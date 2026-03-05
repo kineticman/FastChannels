@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Channels — FastChannels</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
+    nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; }
+    nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
+    nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
+    nav a:hover, nav a.active { color: #e2e8f0; }
+    .container { max-width: 1200px; margin: 2rem auto; padding: 0 2rem; }
+
+    /* Filters */
+    .toolbar { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; align-items: center; }
+    .toolbar input, .toolbar select {
+      background: #1e293b; border: 1px solid #334155; color: #e2e8f0;
+      padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.875rem; outline: none;
+    }
+    .toolbar input:focus, .toolbar select:focus { border-color: #38bdf8; }
+    .toolbar input { flex: 1; min-width: 200px; }
+    .toolbar button { background: #0284c7; color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.875rem; }
+    .toolbar button:hover { background: #0369a1; }
+    .toolbar a.clear { color: #64748b; font-size: 0.85rem; }
+
+    /* Bulk bar */
+    .bulk-bar {
+      display: none;
+      align-items: center;
+      gap: 1rem;
+      background: #1e3a5f;
+      border: 1px solid #2563eb44;
+      border-radius: 8px;
+      padding: 0.6rem 1rem;
+      margin-bottom: 1rem;
+      font-size: 0.875rem;
+    }
+    .bulk-bar.visible { display: flex; }
+    .bulk-bar span { color: #93c5fd; font-weight: 600; }
+    .bulk-bar button {
+      padding: 0.35rem 0.9rem; border-radius: 5px; font-size: 0.8rem;
+      cursor: pointer; border: none; font-weight: 500;
+    }
+    .btn-enable  { background: #15803d; color: #fff; }
+    .btn-enable:hover  { background: #16a34a; }
+    .btn-disable { background: #7f1d1d; color: #fff; }
+    .btn-disable:hover { background: #991b1b; }
+    .btn-cancel  { background: transparent; color: #64748b; border: 1px solid #334155 !important; }
+    .btn-cancel:hover  { color: #e2e8f0; }
+
+    /* Table */
+    .section { background: #1e293b; border: 1px solid #334155; border-radius: 8px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; font-size: 0.72rem; color: #64748b; text-transform: uppercase;
+         padding: 0.7rem 1rem; border-bottom: 1px solid #334155; background: #0f172a; }
+    th.check-col { width: 40px; }
+    td { padding: 0.6rem 1rem; font-size: 0.85rem; border-bottom: 1px solid #0f172a; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr.disabled td:not(.toggle-col) { opacity: 0.4; }
+    tr:hover td { background: #1a2744; }
+
+    .logo { width: 32px; height: 32px; object-fit: contain; border-radius: 4px; background: #0f172a; }
+    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.7rem; font-weight: 600; }
+    .badge-green { background: #064e3b; color: #34d399; }
+    .badge-gray  { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+
+    /* Toggle switch */
+    .toggle-wrap { display: flex; align-items: center; }
+    .toggle {
+      position: relative; display: inline-block; width: 36px; height: 20px; cursor: pointer;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; inset: 0; background: #334155;
+      border-radius: 20px; transition: background 0.2s;
+    }
+    .slider:before {
+      content: ''; position: absolute;
+      width: 14px; height: 14px; left: 3px; top: 3px;
+      background: #fff; border-radius: 50%; transition: transform 0.2s;
+    }
+    .toggle input:checked + .slider { background: #0284c7; }
+    .toggle input:checked + .slider:before { transform: translateX(16px); }
+    .toggle.saving .slider { opacity: 0.5; }
+
+    /* Checkbox */
+    input[type=checkbox].row-check {
+      width: 15px; height: 15px; cursor: pointer; accent-color: #38bdf8;
+    }
+    input[type=checkbox]#select-all {
+      width: 15px; height: 15px; cursor: pointer; accent-color: #38bdf8;
+    }
+
+    /* Pagination */
+    .pagination { display: flex; gap: 0.5rem; margin-top: 1rem; justify-content: center; align-items: center; }
+    .pagination a { color: #38bdf8; text-decoration: none; padding: 0.4rem 0.8rem; border: 1px solid #334155; border-radius: 4px; font-size: 0.8rem; }
+    .pagination a:hover { background: #1e293b; }
+    .page-info { color: #64748b; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <nav>
+    <h1>⚡ FastChannels</h1>
+    <a href="/admin/">Dashboard</a>
+    <a href="/admin/sources">Sources</a>
+    <a href="/admin/channels" class="active">Channels</a>
+    <a href="/admin/settings">Settings</a>
+    <a href="/m3u" target="_blank">M3U ↗</a>
+    <a href="/epg.xml" target="_blank">EPG XML ↗</a>
+  </nav>
+
+  <div class="container">
+    <form class="toolbar" method="get">
+      <input name="search" placeholder="Search channels…" value="{{ search }}">
+      <select name="source">
+        <option value="">All Sources</option>
+        {% for s in sources %}
+        <option value="{{ s.name }}" {% if source_filter == s.name %}selected{% endif %}>{{ s.display_name }}</option>
+        {% endfor %}
+      </select>
+      <select name="enabled">
+        <option value="">All</option>
+        <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
+        <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
+      </select>
+      <button type="submit">Filter</button>
+      <a class="clear" href="/admin/channels">Clear</a>
+    </form>
+
+    <!-- Bulk action bar (shown when rows selected) -->
+    <div class="bulk-bar" id="bulk-bar">
+      <span id="bulk-count">0 selected</span>
+      <button class="btn-enable"  onclick="bulkToggle(true)">Enable Selected</button>
+      <button class="btn-disable" onclick="bulkToggle(false)">Disable Selected</button>
+      <button class="btn-cancel"  onclick="clearSelection()">Cancel</button>
+    </div>
+
+    <div class="section">
+      <table>
+        <thead>
+          <tr>
+            <th class="check-col"><input type="checkbox" id="select-all" onchange="toggleAll(this)"></th>
+            <th>Logo</th>
+            <th>Name</th>
+            <th>Source</th>
+            <th>Category</th>
+            <th>#</th>
+            <th>In M3U</th>
+          </tr>
+        </thead>
+        <tbody id="channel-tbody">
+          {% for ch in channels.items %}
+          <tr id="row-{{ ch.id }}" class="{% if not ch.is_enabled %}disabled{% endif %}">
+            <td><input type="checkbox" class="row-check" value="{{ ch.id }}" onchange="onRowCheck()"></td>
+            <td>
+              {% if ch.logo_url %}
+              <img src="{{ ch.logo_url }}" class="logo" loading="lazy">
+              {% else %}
+              <div class="logo"></div>
+              {% endif %}
+            </td>
+            <td><strong>{{ ch.name }}</strong></td>
+            <td style="color:#64748b">{{ ch.source.display_name }}</td>
+            <td style="color:#94a3b8">{{ ch.category or '—' }}</td>
+            <td style="color:#64748b">{{ ch.number or '—' }}</td>
+            <td class="toggle-col">
+              <div class="toggle-wrap">
+                <label class="toggle" id="toggle-{{ ch.id }}">
+                  <input type="checkbox" {% if ch.is_enabled %}checked{% endif %}
+                         onchange="toggle({{ ch.id }}, this)">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if channels.pages > 1 %}
+    <div class="pagination">
+      {% if channels.has_prev %}
+      <a href="?page={{ channels.prev_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}">← Prev</a>
+      {% endif %}
+      <span class="page-info">Page {{ channels.page }} of {{ channels.pages }}</span>
+      {% if channels.has_next %}
+      <a href="?page={{ channels.next_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}">Next →</a>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  <script>
+    // ── Single toggle ──────────────────────────────────────────────────────
+    async function toggle(channelId, checkbox) {
+      const label = document.getElementById(`toggle-${channelId}`);
+      const row   = document.getElementById(`row-${channelId}`);
+      label.classList.add('saving');
+      checkbox.disabled = true;
+
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method:  'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({is_enabled: checkbox.checked}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        row.classList.toggle('disabled', !checkbox.checked);
+      } catch (e) {
+        // Revert on error
+        checkbox.checked = !checkbox.checked;
+        console.error('Toggle failed:', e);
+      } finally {
+        label.classList.remove('saving');
+        checkbox.disabled = false;
+      }
+    }
+
+    // ── Select all / bulk ─────────────────────────────────────────────────
+    function toggleAll(masterCb) {
+      document.querySelectorAll('.row-check').forEach(cb => cb.checked = masterCb.checked);
+      onRowCheck();
+    }
+
+    function onRowCheck() {
+      const checked = document.querySelectorAll('.row-check:checked');
+      const bar     = document.getElementById('bulk-bar');
+      document.getElementById('bulk-count').textContent = `${checked.length} selected`;
+      bar.classList.toggle('visible', checked.length > 0);
+      // Update master checkbox state
+      const all = document.querySelectorAll('.row-check');
+      document.getElementById('select-all').indeterminate = checked.length > 0 && checked.length < all.length;
+      document.getElementById('select-all').checked = checked.length === all.length;
+    }
+
+    function clearSelection() {
+      document.querySelectorAll('.row-check, #select-all').forEach(cb => { cb.checked = false; cb.indeterminate = false; });
+      document.getElementById('bulk-bar').classList.remove('visible');
+    }
+
+    async function bulkToggle(enable) {
+      const ids = [...document.querySelectorAll('.row-check:checked')].map(cb => parseInt(cb.value));
+      if (!ids.length) return;
+
+      await Promise.all(ids.map(id =>
+        fetch(`/api/channels/${id}`, {
+          method:  'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({is_enabled: enable}),
+        })
+      ));
+
+      // Update UI
+      ids.forEach(id => {
+        const row   = document.getElementById(`row-${id}`);
+        const input = row?.querySelector('input[type=checkbox].row-check');
+        const tog   = row?.querySelector('.toggle input[type=checkbox]');
+        if (tog) tog.checked = enable;
+        row?.classList.toggle('disabled', !enable);
+      });
+      clearSelection();
+    }
+  </script>
+</body>
+</html>

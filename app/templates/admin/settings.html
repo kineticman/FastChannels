@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings — FastChannels</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    /* ── Nav ── */
+    nav {
+      background: #1a1d27;
+      border-bottom: 1px solid #2d3148;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      height: 56px;
+    }
+    nav .brand { font-weight: 700; font-size: 1.1rem; color: #fff; text-decoration: none; }
+    nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
+    nav a:hover, nav a.active { color: #fff; }
+
+    /* ── Layout ── */
+    .page { max-width: 860px; margin: 0 auto; padding: 2.5rem 1.5rem; }
+    h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 0.4rem; }
+    .subtitle { color: #64748b; font-size: 0.9rem; margin-bottom: 2rem; }
+
+    /* ── Source cards ── */
+    .source-card {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      border-radius: 10px;
+      margin-bottom: 1.5rem;
+      overflow: hidden;
+    }
+    .source-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1.1rem 1.4rem;
+      cursor: pointer;
+      user-select: none;
+      gap: 1rem;
+    }
+    .source-header:hover { background: #1f2236; }
+    .source-title {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .source-icon {
+      width: 36px; height: 36px;
+      background: #2d3148;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem;
+    }
+    .source-name { font-weight: 600; font-size: 1rem; }
+    .source-meta { font-size: 0.8rem; color: #64748b; margin-top: 1px; }
+    .source-badges { display: flex; align-items: center; gap: 0.5rem; }
+    .badge {
+      font-size: 0.7rem; font-weight: 600; letter-spacing: 0.03em;
+      padding: 2px 8px; border-radius: 20px;
+      text-transform: uppercase;
+    }
+    .badge-configured { background: #14532d33; color: #4ade80; border: 1px solid #15803d44; }
+    .badge-anon       { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+    .badge-noconfig   { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+    .chevron { color: #475569; transition: transform 0.2s; font-size: 0.8rem; }
+    .chevron.open { transform: rotate(180deg); }
+
+    /* ── Form body ── */
+    .source-body {
+      display: none;
+      padding: 0 1.4rem 1.4rem;
+      border-top: 1px solid #2d3148;
+    }
+    .source-body.open { display: block; }
+
+    .no-config-msg {
+      padding: 1rem 0;
+      color: #64748b;
+      font-size: 0.875rem;
+    }
+
+    .fields-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 1.2rem;
+    }
+    @media (max-width: 600px) { .fields-grid { grid-template-columns: 1fr; } }
+    .field-full { grid-column: 1 / -1; }
+
+    .field label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: #94a3b8;
+      margin-bottom: 0.35rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .field label .req { color: #f87171; margin-left: 2px; }
+
+    .field input[type=text],
+    .field input[type=password],
+    .field input[type=number] {
+      width: 100%;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 6px;
+      padding: 0.55rem 0.75rem;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .field input:focus { border-color: #6366f1; }
+    .field input::placeholder { color: #475569; }
+
+    .field .help { font-size: 0.78rem; color: #64748b; margin-top: 0.35rem; }
+
+    .field-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      margin-top: 1.2rem;
+      padding-top: 1rem;
+      border-top: 1px solid #1e2236;
+    }
+
+    .btn {
+      padding: 0.5rem 1.2rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #6366f1; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #818cf8; }
+    .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #334155; }
+    .btn-ghost:hover:not(:disabled) { color: #fff; border-color: #475569; }
+
+    .save-status {
+      font-size: 0.82rem;
+      font-weight: 500;
+      min-width: 120px;
+      text-align: right;
+    }
+    .save-status.ok    { color: #4ade80; }
+    .save-status.error { color: #f87171; }
+
+    /* ── Loading / empty states ── */
+    .loading { text-align: center; padding: 3rem; color: #475569; }
+    .error-msg { color: #f87171; padding: 1rem; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a class="brand" href="/admin/">⚡ FastChannels</a>
+  <a href="/admin/">Dashboard</a>
+  <a href="/admin/sources">Sources</a>
+  <a href="/admin/channels">Channels</a>
+  <a href="/admin/settings" class="active">Settings</a>
+</nav>
+
+<div class="page">
+  <h1>Settings</h1>
+  <p class="subtitle">Configure credentials and options for each source. Changes take effect on the next scrape.</p>
+
+  <div id="cards-container">
+    <div class="loading">Loading sources…</div>
+  </div>
+</div>
+
+<script>
+const MASK = '••••••••';
+
+// ── Fetch all sources, then load each schema ──────────────────────────────
+async function init() {
+  const container = document.getElementById('cards-container');
+  try {
+    const sources = await apiFetch('/api/sources');
+    if (!sources.length) {
+      container.innerHTML = '<p class="subtitle">No sources found.</p>';
+      return;
+    }
+    container.innerHTML = '';
+    for (const source of sources) {
+      const card = await buildCard(source);
+      container.appendChild(card);
+    }
+  } catch (e) {
+    container.innerHTML = `<p class="error-msg">Failed to load sources: ${e.message}</p>`;
+  }
+}
+
+async function buildCard(source) {
+  const card = document.createElement('div');
+  card.className = 'source-card';
+  card.dataset.sourceId = source.id;
+
+  // Fetch schema + current values
+  let schema = [], values = {};
+  try {
+    const cfg = await apiFetch(`/api/sources/${source.id}/config`);
+    schema = cfg.schema || [];
+    values = cfg.values || {};
+  } catch (e) {
+    console.warn(`Could not load config for ${source.name}`, e);
+  }
+
+  const hasSchema     = schema.length > 0;
+  const isConfigured  = hasSchema && schema.some(f => values[f.key] && values[f.key] !== MASK && values[f.key] !== (f.default || ''));
+  const hasSecrets    = schema.some(f => f.secret);
+
+  const badgeHtml = !hasSchema
+    ? `<span class="badge badge-noconfig">No config</span>`
+    : isConfigured
+      ? `<span class="badge badge-configured">● Configured</span>`
+      : `<span class="badge badge-anon">Anonymous</span>`;
+
+  const icons = { pluto: '📺', distro: '📡' };
+  const icon  = icons[source.name] || '🔌';
+
+  card.innerHTML = `
+    <div class="source-header" onclick="toggleCard(this)">
+      <div class="source-title">
+        <div class="source-icon">${icon}</div>
+        <div>
+          <div class="source-name">${source.display_name}</div>
+          <div class="source-meta">${source.channel_count} channels · ${source.is_enabled ? 'enabled' : 'disabled'}</div>
+        </div>
+      </div>
+      <div class="source-badges">
+        ${badgeHtml}
+        <span class="chevron">▼</span>
+      </div>
+    </div>
+    <div class="source-body">
+      ${hasSchema ? renderFields(schema, values) : '<p class="no-config-msg">This source requires no configuration — it works anonymously out of the box.</p>'}
+    </div>
+  `;
+
+  if (hasSchema) {
+    const form = card.querySelector('.source-body');
+    form.querySelector('.btn-save').addEventListener('click', () => saveConfig(source.id, schema, card));
+    form.querySelector('.btn-clear').addEventListener('click', () => clearFields(card, schema));
+  }
+
+  return card;
+}
+
+function renderFields(schema, values) {
+  const fieldsHtml = schema.map(f => {
+    const val   = values[f.key] ?? f.default ?? '';
+    const req   = f.required ? '<span class="req">*</span>' : '';
+    const itype = f.field_type === 'password' ? 'password' : (f.field_type === 'number' ? 'number' : 'text');
+    const phld  = f.placeholder ? `placeholder="${escHtml(f.placeholder)}"` : '';
+    const help  = f.help_text  ? `<div class="help">${escHtml(f.help_text)}</div>` : '';
+    const cls   = schema.length === 1 ? 'field field-full' : 'field';
+
+    return `
+      <div class="${cls}">
+        <label for="cfg-${f.key}">${escHtml(f.label)}${req}</label>
+        <input type="${itype}" id="cfg-${f.key}" data-key="${f.key}"
+               data-secret="${f.secret}" value="${escHtml(String(val))}" ${phld} autocomplete="off">
+        ${help}
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="fields-grid">${fieldsHtml}</div>
+    <div class="field-actions">
+      <span class="save-status"></span>
+      <button class="btn btn-ghost btn-clear">Clear</button>
+      <button class="btn btn-primary btn-save">Save</button>
+    </div>`;
+}
+
+async function saveConfig(sourceId, schema, card) {
+  const btn    = card.querySelector('.btn-save');
+  const status = card.querySelector('.save-status');
+  const inputs = card.querySelectorAll('input[data-key]');
+
+  const payload = {};
+  inputs.forEach(inp => { payload[inp.dataset.key] = inp.value; });
+
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  status.className   = 'save-status';
+
+  try {
+    await apiFetch(`/api/sources/${sourceId}/config`, {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify(payload),
+    });
+    status.textContent = '✓ Saved';
+    status.className   = 'save-status ok';
+    // Re-mask secret fields after save
+    inputs.forEach(inp => {
+      if (inp.dataset.secret === 'true' && inp.value && inp.value !== MASK) {
+        inp.value = MASK;
+      }
+    });
+    setTimeout(() => { status.textContent = ''; }, 3000);
+  } catch (e) {
+    status.textContent = '✗ ' + e.message;
+    status.className   = 'save-status error';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function clearFields(card, schema) {
+  schema.forEach(f => {
+    const inp = card.querySelector(`#cfg-${f.key}`);
+    if (inp) inp.value = '';
+  });
+}
+
+function toggleCard(header) {
+  const body    = header.nextElementSibling;
+  const chevron = header.querySelector('.chevron');
+  const isOpen  = body.classList.toggle('open');
+  chevron.classList.toggle('open', isOpen);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+async function apiFetch(url, opts = {}) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+init();
+</script>
+</body>
+</html>

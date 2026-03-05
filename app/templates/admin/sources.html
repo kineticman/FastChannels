@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sources — FastChannels</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
+    nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; }
+    nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
+    nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
+    nav a:hover, nav a.active { color: #e2e8f0; }
+    .container { max-width: 900px; margin: 2rem auto; padding: 0 2rem; }
+
+    .card {
+      background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+      padding: 1.25rem 1.5rem; margin-bottom: 1rem;
+      display: flex; align-items: center; justify-content: space-between; gap: 1.5rem;
+      transition: border-color 0.2s;
+    }
+    .card.disabled { opacity: 0.55; }
+    .card-info { flex: 1; min-width: 0; }
+    .card-info h3 { font-size: 1rem; font-weight: 600; }
+    .meta { color: #64748b; font-size: 0.8rem; margin-top: 0.3rem; }
+    .error { color: #f87171; font-size: 0.75rem; margin-top: 0.4rem; font-family: monospace;
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 500px; }
+
+    .actions { display: flex; gap: 0.75rem; align-items: center; flex-shrink: 0; }
+    .btn { padding: 0.4rem 0.9rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;
+           border: none; font-weight: 500; transition: background 0.15s; }
+    .btn-run { background: #0284c7; color: white; }
+    .btn-run:hover:not(:disabled) { background: #0369a1; }
+    .btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Toggle */
+    .toggle-wrap { display: flex; align-items: center; gap: 0.6rem; }
+    .toggle-label { font-size: 0.78rem; font-weight: 600; min-width: 52px; text-align: center; }
+    .toggle-label.on  { color: #34d399; }
+    .toggle-label.off { color: #64748b; }
+    .toggle {
+      position: relative; display: inline-block; width: 44px; height: 24px; cursor: pointer;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; inset: 0; background: #334155;
+      border-radius: 24px; transition: background 0.2s;
+    }
+    .slider:before {
+      content: ''; position: absolute;
+      width: 18px; height: 18px; left: 3px; top: 3px;
+      background: #fff; border-radius: 50%; transition: transform 0.2s;
+    }
+    .toggle input:checked + .slider { background: #0284c7; }
+    .toggle input:checked + .slider:before { transform: translateX(20px); }
+    .toggle.saving { pointer-events: none; opacity: 0.5; }
+
+    /* Confirm modal */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.65); z-index: 100;
+      align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+      padding: 2rem; max-width: 420px; width: 90%;
+    }
+    .modal h2 { font-size: 1.1rem; margin-bottom: 0.75rem; }
+    .modal p  { color: #94a3b8; font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.5rem; }
+    .modal p strong { color: #f87171; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
+    .btn-cancel  { background: transparent; color: #94a3b8; border: 1px solid #334155; }
+    .btn-cancel:hover { color: #e2e8f0; }
+    .btn-confirm { background: #b91c1c; color: white; }
+    .btn-confirm:hover { background: #dc2626; }
+  </style>
+</head>
+<body>
+  <nav>
+    <h1>⚡ FastChannels</h1>
+    <a href="/admin/">Dashboard</a>
+    <a href="/admin/sources" class="active">Sources</a>
+    <a href="/admin/channels">Channels</a>
+    <a href="/admin/settings">Settings</a>
+    <a href="/m3u" target="_blank">M3U ↗</a>
+    <a href="/epg.xml" target="_blank">EPG XML ↗</a>
+  </nav>
+
+  <div class="container">
+    {% for source in sources %}
+    <div class="card {% if not source.is_enabled %}disabled{% endif %}" id="card-{{ source.id }}">
+      <div class="card-info">
+        <h3>{{ source.display_name }}</h3>
+        <div class="meta">
+          Every {{ source.scrape_interval }}min &nbsp;·&nbsp;
+          <span id="ch-count-{{ source.id }}">{{ source.to_dict().channel_count }}</span> channels &nbsp;·&nbsp;
+          Last: {% if source.last_scraped_at %}{{ source.last_scraped_at.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}Never{% endif %}
+        </div>
+        {% if source.last_error %}
+        <div class="error">⚠ {{ source.last_error }}</div>
+        {% endif %}
+      </div>
+      <div class="actions">
+        <div class="toggle-wrap">
+          <label class="toggle" id="toggle-{{ source.id }}">
+            <input type="checkbox" {% if source.is_enabled %}checked{% endif %}
+                   onchange="onSourceToggle({{ source.id }}, '{{ source.display_name }}', this)">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label {% if source.is_enabled %}on{% else %}off{% endif %}"
+                id="toggle-label-{{ source.id }}">
+            {% if source.is_enabled %}Enabled{% else %}Disabled{% endif %}
+          </span>
+        </div>
+        <button class="btn btn-run" onclick="run({{ source.id }}, this)"
+                {% if not source.is_enabled %}disabled{% endif %}>Run Now</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Confirm disable modal -->
+  <div class="modal-overlay" id="confirm-modal">
+    <div class="modal">
+      <h2>Disable source?</h2>
+      <p id="modal-body">All channels from <strong id="modal-source-name"></strong> will be
+         <strong>deleted from the database</strong> and removed from your M3U and EPG.
+         Re-enabling will re-scrape and restore them.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" onclick="cancelDisable()">Cancel</button>
+        <button class="btn btn-confirm" onclick="confirmDisable()">Disable &amp; Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let _pendingSourceId   = null;
+    let _pendingCheckbox   = null;
+
+    // ── Toggle handler ──────────────────────────────────────────────────────
+    function onSourceToggle(sourceId, sourceName, checkbox) {
+      if (!checkbox.checked) {
+        // Disabling — show confirmation first, revert checkbox until confirmed
+        checkbox.checked = true;   // revert visually
+        _pendingSourceId = sourceId;
+        _pendingCheckbox = checkbox;
+        document.getElementById('modal-source-name').textContent = sourceName;
+        document.getElementById('confirm-modal').classList.add('open');
+      } else {
+        // Enabling — no confirmation needed
+        setSourceEnabled(sourceId, true, checkbox);
+      }
+    }
+
+    function cancelDisable() {
+      _pendingSourceId = null;
+      _pendingCheckbox = null;
+      document.getElementById('confirm-modal').classList.remove('open');
+    }
+
+    function confirmDisable() {
+      document.getElementById('confirm-modal').classList.remove('open');
+      if (_pendingSourceId !== null) {
+        setSourceEnabled(_pendingSourceId, false, _pendingCheckbox);
+      }
+    }
+
+    async function setSourceEnabled(sourceId, enabled, checkbox) {
+      const toggleEl = document.getElementById(`toggle-${sourceId}`);
+      const labelEl  = document.getElementById(`toggle-label-${sourceId}`);
+      const card     = document.getElementById(`card-${sourceId}`);
+      const runBtn   = card.querySelector('.btn-run');
+      toggleEl.classList.add('saving');
+
+      try {
+        const r = await fetch(`/api/sources/${sourceId}`, {
+          method:  'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({is_enabled: enabled}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
+        // If disabling, also delete all channels for this source
+        if (!enabled) {
+          await fetch(`/api/sources/${sourceId}/channels`, {method: 'DELETE'});
+          document.getElementById(`ch-count-${sourceId}`).textContent = '0';
+        }
+
+        checkbox.checked = enabled;
+        labelEl.textContent = enabled ? 'Enabled' : 'Disabled';
+        labelEl.className = `toggle-label ${enabled ? 'on' : 'off'}`;
+        card.classList.toggle('disabled', !enabled);
+        runBtn.disabled = !enabled;
+
+      } catch (e) {
+        // Revert on error
+        checkbox.checked = !enabled;
+        console.error('Source toggle failed:', e);
+      } finally {
+        toggleEl.classList.remove('saving');
+        _pendingSourceId = null;
+        _pendingCheckbox = null;
+      }
+    }
+
+    // ── Run now ─────────────────────────────────────────────────────────────
+    async function run(id, btn) {
+      btn.disabled = true;
+      btn.textContent = 'Queued…';
+      try {
+        const r = await fetch(`/api/sources/${id}/run`, {method: 'POST'});
+        const d = await r.json();
+        btn.textContent = d.status === 'queued' ? '✓ Queued' : 'Error';
+      } catch (e) {
+        btn.textContent = 'Error';
+      }
+      setTimeout(() => { btn.textContent = 'Run Now'; btn.disabled = false; }, 3000);
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,122 @@
+from flask import Blueprint, jsonify, request
+from ..extensions import db
+from ..models import Source, Channel
+from ..scrapers import registry
+from .tasks import trigger_scrape
+
+api_bp = Blueprint('api', __name__)
+
+
+@api_bp.route('/sources')
+def list_sources():
+    return jsonify([s.to_dict() for s in Source.query.order_by(Source.display_name).all()])
+
+
+@api_bp.route('/sources/<int:source_id>/run', methods=['POST'])
+def run_source(source_id):
+    source = Source.query.get_or_404(source_id)
+    trigger_scrape(source.name)
+    return jsonify({'status': 'queued', 'source': source.name})
+
+
+@api_bp.route('/sources/<int:source_id>', methods=['PATCH'])
+def update_source(source_id):
+    source = Source.query.get_or_404(source_id)
+    data = request.get_json()
+    if 'is_enabled' in data:
+        source.is_enabled = bool(data['is_enabled'])
+    if 'scrape_interval' in data:
+        source.scrape_interval = int(data['scrape_interval'])
+    db.session.commit()
+    return jsonify(source.to_dict())
+
+
+@api_bp.route('/sources/<int:source_id>/channels', methods=['DELETE'])
+def delete_source_channels(source_id):
+    """Delete all channels (and their programs via cascade) for a source."""
+    source = Source.query.get_or_404(source_id)
+    deleted = source.channels.delete()
+    db.session.commit()
+    return jsonify({'status': 'deleted', 'source': source.name, 'deleted': deleted})
+
+
+@api_bp.route('/sources/<int:source_id>/config', methods=['GET'])
+def get_source_config(source_id):
+    source      = Source.query.get_or_404(source_id)
+    scraper_cls = registry.get(source.name)
+    schema      = [f.to_dict() for f in (scraper_cls.config_schema if scraper_cls else [])]
+    saved       = source.config or {}
+    secret_keys = {f['key'] for f in schema if f['secret']}
+    values = {}
+    for f in schema:
+        key = f['key']
+        if key in secret_keys and saved.get(key):
+            values[key] = '••••••••'
+        else:
+            values[key] = saved.get(key, f['default'] or '')
+    return jsonify({'schema': schema, 'values': values})
+
+
+@api_bp.route('/sources/<int:source_id>/config', methods=['POST'])
+def save_source_config(source_id):
+    source      = Source.query.get_or_404(source_id)
+    scraper_cls = registry.get(source.name)
+    schema      = scraper_cls.config_schema if scraper_cls else []
+    secret_keys = {f.key for f in schema if f.secret}
+    data        = request.get_json() or {}
+    current     = dict(source.config or {})
+    for field in schema:
+        key = field.key
+        if key not in data:
+            continue
+        val = data[key]
+        if key in secret_keys and val == '••••••••':
+            continue
+        if val == '' and not field.required:
+            current.pop(key, None)
+        else:
+            current[key] = val
+    source.config = current
+    db.session.commit()
+    return jsonify({'status': 'saved', 'source': source.name})
+
+
+@api_bp.route('/channels')
+def list_channels():
+    page     = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    q        = Channel.query.join(Source)
+    if s := request.args.get('source'):
+        q = q.filter(Source.name == s)
+    if c := request.args.get('category'):
+        q = q.filter(Channel.category.ilike(f'%{c}%'))
+    if search := request.args.get('search'):
+        q = q.filter(Channel.name.ilike(f'%{search}%'))
+    pag = q.order_by(Channel.name).paginate(page=page, per_page=per_page, error_out=False)
+    return jsonify({
+        'channels': [ch.to_dict() for ch in pag.items],
+        'total': pag.total, 'page': page, 'pages': pag.pages,
+    })
+
+
+@api_bp.route('/channels/<int:channel_id>', methods=['PATCH'])
+def update_channel(channel_id):
+    ch   = Channel.query.get_or_404(channel_id)
+    data = request.get_json()
+    for field in ('name', 'logo_url', 'category', 'is_active', 'is_enabled', 'number'):
+        if field in data:
+            setattr(ch, field, data[field])
+    db.session.commit()
+    return jsonify(ch.to_dict())
+
+
+@api_bp.route('/stats')
+def stats():
+    categories = db.session.query(Channel.category, db.func.count(Channel.id))\
+        .filter(Channel.is_active == True).group_by(Channel.category)\
+        .order_by(db.func.count(Channel.id).desc()).all()
+    return jsonify({
+        'total_channels': Channel.query.filter_by(is_active=True).count(),
+        'total_sources':  Source.query.filter_by(is_enabled=True).count(),
+        'categories':     [{'name': c or 'Uncategorized', 'count': n} for c, n in categories],
+    })

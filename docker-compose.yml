@@ -1,0 +1,17 @@
+version: '3.9'
+
+services:
+  fastchannels:
+    build: .
+    container_name: fastchannels
+    restart: unless-stopped
+    ports:
+      - "5523:5523"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-changeme-in-production}
+    volumes:
+      - ./app:/app/app
+      - db_data:/data
+
+volumes:
+  db_data:
