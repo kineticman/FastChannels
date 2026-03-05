@@ -22,14 +22,14 @@ class Source(db.Model):
 
     def to_dict(self):
         return {
-            'id':             self.id,
-            'name':           self.name,
-            'display_name':   self.display_name,
+            'id':              self.id,
+            'name':            self.name,
+            'display_name':    self.display_name,
             'scrape_interval': self.scrape_interval,
-            'is_enabled':     self.is_enabled,
+            'is_enabled':      self.is_enabled,
             'last_scraped_at': self.last_scraped_at.isoformat() if self.last_scraped_at else None,
-            'last_error':     self.last_error,
-            'channel_count':  self.channels.filter_by(is_active=True).count(),
+            'last_error':      self.last_error,
+            'channel_count':   self.channels.filter_by(is_active=True).count(),
         }
 
 
@@ -48,8 +48,8 @@ class Channel(db.Model):
     language          = db.Column(db.String(16), default='en')
     country           = db.Column(db.String(8), default='US')
     number            = db.Column(db.Integer)
-    is_active         = db.Column(db.Boolean, default=True)   # set by scraper — channel exists upstream
-    is_enabled        = db.Column(db.Boolean, default=True)   # set by user — include in M3U/EPG
+    is_active         = db.Column(db.Boolean, default=True)
+    is_enabled        = db.Column(db.Boolean, default=True)
     created_at        = db.Column(db.DateTime(timezone=True),
                                   default=lambda: datetime.now(timezone.utc))
     updated_at        = db.Column(db.DateTime(timezone=True),
@@ -103,3 +103,45 @@ class Program(db.Model):
 
     def __repr__(self):
         return f'<Program {self.title} @ {self.start_time}>'
+
+
+class Feed(db.Model):
+    """
+    A named, stable output feed — each feed gets its own M3U + EPG URL pair.
+    Filters are stored as JSON with three optional keys:
+      sources    : list[str]  — source slugs to include (null = all)
+      categories : list[str]  — category strings to include (null = all)
+      max_channels: int       — hard cap on output size (null = unlimited)
+
+    URLs:
+      M3U  →  /m3u/<slug>
+      EPG  →  /epg/<slug>.xml
+    """
+    __tablename__ = 'feeds'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    slug        = db.Column(db.String(64), unique=True, nullable=False)
+    name        = db.Column(db.String(128), nullable=False)
+    description = db.Column(db.String(256))
+    filters     = db.Column(db.JSON, default=dict)
+    is_enabled  = db.Column(db.Boolean, default=True)
+    created_at  = db.Column(db.DateTime(timezone=True),
+                             default=lambda: datetime.now(timezone.utc))
+
+    def channel_count(self):
+        from .generators.m3u import _build_channel_query
+        return _build_channel_query(self.filters or {}).count()
+
+    def to_dict(self, base_url=''):
+        return {
+            'id':            self.id,
+            'slug':          self.slug,
+            'name':          self.name,
+            'description':   self.description,
+            'filters':       self.filters or {},
+            'is_enabled':    self.is_enabled,
+            'created_at':    self.created_at.isoformat() if self.created_at else None,
+            'channel_count': self.channel_count(),
+            'm3u_url':       f'{base_url}/m3u/{self.slug}',
+            'epg_url':       f'{base_url}/epg/{self.slug}.xml',
+        }

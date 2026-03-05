@@ -62,6 +62,70 @@ MACRO_REPLACEMENTS = {
     "__CLIENT_IP__":              lambda: "",
 }
 
+# Tags that indicate language/region rather than content genre.
+# These are split out into the channel's language field, not the category.
+_LANG_TAGS = frozenset({
+    'English', 'Spanish', 'Asian', 'African', 'Arabic', 'Middle Eastern',
+    'French', 'Portuguese', 'Hindi', 'Urdu', 'Korean', 'Japanese',
+    'Chinese', 'Tagalog', 'Vietnamese', 'Russian',
+})
+
+# Map Distro region labels → ISO 639-1 language codes where unambiguous.
+# 'Asian' and 'African' are regional, not a single language — stored as-is.
+_LANG_CODE = {
+    'English':        'en',
+    'Spanish':        'es',
+    'French':         'fr',
+    'Portuguese':     'pt',
+    'Hindi':          'hi',
+    'Urdu':           'ur',
+    'Korean':         'ko',
+    'Japanese':       'ja',
+    'Chinese':        'zh',
+    'Tagalog':        'tl',
+    'Vietnamese':     'vi',
+    'Russian':        'ru',
+    'Arabic':         'ar',
+}
+
+
+def _parse_distro_tags(raw: str) -> tuple[Optional[str], str]:
+    """
+    Parse Distro's comma-joined tag string into (category, language).
+
+    Distro stores everything in one field, e.g.:
+      'News,Current Affairs,Politics,Asian'
+      'Entertainment,Classic Movies,English'
+      'Music,Music Video,Contemporary Hits/Pop/Top 40,Hip Hop Music,Spanish'
+
+    Returns:
+      category — all non-language tags joined with ';', e.g.
+                 'News;Current Affairs;Politics'
+                 'Music;Music Video;Contemporary Hits/Pop/Top 40;Hip Hop Music'
+      language — ISO 639-1 code from the first recognised language tag,
+                 or the raw label if no mapping exists (e.g. 'Asian'),
+                 defaulting to 'en' if none found.
+    """
+    if not raw:
+        return None, 'en'
+
+    tags = [t.strip() for t in raw.split(',') if t.strip()]
+
+    genre_tags = []
+    lang       = 'en'
+    lang_found = False
+
+    for tag in tags:
+        if tag in _LANG_TAGS:
+            if not lang_found:
+                lang       = _LANG_CODE.get(tag, tag.lower())
+                lang_found = True
+        else:
+            genre_tags.append(tag)
+
+    category = ';'.join(genre_tags) if genre_tags else None
+    return category, lang
+
 
 def _sanitize_url(url: str) -> str:
     parts = urlsplit(url)
@@ -128,7 +192,7 @@ class DistroScraper(BaseScraper):
     source_name     = "distro"
     display_name    = "Distro TV"
     scrape_interval = 720
-    config_schema   = []   # no credentials needed
+    config_schema   = []
 
     def __init__(self, config: dict = None):
         super().__init__(config)
@@ -165,14 +229,18 @@ class DistroScraper(BaseScraper):
             upstream_url = content.get("url")
             if not name or not tvg_id or not upstream_url:
                 continue
+
+            raw_genre        = (show.get("genre") or "").strip()
+            category, lang   = _parse_distro_tags(raw_genre)
+
             channels.append(ChannelData(
                 source_channel_id = str(tvg_id),
                 name              = name,
                 stream_url        = upstream_url,
                 stream_type       = "hls",
                 logo_url          = logo or None,
-                category          = (show.get("genre") or "").strip() or None,
-                language          = (show.get("language") or "en").strip(),
+                category          = category,
+                language          = lang,
                 country           = "US",
             ))
 

@@ -5,7 +5,21 @@ echo "🚀 Starting FastChannels..."
 
 # Start Redis
 redis-server --daemonize yes --logfile /var/log/redis.log
-echo "✅ Redis ready"
+echo "✅ Redis started"
+
+# Wait for Redis to be ready before proceeding
+echo "⏳ Waiting for Redis..."
+for i in $(seq 1 30); do
+    if redis-cli ping > /dev/null 2>&1; then
+        echo "✅ Redis ready"
+        break
+    fi
+    if [ "$i" = "30" ]; then
+        echo "❌ Redis did not become ready in time"
+        exit 1
+    fi
+    sleep 0.5
+done
 
 # Create DB tables directly from models
 cd /app

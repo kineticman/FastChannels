@@ -16,16 +16,28 @@
     .stat-card .value { font-size: 2rem; font-weight: 700; color: #38bdf8; }
     .stat-card .label { color: #64748b; font-size: 0.85rem; margin-top: 0.25rem; }
     .section { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }
-    .section h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: #cbd5e1; }
+    .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+    .section-header h2 { font-size: 1rem; font-weight: 600; color: #cbd5e1; }
     table { width: 100%; border-collapse: collapse; }
     th { text-align: left; font-size: 0.75rem; color: #64748b; text-transform: uppercase; padding: 0.5rem 0.75rem; border-bottom: 1px solid #334155; }
-    td { padding: 0.75rem; font-size: 0.875rem; border-bottom: 1px solid #1e293b; }
+    td { padding: 0.75rem; font-size: 0.875rem; border-bottom: 1px solid #1e293b; vertical-align: middle; }
     .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
     .badge-green { background: #064e3b; color: #34d399; }
-    .badge-red { background: #450a0a; color: #f87171; }
+    .badge-red   { background: #450a0a; color: #f87171; }
     .btn { padding: 0.4rem 1rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: none; background: #0284c7; color: white; }
     .btn:hover { background: #0369a1; }
-    .link-box { display: block; background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 0.75rem 1rem; font-family: monospace; font-size: 0.8rem; color: #38bdf8; margin-top: 0.5rem; text-decoration: none; } .link-box:hover { border-color: #38bdf8; }
+    .btn-sm { padding: 0.3rem 0.75rem; font-size: 0.75rem; }
+    .link-box { display: block; background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+                padding: 0.65rem 1rem; font-family: monospace; font-size: 0.78rem; color: #38bdf8;
+                margin-top: 0.5rem; text-decoration: none; display: flex; align-items: center;
+                justify-content: space-between; gap: 1rem; }
+    .link-box:hover { border-color: #38bdf8; }
+    .link-label { font-size: 0.7rem; color: #64748b; font-family: sans-serif; white-space: nowrap; }
+    .copy-btn { background: none; border: none; color: #475569; cursor: pointer; font-size: 0.75rem; }
+    .copy-btn:hover { color: #e2e8f0; }
+    .pill { display:inline-block; padding: 0.12rem 0.5rem; border-radius:9999px; font-size:0.68rem;
+            font-weight:600; background:#1e3a5f; color:#93c5fd; margin-right:0.25rem; }
+    .warn { color: #fbbf24; font-size: 0.75rem; }
   </style>
 </head>
 <body>
@@ -34,6 +46,8 @@
     <a href="/admin/">Dashboard</a>
     <a href="/admin/sources">Sources</a>
     <a href="/admin/channels">Channels</a>
+    <a href="/admin/feeds">Feeds</a>
+    <a href="/admin/settings">Settings</a>
     <a href="/m3u" target="_blank">M3U ↗</a>
     <a href="/epg.xml" target="_blank">EPG XML ↗</a>
   </nav>
@@ -41,15 +55,76 @@
     <div class="stats">
       <div class="stat-card"><div class="value">{{ total_channels }}</div><div class="label">Active Channels</div></div>
       <div class="stat-card"><div class="value">{{ sources|length }}</div><div class="label">Sources</div></div>
-      <div class="stat-card"><div class="value">{{ sources|selectattr('is_enabled')|list|length }}</div><div class="label">Enabled</div></div>
+      <div class="stat-card"><div class="value">{{ feeds|length }}</div><div class="label">Output Feeds</div></div>
     </div>
+
+    <!-- Feeds (named output pairs) -->
     <div class="section">
-      <h2>Output Links</h2>
-      <a class="link-box" href="{{ base_url }}/m3u" target="_blank">{{ base_url }}/m3u</a>
-      <a class="link-box" href="{{ base_url }}/epg.xml" target="_blank" style="margin-top:0.5rem">{{ base_url }}/epg.xml</a>
+      <div class="section-header">
+        <h2>Output Feeds</h2>
+        <a href="/admin/feeds" class="btn btn-sm">Manage Feeds</a>
+      </div>
+      {% if feeds %}
+      <table>
+        <thead><tr><th>Feed</th><th>Filters</th><th>Channels</th><th>M3U</th><th>EPG</th></tr></thead>
+        <tbody>
+          {% for feed in feeds %}
+          <tr>
+            <td><strong>{{ feed.name }}</strong></td>
+            <td>
+              {% set f = feed.filters or {} %}
+              {% for s in (f.get('sources') or []) %}<span class="pill">{{ s }}</span>{% endfor %}
+              {% for c in (f.get('categories') or []) %}<span class="pill" style="background:#064e3b;color:#34d399">{{ c }}</span>{% endfor %}
+              {% if not f.get('sources') and not f.get('categories') %}<span style="color:#64748b;font-size:0.8rem">all channels</span>{% endif %}
+            </td>
+            <td>
+              {{ feed.channel_count() }}
+              {% if feed.channel_count() > 750 %}<span class="warn">⚠</span>{% endif %}
+            </td>
+            <td>
+              <a class="link-box" href="{{ base_url }}/m3u/{{ feed.slug }}" target="_blank"
+                 style="margin-top:0;font-size:0.72rem;padding:0.3rem 0.6rem">
+                /m3u/{{ feed.slug }}
+                <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/m3u/{{ feed.slug }}')">⎘</button>
+              </a>
+            </td>
+            <td>
+              <a class="link-box" href="{{ base_url }}/epg/{{ feed.slug }}.xml" target="_blank"
+                 style="margin-top:0;font-size:0.72rem;padding:0.3rem 0.6rem">
+                /epg/{{ feed.slug }}.xml
+                <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/epg/{{ feed.slug }}.xml')">⎘</button>
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p style="color:#64748b;font-size:0.875rem">
+        No feeds yet. <a href="/admin/feeds" style="color:#38bdf8">Create your first feed →</a>
+      </p>
+      {% endif %}
     </div>
+
+    <!-- Raw output links -->
     <div class="section">
-      <h2>Sources</h2>
+      <h2 style="margin-bottom:0.75rem">Raw Output (all enabled channels)</h2>
+      <a class="link-box" href="{{ base_url }}/m3u" target="_blank">
+        <span>{{ base_url }}/m3u</span>
+        <span class="link-label">Full M3U</span>
+      </a>
+      <a class="link-box" href="{{ base_url }}/epg.xml" target="_blank" style="margin-top:0.5rem">
+        <span>{{ base_url }}/epg.xml</span>
+        <span class="link-label">Full EPG</span>
+      </a>
+    </div>
+
+    <!-- Sources -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Sources</h2>
+        <a href="/admin/sources" class="btn btn-sm">Manage</a>
+      </div>
       <table>
         <thead><tr><th>Source</th><th>Status</th><th>Channels</th><th>Last Scraped</th><th>Action</th></tr></thead>
         <tbody>
@@ -59,19 +134,28 @@
             <td><span class="badge {% if source.is_enabled %}badge-green{% else %}badge-red{% endif %}">{% if source.is_enabled %}Enabled{% else %}Disabled{% endif %}</span></td>
             <td>{{ source.to_dict().channel_count }}</td>
             <td style="color:#64748b">{% if source.last_scraped_at %}{{ source.last_scraped_at.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}Never{% endif %}</td>
-            <td><button class="btn" onclick="run({{ source.id }}, this)">Run Now</button></td>
+            <td><button class="btn btn-sm" onclick="run({{ source.id }}, this)">Run Now</button></td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
+
   <script>
     async function run(id, btn) {
       btn.disabled = true; btn.textContent = 'Queued…';
       const r = await fetch(`/api/sources/${id}/run`, {method:'POST'});
       const d = await r.json();
       btn.textContent = d.status === 'queued' ? '✓ Queued' : 'Error';
+      setTimeout(() => { btn.textContent = 'Run Now'; btn.disabled = false; }, 3000);
+    }
+    function copyUrl(e, url) {
+      e.preventDefault(); e.stopPropagation();
+      navigator.clipboard.writeText(url).then(() => {
+        const b = e.target; b.textContent = '✓';
+        setTimeout(() => b.textContent = '⎘', 1500);
+      });
     }
   </script>
 </body>

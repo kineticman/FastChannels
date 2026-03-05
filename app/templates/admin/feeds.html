@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Feeds — FastChannels</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
+    nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; }
+    nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
+    nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
+    nav a:hover, nav a.active { color: #e2e8f0; }
+    .container { max-width: 1100px; margin: 2rem auto; padding: 0 2rem; }
+
+    /* Header row */
+    .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
+    .page-header h2 { font-size: 1.1rem; font-weight: 600; }
+    .btn { padding: 0.45rem 1rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; border: none; font-weight: 500; }
+    .btn-primary { background: #0284c7; color: #fff; }
+    .btn-primary:hover { background: #0369a1; }
+    .btn-danger  { background: transparent; color: #f87171; border: 1px solid #7f1d1d; font-size: 0.78rem; padding: 0.3rem 0.7rem; }
+    .btn-danger:hover  { background: #7f1d1d; }
+    .btn-ghost   { background: transparent; color: #94a3b8; border: 1px solid #334155; }
+    .btn-ghost:hover { color: #e2e8f0; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Feed cards */
+    .feed-grid { display: grid; gap: 1rem; }
+    .feed-card {
+      background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+    }
+    .feed-card.disabled { opacity: 0.5; }
+    .feed-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+    .feed-name { font-size: 1rem; font-weight: 600; }
+    .feed-desc { color: #64748b; font-size: 0.82rem; margin-top: 0.2rem; }
+    .feed-meta { display: flex; gap: 1.5rem; margin-top: 0.9rem; flex-wrap: wrap; }
+    .feed-stat { font-size: 0.8rem; color: #64748b; }
+    .feed-stat strong { color: #e2e8f0; }
+    .feed-urls { margin-top: 0.9rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .url-chip {
+      background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+      padding: 0.35rem 0.75rem; font-family: monospace; font-size: 0.75rem; color: #38bdf8;
+      text-decoration: none; display: flex; align-items: center; gap: 0.4rem;
+    }
+    .url-chip:hover { border-color: #38bdf8; }
+    .url-chip .copy-btn {
+      background: none; border: none; color: #64748b; cursor: pointer; font-size: 0.7rem; padding: 0;
+    }
+    .url-chip .copy-btn:hover { color: #e2e8f0; }
+    .feed-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+    .badge-pill {
+      display: inline-block; padding: 0.15rem 0.55rem; border-radius: 9999px;
+      font-size: 0.7rem; font-weight: 600;
+    }
+    .pill-blue   { background: #1e3a5f; color: #93c5fd; }
+    .pill-green  { background: #064e3b; color: #34d399; }
+    .pill-gray   { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+    .filter-tags { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.6rem; }
+
+    /* Empty state */
+    .empty { text-align: center; padding: 4rem 2rem; color: #475569; }
+    .empty h3 { font-size: 1rem; margin-bottom: 0.5rem; }
+
+    /* ── Modal ── */
+    .overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.7); z-index: 50;
+      align-items: flex-start; justify-content: center;
+      padding: 2rem 1rem; overflow-y: auto;
+    }
+    .overlay.open { display: flex; }
+    .modal {
+      background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+      width: 100%; max-width: 560px; padding: 1.75rem;
+      margin: auto;
+    }
+    .modal h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 1.25rem; }
+
+    .field { margin-bottom: 1rem; }
+    .field label { display: block; font-size: 0.78rem; font-weight: 500; color: #94a3b8;
+                   text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.35rem; }
+    .field input[type=text], .field input[type=number], .field textarea {
+      width: 100%; background: #0f172a; border: 1px solid #2d3148;
+      border-radius: 6px; padding: 0.55rem 0.75rem; color: #e2e8f0;
+      font-size: 0.9rem; outline: none; font-family: inherit;
+    }
+    .field input:focus, .field textarea:focus { border-color: #6366f1; }
+    .field .help { font-size: 0.75rem; color: #475569; margin-top: 0.3rem; }
+
+    /* Checkbox groups */
+    .check-group { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.4rem; max-height: 180px; overflow-y: auto; }
+    .check-item {
+      display: flex; align-items: center; gap: 0.4rem;
+      background: #0f172a; border: 1px solid #2d3148; border-radius: 6px;
+      padding: 0.3rem 0.65rem; cursor: pointer; font-size: 0.82rem;
+      transition: border-color 0.15s;
+    }
+    .check-item:hover { border-color: #475569; }
+    .check-item input { accent-color: #38bdf8; cursor: pointer; }
+    .check-item.selected { border-color: #38bdf8; background: #0c1a2e; }
+
+    .modal-footer { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.5rem;
+                    padding-top: 1rem; border-top: 1px solid #2d3148; }
+    .save-status { font-size: 0.8rem; font-weight: 500; min-width: 80px; text-align: right; align-self: center; }
+    .save-status.ok    { color: #4ade80; }
+    .save-status.error { color: #f87171; }
+
+    /* channel count preview */
+    .count-preview { font-size: 0.82rem; color: #64748b; margin-top: 0.5rem; }
+    .count-preview strong { color: #38bdf8; }
+  </style>
+</head>
+<body>
+<nav>
+  <h1>⚡ FastChannels</h1>
+  <a href="/admin/">Dashboard</a>
+  <a href="/admin/sources">Sources</a>
+  <a href="/admin/channels">Channels</a>
+  <a href="/admin/feeds" class="active">Feeds</a>
+  <a href="/admin/settings">Settings</a>
+  <a href="/m3u" target="_blank">M3U ↗</a>
+  <a href="/epg.xml" target="_blank">EPG XML ↗</a>
+</nav>
+
+<div class="container">
+  <div class="page-header">
+    <div>
+      <h2>Output Feeds</h2>
+      <p style="color:#64748b;font-size:0.85rem;margin-top:0.25rem">
+        Each feed is a named M3U + EPG pair you add as a source in Channels DVR. Keep each feed under 750 channels.
+      </p>
+    </div>
+    <button class="btn btn-primary" onclick="openModal()">+ New Feed</button>
+  </div>
+
+  <div class="feed-grid" id="feed-grid">
+    {% if not feeds %}
+    <div class="empty">
+      <h3>No feeds yet</h3>
+      <p>Create your first feed to get stable M3U + EPG URLs for Channels DVR.</p>
+    </div>
+    {% endif %}
+
+    {% for feed in feeds %}
+    <div class="feed-card {% if not feed.is_enabled %}disabled{% endif %}" id="card-{{ feed.id }}">
+      <div class="feed-top">
+        <div style="flex:1;min-width:0">
+          <div class="feed-name">{{ feed.name }}</div>
+          {% if feed.description %}<div class="feed-desc">{{ feed.description }}</div>{% endif %}
+          <div class="filter-tags">
+            {% set f = feed.filters or {} %}
+            {% if f.get('sources') %}
+              {% for s in f['sources'] %}
+                <span class="badge-pill pill-blue">{{ s }}</span>
+              {% endfor %}
+            {% else %}
+              <span class="badge-pill pill-gray">all sources</span>
+            {% endif %}
+            {% if f.get('categories') %}
+              {% for c in f['categories'] %}
+                <span class="badge-pill pill-green">{{ c }}</span>
+              {% endfor %}
+            {% endif %}
+            {% if f.get('max_channels') %}
+              <span class="badge-pill pill-gray">max {{ f['max_channels'] }}</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="feed-actions">
+          <button class="btn btn-ghost" style="font-size:0.78rem;padding:0.3rem 0.7rem"
+                  onclick='openModal({{ feed.to_dict(base_url)|tojson }})'>Edit</button>
+          <button class="btn btn-danger" onclick="deleteFeed({{ feed.id }}, '{{ feed.name|e }}', this)">Delete</button>
+        </div>
+      </div>
+
+      <div class="feed-meta">
+        <div class="feed-stat"><strong>{{ feed.channel_count() }}</strong> channels</div>
+        <div class="feed-stat">
+          <strong>{% if feed.is_enabled %}Enabled{% else %}Disabled{% endif %}</strong>
+        </div>
+      </div>
+
+      <div class="feed-urls">
+        <a class="url-chip" href="{{ base_url }}/m3u/{{ feed.slug }}" target="_blank">
+          M3U&nbsp;↗&nbsp;<span style="opacity:0.5">{{ base_url }}/m3u/{{ feed.slug }}</span>
+          <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/m3u/{{ feed.slug }}')">⎘</button>
+        </a>
+        <a class="url-chip" href="{{ base_url }}/epg/{{ feed.slug }}.xml" target="_blank">
+          EPG&nbsp;↗&nbsp;<span style="opacity:0.5">{{ base_url }}/epg/{{ feed.slug }}.xml</span>
+          <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/epg/{{ feed.slug }}.xml')">⎘</button>
+        </a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- ── Create / Edit Modal ── -->
+<div class="overlay" id="modal-overlay">
+  <div class="modal">
+    <h3 id="modal-title">New Feed</h3>
+    <input type="hidden" id="edit-id" value="">
+
+    <div class="field">
+      <label>Feed Name <span style="color:#f87171">*</span></label>
+      <input type="text" id="f-name" placeholder="e.g. Sports, News, Pluto Everything">
+    </div>
+    <div class="field">
+      <label>Description</label>
+      <input type="text" id="f-desc" placeholder="Optional note">
+    </div>
+    <div class="field">
+      <label>Sources <span style="color:#475569;font-weight:400;text-transform:none">(leave all unchecked = include all)</span></label>
+      <div class="check-group" id="sources-group">
+        {% for s in sources %}
+        <label class="check-item" id="src-wrap-{{ s.name }}">
+          <input type="checkbox" value="{{ s.name }}" class="src-cb"> {{ s.display_name }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="field">
+      <label>Categories <span style="color:#475569;font-weight:400;text-transform:none">(leave all unchecked = include all)</span></label>
+      <div class="check-group" id="categories-group">
+        {% for c in categories %}
+        <label class="check-item" id="cat-wrap-{{ loop.index }}">
+          <input type="checkbox" value="{{ c }}" class="cat-cb"> {{ c }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="field">
+      <label>Max Channels</label>
+      <input type="number" id="f-max" min="1" max="9999" placeholder="750 recommended for Channels DVR">
+      <div class="help">Leave blank for no limit. Channels DVR degrades above ~750.</div>
+    </div>
+    <div class="count-preview" id="count-preview"></div>
+
+    <div class="modal-footer">
+      <span class="save-status" id="modal-status"></span>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="save-btn" onclick="saveFeed()">Save Feed</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Modal state ────────────────────────────────────────────────────────────
+function openModal(feed = null) {
+  document.getElementById('modal-title').textContent = feed ? 'Edit Feed' : 'New Feed';
+  document.getElementById('edit-id').value    = feed ? feed.id : '';
+  document.getElementById('f-name').value     = feed ? feed.name : '';
+  document.getElementById('f-desc').value     = feed ? (feed.description || '') : '';
+  document.getElementById('f-max').value      = feed ? (feed.filters.max_channels || '') : '';
+  document.getElementById('modal-status').textContent = '';
+
+  // Reset checkboxes
+  document.querySelectorAll('.src-cb').forEach(cb => {
+    cb.checked = feed ? (feed.filters.sources || []).includes(cb.value) : false;
+    cb.closest('.check-item').classList.toggle('selected', cb.checked);
+  });
+  document.querySelectorAll('.cat-cb').forEach(cb => {
+    cb.checked = feed ? (feed.filters.categories || []).includes(cb.value) : false;
+    cb.closest('.check-item').classList.toggle('selected', cb.checked);
+  });
+
+  updateCountPreview();
+  document.getElementById('modal-overlay').classList.add('open');
+  document.getElementById('f-name').focus();
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+// ── Live channel count preview ────────────────────────────────────────────
+let _previewTimer = null;
+function schedulePreview() {
+  clearTimeout(_previewTimer);
+  _previewTimer = setTimeout(updateCountPreview, 400);
+}
+async function updateCountPreview() {
+  const filters = buildFilters();
+  const params  = new URLSearchParams();
+  (filters.sources    || []).forEach(s => params.append('source', s));
+  (filters.categories || []).forEach(c => params.append('category', c));
+  try {
+    const r = await fetch(`/api/stats?${params}`);
+    const d = await r.json();
+    const total = d.total_channels;
+    const max   = filters.max_channels;
+    const shown = max ? Math.min(total, max) : total;
+    const warn  = shown > 750 ? ' ⚠️ over 750 — Channels DVR may be slow' : '';
+    document.getElementById('count-preview').innerHTML =
+      `<strong>${shown}</strong> channels will be in this feed${warn}`;
+  } catch(e) {
+    document.getElementById('count-preview').textContent = '';
+  }
+}
+
+// Wire up live preview on checkbox changes
+document.querySelectorAll('.src-cb, .cat-cb').forEach(cb => {
+  cb.addEventListener('change', () => {
+    cb.closest('.check-item').classList.toggle('selected', cb.checked);
+    schedulePreview();
+  });
+});
+document.getElementById('f-max').addEventListener('input', schedulePreview);
+
+// ── Build filters from modal state ────────────────────────────────────────
+function buildFilters() {
+  const f = {};
+  const sources = [...document.querySelectorAll('.src-cb:checked')].map(c => c.value);
+  if (sources.length) f.sources = sources;
+  const cats = [...document.querySelectorAll('.cat-cb:checked')].map(c => c.value);
+  if (cats.length) f.categories = cats;
+  const max = parseInt(document.getElementById('f-max').value);
+  if (max > 0) f.max_channels = max;
+  return f;
+}
+
+// ── Save ──────────────────────────────────────────────────────────────────
+async function saveFeed() {
+  const name = document.getElementById('f-name').value.trim();
+  if (!name) { alert('Feed name is required.'); return; }
+
+  const id      = document.getElementById('edit-id').value;
+  const btn     = document.getElementById('save-btn');
+  const status  = document.getElementById('modal-status');
+  btn.disabled  = true;
+  status.textContent = 'Saving…';
+  status.className   = 'save-status';
+
+  const payload = {
+    name:        name,
+    description: document.getElementById('f-desc').value.trim(),
+    filters:     buildFilters(),
+    is_enabled:  true,
+  };
+
+  try {
+    const url    = id ? `/api/feeds/${id}` : '/api/feeds';
+    const method = id ? 'PATCH' : 'POST';
+    const r      = await fetch(url, {
+      method,
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const d = await r.json();
+      throw new Error(d.error || `HTTP ${r.status}`);
+    }
+    closeModal();
+    location.reload();
+  } catch(e) {
+    status.textContent = '✗ ' + e.message;
+    status.className   = 'save-status error';
+    btn.disabled = false;
+  }
+}
+
+// ── Delete ────────────────────────────────────────────────────────────────
+async function deleteFeed(id, name, btn) {
+  if (!confirm(`Delete feed "${name}"?\nThis removes the feed definition only — no channels are deleted.`)) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/feeds/${id}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    document.getElementById(`card-${id}`)?.remove();
+  } catch(e) {
+    alert('Delete failed: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+// ── Copy URL ──────────────────────────────────────────────────────────────
+function copyUrl(e, url) {
+  e.preventDefault();
+  e.stopPropagation();
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = e.target;
+    btn.textContent = '✓';
+    setTimeout(() => btn.textContent = '⎘', 1500);
+  });
+}
+
+// Close on backdrop click
+document.getElementById('modal-overlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+</script>
+</body>
+</html>

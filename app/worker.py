@@ -37,7 +37,6 @@ def run_scraper(source_name: str):
             return
 
         try:
-            # Pass saved config (credentials, options) into the scraper
             scraper = scraper_cls(config=source.config or {})
             channels, programs = scraper.run()
             _upsert_channels(source, channels)
@@ -46,6 +45,15 @@ def run_scraper(source_name: str):
             source.last_error      = None
             db.session.commit()
             logger.info(f'[{source_name}] Done — {len(channels)} channels, {len(programs)} programs')
+
+            # Invalidate EPG output cache so next request rebuilds fresh data
+            try:
+                from app.routes.output import invalidate_epg_cache
+                invalidate_epg_cache()
+                logger.info(f'[{source_name}] EPG cache invalidated')
+            except Exception as ce:
+                logger.warning(f'[{source_name}] Cache invalidation failed (non-fatal): {ce}')
+
         except Exception as e:
             logger.exception(f'[{source_name}] Scrape failed')
             source.last_error = str(e)
@@ -57,14 +65,14 @@ def _upsert_channels(source, channel_data_list):
     for cd in channel_data_list:
         ch = existing.get(cd.source_channel_id)
         if ch:
-            ch.name       = cd.name
-            ch.stream_url = cd.stream_url
+            ch.name        = cd.name
+            ch.stream_url  = cd.stream_url
             ch.stream_type = cd.stream_type
-            ch.logo_url   = cd.logo_url
-            ch.slug       = cd.slug
-            ch.category   = cd.category
-            ch.number     = cd.number
-            ch.is_active  = True
+            ch.logo_url    = cd.logo_url
+            ch.slug        = cd.slug
+            ch.category    = cd.category
+            ch.number      = cd.number
+            ch.is_active   = True
         else:
             db.session.add(Channel(
                 source_id=source.id,

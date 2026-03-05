@@ -6,3 +6,4 @@ requests==2.32.3
 gunicorn==23.0.0
 python-dotenv==1.0.1
 pytz==2024.1
+beautifulsoup4==4.12.3

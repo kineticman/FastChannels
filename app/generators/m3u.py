@@ -5,30 +5,17 @@ def generate_m3u(filters: dict = None, base_url: str = None) -> str:
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
 
-    query = Channel.query.join(Source).filter(
-        Channel.is_active  == True,
-        Channel.is_enabled == True,
-        Source.is_enabled  == True,
-        Channel.stream_url != None,
-    )
-    if sources := filters.get('source'):
-        query = query.filter(Source.name.in_(sources))
-    if categories := filters.get('category'):
-        query = query.filter(Channel.category.in_(categories))
-    if language := filters.get('language'):
-        query = query.filter(Channel.language == language)
-    if search := filters.get('search'):
-        query = query.filter(Channel.name.ilike(f'%{search}%'))
-
-    channels = query.order_by(Channel.number.asc().nullslast(), Channel.name.asc()).all()
+    channels = _build_channel_query(filters) \
+        .order_by(Channel.number.asc().nullslast(), Channel.name.asc()).all()
 
     lines = ['#EXTM3U']
     for ch in channels:
         tvg_id = _tvg_id(ch)
-        attrs = [
+        group  = _group_title(ch)
+        attrs  = [
             f'tvg-id="{tvg_id}"',
             f'tvg-name="{_esc(ch.name)}"',
-            f'group-title="{_esc(ch.category or ch.source.display_name)}"',
+            f'group-title="{_esc(group)}"',
         ]
         if ch.logo_url:
             attrs.append(f'tvg-logo="{ch.logo_url}"')
@@ -38,6 +25,46 @@ def generate_m3u(filters: dict = None, base_url: str = None) -> str:
         lines.append(f'{base_url}/play/{ch.source.name}/{ch.source_channel_id}.m3u8')
 
     return '\n'.join(lines)
+
+
+def _build_channel_query(filters: dict):
+    """
+    Shared channel query used by both generate_m3u() and generate_xmltv_stream().
+    Returns a SQLAlchemy query (not yet executed) so callers can add
+    their own ordering / slicing.
+    """
+    q = Channel.query.join(Source).filter(
+        Channel.is_active  == True,
+        Channel.is_enabled == True,
+        Source.is_enabled  == True,
+        Channel.stream_url != None,
+    )
+    if sources := filters.get('source'):
+        q = q.filter(Source.name.in_(sources))
+    if categories := filters.get('category'):
+        q = q.filter(Channel.category.in_(categories))
+    if language := filters.get('language'):
+        q = q.filter(Channel.language == language)
+    if search := filters.get('search'):
+        q = q.filter(Channel.name.ilike(f'%{search}%'))
+    return q
+
+
+def _group_title(ch) -> str:
+    """
+    Build the group-title value.
+    Format: "{category};{source display_name}"
+    e.g. "Sports;Pluto TV"  or  "News;Tubi TV"
+
+    If no category exists, falls back to just the source display name
+    so every channel always has a group.
+    """
+    source_label = ch.source.display_name
+    category     = (ch.category or '').strip()
+
+    if category:
+        return f'{category};{source_label}'
+    return source_label
 
 
 def _tvg_id(ch) -> str:

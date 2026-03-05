@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, request
 from ..extensions import db
-from ..models import Source, Channel
+from ..models import Source, Channel, Feed
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
@@ -8,9 +8,10 @@ admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 @admin_bp.route('/')
 def dashboard():
     sources        = Source.query.order_by(Source.display_name).all()
+    feeds          = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
     total_channels = Channel.query.filter_by(is_active=True, is_enabled=True).count()
     base_url       = request.host_url.rstrip('/')
-    return render_template('admin/dashboard.html', sources=sources,
+    return render_template('admin/dashboard.html', sources=sources, feeds=feeds,
                            total_channels=total_channels, base_url=base_url)
 
 
@@ -43,6 +44,22 @@ def channels():
                            channels=channels, sources=sources,
                            source_filter=source_filter, search=search,
                            enabled_filter=enabled_filter)
+
+
+@admin_bp.route('/feeds')
+def feeds():
+    sources     = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
+    feeds       = Feed.query.order_by(Feed.name).all()
+    # Distinct categories across all active channels for the filter builder
+    from ..models import Channel as Ch
+    cats = db.session.query(Ch.category)\
+        .filter(Ch.is_active == True, Ch.category != None)\
+        .distinct().order_by(Ch.category).all()
+    categories = [c[0] for c in cats]
+    base_url   = request.host_url.rstrip('/')
+    return render_template('admin/feeds.html',
+                           feeds=feeds, sources=sources,
+                           categories=categories, base_url=base_url)
 
 
 @admin_bp.route('/settings')
