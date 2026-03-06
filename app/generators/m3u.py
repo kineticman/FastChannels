@@ -1,21 +1,72 @@
+import re
 from ..models import Channel, Source
+
+# Gracenote ID prefixes recognised by Channels DVR
+_GRACENOTE_PREFIX_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
+
+
+def _parse_gracenote_id(ch) -> str | None:
+    """
+    Returns the Gracenote station ID for a channel, or None.
+
+    Resolution order:
+      1. channel.gracenote_id  — explicitly stored (set by scraper or user via admin UI)
+      2. slug fallback          — Roku scrapers encode "{play_id}|{gracenote_id}" in the
+                                  slug before the dedicated column existed; still honoured
+                                  so existing data keeps working without a re-scrape.
+    """
+    # 1. Dedicated column (preferred)
+    gid = (ch.gracenote_id or '').strip()
+    if gid and _GRACENOTE_PREFIX_RE.match(gid):
+        return gid
+
+    # 2. Slug fallback for Roku-style "{play_id}|{gracenote_id}"
+    slug = ch.slug or ''
+    if '|' in slug:
+        candidate = slug.split('|', 1)[1].strip()
+        if candidate and _GRACENOTE_PREFIX_RE.match(candidate):
+            return candidate
+
+    return None
+
+
+def _build_channel_query(filters: dict):
+    """Shared filtered query for active, enabled channels."""
+    query = Channel.query.join(Source).filter(
+        Channel.is_active  == True,
+        Channel.is_enabled == True,
+        Source.is_enabled  == True,
+        Channel.stream_url != None,
+    )
+    if sources := filters.get('source'):
+        query = query.filter(Source.name.in_(sources))
+    if categories := filters.get('category'):
+        query = query.filter(Channel.category.in_(categories))
+    if language := filters.get('language'):
+        query = query.filter(Channel.language == language)
+    if search := filters.get('search'):
+        query = query.filter(Channel.name.ilike(f'%{search}%'))
+    return query.order_by(Channel.number.asc().nullslast(), Channel.name.asc())
 
 
 def generate_m3u(filters: dict = None, base_url: str = None) -> str:
+    """
+    Standard XMLTV-backed playlist.
+    Excludes channels with a valid Gracenote ID — those belong in /m3u/gracenote
+    so Channels DVR doesn't mix EPG sources within a single M3U source.
+    """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
 
-    channels = _build_channel_query(filters) \
-        .order_by(Channel.number.asc().nullslast(), Channel.name.asc()).all()
-
     lines = ['#EXTM3U']
-    for ch in channels:
+    for ch in _build_channel_query(filters).all():
+        if _parse_gracenote_id(ch):
+            continue  # belongs in /m3u/gracenote
         tvg_id = _tvg_id(ch)
-        group  = _group_title(ch)
-        attrs  = [
+        attrs = [
             f'tvg-id="{tvg_id}"',
             f'tvg-name="{_esc(ch.name)}"',
-            f'group-title="{_esc(group)}"',
+            f'group-title="{_esc(ch.category or ch.source.display_name)}"',
         ]
         if ch.logo_url:
             attrs.append(f'tvg-logo="{ch.logo_url}"')
@@ -27,70 +78,39 @@ def generate_m3u(filters: dict = None, base_url: str = None) -> str:
     return '\n'.join(lines)
 
 
-def _build_channel_query(filters: dict):
+def generate_gracenote_m3u(filters: dict = None, base_url: str = None) -> str:
     """
-    Shared channel query used by both generate_m3u() and generate_xmltv_stream().
-    Returns a SQLAlchemy query (not yet executed) so callers can add
-    their own ordering / slicing.
+    Gracenote-backed playlist for Channels DVR.
+
+    Only includes channels with a valid Gracenote ID (from channel.gracenote_id
+    or the legacy "{play_id}|{gracenote_id}" slug encoding).
+    Uses tvc-guide-stationid so Channels DVR routes guide data through Gracenote
+    rather than our XMLTV — the two cannot be mixed per source.
     """
-    q = Channel.query.join(Source).filter(
-        Channel.is_active  == True,
-        Channel.is_enabled == True,
-        Source.is_enabled  == True,
-        Channel.stream_url != None,
-    )
-    # Accept both singular (query-string style) and plural (feed filters style)
-    sources    = filters.get('sources') or filters.get('source') or []
-    categories = filters.get('categories') or filters.get('category') or []
-    languages  = filters.get('languages') or (
-                     [filters['language']] if filters.get('language') else [])
+    filters  = filters or {}
+    base_url = (base_url or '').rstrip('/')
 
-    if sources:
-        q = q.filter(Source.name.in_(sources))
-    if categories:
-        # Category filter: match channels where ANY of their semicolon-joined
-        # categories contains one of the requested categories.
-        from sqlalchemy import or_
-        cat_filters = [Channel.category.ilike(f'%{c}%') for c in categories]
-        q = q.filter(or_(*cat_filters))
-    if languages:
-        q = q.filter(Channel.language.in_(languages))
-    if search := filters.get('search'):
-        q = q.filter(Channel.name.ilike(f'%{search}%'))
+    lines = ['#EXTM3U']
+    for ch in _build_channel_query(filters).all():
+        gracenote_id = _parse_gracenote_id(ch)
+        if not gracenote_id:
+            continue
+        attrs = [
+            f'tvc-guide-stationid="{gracenote_id}"',
+            f'tvg-name="{_esc(ch.name)}"',
+            f'group-title="{_esc(ch.category or ch.source.display_name)}"',
+        ]
+        if ch.logo_url:
+            attrs.append(f'tvg-logo="{ch.logo_url}"')
+        if ch.number:
+            attrs.append(f'tvg-chno="{ch.number}"')
+        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{ch.name}')
+        lines.append(f'{base_url}/play/{ch.source.name}/{ch.source_channel_id}.m3u8')
 
-    # Hard cap — applied after all filters
-    if max_ch := filters.get('max_channels'):
-        q = q.limit(int(max_ch))
-
-    return q
-
-
-def _group_title(ch) -> str:
-    """
-    Build the group-title value.
-    Format: "{category};{source display_name}"
-    e.g. "Sports;Pluto TV"  or  "News;Tubi TV"
-
-    If no category exists, falls back to just the source display name
-    so every channel always has a group.
-    """
-    source_label = ch.source.display_name
-    category     = (ch.category or '').strip()
-
-    if category:
-        return f'{category};{source_label}'
-    return source_label
+    return '\n'.join(lines)
 
 
 def _tvg_id(ch) -> str:
-    """
-    Stable, human-readable tvg-id that survives re-scrapes and DB rebuilds.
-    Format: "{source_name}.{source_channel_id}"
-    e.g. "pluto.abc-news-1"  or  "distro.12345"
-
-    Must match exactly what generate_xmltv() writes into <channel id="...">
-    and <programme channel="...">.
-    """
     return f'{ch.source.name}.{ch.source_channel_id}'
 
 

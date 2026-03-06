@@ -48,9 +48,9 @@ class Channel(db.Model):
     language          = db.Column(db.String(16), default='en')
     country           = db.Column(db.String(8), default='US')
     number            = db.Column(db.Integer)
+    gracenote_id      = db.Column(db.String(32), nullable=True)   # e.g. EP012345678; set by scraper or user
     is_active         = db.Column(db.Boolean, default=True)   # set by scraper — channel exists upstream
     is_enabled        = db.Column(db.Boolean, default=True)   # set by user — include in M3U/EPG
-    disable_reason    = db.Column(db.String(64))                 # auto-set, e.g. 'DRM'
     created_at        = db.Column(db.DateTime(timezone=True),
                                   default=lambda: datetime.now(timezone.utc))
     updated_at        = db.Column(db.DateTime(timezone=True),
@@ -81,9 +81,9 @@ class Channel(db.Model):
             'language':         self.language,
             'country':          self.country,
             'number':           self.number,
+            'gracenote_id':     self.gracenote_id,
             'is_active':        self.is_active,
             'is_enabled':       self.is_enabled,
-            'disable_reason':   self.disable_reason,
         }
 
 
@@ -109,41 +109,46 @@ class Program(db.Model):
 
 class Feed(db.Model):
     """
-    A named, stable output feed — pre-configured M3U + EPG URLs for use in
-    Channels DVR, Jellyfin, Plex etc. Each feed has a slug that forms its URL:
-      /m3u/<slug>        → filtered M3U playlist
-      /epg/<slug>.xml    → filtered XMLTV EPG
+    A named, filtered sub-feed that exposes its own /m3u and /epg.xml URLs.
+    Filters are stored as a JSON dict and passed directly to generate_m3u()
+    / generate_xmltv() at request time — no denormalisation needed.
 
-    The filters JSON dict uses the same shape as _filters_from_request():
-      {
-        "sources":    ["pluto", "roku"],   # list of source names
-        "categories": ["News", "Sports"],  # list of category strings
-        "language":   "en",
-        "search":     "fox"
-      }
-    Any key can be omitted to leave that dimension unfiltered.
+    Filter keys (all optional):
+      sources      list[str]  — Source.name values to include
+      categories   list[str]  — channel category strings
+      languages    list[str]  — ISO 639-1 codes
+      max_channels int        — cap on channels returned
     """
     __tablename__ = 'feeds'
 
     id          = db.Column(db.Integer, primary_key=True)
-    slug        = db.Column(db.String(64), unique=True, nullable=False)  # URL-safe, e.g. 'news' or 'kids'
-    display_name = db.Column(db.String(128), nullable=False)
-    filters     = db.Column(db.JSON, default=dict)   # see docstring above
+    slug        = db.Column(db.String(64), unique=True, nullable=False)   # URL-safe, permanent
+    name        = db.Column(db.String(128), nullable=False)
+    description = db.Column(db.Text, default='')
+    filters     = db.Column(db.JSON, default=dict)
     is_enabled  = db.Column(db.Boolean, default=True)
     created_at  = db.Column(db.DateTime(timezone=True),
                             default=lambda: datetime.now(timezone.utc))
+    updated_at  = db.Column(db.DateTime(timezone=True),
+                            default=lambda: datetime.now(timezone.utc),
+                            onupdate=lambda: datetime.now(timezone.utc))
 
     def __repr__(self):
         return f'<Feed {self.slug}>'
 
-    def to_dict(self):
+    def to_dict(self, base_url: str = '') -> dict:
+        base_url = (base_url or '').rstrip('/')
         return {
-            'id':           self.id,
-            'slug':         self.slug,
-            'display_name': self.display_name,
-            'filters':      self.filters,
-            'is_enabled':   self.is_enabled,
-            'created_at':   self.created_at.isoformat() if self.created_at else None,
-            'm3u_url':      f'/m3u/{self.slug}',
-            'epg_url':      f'/epg/{self.slug}.xml',
+            'id':          self.id,
+            'slug':        self.slug,
+            'name':        self.name,
+            'description': self.description,
+            'filters':     self.filters or {},
+            'is_enabled':  self.is_enabled,
+            'created_at':  self.created_at.isoformat() if self.created_at else None,
+            'updated_at':  self.updated_at.isoformat() if self.updated_at else None,
+            # Convenience URLs for the client / admin UI
+            'm3u_url':     f'{base_url}/feeds/{self.slug}/m3u',
+            'epg_url':     f'{base_url}/feeds/{self.slug}/epg.xml',
+            'gracenote_url': f'{base_url}/feeds/{self.slug}/m3u/gracenote',
         }

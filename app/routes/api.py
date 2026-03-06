@@ -1,10 +1,13 @@
+import re
 from flask import Blueprint, jsonify, request
 from ..extensions import db
 from ..models import Source, Channel
 from ..scrapers import registry
-from .tasks import trigger_scrape, trigger_drm_check
+from .tasks import trigger_scrape
 
 api_bp = Blueprint('api', __name__)
+
+_GRACENOTE_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
 
 
 @api_bp.route('/sources')
@@ -18,13 +21,6 @@ def run_source(source_id):
     trigger_scrape(source.name)
     return jsonify({'status': 'queued', 'source': source.name})
 
-
-
-@api_bp.route('/sources/<int:source_id>/drm-check', methods=['POST'])
-def drm_check_source(source_id):
-    source = Source.query.get_or_404(source_id)
-    trigger_drm_check(source.name)
-    return jsonify({'status': 'queued', 'source': source.name})
 
 @api_bp.route('/sources/<int:source_id>', methods=['PATCH'])
 def update_source(source_id):
@@ -113,6 +109,12 @@ def update_channel(channel_id):
     for field in ('name', 'logo_url', 'category', 'is_active', 'is_enabled', 'number'):
         if field in data:
             setattr(ch, field, data[field])
+    if 'gracenote_id' in data:
+        raw = (data['gracenote_id'] or '').strip()
+        if raw == '' or _GRACENOTE_RE.match(raw):
+            ch.gracenote_id = raw or None
+        else:
+            return jsonify({'error': 'Invalid Gracenote ID — must be numeric (e.g. 122912) or start with EP/SH/MV/SP/TR (e.g. EP012345678)'}), 422
     db.session.commit()
     return jsonify(ch.to_dict())
 

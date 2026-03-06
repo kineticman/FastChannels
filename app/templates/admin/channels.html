@@ -10,7 +10,7 @@
     nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
     nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
     nav a:hover, nav a.active { color: #e2e8f0; }
-    .container { max-width: 1200px; margin: 2rem auto; padding: 0 2rem; }
+    .container { max-width: 1400px; margin: 2rem auto; padding: 0 2rem; }
 
     /* Filters */
     .toolbar { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; align-items: center; }
@@ -61,10 +61,6 @@
     tr:hover td { background: #1a2744; }
 
     .logo { width: 32px; height: 32px; object-fit: contain; border-radius: 4px; background: #0f172a; }
-    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.7rem; font-weight: 600; }
-    .badge-green { background: #064e3b; color: #34d399; }
-    .badge-gray  { background: #1e293b; color: #64748b; border: 1px solid #334155; }
-    .badge-drm   { background: #451a03; color: #fb923c; border: 1px solid #92400e; font-size: 0.7rem; }
 
     /* Toggle switch */
     .toggle-wrap { display: flex; align-items: center; }
@@ -92,6 +88,49 @@
     input[type=checkbox]#select-all {
       width: 15px; height: 15px; cursor: pointer; accent-color: #38bdf8;
     }
+
+    /* ── Gracenote ID input ─────────────────────────────────────────────── */
+    .gn-cell { min-width: 160px; }
+
+    .gn-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      position: relative;
+    }
+
+    .gn-input {
+      width: 140px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 5px;
+      color: #e2e8f0;
+      font-size: 0.78rem;
+      font-family: monospace;
+      padding: 0.28rem 0.5rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .gn-input::placeholder { color: #334155; }
+    .gn-input:focus { border-color: #38bdf8; }
+    .gn-input.gn-set  { border-color: #15803d; color: #4ade80; }
+    .gn-input.gn-err  { border-color: #b91c1c; color: #f87171; }
+    .gn-input.gn-saving { opacity: 0.5; pointer-events: none; }
+
+    /* tiny status dot */
+    .gn-status {
+      font-size: 0.7rem;
+      width: 14px;
+      text-align: center;
+      flex-shrink: 0;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .gn-status.visible { opacity: 1; }
+    .gn-status.ok   { color: #4ade80; }
+    .gn-status.err  { color: #f87171; }
+    .gn-status.spin { color: #64748b; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     /* Pagination */
     .pagination { display: flex; gap: 0.5rem; margin-top: 1rem; justify-content: center; align-items: center; }
@@ -124,7 +163,6 @@
         <option value="">All</option>
         <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
         <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
-        <option value="drm" {% if enabled_filter == 'drm' %}selected{% endif %}>🔒 DRM only</option>
       </select>
       <button type="submit">Filter</button>
       <a class="clear" href="/admin/channels">Clear</a>
@@ -148,13 +186,13 @@
             <th>Source</th>
             <th>Category</th>
             <th>#</th>
+            <th>Gracenote ID</th>
             <th>In M3U</th>
-            <th>Notes</th>
           </tr>
         </thead>
         <tbody id="channel-tbody">
           {% for ch in channels.items %}
-          <tr id="row-{{ ch.id }}" class="{% if not ch.is_enabled or not ch.is_active %}disabled{% endif %}">
+          <tr id="row-{{ ch.id }}" class="{% if not ch.is_enabled %}disabled{% endif %}">
             <td><input type="checkbox" class="row-check" value="{{ ch.id }}" onchange="onRowCheck()"></td>
             <td>
               {% if ch.logo_url %}
@@ -167,6 +205,27 @@
             <td style="color:#64748b">{{ ch.source.display_name }}</td>
             <td style="color:#94a3b8">{{ ch.category or '—' }}</td>
             <td style="color:#64748b">{{ ch.number or '—' }}</td>
+
+            {# ── Gracenote ID cell ── #}
+            <td class="gn-cell">
+              <div class="gn-wrap">
+                <input
+                  type="text"
+                  class="gn-input {% if ch.gracenote_id %}gn-set{% endif %}"
+                  id="gn-{{ ch.id }}"
+                  data-channel-id="{{ ch.id }}"
+                  data-original="{{ ch.gracenote_id or '' }}"
+                  value="{{ ch.gracenote_id or '' }}"
+                  placeholder="EP…"
+                  maxlength="32"
+                  spellcheck="false"
+                  autocomplete="off"
+                  title="Gracenote station ID (e.g. EP012345678). Saved automatically on leaving the field."
+                >
+                <span class="gn-status" id="gn-status-{{ ch.id }}"></span>
+              </div>
+            </td>
+
             <td class="toggle-col">
               <div class="toggle-wrap">
                 <label class="toggle" id="toggle-{{ ch.id }}">
@@ -175,11 +234,6 @@
                   <span class="slider"></span>
                 </label>
               </div>
-            </td>
-            <td>
-              {% if ch.disable_reason == 'DRM' %}
-              <span class="badge badge-drm" title="Auto-disabled: DRM encryption detected">🔒 DRM</span>
-              {% endif %}
             </td>
           </tr>
           {% endfor %}
@@ -201,7 +255,87 @@
   </div>
 
   <script>
-    // ── Single toggle ──────────────────────────────────────────────────────
+    // ── Gracenote ID — inline edit, save on blur ───────────────────────────
+    const GN_RE = /^(EP|SH|MV|SP|TR)\d+$/;
+
+    document.querySelectorAll('.gn-input').forEach(inp => {
+      inp.addEventListener('blur',  () => gnSave(inp));
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+      inp.addEventListener('input',   () => gnClearStatus(inp));
+    });
+
+    async function gnSave(inp) {
+      const channelId = inp.dataset.channelId;
+      const raw       = inp.value.trim();
+      const original  = inp.dataset.original;
+
+      // Nothing changed — skip the round-trip
+      if (raw === original) return;
+
+      // Client-side format check (empty = clear, otherwise must match pattern)
+      if (raw !== '' && !GN_RE.test(raw)) {
+        gnSetStatus(inp, 'err', '✕');
+        inp.classList.add('gn-err');
+        inp.classList.remove('gn-set');
+        inp.title = 'Invalid ID — must be EP/SH/MV/SP/TR followed by digits (e.g. EP012345678)';
+        return;
+      }
+
+      gnSetStatus(inp, 'spin', '↻');
+      inp.classList.add('gn-saving');
+
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method:  'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({ gracenote_id: raw || null }),
+        });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${r.status}`);
+        }
+        // Commit the new value as the new baseline
+        inp.dataset.original = raw;
+        inp.classList.remove('gn-err');
+        inp.title = 'Gracenote station ID (e.g. EP012345678). Saved automatically on leaving the field.';
+
+        if (raw) {
+          inp.classList.add('gn-set');
+          gnSetStatus(inp, 'ok', '✓');
+          setTimeout(() => gnClearStatus(inp), 2500);
+        } else {
+          inp.classList.remove('gn-set');
+          gnClearStatus(inp);
+        }
+      } catch (e) {
+        gnSetStatus(inp, 'err', '✕');
+        inp.classList.add('gn-err');
+        inp.classList.remove('gn-set');
+        inp.title = e.message;
+        // Revert to last known-good value
+        inp.value = original;
+      } finally {
+        inp.classList.remove('gn-saving');
+      }
+    }
+
+    function gnSetStatus(inp, cls, icon) {
+      const el = document.getElementById(`gn-status-${inp.dataset.channelId}`);
+      if (!el) return;
+      el.textContent  = icon;
+      el.className    = `gn-status visible ${cls}`;
+    }
+
+    function gnClearStatus(inp) {
+      const el = document.getElementById(`gn-status-${inp.dataset.channelId}`);
+      if (!el) return;
+      el.className   = 'gn-status';
+      el.textContent = '';
+      inp.classList.remove('gn-err');
+      inp.title = 'Gracenote station ID (e.g. EP012345678). Saved automatically on leaving the field.';
+    }
+
+    // ── Single M3U toggle ──────────────────────────────────────────────────
     async function toggle(channelId, checkbox) {
       const label = document.getElementById(`toggle-${channelId}`);
       const row   = document.getElementById(`row-${channelId}`);
@@ -217,7 +351,6 @@
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         row.classList.toggle('disabled', !checkbox.checked);
       } catch (e) {
-        // Revert on error
         checkbox.checked = !checkbox.checked;
         console.error('Toggle failed:', e);
       } finally {
@@ -237,7 +370,6 @@
       const bar     = document.getElementById('bulk-bar');
       document.getElementById('bulk-count').textContent = `${checked.length} selected`;
       bar.classList.toggle('visible', checked.length > 0);
-      // Update master checkbox state
       const all = document.querySelectorAll('.row-check');
       document.getElementById('select-all').indeterminate = checked.length > 0 && checked.length < all.length;
       document.getElementById('select-all').checked = checked.length === all.length;
@@ -260,11 +392,9 @@
         })
       ));
 
-      // Update UI
       ids.forEach(id => {
-        const row   = document.getElementById(`row-${id}`);
-        const input = row?.querySelector('input[type=checkbox].row-check');
-        const tog   = row?.querySelector('.toggle input[type=checkbox]');
+        const row = document.getElementById(`row-${id}`);
+        const tog = row?.querySelector('.toggle input[type=checkbox]');
         if (tog) tog.checked = enable;
         row?.classList.toggle('disabled', !enable);
       });

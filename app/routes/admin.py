@@ -1,6 +1,7 @@
 from flask import Blueprint, render_template, request
 from ..extensions import db
-from ..models import Source, Channel
+from ..models import Source, Channel, Feed
+from ..generators.m3u import _parse_gracenote_id
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
@@ -10,8 +11,14 @@ def dashboard():
     sources        = Source.query.order_by(Source.display_name).all()
     total_channels = Channel.query.filter_by(is_active=True, is_enabled=True).count()
     base_url       = request.host_url.rstrip('/')
+    feeds          = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
+    gracenote_count = sum(
+        1 for ch in Channel.query.filter_by(is_active=True, is_enabled=True).all()
+        if _parse_gracenote_id(ch)
+    )
     return render_template('admin/dashboard.html', sources=sources,
-                           total_channels=total_channels, base_url=base_url)
+                           total_channels=total_channels, base_url=base_url,
+                           feeds=feeds, gracenote_count=gracenote_count)
 
 
 @admin_bp.route('/sources')
