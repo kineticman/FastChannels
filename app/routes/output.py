@@ -1,6 +1,7 @@
 from flask import Blueprint, request, Response
-from ..generators.m3u import generate_m3u, generate_gracenote_m3u
+from ..generators.m3u import generate_m3u, generate_gracenote_m3u, feed_to_query_filters
 from ..generators.xmltv import generate_xmltv
+from ..models import Feed
 
 output_bp = Blueprint('output', __name__)
 
@@ -50,3 +51,30 @@ def epg_xml():
     content  = generate_xmltv(_filters(), base_url=base_url)
     return Response(content, mimetype='application/xml',
                     headers={'Content-Disposition': 'attachment; filename="fastchannels.xml"'})
+
+
+@output_bp.route('/feeds/<slug>/m3u')
+def feed_m3u(slug):
+    feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    base_url = request.host_url.rstrip('/')
+    content  = generate_m3u(feed_to_query_filters(feed.filters or {}), base_url=base_url)
+    return Response(content, mimetype='application/x-mpegurl',
+                    headers={'Content-Disposition': f'attachment; filename="{slug}.m3u"'})
+
+
+@output_bp.route('/feeds/<slug>/m3u/gracenote')
+def feed_m3u_gracenote(slug):
+    feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    base_url = request.host_url.rstrip('/')
+    content  = generate_gracenote_m3u(feed_to_query_filters(feed.filters or {}), base_url=base_url)
+    return Response(content, mimetype='application/x-mpegurl',
+                    headers={'Content-Disposition': f'attachment; filename="{slug}-gracenote.m3u"'})
+
+
+@output_bp.route('/feeds/<slug>/epg.xml')
+def feed_epg(slug):
+    feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    base_url = request.host_url.rstrip('/')
+    content  = generate_xmltv(feed_to_query_filters(feed.filters or {}), base_url=base_url)
+    return Response(content, mimetype='application/xml',
+                    headers={'Content-Disposition': f'attachment; filename="{slug}.xml"'})

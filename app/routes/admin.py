@@ -37,9 +37,11 @@ def channels():
 
     q = Channel.query.join(Source)
 
-    # DRM filter shows inactive DRM channels; otherwise only show active
+    # Status filter — can show inactive DRM/Dead channels or exclude them
     if drm_filter == '1':
         q = q.filter(Channel.disable_reason == 'DRM')
+    elif drm_filter == 'dead':
+        q = q.filter(Channel.disable_reason == 'Dead')
     elif drm_filter == '0':
         q = q.filter(Channel.is_active == True).filter(
             db.or_(Channel.disable_reason == None, Channel.disable_reason != 'DRM')
@@ -73,12 +75,22 @@ def feeds():
         .filter(Channel.is_active == True, Channel.category != None)\
         .distinct().order_by(Channel.category).all()
     categories = [c[0] for c in cats]
+    langs = db.session.query(Channel.language)\
+        .filter(Channel.is_active == True, Channel.language != None)\
+        .distinct().order_by(Channel.language).all()
+    languages  = [{'code': r[0], 'label': r[0]} for r in langs]
     base_url   = request.host_url.rstrip('/')
     return render_template('admin/feeds.html',
                            feeds=feeds, sources=sources,
-                           categories=categories, base_url=base_url)
+                           categories=categories, languages=languages,
+                           base_url=base_url)
 
 
 @admin_bp.route('/settings')
 def settings():
     return render_template('admin/settings.html')
+
+
+@admin_bp.route('/logs')
+def logs():
+    return render_template('admin/logs.html')

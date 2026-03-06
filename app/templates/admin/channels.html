@@ -146,6 +146,7 @@
     <a href="/admin/sources">Sources</a>
     <a href="/admin/channels" class="active">Channels</a>
     <a href="/admin/settings">Settings</a>
+    <a href="/admin/logs">Logs</a>
     <a href="/m3u" target="_blank">M3U ↗</a>
     <a href="/epg.xml" target="_blank">EPG XML ↗</a>
   </nav>
@@ -167,6 +168,7 @@
       <select name="drm">
         <option value="">All channels</option>
         <option value="1" {% if drm_filter == '1' %}selected{% endif %}>🔒 DRM only</option>
+        <option value="dead" {% if drm_filter == 'dead' %}selected{% endif %}>💀 Dead only</option>
         <option value="0" {% if drm_filter == '0' %}selected{% endif %}>No DRM</option>
       </select>
       <button type="submit">Filter</button>
@@ -193,7 +195,7 @@
             <th>#</th>
             <th>Gracenote ID</th>
             <th>In M3U</th>
-            <th>DRM</th>
+            <th>Status</th>
           </tr>
         </thead>
         <tbody id="channel-tbody">
@@ -235,6 +237,8 @@
             <td>
               {% if ch.disable_reason == 'DRM' %}
               <span style="color:#f87171;font-size:0.75rem;font-weight:600;">🔒 DRM</span>
+              {% elif ch.disable_reason == 'Dead' %}
+              <span style="color:#94a3b8;font-size:0.75rem;font-weight:600;">💀 Dead</span>
               {% endif %}
             </td>
             <td class="toggle-col">

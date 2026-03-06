@@ -1,9 +1,11 @@
 from flask import Flask
 from .extensions import db
 from .config import Config
+from . import logfile
 
 
 def create_app(config_class=Config):
+    logfile.setup()
     app = Flask(__name__)
     app.config.from_object(config_class)
 

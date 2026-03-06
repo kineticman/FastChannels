@@ -119,6 +119,7 @@
   <a href="/admin/channels">Channels</a>
   <a href="/admin/feeds" class="active">Feeds</a>
   <a href="/admin/settings">Settings</a>
+    <a href="/admin/logs">Logs</a>
   <a href="/m3u" target="_blank">M3U ↗</a>
   <a href="/epg.xml" target="_blank">EPG XML ↗</a>
 </nav>
@@ -187,13 +188,17 @@
       </div>
 
       <div class="feed-urls">
-        <a class="url-chip" href="{{ base_url }}/m3u/{{ feed.slug }}" target="_blank">
-          M3U&nbsp;↗&nbsp;<span style="opacity:0.5">{{ base_url }}/m3u/{{ feed.slug }}</span>
-          <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/m3u/{{ feed.slug }}')">⎘</button>
+        <a class="url-chip" href="{{ base_url }}/feeds/{{ feed.slug }}/m3u" target="_blank">
+          M3U&nbsp;↗&nbsp;<span style="opacity:0.5">{{ base_url }}/feeds/{{ feed.slug }}/m3u</span>
+          <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">⎘</button>
         </a>
-        <a class="url-chip" href="{{ base_url }}/epg/{{ feed.slug }}.xml" target="_blank">
-          EPG&nbsp;↗&nbsp;<span style="opacity:0.5">{{ base_url }}/epg/{{ feed.slug }}.xml</span>
-          <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/epg/{{ feed.slug }}.xml')">⎘</button>
+        <a class="url-chip" href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank">
+          EPG&nbsp;↗&nbsp;<span style="opacity:0.5">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
+          <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">⎘</button>
+        </a>
+        <a class="url-chip" href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote" target="_blank">
+          Gracenote&nbsp;↗&nbsp;<span style="opacity:0.5">{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote</span>
+          <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote')">⎘</button>
         </a>
       </div>
     </div>

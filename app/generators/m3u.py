@@ -42,11 +42,27 @@ def _build_channel_query(filters: dict):
         query = query.filter(Source.name.in_(sources))
     if categories := filters.get('category'):
         query = query.filter(Channel.category.in_(categories))
-    if language := filters.get('language'):
+    if languages := filters.get('languages'):
+        query = query.filter(Channel.language.in_(languages))
+    elif language := filters.get('language'):
         query = query.filter(Channel.language == language)
     if search := filters.get('search'):
         query = query.filter(Channel.name.ilike(f'%{search}%'))
     return query.order_by(Channel.number.asc().nullslast(), Channel.name.asc())
+
+
+def feed_to_query_filters(feed_filters: dict) -> dict:
+    """Translate Feed.filters (plural keys) to _build_channel_query format."""
+    f = {}
+    if sources := feed_filters.get('sources'):
+        f['source'] = sources
+    if categories := feed_filters.get('categories'):
+        f['category'] = categories
+    if languages := feed_filters.get('languages'):
+        f['languages'] = languages
+    if max_ch := feed_filters.get('max_channels'):
+        f['max_channels'] = max_ch
+    return f
 
 
 def generate_m3u(filters: dict = None, base_url: str = None) -> str:

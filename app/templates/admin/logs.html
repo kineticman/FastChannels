@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Logs — FastChannels</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; display: flex; flex-direction: column; height: 100vh; }
+    nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; flex-shrink: 0; }
+    nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
+    nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
+    nav a:hover, nav a.active { color: #e2e8f0; }
+
+    .toolbar {
+      background: #1e293b; border-bottom: 1px solid #334155;
+      padding: 0.6rem 1.5rem; display: flex; align-items: center; gap: 1rem; flex-shrink: 0;
+    }
+    .toolbar label { font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+    .toolbar input[type=checkbox] { accent-color: #38bdf8; }
+    .btn {
+      padding: 0.35rem 0.85rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;
+      border: none; font-weight: 500; background: #0284c7; color: white; transition: background 0.15s;
+    }
+    .btn:hover { background: #0369a1; }
+    .filter-input {
+      background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+      border-radius: 6px; padding: 0.3rem 0.6rem; font-size: 0.8rem; width: 220px;
+    }
+    .filter-input:focus { outline: none; border-color: #38bdf8; }
+    .status { font-size: 0.78rem; color: #64748b; margin-left: auto; }
+
+    #log-container {
+      flex: 1; overflow-y: auto; padding: 0.75rem 1.5rem;
+      font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', monospace; font-size: 0.78rem; line-height: 1.55;
+    }
+    .line { white-space: pre-wrap; word-break: break-all; }
+    .line-INFO    { color: #cbd5e1; }
+    .line-WARNING { color: #fbbf24; }
+    .line-ERROR   { color: #f87171; }
+    .line-CRITICAL{ color: #f87171; font-weight: 700; }
+    .line-DEBUG   { color: #475569; }
+    .line-other   { color: #94a3b8; }
+    .line.hidden  { display: none; }
+  </style>
+</head>
+<body>
+  <nav>
+    <h1>⚡ FastChannels</h1>
+    <a href="/admin/">Dashboard</a>
+    <a href="/admin/sources">Sources</a>
+    <a href="/admin/channels">Channels</a>
+    <a href="/admin/settings">Settings</a>
+    <a href="/admin/logs" class="active">Logs</a>
+    <a href="/m3u" target="_blank">M3U ↗</a>
+    <a href="/epg.xml" target="_blank">EPG XML ↗</a>
+  </nav>
+
+  <div class="toolbar">
+    <button class="btn" onclick="refresh()">↺ Refresh</button>
+    <label><input type="checkbox" id="auto-refresh" onchange="toggleAuto()"> Auto (5s)</label>
+    <label><input type="checkbox" id="tail-mode" checked onchange="applyFilter()"> Tail</label>
+    <input class="filter-input" id="filter" type="text" placeholder="Filter…" oninput="applyFilter()">
+    <span class="status" id="status"></span>
+  </div>
+
+  <div id="log-container"></div>
+
+  <script>
+    let _timer = null;
+    let _lines = [];
+
+    const LEVEL_RE = /\s+(INFO|WARNING|ERROR|CRITICAL|DEBUG)\s+/;
+
+    function levelClass(line) {
+      const m = line.match(LEVEL_RE);
+      if (!m) return 'line-other';
+      return 'line-' + m[1];
+    }
+
+    async function refresh() {
+      const status = document.getElementById('status');
+      status.textContent = 'Loading…';
+      try {
+        const r = await fetch('/api/logs?n=2500');
+        const data = await r.json();
+        _lines = data.lines;
+        applyFilter();
+        status.textContent = `${_lines.length} lines · ${new Date().toLocaleTimeString()}`;
+      } catch(e) {
+        status.textContent = 'Error: ' + e.message;
+      }
+    }
+
+    function applyFilter() {
+      const query = document.getElementById('filter').value.toLowerCase();
+      const tail  = document.getElementById('tail-mode').checked;
+      const container = document.getElementById('log-container');
+
+      container.innerHTML = '';
+      const frag = document.createDocumentFragment();
+      for (const line of _lines) {
+        const div = document.createElement('div');
+        div.className = 'line ' + levelClass(line);
+        div.textContent = line.trimEnd();
+        if (query && !line.toLowerCase().includes(query)) div.classList.add('hidden');
+        frag.appendChild(div);
+      }
+      container.appendChild(frag);
+
+      if (tail) container.scrollTop = container.scrollHeight;
+    }
+
+    function toggleAuto() {
+      if (document.getElementById('auto-refresh').checked) {
+        _timer = setInterval(refresh, 5000);
+      } else {
+        clearInterval(_timer);
+        _timer = null;
+      }
+    }
+
+    refresh();
+  </script>
+</body>
+</html>

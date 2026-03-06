@@ -35,4 +35,10 @@ python -m app.worker &
 echo "✅ Worker started"
 
 echo "✅ Starting gunicorn on port 5523"
-exec gunicorn --bind 0.0.0.0:5523 --workers 2 --timeout 120 "app:create_app()"
+exec gunicorn \
+    --bind 0.0.0.0:5523 \
+    --workers 4 \
+    --timeout 300 \
+    --keep-alive 5 \
+    --worker-tmp-dir /dev/shm \
+    "app:create_app()"

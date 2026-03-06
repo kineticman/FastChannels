@@ -21,6 +21,9 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s %(name)s: %(message)s',
     stream=sys.stdout,
 )
+
+from app.logfile import setup as _setup_logfile
+_setup_logfile()
 logger = logging.getLogger(__name__)
 
 flask_app = create_app()
@@ -79,6 +82,7 @@ def run_drm_check(source_name: str):
         total    = len(channels)
         checked  = 0
         flagged  = 0
+        dead     = 0
         errors   = 0
         consecutive_errors = 0
 
@@ -107,6 +111,29 @@ def run_drm_check(source_name: str):
                                    source_name, r.status_code, wait)
                     _time.sleep(wait)
                     r = sess.get(play_url, timeout=15, allow_redirects=True)
+
+                if r.status_code == 451:
+                    # Play proxy disabled this channel (DRM or VOD) during this request.
+                    # Refresh the channel to read what disable_reason was set.
+                    db.session.refresh(ch)
+                    reason = ch.disable_reason or 'DRM'
+                    if reason == 'Dead':
+                        dead += 1
+                        logger.info('[drm-check] VOD (caught by proxy): %s', ch.name)
+                    else:
+                        flagged += 1
+                        logger.info('[drm-check] DRM (caught by proxy): %s', ch.name)
+                    consecutive_errors = 0
+                    continue
+
+                if r.status_code in (404, 410):
+                    ch.is_active      = False
+                    ch.is_enabled     = False
+                    ch.disable_reason = 'Dead'
+                    dead += 1
+                    consecutive_errors = 0
+                    logger.info('[drm-check] dead stream: %s  (HTTP %d)', ch.name, r.status_code)
+                    continue
 
                 if r.status_code != 200:
                     logger.debug('[drm-check] %d for %s', r.status_code, ch.name)
@@ -145,12 +172,21 @@ def run_drm_check(source_name: str):
                         except Exception as ve:
                             logger.debug('[drm-check] variant fetch failed for %s: %s', ch.name, ve)
 
+                if 'EXT-X-PLAYLIST-TYPE:VOD' in manifest_text:
+                    ch.is_active      = False
+                    ch.is_enabled     = False
+                    ch.disable_reason = 'Dead'
+                    dead += 1
+                    logger.info('[drm-check] VOD (not live): %s', ch.name)
+                    continue
+
                 drm = any(f'METHOD={m}' in manifest_text for m in _DRM_METHODS)
                 if drm:
                     ch.is_active      = False
+                    ch.is_enabled     = False
                     ch.disable_reason = 'DRM'
                     flagged += 1
-                    logger.info('[drm-check] 🔒 DRM: %s  →  %s', ch.name, manifest_url[:80])
+                    logger.info('[drm-check] DRM: %s  →  %s', ch.name, manifest_url[:80])
 
             except Exception as e:
                 logger.debug('[drm-check] error for %s: %s', ch.name, e)
@@ -159,14 +195,14 @@ def run_drm_check(source_name: str):
 
             if i % 25 == 0:
                 db.session.commit()
-                logger.info('[drm-check] %s: %d/%d — checked=%d flagged=%d errors=%d',
-                            source_name, i, total, checked, flagged, errors)
+                logger.info('[drm-check] %s: %d/%d — checked=%d flagged=%d dead=%d errors=%d',
+                            source_name, i, total, checked, flagged, dead, errors)
 
             _time.sleep(0.3)
 
         db.session.commit()
-        logger.info('[drm-check] %s: done — total=%d checked=%d flagged=%d errors=%d',
-                    source_name, total, checked, flagged, errors)
+        logger.info('[drm-check] %s: done — total=%d checked=%d flagged=%d dead=%d errors=%d',
+                    source_name, total, checked, flagged, dead, errors)
 
 
 def _upsert_channels(source, channel_data_list):

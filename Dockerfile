@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     curl \
+    redis-server \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -17,16 +18,8 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY . .
 
+RUN chmod +x /app/entrypoint.sh
+
 EXPOSE 5523
 
-# --timeout 300     : 5 min — covers worst-case first EPG generation with cold DB
-# --keep-alive 5    : reuse connections from Channels DVR's repeat polls
-# --workers 4       : more workers so one slow EPG gen doesn't block everything
-# --worker-tmp-dir  : use tmpfs to avoid disk I/O on worker heartbeat files
-CMD ["gunicorn", \
-     "--bind", "0.0.0.0:5523", \
-     "--workers", "4", \
-     "--timeout", "300", \
-     "--keep-alive", "5", \
-     "--worker-tmp-dir", "/dev/shm", \
-     "app:create_app()"]
+ENTRYPOINT ["/app/entrypoint.sh"]

@@ -135,6 +135,10 @@ class Feed(db.Model):
                             default=lambda: datetime.now(timezone.utc),
                             onupdate=lambda: datetime.now(timezone.utc))
 
+    def channel_count(self) -> int:
+        from .generators.m3u import _build_channel_query, feed_to_query_filters
+        return _build_channel_query(feed_to_query_filters(self.filters or {})).count()
+
     def __repr__(self):
         return f'<Feed {self.slug}>'
 

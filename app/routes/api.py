@@ -4,6 +4,7 @@ from ..extensions import db
 from ..models import Source, Channel
 from ..scrapers import registry
 from .tasks import trigger_scrape, trigger_drm_check
+from .. import logfile
 
 api_bp = Blueprint('api', __name__)
 
@@ -126,13 +127,31 @@ def update_channel(channel_id):
     return jsonify(ch.to_dict())
 
 
+@api_bp.route('/logs')
+def get_logs():
+    n = request.args.get('n', 2500, type=int)
+    lines = logfile.tail(n)
+    return jsonify({'lines': lines})
+
+
 @api_bp.route('/stats')
 def stats():
-    categories = db.session.query(Channel.category, db.func.count(Channel.id))\
+    q = Channel.query.join(Source).filter(
+        Channel.is_active == True,
+        Channel.is_enabled == True,
+        Source.is_enabled == True,
+    )
+    if sources := request.args.getlist('source'):
+        q = q.filter(Source.name.in_(sources))
+    if categories := request.args.getlist('category'):
+        q = q.filter(Channel.category.in_(categories))
+    if languages := request.args.getlist('language'):
+        q = q.filter(Channel.language.in_(languages))
+    cat_rows = db.session.query(Channel.category, db.func.count(Channel.id))\
         .filter(Channel.is_active == True).group_by(Channel.category)\
         .order_by(db.func.count(Channel.id).desc()).all()
     return jsonify({
-        'total_channels': Channel.query.filter_by(is_active=True).count(),
+        'total_channels': q.count(),
         'total_sources':  Source.query.filter_by(is_enabled=True).count(),
-        'categories':     [{'name': c or 'Uncategorized', 'count': n} for c, n in categories],
+        'categories':     [{'name': c or 'Uncategorized', 'count': n} for c, n in cat_rows],
     })
