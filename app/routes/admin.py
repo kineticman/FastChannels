@@ -29,11 +29,12 @@ def sources():
 
 @admin_bp.route('/channels')
 def channels():
-    page           = request.args.get('page', 1, type=int)
-    source_filter  = request.args.get('source', '')
-    search         = request.args.get('search', '')
-    enabled_filter = request.args.get('enabled', '')
-    drm_filter     = request.args.get('drm', '')
+    page            = request.args.get('page', 1, type=int)
+    source_filter   = request.args.get('source', '')
+    search          = request.args.get('search', '')
+    enabled_filter  = request.args.get('enabled', '')
+    drm_filter      = request.args.get('drm', '')
+    language_filter = request.args.get('language', '')
 
     q = Channel.query.join(Source)
 
@@ -56,15 +57,25 @@ def channels():
 
     if source_filter:
         q = q.filter(Source.name == source_filter)
+    if language_filter:
+        q = q.filter(Channel.language == language_filter)
     if search:
         q = q.filter(Channel.name.ilike(f'%{search}%'))
 
     channels = q.order_by(Channel.name).paginate(page=page, per_page=50, error_out=False)
     sources  = Source.query.order_by(Source.display_name).all()
+
+    lang_rows = db.session.query(Channel.language, db.func.count(Channel.id))\
+        .filter(Channel.is_active == True, Channel.language != None)\
+        .group_by(Channel.language)\
+        .order_by(Channel.language).all()
+    languages = [(lang, count) for lang, count in lang_rows]
+
     return render_template('admin/channels.html',
                            channels=channels, sources=sources,
                            source_filter=source_filter, search=search,
-                           enabled_filter=enabled_filter, drm_filter=drm_filter)
+                           enabled_filter=enabled_filter, drm_filter=drm_filter,
+                           language_filter=language_filter, languages=languages)
 
 
 @admin_bp.route('/feeds')

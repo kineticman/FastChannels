@@ -178,6 +178,12 @@
         <option value="dead" {% if drm_filter == 'dead' %}selected{% endif %}>💀 Dead only</option>
         <option value="0" {% if drm_filter == '0' %}selected{% endif %}>No DRM</option>
       </select>
+      <select name="language">
+        <option value="">All Languages</option>
+        {% for lang, count in languages %}
+        <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }} ({{ count }})</option>
+        {% endfor %}
+      </select>
       <button type="submit">Filter</button>
       <a class="clear" href="/admin/channels">Clear</a>
     </form>
@@ -199,6 +205,7 @@
             <th>Name</th>
             <th>Source</th>
             <th>Category</th>
+            <th>Lang</th>
             <th>#</th>
             <th>Gracenote ID</th>
             <th>In M3U</th>
@@ -219,6 +226,7 @@
             <td><strong>{{ ch.name }}</strong></td>
             <td style="color:#64748b">{{ ch.source.display_name }}</td>
             <td style="color:#94a3b8">{{ ch.category or '—' }}</td>
+            <td style="color:#64748b">{{ ch.language or '—' }}</td>
             <td style="color:#64748b">{{ ch.number or '—' }}</td>
 
             {# ── Gracenote ID cell ── #}
@@ -268,11 +276,11 @@
     {% if channels.pages > 1 %}
     <div class="pagination">
       {% if channels.has_prev %}
-      <a href="?page={{ channels.prev_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}&drm={{ drm_filter }}">← Prev</a>
+      <a href="?page={{ channels.prev_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}&drm={{ drm_filter }}&language={{ language_filter }}">← Prev</a>
       {% endif %}
       <span class="page-info">Page {{ channels.page }} of {{ channels.pages }}</span>
       {% if channels.has_next %}
-      <a href="?page={{ channels.next_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}&drm={{ drm_filter }}">Next →</a>
+      <a href="?page={{ channels.next_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}&drm={{ drm_filter }}&language={{ language_filter }}">Next →</a>
       {% endif %}
     </div>
     {% endif %}
