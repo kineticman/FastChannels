@@ -89,8 +89,11 @@ def _clean_filters(raw: dict) -> dict:
         out['sources'] = [str(s) for s in sources if s]
     if categories := raw.get('categories'):
         out['categories'] = [str(c) for c in categories if c]
-    if language := raw.get('language'):
-        out['language'] = str(language)
+    if languages := raw.get('languages'):
+        out['languages'] = [str(l) for l in languages if l]
+    elif language := raw.get('language'):
+        # backward compat with old single-language saves
+        out['languages'] = [str(language)]
     if max_ch := raw.get('max_channels'):
         try:
             out['max_channels'] = max(1, int(max_ch))

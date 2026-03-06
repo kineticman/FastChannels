@@ -31,6 +31,9 @@
     .btn-run { background: #0284c7; color: white; }
     .btn-run:hover:not(:disabled) { background: #0369a1; }
     .btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-drm { background: #78350f; color: #fde68a; }
+    .btn-drm:hover:not(:disabled) { background: #92400e; }
+    .btn-drm:disabled { opacity: 0.4; cursor: not-allowed; }
 
     /* Toggle */
     .toggle-wrap { display: flex; align-items: center; gap: 0.6rem; }
@@ -114,6 +117,9 @@
         </div>
         <button class="btn btn-run" onclick="run({{ source.id }}, this)"
                 {% if not source.is_enabled %}disabled{% endif %}>Run Now</button>
+        <button class="btn btn-drm" onclick="drmCheck({{ source.id }}, this)"
+                {% if not source.is_enabled %}disabled{% endif %}
+                title="Scan all channels for DRM encryption">🔒 DRM Check</button>
       </div>
     </div>
     {% endfor %}
@@ -137,17 +143,14 @@
     let _pendingSourceId   = null;
     let _pendingCheckbox   = null;
 
-    // ── Toggle handler ──────────────────────────────────────────────────────
     function onSourceToggle(sourceId, sourceName, checkbox) {
       if (!checkbox.checked) {
-        // Disabling — show confirmation first, revert checkbox until confirmed
-        checkbox.checked = true;   // revert visually
+        checkbox.checked = true;
         _pendingSourceId = sourceId;
         _pendingCheckbox = checkbox;
         document.getElementById('modal-source-name').textContent = sourceName;
         document.getElementById('confirm-modal').classList.add('open');
       } else {
-        // Enabling — no confirmation needed
         setSourceEnabled(sourceId, true, checkbox);
       }
     }
@@ -170,6 +173,7 @@
       const labelEl  = document.getElementById(`toggle-label-${sourceId}`);
       const card     = document.getElementById(`card-${sourceId}`);
       const runBtn   = card.querySelector('.btn-run');
+      const drmBtn   = card.querySelector('.btn-drm');
       toggleEl.classList.add('saving');
 
       try {
@@ -180,7 +184,6 @@
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
 
-        // If disabling, also delete all channels for this source
         if (!enabled) {
           await fetch(`/api/sources/${sourceId}/channels`, {method: 'DELETE'});
           document.getElementById(`ch-count-${sourceId}`).textContent = '0';
@@ -191,9 +194,9 @@
         labelEl.className = `toggle-label ${enabled ? 'on' : 'off'}`;
         card.classList.toggle('disabled', !enabled);
         runBtn.disabled = !enabled;
+        drmBtn.disabled = !enabled;
 
       } catch (e) {
-        // Revert on error
         checkbox.checked = !enabled;
         console.error('Source toggle failed:', e);
       } finally {
@@ -203,7 +206,6 @@
       }
     }
 
-    // ── Run now ─────────────────────────────────────────────────────────────
     async function run(id, btn) {
       btn.disabled = true;
       btn.textContent = 'Queued…';
@@ -215,6 +217,20 @@
         btn.textContent = 'Error';
       }
       setTimeout(() => { btn.textContent = 'Run Now'; btn.disabled = false; }, 3000);
+    }
+
+    async function drmCheck(id, btn) {
+      if (!confirm('Scan all channels for DRM? This checks every stream manifest and may take several minutes.')) return;
+      btn.disabled = true;
+      btn.textContent = '🔍 Scanning…';
+      try {
+        const r = await fetch(`/api/sources/${id}/drm-check`, {method: 'POST'});
+        const d = await r.json();
+        btn.textContent = d.status === 'queued' ? '✓ Running' : 'Error';
+      } catch (e) {
+        btn.textContent = 'Error';
+      }
+      setTimeout(() => { btn.textContent = '🔒 DRM Check'; btn.disabled = false; }, 5000);
     }
   </script>
 </body>

@@ -39,14 +39,29 @@ def _build_channel_query(filters: dict):
         Source.is_enabled  == True,
         Channel.stream_url != None,
     )
-    if sources := filters.get('source'):
+    # Accept both singular (query-string style) and plural (feed filters style)
+    sources    = filters.get('sources') or filters.get('source') or []
+    categories = filters.get('categories') or filters.get('category') or []
+    languages  = filters.get('languages') or (
+                     [filters['language']] if filters.get('language') else [])
+
+    if sources:
         q = q.filter(Source.name.in_(sources))
-    if categories := filters.get('category'):
-        q = q.filter(Channel.category.in_(categories))
-    if language := filters.get('language'):
-        q = q.filter(Channel.language == language)
+    if categories:
+        # Category filter: match channels where ANY of their semicolon-joined
+        # categories contains one of the requested categories.
+        from sqlalchemy import or_
+        cat_filters = [Channel.category.ilike(f'%{c}%') for c in categories]
+        q = q.filter(or_(*cat_filters))
+    if languages:
+        q = q.filter(Channel.language.in_(languages))
     if search := filters.get('search'):
         q = q.filter(Channel.name.ilike(f'%{search}%'))
+
+    # Hard cap — applied after all filters
+    if max_ch := filters.get('max_channels'):
+        q = q.limit(int(max_ch))
+
     return q
 
 

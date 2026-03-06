@@ -162,6 +162,11 @@
                 <span class="badge-pill pill-green">{{ c }}</span>
               {% endfor %}
             {% endif %}
+            {% if f.get('languages') %}
+              {% for l in f['languages'] %}
+                <span class="badge-pill pill-gray">{{ l }}</span>
+              {% endfor %}
+            {% endif %}
             {% if f.get('max_channels') %}
               <span class="badge-pill pill-gray">max {{ f['max_channels'] }}</span>
             {% endif %}
@@ -231,6 +236,16 @@
       </div>
     </div>
     <div class="field">
+      <label>Languages <span style="color:#475569;font-weight:400;text-transform:none">(leave all unchecked = include all)</span></label>
+      <div class="check-group" id="languages-group">
+        {% for l in languages %}
+        <label class="check-item" id="lang-wrap-{{ l.code }}">
+          <input type="checkbox" value="{{ l.code }}" class="lang-cb"> {{ l.label }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="field">
       <label>Max Channels</label>
       <input type="number" id="f-max" min="1" max="9999" placeholder="750 recommended for Channels DVR">
       <div class="help">Leave blank for no limit. Channels DVR degrades above ~750.</div>
@@ -264,6 +279,10 @@ function openModal(feed = null) {
     cb.checked = feed ? (feed.filters.categories || []).includes(cb.value) : false;
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
   });
+  document.querySelectorAll('.lang-cb').forEach(cb => {
+    cb.checked = feed ? (feed.filters.languages || []).includes(cb.value) : false;
+    cb.closest('.check-item').classList.toggle('selected', cb.checked);
+  });
 
   updateCountPreview();
   document.getElementById('modal-overlay').classList.add('open');
@@ -285,6 +304,7 @@ async function updateCountPreview() {
   const params  = new URLSearchParams();
   (filters.sources    || []).forEach(s => params.append('source', s));
   (filters.categories || []).forEach(c => params.append('category', c));
+  (filters.languages  || []).forEach(l => params.append('language', l));
   try {
     const r = await fetch(`/api/stats?${params}`);
     const d = await r.json();
@@ -300,7 +320,7 @@ async function updateCountPreview() {
 }
 
 // Wire up live preview on checkbox changes
-document.querySelectorAll('.src-cb, .cat-cb').forEach(cb => {
+document.querySelectorAll('.src-cb, .cat-cb, .lang-cb').forEach(cb => {
   cb.addEventListener('change', () => {
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
     schedulePreview();
@@ -315,6 +335,8 @@ function buildFilters() {
   if (sources.length) f.sources = sources;
   const cats = [...document.querySelectorAll('.cat-cb:checked')].map(c => c.value);
   if (cats.length) f.categories = cats;
+  const langs = [...document.querySelectorAll('.lang-cb:checked')].map(c => c.value);
+  if (langs.length) f.languages = langs;
   const max = parseInt(document.getElementById('f-max').value);
   if (max > 0) f.max_channels = max;
   return f;

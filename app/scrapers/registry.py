@@ -24,8 +24,7 @@ def _discover():
 
 
 def get_all() -> dict[str, type[BaseScraper]]:
-    if not _registry:
-        _discover()
+    _discover()   # always re-discover; fast filesystem scan, safe to call repeatedly
     return _registry
 
 

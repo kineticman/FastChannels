@@ -64,6 +64,7 @@
     .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.7rem; font-weight: 600; }
     .badge-green { background: #064e3b; color: #34d399; }
     .badge-gray  { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+    .badge-drm   { background: #451a03; color: #fb923c; border: 1px solid #92400e; font-size: 0.7rem; }
 
     /* Toggle switch */
     .toggle-wrap { display: flex; align-items: center; }
@@ -123,6 +124,7 @@
         <option value="">All</option>
         <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
         <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
+        <option value="drm" {% if enabled_filter == 'drm' %}selected{% endif %}>🔒 DRM only</option>
       </select>
       <button type="submit">Filter</button>
       <a class="clear" href="/admin/channels">Clear</a>
@@ -147,11 +149,12 @@
             <th>Category</th>
             <th>#</th>
             <th>In M3U</th>
+            <th>Notes</th>
           </tr>
         </thead>
         <tbody id="channel-tbody">
           {% for ch in channels.items %}
-          <tr id="row-{{ ch.id }}" class="{% if not ch.is_enabled %}disabled{% endif %}">
+          <tr id="row-{{ ch.id }}" class="{% if not ch.is_enabled or not ch.is_active %}disabled{% endif %}">
             <td><input type="checkbox" class="row-check" value="{{ ch.id }}" onchange="onRowCheck()"></td>
             <td>
               {% if ch.logo_url %}
@@ -172,6 +175,11 @@
                   <span class="slider"></span>
                 </label>
               </div>
+            </td>
+            <td>
+              {% if ch.disable_reason == 'DRM' %}
+              <span class="badge badge-drm" title="Auto-disabled: DRM encryption detected">🔒 DRM</span>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}

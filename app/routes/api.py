@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 from ..extensions import db
 from ..models import Source, Channel
 from ..scrapers import registry
-from .tasks import trigger_scrape
+from .tasks import trigger_scrape, trigger_drm_check
 
 api_bp = Blueprint('api', __name__)
 
@@ -18,6 +18,13 @@ def run_source(source_id):
     trigger_scrape(source.name)
     return jsonify({'status': 'queued', 'source': source.name})
 
+
+
+@api_bp.route('/sources/<int:source_id>/drm-check', methods=['POST'])
+def drm_check_source(source_id):
+    source = Source.query.get_or_404(source_id)
+    trigger_drm_check(source.name)
+    return jsonify({'status': 'queued', 'source': source.name})
 
 @api_bp.route('/sources/<int:source_id>', methods=['PATCH'])
 def update_source(source_id):
