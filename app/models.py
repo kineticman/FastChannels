@@ -49,6 +49,7 @@ class Channel(db.Model):
     country           = db.Column(db.String(8), default='US')
     number            = db.Column(db.Integer)
     gracenote_id      = db.Column(db.String(32), nullable=True)   # e.g. EP012345678; set by scraper or user
+    disable_reason    = db.Column(db.String(64), nullable=True)  # e.g. 'DRM'; set by play proxy
     is_active         = db.Column(db.Boolean, default=True)   # set by scraper — channel exists upstream
     is_enabled        = db.Column(db.Boolean, default=True)   # set by user — include in M3U/EPG
     created_at        = db.Column(db.DateTime(timezone=True),
@@ -83,6 +84,7 @@ class Channel(db.Model):
             'number':           self.number,
             'gracenote_id':     self.gracenote_id,
             'is_active':        self.is_active,
+            'disable_reason':   self.disable_reason,
             'is_enabled':       self.is_enabled,
         }
 

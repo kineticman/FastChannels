@@ -164,6 +164,11 @@
         <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
         <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
       </select>
+      <select name="drm">
+        <option value="">All channels</option>
+        <option value="1" {% if drm_filter == '1' %}selected{% endif %}>🔒 DRM only</option>
+        <option value="0" {% if drm_filter == '0' %}selected{% endif %}>No DRM</option>
+      </select>
       <button type="submit">Filter</button>
       <a class="clear" href="/admin/channels">Clear</a>
     </form>
@@ -188,6 +193,7 @@
             <th>#</th>
             <th>Gracenote ID</th>
             <th>In M3U</th>
+            <th>DRM</th>
           </tr>
         </thead>
         <tbody id="channel-tbody">
@@ -226,6 +232,11 @@
               </div>
             </td>
 
+            <td>
+              {% if ch.disable_reason == 'DRM' %}
+              <span style="color:#f87171;font-size:0.75rem;font-weight:600;">🔒 DRM</span>
+              {% endif %}
+            </td>
             <td class="toggle-col">
               <div class="toggle-wrap">
                 <label class="toggle" id="toggle-{{ ch.id }}">
@@ -244,11 +255,11 @@
     {% if channels.pages > 1 %}
     <div class="pagination">
       {% if channels.has_prev %}
-      <a href="?page={{ channels.prev_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}">← Prev</a>
+      <a href="?page={{ channels.prev_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}&drm={{ drm_filter }}">← Prev</a>
       {% endif %}
       <span class="page-info">Page {{ channels.page }} of {{ channels.pages }}</span>
       {% if channels.has_next %}
-      <a href="?page={{ channels.next_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}">Next →</a>
+      <a href="?page={{ channels.next_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}&drm={{ drm_filter }}">Next →</a>
       {% endif %}
     </div>
     {% endif %}

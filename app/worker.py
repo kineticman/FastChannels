@@ -11,6 +11,9 @@ from rq import Worker, Queue, Connection
 from app import create_app
 from app.extensions import db
 from app.models import Source, Channel, Program
+import time as _time
+import requests as _requests
+from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
 
 logging.basicConfig(
@@ -49,6 +52,116 @@ def run_scraper(source_name: str):
             logger.exception(f'[{source_name}] Scrape failed')
             source.last_error = str(e)
             db.session.commit()
+
+
+
+def run_drm_check(source_name: str):
+    """
+    Bulk DRM scanner — fetches every channel via the /play/ proxy, follows the
+    redirect to the real CDN URL, drills master → variant playlist, and checks
+    for SAMPLE-AES (Apple FairPlay). Channels that are DRM-encrypted are marked
+    is_active=False with disable_reason='DRM' so they drop out of M3U/EPG output.
+    """
+    _DRM_METHODS = ('SAMPLE-AES',)  # AES-128 with key URL is standard HLS, not FairPlay
+
+    with flask_app.app_context():
+        source = Source.query.filter_by(name=source_name).first()
+        if not source:
+            logger.error('[drm-check] source not found: %s', source_name)
+            return
+
+        channels = source.channels.filter_by(is_active=True).all()
+        total    = len(channels)
+        checked  = 0
+        flagged  = 0
+        errors   = 0
+        consecutive_errors = 0
+
+        logger.info('[drm-check] %s: checking %d channels via play proxy…', source_name, total)
+
+        # Brief warmup pause — gives any residual rate-limit ban time to clear
+        _time.sleep(5)
+
+        sess = _requests.Session()
+        sess.headers['User-Agent'] = 'FastChannels-DRMCheck/1.0'
+
+        for i, ch in enumerate(channels, 1):
+            # Skip malformed IDs that would break URL routing
+            if len(ch.source_channel_id) > 128 or '/' in ch.source_channel_id:
+                logger.debug('[drm-check] skipping bad channel ID: %s', ch.source_channel_id[:40])
+                continue
+
+            play_url = f'http://localhost:5523/play/{source_name}/{ch.source_channel_id}.m3u8'
+
+            try:
+                r = sess.get(play_url, timeout=15, allow_redirects=True)
+
+                if r.status_code in (403, 429, 503):
+                    wait = 30
+                    logger.warning('[drm-check] %s rate-limited (%d), backing off %ds…',
+                                   source_name, r.status_code, wait)
+                    _time.sleep(wait)
+                    r = sess.get(play_url, timeout=15, allow_redirects=True)
+
+                if r.status_code != 200:
+                    logger.debug('[drm-check] %d for %s', r.status_code, ch.name)
+                    errors += 1
+                    consecutive_errors += 1
+                    if consecutive_errors >= 20:
+                        logger.error('[drm-check] %s: 20 consecutive errors — aborting. '
+                                     'Source may be rate-limiting or down.', source_name)
+                        break
+                    continue
+
+                consecutive_errors = 0
+                checked += 1
+                manifest_text = r.text
+                manifest_url  = r.url
+
+                # EXT-X-KEY only appears in media playlists, not master playlists.
+                # If we landed on a master, fetch the first variant to check properly.
+                if '#EXT-X-STREAM-INF' in manifest_text:
+                    variant_url = None
+                    for line in manifest_text.splitlines():
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            variant_url = _urljoin(manifest_url, line)
+                            break
+                    if variant_url:
+                        try:
+                            rv = sess.get(variant_url, timeout=10)
+                            if rv.status_code == 200:
+                                manifest_text = rv.text
+                                logger.debug('[drm-check] variant fetched for %s (%d bytes)',
+                                             ch.name, len(manifest_text))
+                            else:
+                                logger.debug('[drm-check] variant returned %d for %s',
+                                             rv.status_code, ch.name)
+                        except Exception as ve:
+                            logger.debug('[drm-check] variant fetch failed for %s: %s', ch.name, ve)
+
+                drm = any(f'METHOD={m}' in manifest_text for m in _DRM_METHODS)
+                if drm:
+                    ch.is_active      = False
+                    ch.disable_reason = 'DRM'
+                    flagged += 1
+                    logger.info('[drm-check] 🔒 DRM: %s  →  %s', ch.name, manifest_url[:80])
+
+            except Exception as e:
+                logger.debug('[drm-check] error for %s: %s', ch.name, e)
+                errors += 1
+                consecutive_errors += 1
+
+            if i % 25 == 0:
+                db.session.commit()
+                logger.info('[drm-check] %s: %d/%d — checked=%d flagged=%d errors=%d',
+                            source_name, i, total, checked, flagged, errors)
+
+            _time.sleep(0.3)
+
+        db.session.commit()
+        logger.info('[drm-check] %s: done — total=%d checked=%d flagged=%d errors=%d',
+                    source_name, total, checked, flagged, errors)
 
 
 def _upsert_channels(source, channel_data_list):

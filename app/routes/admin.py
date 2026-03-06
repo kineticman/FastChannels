@@ -33,18 +33,24 @@ def channels():
     source_filter  = request.args.get('source', '')
     search         = request.args.get('search', '')
     enabled_filter = request.args.get('enabled', '')
+    drm_filter     = request.args.get('drm', '')
 
     q = Channel.query.join(Source)
 
-    # Base filter: always show active channels; DRM filter shows inactive+DRM
-    if enabled_filter == 'drm':
+    # DRM filter shows inactive DRM channels; otherwise only show active
+    if drm_filter == '1':
         q = q.filter(Channel.disable_reason == 'DRM')
+    elif drm_filter == '0':
+        q = q.filter(Channel.is_active == True).filter(
+            db.or_(Channel.disable_reason == None, Channel.disable_reason != 'DRM')
+        )
     else:
         q = q.filter(Channel.is_active == True)
-        if enabled_filter == '1':
-            q = q.filter(Channel.is_enabled == True)
-        elif enabled_filter == '0':
-            q = q.filter(Channel.is_enabled == False)
+
+    if enabled_filter == '1':
+        q = q.filter(Channel.is_enabled == True)
+    elif enabled_filter == '0':
+        q = q.filter(Channel.is_enabled == False)
 
     if source_filter:
         q = q.filter(Source.name == source_filter)
@@ -56,7 +62,7 @@ def channels():
     return render_template('admin/channels.html',
                            channels=channels, sources=sources,
                            source_filter=source_filter, search=search,
-                           enabled_filter=enabled_filter)
+                           enabled_filter=enabled_filter, drm_filter=drm_filter)
 
 
 @admin_bp.route('/settings')
