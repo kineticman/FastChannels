@@ -37,7 +37,7 @@ class ConfigField:
 class ChannelData:
     def __init__(self, source_channel_id, name, stream_url, logo_url=None,
                  slug=None, category=None, language='en', country='US',
-                 stream_type='hls', number=None):
+                 stream_type='hls', number=None, gracenote_id=None):
         self.source_channel_id = source_channel_id
         self.name        = name
         self.stream_url  = stream_url
@@ -48,6 +48,7 @@ class ChannelData:
         self.country     = country
         self.stream_type = stream_type
         self.number      = number
+        self.gracenote_id = gracenote_id
 
 
 class ProgramData:

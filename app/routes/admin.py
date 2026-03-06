@@ -65,6 +65,20 @@ def channels():
                            enabled_filter=enabled_filter, drm_filter=drm_filter)
 
 
+@admin_bp.route('/feeds')
+def feeds():
+    sources    = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
+    feeds      = Feed.query.order_by(Feed.name).all()
+    cats = db.session.query(Channel.category)\
+        .filter(Channel.is_active == True, Channel.category != None)\
+        .distinct().order_by(Channel.category).all()
+    categories = [c[0] for c in cats]
+    base_url   = request.host_url.rstrip('/')
+    return render_template('admin/feeds.html',
+                           feeds=feeds, sources=sources,
+                           categories=categories, base_url=base_url)
+
+
 @admin_bp.route('/settings')
 def settings():
     return render_template('admin/settings.html')

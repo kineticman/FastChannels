@@ -63,6 +63,57 @@ _BASE_HEADERS = {
 }
 
 
+# ── Gracenote / TMS station ID lookup ───────────────────────────────────────
+# Hardcoded mapping of Tubi channel ID → Gracenote station ID.
+#
+# This data was sourced from the tubi_tmsid.csv file maintained by
+# jgomez177 in the tubi-for-channels project:
+#   https://github.com/jgomez177/tubi-for-channels
+# Many thanks to jgomez177 for compiling and maintaining this mapping.
+# We've embedded it here to avoid a runtime dependency on GitHub.
+#
+# These IDs enable tvc-guide-stationid in the M3U output so that
+# Channels DVR can match channels to its guide data automatically.
+_GRACENOTE_IDS: dict[str, str] = {
+    '400000012': '124806',  # ACCDN
+    '653208': '134109',  # Always Funny
+    '715950': '170368',  # At the Movies
+    '555124': '71799',  # Bloomberg TV+
+    '571664': '123870',  # Bloomberg Originals
+    '555130': '124721',  # CBC News
+    '555126': '107241',  # Cheddar
+    '715949': '169318',  # Crime Scenes
+    '400000088': '150981',  # Dog the Bounty Hunter
+    '400000056': '146144',  # Ebony TV by Lionsgate
+    '715948': '169317',  # Family Unscripted
+    '628893': '121307',  # FOX Weather
+    '400000070': '169320',  # Generation Drama
+    '715951': '169310',  # Ghosts are Real
+    '685558': '120790',  # Hi-YAH!
+    '715952': '169315',  # How To
+    '400000073': '169605',  # In the Garage
+    '400000033': '169820',  # Kartoon Channel!
+    '400000067': '170382',  # Living with Evil
+    '715947': '138034',  # Love & Marriage
+    '670605': '149920',  # Love Quest
+    '400000108': '126737',  # MotorTrend FAST TV
+    '400000048': '146284',  # MrBeast
+    '715946': '169313',  # Mysterious Worlds
+    '400000105': '158128',  # Nash Bridges
+    '400000116': '171941',  # NBA FAST Channel
+    '629323': '129130',  # NHRA TV
+    '400000072': '169610',  # On the Telly
+    '715939': '169312',  # Paws and Claws
+    '400000004': '129774',  # Revolt Mixtape
+    '578086': '120010',  # Scripps News
+    '715938': '169611',  # Sweet Escapes
+    '702891': '132922',  # The Jack Hanna Channel
+    '700412': '131220',  # Total Crime
+    '715942': '169646',  # Unique Lives
+    '666613': '135718',  # Vice
+    '715945': '169645',  # Welcome Home
+}
+
 # ── Scraper ──────────────────────────────────────────────────────────────────
 
 class TubiScraper(BaseScraper):
@@ -208,6 +259,12 @@ class TubiScraper(BaseScraper):
             group_list = [k for k, v in groups.items() if cid in v]
             category   = group_list[0] if group_list else None
 
+            # Gracenote ID: prefer what the EPG row returns, fall back to lookup table
+            gracenote_id = (
+                str(row.get('gracenote_id')).strip()
+                if row.get('gracenote_id') else None
+            ) or _GRACENOTE_IDS.get(cid)
+
             channels.append(ChannelData(
                 source_channel_id = cid,
                 name              = name,
@@ -217,6 +274,7 @@ class TubiScraper(BaseScraper):
                 language          = 'en',
                 country           = 'US',
                 stream_type       = 'hls',
+                gracenote_id      = gracenote_id,
             ))
 
         logger.info('[tubi] %d channels (anonymous)', len(channels))
@@ -360,6 +418,9 @@ class TubiScraper(BaseScraper):
 
             self._url_cache[scid] = raw_url
 
+            # Gracenote ID from EPG content or lookup table
+            gracenote_id = _GRACENOTE_IDS.get(scid)
+
             channels.append(ChannelData(
                 source_channel_id = scid,
                 name              = name,
@@ -369,6 +430,7 @@ class TubiScraper(BaseScraper):
                 language          = 'en',
                 country           = 'US',
                 stream_type       = 'hls',
+                gracenote_id      = gracenote_id,
             ))
 
         logger.info('[tubi] %d channels (authenticated)', len(channels))
