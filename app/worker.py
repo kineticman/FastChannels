@@ -70,6 +70,11 @@ def run_drm_check(source_name: str):
             logger.error('[drm-check] source not found: %s', source_name)
             return
 
+        scraper_cls = registry.get(source_name)
+        if not scraper_cls or not getattr(scraper_cls, 'drm_check_enabled', False):
+            logger.info('[drm-check] %s: DRM check not enabled for this source, skipping', source_name)
+            return
+
         channels = source.channels.filter_by(is_active=True).all()
         total    = len(channels)
         checked  = 0
