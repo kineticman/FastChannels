@@ -72,7 +72,7 @@
     .overlay.open { display: flex; }
     .modal {
       background: #1e293b; border: 1px solid #334155; border-radius: 12px;
-      width: 100%; max-width: 560px; padding: 1.75rem;
+      width: 100%; max-width: 700px; padding: 1.75rem;
       margin: auto;
     }
     .modal h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 1.25rem; }
@@ -109,6 +109,45 @@
     /* channel count preview */
     .count-preview { font-size: 0.82rem; color: #64748b; margin-top: 0.5rem; }
     .count-preview strong { color: #38bdf8; }
+
+    /* channel picker */
+    .ch-search {
+      width: 100%; background: #0f172a; border: 1px solid #2d3148; border-radius: 6px;
+      padding: 0.4rem 0.65rem; color: #e2e8f0; font-size: 0.85rem; outline: none;
+      margin-bottom: 0.5rem;
+    }
+    .ch-search:focus { border-color: #6366f1; }
+    .ch-list {
+      max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.2rem;
+      border: 1px solid #1e3a5f; border-radius: 6px; padding: 0.4rem;
+      background: #0f172a;
+    }
+    .ch-group-header {
+      font-size: 0.7rem; font-weight: 600; color: #38bdf8;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 0.4rem 0.3rem 0.1rem; margin-top: 0.3rem;
+    }
+    .ch-group-header:first-child { margin-top: 0; }
+    .ch-item {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.25rem 0.4rem; border-radius: 4px; cursor: pointer;
+      font-size: 0.82rem; transition: background 0.1s;
+    }
+    .ch-item:hover { background: #1e293b; }
+    .ch-item input { accent-color: #38bdf8; cursor: pointer; flex-shrink: 0; }
+    .ch-item.selected { background: #0c1a2e; }
+    .ch-item .ch-source { color: #475569; font-size: 0.72rem; margin-left: auto; flex-shrink: 0; }
+    .ch-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 0.4rem; font-size: 0.78rem; color: #64748b;
+    }
+    .ch-bar-actions { display: flex; gap: 0.5rem; }
+    .ch-bar-btn {
+      background: none; border: none; color: #38bdf8; cursor: pointer;
+      font-size: 0.75rem; padding: 0; text-decoration: underline;
+    }
+    .ch-bar-btn:hover { color: #7dd3fc; }
+    .pill-manual { background: #1e3a5f; color: #7dd3fc; }
   </style>
 </head>
 <body>
@@ -151,22 +190,26 @@
           {% if feed.description %}<div class="feed-desc">{{ feed.description }}</div>{% endif %}
           <div class="filter-tags">
             {% set f = feed.filters or {} %}
-            {% if f.get('sources') %}
-              {% for s in f['sources'] %}
-                <span class="badge-pill pill-blue">{{ s }}</span>
-              {% endfor %}
+            {% if f.get('channel_ids') %}
+              <span class="badge-pill pill-manual">{{ f['channel_ids']|length }} channels (manual)</span>
             {% else %}
-              <span class="badge-pill pill-gray">all sources</span>
-            {% endif %}
-            {% if f.get('categories') %}
-              {% for c in f['categories'] %}
-                <span class="badge-pill pill-green">{{ c }}</span>
-              {% endfor %}
-            {% endif %}
-            {% if f.get('languages') %}
-              {% for l in f['languages'] %}
-                <span class="badge-pill pill-gray">{{ l }}</span>
-              {% endfor %}
+              {% if f.get('sources') %}
+                {% for s in f['sources'] %}
+                  <span class="badge-pill pill-blue">{{ s }}</span>
+                {% endfor %}
+              {% else %}
+                <span class="badge-pill pill-gray">all sources</span>
+              {% endif %}
+              {% if f.get('categories') %}
+                {% for c in f['categories'] %}
+                  <span class="badge-pill pill-green">{{ c }}</span>
+                {% endfor %}
+              {% endif %}
+              {% if f.get('languages') %}
+                {% for l in f['languages'] %}
+                  <span class="badge-pill pill-gray">{{ l }}</span>
+                {% endfor %}
+              {% endif %}
             {% endif %}
             {% if f.get('max_channels') %}
               <span class="badge-pill pill-gray">max {{ f['max_channels'] }}</span>
@@ -251,6 +294,19 @@
       </div>
     </div>
     <div class="field">
+      <label>Channels <span style="color:#475569;font-weight:400;text-transform:none">(leave none checked to use filters above)</span></label>
+      <div class="ch-bar">
+        <span id="ch-selected-count">loading…</span>
+        <span class="ch-bar-actions">
+          <button class="ch-bar-btn" type="button" onclick="selectAllChannels()">Select all</button>
+          <button class="ch-bar-btn" type="button" onclick="clearAllChannels()">Clear</button>
+        </span>
+      </div>
+      <input class="ch-search" id="ch-search" type="text" placeholder="Filter channels…" oninput="renderChannelList()">
+      <div class="ch-list" id="channel-list"></div>
+    </div>
+
+    <div class="field">
       <label>Max Channels</label>
       <input type="number" id="f-max" min="1" max="9999" placeholder="750 recommended for Channels DVR">
       <div class="help">Leave blank for no limit. Channels DVR degrades above ~750.</div>
@@ -266,16 +322,93 @@
 </div>
 
 <script>
+// ── Channel list cache ─────────────────────────────────────────────────────
+let _allChannels = [];
+let _selectedChannelIds = new Set();
+
+async function ensureChannelsLoaded() {
+  if (_allChannels.length > 0) return;
+  document.getElementById('ch-selected-count').textContent = 'loading…';
+  try {
+    const r = await fetch('/api/channels?per_page=2000');
+    const d = await r.json();
+    _allChannels = d.channels.sort((a, b) => a.name.localeCompare(b.name));
+  } catch(e) {
+    document.getElementById('ch-selected-count').textContent = 'Failed to load channels';
+  }
+}
+
+function renderChannelList() {
+  const search = document.getElementById('ch-search').value.toLowerCase();
+  const container = document.getElementById('channel-list');
+  container.innerHTML = '';
+
+  // Group by source
+  const groups = {};
+  for (const ch of _allChannels) {
+    if (search && !ch.name.toLowerCase().includes(search)) continue;
+    if (!groups[ch.source_name]) groups[ch.source_name] = [];
+    groups[ch.source_name].push(ch);
+  }
+
+  for (const [source, channels] of Object.entries(groups)) {
+    const hdr = document.createElement('div');
+    hdr.className = 'ch-group-header';
+    hdr.textContent = source;
+    container.appendChild(hdr);
+
+    for (const ch of channels) {
+      const sel = _selectedChannelIds.has(ch.id);
+      const label = document.createElement('label');
+      label.className = 'ch-item' + (sel ? ' selected' : '');
+      label.innerHTML = `<input type="checkbox" value="${ch.id}" ${sel ? 'checked' : ''}>${ch.name}<span class="ch-source">${ch.source_name}</span>`;
+      label.querySelector('input').addEventListener('change', e => {
+        if (e.target.checked) _selectedChannelIds.add(ch.id);
+        else _selectedChannelIds.delete(ch.id);
+        label.classList.toggle('selected', e.target.checked);
+        updateChCount();
+        schedulePreview();
+      });
+      container.appendChild(label);
+    }
+  }
+  updateChCount();
+}
+
+function updateChCount() {
+  const n = _selectedChannelIds.size;
+  document.getElementById('ch-selected-count').textContent =
+    n === 0 ? 'None selected — using filters above' : `${n} channel${n === 1 ? '' : 's'} selected`;
+}
+
+function selectAllChannels() {
+  const search = document.getElementById('ch-search').value.toLowerCase();
+  const visible = _allChannels.filter(ch => !search || ch.name.toLowerCase().includes(search));
+  visible.forEach(ch => _selectedChannelIds.add(ch.id));
+  renderChannelList();
+  schedulePreview();
+}
+
+function clearAllChannels() {
+  _selectedChannelIds.clear();
+  renderChannelList();
+  schedulePreview();
+}
+
 // ── Modal state ────────────────────────────────────────────────────────────
-function openModal(feed = null) {
+async function openModal(feed = null) {
   document.getElementById('modal-title').textContent = feed ? 'Edit Feed' : 'New Feed';
   document.getElementById('edit-id').value    = feed ? feed.id : '';
   document.getElementById('f-name').value     = feed ? feed.name : '';
   document.getElementById('f-desc').value     = feed ? (feed.description || '') : '';
   document.getElementById('f-max').value      = feed ? (feed.filters.max_channels || '') : '';
   document.getElementById('modal-status').textContent = '';
+  document.getElementById('ch-search').value  = '';
 
-  // Reset checkboxes
+  // Restore selected channel IDs
+  _selectedChannelIds = new Set((feed?.filters?.channel_ids || []).map(Number));
+
+  // Reset filter checkboxes
   document.querySelectorAll('.src-cb').forEach(cb => {
     cb.checked = feed ? (feed.filters.sources || []).includes(cb.value) : false;
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
@@ -289,9 +422,12 @@ function openModal(feed = null) {
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
   });
 
-  updateCountPreview();
   document.getElementById('modal-overlay').classList.add('open');
   document.getElementById('f-name').focus();
+
+  await ensureChannelsLoaded();
+  renderChannelList();
+  updateCountPreview();
 }
 
 function closeModal() {
@@ -306,42 +442,86 @@ function schedulePreview() {
 }
 async function updateCountPreview() {
   const filters = buildFilters();
-  const params  = new URLSearchParams();
-  (filters.sources    || []).forEach(s => params.append('source', s));
-  (filters.categories || []).forEach(c => params.append('category', c));
-  (filters.languages  || []).forEach(l => params.append('language', l));
-  try {
-    const r = await fetch(`/api/stats?${params}`);
-    const d = await r.json();
-    const total = d.total_channels;
-    const max   = filters.max_channels;
-    const shown = max ? Math.min(total, max) : total;
-    const warn  = shown > 750 ? ' ⚠️ over 750 — Channels DVR may be slow' : '';
-    document.getElementById('count-preview').innerHTML =
-      `<strong>${shown}</strong> channels will be in this feed${warn}`;
-  } catch(e) {
-    document.getElementById('count-preview').textContent = '';
+  const max     = filters.max_channels;
+  let total;
+
+  if (filters.channel_ids) {
+    total = filters.channel_ids.length;
+  } else {
+    const params = new URLSearchParams();
+    (filters.sources    || []).forEach(s => params.append('source', s));
+    (filters.categories || []).forEach(c => params.append('category', c));
+    (filters.languages  || []).forEach(l => params.append('language', l));
+    try {
+      const r = await fetch(`/api/stats?${params}`);
+      const d = await r.json();
+      total = d.total_channels;
+    } catch(e) {
+      document.getElementById('count-preview').textContent = '';
+      return;
+    }
   }
+
+  const shown = max ? Math.min(total, max) : total;
+  const warn  = shown > 750 ? ' ⚠️ over 750 — Channels DVR may be slow' : '';
+  document.getElementById('count-preview').innerHTML =
+    `<strong>${shown}</strong> channels will be in this feed${warn}`;
 }
 
 // Wire up live preview on checkbox changes
-document.querySelectorAll('.src-cb, .cat-cb, .lang-cb').forEach(cb => {
+document.querySelectorAll('.src-cb, .lang-cb').forEach(cb => {
   cb.addEventListener('change', () => {
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
     schedulePreview();
   });
 });
+
+document.querySelectorAll('.cat-cb').forEach(cb => {
+  cb.addEventListener('change', () => {
+    cb.closest('.check-item').classList.toggle('selected', cb.checked);
+    applyCategoriesToChannels();
+    schedulePreview();
+  });
+});
+
+function applyCategoriesToChannels() {
+  const checkedCats = new Set(
+    [...document.querySelectorAll('.cat-cb:checked')].map(c => c.value)
+  );
+  for (const ch of _allChannels) {
+    if (checkedCats.has(ch.category)) {
+      _selectedChannelIds.add(ch.id);
+    } else if (ch.category) {
+      // Only deselect if it was selected by a category (not manually).
+      // Strategy: remove if not in any currently-checked category.
+      // Manual selections (added without a category) are preserved
+      // because we can't distinguish them — safest is to only remove
+      // channels whose category was previously checked and is now unchecked.
+      // So: if the channel's category exists in the UI and none of the
+      // checked cats covers it, remove it.
+      const catExistsInUI = !!document.querySelector(`.cat-cb[value="${CSS.escape(ch.category)}"]`);
+      if (catExistsInUI && !checkedCats.has(ch.category)) {
+        _selectedChannelIds.delete(ch.id);
+      }
+    }
+  }
+  renderChannelList();
+}
 document.getElementById('f-max').addEventListener('input', schedulePreview);
 
 // ── Build filters from modal state ────────────────────────────────────────
 function buildFilters() {
   const f = {};
-  const sources = [...document.querySelectorAll('.src-cb:checked')].map(c => c.value);
-  if (sources.length) f.sources = sources;
-  const cats = [...document.querySelectorAll('.cat-cb:checked')].map(c => c.value);
-  if (cats.length) f.categories = cats;
-  const langs = [...document.querySelectorAll('.lang-cb:checked')].map(c => c.value);
-  if (langs.length) f.languages = langs;
+  if (_selectedChannelIds.size > 0) {
+    f.channel_ids = [..._selectedChannelIds];
+  } else {
+    const sources = [...document.querySelectorAll('.src-cb:checked')].map(c => c.value);
+    if (sources.length) f.sources = sources;
+    const cats = [...document.querySelectorAll('.cat-cb:checked')].map(c => c.value);
+    if (cats.length) f.categories = cats;
+    const langs = [...document.querySelectorAll('.lang-cb:checked')].map(c => c.value);
+    if (langs.length) f.languages = langs;
+  }
   const max = parseInt(document.getElementById('f-max').value);
   if (max > 0) f.max_channels = max;
   return f;

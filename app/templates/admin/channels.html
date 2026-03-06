@@ -46,6 +46,13 @@
     .btn-enable:hover  { background: #16a34a; }
     .btn-disable { background: #7f1d1d; color: #fff; }
     .btn-disable:hover { background: #991b1b; }
+    .btn-reenable {
+      font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 4px; border: none;
+      background: #1e3a5f; color: #7dd3fc; cursor: pointer; margin-left: 0.4rem;
+      font-weight: 500; transition: background 0.15s;
+    }
+    .btn-reenable:hover { background: #1d4ed8; color: #fff; }
+    .btn-reenable:disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-cancel  { background: transparent; color: #64748b; border: 1px solid #334155 !important; }
     .btn-cancel:hover  { color: #e2e8f0; }
 
@@ -237,8 +244,10 @@
             <td>
               {% if ch.disable_reason == 'DRM' %}
               <span style="color:#f87171;font-size:0.75rem;font-weight:600;">🔒 DRM</span>
+              <button class="btn-reenable" onclick="reenable({{ ch.id }}, this)" title="Clear DRM flag and re-enable">Re-enable</button>
               {% elif ch.disable_reason == 'Dead' %}
               <span style="color:#94a3b8;font-size:0.75rem;font-weight:600;">💀 Dead</span>
+              <button class="btn-reenable" onclick="reenable({{ ch.id }}, this)" title="Clear Dead flag and re-enable">Re-enable</button>
               {% endif %}
             </td>
             <td class="toggle-col">
@@ -371,6 +380,28 @@
       } finally {
         label.classList.remove('saving');
         checkbox.disabled = false;
+      }
+    }
+
+    async function reenable(channelId, btn) {
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method:  'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({is_active: true, is_enabled: true, disable_reason: null}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        // Remove the badge and button, flip the toggle on
+        const cell = btn.closest('td');
+        cell.innerHTML = '';
+        const checkbox = document.querySelector(`#toggle-${channelId} input`);
+        if (checkbox) { checkbox.checked = true; }
+        document.getElementById(`row-${channelId}`).classList.remove('disabled');
+      } catch (e) {
+        btn.textContent = 'Error';
+        console.error('Re-enable failed:', e);
       }
     }
 

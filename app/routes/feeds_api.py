@@ -85,6 +85,14 @@ def _clean_filters(raw: dict) -> dict:
     builder treats them as 'no filter on this dimension'.
     """
     out = {}
+    if channel_ids := raw.get('channel_ids'):
+        out['channel_ids'] = [int(i) for i in channel_ids if str(i).isdigit() or isinstance(i, int)]
+        if max_ch := raw.get('max_channels'):
+            try:
+                out['max_channels'] = max(1, int(max_ch))
+            except (ValueError, TypeError):
+                pass
+        return out  # channel_ids overrides all other filters
     if sources := raw.get('sources'):
         out['sources'] = [str(s) for s in sources if s]
     if categories := raw.get('categories'):

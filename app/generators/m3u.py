@@ -38,22 +38,31 @@ def _build_channel_query(filters: dict):
         Source.is_enabled  == True,
         Channel.stream_url != None,
     )
-    if sources := filters.get('source'):
-        query = query.filter(Source.name.in_(sources))
-    if categories := filters.get('category'):
-        query = query.filter(Channel.category.in_(categories))
-    if languages := filters.get('languages'):
-        query = query.filter(Channel.language.in_(languages))
-    elif language := filters.get('language'):
-        query = query.filter(Channel.language == language)
-    if search := filters.get('search'):
-        query = query.filter(Channel.name.ilike(f'%{search}%'))
+    if channel_ids := filters.get('channel_ids'):
+        query = query.filter(Channel.id.in_(channel_ids))
+    else:
+        if sources := filters.get('source'):
+            query = query.filter(Source.name.in_(sources))
+        if categories := filters.get('category'):
+            query = query.filter(Channel.category.in_(categories))
+        if languages := filters.get('languages'):
+            query = query.filter(Channel.language.in_(languages))
+        elif language := filters.get('language'):
+            query = query.filter(Channel.language == language)
+        if search := filters.get('search'):
+            query = query.filter(Channel.name.ilike(f'%{search}%'))
     return query.order_by(Channel.number.asc().nullslast(), Channel.name.asc())
 
 
 def feed_to_query_filters(feed_filters: dict) -> dict:
     """Translate Feed.filters (plural keys) to _build_channel_query format."""
     f = {}
+    if channel_ids := feed_filters.get('channel_ids'):
+        # Explicit channel list overrides source/category/language filters.
+        f['channel_ids'] = channel_ids
+        if max_ch := feed_filters.get('max_channels'):
+            f['max_channels'] = max_ch
+        return f
     if sources := feed_filters.get('sources'):
         f['source'] = sources
     if categories := feed_filters.get('categories'):
