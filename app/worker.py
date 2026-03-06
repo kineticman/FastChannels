@@ -43,14 +43,39 @@ def run_scraper(source_name: str):
             return
 
         try:
-            scraper = scraper_cls(config=source.config or {})
-            channels, programs = scraper.run()
-            _upsert_channels(source, channels)
-            _upsert_programs(source, programs)
-            source.last_scraped_at = datetime.now(timezone.utc)
-            source.last_error      = None
-            db.session.commit()
-            logger.info(f'[{source_name}] Done — {len(channels)} channels, {len(programs)} programs')
+            scraper  = scraper_cls(config=source.config or {})
+            refresh_hours = getattr(scraper_cls, 'channel_refresh_hours', 0)
+
+            # Decide whether to skip the channel list fetch this run.
+            # If channel_refresh_hours > 0 and we scraped within that window,
+            # only refresh EPG using the existing DB channel list.
+            skip_channels = False
+            if refresh_hours > 0 and source.last_scraped_at:
+                last = source.last_scraped_at.replace(tzinfo=timezone.utc) if source.last_scraped_at.tzinfo is None else source.last_scraped_at
+                age_hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
+                skip_channels = age_hours < refresh_hours
+
+            if skip_channels:
+                from app.scrapers.base import ChannelData as _CD
+                db_channels = source.channels.filter_by(is_active=True).all()
+                epg_input   = [_CD(source_channel_id=ch.source_channel_id,
+                                   name=ch.name,
+                                   stream_url=ch.stream_url or '',
+                                   slug=ch.slug or '') for ch in db_channels]
+                programs = scraper.fetch_epg(epg_input)
+                _upsert_programs(source, programs)
+                source.last_scraped_at = datetime.now(timezone.utc)
+                source.last_error      = None
+                db.session.commit()
+                logger.info(f'[{source_name}] EPG-only run — {len(db_channels)} channels, {len(programs)} programs')
+            else:
+                channels, programs = scraper.run()
+                _upsert_channels(source, channels)
+                _upsert_programs(source, programs)
+                source.last_scraped_at = datetime.now(timezone.utc)
+                source.last_error      = None
+                db.session.commit()
+                logger.info(f'[{source_name}] Done — {len(channels)} channels, {len(programs)} programs')
         except Exception as e:
             logger.exception(f'[{source_name}] Scrape failed')
             source.last_error = str(e)

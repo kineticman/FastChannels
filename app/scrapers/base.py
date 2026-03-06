@@ -73,6 +73,7 @@ class BaseScraper(ABC):
     display_name:    str = None
     scrape_interval: int = 360
     drm_check_enabled: bool = False  # opt-in; only scrapers known to serve DRM should set True
+    channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
 
     # Declare config fields your scraper needs.
     # The admin UI auto-renders these — no template changes needed for new scrapers.

@@ -103,10 +103,11 @@ def _cat_id_to_label(cat_id: str) -> str:
 
 class RokuScraper(BaseScraper):
 
-    source_name     = "roku"
-    display_name    = "The Roku Channel"
-    scrape_interval = 60
-    drm_check_enabled = True          # EPG is now/next only, refresh hourly
+    source_name           = "roku"
+    display_name          = "The Roku Channel"
+    scrape_interval       = 60    # EPG refreshed every hour
+    channel_refresh_hours = 24    # channel list refreshed once a day
+    drm_check_enabled     = True
 
     # No config needed — fully anonymous, no credentials
     config_schema = []
