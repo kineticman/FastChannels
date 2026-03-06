@@ -41,7 +41,62 @@ _UA = (
     "Chrome/145.0.0.0 Safari/537.36"
 )
 
+_EPG_URL = f"{_BASE}/api/v2/epg"
+
+# Tags in the EPG station object → human-readable category (checked in order)
+_TAG_CATEGORY_PRIORITY = [
+    ('news',            'News'),
+    ('spanish-language','Spanish'),
+    ('music',           'Music'),
+    ('kids_music',      'Kids'),
+    ('kids_linear',     'Kids'),
+    ('ages_1-3',        'Kids'),
+    ('ages_4-6',        'Kids'),
+    ('ages_7-9',        'Kids'),
+    ('ages_10plus',     'Kids'),
+    ('educational',     'Kids'),
+    ('preschool_specials', 'Kids'),
+]
+
 _SESSION_TTL = 55 * 60  # seconds before we refresh cookies + csrf
+
+
+# ── Category helpers ───────────────────────────────────────────────────────────
+
+def _category_from_station(station: dict) -> str:
+    """Derive a human-readable category from an EPG station object."""
+    if station.get("kidsDirected"):
+        return "Kids"
+    tags = set(station.get("tags", []))
+    for tag, label in _TAG_CATEGORY_PRIORITY:
+        if tag in tags:
+            return label
+    # channelcode_* tags hint at genre
+    for tag in tags:
+        tl = tag.lower()
+        if "reality" in tl or "wedding" in tl:
+            return "Reality TV"
+        if "thriller" in tl or "movie" in tl or "film" in tl or "ifc" in tl:
+            return "Movies"
+        if "comedy" in tl:
+            return "Comedy"
+        if "drama" in tl or "stories" in tl:
+            return "Drama"
+    return "Live TV"
+
+
+def _cat_id_to_label(cat_id: str) -> str:
+    """Convert a Roku cat-* ID to a friendly label (best effort)."""
+    _MAP = {
+        "cat-news": "News", "cat-national-news": "News", "cat-epg-news-opinion": "News",
+        "cat-sports": "Sports", "cat-sports-general": "Sports",
+        "cat-movies": "Movies", "cat-movie": "Movies",
+        "cat-comedy": "Comedy", "cat-drama": "Drama",
+        "cat-reality": "Reality TV", "cat-lifestyle": "Lifestyle",
+        "cat-food": "Food", "cat-music": "Music",
+        "cat-kids": "Kids", "cat-family": "Kids",
+    }
+    return _MAP.get(cat_id, "Live TV")
 
 
 # ── Scraper ────────────────────────────────────────────────────────────────────
@@ -147,47 +202,28 @@ class RokuScraper(BaseScraper):
         if not self._ensure_session():
             return []
 
-        # The live TV page (page.json equivalent) has all channel tiles embedded.
-        # We use the billboard endpoint to get the featured 3, then fall back to
-        # iterating the full channel list via a known page structure.
-        # Best approach: fetch page.json-style data via the homescreen rendered page.
-        # Since that 500s for requests, we instead call the content proxy for each
-        # channel ID discovered from a known channel list seed.
-        #
-        # Practical approach that works headlessly:
-        # 1. Fetch the billboard (returns ~3 hero channels with full metadata)
-        # 2. Fetch the full page via a category browse endpoint
-        # 3. Fall back to a known channel list if the page API is unavailable
-
         channels: list[ChannelData] = []
         seen: set[str] = set()
 
-        # ── Phase 1: category browse (returns all live channels) ──────────────
-        cat_url = (
-            f"{_BASE}/api/v2/homescreen/content/"
-            + quote(
-                "https://content.sr.roku.com/content/v1/roku-trc"
-                "?type=livefeed"
-                "&include=title,type,images,categories,viewOptions.playId,"
-                "viewOptions.providerId,meta,shortName"
-                "&pageSize=500",
-                safe=""
-            )
-        )
+        # ── Phase 1: /api/v2/epg — returns all ~795 live channels ─────────────
+        # Each collection item has features.station with full channel metadata.
         try:
-            r = self.session.get(cat_url, headers=self._api_headers(), timeout=20)
+            r = self.session.get(_EPG_URL, headers=self._api_headers(), timeout=20)
             if r.status_code == 200:
-                data = r.json()
-                items = data if isinstance(data, list) else data.get("items", [])
-                for item in items:
-                    sid = (item.get("meta") or {}).get("id") or item.get("id")
+                for col in r.json().get("collections", []):
+                    station = col.get("features", {}).get("station")
+                    if not station:
+                        continue
+                    sid = station.get("meta", {}).get("id")
                     if not sid or sid in seen:
                         continue
-                    self._add_channel(channels, seen, sid, item)
+                    self._add_channel_from_station(channels, seen, sid, station)
+            else:
+                logger.warning("[roku] EPG returned %d", r.status_code)
         except Exception as exc:
-            logger.warning("[roku] category browse failed: %s", exc)
+            logger.warning("[roku] EPG fetch failed: %s", exc)
 
-        # ── Phase 2: billboard (always works, catches any gaps) ───────────────
+        # ── Phase 2: billboard (hero channels, fills any EPG gaps) ────────────
         try:
             r2 = self.session.get(
                 f"{_BASE}/api/v1/billboard/landing/trc-us-live-ml-page-en-current",
@@ -199,11 +235,10 @@ class RokuScraper(BaseScraper):
                     sid = (item.get("meta") or {}).get("id")
                     if not sid or sid in seen:
                         continue
-                    self._add_channel(channels, seen, sid, item)
+                    self._add_channel_from_content(channels, seen, sid, item)
         except Exception as exc:
             logger.warning("[roku] billboard fetch failed: %s", exc)
 
-        # ── Phase 3: if we got nothing, log an error ──────────────────────────
         if not channels:
             logger.error("[roku] fetch_channels returned 0 channels — session may be bad")
         else:
@@ -211,13 +246,52 @@ class RokuScraper(BaseScraper):
 
         return channels
 
-    def _add_channel(
+    def _add_channel_from_station(
+        self,
+        channels: list[ChannelData],
+        seen: set[str],
+        station_id: str,
+        station: dict,
+    ) -> None:
+        """Add a channel parsed from an EPG features.station object."""
+        seen.add(station_id)
+
+        title  = station.get("title") or station.get("shortName") or "Unknown"
+        number = station.get("displayNumber")
+
+        # Logo: prefer gridEpg → epgLogo → liveHudLogo
+        logo = None
+        image_map = station.get("imageMap") or {}
+        for key in ("gridEpg", "epgLogo", "liveHudLogo", "epgLogoDark"):
+            img = image_map.get(key)
+            if img and img.get("path"):
+                logo = img["path"]
+                break
+
+        # Category from kidsDirected flag or tags
+        category = _category_from_station(station)
+
+        channels.append(ChannelData(
+            source_channel_id = station_id,
+            name              = title,
+            stream_url        = f"roku://{station_id}",
+            logo_url          = logo,
+            category          = category,
+            language          = "en",
+            country           = "US",
+            stream_type       = "hls",
+            number            = number,
+            slug              = f"|",  # playId resolved on demand; no gracenoteId from EPG
+        ))
+
+    def _add_channel_from_content(
         self,
         channels: list[ChannelData],
         seen: set[str],
         station_id: str,
         item: dict,
     ) -> None:
+        """Add a channel parsed from a content-proxy / billboard item."""
         seen.add(station_id)
 
         title = item.get("title", "Unknown")
@@ -225,15 +299,15 @@ class RokuScraper(BaseScraper):
         # Logo: prefer grid thumbnail
         logo = None
         image_map = item.get("imageMap") or {}
-        for key in ("grid", "detailBackground", "detailPoster"):
+        for key in ("grid", "gridEpg", "detailBackground", "detailPoster"):
             img = image_map.get(key)
             if img and img.get("path"):
                 logo = img["path"]
                 break
 
         # Category from categories list
-        cats = item.get("categories") or item.get("categoryObjects") or []
-        category = cats[0] if cats else None
+        cats = item.get("categories") or []
+        category = _cat_id_to_label(cats[0]) if cats else None
 
         # playId from viewOptions
         view_opts = item.get("viewOptions") or [{}]
@@ -253,8 +327,6 @@ class RokuScraper(BaseScraper):
             language          = "en",
             country           = "US",
             stream_type       = "hls",
-            # Pass through extras for the M3U generator via slug field
-            # We encode playId and gracenoteId into slug for resolve() and M3U output
             slug              = f"{play_id or ''}|{gracenote_id}",
         ))
 
