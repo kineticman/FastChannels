@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 import redis
 from rq import Worker, Queue, Connection
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from app import create_app
 from app.extensions import db
@@ -303,6 +304,45 @@ def _upsert_programs(source, program_data_list):
     db.session.flush()
 
 
+# In-memory record of when each source was last enqueued, so we don't
+# double-queue a source that's still running (last_scraped_at not yet updated).
+_last_enqueued: dict[str, datetime] = {}
+
+
+def _schedule_due_scrapes():
+    """Enqueue scrapes for enabled sources whose interval has elapsed."""
+    now = datetime.now(timezone.utc)
+    with flask_app.app_context():
+        try:
+            r = redis.from_url(flask_app.config['REDIS_URL'])
+            q = Queue('scraper', connection=r)
+        except Exception as e:
+            logger.error('[scheduler] Redis unavailable: %s', e)
+            return
+
+        sources = Source.query.filter_by(is_enabled=True).all()
+        for source in sources:
+            interval_secs = (source.scrape_interval or 360) * 60
+
+            last_scraped = source.last_scraped_at
+            if last_scraped and last_scraped.tzinfo is None:
+                last_scraped = last_scraped.replace(tzinfo=timezone.utc)
+
+            last_queued = _last_enqueued.get(source.name)
+            candidates = [t for t in (last_scraped, last_queued) if t is not None]
+            last = max(candidates) if candidates else None
+
+            if last is None or (now - last).total_seconds() >= interval_secs:
+                try:
+                    q.enqueue('app.worker.run_scraper', source.name, job_timeout=600)
+                    _last_enqueued[source.name] = now
+                    logger.info('[scheduler] Enqueued %s (interval=%dm, age=%s)',
+                                source.name, source.scrape_interval,
+                                f'{(now - last).total_seconds() / 60:.0f}m' if last else 'never')
+                except Exception as e:
+                    logger.error('[scheduler] Failed to enqueue %s: %s', source.name, e)
+
+
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
@@ -320,6 +360,13 @@ def seed_sources():
 
 if __name__ == '__main__':
     seed_sources()
+
+    scheduler = BackgroundScheduler(daemon=True)
+    scheduler.add_job(_schedule_due_scrapes, 'interval', minutes=1, id='auto_scrape',
+                      max_instances=1, coalesce=True)
+    scheduler.start()
+    logger.info('Scheduler started — checking sources every 60s')
+
     r = redis.from_url(flask_app.config['REDIS_URL'])
     with Connection(r):
         worker = Worker(queues=[Queue('scraper', connection=r)])
