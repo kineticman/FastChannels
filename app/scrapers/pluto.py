@@ -281,8 +281,6 @@ class PlutoScraper(BaseScraper):
         end_time   = start_time
 
         n_batches = (len(all_ids) + 99) // 100
-        logger.info("[pluto] %s: fetching EPG — %d channels, %d batch(es) × 3 windows",
-                    country_code, len(all_ids), n_batches)
 
         for window in range(3):
             if window > 0:
@@ -290,8 +288,6 @@ class PlutoScraper(BaseScraper):
             for i in range(0, len(all_ids), 100):
                 batch     = all_ids[i:i+100]
                 batch_num = i // 100 + 1
-                logger.info("[pluto] %s: EPG window=%d batch=%d/%d from=%s",
-                            country_code, window + 1, batch_num, n_batches, start_time)
                 try:
                     r = self.session.get(
                         'https://service-channels.clusters.pluto.tv/v2/guide/timelines',
@@ -302,8 +298,8 @@ class PlutoScraper(BaseScraper):
                     data     = r.json()
                     new_prgs = self._parse_timelines(data.get('data', []))
                     programs.extend(new_prgs)
-                    logger.info("[pluto] %s: EPG window=%d batch=%d → %d entries (total %d)",
-                                country_code, window + 1, batch_num, len(new_prgs), len(programs))
+                    logger.debug("[pluto] %s: EPG w%d b%d/%d → %d entries",
+                                 country_code, window + 1, batch_num, n_batches, len(new_prgs))
                     meta_end = data.get('meta', {}).get('endDateTime')
                     if meta_end:
                         end_time = (

@@ -351,7 +351,7 @@ class TubiScraper(BaseScraper):
                 if slug not in _SKIP_SLUGS and item.get('name'):
                     groups[item['name']] = item.get('contents', [])
 
-        logger.info('[tubi] live page: %d channel IDs, %d groups', len(channel_ids), len(groups))
+        logger.debug('[tubi] live page: %d channel IDs, %d groups', len(channel_ids), len(groups))
         return channel_ids, groups, None
 
     def _fetch_epg_rows_anon(self, channel_ids: list) -> list[dict]:

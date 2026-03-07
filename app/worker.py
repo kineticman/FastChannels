@@ -23,6 +23,8 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s %(name)s: %(message)s',
     stream=sys.stdout,
 )
+# APScheduler logs every job execution at INFO — suppress to WARNING
+logging.getLogger('apscheduler').setLevel(logging.WARNING)
 
 from app.logfile import setup as _setup_logfile
 _setup_logfile()

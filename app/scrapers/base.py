@@ -102,11 +102,8 @@ class BaseScraper(ABC):
         return raw_url
 
     def run(self) -> tuple[list[ChannelData], list[ProgramData]]:
-        logger.info(f'[{self.source_name}] Starting scrape')
         channels = self.fetch_channels()
-        logger.info(f'[{self.source_name}] Found {len(channels)} channels')
         programs = self.fetch_epg(channels)
-        logger.info(f'[{self.source_name}] Found {len(programs)} EPG entries')
         return channels, programs
 
     def get(self, url: str, **kwargs) -> Optional[requests.Response]:

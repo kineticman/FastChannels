@@ -137,7 +137,6 @@ class XumoScraper(BaseScraper):
 
     def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
         if not channels:
-            logger.info("[xumo] 0 EPG entries")
             return []
 
         wanted_ids = {str(ch.source_channel_id) for ch in channels}
