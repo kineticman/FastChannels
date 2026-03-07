@@ -1,4 +1,6 @@
 import re
+import requests as _req
+from urllib.parse import urljoin as _urljoin
 from flask import Blueprint, jsonify, request
 from ..extensions import db
 from ..models import Source, Channel
@@ -125,6 +127,108 @@ def update_channel(channel_id):
             return jsonify({'error': 'Invalid Gracenote ID — must be numeric (e.g. 122912) or start with EP/SH/MV/SP/TR (e.g. EP012345678)'}), 422
     db.session.commit()
     return jsonify(ch.to_dict())
+
+
+@api_bp.route('/channels/<int:channel_id>/inspect', methods=['POST'])
+def inspect_channel(channel_id):
+    """
+    Single-channel inspector: resolve the stream URL directly, parse the HLS manifest,
+    check for DRM/VOD, then pull one segment to confirm video data is flowing.
+    Returns: { status, detail, segment_bytes }
+      status: 'live' | 'drm' | 'dead' | 'vod' | 'no_data' | 'error'
+    """
+    _DRM_METHODS = ('SAMPLE-AES',)
+
+    ch     = Channel.query.get_or_404(channel_id)
+    source = ch.source
+
+    if len(ch.source_channel_id) > 128 or '/' in ch.source_channel_id:
+        return jsonify({'status': 'error', 'detail': 'Malformed channel ID'})
+
+    # Resolve the stream URL directly — avoids a self-referential HTTP request to the
+    # gunicorn server itself, which can deadlock all workers under concurrent inspect calls.
+    scraper_cls = registry.get(source.name)
+    if scraper_cls:
+        scraper = scraper_cls()
+        try:
+            resolved_url = scraper.resolve(ch.stream_url)
+        except Exception as e:
+            return jsonify({'status': 'error', 'detail': f'URL resolve failed: {e}'})
+        sess = scraper.session
+    else:
+        resolved_url = ch.stream_url
+        sess = _req.Session()
+        sess.headers['User-Agent'] = 'FastChannels-Inspector/1.0'
+
+    if not resolved_url:
+        return jsonify({'status': 'error', 'detail': 'No stream URL'})
+
+    try:
+        r = sess.get(resolved_url, timeout=15, allow_redirects=True)
+
+        if r.status_code in (404, 410):
+            return jsonify({'status': 'dead', 'detail': f'HTTP {r.status_code} — stream not found'})
+
+        if r.status_code in (403, 429, 451, 503):
+            return jsonify({'status': 'error', 'detail': f'HTTP {r.status_code} — blocked or restricted'})
+
+        if r.status_code != 200:
+            return jsonify({'status': 'error', 'detail': f'HTTP {r.status_code}'})
+
+        manifest_text = r.text
+        manifest_url  = r.url
+
+        # Master playlist → drill into first variant to get media playlist
+        if '#EXT-X-STREAM-INF' in manifest_text:
+            for line in manifest_text.splitlines():
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    variant_url = _urljoin(manifest_url, line)
+                    try:
+                        rv = sess.get(variant_url, timeout=10)
+                        if rv.status_code == 200:
+                            manifest_text = rv.text
+                            manifest_url  = rv.url
+                    except Exception:
+                        pass
+                    break
+
+        if 'EXT-X-PLAYLIST-TYPE:VOD' in manifest_text:
+            return jsonify({'status': 'vod', 'detail': 'VOD stream — not a live channel'})
+
+        drm_method = next((m for m in _DRM_METHODS if f'METHOD={m}' in manifest_text), None)
+        if drm_method:
+            return jsonify({'status': 'drm', 'detail': f'DRM encryption detected ({drm_method})'})
+
+        # Find the first media segment and try to pull a chunk to confirm data flows
+        segment_url = None
+        for line in manifest_text.splitlines():
+            line = line.strip()
+            if line and not line.startswith('#'):
+                segment_url = _urljoin(manifest_url, line)
+                break
+
+        if not segment_url:
+            return jsonify({'status': 'live', 'detail': 'Manifest OK (no segments listed yet)'})
+
+        try:
+            rs = sess.get(segment_url, timeout=10, stream=True)
+            if rs.status_code != 200:
+                return jsonify({'status': 'no_data',
+                                'detail': f'Manifest OK but segment returned HTTP {rs.status_code}'})
+            chunk = next(rs.iter_content(8192), None)
+            rs.close()
+            seg_bytes = len(chunk) if chunk else 0
+            if seg_bytes == 0:
+                return jsonify({'status': 'no_data', 'detail': 'Segment returned 0 bytes'})
+            return jsonify({'status': 'live',
+                            'detail': f'Stream OK — {seg_bytes} bytes received from segment',
+                            'segment_bytes': seg_bytes})
+        except Exception as e:
+            return jsonify({'status': 'error', 'detail': f'Segment fetch failed: {e}'})
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'detail': str(e)})
 
 
 @api_bp.route('/logs')

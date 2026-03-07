@@ -144,6 +144,28 @@
     .pagination a { color: #38bdf8; text-decoration: none; padding: 0.4rem 0.8rem; border: 1px solid #334155; border-radius: 4px; font-size: 0.8rem; }
     .pagination a:hover { background: #1e293b; }
     .page-info { color: #64748b; font-size: 0.8rem; }
+
+    /* Channel inspector */
+    .btn-inspect {
+      background: none; border: 1px solid #334155; color: #64748b;
+      padding: 0.2rem 0.45rem; border-radius: 4px; cursor: pointer;
+      font-size: 0.8rem; line-height: 1; transition: border-color 0.15s, color 0.15s;
+    }
+    .btn-inspect:hover { border-color: #38bdf8; color: #38bdf8; }
+    .btn-inspect:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .inspect-badge {
+      display: inline-block; font-size: 0.72rem; font-weight: 600;
+      padding: 0.15rem 0.45rem; border-radius: 4px; cursor: default;
+      white-space: nowrap;
+    }
+    .inspect-badge.live    { background: #14532d; color: #4ade80; }
+    .inspect-badge.drm     { background: #450a0a; color: #f87171; }
+    .inspect-badge.dead    { background: #1c1917; color: #94a3b8; }
+    .inspect-badge.vod     { background: #1c1917; color: #94a3b8; }
+    .inspect-badge.no_data { background: #431407; color: #fb923c; }
+    .inspect-badge.error   { background: #1e1b4b; color: #a5b4fc; }
+    .inspect-badge.spin    { background: transparent; color: #64748b; animation: spin 0.8s linear infinite; }
   </style>
 </head>
 <body>
@@ -209,6 +231,7 @@
             <th>#</th>
             <th>Gracenote ID</th>
             <th>In M3U</th>
+            <th>Inspect</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -258,6 +281,9 @@
               <button class="btn-reenable" onclick="reenable({{ ch.id }}, this)" title="Clear Dead flag and re-enable">Re-enable</button>
               {% endif %}
             </td>
+            <td id="inspect-cell-{{ ch.id }}" style="white-space:nowrap">
+              <button class="btn-inspect" onclick="inspectChannel({{ ch.id }}, this)" title="Test stream: check DRM, liveness, and segment data">&#128269;</button>
+            </td>
             <td class="toggle-col">
               <div class="toggle-wrap">
                 <label class="toggle" id="toggle-{{ ch.id }}">
@@ -287,6 +313,67 @@
   </div>
 
   <script>
+    // ── Channel inspector ─────────────────────────────────────────────────
+    const INSPECT_LABELS = {
+      live:    '✓ Live',
+      drm:     '🔒 DRM',
+      dead:    '💀 Dead',
+      vod:     '📼 VOD',
+      no_data: '⚠ No Data',
+      error:   '✕ Error',
+    };
+
+    async function inspectChannel(channelId, btn) {
+      const cell = document.getElementById(`inspect-cell-${channelId}`);
+      btn.disabled = true;
+
+      // Show spinner
+      const spinner = document.createElement('span');
+      spinner.className = 'inspect-badge spin';
+      spinner.textContent = '↻';
+      cell.replaceChildren(spinner);
+
+      try {
+        const r = await fetch(`/api/channels/${channelId}/inspect`, { method: 'POST' });
+        const data = await r.json();
+        const status = data.status || 'error';
+        const label  = INSPECT_LABELS[status] || status;
+
+        const badge = document.createElement('span');
+        badge.className = `inspect-badge ${status}`;
+        badge.textContent = label;
+        badge.title = data.detail || '';
+
+        // Allow re-running by clicking the badge
+        badge.style.cursor = 'pointer';
+        badge.onclick = () => {
+          const newBtn = document.createElement('button');
+          newBtn.className = 'btn-inspect';
+          newBtn.title = 'Test stream: check DRM, liveness, and segment data';
+          newBtn.innerHTML = '&#128269;';
+          newBtn.onclick = () => inspectChannel(channelId, newBtn);
+          cell.replaceChildren(newBtn);
+        };
+
+        cell.replaceChildren(badge);
+      } catch (e) {
+        const badge = document.createElement('span');
+        badge.className = 'inspect-badge error';
+        badge.textContent = '✕ Error';
+        badge.title = String(e);
+        badge.style.cursor = 'pointer';
+        badge.onclick = () => {
+          const newBtn = document.createElement('button');
+          newBtn.className = 'btn-inspect';
+          newBtn.title = 'Test stream: check DRM, liveness, and segment data';
+          newBtn.innerHTML = '&#128269;';
+          newBtn.onclick = () => inspectChannel(channelId, newBtn);
+          cell.replaceChildren(newBtn);
+        };
+        cell.replaceChildren(badge);
+      }
+    }
+
     // ── Gracenote ID — inline edit, save on blur ───────────────────────────
     const GN_RE = /^(EP|SH|MV|SP|TR)\d+$/;
 
