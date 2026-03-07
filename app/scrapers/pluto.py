@@ -280,11 +280,18 @@ class PlutoScraper(BaseScraper):
         programs: list[ProgramData] = []
         end_time   = start_time
 
+        n_batches = (len(all_ids) + 99) // 100
+        logger.info("[pluto] %s: fetching EPG — %d channels, %d batch(es) × 3 windows",
+                    country_code, len(all_ids), n_batches)
+
         for window in range(3):
             if window > 0:
                 start_time = end_time
             for i in range(0, len(all_ids), 100):
-                batch = all_ids[i:i+100]
+                batch     = all_ids[i:i+100]
+                batch_num = i // 100 + 1
+                logger.info("[pluto] %s: EPG window=%d batch=%d/%d from=%s",
+                            country_code, window + 1, batch_num, n_batches, start_time)
                 try:
                     r = self.session.get(
                         'https://service-channels.clusters.pluto.tv/v2/guide/timelines',
@@ -292,8 +299,11 @@ class PlutoScraper(BaseScraper):
                         headers=headers, timeout=30,
                     )
                     r.raise_for_status()
-                    data = r.json()
-                    programs.extend(self._parse_timelines(data.get('data', [])))
+                    data     = r.json()
+                    new_prgs = self._parse_timelines(data.get('data', []))
+                    programs.extend(new_prgs)
+                    logger.info("[pluto] %s: EPG window=%d batch=%d → %d entries (total %d)",
+                                country_code, window + 1, batch_num, len(new_prgs), len(programs))
                     meta_end = data.get('meta', {}).get('endDateTime')
                     if meta_end:
                         end_time = (
@@ -302,9 +312,10 @@ class PlutoScraper(BaseScraper):
                             .strftime("%Y-%m-%dT%H:00:00.000Z")
                         )
                 except Exception as e:
-                    logger.warning("[pluto] EPG fetch failed %s window=%d: %s", country_code, window, e)
+                    logger.warning("[pluto] EPG fetch failed %s window=%d batch=%d: %s",
+                                   country_code, window + 1, batch_num, e)
 
-        logger.info("[pluto] %s: %d EPG entries", country_code, len(programs))
+        logger.info("[pluto] %s: %d EPG entries total", country_code, len(programs))
         return programs
 
     def _parse_timelines(self, data: list) -> list[ProgramData]:

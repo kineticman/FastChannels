@@ -3,6 +3,7 @@ Background worker — run with: python -m app.worker
 """
 import logging
 import sys
+import time
 from datetime import datetime, timezone
 
 import redis
@@ -43,6 +44,8 @@ def run_scraper(source_name: str):
             db.session.commit()
             return
 
+        t0 = time.monotonic()
+        logger.info('[%s] Scrape job started', source_name)
         try:
             scraper  = scraper_cls(config=source.config or {})
             refresh_hours = getattr(scraper_cls, 'channel_refresh_hours', 0)
@@ -68,7 +71,9 @@ def run_scraper(source_name: str):
                 source.last_scraped_at = datetime.now(timezone.utc)
                 source.last_error      = None
                 db.session.commit()
-                logger.info(f'[{source_name}] EPG-only run — {len(db_channels)} channels, {len(programs)} programs')
+                elapsed = time.monotonic() - t0
+                logger.info('[%s] EPG-only run complete — %d channels, %d programs (%.1fs)',
+                            source_name, len(db_channels), len(programs), elapsed)
             else:
                 channels, programs = scraper.run()
                 _upsert_channels(source, channels)
@@ -76,9 +81,12 @@ def run_scraper(source_name: str):
                 source.last_scraped_at = datetime.now(timezone.utc)
                 source.last_error      = None
                 db.session.commit()
-                logger.info(f'[{source_name}] Done — {len(channels)} channels, {len(programs)} programs')
+                elapsed = time.monotonic() - t0
+                logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
+                            source_name, len(channels), len(programs), elapsed)
         except Exception as e:
-            logger.exception(f'[{source_name}] Scrape failed')
+            elapsed = time.monotonic() - t0
+            logger.exception('[%s] Scrape failed after %.1fs', source_name, elapsed)
             source.last_error = str(e)
             db.session.commit()
 
