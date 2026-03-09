@@ -10,21 +10,22 @@
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f1117;
+      background: #0f172a;
       color: #e2e8f0;
       min-height: 100vh;
     }
 
     /* ── Nav ── */
     nav {
-      background: #1a1d27;
-      border-bottom: 1px solid #2d3148;
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
       padding: 0 2rem;
       display: flex;
       align-items: center;
       gap: 2rem;
       height: 56px;
     }
+    nav .version { margin-left: auto; color: #475569; font-size: 0.75rem; }
     nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
     nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
     nav a:hover, nav a.active { color: #e2e8f0; }
@@ -36,8 +37,8 @@
 
     /* ── Source cards ── */
     .source-card {
-      background: #1a1d27;
-      border: 1px solid #2d3148;
+      background: #1e293b;
+      border: 1px solid #334155;
       border-radius: 10px;
       margin-bottom: 1.5rem;
       overflow: hidden;
@@ -51,7 +52,7 @@
       user-select: none;
       gap: 1rem;
     }
-    .source-header:hover { background: #1f2236; }
+    .source-header:hover { background: #243044; }
     .source-title {
       display: flex;
       align-items: center;
@@ -82,7 +83,7 @@
     .source-body {
       display: none;
       padding: 0 1.4rem 1.4rem;
-      border-top: 1px solid #2d3148;
+      border-top: 1px solid #334155;
     }
     .source-body.open { display: block; }
 
@@ -137,7 +138,7 @@
       gap: 0.75rem;
       margin-top: 1.2rem;
       padding-top: 1rem;
-      border-top: 1px solid #1e2236;
+      border-top: 1px solid #334155;
     }
 
     .btn {
@@ -181,6 +182,7 @@
   <a href="/admin/logs">Logs</a>
   <a href="/m3u" target="_blank">M3U ↗</a>
   <a href="/epg.xml" target="_blank">EPG XML ↗</a>
+  <span class="version">v{{ app_version }}</span>
 </nav>
 
 <div class="page">

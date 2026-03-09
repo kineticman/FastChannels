@@ -1,6 +1,6 @@
 from flask import Flask
 from .extensions import db
-from .config import Config
+from .config import Config, VERSION
 from . import logfile
 
 
@@ -8,6 +8,10 @@ def create_app(config_class=Config):
     logfile.setup()
     app = Flask(__name__)
     app.config.from_object(config_class)
+
+    @app.context_processor
+    def inject_version():
+        return {'app_version': VERSION}
 
     db.init_app(app)
 

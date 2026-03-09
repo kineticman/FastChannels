@@ -8,6 +8,7 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
     nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; }
+    nav .version { margin-left: auto; color: #475569; font-size: 0.75rem; }
     nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
     nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
     nav a:hover, nav a.active { color: #e2e8f0; }
@@ -162,6 +163,7 @@
     <a href="/admin/logs">Logs</a>
   <a href="/m3u" target="_blank">M3U ↗</a>
   <a href="/epg.xml" target="_blank">EPG XML ↗</a>
+  <span class="version">v{{ app_version }}</span>
 </nav>
 
 <div class="container">

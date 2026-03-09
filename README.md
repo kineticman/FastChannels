@@ -1,6 +1,6 @@
 # FastChannels
 
-FAST channel aggregator — scrapes Pluto TV, DistroTV and more, outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
+FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Sling Freestream, Plex, DistroTV, Xumo, and more, outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
 
 ## Stack
 
@@ -30,10 +30,15 @@ curl -X POST http://localhost:5523/api/sources/2/run
 | `http://localhost:5523/admin/sources` | Enable/disable sources, run scrapes |
 | `http://localhost:5523/admin/channels` | Browse channels, toggle individual channels on/off |
 | `http://localhost:5523/admin/settings` | Credentials and options per source |
+| `http://localhost:5523/admin/feeds` | Named filtered sub-feeds |
+| `http://localhost:5523/admin/logs` | Live scrape log viewer |
 | `http://localhost:5523/m3u` | Full M3U playlist |
 | `http://localhost:5523/epg.xml` | Full XMLTV EPG |
+| `http://localhost:5523/feeds/<slug>/m3u` | Feed-specific M3U |
+| `http://localhost:5523/feeds/<slug>/epg.xml` | Feed-specific EPG |
 | `http://localhost:5523/api/sources` | Sources API |
 | `http://localhost:5523/api/channels` | Channels API |
+| `http://localhost:5523/api/feeds` | Feeds API |
 
 ## Filtered M3U Output
 
@@ -43,6 +48,18 @@ curl -X POST http://localhost:5523/api/sources/2/run
 /m3u?source=pluto&category=Sports
 /m3u?search=news
 ```
+
+## Named Feeds
+
+Feeds are named, persistent filtered sub-feeds that expose their own `/m3u` and `/epg.xml` URLs. Create and manage them in the admin UI or via the API.
+
+```
+/feeds/sports/m3u
+/feeds/sports/epg.xml
+/feeds/sports/m3u/gracenote   # Channels DVR gracenote variant
+```
+
+Filter keys: `sources`, `categories`, `languages`, `max_channels`.
 
 ## Architecture
 
@@ -57,10 +74,18 @@ http://host:5523/play/{source}/{channel_id}.m3u8
 At playback time the proxy calls `scraper.resolve(raw_url)` which:
 - Substitutes URL macros (cache busters, device IDs, etc.) with fresh values
 - Resolves HLS master playlists to the best-bandwidth variant
-- Handles JWT auth (Pluto TV stitcher tokens)
+- Handles JWT auth (Pluto TV stitcher tokens, Sling bearer tokens, etc.)
 - Issues a `302` redirect to the final CDN URL
 
 This means streams never go stale — every play request gets a fresh URL.
+
+### Stream Audit
+
+Sources that opt in (`stream_audit_enabled = True`) support a Stream Audit job that health-checks every channel's stream and marks dead channels inactive. Triggered from the admin UI per source. Currently enabled for: Pluto TV, Tubi, Roku, Sling Freestream, DistroTV.
+
+### EPG-only sources
+
+A source can be flagged **EPG Only** in the admin UI. EPG-only sources are excluded from M3U output but their program data is used to enrich EPG for title-matched channels from other sources. Amazon Prime Free is the primary use case — it has no playable streams but provides accurate guide data.
 
 ### Channel enable/disable
 
@@ -83,7 +108,8 @@ Each scraper declares a `config_schema` (list of `ConfigField`) describing what 
 4. Optionally implement `fetch_epg()` → returns `list[ProgramData]`
 5. Optionally implement `resolve(raw_url)` → returns playable URL at request time
 6. Optionally declare `config_schema` for any credentials needed
-7. Restart — auto-discovered, seeded as a Source, and appears in Settings
+7. Optionally set `stream_audit_enabled = True` to enable the Stream Audit job
+8. Restart — auto-discovered, seeded as a Source, and appears in Settings
 
 ```python
 from .base import BaseScraper, ChannelData, ConfigField
@@ -91,6 +117,7 @@ from .base import BaseScraper, ChannelData, ConfigField
 class YourServiceScraper(BaseScraper):
     source_name  = 'yourservice'
     display_name = 'Your Service'
+    stream_audit_enabled = True   # optional
 
     config_schema = [
         ConfigField('api_key', 'API Key', secret=True,
@@ -131,30 +158,48 @@ FastChannels/
     ├── extensions.py
     ├── models.py
     ├── worker.py
+    ├── play.py              # /play/<source>/<id>.m3u8 proxy
+    ├── logfile.py           # structured log capture for admin log viewer
     ├── scrapers/
     │   ├── base.py          # BaseScraper, ChannelData, ProgramData, ConfigField
     │   ├── registry.py      # auto-discovery
     │   ├── pluto.py         # Pluto TV (session pool, JWT auth, per-country feeds)
-    │   └── distro.py        # DistroTV (macro substitution, HLS variant selection)
+    │   ├── distro.py        # DistroTV (macro substitution, HLS variant selection)
+    │   ├── tubi.py          # Tubi TV (optional email/password auth)
+    │   ├── roku.py          # The Roku Channel (session cookie auth)
+    │   ├── sling.py         # Sling Freestream (OAuth or browser bootstrap for JWT)
+    │   ├── plex.py          # Plex (session cookie auth)
+    │   ├── xumo.py          # Xumo Play (public API)
+    │   ├── amazon_prime_free.py  # Amazon Prime Free (EPG-only; optional cookie auth)
+    │   └── freelivesports.py     # FreeLiveSports (public API)
     ├── generators/
     │   ├── m3u.py           # M3U playlist generator
-    │   └── xmltv.py         # XMLTV EPG generator
+    │   └── xmltv.py         # XMLTV EPG generator (with EPG-only source enrichment)
     └── routes/
         ├── admin.py         # Admin UI routes
         ├── api.py           # REST API
-        ├── output.py        # /m3u and /epg.xml endpoints
-        ├── play.py          # /play/<source>/<id>.m3u8 proxy endpoint
-        └── tasks.py         # RQ job dispatch
+        ├── feeds_api.py     # /api/feeds CRUD
+        ├── output.py        # /m3u, /epg.xml, /feeds/<slug>/… endpoints
+        └── tasks.py         # RQ job dispatch (scrape, stream audit)
     └── templates/admin/
         ├── dashboard.html
         ├── sources.html
         ├── channels.html
-        └── settings.html
+        ├── settings.html
+        ├── feeds.html
+        └── logs.html
 ```
 
 ## Current Sources
 
-| Source | Channels | Auth | Notes |
-|--------|----------|------|-------|
-| Pluto TV | ~410 | Optional login | Session pool (10 slots), per-country feeds, JWT stitcher auth |
-| DistroTV | ~304 | None | Android TV UA required, URL macro substitution |
+| Source | Auth | Notes |
+|--------|------|-------|
+| Pluto TV | Optional login | Session pool (10 slots), per-country feeds, JWT stitcher auth |
+| DistroTV | None | Android TV UA required, URL macro substitution |
+| Tubi TV | Optional email/password | Bearer token auth |
+| The Roku Channel | None | Session cookie auth, HLS variant selection |
+| Sling Freestream | Optional OAuth creds | Falls back to browser bootstrap to capture Bearer JWT |
+| Plex | None | Session cookie auth |
+| Xumo Play | None | Public API |
+| Amazon Prime Free | Optional cookie header | EPG-only by default; pagination requires auth |
+| FreeLiveSports | None | Public API |

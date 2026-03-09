@@ -1,5 +1,7 @@
 import os
 
+VERSION = "1.0"
+
 
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret')
