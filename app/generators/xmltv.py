@@ -77,11 +77,38 @@ def _build_enrich_index() -> dict:
     return index
 
 
+def _titles_similar(a: str, b: str) -> bool:
+    """
+    Return True if two programme titles are similar enough to trust enrichment.
+
+    Rules (applied to lowercased, punctuation-stripped, whitespace-normalised):
+      - Exact match
+      - One title is a prefix of the other (handles "Fox 32 News at 5" vs
+        "FOX 32 News at 5 PM" style variations)
+      - Titles share at least 3 non-stopword words in common (handles minor
+        differences while rejecting completely different programmes)
+    """
+    def _clean(s):
+        s = re.sub(r'[^a-z0-9 ]', ' ', s.lower())
+        return re.sub(r'\s+', ' ', s).strip()
+
+    a = _clean(a)
+    b = _clean(b)
+    if a == b:
+        return True
+    if a.startswith(b) or b.startswith(a):
+        return True
+    stop = {'a', 'an', 'the', 'of', 'at', 'in', 'on', 'and', 'or'}
+    shared = (set(a.split()) & set(b.split())) - stop
+    return len(shared) >= 3
+
+
 def _enrich_prog(index: dict, ch_name: str, prog: Program):
     """
     Return (description, poster_url, rating) for *prog*, supplemented from
-    the enrichment index where the channel name matches and the EPG-only
-    program's time window covers prog.start_time.
+    the enrichment index where the channel name matches, the EPG-only
+    program's time window covers prog.start_time, AND the titles are
+    similar enough to avoid cross-programme contamination.
 
     Only fills in fields that are None on the original program.
     """
@@ -93,8 +120,9 @@ def _enrich_prog(index: dict, ch_name: str, prog: Program):
     if not entries:
         return prog.description, prog.poster_url, prog.rating
 
-    for (start, end, _title, desc, poster, rating) in entries:
-        if start <= prog.start_time < end:
+    prog_title = (prog.title or '').lower()
+    for (start, end, enrich_title, desc, poster, rating) in entries:
+        if start <= prog.start_time < end and _titles_similar(prog_title, enrich_title):
             return (
                 prog.description or desc,
                 prog.poster_url  or poster,
