@@ -2,6 +2,7 @@ from flask import Blueprint, render_template, request
 from ..extensions import db
 from ..models import Source, Channel, Feed
 from ..generators.m3u import _parse_gracenote_id, get_chnum_overlaps
+from ..scrapers import registry as _scraper_registry
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
@@ -24,9 +25,15 @@ def dashboard():
 @admin_bp.route('/sources')
 def sources():
     chnum_warnings = get_chnum_overlaps()
+    all_scrapers   = _scraper_registry.get_all()
+    audit_enabled  = {
+        name: getattr(cls, 'stream_audit_enabled', False)
+        for name, cls in all_scrapers.items()
+    }
     return render_template('admin/sources.html',
                            sources=Source.query.order_by(Source.display_name).all(),
-                           chnum_warnings=chnum_warnings)
+                           chnum_warnings=chnum_warnings,
+                           audit_enabled=audit_enabled)
 
 
 @admin_bp.route('/channels')

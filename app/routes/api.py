@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request, current_app
 from ..extensions import db
 from ..models import Source, Channel
 from ..scrapers import registry
-from .tasks import trigger_scrape, trigger_drm_check
+from .tasks import trigger_scrape, trigger_stream_audit
 from ..generators.m3u import get_chnum_overlaps
 from .. import logfile
 
@@ -46,7 +46,8 @@ def scrape_status(source_id):
         for job_id in q.get_job_ids():
             try:
                 job = q.fetch_job(job_id)
-                if job and job.args and job.args[0] == source.name:
+                if job and job.args and job.args[0] == source.name \
+                        and 'stream_audit' not in (job.func_name or ''):
                     return jsonify({'status': 'queued'})
             except Exception:
                 pass
@@ -56,7 +57,8 @@ def scrape_status(source_id):
             try:
                 from rq.job import Job
                 job = Job.fetch(job_id, connection=r)
-                if job.args and job.args[0] == source.name:
+                if job.args and job.args[0] == source.name \
+                        and 'stream_audit' not in (job.func_name or ''):
                     return jsonify({'status': 'running', 'phase': 'starting'})
             except Exception:
                 pass
@@ -65,11 +67,55 @@ def scrape_status(source_id):
     return jsonify({'status': 'idle'})
 
 
-@api_bp.route('/sources/<int:source_id>/drm-check', methods=['POST'])
-def drm_check_source(source_id):
+@api_bp.route('/sources/<int:source_id>/stream-audit', methods=['POST'])
+def stream_audit_source(source_id):
     source = Source.query.get_or_404(source_id)
-    trigger_drm_check(source.name)
+    trigger_stream_audit(source.name)
     return jsonify({'status': 'queued', 'source': source.name})
+
+
+@api_bp.route('/sources/<int:source_id>/audit-status')
+def audit_status(source_id):
+    import time as _time
+    import redis as _redis
+    from rq import Queue
+    from rq.registry import StartedJobRegistry
+
+    source = Source.query.get_or_404(source_id)
+    try:
+        r = _redis.from_url(current_app.config['REDIS_URL'])
+        key = f'audit:progress:{source.name}'
+        raw = r.get(key)
+        if raw:
+            data = json.loads(raw)
+            # Stale check — progress is written every ~25 channels (~20s); treat
+            # as dead if no heartbeat for 90s (catches mid-job container restarts).
+            if _time.time() - data.get('ts', 0) > 90:
+                r.delete(key)
+            else:
+                return jsonify({'status': 'running', **data})
+        q = Queue('scraper', connection=r)
+        for job_id in q.get_job_ids():
+            try:
+                job = q.fetch_job(job_id)
+                if job and job.args and job.args[0] == source.name \
+                        and 'stream_audit' in (job.func_name or ''):
+                    return jsonify({'status': 'queued'})
+            except Exception:
+                pass
+        registry = StartedJobRegistry('scraper', connection=r)
+        for job_id in registry.get_job_ids():
+            try:
+                from rq.job import Job
+                job = Job.fetch(job_id, connection=r)
+                if job.args and job.args[0] == source.name \
+                        and 'stream_audit' in (job.func_name or ''):
+                    return jsonify({'status': 'running', 'phase': 'starting'})
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return jsonify({'status': 'idle'})
 
 
 @api_bp.route('/sources/chnum-overlaps')

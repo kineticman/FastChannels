@@ -47,6 +47,7 @@ def _replace_macros(url: str) -> str:
 class FreeLiveSportsScraper(BaseScraper):
     source_name     = "freelivesports"
     display_name    = "FreeLiveSports"
+    stream_audit_enabled = True
     scrape_interval = 360
     config_schema   = []   # public API, no credentials needed
 

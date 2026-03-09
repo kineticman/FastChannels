@@ -32,9 +32,15 @@
     .btn-run { background: #0284c7; color: white; }
     .btn-run:hover:not(:disabled) { background: #0369a1; }
     .btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-drm { background: #78350f; color: #fde68a; }
-    .btn-drm:hover:not(:disabled) { background: #92400e; }
-    .btn-drm:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-audit { background: #78350f; color: #fde68a; }
+    .btn-audit:hover:not(:disabled) { background: #92400e; }
+    .btn-audit:disabled { opacity: 0.4; cursor: not-allowed; }
+    .badge-audit {
+      display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
+      padding: 2px 7px; border-radius: 20px; text-transform: uppercase;
+      background: #052e16; color: #86efac; border: 1px solid #16a34a44;
+      margin-left: 0.5rem; vertical-align: middle;
+    }
 
     /* ch-num start input */
     .chnum-wrap { display: flex; align-items: center; gap: 0.5rem; }
@@ -89,6 +95,14 @@
     .status-running .status-text { color: #7dd3fc; }
     .status-queued  .status-text { color: #fcd34d; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+    /* Stream Audit status */
+    .audit-status { font-size: 0.78rem; margin-top: 0.25rem; display: flex; align-items: center; gap: 0.4rem; min-height: 1.1rem; }
+    .audit-status:empty { display: none; }
+    .audit-status-running .status-dot { background: #fb923c; animation: pulse 1.2s ease-in-out infinite; }
+    .audit-status-queued  .status-dot { background: #fbbf24; }
+    .audit-status-running .status-text { color: #fdba74; }
+    .audit-status-queued  .status-text { color: #fcd34d; }
 
     /* EPG-only toggle */
     .epg-toggle-wrap { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
@@ -150,6 +164,7 @@
         <h3>
           {{ source.display_name }}
           {% if source.epg_only %}<span class="badge-epg-only">EPG Only</span>{% endif %}
+          {% if audit_enabled.get(source.name) %}<span class="badge-audit">Stream Audit</span>{% endif %}
         </h3>
         <div class="meta">
           Every {{ source.scrape_interval }}min &nbsp;·&nbsp;
@@ -161,6 +176,7 @@
         <div class="error">⚠ {{ source.last_error }}</div>
         {% endif %}
         <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
+        <div class="audit-status" id="audit-status-{{ source.id }}"></div>
         <div class="chnum-wrap" style="margin-top:0.45rem">
           <span class="chnum-label">Ch# start (combined M3U):</span>
           <input class="chnum-input" type="number" min="1" placeholder="none"
@@ -192,9 +208,11 @@
         </div>
         <button class="btn btn-run" onclick="run({{ source.id }}, this)"
                 {% if not source.is_enabled %}disabled{% endif %}>Run Now</button>
-        <button class="btn btn-drm" onclick="drmCheck({{ source.id }}, this)"
+        {% if audit_enabled.get(source.name) %}
+        <button class="btn btn-audit" onclick="streamAudit({{ source.id }}, this)"
                 {% if not source.is_enabled %}disabled{% endif %}
-                title="Scan all channels for DRM encryption">🔒 DRM Check</button>
+                title="Audit all channels — checks for dead streams, VOD, and DRM encryption">📋 Stream Audit</button>
+        {% endif %}
       </div>
     </div>
     {% endfor %}
@@ -248,7 +266,7 @@
       const labelEl  = document.getElementById(`toggle-label-${sourceId}`);
       const card     = document.getElementById(`card-${sourceId}`);
       const runBtn   = card.querySelector('.btn-run');
-      const drmBtn   = card.querySelector('.btn-drm');
+      const drmBtn   = card.querySelector('.btn-audit');
       toggleEl.classList.add('saving');
 
       try {
@@ -295,18 +313,24 @@
       setTimeout(() => { btn.textContent = 'Run Now'; btn.disabled = false; }, 3000);
     }
 
-    async function drmCheck(id, btn) {
-      if (!confirm('Scan all channels for DRM? This checks every stream manifest and may take several minutes.')) return;
+    async function streamAudit(id, btn) {
+      if (!confirm('Run Stream Audit? This checks every channel manifest for dead streams, VOD, and DRM — may take several minutes.')) return;
       btn.disabled = true;
-      btn.textContent = '🔍 Scanning…';
+      btn.textContent = '📋 Queuing…';
       try {
-        const r = await fetch(`/api/sources/${id}/drm-check`, {method: 'POST'});
+        const r = await fetch(`/api/sources/${id}/stream-audit`, {method: 'POST'});
         const d = await r.json();
-        btn.textContent = d.status === 'queued' ? '✓ Running' : 'Error';
+        if (d.status === 'queued') {
+          btn.textContent = '📋 Running…';
+          _startAuditPolling(id, btn);
+        } else {
+          btn.textContent = 'Error';
+          setTimeout(() => { btn.textContent = '📋 Stream Audit'; btn.disabled = false; }, 3000);
+        }
       } catch (e) {
         btn.textContent = 'Error';
+        setTimeout(() => { btn.textContent = '📋 Stream Audit'; btn.disabled = false; }, 3000);
       }
-      setTimeout(() => { btn.textContent = '🔒 DRM Check'; btn.disabled = false; }, 5000);
     }
 
     async function setEpgOnly(sourceId, checkbox) {
@@ -408,11 +432,63 @@
       poll();
     }
 
+    // ── Stream Audit progress polling ─────────────────────────────────────
+    const _auditPollTimers = {};
+    const _auditRunBtns    = {};
+
+    function _auditStatusText(data) {
+      if (data.status === 'queued') return { cls: 'audit-status-queued', text: 'Stream Audit queued' };
+      if (data.status === 'running') {
+        if (data.phase === 'starting') return { cls: 'audit-status-running', text: 'Stream Audit starting…' };
+        if (data.total > 0) {
+          const pct  = Math.round(data.done / data.total * 100);
+          const bits = [`${data.done} / ${data.total} (${pct}%)`];
+          if (data.flagged) bits.push(`${data.flagged} DRM`);
+          if (data.dead)    bits.push(`${data.dead} dead`);
+          return { cls: 'audit-status-running', text: '📋 ' + bits.join(' · ') };
+        }
+        return { cls: 'audit-status-running', text: 'Stream Audit running…' };
+      }
+      return null;
+    }
+
+    function _renderAuditStatus(sourceId, data) {
+      const el = document.getElementById(`audit-status-${sourceId}`);
+      if (!el) return;
+      const info = _auditStatusText(data);
+      if (!info) { el.innerHTML = ''; el.className = 'audit-status'; return; }
+      el.className = `audit-status ${info.cls}`;
+      el.innerHTML = `<span class="status-dot"></span><span class="status-text">${info.text}</span>`;
+    }
+
+    function _startAuditPolling(sourceId, btn) {
+      if (btn) _auditRunBtns[sourceId] = btn;
+      if (_auditPollTimers[sourceId]) return;
+      async function poll() {
+        try {
+          const r = await fetch(`/api/sources/${sourceId}/audit-status`);
+          const d = await r.json();
+          _renderAuditStatus(sourceId, d);
+          if (d.status === 'running' || d.status === 'queued') {
+            _auditPollTimers[sourceId] = setTimeout(poll, 2000);
+          } else {
+            delete _auditPollTimers[sourceId];
+            const b = _auditRunBtns[sourceId];
+            if (b) { b.textContent = '📋 Stream Audit'; b.disabled = false; delete _auditRunBtns[sourceId]; }
+          }
+        } catch (e) {
+          delete _auditPollTimers[sourceId];
+        }
+      }
+      poll();
+    }
+
     // On page load, start polling for any source that may already be running
     document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('[id^="scrape-status-"]').forEach(el => {
         const id = parseInt(el.id.replace('scrape-status-', ''));
         _startPolling(id);
+        _startAuditPolling(id);
       });
     });
 

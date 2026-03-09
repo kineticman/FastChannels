@@ -119,6 +119,7 @@ _GRACENOTE_IDS: dict[str, str] = {
 class TubiScraper(BaseScraper):
     source_name     = 'tubi'
     display_name    = 'Tubi TV'
+    stream_audit_enabled = True
     scrape_interval = 360
 
     config_schema = [

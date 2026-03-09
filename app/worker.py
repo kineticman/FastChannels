@@ -117,24 +117,24 @@ def run_scraper(source_name: str):
 
 
 
-def run_drm_check(source_name: str):
+def run_stream_audit(source_name: str):
     """
-    Bulk DRM scanner — fetches every channel via the /play/ proxy, follows the
+    Stream Audit — fetches every active channel via the /play/ proxy, follows the
     redirect to the real CDN URL, drills master → variant playlist, and checks
-    for SAMPLE-AES (Apple FairPlay). Channels that are DRM-encrypted are marked
-    is_active=False with disable_reason='DRM' so they drop out of M3U/EPG output.
+    for dead streams, VOD-only content, and SAMPLE-AES DRM encryption.
+    Flagged channels are marked is_active=False so they drop out of M3U/EPG output.
     """
     _DRM_METHODS = ('SAMPLE-AES',)  # AES-128 with key URL is standard HLS, not FairPlay
 
     with flask_app.app_context():
         source = Source.query.filter_by(name=source_name).first()
         if not source:
-            logger.error('[drm-check] source not found: %s', source_name)
+            logger.error('[audit] source not found: %s', source_name)
             return
 
         scraper_cls = registry.get(source_name)
-        if not scraper_cls or not getattr(scraper_cls, 'drm_check_enabled', False):
-            logger.info('[drm-check] %s: DRM check not enabled for this source, skipping', source_name)
+        if not scraper_cls or not getattr(scraper_cls, 'stream_audit_enabled', False):
+            logger.info('[audit] %s: stream audit not enabled for this source, skipping', source_name)
             return
 
         channels = source.channels.filter_by(is_active=True).all()
@@ -145,7 +145,33 @@ def run_drm_check(source_name: str):
         errors   = 0
         consecutive_errors = 0
 
-        logger.info('[drm-check] %s: checking %d channels via play proxy…', source_name, total)
+        logger.info('[audit] %s: checking %d channels via play proxy…', source_name, total)
+
+        # Live progress → Redis key audit:progress:{source_name}
+        _audit_key = f'audit:progress:{source_name}'
+        try:
+            _redis_audit = redis.from_url(flask_app.config['REDIS_URL'])
+            _redis_audit.ping()
+        except Exception:
+            _redis_audit = None
+
+        import json as _json_audit
+        def _audit_progress(done, total_, flagged_=0, dead_=0, errors_=0, phase='checking'):
+            if not _redis_audit:
+                return
+            try:
+                if phase == 'done':
+                    _redis_audit.delete(_audit_key)
+                else:
+                    _redis_audit.setex(_audit_key, 600, _json_audit.dumps({
+                        'phase': phase, 'done': done, 'total': total_,
+                        'flagged': flagged_, 'dead': dead_, 'errors': errors_,
+                        'ts': _time.time(),
+                    }))
+            except Exception:
+                pass
+
+        _audit_progress(0, total)
 
         # Brief warmup pause — gives any residual rate-limit ban time to clear
         _time.sleep(5)
@@ -156,7 +182,7 @@ def run_drm_check(source_name: str):
         for i, ch in enumerate(channels, 1):
             # Skip malformed IDs that would break URL routing
             if len(ch.source_channel_id) > 128 or '/' in ch.source_channel_id:
-                logger.debug('[drm-check] skipping bad channel ID: %s', ch.source_channel_id[:40])
+                logger.debug('[audit] skipping bad channel ID: %s', ch.source_channel_id[:40])
                 continue
 
             play_url = f'http://localhost:5523/play/{source_name}/{ch.source_channel_id}.m3u8'
@@ -166,7 +192,7 @@ def run_drm_check(source_name: str):
 
                 if r.status_code in (403, 429, 503):
                     wait = 30
-                    logger.warning('[drm-check] %s rate-limited (%d), backing off %ds…',
+                    logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
                                    source_name, r.status_code, wait)
                     _time.sleep(wait)
                     r = sess.get(play_url, timeout=15, allow_redirects=True)
@@ -178,10 +204,10 @@ def run_drm_check(source_name: str):
                     reason = ch.disable_reason or 'DRM'
                     if reason == 'Dead':
                         dead += 1
-                        logger.info('[drm-check] VOD (caught by proxy): %s', ch.name)
+                        logger.info('[audit] VOD (caught by proxy): %s', ch.name)
                     else:
                         flagged += 1
-                        logger.info('[drm-check] DRM (caught by proxy): %s', ch.name)
+                        logger.info('[audit] DRM (caught by proxy): %s', ch.name)
                     consecutive_errors = 0
                     continue
 
@@ -191,15 +217,15 @@ def run_drm_check(source_name: str):
                     ch.disable_reason = 'Dead'
                     dead += 1
                     consecutive_errors = 0
-                    logger.info('[drm-check] dead stream: %s  (HTTP %d)', ch.name, r.status_code)
+                    logger.info('[audit] dead stream: %s  (HTTP %d)', ch.name, r.status_code)
                     continue
 
                 if r.status_code != 200:
-                    logger.debug('[drm-check] %d for %s', r.status_code, ch.name)
+                    logger.debug('[audit] %d for %s', r.status_code, ch.name)
                     errors += 1
                     consecutive_errors += 1
                     if consecutive_errors >= 20:
-                        logger.error('[drm-check] %s: 20 consecutive errors — aborting. '
+                        logger.error('[audit] %s: 20 consecutive errors — aborting. '
                                      'Source may be rate-limiting or down.', source_name)
                         break
                     continue
@@ -223,20 +249,20 @@ def run_drm_check(source_name: str):
                             rv = sess.get(variant_url, timeout=10)
                             if rv.status_code == 200:
                                 manifest_text = rv.text
-                                logger.debug('[drm-check] variant fetched for %s (%d bytes)',
+                                logger.debug('[audit] variant fetched for %s (%d bytes)',
                                              ch.name, len(manifest_text))
                             else:
-                                logger.debug('[drm-check] variant returned %d for %s',
+                                logger.debug('[audit] variant returned %d for %s',
                                              rv.status_code, ch.name)
                         except Exception as ve:
-                            logger.debug('[drm-check] variant fetch failed for %s: %s', ch.name, ve)
+                            logger.debug('[audit] variant fetch failed for %s: %s', ch.name, ve)
 
                 if 'EXT-X-PLAYLIST-TYPE:VOD' in manifest_text:
                     ch.is_active      = False
                     ch.is_enabled     = False
                     ch.disable_reason = 'Dead'
                     dead += 1
-                    logger.info('[drm-check] VOD (not live): %s', ch.name)
+                    logger.info('[audit] VOD (not live): %s', ch.name)
                     continue
 
                 drm = any(f'METHOD={m}' in manifest_text for m in _DRM_METHODS)
@@ -245,22 +271,24 @@ def run_drm_check(source_name: str):
                     ch.is_enabled     = False
                     ch.disable_reason = 'DRM'
                     flagged += 1
-                    logger.info('[drm-check] DRM: %s  →  %s', ch.name, manifest_url[:80])
+                    logger.info('[audit] DRM: %s  →  %s', ch.name, manifest_url[:80])
 
             except Exception as e:
-                logger.debug('[drm-check] error for %s: %s', ch.name, e)
+                logger.debug('[audit] error for %s: %s', ch.name, e)
                 errors += 1
                 consecutive_errors += 1
 
             if i % 25 == 0:
                 db.session.commit()
-                logger.info('[drm-check] %s: %d/%d — checked=%d flagged=%d dead=%d errors=%d',
+                _audit_progress(i, total, flagged, dead, errors)
+                logger.info('[audit] %s: %d/%d — checked=%d flagged=%d dead=%d errors=%d',
                             source_name, i, total, checked, flagged, dead, errors)
 
             _time.sleep(0.3)
 
         db.session.commit()
-        logger.info('[drm-check] %s: done — total=%d checked=%d flagged=%d dead=%d errors=%d',
+        _audit_progress(0, 0, phase='done')
+        logger.info('[audit] %s: done — total=%d checked=%d flagged=%d dead=%d errors=%d',
                     source_name, total, checked, flagged, dead, errors)
 
 
@@ -311,6 +339,7 @@ def _upsert_channels(source, channel_data_list):
                 gracenote_id = candidate or None
 
         if ch:
+            stream_url_changed = ch.stream_url != cd.stream_url
             ch.name          = cd.name
             ch.stream_url    = cd.stream_url
             ch.stream_type   = cd.stream_type
@@ -318,7 +347,14 @@ def _upsert_channels(source, channel_data_list):
             ch.slug          = cd.slug
             ch.category      = cd.category
             ch.number        = cd.number
-            ch.is_active     = True
+            # Don't resurrect channels the stream audit flagged as Dead or DRM
+            # unless the stream URL changed (source may have fixed the channel).
+            if ch.disable_reason in ('Dead', 'DRM') and not stream_url_changed:
+                pass  # keep is_active=False / is_enabled=False / disable_reason
+            else:
+                ch.is_active = True
+                if stream_url_changed and ch.disable_reason in ('Dead', 'DRM'):
+                    ch.disable_reason = None  # clear flag; let next audit re-check
             # Only overwrite gracenote_id if the scraper has one —
             # preserve any value the user set manually via the admin UI.
             if gracenote_id is not None:

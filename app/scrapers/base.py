@@ -72,7 +72,7 @@ class BaseScraper(ABC):
     source_name:     str = None
     display_name:    str = None
     scrape_interval: int = 360
-    drm_check_enabled: bool = False  # opt-in; only scrapers known to serve DRM should set True
+    stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
 
     # Declare config fields your scraper needs.

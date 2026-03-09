@@ -111,6 +111,7 @@ class _StreamSession:
 class PlutoScraper(BaseScraper):
     source_name     = "pluto"
     display_name    = "Pluto TV"
+    stream_audit_enabled = True
     scrape_interval = 360
 
     config_schema = [

@@ -238,6 +238,7 @@ def _iter_shows(feed: object):
 class DistroScraper(BaseScraper):
     source_name     = "distro"
     display_name    = "Distro TV"
+    stream_audit_enabled = True
     scrape_interval = 720
     config_schema   = []
 

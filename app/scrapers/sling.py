@@ -39,7 +39,7 @@ class SlingScraper(BaseScraper):
     source_name = "sling"
     display_name = "Sling Freestream"
     scrape_interval = 360
-    drm_check_enabled = True
+    stream_audit_enabled = True
     channel_refresh_hours = 12
 
     CMW_FAST = "https://p-cmwnext-fast.movetv.com"
@@ -613,7 +613,6 @@ class SlingScraper(BaseScraper):
 
         logo_url = ((playback.get("channel_logo") or {}).get("url"))
         category = self._infer_group(tile)
-        call_sign = playback.get("call_sign")
 
         return ChannelData(
             source_channel_id=channel_guid,
@@ -625,7 +624,6 @@ class SlingScraper(BaseScraper):
             language="en",
             country="US",
             stream_type="dash",
-            gracenote_id=call_sign,
         )
 
     def _best_channel_name(

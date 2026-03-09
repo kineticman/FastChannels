@@ -294,7 +294,7 @@ class RokuScraper(BaseScraper):
     display_name          = "The Roku Channel"
     scrape_interval       = 60    # EPG refreshed every hour
     channel_refresh_hours = 24    # channel list refreshed once a day
-    drm_check_enabled     = True
+    stream_audit_enabled  = True
 
     # No config needed — fully anonymous, no credentials
     config_schema = []

@@ -22,12 +22,12 @@ def trigger_scrape(source_name: str):
         threading.Thread(target=run_scraper, args=(source_name,), daemon=True).start()
 
 
-def trigger_drm_check(source_name: str):
+def trigger_stream_audit(source_name: str):
     try:
-        get_queue().enqueue('app.worker.run_drm_check', source_name, job_timeout=1800)
-        logger.info(f'Enqueued DRM check for {source_name}')
+        get_queue().enqueue('app.worker.run_stream_audit', source_name, job_timeout=1800)
+        logger.info(f'Enqueued stream audit for {source_name}')
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for {source_name}')
         import threading
-        from app.worker import run_drm_check
-        threading.Thread(target=run_drm_check, args=(source_name,), daemon=True).start()
+        from app.worker import run_stream_audit
+        threading.Thread(target=run_stream_audit, args=(source_name,), daemon=True).start()
