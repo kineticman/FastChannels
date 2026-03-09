@@ -57,6 +57,8 @@ def update_source(source_id):
                 source.chnum_start = n if n > 0 else None
             except (ValueError, TypeError):
                 return jsonify({'error': 'chnum_start must be a positive integer'}), 422
+    if 'epg_only' in data:
+        source.epg_only = bool(data['epg_only'])
     db.session.commit()
     return jsonify(source.to_dict())
 

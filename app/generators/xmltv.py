@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import gzip
 import io
+import re
+import logging
 from datetime import timezone
 from xml.etree.ElementTree import Element, SubElement, tostring
 
@@ -24,6 +26,82 @@ from flask import request as flask_request
 from ..extensions import db
 from ..models import Channel, Program, Source
 from .m3u import _build_channel_query, _tvg_id
+
+log = logging.getLogger(__name__)
+
+
+def _norm_name(name: str) -> str:
+    """Normalise a channel name for fuzzy matching against EPG-only sources."""
+    n = (name or '').lower()
+    n = re.sub(r'[^a-z0-9 ]', ' ', n)
+    return re.sub(r'\s+', ' ', n).strip()
+
+
+def _build_enrich_index() -> dict:
+    """
+    Load all programs from EPG-only sources into an in-memory enrichment index.
+
+    Returns:
+        dict mapping normalised channel name →
+            sorted list of (start_time, end_time, title_lower, description, poster_url, rating)
+
+    The index is used to back-fill missing descriptions/posters/ratings for
+    programs in other sources whose channel name matches an EPG-only channel.
+    """
+    epg_only_source_ids = [
+        s.id for s in Source.query.filter_by(epg_only=True, is_enabled=True).all()
+    ]
+    if not epg_only_source_ids:
+        return {}
+
+    rows = (
+        db.session.query(Program, Channel.name)
+        .join(Channel, Program.channel_id == Channel.id)
+        .filter(Channel.source_id.in_(epg_only_source_ids))
+        .all()
+    )
+
+    index: dict[str, list] = {}
+    for prog, ch_name in rows:
+        key = _norm_name(ch_name)
+        index.setdefault(key, []).append((
+            prog.start_time, prog.end_time,
+            (prog.title or '').lower(),
+            prog.description, prog.poster_url, prog.rating,
+        ))
+
+    for key in index:
+        index[key].sort(key=lambda x: x[0])
+
+    log.debug('[xmltv] enrichment index: %d EPG-only channels loaded', len(index))
+    return index
+
+
+def _enrich_prog(index: dict, ch_name: str, prog: Program):
+    """
+    Return (description, poster_url, rating) for *prog*, supplemented from
+    the enrichment index where the channel name matches and the EPG-only
+    program's time window covers prog.start_time.
+
+    Only fills in fields that are None on the original program.
+    """
+    if prog.description and prog.poster_url and prog.rating:
+        return prog.description, prog.poster_url, prog.rating
+
+    key = _norm_name(ch_name)
+    entries = index.get(key)
+    if not entries:
+        return prog.description, prog.poster_url, prog.rating
+
+    for (start, end, _title, desc, poster, rating) in entries:
+        if start <= prog.start_time < end:
+            return (
+                prog.description or desc,
+                prog.poster_url  or poster,
+                prog.rating      or rating,
+            )
+
+    return prog.description, prog.poster_url, prog.rating
 
 
 def generate_xmltv(filters: dict = None, base_url: str = None) -> str:
@@ -63,7 +141,12 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None):
     ch_cat_map   = {ch.id: ch.category for ch in channels if ch.category}
     # Source display name map — added as a final <category> tag on every programme
     ch_src_map   = {ch.id: ch.source.display_name for ch in channels}
+    # Channel name map — used for enrichment lookup
+    ch_name_map  = {ch.id: ch.name for ch in channels}
     channel_ids = set(tvg_map.keys())
+
+    # Build EPG enrichment index from epg_only sources (e.g. Amazon Prime Free)
+    enrich_index = _build_enrich_index()
 
     # ── Header ────────────────────────────────────────────────────────────
     yield '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -112,14 +195,19 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None):
             tvg_id = tvg_map.get(prog.channel_id)
             if not tvg_id:
                 continue
+
+            # Enrich missing fields from EPG-only sources (e.g. Amazon Prime Free)
+            ch_name = ch_name_map.get(prog.channel_id, '')
+            desc, poster, rating = _enrich_prog(enrich_index, ch_name, prog)
+
             el = Element('programme', attrib={
                 'start':   _dt(prog.start_time),
                 'stop':    _dt(prog.end_time),
                 'channel': tvg_id,
             })
             SubElement(el, 'title', lang='en').text = prog.title or ''
-            if prog.description:
-                SubElement(el, 'desc', lang='en').text = prog.description
+            if desc:
+                SubElement(el, 'desc', lang='en').text = desc
             if prog.category or ch_cat_map.get(prog.channel_id):
                 # Use prog.category if set, fall back to channel category.
                 # Split semicolon-joined strings into multiple <category> tags —
@@ -132,11 +220,11 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None):
             src_name = ch_src_map.get(prog.channel_id)
             if src_name:
                 SubElement(el, 'category', lang='en').text = src_name
-            if prog.poster_url:
-                SubElement(el, 'icon', src=prog.poster_url)
-            if prog.rating:
+            if poster:
+                SubElement(el, 'icon', src=poster)
+            if rating:
                 r = SubElement(el, 'rating', system='MPAA')
-                SubElement(r, 'value').text = prog.rating
+                SubElement(r, 'value').text = rating
             if prog.episode_title:
                 SubElement(el, 'sub-title', lang='en').text = prog.episode_title
             if prog.season and prog.episode:

@@ -39,6 +39,7 @@ def _build_channel_query(filters: dict):
         Channel.is_active  == True,
         Channel.is_enabled == True,
         Source.is_enabled  == True,
+        Source.epg_only    == False,
         Channel.stream_url != None,
     )
     if channel_ids := filters.get('channel_ids'):
