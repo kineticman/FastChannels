@@ -8,3 +8,4 @@ python-dotenv==1.0.1
 pytz==2024.1
 beautifulsoup4==4.12.3
 apscheduler==3.10.4
+playwright

@@ -48,8 +48,11 @@ def run_scraper(source_name: str):
 
         t0 = time.monotonic()
         logger.info('[%s] Scrape job started', source_name)
+        scraper = None
+        _progress = _make_progress_writer(source_name)
         try:
             scraper  = scraper_cls(config=source.config or {})
+            scraper._progress_cb = _progress
             refresh_hours = getattr(scraper_cls, 'channel_refresh_hours', 0)
 
             # Decide whether to skip the channel list fetch this run.
@@ -61,6 +64,14 @@ def run_scraper(source_name: str):
                 age_hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
                 skip_channels = age_hours < refresh_hours
 
+            # Run pre_run_setup (e.g. auth bootstrap) and persist any config
+            # updates (like tokens) immediately — before the long scrape starts —
+            # so they survive even if the job times out mid-EPG.
+            _progress('bootstrap')
+            scraper.pre_run_setup()
+            _apply_scraper_config_updates(source, scraper)
+            db.session.commit()
+
             if skip_channels:
                 from app.scrapers.base import ChannelData as _CD
                 db_channels = source.channels.filter_by(is_active=True).all()
@@ -68,29 +79,41 @@ def run_scraper(source_name: str):
                                    name=ch.name,
                                    stream_url=ch.stream_url or '',
                                    slug=ch.slug or '') for ch in db_channels]
+                _progress('epg', 0, len(epg_input))
                 programs = scraper.fetch_epg(epg_input)
                 _upsert_programs(source, programs)
                 source.last_scraped_at = datetime.now(timezone.utc)
                 source.last_error      = None
+                _apply_scraper_config_updates(source, scraper)
                 db.session.commit()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] EPG-only run complete — %d channels, %d programs (%.1fs)',
                             source_name, len(db_channels), len(programs), elapsed)
             else:
-                channels, programs = scraper.run()
+                _progress('channels')
+                channels = scraper.fetch_channels()
+                _progress('epg', 0, len(channels))
+                programs = scraper.fetch_epg(channels)
                 _upsert_channels(source, channels)
                 _upsert_programs(source, programs)
                 source.last_scraped_at = datetime.now(timezone.utc)
                 source.last_error      = None
+                _apply_scraper_config_updates(source, scraper)
                 db.session.commit()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
+            _progress('done')
         except Exception as e:
             elapsed = time.monotonic() - t0
             logger.exception('[%s] Scrape failed after %.1fs', source_name, elapsed)
+            # Persist any config updates the scraper queued before the failure
+            # (e.g. a freshly bootstrapped token — don't lose it just because a
+            # subsequent API call failed).
+            _apply_scraper_config_updates(source, scraper)
             source.last_error = str(e)
             db.session.commit()
+            _progress('done')
 
 
 
@@ -241,6 +264,39 @@ def run_drm_check(source_name: str):
                     source_name, total, checked, flagged, dead, errors)
 
 
+def _make_progress_writer(source_name: str):
+    """Return a callable(phase, done=0, total=0) that writes scrape progress to Redis.
+    Phase 'done' deletes the key.  Silently no-ops if Redis is unavailable."""
+    import json as _json
+    key = f'scrape:progress:{source_name}'
+    try:
+        r = redis.from_url(flask_app.config['REDIS_URL'])
+        r.ping()
+    except Exception:
+        return lambda *a, **kw: None
+
+    def _write(phase: str, done: int = 0, total: int = 0):
+        try:
+            if phase == 'done':
+                r.delete(key)
+            else:
+                r.setex(key, 600, _json.dumps({'phase': phase, 'done': done, 'total': total}))
+        except Exception:
+            pass
+    return _write
+
+
+def _apply_scraper_config_updates(source, scraper) -> None:
+    """Merge any config updates the scraper queued back into source.config."""
+    if scraper and scraper._pending_config_updates:
+        updated = dict(source.config or {})
+        updated.update(scraper._pending_config_updates)
+        source.config = updated
+        logger.debug('[%s] persisting %d config update(s): %s',
+                     source.name, len(scraper._pending_config_updates),
+                     list(scraper._pending_config_updates.keys()))
+
+
 def _upsert_channels(source, channel_data_list):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
     for cd in channel_data_list:
@@ -344,7 +400,7 @@ def _schedule_due_scrapes():
 
             if last is None or (now - last).total_seconds() >= interval_secs:
                 try:
-                    q.enqueue('app.worker.run_scraper', source.name, job_timeout=600)
+                    q.enqueue('app.worker.run_scraper', source.name, job_timeout=3600)
                     _last_enqueued[source.name] = now
                     logger.info('[scheduler] Enqueued %s (interval=%dm, age=%s)',
                                 source.name, source.scrape_interval,

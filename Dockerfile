@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN playwright install-deps chromium && playwright install chromium
 
 COPY . .
 

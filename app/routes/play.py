@@ -75,13 +75,24 @@ def play(source_name: str, channel_id: str):
         abort(404)
 
     scraper_cls = registry.get(source_name)
+    scraper = None
     if scraper_cls:
-        scraper = scraper_cls()
+        scraper = scraper_cls(config=channel.source.config or {})
         try:
             resolved_url = scraper.resolve(channel.stream_url)
         except Exception as e:
             logger.error('[play] resolve failed for %s/%s: %s', source_name, channel_id, e)
             resolved_url = channel.stream_url
+        finally:
+            if scraper._pending_config_updates:
+                try:
+                    updated = dict(channel.source.config or {})
+                    updated.update(scraper._pending_config_updates)
+                    channel.source.config = updated
+                    db.session.commit()
+                except Exception as ce:
+                    logger.warning('[play] failed to persist config updates: %s', ce)
+                    db.session.rollback()
     else:
         resolved_url = channel.stream_url
 

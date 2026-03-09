@@ -520,33 +520,63 @@ class RokuScraper(BaseScraper):
     # ── fetch_epg ──────────────────────────────────────────────────────────────
 
     def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
+        import threading
+        import requests as _req
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         if not self._ensure_session():
             return []
 
-        programs: list[ProgramData] = []
         total = len(channels)
+        # Snapshot merged headers (session defaults + API-specific) and cookies
+        # so each thread can build an independent session — avoids concurrent
+        # mutation of the shared self.session.
+        headers_snapshot = {**self.session.headers, **self._api_headers()}
+        cookies_snapshot  = dict(self.session.cookies)
 
-        for i, ch in enumerate(channels):
+        programs: list[ProgramData] = []
+        lock = threading.Lock()
+        done = [0]
+
+        def fetch_one(ch: ChannelData) -> list[ProgramData]:
+            sess = _req.Session()
+            sess.headers.update(headers_snapshot)
+            sess.cookies.update(cookies_snapshot)
             sid = ch.source_channel_id
             try:
-                data = self._fetch_content(sid, feature_include="linearSchedule")
-                if not data:
-                    continue
-
+                qs = "?featureInclude=linearSchedule"
+                content_url = _CONTENT_TPL.format(sid=sid) + qs
+                proxy_url   = _PROXY_BASE + quote(content_url, safe="")
+                r = sess.get(proxy_url, timeout=10)
+                if r.status_code != 200:
+                    return []
+                data = r.json()
                 schedule = data.get("features", {}).get("linearSchedule", [])
+                result = []
                 for entry in schedule:
                     prog = self._parse_program(sid, entry)
                     if prog:
-                        programs.append(prog)
-
+                        result.append(prog)
+                return result
             except Exception as exc:
                 logger.warning("[roku] EPG error for %s (%s): %s", ch.name, sid, exc)
+                return []
 
-            if (i + 1) % 50 == 0:
-                logger.info("[roku] EPG progress: %d/%d channels", i + 1, total)
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = {executor.submit(fetch_one, ch): ch for ch in channels}
+            for future in as_completed(futures):
+                exc = future.exception()
+                if exc and type(exc).__name__ == 'JobTimeoutException':
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise exc
+                result = future.result() if not exc else []
+                with lock:
+                    programs.extend(result)
+                    done[0] += 1
+                    if self._progress_cb:
+                        self._progress_cb('epg', done[0], total)
 
-            time.sleep(0.25)  # be polite
-
+        programs.sort(key=lambda p: (p.source_channel_id, p.start_time))
         logger.info("[roku] %d EPG entries fetched for %d channels", len(programs), total)
         return programs
 

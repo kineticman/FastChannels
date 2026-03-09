@@ -1,7 +1,8 @@
+import json
 import re
 import requests as _req
 from urllib.parse import urljoin as _urljoin
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from ..extensions import db
 from ..models import Source, Channel
 from ..scrapers import registry
@@ -24,6 +25,44 @@ def run_source(source_id):
     source = Source.query.get_or_404(source_id)
     trigger_scrape(source.name)
     return jsonify({'status': 'queued', 'source': source.name})
+
+
+@api_bp.route('/sources/<int:source_id>/scrape-status')
+def scrape_status(source_id):
+    import redis as _redis
+    from rq import Queue
+    from rq.registry import StartedJobRegistry
+
+    source = Source.query.get_or_404(source_id)
+    try:
+        r = _redis.from_url(current_app.config['REDIS_URL'])
+        # Active progress written by the worker
+        raw = r.get(f'scrape:progress:{source.name}')
+        if raw:
+            data = json.loads(raw)
+            return jsonify({'status': 'running', **data})
+        # Check if queued but not yet started
+        q = Queue('scraper', connection=r)
+        for job_id in q.get_job_ids():
+            try:
+                job = q.fetch_job(job_id)
+                if job and job.args and job.args[0] == source.name:
+                    return jsonify({'status': 'queued'})
+            except Exception:
+                pass
+        # Check started registry (job may have just started before writing progress)
+        registry = StartedJobRegistry('scraper', connection=r)
+        for job_id in registry.get_job_ids():
+            try:
+                from rq.job import Job
+                job = Job.fetch(job_id, connection=r)
+                if job.args and job.args[0] == source.name:
+                    return jsonify({'status': 'running', 'phase': 'starting'})
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return jsonify({'status': 'idle'})
 
 
 @api_bp.route('/sources/<int:source_id>/drm-check', methods=['POST'])
@@ -168,11 +207,20 @@ def inspect_channel(channel_id):
     # gunicorn server itself, which can deadlock all workers under concurrent inspect calls.
     scraper_cls = registry.get(source.name)
     if scraper_cls:
-        scraper = scraper_cls()
+        scraper = scraper_cls(config=source.config or {})
         try:
             resolved_url = scraper.resolve(ch.stream_url)
         except Exception as e:
             return jsonify({'status': 'error', 'detail': f'URL resolve failed: {e}'})
+        finally:
+            if scraper._pending_config_updates:
+                try:
+                    updated = dict(source.config or {})
+                    updated.update(scraper._pending_config_updates)
+                    source.config = updated
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
         sess = scraper.session
     else:
         resolved_url = ch.stream_url

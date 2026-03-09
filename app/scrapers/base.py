@@ -86,10 +86,24 @@ class BaseScraper(ABC):
 
     def __init__(self, config: dict = None):
         self.config  = config or {}
+        self._pending_config_updates: dict = {}
+        self._progress_cb = None   # optional callable(phase, done, total) set by worker
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (compatible; FastChannels/1.0)'
         })
+
+    def _update_config(self, key: str, value) -> None:
+        """Queue a config key/value to be persisted by the worker after this run.
+        Also updates self.config so the value is usable within the current run."""
+        self.config[key] = value
+        self._pending_config_updates[key] = value
+
+    def pre_run_setup(self) -> None:
+        """Called by the worker before fetch_channels/fetch_epg.
+        Override to perform auth or any setup that queues config updates
+        (e.g. capturing tokens) so they can be persisted before the long scrape."""
+        pass
 
     @abstractmethod
     def fetch_channels(self) -> list[ChannelData]: ...

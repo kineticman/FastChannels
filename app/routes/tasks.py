@@ -13,7 +13,7 @@ def get_queue():
 
 def trigger_scrape(source_name: str):
     try:
-        get_queue().enqueue('app.worker.run_scraper', source_name, job_timeout=600)
+        get_queue().enqueue('app.worker.run_scraper', source_name, job_timeout=3600)
         logger.info(f'Enqueued scrape for {source_name}')
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for {source_name}')
