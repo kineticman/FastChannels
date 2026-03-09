@@ -1,5 +1,8 @@
+import logging
 import re
 from ..models import Channel, Source
+
+log = logging.getLogger(__name__)
 
 # Gracenote ID prefixes recognised by Channels DVR
 _GRACENOTE_PREFIX_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
@@ -74,19 +77,110 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
     return f
 
 
-def generate_m3u(filters: dict = None, base_url: str = None) -> str:
+def _build_source_chnum_map(channels):
+    """
+    Build a channel-number assignment map using Source.chnum_start values.
+
+    Channels from sources with chnum_start configured are renumbered sequentially
+    starting from that value.  Channels from sources without chnum_start fall back
+    to their existing Channel.number (unchanged from scraper output).
+
+    Returns:
+        chnum_map  – dict[channel_id -> int]
+        warnings   – list of human-readable overlap warning strings
+    """
+    # Group channels by source, preserving their sorted order
+    by_source: dict[str, list] = {}
+    source_starts: dict[str, int] = {}
+    for ch in channels:
+        src = ch.source.name
+        if src not in by_source:
+            by_source[src] = []
+            if ch.source.chnum_start:
+                source_starts[src] = ch.source.chnum_start
+        by_source[src].append(ch)
+
+    # Detect overlaps between configured sources
+    warnings: list[str] = []
+    configured = [
+        (src, source_starts[src], len(by_source[src]))
+        for src in source_starts
+    ]
+    for i in range(len(configured)):
+        for j in range(i + 1, len(configured)):
+            a_name, a_start, a_count = configured[i]
+            b_name, b_start, b_count = configured[j]
+            a_end = a_start + a_count
+            b_end = b_start + b_count
+            if a_start < b_end and b_start < a_end:
+                overlap_lo = max(a_start, b_start)
+                overlap_hi = min(a_end, b_end) - 1
+                warnings.append(
+                    f"'{a_name}' (ch {a_start}–{a_end - 1}, {a_count} channels) overlaps "
+                    f"'{b_name}' (ch {b_start}–{b_end - 1}, {b_count} channels) "
+                    f"at ch {overlap_lo}–{overlap_hi}"
+                )
+
+    # Assign numbers
+    chnum_map: dict[int, int] = {}
+    for src, chs in by_source.items():
+        if src in source_starts:
+            start = source_starts[src]
+            for idx, ch in enumerate(chs):
+                chnum_map[ch.id] = start + idx
+        else:
+            for ch in chs:
+                if ch.number:
+                    chnum_map[ch.id] = ch.number
+
+    return chnum_map, warnings
+
+
+def _build_feed_chnum_map(channels, feed_chnum_start: int):
+    """
+    Simple sequential numbering for a feed-level chnum_start.
+    All channels in the feed are numbered start, start+1, start+2, …
+    """
+    return {ch.id: feed_chnum_start + idx for idx, ch in enumerate(channels)}
+
+
+def get_chnum_overlaps() -> list[str]:
+    """
+    Return a list of overlap warning strings for the current source configuration.
+    Used by the admin UI to surface misconfiguration.
+    """
+    channels = _build_channel_query({}).all()
+    _, warnings = _build_source_chnum_map(channels)
+    return warnings
+
+
+def generate_m3u(filters: dict = None, base_url: str = None,
+                 feed_chnum_start: int = None) -> str:
     """
     Standard XMLTV-backed playlist.
     Excludes channels with a valid Gracenote ID — those belong in /m3u/gracenote
     so Channels DVR doesn't mix EPG sources within a single M3U source.
+
+    Channel numbering (tvg-chno):
+      - feed_chnum_start set  → sequential from that number for all channels in this feed
+      - feed_chnum_start None → per-source Source.chnum_start values (source-level config)
+      - source without chnum_start → existing Channel.number (or omitted if null)
     """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
 
+    all_channels = _build_channel_query(filters).all()
+    channels = [ch for ch in all_channels if not _parse_gracenote_id(ch)]
+
+    if feed_chnum_start is not None:
+        chnum_map = _build_feed_chnum_map(channels, feed_chnum_start)
+    else:
+        chnum_map, warnings = _build_source_chnum_map(channels)
+        for w in warnings:
+            log.warning('chnum overlap: %s', w)
+
     lines = ['#EXTM3U']
-    for ch in _build_channel_query(filters).all():
-        if _parse_gracenote_id(ch):
-            continue  # belongs in /m3u/gracenote
+    for ch in channels:
         tvg_id = _tvg_id(ch)
         attrs = [
             f'tvg-id="{tvg_id}"',
@@ -95,15 +189,17 @@ def generate_m3u(filters: dict = None, base_url: str = None) -> str:
         ]
         if ch.logo_url:
             attrs.append(f'tvg-logo="{ch.logo_url}"')
-        if ch.number:
-            attrs.append(f'tvg-chno="{ch.number}"')
+        chnum = chnum_map.get(ch.id)
+        if chnum:
+            attrs.append(f'tvg-chno="{chnum}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{ch.name}')
         lines.append(f'{base_url}/play/{ch.source.name}/{ch.source_channel_id}.m3u8')
 
     return '\n'.join(lines)
 
 
-def generate_gracenote_m3u(filters: dict = None, base_url: str = None) -> str:
+def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
+                            feed_chnum_start: int = None) -> str:
     """
     Gracenote-backed playlist for Channels DVR.
 
@@ -111,15 +207,25 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None) -> str:
     or the legacy "{play_id}|{gracenote_id}" slug encoding).
     Uses tvc-guide-stationid so Channels DVR routes guide data through Gracenote
     rather than our XMLTV — the two cannot be mixed per source.
+
+    Channel numbering follows the same rules as generate_m3u.
     """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
 
+    all_channels = _build_channel_query(filters).all()
+    channels = [ch for ch in all_channels if _parse_gracenote_id(ch)]
+
+    if feed_chnum_start is not None:
+        chnum_map = _build_feed_chnum_map(channels, feed_chnum_start)
+    else:
+        chnum_map, warnings = _build_source_chnum_map(channels)
+        for w in warnings:
+            log.warning('chnum overlap (gracenote): %s', w)
+
     lines = ['#EXTM3U']
-    for ch in _build_channel_query(filters).all():
+    for ch in channels:
         gracenote_id = _parse_gracenote_id(ch)
-        if not gracenote_id:
-            continue
         attrs = [
             f'tvc-guide-stationid="{gracenote_id}"',
             f'tvg-name="{_esc(ch.name)}"',
@@ -127,8 +233,9 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None) -> str:
         ]
         if ch.logo_url:
             attrs.append(f'tvg-logo="{ch.logo_url}"')
-        if ch.number:
-            attrs.append(f'tvg-chno="{ch.number}"')
+        chnum = chnum_map.get(ch.id)
+        if chnum:
+            attrs.append(f'tvg-chno="{chnum}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{ch.name}')
         lines.append(f'{base_url}/play/{ch.source.name}/{ch.source_channel_id}.m3u8')
 

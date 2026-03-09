@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, request
 from ..extensions import db
 from ..models import Source, Channel, Feed
-from ..generators.m3u import _parse_gracenote_id
+from ..generators.m3u import _parse_gracenote_id, get_chnum_overlaps
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
@@ -23,8 +23,10 @@ def dashboard():
 
 @admin_bp.route('/sources')
 def sources():
+    chnum_warnings = get_chnum_overlaps()
     return render_template('admin/sources.html',
-                           sources=Source.query.order_by(Source.display_name).all())
+                           sources=Source.query.order_by(Source.display_name).all(),
+                           chnum_warnings=chnum_warnings)
 
 
 @admin_bp.route('/channels')

@@ -13,6 +13,7 @@ class Source(db.Model):
     last_scraped_at = db.Column(db.DateTime(timezone=True))
     last_error      = db.Column(db.Text)
     config          = db.Column(db.JSON, default=dict)
+    chnum_start     = db.Column(db.Integer, nullable=True)   # starting tvg-chno in combined /m3u output
 
     channels = db.relationship('Channel', backref='source', lazy='dynamic',
                                 cascade='all, delete-orphan')
@@ -30,6 +31,7 @@ class Source(db.Model):
             'last_scraped_at': self.last_scraped_at.isoformat() if self.last_scraped_at else None,
             'last_error':     self.last_error,
             'channel_count':  self.channels.filter_by(is_active=True).count(),
+            'chnum_start':    self.chnum_start,
         }
 
 
@@ -128,6 +130,7 @@ class Feed(db.Model):
     name        = db.Column(db.String(128), nullable=False)
     description = db.Column(db.Text, default='')
     filters     = db.Column(db.JSON, default=dict)
+    chnum_start = db.Column(db.Integer, nullable=True)   # starting tvg-chno for this feed's M3U output
     is_enabled  = db.Column(db.Boolean, default=True)
     created_at  = db.Column(db.DateTime(timezone=True),
                             default=lambda: datetime.now(timezone.utc))
@@ -150,6 +153,7 @@ class Feed(db.Model):
             'name':        self.name,
             'description': self.description,
             'filters':     self.filters or {},
+            'chnum_start': self.chnum_start,
             'is_enabled':  self.is_enabled,
             'created_at':  self.created_at.isoformat() if self.created_at else None,
             'updated_at':  self.updated_at.isoformat() if self.updated_at else None,

@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <title>Feeds — FastChannels</title>
   <style>
+    html { font-size: 17px; }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
     nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; }
@@ -214,6 +215,9 @@
             {% if f.get('max_channels') %}
               <span class="badge-pill pill-gray">max {{ f['max_channels'] }}</span>
             {% endif %}
+            {% if feed.chnum_start %}
+              <span class="badge-pill pill-gray">ch# from {{ feed.chnum_start }}</span>
+            {% endif %}
           </div>
         </div>
         <div class="feed-actions">
@@ -311,6 +315,11 @@
       <input type="number" id="f-max" min="1" max="9999" placeholder="750 recommended for Channels DVR">
       <div class="help">Leave blank for no limit. Channels DVR degrades above ~750.</div>
     </div>
+    <div class="field">
+      <label>Starting Channel Number <span style="color:#475569;font-weight:400;text-transform:none">(tvg-chno)</span></label>
+      <input type="number" id="f-chnum" min="1" placeholder="e.g. 1000 — leave blank to use per-source settings">
+      <div class="help">When set, all channels in this feed are numbered sequentially starting here, overriding per-source channel number settings.</div>
+    </div>
     <div class="count-preview" id="count-preview"></div>
 
     <div class="modal-footer">
@@ -402,6 +411,7 @@ async function openModal(feed = null) {
   document.getElementById('f-name').value     = feed ? feed.name : '';
   document.getElementById('f-desc').value     = feed ? (feed.description || '') : '';
   document.getElementById('f-max').value      = feed ? (feed.filters.max_channels || '') : '';
+  document.getElementById('f-chnum').value    = feed ? (feed.chnum_start || '') : '';
   document.getElementById('modal-status').textContent = '';
   document.getElementById('ch-search').value  = '';
 
@@ -539,10 +549,12 @@ async function saveFeed() {
   status.textContent = 'Saving…';
   status.className   = 'save-status';
 
+  const chnumRaw = document.getElementById('f-chnum').value.trim();
   const payload = {
     name:        name,
     description: document.getElementById('f-desc').value.trim(),
     filters:     buildFilters(),
+    chnum_start: chnumRaw ? parseInt(chnumRaw, 10) : null,
     is_enabled:  true,
   };
 

@@ -6,6 +6,7 @@ from ..extensions import db
 from ..models import Source, Channel
 from ..scrapers import registry
 from .tasks import trigger_scrape, trigger_drm_check
+from ..generators.m3u import get_chnum_overlaps
 from .. import logfile
 
 api_bp = Blueprint('api', __name__)
@@ -32,6 +33,12 @@ def drm_check_source(source_id):
     return jsonify({'status': 'queued', 'source': source.name})
 
 
+@api_bp.route('/sources/chnum-overlaps')
+def chnum_overlaps():
+    """Return a list of channel-number overlap warnings for the current source config."""
+    return jsonify({'warnings': get_chnum_overlaps()})
+
+
 @api_bp.route('/sources/<int:source_id>', methods=['PATCH'])
 def update_source(source_id):
     source = Source.query.get_or_404(source_id)
@@ -40,6 +47,16 @@ def update_source(source_id):
         source.is_enabled = bool(data['is_enabled'])
     if 'scrape_interval' in data:
         source.scrape_interval = int(data['scrape_interval'])
+    if 'chnum_start' in data:
+        val = data['chnum_start']
+        if val is None or val == '':
+            source.chnum_start = None
+        else:
+            try:
+                n = int(val)
+                source.chnum_start = n if n > 0 else None
+            except (ValueError, TypeError):
+                return jsonify({'error': 'chnum_start must be a positive integer'}), 422
     db.session.commit()
     return jsonify(source.to_dict())
 

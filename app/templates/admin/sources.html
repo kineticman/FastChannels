@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <title>Sources — FastChannels</title>
   <style>
+    html { font-size: 17px; }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
     nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; }
@@ -34,6 +35,28 @@
     .btn-drm { background: #78350f; color: #fde68a; }
     .btn-drm:hover:not(:disabled) { background: #92400e; }
     .btn-drm:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ch-num start input */
+    .chnum-wrap { display: flex; align-items: center; gap: 0.5rem; }
+    .chnum-label { font-size: 0.75rem; color: #64748b; white-space: nowrap; }
+    .chnum-input {
+      width: 90px; background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+      padding: 0.3rem 0.5rem; color: #e2e8f0; font-size: 0.8rem; outline: none;
+    }
+    .chnum-input:focus { border-color: #6366f1; }
+    .chnum-input::placeholder { color: #475569; }
+    .chnum-save { background: none; border: none; color: #38bdf8; font-size: 0.75rem;
+                  cursor: pointer; padding: 0 0.25rem; }
+    .chnum-save:hover { color: #7dd3fc; }
+    .chnum-ok { color: #4ade80; font-size: 0.75rem; }
+
+    /* overlap warning banner */
+    .overlap-banner {
+      background: #451a03; border: 1px solid #92400e; border-radius: 8px;
+      padding: 0.85rem 1.25rem; margin-bottom: 1.25rem; color: #fde68a;
+    }
+    .overlap-banner strong { display: block; margin-bottom: 0.4rem; font-size: 0.9rem; }
+    .overlap-banner ul { margin: 0; padding-left: 1.25rem; font-size: 0.82rem; line-height: 1.7; }
 
     /* Toggle */
     .toggle-wrap { display: flex; align-items: center; gap: 0.6rem; }
@@ -91,6 +114,15 @@
   </nav>
 
   <div class="container">
+    {% if chnum_warnings %}
+    <div class="overlap-banner" id="overlap-banner">
+      <strong>⚠ Channel number overlaps detected in combined /m3u output</strong>
+      <ul>
+        {% for w in chnum_warnings %}<li>{{ w }}</li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
     {% for source in sources %}
     <div class="card {% if not source.is_enabled %}disabled{% endif %}" id="card-{{ source.id }}">
       <div class="card-info">
@@ -103,6 +135,14 @@
         {% if source.last_error %}
         <div class="error">⚠ {{ source.last_error }}</div>
         {% endif %}
+        <div class="chnum-wrap" style="margin-top:0.45rem">
+          <span class="chnum-label">Ch# start (combined M3U):</span>
+          <input class="chnum-input" type="number" min="1" placeholder="none"
+                 id="chnum-{{ source.id }}"
+                 value="{{ source.chnum_start if source.chnum_start else '' }}"
+                 onchange="saveChnumStart({{ source.id }}, this)">
+          <span class="chnum-ok" id="chnum-ok-{{ source.id }}" style="display:none">✓</span>
+        </div>
       </div>
       <div class="actions">
         <div class="toggle-wrap">
@@ -232,6 +272,54 @@
         btn.textContent = 'Error';
       }
       setTimeout(() => { btn.textContent = '🔒 DRM Check'; btn.disabled = false; }, 5000);
+    }
+
+    async function saveChnumStart(sourceId, input) {
+      const raw = input.value.trim();
+      const val = raw === '' ? null : parseInt(raw, 10);
+      if (raw !== '' && (isNaN(val) || val < 1)) {
+        input.value = '';
+        return;
+      }
+      try {
+        const r = await fetch(`/api/sources/${sourceId}`, {
+          method:  'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({chnum_start: val}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const ok = document.getElementById(`chnum-ok-${sourceId}`);
+        ok.style.display = 'inline';
+        setTimeout(() => { ok.style.display = 'none'; }, 2000);
+        // Refresh overlap banner
+        refreshOverlapBanner();
+      } catch (e) {
+        console.error('Failed to save chnum_start:', e);
+      }
+    }
+
+    async function refreshOverlapBanner() {
+      try {
+        const r = await fetch('/api/sources/chnum-overlaps');
+        const d = await r.json();
+        let banner = document.getElementById('overlap-banner');
+        if (d.warnings && d.warnings.length > 0) {
+          const items = d.warnings.map(w => `<li>${w}</li>`).join('');
+          if (banner) {
+            banner.querySelector('ul').innerHTML = items;
+          } else {
+            banner = document.createElement('div');
+            banner.id = 'overlap-banner';
+            banner.className = 'overlap-banner';
+            banner.innerHTML = `<strong>⚠ Channel number overlaps detected in combined /m3u output</strong><ul>${items}</ul>`;
+            document.querySelector('.container').prepend(banner);
+          }
+        } else if (banner) {
+          banner.remove();
+        }
+      } catch (e) {
+        console.error('Failed to refresh overlap banner:', e);
+      }
     }
   </script>
 </body>

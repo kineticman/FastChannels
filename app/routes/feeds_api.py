@@ -39,6 +39,7 @@ def create_feed():
         name        = name,
         description = data.get('description', ''),
         filters     = _clean_filters(data.get('filters', {})),
+        chnum_start = _parse_chnum_start(data.get('chnum_start')),
         is_enabled  = data.get('is_enabled', True),
     )
     db.session.add(feed)
@@ -63,6 +64,8 @@ def update_feed(feed_id):
         feed.description = data['description']
     if 'filters' in data:
         feed.filters = _clean_filters(data['filters'])
+    if 'chnum_start' in data:
+        feed.chnum_start = _parse_chnum_start(data['chnum_start'])
     if 'is_enabled' in data:
         feed.is_enabled = bool(data['is_enabled'])
 
@@ -76,6 +79,17 @@ def delete_feed(feed_id):
     db.session.delete(feed)
     db.session.commit()
     return jsonify({'status': 'deleted', 'slug': feed.slug})
+
+
+def _parse_chnum_start(val) -> int | None:
+    """Coerce chnum_start to a positive int, or None to clear it."""
+    if val is None or val == '':
+        return None
+    try:
+        n = int(val)
+        return n if n > 0 else None
+    except (ValueError, TypeError):
+        return None
 
 
 def _clean_filters(raw: dict) -> dict:

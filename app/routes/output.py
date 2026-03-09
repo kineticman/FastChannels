@@ -57,7 +57,8 @@ def epg_xml():
 def feed_m3u(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = request.host_url.rstrip('/')
-    content  = generate_m3u(feed_to_query_filters(feed.filters or {}), base_url=base_url)
+    content  = generate_m3u(feed_to_query_filters(feed.filters or {}), base_url=base_url,
+                             feed_chnum_start=feed.chnum_start)
     return Response(content, mimetype='application/x-mpegurl',
                     headers={'Content-Disposition': f'attachment; filename="{slug}.m3u"'})
 
@@ -66,7 +67,8 @@ def feed_m3u(slug):
 def feed_m3u_gracenote(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = request.host_url.rstrip('/')
-    content  = generate_gracenote_m3u(feed_to_query_filters(feed.filters or {}), base_url=base_url)
+    content  = generate_gracenote_m3u(feed_to_query_filters(feed.filters or {}), base_url=base_url,
+                                      feed_chnum_start=feed.chnum_start)
     return Response(content, mimetype='application/x-mpegurl',
                     headers={'Content-Disposition': f'attachment; filename="{slug}-gracenote.m3u"'})
 
