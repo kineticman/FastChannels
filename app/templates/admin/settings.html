@@ -25,9 +25,9 @@
       gap: 2rem;
       height: 56px;
     }
-    nav .brand { font-weight: 700; font-size: 1.1rem; color: #fff; text-decoration: none; }
+    nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
     nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
-    nav a:hover, nav a.active { color: #fff; }
+    nav a:hover, nav a.active { color: #e2e8f0; }
 
     /* ── Layout ── */
     .page { max-width: 860px; margin: 0 auto; padding: 2.5rem 1.5rem; }
@@ -172,16 +172,47 @@
 <body>
 
 <nav>
-  <a class="brand" href="/admin/">⚡ FastChannels</a>
+  <h1>⚡ FastChannels</h1>
   <a href="/admin/">Dashboard</a>
   <a href="/admin/sources">Sources</a>
   <a href="/admin/channels">Channels</a>
+  <a href="/admin/feeds">Feeds</a>
   <a href="/admin/settings" class="active">Settings</a>
+  <a href="/admin/logs">Logs</a>
+  <a href="/m3u" target="_blank">M3U ↗</a>
+  <a href="/epg.xml" target="_blank">EPG XML ↗</a>
 </nav>
 
 <div class="page">
   <h1>Settings</h1>
   <p class="subtitle">Configure credentials and options for each source. Changes take effect on the next scrape.</p>
+
+  <!-- Global settings card -->
+  <div class="source-card">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">⚙️</div>
+        <div>
+          <div class="source-name">Global Output Settings</div>
+          <div class="source-meta">Applied to M3U / channel numbering across all sources</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="fields-grid" style="max-width:480px">
+        <div class="field field-full">
+          <label for="global-chnum-start">Master Channel Number Start</label>
+          <input type="number" id="global-chnum-start" min="1" max="99999"
+                 placeholder="e.g. 1000" value="{{ global_chnum_start or '' }}">
+          <div class="help">Sequential tvg-chno numbers assigned to sources without their own channel number start. Leave blank to disable.</div>
+        </div>
+      </div>
+      <div class="field-actions">
+        <span class="save-status" id="global-settings-status"></span>
+        <button class="btn btn-primary" onclick="saveGlobalSettings()">Save</button>
+      </div>
+    </div>
+  </div>
 
   <div id="cards-container">
     <div class="loading">Loading sources…</div>
@@ -190,6 +221,30 @@
 
 <script>
 const MASK = '••••••••';
+
+async function saveGlobalSettings() {
+  const inp    = document.getElementById('global-chnum-start');
+  const status = document.getElementById('global-settings-status');
+  const val    = inp.value.trim();
+  const body   = { global_chnum_start: val ? parseInt(val, 10) : null };
+
+  status.className = 'save-status';
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/settings', {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    status.className = 'save-status ok';
+    status.textContent = '✓ Saved';
+    setTimeout(() => { status.textContent = ''; }, 2500);
+  } catch (e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ ' + e.message;
+  }
+}
 
 // ── Fetch all sources, then load each schema ──────────────────────────────
 async function init() {

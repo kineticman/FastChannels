@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
-from .base import BaseScraper, ChannelData, ProgramData
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError
 
 logger = logging.getLogger(__name__)
 
@@ -370,7 +370,7 @@ class RokuScraper(BaseScraper):
 
     # ── Content proxy helper ───────────────────────────────────────────────────
 
-    def _fetch_content(self, station_id: str, feature_include: str = "") -> Optional[dict]:
+    def _fetch_content(self, station_id: str, feature_include: str = "", _raise_on_404: bool = False) -> Optional[dict]:
         """Call the therokuchannel content proxy for a given station_id."""
         qs = f"?featureInclude={feature_include}" if feature_include else ""
         content_url = _CONTENT_TPL.format(sid=station_id) + qs
@@ -379,6 +379,10 @@ class RokuScraper(BaseScraper):
             r = self.session.get(proxy_url, headers=self._api_headers(), timeout=10)
             if r.status_code == 200:
                 return r.json()
+            if _raise_on_404 and r.status_code == 404:
+                raise StreamDeadError(f"[roku] channel not found (404): {station_id}")
+        except StreamDeadError:
+            raise
         except Exception as exc:
             logger.warning("[roku] content fetch error for %s: %s", station_id, exc)
         return None
@@ -654,11 +658,10 @@ class RokuScraper(BaseScraper):
         station_id = raw_url[len("roku://"):]
 
         if not self._ensure_session():
-            logger.error("[roku] resolve failed — could not obtain session")
-            return raw_url
+            raise RuntimeError(f"[roku] resolve failed — could not obtain session for {station_id}")
 
-        # Step 1: get playId from content proxy
-        data    = self._fetch_content(station_id)
+        # Step 1: get playId from content proxy (404 → StreamDeadError)
+        data    = self._fetch_content(station_id, _raise_on_404=True)
         play_id = None
         if data:
             view_opts = data.get("viewOptions") or [{}]
@@ -677,7 +680,7 @@ class RokuScraper(BaseScraper):
 
         if not play_id:
             logger.warning("[roku] no playId found for %s", station_id)
-            return raw_url
+            raise RuntimeError(f"[roku] no playId found for {station_id}")
 
         # Decode to determine media format
         try:
@@ -715,11 +718,11 @@ class RokuScraper(BaseScraper):
                 if stream_url:
                     logger.debug("[roku] resolved %s -> %s…", station_id, stream_url[:60])
                     return stream_url
-            logger.warning("[roku] playback returned %d for %s", r2.status_code, station_id)
+            raise RuntimeError(f"[roku] playback returned {r2.status_code} for {station_id}")
+        except RuntimeError:
+            raise
         except Exception as exc:
-            logger.error("[roku] playback request failed for %s: %s", station_id, exc)
-
-        return raw_url
+            raise RuntimeError(f"[roku] playback request failed for {station_id}: {exc}") from exc
 
     # ── M3U extras ─────────────────────────────────────────────────────────────
     # FastChannels calls generate_m3u() which uses ChannelData fields.

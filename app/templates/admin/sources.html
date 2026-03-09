@@ -142,6 +142,7 @@
     <a href="/admin/">Dashboard</a>
     <a href="/admin/sources" class="active">Sources</a>
     <a href="/admin/channels">Channels</a>
+    <a href="/admin/feeds">Feeds</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/logs">Logs</a>
     <a href="/m3u" target="_blank">M3U ↗</a>
@@ -164,7 +165,7 @@
         <h3>
           {{ source.display_name }}
           {% if source.epg_only %}<span class="badge-epg-only">EPG Only</span>{% endif %}
-          {% if audit_enabled.get(source.name) %}<span class="badge-audit">Stream Audit</span>{% endif %}
+
         </h3>
         <div class="meta">
           Every {{ source.scrape_interval }}min &nbsp;·&nbsp;
@@ -207,7 +208,7 @@
           </span>
         </div>
         <button class="btn btn-run" onclick="run({{ source.id }}, this)"
-                {% if not source.is_enabled %}disabled{% endif %}>Run Now</button>
+                {% if not source.is_enabled %}disabled{% endif %}>Scrape Now</button>
         {% if audit_enabled.get(source.name) %}
         <button class="btn btn-audit" onclick="streamAudit({{ source.id }}, this)"
                 {% if not source.is_enabled %}disabled{% endif %}
@@ -310,7 +311,7 @@
       } catch (e) {
         btn.textContent = 'Error';
       }
-      setTimeout(() => { btn.textContent = 'Run Now'; btn.disabled = false; }, 3000);
+      setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
     }
 
     async function streamAudit(id, btn) {

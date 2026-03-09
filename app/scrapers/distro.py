@@ -28,7 +28,10 @@ HLS_HEADERS = {
     "Referer":    "https://distro.tv/",
 }
 
-SESSION_CDN_HOSTS = {"d3s7x6kmqcnb6b.cloudfront.net"}
+SESSION_CDN_HOSTS = {
+    "d3s7x6kmqcnb6b.cloudfront.net",   # session-token CDN
+    "d35j504z0x2vu2.cloudfront.net",   # requires Origin/Referer headers — don't pre-fetch
+}
 
 MACRO_RE = re.compile(r"__[^_].*?__")
 

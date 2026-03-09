@@ -7,6 +7,10 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+class StreamDeadError(Exception):
+    """Raised by audit_resolve() when a channel is confirmed dead (not a transient error)."""
+
+
 class ConfigField:
     """Declares a single config field a scraper needs from the UI."""
     def __init__(self, key: str, label: str, field_type: str = 'text',

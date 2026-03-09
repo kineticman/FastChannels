@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, request
 from ..extensions import db
-from ..models import Source, Channel, Feed
-from ..generators.m3u import _parse_gracenote_id, get_chnum_overlaps
+from ..models import Source, Channel, Feed, AppSettings
+from ..generators.m3u import _parse_gracenote_id, get_chnum_overlaps, _build_source_chnum_map
 from ..scrapers import registry as _scraper_registry
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
@@ -38,12 +38,15 @@ def sources():
 
 @admin_bp.route('/channels')
 def channels():
-    page            = request.args.get('page', 1, type=int)
-    source_filter   = request.args.get('source', '')
-    search          = request.args.get('search', '')
-    enabled_filter  = request.args.get('enabled', '')
-    drm_filter      = request.args.get('drm', '')
-    language_filter = request.args.get('language', '')
+    page             = request.args.get('page', 1, type=int)
+    source_filter    = request.args.get('source', '')
+    search           = request.args.get('search', '')
+    enabled_filter   = request.args.get('enabled', '')
+    drm_filter       = request.args.get('drm', '')
+    language_filter  = request.args.get('language', '')
+    category_filter  = request.args.get('category', '')
+    sort_by          = request.args.get('sort', 'name')
+    sort_dir         = request.args.get('dir', 'asc')
 
     q = Channel.query.join(Source)
 
@@ -68,11 +71,30 @@ def channels():
         q = q.filter(Source.name == source_filter)
     if language_filter:
         q = q.filter(Channel.language == language_filter)
+    if category_filter:
+        q = q.filter(Channel.category == category_filter)
     if search:
         q = q.filter(Channel.name.ilike(f'%{search}%'))
 
-    channels = q.order_by(Channel.name).paginate(page=page, per_page=50, error_out=False)
+    _sort_cols = {
+        'name':     [Channel.name],
+        'source':   [Source.display_name, Channel.name],
+        'category': [Channel.category, Channel.name],
+        # Approximate M3U order: sources with explicit start first, then by source name + channel name
+        'number':   [db.func.coalesce(Source.chnum_start, 999999), Source.display_name, Channel.name],
+    }
+    _cols = _sort_cols.get(sort_by, [Channel.name])
+    if sort_dir == 'desc':
+        _order = [c.desc() for c in _cols]
+    else:
+        _order = [c.asc() for c in _cols]
+
+    channels = q.order_by(*_order).paginate(page=page, per_page=50, error_out=False)
     sources  = Source.query.order_by(Source.display_name).all()
+
+    # Build computed channel number map for display
+    all_active = Channel.query.join(Source).filter(Channel.is_active == True).all()
+    chnum_map, _ = _build_source_chnum_map(all_active)
 
     lang_rows = db.session.query(Channel.language, db.func.count(Channel.id))\
         .filter(Channel.is_active == True, Channel.language != None)\
@@ -80,11 +102,20 @@ def channels():
         .order_by(Channel.language).all()
     languages = [(lang, count) for lang, count in lang_rows]
 
+    cat_rows = db.session.query(Channel.category, db.func.count(Channel.id))\
+        .filter(Channel.is_active == True, Channel.category != None)\
+        .group_by(Channel.category)\
+        .order_by(Channel.category).all()
+    categories = [(cat, count) for cat, count in cat_rows]
+
     return render_template('admin/channels.html',
                            channels=channels, sources=sources,
                            source_filter=source_filter, search=search,
                            enabled_filter=enabled_filter, drm_filter=drm_filter,
-                           language_filter=language_filter, languages=languages)
+                           language_filter=language_filter, languages=languages,
+                           category_filter=category_filter, categories=categories,
+                           sort_by=sort_by, sort_dir=sort_dir,
+                           chnum_map=chnum_map)
 
 
 @admin_bp.route('/feeds')
@@ -108,7 +139,9 @@ def feeds():
 
 @admin_bp.route('/settings')
 def settings():
-    return render_template('admin/settings.html')
+    app_settings = AppSettings.get()
+    return render_template('admin/settings.html',
+                           global_chnum_start=app_settings.global_chnum_start)
 
 
 @admin_bp.route('/logs')

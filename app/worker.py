@@ -4,7 +4,7 @@ Background worker — run with: python -m app.worker
 import logging
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import redis
 from rq import Worker, Queue, Connection
@@ -17,6 +17,7 @@ import time as _time
 import requests as _requests
 from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
+from app.scrapers.base import StreamDeadError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -119,8 +120,9 @@ def run_scraper(source_name: str):
 
 def run_stream_audit(source_name: str):
     """
-    Stream Audit — fetches every active channel via the /play/ proxy, follows the
-    redirect to the real CDN URL, drills master → variant playlist, and checks
+    Stream Audit — resolves each active channel via the scraper, fetches the
+    HLS manifest using the scraper's session (so source-specific headers like
+    Origin/Referer are included), drills master → variant playlist, and checks
     for dead streams, VOD-only content, and SAMPLE-AES DRM encryption.
     Flagged channels are marked is_active=False so they drop out of M3U/EPG output.
     """
@@ -137,6 +139,12 @@ def run_stream_audit(source_name: str):
             logger.info('[audit] %s: stream audit not enabled for this source, skipping', source_name)
             return
 
+        scraper = scraper_cls(config=source.config or {})
+        try:
+            scraper.pre_run_setup()
+        except Exception as _pre_exc:
+            logger.debug('[audit] pre_run_setup failed (non-fatal): %s', _pre_exc)
+
         channels = source.channels.filter_by(is_active=True).all()
         total    = len(channels)
         checked  = 0
@@ -145,7 +153,7 @@ def run_stream_audit(source_name: str):
         errors   = 0
         consecutive_errors = 0
 
-        logger.info('[audit] %s: checking %d channels via play proxy…', source_name, total)
+        logger.info('[audit] %s: checking %d channels…', source_name, total)
 
         # Live progress → Redis key audit:progress:{source_name}
         _audit_key = f'audit:progress:{source_name}'
@@ -176,42 +184,44 @@ def run_stream_audit(source_name: str):
         # Brief warmup pause — gives any residual rate-limit ban time to clear
         _time.sleep(5)
 
-        sess = _requests.Session()
-        sess.headers['User-Agent'] = 'FastChannels-DRMCheck/1.0'
+        # Use the scraper's own session so source-specific headers (Origin, Referer,
+        # auth tokens, etc.) are included in every CDN request.
+        sess = scraper.session
 
         for i, ch in enumerate(channels, 1):
-            # Skip malformed IDs that would break URL routing
-            if len(ch.source_channel_id) > 128 or '/' in ch.source_channel_id:
-                logger.debug('[audit] skipping bad channel ID: %s', ch.source_channel_id[:40])
-                continue
-
-            play_url = f'http://localhost:5523/play/{source_name}/{ch.source_channel_id}.m3u8'
-
             try:
-                r = sess.get(play_url, timeout=15, allow_redirects=True)
+                # Resolve the raw stream URL. Use audit_resolve() if the scraper
+                # provides a lighter-weight bulk-check variant (e.g. Plex skips tune).
+                _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
+                try:
+                    resolved_url = _resolve(ch.stream_url)
+                except StreamDeadError:
+                    ch.is_active      = False
+                    ch.is_enabled     = False
+                    ch.disable_reason = 'Dead'
+                    dead += 1
+                    consecutive_errors = 0
+                    logger.info('[audit] dead stream: %s  (confirmed by scraper)', ch.name)
+                    continue
+                except Exception as re_exc:
+                    logger.warning('[audit] resolve failed for %s: %s', ch.name, re_exc)
+                    errors += 1
+                    consecutive_errors += 1
+                    if consecutive_errors >= 20:
+                        logger.error('[audit] %s: 20 consecutive errors — aborting.', source_name)
+                        break
+                    continue
+
+                r = sess.get(resolved_url, timeout=15, allow_redirects=True)
 
                 if r.status_code in (403, 429, 503):
                     wait = 30
                     logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
                                    source_name, r.status_code, wait)
                     _time.sleep(wait)
-                    r = sess.get(play_url, timeout=15, allow_redirects=True)
+                    r = sess.get(resolved_url, timeout=15, allow_redirects=True)
 
-                if r.status_code == 451:
-                    # Play proxy disabled this channel (DRM or VOD) during this request.
-                    # Refresh the channel to read what disable_reason was set.
-                    db.session.refresh(ch)
-                    reason = ch.disable_reason or 'DRM'
-                    if reason == 'Dead':
-                        dead += 1
-                        logger.info('[audit] VOD (caught by proxy): %s', ch.name)
-                    else:
-                        flagged += 1
-                        logger.info('[audit] DRM (caught by proxy): %s', ch.name)
-                    consecutive_errors = 0
-                    continue
-
-                if r.status_code in (404, 410):
+                if r.status_code in (400, 404, 410):
                     ch.is_active      = False
                     ch.is_enabled     = False
                     ch.disable_reason = 'Dead'
@@ -350,7 +360,8 @@ def _upsert_channels(source, channel_data_list):
             # Don't resurrect channels the stream audit flagged as Dead or DRM
             # unless the stream URL changed (source may have fixed the channel).
             if ch.disable_reason in ('Dead', 'DRM') and not stream_url_changed:
-                pass  # keep is_active=False / is_enabled=False / disable_reason
+                ch.is_active  = False  # re-enforce — a prior scrape may have revived it
+                ch.is_enabled = False
             else:
                 ch.is_active = True
                 if stream_url_changed and ch.disable_reason in ('Dead', 'DRM'):
@@ -382,6 +393,14 @@ def _upsert_channels(source, channel_data_list):
     db.session.flush()
 
 
+def _prune_old_programs():
+    """Delete programs that ended more than 2 hours ago."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    deleted = Program.query.filter(Program.end_time < cutoff).delete()
+    if deleted:
+        logger.info('[worker] pruned %d expired EPG entries', deleted)
+
+
 def _upsert_programs(source, program_data_list):
     if not program_data_list:
         return
@@ -404,6 +423,7 @@ def _upsert_programs(source, program_data_list):
             episode       = pd.episode,
         ))
     db.session.flush()
+    _prune_old_programs()
 
 
 # In-memory record of when each source was last enqueued, so we don't

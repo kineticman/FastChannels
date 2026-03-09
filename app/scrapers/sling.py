@@ -12,10 +12,12 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlparse
 
+import requests
+
 try:
-    from .base import BaseScraper, ChannelData, ConfigField, ProgramData
+    from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError
 except ImportError:  # pragma: no cover - local staging outside FastChannels package
-    from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData
+    from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError
 
 logger = logging.getLogger(__name__)
 
@@ -335,9 +337,10 @@ class SlingScraper(BaseScraper):
 
         try:
             payload = self._get_json(self._channel_schedule_url(channel_guid))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[%s] resolve failed for %s: %s", self.source_name, raw_url, exc)
-            return raw_url
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                raise StreamDeadError(f"[sling] channel not found (404): {channel_guid}") from exc
+            raise
 
         playback = payload.get("playback_info") or {}
         for key in ("dash_manifest_url", "live_m3u8_url_template", "m3u8_url_template"):
@@ -612,7 +615,7 @@ class SlingScraper(BaseScraper):
             return None
 
         logo_url = ((playback.get("channel_logo") or {}).get("url"))
-        category = self._infer_group(tile)
+        category = self._infer_group(tile, name)
 
         return ChannelData(
             source_channel_id=channel_guid,
@@ -646,11 +649,41 @@ class SlingScraper(BaseScraper):
         call_sign = (playback.get("call_sign") or "").strip()
         return call_sign or None
 
-    def _infer_group(self, tile: dict[str, Any]) -> str | None:
-        for attr in tile.get("focus_attributes", []):
-            value = (attr.get("str_value") or "").strip()
-            if value and ":" not in value and "-" not in value:
-                return value
+    @staticmethod
+    def _category_from_name(name: str) -> str:
+        n = name.lower()
+        if any(x in n for x in ("news", "noticias", "cheddar", "scripps", "newsmax", "bloomberg", "euronews", "france 24", "al jazeera", "al arabiya", "al hadath", "al araby")):
+            return "News"
+        if any(x in n for x in ("sport", " nba ", "nhl network", "pickleball", "espn", "nbc sports", "draftkings", "fanduel", "bowling", "billiard", "poker", "surf league", "baseball tv", "fubo sport", "beinsport", "bein sport", "sportsnet", "sportsgrid", "willow sport")):
+            return "Sports"
+        if any(x in n for x in ("vevo", " music", "mtv ", "concerts by stingray", "country network", "b4u music", "yrf music", "raj mus", "saga music", "aghani")):
+            return "Music"
+        if any(x in n for x in ("kids", "junior", "jr.", "cartoon", "barney", "dinos 24", "my little pony", "strawberry shortcake", "power rangers", "kartoon", "pocket.watch", "baby")):
+            return "Kids"
+        if any(x in n for x in ("food", "cook", "kitchen", "tastemade", "bon appetit", "emeril", "chef", "gusto", "jamie oliver", "martha stewart", "america's test", "foodxp")):
+            return "Food"
+        if any(x in n for x in ("crime", "murder", "killer", "forensic files", "court tv", "chasing criminal", "unsolved", "bounty hunter", "cold case", "true crime")):
+            return "True Crime"
+        if any(x in n for x in ("documentary", "curiosity stream", "pbs ", "nhk", "earth touch", "love nature", "wildearth", "wild ocean", "terra mater", "history & warfare", "combat war", "magellan", "science is")):
+            return "Documentary"
+        if any(x in n for x in ("qvc", "hsn", "shopping", "deal zone")):
+            return "Shopping"
+        if any(x in n for x in ("anime", "hidive", "crunchyroll", "retrocrush")):
+            return "Anime"
+        if any(x in n for x in ("tbn", "osteen", "quran", "bhajan", "dharm", "faith & family", "christian", "padre pio", "noursat", "aastha")):
+            return "Religion"
+        if any(x in n for x in ("travel", "voyage", "travelxp", "go traveler", "places & spaces", "tv5monde voyage")):
+            return "Travel"
+        if any(x in n for x in ("comedy", "funny", "laugh", "gags", "always funny", "comedy central")):
+            return "Comedy"
+        if any(x in n for x in ("outdoor", "meateater", "waypoint tv", "wired2fish", "xtreme outdoor", "outside tv")):
+            return "Outdoors"
+        return "Entertainment"
+
+    def _infer_group(self, tile: dict[str, Any], name: str = "") -> str | None:
+        # Name-based channel category inference
+        if name:
+            return self._category_from_name(name)
         return None
 
     def _slugify(self, value: str) -> str:

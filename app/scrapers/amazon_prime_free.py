@@ -280,7 +280,10 @@ class AmazonPrimeFreeScraper(BaseScraper):
             try:
                 payload = response.json()
             except ValueError:
-                logger.warning("[%s] non-JSON paginateCollection response at startIndex=%s", self.source_name, start_index)
+                if self._cookie_header:
+                    logger.warning("[%s] non-JSON paginateCollection response at startIndex=%s — cookies may be expired", self.source_name, start_index)
+                else:
+                    logger.info("[%s] pagination requires auth (no cookie configured) — using %d channels from initial page only", self.source_name, len(stations))
                 break
 
             entities = payload.get("entities", []) or []
@@ -352,17 +355,42 @@ class AmazonPrimeFreeScraper(BaseScraper):
             return None
         return str(station_id)
 
+    @staticmethod
+    def _category_from_name(name: str) -> str | None:
+        n = name.lower()
+        if any(x in n for x in ("news", "weather", "business", "livenow", "live now")):
+            return "News"
+        if any(x in n for x in ("sport", "sports", " fs1", " fs2", "big ten", "deportes", "msg ")):
+            return "Sports"
+        if any(x in n for x in ("movie", "movies", "cinemax", "mgm+", "mgm plus", "ifc", "sundance", "hallmark")):
+            return "Movies"
+        if any(x in n for x in ("music", "country", "hits", "christian hits")):
+            return "Music"
+        if any(x in n for x in ("qvc", "hsn", "amazon live", "shopping")):
+            return "Shopping"
+        if any(x in n for x in ("comedy", "funniest")):
+            return "Comedy"
+        if any(x in n for x in ("justice", "true crime", "crime")):
+            return "True Crime"
+        if any(x in n for x in ("kids", "family", "children")):
+            return "Kids"
+        if any(x in n for x in ("holiday", "christmas", "lifestyle")):
+            return "Lifestyle"
+        if any(x in n for x in ("documentary", "nature", "science", "history", "pbs")):
+            return "Documentary"
+        return "Entertainment"
+
     def _channel_from_station(self, station_id: str, station: dict[str, Any]) -> ChannelData | None:
         name = _html.unescape((station.get("name") or "").strip())
         if not name:
             return None
 
-        # Infer category from station flags and genre fields
-        category = None
         if station.get("isOnLinearNewsPage") or station.get("genre") == "news":
             category = "News"
         elif station.get("genre"):
             category = station["genre"].title()
+        else:
+            category = self._category_from_name(name)
 
         return ChannelData(
             source_channel_id=station_id,

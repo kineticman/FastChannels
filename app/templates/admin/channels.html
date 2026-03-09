@@ -25,6 +25,13 @@
     .toolbar button:hover { background: #0369a1; }
     .toolbar a.clear { color: #64748b; font-size: 0.85rem; }
 
+    /* Sortable headers */
+    th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+    th.sortable:hover { color: #94a3b8; }
+    th.sortable.active { color: #38bdf8; }
+    th.sortable .sort-arrow { display: inline-block; margin-left: 4px; font-size: 0.65rem; opacity: 0.5; }
+    th.sortable.active .sort-arrow { opacity: 1; }
+
     /* Bulk bar */
     .bulk-bar {
       display: none;
@@ -175,6 +182,7 @@
     <a href="/admin/">Dashboard</a>
     <a href="/admin/sources">Sources</a>
     <a href="/admin/channels" class="active">Channels</a>
+    <a href="/admin/feeds">Feeds</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/logs">Logs</a>
     <a href="/m3u" target="_blank">M3U ↗</a>
@@ -190,8 +198,14 @@
         <option value="{{ s.name }}" {% if source_filter == s.name %}selected{% endif %}>{{ s.display_name }}</option>
         {% endfor %}
       </select>
+      <select name="category">
+        <option value="">All Categories</option>
+        {% for cat, count in categories %}
+        <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }} ({{ count }})</option>
+        {% endfor %}
+      </select>
       <select name="enabled">
-        <option value="">All</option>
+        <option value="">All Status</option>
         <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
         <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
       </select>
@@ -207,6 +221,8 @@
         <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }} ({{ count }})</option>
         {% endfor %}
       </select>
+      <input type="hidden" name="sort" value="{{ sort_by }}">
+      <input type="hidden" name="dir" value="{{ sort_dir }}">
       <button type="submit">Filter</button>
       <a class="clear" href="/admin/channels">Clear</a>
     </form>
@@ -225,13 +241,19 @@
           <tr>
             <th class="check-col"><input type="checkbox" id="select-all" onchange="toggleAll(this)"></th>
             <th>Logo</th>
-            <th>Name</th>
-            <th>Source</th>
-            <th>Category</th>
+            <th class="sortable {% if sort_by == 'name' %}active{% endif %}" onclick="sortBy('name')">
+              Name <span class="sort-arrow">{% if sort_by == 'name' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span>
+            </th>
+            <th class="sortable {% if sort_by == 'source' %}active{% endif %}" onclick="sortBy('source')">
+              Source <span class="sort-arrow">{% if sort_by == 'source' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span>
+            </th>
+            <th class="sortable {% if sort_by == 'category' %}active{% endif %}" onclick="sortBy('category')">
+              Category <span class="sort-arrow">{% if sort_by == 'category' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span>
+            </th>
             <th>Lang</th>
-            <th>#</th>
+            <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')"># <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
-            <th>In M3U</th>
+            <th>Status</th>
             <th>Inspect</th>
             <th>Status</th>
           </tr>
@@ -251,7 +273,7 @@
             <td style="color:#64748b">{{ ch.source.display_name }}</td>
             <td style="color:#94a3b8">{{ ch.category or '—' }}</td>
             <td style="color:#64748b">{{ ch.language or '—' }}</td>
-            <td style="color:#64748b">{{ ch.number or '—' }}</td>
+            <td style="color:#64748b">{{ chnum_map.get(ch.id) or '—' }}</td>
 
             {# ── Gracenote ID cell ── #}
             <td class="gn-cell">
@@ -301,14 +323,19 @@
     </div>
 
     {% if channels.pages > 1 %}
+    {% set qs = 'source=' ~ source_filter ~ '&search=' ~ search ~ '&enabled=' ~ enabled_filter ~ '&drm=' ~ drm_filter ~ '&language=' ~ language_filter ~ '&category=' ~ category_filter ~ '&sort=' ~ sort_by ~ '&dir=' ~ sort_dir %}
     <div class="pagination">
       {% if channels.has_prev %}
-      <a href="?page={{ channels.prev_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}&drm={{ drm_filter }}&language={{ language_filter }}">← Prev</a>
+      <a href="?page={{ channels.prev_num }}&{{ qs }}">← Prev</a>
       {% endif %}
-      <span class="page-info">Page {{ channels.page }} of {{ channels.pages }}</span>
+      <span class="page-info">Page {{ channels.page }} of {{ channels.pages }} ({{ channels.total }} channels)</span>
       {% if channels.has_next %}
-      <a href="?page={{ channels.next_num }}&source={{ source_filter }}&search={{ search }}&enabled={{ enabled_filter }}&drm={{ drm_filter }}&language={{ language_filter }}">Next →</a>
+      <a href="?page={{ channels.next_num }}&{{ qs }}">Next →</a>
       {% endif %}
+    </div>
+    {% else %}
+    <div class="pagination">
+      <span class="page-info">{{ channels.total }} channels</span>
     </div>
     {% endif %}
   </div>
@@ -520,6 +547,17 @@
     function clearSelection() {
       document.querySelectorAll('.row-check, #select-all').forEach(cb => { cb.checked = false; cb.indeterminate = false; });
       document.getElementById('bulk-bar').classList.remove('visible');
+    }
+
+    // ── Sort by column ────────────────────────────────────────────────────
+    function sortBy(col) {
+      const params = new URLSearchParams(window.location.search);
+      const cur    = params.get('sort') || 'name';
+      const curDir = params.get('dir')  || 'asc';
+      params.set('sort', col);
+      params.set('dir', cur === col && curDir === 'asc' ? 'desc' : 'asc');
+      params.set('page', '1');
+      window.location.search = params.toString();
     }
 
     async function bulkToggle(enable) {

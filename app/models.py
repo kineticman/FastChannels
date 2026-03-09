@@ -164,3 +164,21 @@ class Feed(db.Model):
             'epg_url':     f'{base_url}/feeds/{self.slug}/epg.xml',
             'gracenote_url': f'{base_url}/feeds/{self.slug}/m3u/gracenote',
         }
+
+
+class AppSettings(db.Model):
+    """Single-row global settings table (always id=1)."""
+    __tablename__ = 'app_settings'
+
+    id                 = db.Column(db.Integer, primary_key=True)
+    global_chnum_start = db.Column(db.Integer, nullable=True)  # master tvg-chno start for ungrouped sources
+
+    @classmethod
+    def get(cls):
+        """Return the single settings row, creating it if absent."""
+        row = cls.query.get(1)
+        if row is None:
+            row = cls(id=1)
+            db.session.add(row)
+            db.session.commit()
+        return row

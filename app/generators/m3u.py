@@ -1,6 +1,6 @@
 import logging
 import re
-from ..models import Channel, Source
+from ..models import Channel, Source, AppSettings
 
 log = logging.getLogger(__name__)
 
@@ -122,17 +122,26 @@ def _build_source_chnum_map(channels):
                     f"at ch {overlap_lo}–{overlap_hi}"
                 )
 
+    # Read global fallback start (sources without their own chnum_start)
+    global_start = None
+    try:
+        settings = AppSettings.get()
+        global_start = settings.global_chnum_start
+    except Exception:
+        pass
+
     # Assign numbers
     chnum_map: dict[int, int] = {}
+    global_cursor = global_start  # tracks next number for ungrouped sources
     for src, chs in by_source.items():
         if src in source_starts:
             start = source_starts[src]
             for idx, ch in enumerate(chs):
                 chnum_map[ch.id] = start + idx
-        else:
-            for ch in chs:
-                if ch.number:
-                    chnum_map[ch.id] = ch.number
+        elif global_cursor is not None:
+            for idx, ch in enumerate(chs):
+                chnum_map[ch.id] = global_cursor + idx
+            global_cursor += len(chs)
 
     return chnum_map, warnings
 

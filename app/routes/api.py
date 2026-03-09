@@ -4,7 +4,7 @@ import requests as _req
 from urllib.parse import urljoin as _urljoin
 from flask import Blueprint, jsonify, request, current_app
 from ..extensions import db
-from ..models import Source, Channel
+from ..models import Source, Channel, AppSettings
 from ..scrapers import registry
 from .tasks import trigger_scrape, trigger_stream_audit
 from ..generators.m3u import get_chnum_overlaps
@@ -372,3 +372,15 @@ def stats():
         'total_sources':  Source.query.filter_by(is_enabled=True).count(),
         'categories':     [{'name': c or 'Uncategorized', 'count': n} for c, n in cat_rows],
     })
+
+
+@api_bp.route('/settings', methods=['GET', 'POST'])
+def app_settings():
+    row = AppSettings.get()
+    if request.method == 'POST':
+        data = request.get_json(force=True) or {}
+        if 'global_chnum_start' in data:
+            val = data['global_chnum_start']
+            row.global_chnum_start = int(val) if val is not None else None
+        db.session.commit()
+    return jsonify({'global_chnum_start': row.global_chnum_start})

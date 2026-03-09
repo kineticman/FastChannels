@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import quote_plus
 from uuid import uuid4
 
-from .base import BaseScraper, ChannelData, ProgramData
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,33 @@ _NEXT_ROUTER_STATE_TREE = (
 # JSON anchor strings that appear before channel-list objects in the RSC blob
 _RSC_ANCHORS = ('{"categories":[', '{"channel":{', '{"channels":[')
 _CHANNEL_KEYS = {"id", "slug", "title", "thumb"}
+
+# Map Plex category slugs → normalized category labels.
+# "featured" is an editorial pick list, not a genre — excluded.
+# "en-espanol" / "international" indicate language; handled separately.
+_PLEX_CATEGORY_MAP = {
+    "entertainment":    "Entertainment",
+    "drama":            "Drama",
+    "movies":           "Movies",
+    "crime":            "True Crime",
+    "news":             "News",
+    "sports":           "Sports",
+    "reality":          "Reality TV",
+    "classic-tv":       "Classics",
+    "action":           "Action",
+    "thriller":         "Thriller",
+    "comedy":           "Comedy",
+    "daytime-tv":       "Entertainment",
+    "game-show":        "Game Shows",
+    "nature-travel":    "Nature",
+    "history-science":  "History",
+    "food-home":        "Food",
+    "lifestyle":        "Lifestyle",
+    "kids-family":      "Kids",
+    "international":    "International",
+    "gaming-anime":     "Anime",
+    "music":            "Music",
+}
 
 
 # ── RSC parsing helpers ────────────────────────────────────────────────────────
@@ -126,6 +153,41 @@ def _parse_ts(value) -> datetime | None:
 
 def _rand_rsc() -> str:
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
+
+
+def _build_category_map(rsc_objects: list[dict]) -> tuple[dict[str, str], set[str]]:
+    """
+    Parse the categories list from RSC objects.
+    Returns:
+      cat_map   — channel_id → category label
+      spanish   — set of channel_ids in the en-espanol category (language hint)
+    """
+    cat_map: dict[str, str] = {}
+    spanish: set[str] = set()
+
+    for obj in rsc_objects:
+        cats = obj.get("categories")
+        if not isinstance(cats, list) or not cats:
+            continue
+        for cat in cats:
+            slug = cat.get("slug", "")
+            for ch in (cat.get("channels") or []):
+                cid = ch.get("id")
+                if not cid:
+                    continue
+                if slug == "en-espanol":
+                    spanish.add(cid)
+                    if cid not in cat_map:
+                        cat_map[cid] = "En Español"
+                elif slug != "featured":
+                    # Only set if not already assigned (first non-featured wins)
+                    if cid not in cat_map:
+                        label = _PLEX_CATEGORY_MAP.get(slug)
+                        if label:
+                            cat_map[cid] = label
+        break  # categories list only appears once
+
+    return cat_map, spanish
 
 
 # ── Scraper ────────────────────────────────────────────────────────────────────
@@ -232,8 +294,11 @@ class PlexScraper(BaseScraper):
         if not text:
             return []
 
+        rsc_objects = _extract_rsc_objects(text)
+        cat_map, spanish_ids = _build_category_map(rsc_objects)
+
         channels: dict[str, ChannelData] = {}
-        for obj in _extract_rsc_objects(text):
+        for obj in rsc_objects:
             for node in _walk(obj):
                 if not isinstance(node, dict):
                     continue
@@ -247,13 +312,15 @@ class PlexScraper(BaseScraper):
                 logo  = node.get("thumb") or (
                     ((data.get("cast") or {}).get("image") or {}).get("url")
                 )
+                lang = "es" if channel_id in spanish_ids else "en"
                 channels[channel_id] = ChannelData(
                     source_channel_id = channel_id,
                     name              = node.get("title") or node.get("slug") or channel_id,
                     stream_url        = f"plex://{channel_id}",
                     logo_url          = logo,
                     slug              = node.get("slug") or channel_id,
-                    language          = "en",
+                    category          = cat_map.get(channel_id),
+                    language          = lang,
                     country           = "US",
                     stream_type       = "hls",
                 )
@@ -379,3 +446,46 @@ class PlexScraper(BaseScraper):
                     return r2.url
 
         raise RuntimeError(f"[plex] manifest HTTP {r.status_code} for {channel_id}")
+
+    def audit_resolve(self, raw_url: str) -> str:
+        """
+        Lightweight health check for stream audits.
+        Skips the tune POST and does not follow the MediaTailor redirect —
+        just confirms the manifest endpoint returns 302 (channel is live).
+        Returns raw_url on success so the audit knows the channel is alive.
+        """
+        if not raw_url.startswith("plex://"):
+            return raw_url
+
+        channel_id = raw_url[len("plex://"):]
+
+        if not self._ensure_auth():
+            raise RuntimeError("[plex] cannot audit_resolve — auth failed")
+
+        manifest_url = (
+            f"{_EPG_HOST}/library/parts/{channel_id}.m3u8"
+            f"?includeAllStreams=1"
+            f"&X-Plex-Product={quote_plus(_PRODUCT)}"
+            f"&X-Plex-Token={quote_plus(self._auth_token)}"
+        )
+        r = self.session.get(manifest_url, timeout=10, allow_redirects=True)
+
+        if r.status_code == 200:
+            return r.url
+
+        if r.status_code in (401, 403):
+            self._auth_token = None
+            if self._ensure_auth(force=True):
+                manifest_url = (
+                    f"{_EPG_HOST}/library/parts/{channel_id}.m3u8"
+                    f"?includeAllStreams=1"
+                    f"&X-Plex-Product={quote_plus(_PRODUCT)}"
+                    f"&X-Plex-Token={quote_plus(self._auth_token)}"
+                )
+                r2 = self.session.get(manifest_url, timeout=10, allow_redirects=True)
+                if r2.status_code == 200:
+                    return r2.url
+
+        if r.status_code == 400:
+            raise StreamDeadError(f"[plex] channel not playable: {channel_id}")
+        raise RuntimeError(f"[plex] audit manifest HTTP {r.status_code} for {channel_id}")
