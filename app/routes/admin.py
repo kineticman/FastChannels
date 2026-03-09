@@ -50,17 +50,13 @@ def channels():
 
     q = Channel.query.join(Source)
 
-    # Status filter — can show inactive DRM/Dead channels or exclude them
+    # Status filter — admin always shows all channels regardless of is_active
     if drm_filter == '1':
         q = q.filter(Channel.disable_reason == 'DRM')
     elif drm_filter == 'dead':
         q = q.filter(Channel.disable_reason == 'Dead')
     elif drm_filter == '0':
-        q = q.filter(Channel.is_active == True).filter(
-            db.or_(Channel.disable_reason == None, Channel.disable_reason != 'DRM')
-        )
-    else:
-        q = q.filter(Channel.is_active == True)
+        q = q.filter(Channel.disable_reason == None)
 
     if enabled_filter == '1':
         q = q.filter(Channel.is_enabled == True)
@@ -97,13 +93,13 @@ def channels():
     chnum_map, _ = _build_source_chnum_map(all_active)
 
     lang_rows = db.session.query(Channel.language, db.func.count(Channel.id))\
-        .filter(Channel.is_active == True, Channel.language != None)\
+        .filter(Channel.language != None)\
         .group_by(Channel.language)\
         .order_by(Channel.language).all()
     languages = [(lang, count) for lang, count in lang_rows]
 
     cat_rows = db.session.query(Channel.category, db.func.count(Channel.id))\
-        .filter(Channel.is_active == True, Channel.category != None)\
+        .filter(Channel.category != None)\
         .group_by(Channel.category)\
         .order_by(Channel.category).all()
     categories = [(cat, count) for cat, count in cat_rows]

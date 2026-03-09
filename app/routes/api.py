@@ -291,6 +291,20 @@ def inspect_channel(channel_id):
         manifest_text = r.text
         manifest_url  = r.url
 
+        # ── DASH/MPD manifest ─────────────────────────────────────────────
+        is_mpd = ('<MPD ' in manifest_text or manifest_text.lstrip().startswith('<?xml')
+                  and '<MPD' in manifest_text)
+        if is_mpd:
+            # VOD check
+            if 'type="static"' in manifest_text:
+                return jsonify({'status': 'vod', 'detail': 'DASH VOD stream — not a live channel'})
+            # DRM check (Widevine / PlayReady)
+            widevine_uuid = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
+            playready_uuid = '9a04f079-9840-4286-ab92-e65be0885f95'
+            if widevine_uuid in manifest_text.lower() or playready_uuid in manifest_text.lower():
+                return jsonify({'status': 'drm', 'detail': 'DASH DRM detected (Widevine/PlayReady)'})
+            return jsonify({'status': 'live', 'detail': 'DASH manifest OK (live)'})
+
         # Master playlist → drill into first variant to get media playlist
         if '#EXT-X-STREAM-INF' in manifest_text:
             for line in manifest_text.splitlines():

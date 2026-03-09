@@ -245,6 +245,26 @@ def run_stream_audit(source_name: str):
                 manifest_text = r.text
                 manifest_url  = r.url
 
+                # ── DASH/MPD manifest ──────────────────────────────────────
+                if '<MPD ' in manifest_text or (manifest_text.lstrip().startswith('<?xml')
+                                                and '<MPD' in manifest_text):
+                    if 'type="static"' in manifest_text:
+                        ch.is_active      = False
+                        ch.is_enabled     = False
+                        ch.disable_reason = 'Dead'
+                        dead += 1
+                        logger.info('[audit] DASH VOD (not live): %s', ch.name)
+                        continue
+                    _widevine  = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
+                    _playready = '9a04f079-9840-4286-ab92-e65be0885f95'
+                    if _widevine in manifest_text.lower() or _playready in manifest_text.lower():
+                        ch.is_active      = False
+                        ch.is_enabled     = False
+                        ch.disable_reason = 'DRM'
+                        flagged += 1
+                        logger.info('[audit] DASH DRM: %s  →  %s', ch.name, manifest_url[:80])
+                    continue   # DASH — skip HLS checks below
+
                 # EXT-X-KEY only appears in media playlists, not master playlists.
                 # If we landed on a master, fetch the first variant to check properly.
                 if '#EXT-X-STREAM-INF' in manifest_text:

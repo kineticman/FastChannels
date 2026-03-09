@@ -325,6 +325,7 @@
         const d = await r.json();
         if (d.status === 'queued') {
           btn.textContent = '📋 Running…';
+          _auditGrace[id] = Date.now() + 12000;   // 12s grace for worker startup
           _startAuditPolling(id, btn);
         } else {
           btn.textContent = 'Error';
@@ -438,6 +439,7 @@
     // ── Stream Audit progress polling ─────────────────────────────────────
     const _auditPollTimers = {};
     const _auditRunBtns    = {};
+    const _auditGrace      = {};   // sourceId → ms timestamp: don't stop on idle before this
 
     function _auditStatusText(data) {
       if (data.status === 'queued') return { cls: 'audit-status-queued', text: 'Stream Audit queued' };
@@ -474,6 +476,9 @@
           _renderAuditStatus(sourceId, d);
           if (d.status === 'running' || d.status === 'queued') {
             _auditPollTimers[sourceId] = setTimeout(poll, 2000);
+          } else if (Date.now() < (_auditGrace[sourceId] || 0)) {
+            // Job was just queued — worker may not have written progress yet; keep polling
+            _auditPollTimers[sourceId] = setTimeout(poll, 1000);
           } else {
             delete _auditPollTimers[sourceId];
             const b = _auditRunBtns[sourceId];
