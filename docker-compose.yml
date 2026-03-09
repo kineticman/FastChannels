@@ -10,7 +10,6 @@ services:
     environment:
       - SECRET_KEY=${SECRET_KEY:-changeme-in-production}
     volumes:
-      - ./app:/app/app
       - db_data:/data
 
 volumes:

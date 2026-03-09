@@ -16,6 +16,10 @@ env/
 .env
 *.env
 
+# Cookie files (contain personal auth tokens — never commit)
+*cookies*.json
+amazoncookies.json
+
 # Database
 *.db
 *.sqlite

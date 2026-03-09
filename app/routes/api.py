@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request, current_app
 from ..extensions import db
 from ..models import Source, Channel, AppSettings
 from ..scrapers import registry
+from ..scrapers.base import StreamDeadError
 from .tasks import trigger_scrape, trigger_stream_audit
 from ..generators.m3u import get_chnum_overlaps
 from .. import logfile
@@ -256,6 +257,8 @@ def inspect_channel(channel_id):
         scraper = scraper_cls(config=source.config or {})
         try:
             resolved_url = scraper.resolve(ch.stream_url)
+        except StreamDeadError as e:
+            return jsonify({'status': 'dead', 'detail': str(e)})
         except Exception as e:
             return jsonify({'status': 'error', 'detail': f'URL resolve failed: {e}'})
         finally:

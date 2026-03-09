@@ -12,15 +12,23 @@ FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Sling Freestream, Plex
 ## Quick Start
 
 ```bash
-cd /home/brad/Projects/FastChannels
+git clone https://github.com/kineticman/FastChannels.git
+cd FastChannels
+
+# Optional: set a real secret key
+cp .env.example .env
 
 # Build and start
 docker compose up -d --build
-
-# Trigger first scrape (sources are seeded automatically on startup)
-curl -X POST http://localhost:5523/api/sources/1/run
-curl -X POST http://localhost:5523/api/sources/2/run
 ```
+
+That's it. On first boot:
+1. Database is created automatically (no migrations to run)
+2. All sources are seeded
+3. The scheduler starts all scrapes within 60 seconds
+4. Open `http://localhost:5523/admin/` — channels will populate in a few minutes
+
+Sources that need credentials (Sling, Amazon Prime Free) will appear in the UI but won't scrape until configured under **Settings**.
 
 ## URLs
 
@@ -60,6 +68,26 @@ Feeds are named, persistent filtered sub-feeds that expose their own `/m3u` and 
 ```
 
 Filter keys: `sources`, `categories`, `languages`, `max_channels`.
+
+## Configuration
+
+Copy `.env.example` to `.env` and set values before starting the container. Docker Compose picks up `.env` automatically.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SECRET_KEY` | `changeme-in-production` | Flask session signing key |
+| `DATABASE_URL` | `sqlite:////data/fastchannels.db` | Database path (inside container) |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection (inside container) |
+
+Source credentials (Pluto TV login, Amazon Prime cookies, etc.) are set through the **Settings** page in the admin UI — not environment variables.
+
+## Development
+
+To run with live code reloading (no rebuild needed on file changes):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
 
 ## Architecture
 
@@ -147,7 +175,9 @@ class YourServiceScraper(BaseScraper):
 
 ```
 FastChannels/
-├── docker-compose.yml
+├── docker-compose.yml       # production / beta
+├── docker-compose.dev.yml   # dev override (live code mount)
+├── .env.example             # copy to .env to configure
 ├── Dockerfile
 ├── entrypoint.sh
 ├── requirements.txt
