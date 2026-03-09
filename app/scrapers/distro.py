@@ -89,6 +89,45 @@ _LANG_CODE = {
 }
 
 
+_DISTRO_CATEGORY_MAP = {
+    # Top-level tag → normalized label
+    'News':          'News',
+    'Sports':        'Sports',
+    'Music':         'Music',
+    'Lifestyle':     'Lifestyle',
+    'Documentary':   'Documentary',
+    'Education':     'Science',
+    'Travel':        'Travel',
+    'Finance':       'Business',
+    'Business':      'Business',
+    'Fun & Games':   'Gaming',
+}
+
+# When top-level is "Entertainment", use the second tag to refine
+_DISTRO_ENTERTAINMENT_MAP = {
+    'Movies':            'Movies',
+    'Classic Movies':    'Movies',
+    'Drama':             'Drama',
+    'Comedy':            'Comedy',
+    'Horror':            'Horror',
+    'Thriller':          'Horror',
+    'Action/Adventure':  'Action',
+    'Animation & Anime': 'Anime',
+    'True Crime':        'True Crime',
+    'Western':           'Westerns',
+    'Reality TV':        'Reality TV',
+    'Talk Show':         'Reality TV',
+    'Bollywood':         'Bollywood',
+    'Hindi GEC':         'Drama',
+    'Circus':            'Entertainment',
+    'Pop Culture':       'Entertainment',
+    'Infotainment':      'Entertainment',
+    'Food':              'Food',
+    'Fashion':           'Lifestyle',
+    'Family/Children':   'Kids',
+}
+
+
 def _parse_distro_tags(raw: str) -> tuple[Optional[str], str]:
     """
     Parse Distro's comma-joined tag string into (category, language).
@@ -99,9 +138,7 @@ def _parse_distro_tags(raw: str) -> tuple[Optional[str], str]:
       'Music,Music Video,Contemporary Hits/Pop/Top 40,Hip Hop Music,Spanish'
 
     Returns:
-      category — all non-language tags joined with ';', e.g.
-                 'News;Current Affairs;Politics'
-                 'Music;Music Video;Contemporary Hits/Pop/Top 40;Hip Hop Music'
+      category — normalized single-label category
       language — ISO 639-1 code from the first recognised language tag,
                  or the raw label if no mapping exists (e.g. 'Asian'),
                  defaulting to 'en' if none found.
@@ -123,7 +160,17 @@ def _parse_distro_tags(raw: str) -> tuple[Optional[str], str]:
         else:
             genre_tags.append(tag)
 
-    category = ';'.join(genre_tags) if genre_tags else None
+    if not genre_tags:
+        return None, lang
+
+    primary = genre_tags[0]
+    secondary = genre_tags[1] if len(genre_tags) > 1 else None
+
+    if primary == 'Entertainment' and secondary:
+        category = _DISTRO_ENTERTAINMENT_MAP.get(secondary, 'Entertainment')
+    else:
+        category = _DISTRO_CATEGORY_MAP.get(primary, primary)
+
     return category, lang
 
 
