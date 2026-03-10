@@ -3,6 +3,79 @@ from sqlalchemy import text
 from .extensions import db
 
 
+def _merge_source_name(conn, old_name: str, new_name: str) -> None:
+    old_rows = conn.execute(
+        text("SELECT id FROM sources WHERE name = :name ORDER BY id"),
+        {"name": old_name},
+    ).fetchall()
+    if not old_rows:
+        return
+
+    new_row = conn.execute(
+        text("SELECT id FROM sources WHERE name = :name ORDER BY id LIMIT 1"),
+        {"name": new_name},
+    ).fetchone()
+
+    if not new_row:
+        conn.execute(
+            text("UPDATE sources SET name = :new_name WHERE name = :old_name"),
+            {"new_name": new_name, "old_name": old_name},
+        )
+        return
+
+    target_source_id = new_row[0]
+    for (old_source_id,) in old_rows:
+        channel_rows = conn.execute(
+            text(
+                "SELECT id, source_channel_id FROM channels "
+                "WHERE source_id = :source_id ORDER BY id"
+            ),
+            {"source_id": old_source_id},
+        ).fetchall()
+
+        for old_channel_id, source_channel_id in channel_rows:
+            existing_channel = conn.execute(
+                text(
+                    "SELECT id FROM channels "
+                    "WHERE source_id = :source_id AND "
+                    "((source_channel_id = :source_channel_id) OR "
+                    "(:source_channel_id IS NULL AND source_channel_id IS NULL)) "
+                    "ORDER BY id LIMIT 1"
+                ),
+                {
+                    "source_id": target_source_id,
+                    "source_channel_id": source_channel_id,
+                },
+            ).fetchone()
+
+            if existing_channel:
+                conn.execute(
+                    text(
+                        "UPDATE programs SET channel_id = :target_channel_id "
+                        "WHERE channel_id = :old_channel_id"
+                    ),
+                    {
+                        "target_channel_id": existing_channel[0],
+                        "old_channel_id": old_channel_id,
+                    },
+                )
+                conn.execute(
+                    text("DELETE FROM channels WHERE id = :channel_id"),
+                    {"channel_id": old_channel_id},
+                )
+                continue
+
+            conn.execute(
+                text("UPDATE channels SET source_id = :target_source_id WHERE id = :channel_id"),
+                {
+                    "target_source_id": target_source_id,
+                    "channel_id": old_channel_id,
+                },
+            )
+
+        conn.execute(text("DELETE FROM sources WHERE id = :source_id"), {"source_id": old_source_id})
+
+
 def ensure_runtime_schema() -> None:
     engine = db.engine
     if engine.dialect.name != "sqlite":
@@ -25,9 +98,9 @@ def ensure_runtime_schema() -> None:
 
         # Normalize the one hyphenated internal source id to snake_case so
         # source naming stays consistent across code paths and fresh installs.
-        conn.execute(
-            text("UPDATE sources SET name = 'amazon_prime_free' WHERE name = 'amazon-prime-free'")
-        )
+        # Older installs may have both names present due to alias seeding, so
+        # merge rows first to avoid violating the unique constraint.
+        _merge_source_name(conn, "amazon-prime-free", "amazon_prime_free")
 
         feed_rows = conn.execute(text("SELECT id, filters FROM feeds")).fetchall()
         for feed_id, raw_filters in feed_rows:

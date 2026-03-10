@@ -521,17 +521,22 @@ def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
         default_epg_only_sources = {'amazon_prime_free', 'sling'}
+        seeded_names = set()
         for name, cls in scrapers.items():
-            if not Source.query.filter_by(name=name).first():
+            canonical_name = getattr(cls, 'source_name', None) or name
+            if name != canonical_name or canonical_name in seeded_names:
+                continue
+            seeded_names.add(canonical_name)
+            if not Source.query.filter_by(name=canonical_name).first():
                 db.session.add(Source(
-                    name            = name,
-                    display_name    = cls.display_name or name.title(),
+                    name            = canonical_name,
+                    display_name    = cls.display_name or canonical_name.title(),
                     scrape_interval = cls.scrape_interval,
                     config          = {},
-                    epg_only        = name in default_epg_only_sources,
+                    epg_only        = canonical_name in default_epg_only_sources,
                 ))
         db.session.commit()
-        logger.info(f'Seeded {len(scrapers)} sources')
+        logger.info(f'Seeded {len(seeded_names)} sources')
 
 
 if __name__ == '__main__':
