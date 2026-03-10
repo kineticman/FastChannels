@@ -116,6 +116,8 @@ def _clean_filters(raw: dict) -> dict:
     elif language := raw.get('language'):
         # backward compat with old single-language saves
         out['languages'] = [str(language)]
+    if excluded_ids := raw.get('excluded_channel_ids'):
+        out['excluded_channel_ids'] = [int(i) for i in excluded_ids if str(i).isdigit() or isinstance(i, int)]
     if max_ch := raw.get('max_channels'):
         try:
             out['max_channels'] = max(1, int(max_ch))

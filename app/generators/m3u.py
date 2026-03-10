@@ -55,6 +55,8 @@ def _build_channel_query(filters: dict):
             query = query.filter(Channel.language == language)
         if search := filters.get('search'):
             query = query.filter(Channel.name.ilike(f'%{search}%'))
+        if excluded_ids := filters.get('excluded_channel_ids'):
+            query = query.filter(Channel.id.notin_(excluded_ids))
     return query.order_by(Channel.number.asc().nullslast(), Channel.name.asc())
 
 
@@ -73,6 +75,8 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
         f['category'] = categories
     if languages := feed_filters.get('languages'):
         f['languages'] = languages
+    if excluded_ids := feed_filters.get('excluded_channel_ids'):
+        f['excluded_channel_ids'] = excluded_ids
     if max_ch := feed_filters.get('max_channels'):
         f['max_channels'] = max_ch
     return f
