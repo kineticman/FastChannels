@@ -2,51 +2,62 @@
 
 FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Sling Freestream, Plex, DistroTV, Xumo, and more, outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
 
-## Stack
+## Deploy with Portainer
 
-- **Python 3.12** + Flask 3
-- **SQLite** — channel & EPG data (file at `/data/fastchannels.db`)
-- **Redis + RQ** — background scrape jobs
-- **Docker** — single container (Flask, Worker, Redis all inside)
+In Portainer, create a new stack and paste this:
 
-## Quick Start
+```yaml
+version: '3.9'
 
-```bash
-git clone https://github.com/kineticman/FastChannels.git
-cd FastChannels
+services:
+  fastchannels:
+    image: ghcr.io/kineticman/fastchannels:latest
+    container_name: fastchannels
+    restart: unless-stopped
+    ports:
+      - "5523:5523"
+    volumes:
+      - db_data:/data
 
-# Optional: set a real secret key
-cp .env.example .env
-
-# Build and start
-docker compose up -d --build
+volumes:
+  db_data:
 ```
 
-That's it. On first boot:
-1. Database is created automatically (no migrations to run)
-2. All sources are seeded
-3. The scheduler starts all scrapes within 60 seconds
-4. Open `http://localhost:5523/admin/` — channels will populate in a few minutes
+- Deploy the stack.
+- Open `http://<your-server>:5523/admin/`.
+- On first boot, sources seed automatically and channels begin populating within a few minutes.
+- If you want a specific published version, replace `:latest` with a tag like `:v1.0.0`.
+- Keep the `/data` volume mount so the SQLite database survives container recreation.
 
-Sources that need credentials (Sling, Amazon Prime Free) will appear in the UI but won't scrape until configured under **Settings**.
+## Deploy with Docker
 
-## Deploy with Published Image
+The published image is currently hosted on GitHub Container Registry:
 
-For a deployment that pulls the published GitHub Container Registry image instead of building locally, use `docker-compose.ghcr.yml`.
+```bash
+docker run -d \
+  --name fastchannels \
+  --restart unless-stopped \
+  -p 5523:5523 \
+  -v fastchannels_data:/data \
+  ghcr.io/kineticman/fastchannels:latest
+```
+
+Then open `http://localhost:5523/admin/`.
+
+If you prefer Docker Compose with the published image:
 
 ```bash
 docker compose -f docker-compose.ghcr.yml up -d
 ```
 
-Optional `.env` values:
+This works without a `.env` file. Only use `.env` if you want to override the image owner or tag:
 
 ```bash
 GHCR_OWNER=kineticman
 FASTCHANNELS_IMAGE_TAG=latest
-SECRET_KEY=replace-me
 ```
 
-The `/data` volume is still mounted in the same way, so database and other persisted files survive container upgrades.
+There is not currently a separate Docker Hub image documented in this repo.
 
 ## URLs
 
@@ -54,7 +65,10 @@ The `/data` volume is still mounted in the same way, so database and other persi
 |-----|-------------|
 | `http://localhost:5523/admin/` | Admin dashboard |
 | `http://localhost:5523/admin/sources` | Enable/disable sources, run scrapes |
-| `http://localhost:5523/admin/channels` | Browse channels, toggle individual 
+| `http://localhost:5523/admin/channels` | Browse channels and enable/disable them |
+| `http://localhost:5523/admin/settings` | Enter source credentials and options |
+| `http://localhost:5523/m3u` | Full M3U playlist |
+| `http://localhost:5523/epg.xml` | Full XMLTV EPG |
 
 ## Filtered M3U Output
 
@@ -79,7 +93,7 @@ Filter keys: `sources`, `categories`, `languages`, `max_channels`.
 
 ## Configuration
 
-Source credentials (Pluto TV login, Amazon Prime cookies, etc.) are set through the **Settings** page in the admin UI — not environment variables.
+Source credentials and source-specific options are set through the **Settings** page in the admin UI.
 
 ## Architecture
 
