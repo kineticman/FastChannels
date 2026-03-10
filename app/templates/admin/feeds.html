@@ -22,6 +22,9 @@
     .btn-primary:hover { background: #0369a1; }
     .btn-danger  { background: transparent; color: #f87171; border: 1px solid #7f1d1d; font-size: 0.78rem; padding: 0.3rem 0.7rem; }
     .btn-danger:hover  { background: #7f1d1d; }
+    .btn-dvr { background: #1e3a5f; color: #7dd3fc; border: 1px solid #1e40af44; font-size: 0.78rem; padding: 0.3rem 0.7rem; border-radius: 6px; cursor: pointer; transition: background 0.15s; }
+    .btn-dvr:hover { background: #1d4ed8; color: #fff; }
+    .btn-dvr:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-ghost   { background: transparent; color: #94a3b8; border: 1px solid #334155; }
     .btn-ghost:hover { color: #e2e8f0; }
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -225,6 +228,8 @@
         <div class="feed-actions">
           <button class="btn btn-ghost" style="font-size:0.78rem;padding:0.3rem 0.7rem"
                   onclick='openModal({{ feed.to_dict(base_url)|tojson }})'>Edit</button>
+          <button class="btn btn-dvr" title="Register this feed as a custom M3U source in Channels DVR"
+                  onclick="pushToDvr({{ feed.id }}, '{{ feed.name|e }}', this)">📺 Add to Channels DVR</button>
           <button class="btn btn-danger" onclick="deleteFeed({{ feed.id }}, '{{ feed.name|e }}', this)">Delete</button>
         </div>
       </div>
@@ -578,6 +583,40 @@ async function saveFeed() {
     status.textContent = '✗ ' + e.message;
     status.className   = 'save-status error';
     btn.disabled = false;
+  }
+}
+
+// ── Push to Channels DVR ──────────────────────────────────────────────────
+async function pushToDvr(id, name, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Adding…';
+  try {
+    const r = await fetch(`/api/feeds/${id}/push-to-dvr`, { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) {
+      if (r.status === 400 && data.error?.includes('not configured')) {
+        alert('Channels DVR URL is not configured.\n\nGo to Settings and enter your Channels DVR server URL (e.g. http://192.168.1.x:8089).');
+      } else {
+        alert('Failed: ' + (data.error || `HTTP ${r.status}`));
+      }
+      btn.disabled = false;
+      btn.textContent = orig;
+      return;
+    }
+    btn.textContent = '✓ Added!';
+    btn.style.background = '#14532d';
+    btn.style.color = '#86efac';
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.style.background = '';
+      btn.style.color = '';
+      btn.disabled = false;
+    }, 3000);
+  } catch(e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = orig;
   }
 }
 

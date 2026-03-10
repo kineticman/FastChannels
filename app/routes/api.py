@@ -480,6 +480,52 @@ def resolve_duplicates():
     return jsonify({'disabled': disabled_count, 'groups_resolved': len(groups)})
 
 
+@api_bp.route('/feeds/<int:feed_id>/push-to-dvr', methods=['POST'])
+def push_feed_to_dvr(feed_id):
+    """Register or update this feed as a custom M3U source in Channels DVR."""
+    import re as _re
+    feed = Feed.query.get_or_404(feed_id)
+    settings = AppSettings.get()
+
+    dvr_url = (settings.channels_dvr_url or '').strip()
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
+
+    # Build absolute URLs for this feed pointing back at FastChannels
+    base = request.host_url.rstrip('/')
+    m3u_url  = f"{base}/feeds/{feed.slug}/m3u/gracenote"
+    epg_url  = f"{base}/feeds/{feed.slug}/epg.xml"
+
+    # Channels DVR requires alphanumeric-only name in the URL path
+    display_name  = f"FastChannels – {feed.name}"
+    safe_name     = _re.sub(r'[^a-zA-Z0-9]', '', display_name)
+    dvr_endpoint  = f"{dvr_url}/providers/m3u/sources/{safe_name}"
+
+    payload = {
+        'name':         display_name,
+        'type':         'HLS',
+        'source':       '',
+        'url':          m3u_url,
+        'text':         '',
+        'refresh':      '24',
+        'limit':        '',
+        'xmltv_url':    epg_url,
+        'xmltv_refresh': '3600',
+    }
+
+    try:
+        resp = _req.put(dvr_endpoint, json=payload, timeout=8)
+        resp.raise_for_status()
+    except _req.exceptions.ConnectionError:
+        return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
+    except _req.exceptions.Timeout:
+        return jsonify({'error': 'Channels DVR timed out.'}), 504
+    except _req.exceptions.HTTPError as e:
+        return jsonify({'error': f'Channels DVR returned {resp.status_code}: {resp.text}'}), 502
+
+    return jsonify({'ok': True, 'dvr_source': display_name, 'm3u_url': m3u_url, 'epg_url': epg_url})
+
+
 @api_bp.route('/settings', methods=['GET', 'POST'])
 def app_settings():
     row = AppSettings.get()
@@ -488,5 +534,11 @@ def app_settings():
         if 'global_chnum_start' in data:
             val = data['global_chnum_start']
             row.global_chnum_start = int(val) if val is not None else None
+        if 'channels_dvr_url' in data:
+            val = (data['channels_dvr_url'] or '').strip().rstrip('/')
+            row.channels_dvr_url = val or None
         db.session.commit()
-    return jsonify({'global_chnum_start': row.global_chnum_start})
+    return jsonify({
+        'global_chnum_start': row.global_chnum_start,
+        'channels_dvr_url':   row.channels_dvr_url,
+    })

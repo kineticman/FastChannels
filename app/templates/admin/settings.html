@@ -208,6 +208,12 @@
                  placeholder="e.g. 1000" value="{{ global_chnum_start or '' }}">
           <div class="help">Sequential tvg-chno numbers assigned to sources without their own channel number start. Leave blank to disable.</div>
         </div>
+        <div class="field field-full">
+          <label for="channels-dvr-url">Channels DVR Server URL</label>
+          <input type="url" id="channels-dvr-url"
+                 placeholder="http://192.168.1.x:8089" value="{{ channels_dvr_url }}">
+          <div class="help">Base URL of your Channels DVR server. Used to register feeds as custom M3U sources with one click.</div>
+        </div>
       </div>
       <div class="field-actions">
         <span class="save-status" id="global-settings-status"></span>
@@ -228,7 +234,11 @@ async function saveGlobalSettings() {
   const inp    = document.getElementById('global-chnum-start');
   const status = document.getElementById('global-settings-status');
   const val    = inp.value.trim();
-  const body   = { global_chnum_start: val ? parseInt(val, 10) : null };
+  const dvrVal = document.getElementById('channels-dvr-url').value.trim();
+  const body   = {
+    global_chnum_start: val ? parseInt(val, 10) : null,
+    channels_dvr_url:   dvrVal || null,
+  };
 
   status.className = 'save-status';
   status.textContent = 'Saving…';

@@ -153,7 +153,8 @@ def feeds():
 def settings():
     app_settings = AppSettings.get()
     return render_template('admin/settings.html',
-                           global_chnum_start=app_settings.global_chnum_start)
+                           global_chnum_start=app_settings.global_chnum_start,
+                           channels_dvr_url=app_settings.channels_dvr_url or '')
 
 
 @admin_bp.route('/logs')
