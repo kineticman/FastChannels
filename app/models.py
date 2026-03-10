@@ -67,6 +67,8 @@ class Channel(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint('source_id', 'source_channel_id', name='uq_source_channel'),
+        db.Index('idx_channels_source_id', 'source_id'),
+        db.Index('idx_channels_active', 'is_active', 'is_enabled'),
     )
 
     def __repr__(self):
@@ -108,6 +110,11 @@ class Program(db.Model):
     episode_title = db.Column(db.String(256))
     season        = db.Column(db.Integer)
     episode       = db.Column(db.Integer)
+
+    __table_args__ = (
+        db.Index('idx_programs_channel_id', 'channel_id'),
+        db.Index('idx_programs_start_time', 'start_time'),
+    )
 
     def __repr__(self):
         return f'<Program {self.title} @ {self.start_time}>'

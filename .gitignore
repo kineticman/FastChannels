@@ -38,3 +38,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Internal docs (never push)
+Dev/
