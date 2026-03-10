@@ -430,6 +430,23 @@ def _upsert_programs(source, program_data_list):
     if not program_data_list:
         return
     channels = {ch.source_channel_id: ch for ch in source.channels.all()}
+
+    # Collect DB channel IDs that have incoming programs, then delete their
+    # existing future programs before inserting fresh data.  This prevents
+    # duplicates caused by the same channel appearing in multiple country
+    # feeds or by repeated scrape runs appending to the same window.
+    incoming_channel_ids = {
+        channels[pd.source_channel_id].id
+        for pd in program_data_list
+        if pd.source_channel_id in channels
+    }
+    if incoming_channel_ids:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+        Program.query.filter(
+            Program.channel_id.in_(incoming_channel_ids),
+            Program.start_time >= cutoff,
+        ).delete(synchronize_session=False)
+
     for pd in program_data_list:
         ch = channels.get(pd.source_channel_id)
         if not ch:

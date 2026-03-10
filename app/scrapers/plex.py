@@ -332,57 +332,104 @@ class PlexScraper(BaseScraper):
     # ── fetch_epg ──────────────────────────────────────────────────────────────
 
     def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
-        text = self._fetch_rsc()
-        if not text:
+        """
+        Fetch full EPG from the Plex grid API (epg.provider.plex.tv/grid).
+
+        The grid endpoint returns ALL channels in one shot regardless of any
+        channelIds filter, so we fetch 3 consecutive 8-hour windows (24 h total)
+        and filter the results in-memory by our known channel IDs.
+        """
+        if not self._ensure_auth():
             return []
 
         known_ids = {ch.source_channel_id for ch in channels}
         programs: list[ProgramData] = []
-        seen: set[str] = set()
+        seen: set[str] = set()   # deduplicate by media airing id
 
-        for obj in _extract_rsc_objects(text):
-            for node in _walk(obj):
-                if not isinstance(node, dict):
-                    continue
-                if not _CHANNEL_KEYS <= node.keys():
-                    continue
-                channel_id = node.get("id")
-                if not channel_id or channel_id not in known_ids:
-                    continue
+        headers = {
+            "Accept":                   "application/json",
+            "X-Plex-Token":             self._auth_token,
+            "X-Plex-Client-Identifier": self._client_id,
+            "X-Plex-Product":           _PRODUCT,
+            "X-Plex-Platform":          "Chrome",
+            "X-Plex-Platform-Version":  "145.0.0.0",
+            # Suppress session-level provider-version header — it triggers a
+            # channelGridKey requirement on the grid endpoint.
+            "X-Plex-Provider-Version":  None,
+        }
 
-                for airing in (node.get("airings") or []):
-                    airing_data = airing.get("data") or {}
-                    preview     = airing.get("previewData") or {}
+        import time as _time
+        window_hours = 8
+        window_secs  = window_hours * 3600
+        n_windows    = 3   # 24 h total
 
-                    start = _parse_ts(airing_data.get("beginsAt"))
-                    end   = _parse_ts(airing_data.get("endsAt"))
-                    title = (
-                        airing.get("title")
-                        or preview.get("title")
-                        or "Unknown"
-                    )
+        t_start = int(_time.time())
+        for w in range(n_windows):
+            begins_at = t_start + w * window_secs
+            ends_at   = begins_at + window_secs
+            try:
+                r = self.session.get(
+                    f"{_EPG_HOST}/grid",
+                    params={"beginningAt": begins_at, "endingAt": ends_at},
+                    headers=headers,
+                    timeout=30,
+                )
+                r.raise_for_status()
+                entries = r.json().get("MediaContainer", {}).get("Metadata", [])
+            except Exception as exc:
+                logger.warning("[plex] grid fetch window %d failed: %s", w + 1, exc)
+                continue
+
+            for entry in entries:
+                for media in entry.get("Media", []):
+                    ch_id = media.get("channelIdentifier")
+                    if not ch_id or ch_id not in known_ids:
+                        continue
+
+                    airing_id = media.get("id")
+                    if airing_id and airing_id in seen:
+                        continue
+                    if airing_id:
+                        seen.add(airing_id)
+
+                    start = _parse_ts(media.get("beginsAt"))
+                    end   = _parse_ts(media.get("endsAt"))
                     if not start or not end:
                         continue
 
-                    key = f"{channel_id}|{start.isoformat()}|{title}"
-                    if key in seen:
-                        continue
-                    seen.add(key)
+                    title = entry.get("title") or "Unknown"
+                    # Use grandparentTitle as the episode_title when it adds context
+                    # (e.g. show name differs from episode title)
+                    gp_title = entry.get("grandparentTitle") or ""
+                    ep_title = gp_title if gp_title and gp_title.lower() != title.lower() else None
 
-                    subtitle = preview.get("subtitle") or airing.get("subtitle")
-                    poster   = ((preview.get("poster") or {}).get("image") or {}).get("url")
+                    # Prefer episode thumb; fall back to grandparent art
+                    poster = (
+                        entry.get("thumb")
+                        or entry.get("grandparentThumb")
+                        or next(
+                            (img["url"] for img in entry.get("Image", [])
+                             if img.get("type") == "coverArt"),
+                            None,
+                        )
+                    )
 
                     programs.append(ProgramData(
-                        source_channel_id = channel_id,
+                        source_channel_id = ch_id,
                         title             = title,
+                        description       = entry.get("summary") or None,
                         start_time        = start,
                         end_time          = end,
-                        description       = preview.get("summary"),
                         poster_url        = poster,
-                        episode_title     = subtitle if subtitle and subtitle != title else None,
+                        rating            = entry.get("contentRating") or None,
+                        season            = entry.get("parentIndex"),
+                        episode           = entry.get("index"),
+                        episode_title     = ep_title,
                     ))
 
-        logger.info("[plex] %d EPG entries fetched", len(programs))
+            logger.debug("[plex] grid window %d: %d total entries", w + 1, len(entries))
+
+        logger.info("[plex] %d EPG entries fetched from grid API", len(programs))
         return programs
 
     # ── resolve ────────────────────────────────────────────────────────────────

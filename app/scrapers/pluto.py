@@ -319,8 +319,15 @@ class PlutoScraper(BaseScraper):
         programs = []
         illegal  = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
 
+        _filler = {'no info available', 'n/a'}
+
         def clean(s):
             return illegal.sub('', s or '').replace('&quot;', '"')
+
+        def clean_meta(s):
+            """Return None for Pluto filler placeholder strings."""
+            v = clean(s)
+            return None if v.lower() in _filler else (v or None)
 
         for entry in data:
             channel_id = entry.get('channelId')
@@ -334,14 +341,21 @@ class PlutoScraper(BaseScraper):
                 series   = ep.get('series', {})
                 title    = clean(tl.get('title', ''))
                 ep_title = clean(ep.get('name', ''))
+                # Skip Pluto filler slots — no real program data
+                if not title or title.lower() in _filler:
+                    continue
                 programs.append(ProgramData(
                     source_channel_id = channel_id,
-                    title             = title or 'Unknown',
-                    description       = clean(ep.get('description', '')) or None,
+                    title             = title,
+                    description       = clean_meta(ep.get('description', '')),
                     start_time        = start,
                     end_time          = end,
                     poster_url        = series.get('tile', {}).get('path') or None,
-                    category          = ep.get('genre') or ep.get('subGenre') or None,
+                    category          = next(
+                        (v for v in (ep.get('genre'), ep.get('subGenre'))
+                         if v and v.lower() not in ('no info available', 'n/a', '')),
+                        None,
+                    ),
                     season            = ep.get('season'),
                     episode           = ep.get('number'),
                     episode_title     = ep_title if ep_title.lower() != title.lower() else None,
