@@ -18,7 +18,7 @@ import gzip
 import io
 import re
 import logging
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 from flask import request as flask_request
@@ -204,6 +204,11 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None):
         .select()
     )
 
+    # Rolling 5-day window: include currently-airing programs (up to 2h ago)
+    # through 5 days from now. Naive UTC matches how SQLite stores the values.
+    epg_start = datetime.utcnow() - timedelta(hours=2)
+    epg_end   = datetime.utcnow() + timedelta(days=5)
+
     while True:
         programs = (
             db.session.query(Program)
@@ -211,6 +216,8 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None):
             .filter(
                 Channel.id.in_(ch_id_subq),
                 Program.id > last_id,
+                Program.end_time   > epg_start,
+                Program.start_time < epg_end,
             )
             .order_by(Program.id.asc())
             .limit(BATCH)

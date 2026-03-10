@@ -414,9 +414,14 @@ def _upsert_channels(source, channel_data_list):
 
 
 def _prune_old_programs():
-    """Delete programs that ended more than 2 hours ago."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    """Delete programs that ended more than 2 hours ago.
+
+    Uses naive UTC (datetime.utcnow) to match how SQLite stores the values,
+    avoiding string-comparison issues with timezone-aware datetimes.
+    """
+    cutoff = datetime.utcnow() - timedelta(hours=2)
     deleted = Program.query.filter(Program.end_time < cutoff).delete()
+    db.session.commit()
     if deleted:
         logger.info('[worker] pruned %d expired EPG entries', deleted)
 
@@ -503,8 +508,14 @@ def seed_sources():
 if __name__ == '__main__':
     seed_sources()
 
+    def _scheduled_prune():
+        with flask_app.app_context():
+            _prune_old_programs()
+
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(_schedule_due_scrapes, 'interval', minutes=1, id='auto_scrape',
+                      max_instances=1, coalesce=True)
+    scheduler.add_job(_scheduled_prune, 'interval', hours=1, id='epg_prune',
                       max_instances=1, coalesce=True)
     scheduler.start()
     logger.info('Scheduler started — checking sources every 60s')
