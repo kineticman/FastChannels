@@ -698,7 +698,7 @@
       const bestGn = Math.max(..._dupSources.map(s => s.gn_pct));
 
       const items = _dupSources.map((s, i) => {
-        const isRec = s.gn_pct === bestGn && bestGn > 0;
+        const isRec = s.gn_pct === bestGn && bestGn > 0 && !s.epg_only;
         return `
           <li class="priority-item" draggable="true" data-idx="${i}"
               ondragstart="onDragStart(event)" ondragover="onDragOver(event)"
@@ -707,6 +707,7 @@
             <span class="rank">${i + 1}</span>
             <span class="src-name">${s.display_name}</span>
             ${isRec ? '<span class="rec-badge">RECOMMENDED</span>' : ''}
+            ${s.epg_only ? '<span class="badge-epg-only" title="EPG-only source — cannot serve streams">EPG</span>' : ''}
             <span class="src-meta">${s.dup_count} ch · ${s.gn_pct}% EPG</span>
           </li>`;
       }).join('');

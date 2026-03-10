@@ -411,10 +411,11 @@ def duplicate_summary():
     # Count unique name groups
     unique_names = {ch.name for ch in dup_channels}
 
-    stats = defaultdict(lambda: {'display_name': '', 'total': 0, 'with_gn': 0})
+    stats = defaultdict(lambda: {'display_name': '', 'total': 0, 'with_gn': 0, 'epg_only': False})
     for ch in dup_channels:
         s = stats[ch.source.name]
         s['display_name'] = ch.source.display_name
+        s['epg_only'] = ch.source.epg_only
         s['total'] += 1
         if ch.gracenote_id:
             s['with_gn'] += 1
@@ -427,10 +428,11 @@ def duplicate_summary():
             'display_name': s['display_name'],
             'dup_count':    s['total'],
             'gn_pct':       pct,
+            'epg_only':     s['epg_only'],
         })
 
-    # Sort by gracenote coverage descending — this is the suggested priority
-    sources.sort(key=lambda x: -x['gn_pct'])
+    # EPG-only sources always rank last; within each tier sort by gracenote coverage descending
+    sources.sort(key=lambda x: (1 if x['epg_only'] else 0, -x['gn_pct']))
 
     return jsonify({
         'sources':       sources,
