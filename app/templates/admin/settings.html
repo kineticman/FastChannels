@@ -131,6 +131,21 @@
     .field input::placeholder { color: #475569; }
 
     .field .help { font-size: 0.78rem; color: #64748b; margin-top: 0.35rem; }
+    .field .hint-box {
+      margin-top: 0.55rem;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 0.7rem 0.8rem;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      color: #94a3b8;
+    }
+    .field .hint-box code {
+      color: #7dd3fc;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      word-break: break-all;
+    }
 
     .field-actions {
       display: flex;
@@ -231,6 +246,18 @@
     <div class="source-body open">
       <div class="fields-grid" style="max-width:480px">
         <div class="field field-full">
+          <label for="public-base-url">FastChannels Server URL</label>
+          <input type="text" id="public-base-url"
+                 placeholder="192.168.1.50 or 192.168.1.50:5523" value="{{ public_base_url }}">
+          <div class="help">Address other devices should use to reach this FastChannels server. You can enter just the IP or hostname and FastChannels will fill in <code>http://</code> and port <code>5523</code> automatically.</div>
+          <div class="hint-box">
+            Browser address: <code>{{ request_base_url }}</code><br>
+            Detected server address: <code>{{ detected_base_url }}</code><br>
+            Recommended: enter the LAN IP or hostname of the FastChannels server, for example <code>http://192.168.1.50:5523</code>.<br>
+            If FastChannels is running in Docker and you opened the UI with <code>localhost</code>, auto-detect is not reliable, so set this field manually.
+          </div>
+        </div>
+        <div class="field field-full">
           <label for="channels-dvr-url">Channels DVR Server URL</label>
           <input type="url" id="channels-dvr-url"
                  placeholder="http://192.168.1.x:8089" value="{{ channels_dvr_url }}">
@@ -278,8 +305,12 @@ function saveGlobalSettings() {
 }
 
 function saveDvrSettings() {
-  const val = document.getElementById('channels-dvr-url').value.trim();
-  saveSettings({ channels_dvr_url: val || null }, 'dvr-settings-status');
+  const dvrUrl = document.getElementById('channels-dvr-url').value.trim();
+  const publicBaseUrl = document.getElementById('public-base-url').value.trim();
+  saveSettings({
+    channels_dvr_url: dvrUrl || null,
+    public_base_url: publicBaseUrl || null,
+  }, 'dvr-settings-status');
 }
 
 // ── Fetch all sources, then load each schema ──────────────────────────────

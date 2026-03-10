@@ -1,7 +1,7 @@
 import json
 import re
 import requests as _req
-from urllib.parse import urljoin as _urljoin
+from urllib.parse import urljoin as _urljoin, urlsplit
 from flask import Blueprint, jsonify, request, current_app
 from ..extensions import db
 from ..models import Source, Channel, AppSettings, Feed
@@ -15,6 +15,32 @@ from .. import logfile
 api_bp = Blueprint('api', __name__)
 
 _GRACENOTE_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
+
+
+def _normalize_server_url(value: str | None, default_port: int = 5523) -> str | None:
+    raw = (value or '').strip()
+    if not raw:
+        return None
+
+    if '://' not in raw:
+        raw = f'http://{raw}'
+
+    parsed = urlsplit(raw)
+    scheme = parsed.scheme or 'http'
+    netloc = parsed.netloc or parsed.path
+    path = parsed.path if parsed.netloc else ''
+    host = netloc.strip()
+
+    if not host:
+        return None
+
+    if path not in ('', '/'):
+        host = f'{host}{path}'
+
+    if ':' not in host.rsplit(']', 1)[-1]:
+        host = f'{host}:{default_port}'
+
+    return f'{scheme}://{host}'.rstrip('/')
 
 
 @api_bp.route('/sources')
@@ -554,10 +580,12 @@ def app_settings():
             val = data['global_chnum_start']
             row.global_chnum_start = int(val) if val is not None else None
         if 'channels_dvr_url' in data:
-            val = (data['channels_dvr_url'] or '').strip().rstrip('/')
-            row.channels_dvr_url = val or None
+            row.channels_dvr_url = _normalize_server_url(data['channels_dvr_url'], default_port=8089)
+        if 'public_base_url' in data:
+            row.public_base_url = _normalize_server_url(data['public_base_url'], default_port=5523)
         db.session.commit()
     return jsonify({
         'global_chnum_start': row.global_chnum_start,
         'channels_dvr_url':   row.channels_dvr_url,
+        'public_base_url':    row.public_base_url,
     })

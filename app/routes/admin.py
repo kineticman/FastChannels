@@ -3,7 +3,7 @@ from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings
 from ..generators.m3u import _parse_gracenote_id, get_chnum_overlaps, _build_source_chnum_map
 from ..scrapers import registry as _scraper_registry
-from ..url import public_base_url
+from ..url import public_base_url, detected_base_url
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
@@ -153,9 +153,13 @@ def feeds():
 @admin_bp.route('/settings')
 def settings():
     app_settings = AppSettings.get()
+    request_base_url = request.host_url.rstrip('/')
     return render_template('admin/settings.html',
                            global_chnum_start=app_settings.global_chnum_start,
-                           channels_dvr_url=app_settings.channels_dvr_url or '')
+                           channels_dvr_url=app_settings.channels_dvr_url or '',
+                           public_base_url=app_settings.public_base_url or '',
+                           request_base_url=request_base_url,
+                           detected_base_url=detected_base_url())
 
 
 @admin_bp.route('/logs')

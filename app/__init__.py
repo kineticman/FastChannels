@@ -2,6 +2,7 @@ from flask import Flask
 from .extensions import db
 from .config import Config, VERSION
 from . import logfile
+from .schema import ensure_runtime_schema
 
 
 def create_app(config_class=Config):
@@ -14,6 +15,8 @@ def create_app(config_class=Config):
         return {'app_version': VERSION}
 
     db.init_app(app)
+    with app.app_context():
+        ensure_runtime_schema()
 
     from .routes.output import output_bp
     from .routes.api import api_bp

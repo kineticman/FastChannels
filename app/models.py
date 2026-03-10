@@ -180,6 +180,7 @@ class AppSettings(db.Model):
     id                 = db.Column(db.Integer, primary_key=True)
     global_chnum_start = db.Column(db.Integer, nullable=True)  # master tvg-chno start for ungrouped sources
     channels_dvr_url   = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
+    public_base_url    = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
 
     @classmethod
     def get(cls):
