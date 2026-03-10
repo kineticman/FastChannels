@@ -78,6 +78,7 @@ class ProgramData:
 
 class BaseScraper(ABC):
     source_name:     str = None
+    source_aliases:  tuple[str, ...] = ()
     display_name:    str = None
     scrape_interval: int = 360
     stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source

@@ -21,6 +21,8 @@ def _discover():
     for cls in BaseScraper.__subclasses__():
         if cls.source_name:
             _registry[cls.source_name] = cls
+            for alias in getattr(cls, 'source_aliases', ()) or ():
+                _registry[alias] = cls
 
 
 def get_all() -> dict[str, type[BaseScraper]]:

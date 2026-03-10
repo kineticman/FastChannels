@@ -29,7 +29,8 @@ class AmazonPrimeFreeScraper(BaseScraper):
       scraped, inspected, and exported while playback work continues.
     """
 
-    source_name = "amazon-prime-free"
+    source_name = "amazon_prime_free"
+    source_aliases = ("amazon-prime-free",)
     display_name = "Amazon Prime Free Channels"
     scrape_interval = 360
 
