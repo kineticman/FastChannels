@@ -346,9 +346,15 @@ async function ensureChannelsLoaded() {
   if (_allChannels.length > 0) return;
   document.getElementById('ch-selected-count').textContent = 'loading…';
   try {
-    const r = await fetch('/api/channels?per_page=2000');
-    const d = await r.json();
-    _allChannels = d.channels.sort((a, b) => a.name.localeCompare(b.name));
+    let page = 1, all = [];
+    while (true) {
+      const r = await fetch(`/api/channels?per_page=2000&page=${page}`);
+      const d = await r.json();
+      all = all.concat(d.channels);
+      if (page >= (d.pages || 1)) break;
+      page++;
+    }
+    _allChannels = all.sort((a, b) => a.name.localeCompare(b.name));
   } catch(e) {
     document.getElementById('ch-selected-count').textContent = 'Failed to load channels';
   }
@@ -359,10 +365,18 @@ function renderChannelList() {
   const container = document.getElementById('channel-list');
   container.innerHTML = '';
 
-  // Group by source
+  // Active filter selections
+  const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
+  const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
+  const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
+
+  // Group by source, applying all active filters
   const groups = {};
   for (const ch of _allChannels) {
     if (search && !ch.name.toLowerCase().includes(search)) continue;
+    if (activeSources.size && !activeSources.has(ch.source_name)) continue;
+    if (activeCats.size   && !activeCats.has(ch.category))        continue;
+    if (activeLangs.size  && !activeLangs.has(ch.language))       continue;
     if (!groups[ch.source_name]) groups[ch.source_name] = [];
     groups[ch.source_name].push(ch);
   }
@@ -489,6 +503,7 @@ async function updateCountPreview() {
 document.querySelectorAll('.src-cb, .lang-cb').forEach(cb => {
   cb.addEventListener('change', () => {
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
+    renderChannelList();
     schedulePreview();
   });
 });
@@ -496,34 +511,11 @@ document.querySelectorAll('.src-cb, .lang-cb').forEach(cb => {
 document.querySelectorAll('.cat-cb').forEach(cb => {
   cb.addEventListener('change', () => {
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
-    applyCategoriesToChannels();
+    renderChannelList();
     schedulePreview();
   });
 });
 
-function applyCategoriesToChannels() {
-  const checkedCats = new Set(
-    [...document.querySelectorAll('.cat-cb:checked')].map(c => c.value)
-  );
-  for (const ch of _allChannels) {
-    if (checkedCats.has(ch.category)) {
-      _selectedChannelIds.add(ch.id);
-    } else if (ch.category) {
-      // Only deselect if it was selected by a category (not manually).
-      // Strategy: remove if not in any currently-checked category.
-      // Manual selections (added without a category) are preserved
-      // because we can't distinguish them — safest is to only remove
-      // channels whose category was previously checked and is now unchecked.
-      // So: if the channel's category exists in the UI and none of the
-      // checked cats covers it, remove it.
-      const catExistsInUI = !!document.querySelector(`.cat-cb[value="${CSS.escape(ch.category)}"]`);
-      if (catExistsInUI && !checkedCats.has(ch.category)) {
-        _selectedChannelIds.delete(ch.id);
-      }
-    }
-  }
-  renderChannelList();
-}
 document.getElementById('f-max').addEventListener('input', schedulePreview);
 
 // ── Build filters from modal state ────────────────────────────────────────

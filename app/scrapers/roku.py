@@ -539,10 +539,14 @@ class RokuScraper(BaseScraper):
         cookies_snapshot  = dict(self.session.cookies)
 
         programs: list[ProgramData] = []
+        # Map content_id → programs within 48h that need a description backfill
+        cid_to_progs: dict[str, list[ProgramData]] = {}
         lock = threading.Lock()
         done = [0]
 
-        def fetch_one(ch: ChannelData) -> list[ProgramData]:
+        cutoff_48h = datetime.now(timezone.utc) + timedelta(hours=48)
+
+        def fetch_one(ch: ChannelData) -> tuple[list[ProgramData], dict]:
             sess = _req.Session()
             sess.headers.update(headers_snapshot)
             sess.cookies.update(cookies_snapshot)
@@ -553,18 +557,26 @@ class RokuScraper(BaseScraper):
                 proxy_url   = _PROXY_BASE + quote(content_url, safe="")
                 r = sess.get(proxy_url, timeout=10)
                 if r.status_code != 200:
-                    return []
+                    return [], {}
                 data = r.json()
                 schedule = data.get("features", {}).get("linearSchedule", [])
                 result = []
+                local_cid_map: dict[str, list[ProgramData]] = {}
                 for entry in schedule:
                     prog = self._parse_program(sid, entry)
-                    if prog:
-                        result.append(prog)
-                return result
+                    if not prog:
+                        continue
+                    result.append(prog)
+                    # Track content_id for programs in the 48h window so we
+                    # can backfill descriptions in a second pass.
+                    if prog.start_time <= cutoff_48h:
+                        cid = (entry.get("content") or {}).get("meta", {}).get("id")
+                        if cid:
+                            local_cid_map.setdefault(cid, []).append(prog)
+                return result, local_cid_map
             except Exception as exc:
                 logger.warning("[roku] EPG error for %s (%s): %s", ch.name, sid, exc)
-                return []
+                return [], {}
 
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = {executor.submit(fetch_one, ch): ch for ch in channels}
@@ -573,16 +585,78 @@ class RokuScraper(BaseScraper):
                 if exc and type(exc).__name__ == 'JobTimeoutException':
                     executor.shutdown(wait=False, cancel_futures=True)
                     raise exc
-                result = future.result() if not exc else []
+                result, local_cid_map = future.result() if not exc else ([], {})
                 with lock:
                     programs.extend(result)
+                    for cid, progs in local_cid_map.items():
+                        cid_to_progs.setdefault(cid, []).extend(progs)
                     done[0] += 1
                     if self._progress_cb:
                         self._progress_cb('epg', done[0], total)
 
+        # ── Description backfill for 48h window ───────────────────────────────
+        if cid_to_progs:
+            desc_map = self._fetch_descriptions(
+                list(cid_to_progs.keys()), headers_snapshot, cookies_snapshot
+            )
+            filled = 0
+            for cid, desc in desc_map.items():
+                for prog in cid_to_progs.get(cid, []):
+                    if not prog.description:
+                        prog.description = desc
+                        filled += 1
+            logger.info("[roku] description backfill: %d unique IDs → %d programs filled",
+                        len(desc_map), filled)
+
         programs.sort(key=lambda p: (p.source_channel_id, p.start_time))
         logger.info("[roku] %d EPG entries fetched for %d channels", len(programs), total)
         return programs
+
+    def _fetch_descriptions(
+        self,
+        content_ids: list[str],
+        headers_snapshot: dict,
+        cookies_snapshot: dict,
+    ) -> dict[str, str]:
+        """Fetch program descriptions in parallel via the content proxy."""
+        import requests as _req
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        desc_map: dict[str, str] = {}
+        lock = __import__('threading').Lock()
+
+        def fetch_desc(cid: str):
+            sess = _req.Session()
+            sess.headers.update(headers_snapshot)
+            sess.cookies.update(cookies_snapshot)
+            prog_url  = f"https://content.sr.roku.com/content/v1/roku-trc/{cid}"
+            proxy_url = _PROXY_BASE + quote(prog_url, safe="")
+            try:
+                r = sess.get(proxy_url, timeout=10)
+                if r.status_code == 200:
+                    d = r.json()
+                    descs = d.get("descriptions") or {}
+                    desc = None
+                    for key in ("250", "100", "60"):
+                        entry = descs.get(key)
+                        if entry:
+                            desc = entry.get("text") if isinstance(entry, dict) else entry
+                            break
+                    if not desc:
+                        desc = d.get("description")
+                    if desc:
+                        return cid, str(desc)
+            except Exception:
+                pass
+            return cid, None
+
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            for cid, desc in executor.map(fetch_desc, content_ids):
+                if desc:
+                    with lock:
+                        desc_map[cid] = desc
+
+        return desc_map
 
     def _parse_program(self, station_id: str, entry: dict) -> Optional[ProgramData]:
         try:
