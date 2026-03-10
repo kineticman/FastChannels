@@ -30,6 +30,24 @@ That's it. On first boot:
 
 Sources that need credentials (Sling, Amazon Prime Free) will appear in the UI but won't scrape until configured under **Settings**.
 
+## Deploy with Published Image
+
+For a deployment that pulls the published GitHub Container Registry image instead of building locally, use `docker-compose.ghcr.yml`.
+
+```bash
+docker compose -f docker-compose.ghcr.yml up -d
+```
+
+Optional `.env` values:
+
+```bash
+GHCR_OWNER=kineticman
+FASTCHANNELS_IMAGE_TAG=latest
+SECRET_KEY=replace-me
+```
+
+The `/data` volume is still mounted in the same way, so database and other persisted files survive container upgrades.
+
 ## URLs
 
 | URL | Description |

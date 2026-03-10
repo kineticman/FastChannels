@@ -1,0 +1,16 @@
+version: '3.9'
+
+services:
+  fastchannels:
+    image: ghcr.io/${GHCR_OWNER:-kineticman}/fastchannels:${FASTCHANNELS_IMAGE_TAG:-latest}
+    container_name: fastchannels
+    restart: unless-stopped
+    ports:
+      - "5523:5523"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-changeme-in-production}
+    volumes:
+      - db_data:/data
+
+volumes:
+  db_data:
