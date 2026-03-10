@@ -441,10 +441,13 @@ def _upsert_programs(source, program_data_list):
         if pd.source_channel_id in channels
     }
     if incoming_channel_ids:
+        # Delete any program that hasn't fully expired yet (end_time >= now - 2h),
+        # matching the prune cutoff so programs in the "just aired" zone are
+        # replaced rather than left as stale duplicates.
         cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
         Program.query.filter(
             Program.channel_id.in_(incoming_channel_ids),
-            Program.start_time >= cutoff,
+            Program.end_time >= cutoff,
         ).delete(synchronize_session=False)
 
     for pd in program_data_list:

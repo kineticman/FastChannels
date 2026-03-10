@@ -312,8 +312,19 @@ class PlutoScraper(BaseScraper):
                     logger.warning("[pluto] EPG fetch failed %s window=%d batch=%d: %s",
                                    country_code, window + 1, batch_num, e)
 
-        logger.info("[pluto] %s: %d EPG entries total", country_code, len(programs))
-        return programs
+        # Deduplicate within the fetch — programs near window boundaries can
+        # appear in both adjacent window responses.
+        seen: set[tuple] = set()
+        unique: list[ProgramData] = []
+        for p in programs:
+            key = (p.source_channel_id, p.start_time)
+            if key not in seen:
+                seen.add(key)
+                unique.append(p)
+
+        logger.info("[pluto] %s: %d EPG entries total (%d dupes dropped)",
+                    country_code, len(unique), len(programs) - len(unique))
+        return unique
 
     def _parse_timelines(self, data: list) -> list[ProgramData]:
         programs = []
