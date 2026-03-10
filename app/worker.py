@@ -513,6 +513,7 @@ def _schedule_due_scrapes():
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
+        default_epg_only_sources = {'amazon_prime_free', 'sling'}
         for name, cls in scrapers.items():
             if not Source.query.filter_by(name=name).first():
                 db.session.add(Source(
@@ -520,6 +521,7 @@ def seed_sources():
                     display_name    = cls.display_name or name.title(),
                     scrape_interval = cls.scrape_interval,
                     config          = {},
+                    epg_only        = name in default_epg_only_sources,
                 ))
         db.session.commit()
         logger.info(f'Seeded {len(scrapers)} sources')
