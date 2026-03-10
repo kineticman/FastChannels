@@ -8,8 +8,9 @@ It remains visible in the admin channels page so users can see what was
 disabled and manually re-enable if desired.
 """
 import logging
+import threading
 
-from flask import Blueprint, redirect, abort
+from flask import Blueprint, redirect, abort, current_app
 from ..models import Channel, Source
 from ..extensions import db
 from ..scrapers import registry
@@ -96,29 +97,37 @@ def play(source_name: str, channel_id: str):
     else:
         resolved_url = channel.stream_url
 
-    # Manifest check — detect DRM or stale VOD streams.
-    # Only runs once per channel: skip if already marked inactive.
+    # Fire-and-forget manifest check — detect DRM or dead streams without
+    # blocking the redirect. The check runs in a background thread so Channels
+    # DVR gets the 302 immediately, avoiding 504s on slow upstream sources.
     if channel.is_active and resolved_url and resolved_url.startswith('http'):
-        session = scraper.session if scraper_cls else None
-        if session is None:
-            import requests
-            session = requests.Session()
+        app = current_app._get_current_object()
+        ch_id = channel.id
+        check_session = scraper.session if scraper_cls else None
 
-        disable_reason = _check_manifest(resolved_url, session)
-        if disable_reason:
-            try:
-                channel.is_active      = False
-                channel.is_enabled     = False
-                channel.disable_reason = disable_reason
-                db.session.commit()
-                logger.warning(
-                    '[play] %s detected — auto-disabled channel %s (%s/%s)',
-                    disable_reason, channel.name, source_name, channel_id,
-                )
-            except Exception as e:
-                logger.error('[play] failed to persist disable flag for %s: %s', channel_id, e)
-                db.session.rollback()
-            abort(451)
+        def _bg_check():
+            import requests
+            s = check_session or requests.Session()
+            reason = _check_manifest(resolved_url, s)
+            if not reason:
+                return
+            with app.app_context():
+                try:
+                    ch = Channel.query.get(ch_id)
+                    if ch and ch.is_active:
+                        ch.is_active      = False
+                        ch.is_enabled     = False
+                        ch.disable_reason = reason
+                        db.session.commit()
+                        logger.warning(
+                            '[play] %s detected — auto-disabled channel %s (%s/%s)',
+                            reason, ch.name, source_name, channel_id,
+                        )
+                except Exception as e:
+                    logger.error('[play] failed to persist disable flag for %s: %s', ch_id, e)
+                    db.session.rollback()
+
+        threading.Thread(target=_bg_check, daemon=True).start()
 
     logger.debug('[play] %s/%s → %s', source_name, channel_id, resolved_url[:80])
     return redirect(resolved_url, 302)
