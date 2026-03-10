@@ -45,6 +45,7 @@ def channels():
     drm_filter       = request.args.get('drm', '')
     language_filter  = request.args.get('language', '')
     category_filter  = request.args.get('category', '')
+    duplicates_filter = request.args.get('duplicates', '')
     sort_by          = request.args.get('sort', 'name')
     sort_dir         = request.args.get('dir', 'asc')
 
@@ -71,6 +72,13 @@ def channels():
         q = q.filter(Channel.category == category_filter)
     if search:
         q = q.filter(Channel.name.ilike(f'%{search}%'))
+
+    if duplicates_filter == '1':
+        dup_names_sq = db.session.query(Channel.name)\
+            .group_by(Channel.name)\
+            .having(db.func.count(Channel.id) > 1)\
+            .subquery()
+        q = q.filter(Channel.name.in_(dup_names_sq))
 
     _sort_cols = {
         'name':     [Channel.name],
@@ -104,12 +112,20 @@ def channels():
         .order_by(Channel.category).all()
     categories = [(cat, count) for cat, count in cat_rows]
 
+    # Compute duplicate name set for visual grouping in template
+    dup_name_rows = db.session.query(Channel.name)\
+        .group_by(Channel.name)\
+        .having(db.func.count(Channel.id) > 1).all()
+    duplicate_names = {row[0] for row in dup_name_rows}
+
     return render_template('admin/channels.html',
                            channels=channels, sources=sources,
                            source_filter=source_filter, search=search,
                            enabled_filter=enabled_filter, drm_filter=drm_filter,
                            language_filter=language_filter, languages=languages,
                            category_filter=category_filter, categories=categories,
+                           duplicates_filter=duplicates_filter,
+                           duplicate_names=duplicate_names,
                            sort_by=sort_by, sort_dir=sort_dir,
                            chnum_map=chnum_map)
 

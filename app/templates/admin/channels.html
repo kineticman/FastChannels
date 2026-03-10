@@ -65,6 +65,67 @@
     .btn-cancel  { background: transparent; color: #64748b; border: 1px solid #334155 !important; }
     .btn-cancel:hover  { color: #e2e8f0; }
 
+    /* Duplicate detection */
+    .dup-badge {
+      display: inline-block; font-size: 0.6rem; font-weight: 700; padding: 0.1rem 0.35rem;
+      border-radius: 3px; background: #78350f; color: #fbbf24; margin-left: 0.4rem;
+      vertical-align: middle; letter-spacing: 0.05em;
+    }
+    tr.dup-group-1 td { background: rgba(251,191,36,0.04); }
+    .btn-resolve-dupes {
+      background: #854d0e; color: #fef3c7; border: none; border-radius: 6px;
+      padding: 0.4rem 0.85rem; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+      transition: background 0.15s; margin-left: 0.25rem;
+    }
+    .btn-resolve-dupes:hover { background: #a16207; }
+
+    /* Resolve duplicates modal */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+      z-index: 1000; align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+      background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+      padding: 1.5rem; width: 480px; max-width: 95vw; max-height: 90vh;
+      overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+    .modal-box h2 { margin: 0 0 0.25rem; font-size: 1.1rem; color: #f1f5f9; }
+    .modal-box .modal-sub { color: #64748b; font-size: 0.8rem; margin-bottom: 1.25rem; }
+    .modal-box .modal-loading { color: #64748b; text-align: center; padding: 2rem 0; }
+    .priority-list { list-style: none; margin: 0 0 1rem; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+    .priority-item {
+      display: flex; align-items: center; gap: 0.6rem;
+      background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+      padding: 0.55rem 0.75rem; cursor: grab; user-select: none;
+    }
+    .priority-item:active { cursor: grabbing; }
+    .priority-item.drag-over { border-color: #fbbf24; background: #1c1a0e; }
+    .priority-item .drag-handle { color: #475569; font-size: 1rem; flex-shrink: 0; }
+    .priority-item .rank { color: #475569; font-size: 0.75rem; font-weight: 600; min-width: 1.2rem; }
+    .priority-item .src-name { flex: 1; font-size: 0.875rem; color: #e2e8f0; font-weight: 500; }
+    .priority-item .src-meta { font-size: 0.72rem; color: #64748b; white-space: nowrap; }
+    .priority-item .rec-badge {
+      font-size: 0.6rem; font-weight: 700; padding: 0.1rem 0.35rem; border-radius: 3px;
+      background: #14532d; color: #86efac; letter-spacing: 0.04em;
+    }
+    .modal-preview {
+      background: #0f172a; border: 1px solid #1e3a5f; border-radius: 6px;
+      padding: 0.65rem 0.85rem; font-size: 0.8rem; color: #7dd3fc; margin-bottom: 1.25rem;
+    }
+    .modal-actions { display: flex; gap: 0.6rem; justify-content: flex-end; }
+    .modal-actions .btn-cancel-modal {
+      background: transparent; color: #64748b; border: 1px solid #334155;
+      border-radius: 6px; padding: 0.45rem 1rem; font-size: 0.85rem; cursor: pointer;
+    }
+    .modal-actions .btn-confirm {
+      background: #854d0e; color: #fef3c7; border: none; border-radius: 6px;
+      padding: 0.45rem 1.1rem; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+      transition: background 0.15s;
+    }
+    .modal-actions .btn-confirm:hover { background: #a16207; }
+    .modal-actions .btn-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+
     /* Table */
     .section { background: #1e293b; border: 1px solid #334155; border-radius: 8px; overflow: hidden; }
     table { width: 100%; border-collapse: collapse; }
@@ -223,10 +284,17 @@
         <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }} ({{ count }})</option>
         {% endfor %}
       </select>
+      <select name="duplicates">
+        <option value="">All channels</option>
+        <option value="1" {% if duplicates_filter == '1' %}selected{% endif %}>⚠ Duplicates only</option>
+      </select>
       <input type="hidden" name="sort" value="{{ sort_by }}">
       <input type="hidden" name="dir" value="{{ sort_dir }}">
       <button type="submit">Filter</button>
       <a class="clear" href="/admin/channels">Clear</a>
+      {% if duplicates_filter == '1' %}
+      <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Duplicates</button>
+      {% endif %}
     </form>
 
     <!-- Bulk action bar (shown when rows selected) -->
@@ -261,8 +329,13 @@
           </tr>
         </thead>
         <tbody id="channel-tbody">
+          {% set ns = namespace(prev_name='', group_idx=0) %}
           {% for ch in channels.items %}
-          <tr id="row-{{ ch.id }}" class="{% if not ch.is_enabled %}disabled{% endif %}">
+          {% if duplicates_filter == '1' and ch.name != ns.prev_name %}
+            {% set ns.group_idx = (ns.group_idx + 1) % 2 %}
+            {% set ns.prev_name = ch.name %}
+          {% endif %}
+          <tr id="row-{{ ch.id }}" class="{% if not ch.is_enabled %}disabled{% endif %}{% if duplicates_filter == '1' %} dup-group-{{ ns.group_idx }}{% endif %}">
             <td><input type="checkbox" class="row-check" value="{{ ch.id }}" onchange="onRowCheck()"></td>
             <td>
               {% if ch.logo_url %}
@@ -271,7 +344,7 @@
               <div class="logo"></div>
               {% endif %}
             </td>
-            <td><strong>{{ ch.name }}</strong></td>
+            <td><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="This channel name exists in multiple sources">DUP</span>{% endif %}</td>
             <td style="color:#64748b">{{ ch.source.display_name }}</td>
             <td style="color:#94a3b8">{{ ch.category or '—' }}</td>
             <td style="color:#64748b">{{ ch.language or '—' }}</td>
@@ -325,7 +398,7 @@
     </div>
 
     {% if channels.pages > 1 %}
-    {% set qs = 'source=' ~ source_filter ~ '&search=' ~ search ~ '&enabled=' ~ enabled_filter ~ '&drm=' ~ drm_filter ~ '&language=' ~ language_filter ~ '&category=' ~ category_filter ~ '&sort=' ~ sort_by ~ '&dir=' ~ sort_dir %}
+    {% set qs = 'source=' ~ source_filter ~ '&search=' ~ search ~ '&enabled=' ~ enabled_filter ~ '&drm=' ~ drm_filter ~ '&language=' ~ language_filter ~ '&category=' ~ category_filter ~ '&duplicates=' ~ duplicates_filter ~ '&sort=' ~ sort_by ~ '&dir=' ~ sort_dir %}
     <div class="pagination">
       {% if channels.has_prev %}
       <a href="?page={{ channels.prev_num }}&{{ qs }}">← Prev</a>
@@ -581,6 +654,124 @@
         row?.classList.toggle('disabled', !enable);
       });
       clearSelection();
+    }
+  </script>
+
+  <!-- ── Resolve Duplicates Modal ───────────────────────────────────────── -->
+  <div class="modal-overlay" id="resolve-modal" onclick="closeResolveDupesModal(event)">
+    <div class="modal-box">
+      <h2>⚡ Resolve Duplicates</h2>
+      <p class="modal-sub">Drag to set source priority. The top source wins each duplicate — all others will be disabled.</p>
+      <div id="resolve-modal-body" class="modal-loading">Loading…</div>
+    </div>
+  </div>
+
+  <script>
+    // ── Resolve Duplicates Modal ───────────────────────────────────────────
+    let _dupSources = [];  // current ordered list
+
+    async function openResolveDupesModal() {
+      const modal = document.getElementById('resolve-modal');
+      const body  = document.getElementById('resolve-modal-body');
+      modal.classList.add('open');
+      body.innerHTML = '<div class="modal-loading">Loading…</div>';
+
+      const res  = await fetch('/api/channels/duplicate-summary');
+      const data = await res.json();
+      _dupSources = data.sources.map(s => ({ ...s }));
+      renderModalBody(data);
+    }
+
+    function renderModalBody(data) {
+      const body = document.getElementById('resolve-modal-body');
+      if (!_dupSources.length) {
+        body.innerHTML = '<p style="color:#64748b;text-align:center;padding:2rem 0">No duplicates found.</p>';
+        return;
+      }
+
+      const bestGn = Math.max(..._dupSources.map(s => s.gn_pct));
+
+      const items = _dupSources.map((s, i) => {
+        const isRec = s.gn_pct === bestGn && bestGn > 0;
+        return `
+          <li class="priority-item" draggable="true" data-idx="${i}"
+              ondragstart="onDragStart(event)" ondragover="onDragOver(event)"
+              ondrop="onDrop(event)" ondragleave="onDragLeave(event)">
+            <span class="drag-handle">⠿</span>
+            <span class="rank">${i + 1}</span>
+            <span class="src-name">${s.display_name}</span>
+            ${isRec ? '<span class="rec-badge">RECOMMENDED</span>' : ''}
+            <span class="src-meta">${s.dup_count} ch · ${s.gn_pct}% EPG</span>
+          </li>`;
+      }).join('');
+
+      const willDisable = data.total_affected - data.total_groups;
+
+      body.innerHTML = `
+        <ul class="priority-list" id="priority-list">${items}</ul>
+        <div class="modal-preview">
+          Will keep <strong>${data.total_groups}</strong> channel${data.total_groups !== 1 ? 's' : ''}
+          and disable <strong>${willDisable}</strong> duplicate${willDisable !== 1 ? 's' : ''}
+          across <strong>${_dupSources.length}</strong> source${_dupSources.length !== 1 ? 's' : ''}.
+        </div>
+        <div class="modal-actions">
+          <button class="btn-cancel-modal" onclick="closeResolveDupesModal()">Cancel</button>
+          <button class="btn-confirm" onclick="confirmResolve(this)">Disable Duplicates</button>
+        </div>`;
+    }
+
+    function closeResolveDupesModal(e) {
+      if (e && e.target !== document.getElementById('resolve-modal')) return;
+      document.getElementById('resolve-modal').classList.remove('open');
+    }
+
+    async function confirmResolve(btn) {
+      btn.disabled = true;
+      btn.textContent = 'Resolving…';
+      const priority = _dupSources.map(s => s.name);
+      const res  = await fetch('/api/channels/resolve-duplicates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_priority: priority }),
+      });
+      const data = await res.json();
+      document.getElementById('resolve-modal-body').innerHTML = `
+        <p style="color:#86efac;font-size:0.95rem;text-align:center;padding:1.5rem 0">
+          ✓ Done — disabled <strong>${data.disabled}</strong> duplicate channel${data.disabled !== 1 ? 's' : ''}
+          across <strong>${data.groups_resolved}</strong> group${data.groups_resolved !== 1 ? 's' : ''}.
+        </p>
+        <div class="modal-actions" style="justify-content:center">
+          <button class="btn-confirm" onclick="location.reload()">Reload Page</button>
+        </div>`;
+    }
+
+    // ── Drag-to-reorder ───────────────────────────────────────────────────
+    let _dragIdx = null;
+
+    function onDragStart(e) {
+      _dragIdx = +e.currentTarget.dataset.idx;
+      e.dataTransfer.effectAllowed = 'move';
+    }
+    function onDragOver(e) {
+      e.preventDefault();
+      e.currentTarget.classList.add('drag-over');
+    }
+    function onDragLeave(e) {
+      e.currentTarget.classList.remove('drag-over');
+    }
+    function onDrop(e) {
+      e.preventDefault();
+      const targetIdx = +e.currentTarget.dataset.idx;
+      e.currentTarget.classList.remove('drag-over');
+      if (_dragIdx === null || _dragIdx === targetIdx) return;
+      const [moved] = _dupSources.splice(_dragIdx, 1);
+      _dupSources.splice(targetIdx, 0, moved);
+      _dragIdx = null;
+      renderModalBody({ total_groups: 0, total_affected: 0, sources: _dupSources });
+      // Recalculate counts from current state
+      fetch('/api/channels/duplicate-summary')
+        .then(r => r.json())
+        .then(d => { renderModalBody({ ...d, sources: _dupSources }); });
     }
   </script>
 </body>

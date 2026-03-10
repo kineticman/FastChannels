@@ -391,6 +391,93 @@ def stats():
     })
 
 
+@api_bp.route('/channels/duplicate-summary', methods=['GET'])
+def duplicate_summary():
+    """Return per-source stats for channels involved in duplicates, sorted by gracenote coverage."""
+    from collections import defaultdict
+
+    dup_names_sq = db.session.query(Channel.name)\
+        .group_by(Channel.name)\
+        .having(db.func.count(Channel.id) > 1)\
+        .subquery()
+
+    dup_channels = Channel.query.join(Source)\
+        .filter(Channel.name.in_(dup_names_sq))\
+        .all()
+
+    if not dup_channels:
+        return jsonify({'sources': [], 'total_groups': 0, 'total_affected': 0})
+
+    # Count unique name groups
+    unique_names = {ch.name for ch in dup_channels}
+
+    stats = defaultdict(lambda: {'display_name': '', 'total': 0, 'with_gn': 0})
+    for ch in dup_channels:
+        s = stats[ch.source.name]
+        s['display_name'] = ch.source.display_name
+        s['total'] += 1
+        if ch.gracenote_id:
+            s['with_gn'] += 1
+
+    sources = []
+    for name, s in stats.items():
+        pct = round(100 * s['with_gn'] / s['total']) if s['total'] else 0
+        sources.append({
+            'name':         name,
+            'display_name': s['display_name'],
+            'dup_count':    s['total'],
+            'gn_pct':       pct,
+        })
+
+    # Sort by gracenote coverage descending — this is the suggested priority
+    sources.sort(key=lambda x: -x['gn_pct'])
+
+    return jsonify({
+        'sources':       sources,
+        'total_groups':  len(unique_names),
+        'total_affected': len(dup_channels),
+    })
+
+
+@api_bp.route('/channels/resolve-duplicates', methods=['POST'])
+def resolve_duplicates():
+    """Disable duplicate channels, keeping one winner per name group based on source priority."""
+    from collections import defaultdict
+
+    data = request.get_json(force=True) or {}
+    priority = data.get('source_priority', [])  # ordered list of source names, index 0 = highest
+
+    dup_names_sq = db.session.query(Channel.name)\
+        .group_by(Channel.name)\
+        .having(db.func.count(Channel.id) > 1)\
+        .subquery()
+
+    dup_channels = Channel.query.join(Source)\
+        .filter(Channel.name.in_(dup_names_sq))\
+        .all()
+
+    groups = defaultdict(list)
+    for ch in dup_channels:
+        groups[ch.name].append(ch)
+
+    def priority_key(ch):
+        try:
+            return priority.index(ch.source.name)
+        except ValueError:
+            return len(priority)  # unlisted sources rank last
+
+    disabled_count = 0
+    for name, channels in groups.items():
+        channels.sort(key=priority_key)
+        for ch in channels[1:]:
+            if ch.is_enabled:
+                ch.is_enabled = False
+                disabled_count += 1
+
+    db.session.commit()
+    return jsonify({'disabled': disabled_count, 'groups_resolved': len(groups)})
+
+
 @api_bp.route('/settings', methods=['GET', 'POST'])
 def app_settings():
     row = AppSettings.get()
