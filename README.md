@@ -138,8 +138,8 @@ Disabling a **source** deletes all its channels from the DB. Re-enabling and run
 | DistroTV | None | Android TV UA required, URL macro substitution |
 | Tubi TV | Optional email/password | Bearer token auth |
 | The Roku Channel | None | Session cookie auth, HLS variant selection |
-| Sling Freestream | Optional OAuth creds | Falls back to browser bootstrap to capture Bearer JWT |  **ALL STREAMS DRM AT THIS TIME**
+| Sling Freestream | Optional OAuth creds | Falls back to browser bootstrap to capture Bearer JWT. Streams are DRM-only right now, but the scraper remains active for potential EPG data. |
 | Plex | None | Session cookie auth |
 | Xumo Play | None | Public API |
-| Amazon Prime Free | Optional cookie header | EPG-only by default; pagination requires auth | **ALL STREAMS DRM AT THIS TIME**
+| Amazon Prime Free | Optional cookie header | EPG-only by default; pagination requires auth. Streams are DRM-only right now, but the scraper remains active for potential EPG data. |
 | FreeLiveSports | None | Public API |
