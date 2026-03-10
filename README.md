@@ -57,6 +57,12 @@ GHCR_OWNER=kineticman
 FASTCHANNELS_IMAGE_TAG=latest
 ```
 
+If you access the admin UI via `localhost` but want generated M3U / EPG / feed URLs to use a LAN IP or hostname instead, set:
+
+```bash
+PUBLIC_BASE_URL=http://192.168.1.50:5523
+```
+
 There is not currently a separate Docker Hub image documented in this repo.
 
 ## URLs

@@ -6,6 +6,7 @@ import re
 from flask import Blueprint, jsonify, request
 from ..extensions import db
 from ..models import Feed
+from ..url import public_base_url
 
 feeds_api_bp = Blueprint('feeds_api', __name__)
 
@@ -18,7 +19,7 @@ def _slugify(text: str) -> str:
 
 @feeds_api_bp.route('', methods=['GET'])
 def list_feeds():
-    base_url = request.host_url.rstrip('/')
+    base_url = public_base_url()
     feeds = Feed.query.order_by(Feed.name).all()
     return jsonify([f.to_dict(base_url) for f in feeds])
 
@@ -44,13 +45,13 @@ def create_feed():
     )
     db.session.add(feed)
     db.session.commit()
-    return jsonify(feed.to_dict(request.host_url.rstrip('/'))), 201
+    return jsonify(feed.to_dict(public_base_url())), 201
 
 
 @feeds_api_bp.route('/<int:feed_id>', methods=['GET'])
 def get_feed(feed_id):
     feed = Feed.query.get_or_404(feed_id)
-    return jsonify(feed.to_dict(request.host_url.rstrip('/')))
+    return jsonify(feed.to_dict(public_base_url()))
 
 
 @feeds_api_bp.route('/<int:feed_id>', methods=['PATCH'])
@@ -70,7 +71,7 @@ def update_feed(feed_id):
         feed.is_enabled = bool(data['is_enabled'])
 
     db.session.commit()
-    return jsonify(feed.to_dict(request.host_url.rstrip('/')))
+    return jsonify(feed.to_dict(public_base_url()))
 
 
 @feeds_api_bp.route('/<int:feed_id>', methods=['DELETE'])

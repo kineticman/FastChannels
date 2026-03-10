@@ -5,6 +5,7 @@ VERSION = "1.0"
 
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret')
+    PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL', '')
     SQLALCHEMY_DATABASE_URI = os.environ.get(
         'DATABASE_URL',
         'sqlite:////data/fastchannels.db'

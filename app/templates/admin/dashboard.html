@@ -86,17 +86,17 @@
               {% if feed.channel_count() > 750 %}<span class="warn">⚠</span>{% endif %}
             </td>
             <td>
-              <a class="link-box" href="{{ base_url }}/m3u/{{ feed.slug }}" target="_blank"
+              <a class="link-box" href="{{ base_url }}/feeds/{{ feed.slug }}/m3u" target="_blank"
                  style="margin-top:0;font-size:0.72rem;padding:0.3rem 0.6rem">
-                /m3u/{{ feed.slug }}
-                <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/m3u/{{ feed.slug }}')">⎘</button>
+                /feeds/{{ feed.slug }}/m3u
+                <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">⎘</button>
               </a>
             </td>
             <td>
-              <a class="link-box" href="{{ base_url }}/epg/{{ feed.slug }}.xml" target="_blank"
+              <a class="link-box" href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank"
                  style="margin-top:0;font-size:0.72rem;padding:0.3rem 0.6rem">
-                /epg/{{ feed.slug }}.xml
-                <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/epg/{{ feed.slug }}.xml')">⎘</button>
+                /feeds/{{ feed.slug }}/epg.xml
+                <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">⎘</button>
               </a>
             </td>
           </tr>

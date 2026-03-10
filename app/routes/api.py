@@ -7,6 +7,7 @@ from ..extensions import db
 from ..models import Source, Channel, AppSettings, Feed
 from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
+from ..url import public_base_url
 from .tasks import trigger_scrape, trigger_stream_audit
 from ..generators.m3u import get_chnum_overlaps
 from .. import logfile
@@ -499,7 +500,7 @@ def push_feed_to_dvr(feed_id):
     if not dvr_url:
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
 
-    base = request.host_url.rstrip('/')
+    base = public_base_url()
 
     # Check if this feed has any channels with Gracenote IDs using the same
     # logic as generate_gracenote_m3u() so we don't register an empty source.

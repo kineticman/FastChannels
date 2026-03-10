@@ -3,6 +3,7 @@ from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings
 from ..generators.m3u import _parse_gracenote_id, get_chnum_overlaps, _build_source_chnum_map
 from ..scrapers import registry as _scraper_registry
+from ..url import public_base_url
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
@@ -11,7 +12,7 @@ admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 def dashboard():
     sources        = Source.query.order_by(Source.display_name).all()
     total_channels = Channel.query.filter_by(is_active=True, is_enabled=True).count()
-    base_url       = request.host_url.rstrip('/')
+    base_url       = public_base_url()
     feeds          = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
     gracenote_count = sum(
         1 for ch in Channel.query.filter_by(is_active=True, is_enabled=True).all()
@@ -142,7 +143,7 @@ def feeds():
         .filter(Channel.is_active == True, Channel.language != None)\
         .distinct().order_by(Channel.language).all()
     languages  = [{'code': r[0], 'label': r[0]} for r in langs]
-    base_url   = request.host_url.rstrip('/')
+    base_url   = public_base_url()
     return render_template('admin/feeds.html',
                            feeds=feeds, sources=sources,
                            categories=categories, languages=languages,
