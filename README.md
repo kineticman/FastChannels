@@ -36,17 +36,7 @@ Sources that need credentials (Sling, Amazon Prime Free) will appear in the UI b
 |-----|-------------|
 | `http://localhost:5523/admin/` | Admin dashboard |
 | `http://localhost:5523/admin/sources` | Enable/disable sources, run scrapes |
-| `http://localhost:5523/admin/channels` | Browse channels, toggle individual channels on/off |
-| `http://localhost:5523/admin/settings` | Credentials and options per source |
-| `http://localhost:5523/admin/feeds` | Named filtered sub-feeds |
-| `http://localhost:5523/admin/logs` | Live scrape log viewer |
-| `http://localhost:5523/m3u` | Full M3U playlist |
-| `http://localhost:5523/epg.xml` | Full XMLTV EPG |
-| `http://localhost:5523/feeds/<slug>/m3u` | Feed-specific M3U |
-| `http://localhost:5523/feeds/<slug>/epg.xml` | Feed-specific EPG |
-| `http://localhost:5523/api/sources` | Sources API |
-| `http://localhost:5523/api/channels` | Channels API |
-| `http://localhost:5523/api/feeds` | Feeds API |
+| `http://localhost:5523/admin/channels` | Browse channels, toggle individual 
 
 ## Filtered M3U Output
 
@@ -71,23 +61,7 @@ Filter keys: `sources`, `categories`, `languages`, `max_channels`.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and set values before starting the container. Docker Compose picks up `.env` automatically.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SECRET_KEY` | `changeme-in-production` | Flask session signing key |
-| `DATABASE_URL` | `sqlite:////data/fastchannels.db` | Database path (inside container) |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection (inside container) |
-
 Source credentials (Pluto TV login, Amazon Prime cookies, etc.) are set through the **Settings** page in the admin UI — not environment variables.
-
-## Development
-
-To run with live code reloading (no rebuild needed on file changes):
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
-```
 
 ## Architecture
 
@@ -124,102 +98,6 @@ Two separate flags on each channel:
 
 Disabling a **source** deletes all its channels from the DB. Re-enabling and running a scrape restores them.
 
-### Source config
-
-Each scraper declares a `config_schema` (list of `ConfigField`) describing what credentials or options it needs. The Settings page auto-renders the right form fields for each source — no template changes needed when adding new scrapers. Secrets are masked (`••••••••`) in the UI and never returned by the API.
-
-## Adding a New Scraper
-
-1. Create `app/scrapers/yourservice.py`
-2. Subclass `BaseScraper`, set `source_name` and `display_name`
-3. Implement `fetch_channels()` → returns `list[ChannelData]`
-4. Optionally implement `fetch_epg()` → returns `list[ProgramData]`
-5. Optionally implement `resolve(raw_url)` → returns playable URL at request time
-6. Optionally declare `config_schema` for any credentials needed
-7. Optionally set `stream_audit_enabled = True` to enable the Stream Audit job
-8. Restart — auto-discovered, seeded as a Source, and appears in Settings
-
-```python
-from .base import BaseScraper, ChannelData, ConfigField
-
-class YourServiceScraper(BaseScraper):
-    source_name  = 'yourservice'
-    display_name = 'Your Service'
-    stream_audit_enabled = True   # optional
-
-    config_schema = [
-        ConfigField('api_key', 'API Key', secret=True,
-                    help_text='Found in your account settings.'),
-    ]
-
-    def fetch_channels(self) -> list[ChannelData]:
-        r = self.get('https://api.yourservice.com/channels',
-                     headers={'X-API-Key': self.config.get('api_key', '')})
-        return [
-            ChannelData(
-                source_channel_id=ch['id'],
-                name=ch['title'],
-                stream_url=ch['stream'],   # stored raw; resolve() called at playback time
-                logo_url=ch['logo'],
-                category=ch['genre'],
-            )
-            for ch in r.json()
-        ]
-
-    def resolve(self, raw_url: str) -> str:
-        # Exchange raw_url for a fresh playable URL here
-        return raw_url
-```
-
-## Project Structure
-
-```
-FastChannels/
-├── docker-compose.yml       # production / beta
-├── docker-compose.dev.yml   # dev override (live code mount)
-├── .env.example             # copy to .env to configure
-├── Dockerfile
-├── entrypoint.sh
-├── requirements.txt
-├── README.md
-└── app/
-    ├── __init__.py
-    ├── config.py
-    ├── extensions.py
-    ├── models.py
-    ├── worker.py
-    ├── play.py              # /play/<source>/<id>.m3u8 proxy
-    ├── logfile.py           # structured log capture for admin log viewer
-    ├── scrapers/
-    │   ├── base.py          # BaseScraper, ChannelData, ProgramData, ConfigField
-    │   ├── registry.py      # auto-discovery
-    │   ├── pluto.py         # Pluto TV (session pool, JWT auth, per-country feeds)
-    │   ├── distro.py        # DistroTV (macro substitution, HLS variant selection)
-    │   ├── tubi.py          # Tubi TV (optional email/password auth)
-    │   ├── roku.py          # The Roku Channel (session cookie auth)
-    │   ├── sling.py         # Sling Freestream (OAuth or browser bootstrap for JWT)
-    │   ├── plex.py          # Plex (session cookie auth)
-    │   ├── xumo.py          # Xumo Play (public API)
-    │   ├── amazon_prime_free.py  # Amazon Prime Free (EPG-only; optional cookie auth)
-    │   └── freelivesports.py     # FreeLiveSports (public API)
-    ├── generators/
-    │   ├── m3u.py           # M3U playlist generator
-    │   └── xmltv.py         # XMLTV EPG generator (with EPG-only source enrichment)
-    └── routes/
-        ├── admin.py         # Admin UI routes
-        ├── api.py           # REST API
-        ├── feeds_api.py     # /api/feeds CRUD
-        ├── output.py        # /m3u, /epg.xml, /feeds/<slug>/… endpoints
-        └── tasks.py         # RQ job dispatch (scrape, stream audit)
-    └── templates/admin/
-        ├── dashboard.html
-        ├── sources.html
-        ├── channels.html
-        ├── settings.html
-        ├── feeds.html
-        └── logs.html
-```
-
 ## Current Sources
 
 | Source | Auth | Notes |
@@ -228,8 +106,8 @@ FastChannels/
 | DistroTV | None | Android TV UA required, URL macro substitution |
 | Tubi TV | Optional email/password | Bearer token auth |
 | The Roku Channel | None | Session cookie auth, HLS variant selection |
-| Sling Freestream | Optional OAuth creds | Falls back to browser bootstrap to capture Bearer JWT |
+| Sling Freestream | Optional OAuth creds | Falls back to browser bootstrap to capture Bearer JWT |  **ALL STREAMS DRM AT THIS TIME**
 | Plex | None | Session cookie auth |
 | Xumo Play | None | Public API |
-| Amazon Prime Free | Optional cookie header | EPG-only by default; pagination requires auth |
+| Amazon Prime Free | Optional cookie header | EPG-only by default; pagination requires auth | **ALL STREAMS DRM AT THIS TIME**
 | FreeLiveSports | None | Public API |
