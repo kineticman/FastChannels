@@ -502,16 +502,14 @@ def push_feed_to_dvr(feed_id):
     def _put(name, url, xmltv_url=''):
         safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
         payload = {
-            'name':         name,
-            'type':         'HLS',
-            'source':       '',
-            'url':          url,
-            'text':         '',
-            'refresh':      '24',
-            'limit':        '',
-            'xmltv_url':    xmltv_url,
-            'xmltv_refresh': '3600' if xmltv_url else '',
+            'name':    name,
+            'type':    'HLS',
+            'url':     url,
+            'refresh': '24',
         }
+        if xmltv_url:
+            payload['xmltv_url']    = xmltv_url
+            payload['xmltv_refresh'] = '3600'
         return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=8)
 
     gn_name  = f"FastChannels {feed.name} Gracenote"
@@ -520,16 +518,19 @@ def push_feed_to_dvr(feed_id):
     try:
         # Source 1: Gracenote M3U — no EPG URL, DVR uses its own Gracenote guide
         r1 = _put(gn_name,  f"{base}/feeds/{feed.slug}/m3u/gracenote")
+        current_app.logger.info("DVR PUT %s -> %s: %s", gn_name, r1.url, r1.text[:200])
         r1.raise_for_status()
         # Source 2: standard M3U with our EPG XML for non-Gracenote channels
         r2 = _put(epg_name, f"{base}/feeds/{feed.slug}/m3u", f"{base}/feeds/{feed.slug}/epg.xml")
+        current_app.logger.info("DVR PUT %s -> %s: %s", epg_name, r2.url, r2.text[:200])
         r2.raise_for_status()
     except _req.exceptions.ConnectionError:
         return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
     except _req.exceptions.Timeout:
         return jsonify({'error': 'Channels DVR timed out.'}), 504
-    except _req.exceptions.HTTPError:
-        return jsonify({'error': f'Channels DVR returned an error — check the DVR logs.'}), 502
+    except _req.exceptions.HTTPError as exc:
+        resp = exc.response
+        return jsonify({'error': f'DVR {resp.status_code}: {resp.text[:300]}'}), 502
 
     return jsonify({'ok': True, 'sources_added': [gn_name, epg_name]})
 
