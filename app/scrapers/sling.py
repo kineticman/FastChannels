@@ -33,9 +33,8 @@ class SlingScraper(BaseScraper):
     - DRM: expected for many channels; this scraper does not acquire licenses.
 
     Important limitation:
-    - Browser bootstrap is not implemented here. To mint a fresh Bearer JWT
-      without Playwright, you must configure Sling OAuth and session values
-      captured from a real browser session.
+    - Playback remains DRM-protected for many channels. This scraper only
+      captures metadata/EPG and the current manifest URL.
     """
 
     source_name = "sling"
@@ -431,6 +430,7 @@ class SlingScraper(BaseScraper):
             )
 
         captured: list[str] = []
+        bootstrap_data: dict[str, str] = {}
 
         def on_request(request):
             if captured:
@@ -438,6 +438,37 @@ class SlingScraper(BaseScraper):
             auth = request.headers.get("authorization", "")
             if auth.startswith("Bearer ") and "movetv.com" in request.url:
                 captured.append(auth[7:])
+
+        def on_response(response):
+            url = response.url
+            try:
+                if "/cmw/v1/client/jwt" in url:
+                    data = response.json()
+                    token = (data.get("jwt") or "").strip()
+                    if token and not captured:
+                        captured.append(token)
+                elif "/user/prospect" in url:
+                    data = response.json()
+                    # Persist bootstrap values when Sling exposes them so future
+                    # runs can mint a bearer without Playwright.
+                    mapping = {
+                        "accessToken": "access_token",
+                        "accessSecret": "access_secret",
+                        "consumerKey": "consumer_key",
+                        "consumerSecret": "consumer_secret",
+                        "profileGuid": "profile_guid",
+                        "userGuid": "profile_guid",
+                        "accountStatus": "account_status",
+                        "profileType": "profile_type",
+                    }
+                    for source_key, dest_key in mapping.items():
+                        value = (data.get(source_key) or "").strip() if isinstance(data.get(source_key), str) else data.get(source_key)
+                        if value:
+                            bootstrap_data[dest_key] = value
+            except Exception:
+                # Token capture is best-effort; ignore parsing issues from
+                # unrelated responses and keep waiting for a direct auth header.
+                return
 
         logger.info("[%s] Starting browser bootstrap to capture Bearer JWT", self.source_name)
         with sync_playwright() as p:
@@ -452,10 +483,26 @@ class SlingScraper(BaseScraper):
                 )
                 page = ctx.new_page()
                 page.on("request", on_request)
+                page.on("response", on_response)
                 try:
-                    page.goto("https://watch.sling.com/", wait_until="networkidle", timeout=60_000)
+                    page.goto("https://watch.sling.com/", wait_until="domcontentloaded", timeout=60_000)
                 except PWTimeout:
-                    pass  # networkidle may time out on heavy SPAs; check capture below
+                    pass
+
+                # The Sling SPA keeps loading data after initial HTML arrives.
+                # Wait explicitly for the auth/bootstrap requests that yield the
+                # anonymous Freestream bearer token.
+                for _ in range(30):
+                    if captured:
+                        break
+                    page.wait_for_timeout(1000)
+
+                try:
+                    device_guid = page.evaluate("window.localStorage.getItem('HardwareDeviceGUID') || ''")
+                    if device_guid:
+                        bootstrap_data["device_guid"] = device_guid.strip()
+                except Exception:
+                    pass
             finally:
                 browser.close()
 
@@ -464,6 +511,9 @@ class SlingScraper(BaseScraper):
                 "Browser bootstrap failed: no Bearer JWT captured from watch.sling.com. "
                 "The page may have changed — try providing bearer_jwt manually."
             )
+
+        for key, value in bootstrap_data.items():
+            self._update_config(key, value)
 
         logger.info("[%s] Browser bootstrap succeeded", self.source_name)
         return captured[0]
