@@ -17,7 +17,7 @@ import time as _time
 import requests as _requests
 from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
-from app.scrapers.base import StreamDeadError
+from app.scrapers.base import StreamDeadError, ScrapeSkipError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,6 +104,13 @@ def run_scraper(source_name: str):
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
+            _progress('done')
+        except ScrapeSkipError as e:
+            elapsed = time.monotonic() - t0
+            logger.warning('[%s] Scrape skipped after %.1fs: %s', source_name, elapsed, e)
+            _apply_scraper_config_updates(source, scraper)
+            source.last_error = str(e)
+            db.session.commit()
             _progress('done')
         except Exception as e:
             elapsed = time.monotonic() - t0

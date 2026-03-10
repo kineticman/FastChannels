@@ -15,9 +15,9 @@ from urllib.parse import parse_qsl, quote, urlparse
 import requests
 
 try:
-    from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError
+    from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, ScrapeSkipError
 except ImportError:  # pragma: no cover - local staging outside FastChannels package
-    from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError
+    from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, ScrapeSkipError
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +241,12 @@ class SlingScraper(BaseScraper):
         self._bearer_jwt = (self.config.get("bearer_jwt") or "").strip()
 
     def pre_run_setup(self) -> None:
-        self._ensure_bearer()
+        try:
+            self._ensure_bearer()
+        except RuntimeError as exc:
+            raise ScrapeSkipError(
+                "Sling auth is not available yet. Configure bearer_jwt or OAuth creds if you want Sling EPG data."
+            ) from exc
 
     def fetch_channels(self) -> list[ChannelData]:
         self._ensure_bearer()

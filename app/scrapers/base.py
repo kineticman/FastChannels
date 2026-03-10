@@ -11,6 +11,10 @@ class StreamDeadError(Exception):
     """Raised by audit_resolve() when a channel is confirmed dead (not a transient error)."""
 
 
+class ScrapeSkipError(Exception):
+    """Raised when a scraper should skip the current run without treating it as a hard failure."""
+
+
 class ConfigField:
     """Declares a single config field a scraper needs from the UI."""
     def __init__(self, key: str, label: str, field_type: str = 'text',
