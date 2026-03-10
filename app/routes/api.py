@@ -504,6 +504,7 @@ def push_feed_to_dvr(feed_id):
         payload = {
             'name':    name,
             'type':    'HLS',
+            'source':  'URL',
             'url':     url,
             'refresh': '24',
         }
