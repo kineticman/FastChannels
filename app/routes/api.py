@@ -482,14 +482,16 @@ def resolve_duplicates():
 
 @api_bp.route('/feeds/<int:feed_id>/push-to-dvr', methods=['POST'])
 def push_feed_to_dvr(feed_id):
-    """Register this feed as two custom M3U sources in Channels DVR.
+    """Register this feed as custom M3U source(s) in Channels DVR.
 
-    Channels DVR handles Gracenote separately: the Gracenote source uses
-    tvg-id for guide matching and must have NO xmltv_url (DVR fetches its
-    own guide data). The standard source carries our EPG XML for any
-    channels that don't have a Gracenote ID.
+    Registers up to two sources:
+    - Gracenote source (no EPG URL): only if the feed has channels with
+      Gracenote IDs — DVR fetches its own guide data via tvc-guide-stationid.
+    - Standard source (with our EPG XML): always registered.
     """
     import re as _re
+    from ..generators.m3u import feed_to_query_filters, _build_channel_query, _parse_gracenote_id
+
     feed = Feed.query.get_or_404(feed_id)
     settings = AppSettings.get()
 
@@ -498,6 +500,11 @@ def push_feed_to_dvr(feed_id):
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
 
     base = request.host_url.rstrip('/')
+
+    # Check if this feed has any channels with Gracenote IDs using the same
+    # logic as generate_gracenote_m3u() so we don't register an empty source.
+    feed_channels = _build_channel_query(feed_to_query_filters(feed.filters or {})).all()
+    has_gracenote = any(_parse_gracenote_id(ch) for ch in feed_channels)
 
     def _put(name, url, xmltv_url=''):
         safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
@@ -509,22 +516,23 @@ def push_feed_to_dvr(feed_id):
             'refresh': '24',
         }
         if xmltv_url:
-            payload['xmltv_url']    = xmltv_url
+            payload['xmltv_url']     = xmltv_url
             payload['xmltv_refresh'] = '3600'
         return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=8)
 
     gn_name  = f"FastChannels {feed.name} Gracenote"
     epg_name = f"FastChannels {feed.name}"
+    sources_added = []
 
     try:
-        # Source 1: Gracenote M3U — no EPG URL, DVR uses its own Gracenote guide
-        r1 = _put(gn_name,  f"{base}/feeds/{feed.slug}/m3u/gracenote")
-        current_app.logger.info("DVR PUT %s -> %s: %s", gn_name, r1.url, r1.text[:200])
-        r1.raise_for_status()
-        # Source 2: standard M3U with our EPG XML for non-Gracenote channels
+        if has_gracenote:
+            r1 = _put(gn_name, f"{base}/feeds/{feed.slug}/m3u/gracenote")
+            r1.raise_for_status()
+            sources_added.append(gn_name)
+
         r2 = _put(epg_name, f"{base}/feeds/{feed.slug}/m3u", f"{base}/feeds/{feed.slug}/epg.xml")
-        current_app.logger.info("DVR PUT %s -> %s: %s", epg_name, r2.url, r2.text[:200])
         r2.raise_for_status()
+        sources_added.append(epg_name)
     except _req.exceptions.ConnectionError:
         return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
     except _req.exceptions.Timeout:
@@ -533,7 +541,7 @@ def push_feed_to_dvr(feed_id):
         resp = exc.response
         return jsonify({'error': f'DVR {resp.status_code}: {resp.text[:300]}'}), 502
 
-    return jsonify({'ok': True, 'sources_added': [gn_name, epg_name]})
+    return jsonify({'ok': True, 'sources_added': sources_added})
 
 
 @api_bp.route('/settings', methods=['GET', 'POST'])
