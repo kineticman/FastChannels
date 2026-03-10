@@ -4,7 +4,7 @@ import requests as _req
 from urllib.parse import urljoin as _urljoin
 from flask import Blueprint, jsonify, request, current_app
 from ..extensions import db
-from ..models import Source, Channel, AppSettings
+from ..models import Source, Channel, AppSettings, Feed
 from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
 from .tasks import trigger_scrape, trigger_stream_audit
@@ -482,7 +482,13 @@ def resolve_duplicates():
 
 @api_bp.route('/feeds/<int:feed_id>/push-to-dvr', methods=['POST'])
 def push_feed_to_dvr(feed_id):
-    """Register or update this feed as a custom M3U source in Channels DVR."""
+    """Register this feed as two custom M3U sources in Channels DVR.
+
+    Channels DVR handles Gracenote separately: the Gracenote source uses
+    tvg-id for guide matching and must have NO xmltv_url (DVR fetches its
+    own guide data). The standard source carries our EPG XML for any
+    channels that don't have a Gracenote ID.
+    """
     import re as _re
     feed = Feed.query.get_or_404(feed_id)
     settings = AppSettings.get()
@@ -491,39 +497,41 @@ def push_feed_to_dvr(feed_id):
     if not dvr_url:
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
 
-    # Build absolute URLs for this feed pointing back at FastChannels
     base = request.host_url.rstrip('/')
-    m3u_url  = f"{base}/feeds/{feed.slug}/m3u/gracenote"
-    epg_url  = f"{base}/feeds/{feed.slug}/epg.xml"
 
-    # Channels DVR requires alphanumeric-only name in the URL path
-    display_name  = f"FastChannels – {feed.name}"
-    safe_name     = _re.sub(r'[^a-zA-Z0-9]', '', display_name)
-    dvr_endpoint  = f"{dvr_url}/providers/m3u/sources/{safe_name}"
+    def _put(name, url, xmltv_url=''):
+        safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
+        payload = {
+            'name':         name,
+            'type':         'HLS',
+            'source':       '',
+            'url':          url,
+            'text':         '',
+            'refresh':      '24',
+            'limit':        '',
+            'xmltv_url':    xmltv_url,
+            'xmltv_refresh': '3600' if xmltv_url else '',
+        }
+        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=8)
 
-    payload = {
-        'name':         display_name,
-        'type':         'HLS',
-        'source':       '',
-        'url':          m3u_url,
-        'text':         '',
-        'refresh':      '24',
-        'limit':        '',
-        'xmltv_url':    epg_url,
-        'xmltv_refresh': '3600',
-    }
+    gn_name  = f"FastChannels {feed.name} Gracenote"
+    epg_name = f"FastChannels {feed.name}"
 
     try:
-        resp = _req.put(dvr_endpoint, json=payload, timeout=8)
-        resp.raise_for_status()
+        # Source 1: Gracenote M3U — no EPG URL, DVR uses its own Gracenote guide
+        r1 = _put(gn_name,  f"{base}/feeds/{feed.slug}/m3u/gracenote")
+        r1.raise_for_status()
+        # Source 2: standard M3U with our EPG XML for non-Gracenote channels
+        r2 = _put(epg_name, f"{base}/feeds/{feed.slug}/m3u", f"{base}/feeds/{feed.slug}/epg.xml")
+        r2.raise_for_status()
     except _req.exceptions.ConnectionError:
         return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
     except _req.exceptions.Timeout:
         return jsonify({'error': 'Channels DVR timed out.'}), 504
-    except _req.exceptions.HTTPError as e:
-        return jsonify({'error': f'Channels DVR returned {resp.status_code}: {resp.text}'}), 502
+    except _req.exceptions.HTTPError:
+        return jsonify({'error': f'Channels DVR returned an error — check the DVR logs.'}), 502
 
-    return jsonify({'ok': True, 'dvr_source': display_name, 'm3u_url': m3u_url, 'epg_url': epg_url})
+    return jsonify({'ok': True, 'sources_added': [gn_name, epg_name]})
 
 
 @api_bp.route('/settings', methods=['GET', 'POST'])

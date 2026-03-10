@@ -574,8 +574,9 @@ async function saveFeed() {
       body:    JSON.stringify(payload),
     });
     if (!r.ok) {
-      const d = await r.json();
-      throw new Error(d.error || `HTTP ${r.status}`);
+      let msg = `HTTP ${r.status}`;
+      try { const d = await r.json(); msg = d.error || msg; } catch {}
+      throw new Error(msg);
     }
     closeModal();
     location.reload();
