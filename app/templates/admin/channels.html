@@ -72,6 +72,12 @@
       vertical-align: middle; letter-spacing: 0.05em;
     }
     tr.dup-group-1 td { background: rgba(251,191,36,0.04); }
+    .badge-epg-only {
+      display: inline-block; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em;
+      padding: 1px 5px; border-radius: 20px; text-transform: uppercase;
+      background: #2e1065; color: #c4b5fd; border: 1px solid #6d28d944;
+      margin-left: 0.35rem; vertical-align: middle;
+    }
     .btn-resolve-dupes {
       background: #854d0e; color: #fef3c7; border: none; border-radius: 6px;
       padding: 0.4rem 0.85rem; font-size: 0.8rem; font-weight: 600; cursor: pointer;
@@ -345,7 +351,7 @@
               {% endif %}
             </td>
             <td><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="This channel name exists in multiple sources">DUP</span>{% endif %}</td>
-            <td style="color:#64748b">{{ ch.source.display_name }}</td>
+            <td style="color:#64748b">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
             <td style="color:#94a3b8">{{ ch.category or '—' }}</td>
             <td style="color:#64748b">{{ ch.language or '—' }}</td>
             <td style="color:#64748b">{{ chnum_map.get(ch.id) or '—' }}</td>
