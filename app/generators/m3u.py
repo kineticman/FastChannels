@@ -94,16 +94,31 @@ def _build_source_chnum_map(channels):
         chnum_map  – dict[channel_id -> int]
         warnings   – list of human-readable overlap warning strings
     """
-    # Group channels by source, preserving their sorted order
+    def _channel_sort_key(ch):
+        return (
+            ch.number is None,
+            ch.number if ch.number is not None else 0,
+            (ch.name or '').lower(),
+            ch.source_channel_id or '',
+        )
+
+    # Group channels by source, then sort each source's channels independently.
+    # This keeps the global tvg-chno blocks stable even when the mixed query
+    # order shifts as scrapers add/remove channels in other sources.
     by_source: dict[str, list] = {}
     source_starts: dict[str, int] = {}
+    source_labels: dict[str, str] = {}
     for ch in channels:
         src = ch.source.name
         if src not in by_source:
             by_source[src] = []
+            source_labels[src] = ch.source.display_name or ch.source.name or src
             if ch.source.chnum_start:
                 source_starts[src] = ch.source.chnum_start
         by_source[src].append(ch)
+
+    for src in by_source:
+        by_source[src].sort(key=_channel_sort_key)
 
     # Detect overlaps between configured sources
     warnings: list[str] = []
@@ -137,7 +152,18 @@ def _build_source_chnum_map(channels):
     # Assign numbers
     chnum_map: dict[int, int] = {}
     global_cursor = global_start  # tracks next number for ungrouped sources
-    for src, chs in by_source.items():
+    ordered_sources = sorted(
+        by_source,
+        key=lambda src: (
+            src not in source_starts,
+            source_starts.get(src, 0),
+            source_labels.get(src, src).lower(),
+            src,
+        ),
+    )
+
+    for src in ordered_sources:
+        chs = by_source[src]
         if src in source_starts:
             start = source_starts[src]
             for idx, ch in enumerate(chs):
