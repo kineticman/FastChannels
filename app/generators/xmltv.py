@@ -25,7 +25,7 @@ from flask import request as flask_request
 
 from ..extensions import db
 from ..models import Channel, Program, Source
-from .m3u import _build_channel_query, _tvg_id
+from .m3u import _build_channel_query, _selected_channels, _tvg_id
 
 log = logging.getLogger(__name__)
 
@@ -158,11 +158,10 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None):
     filters  = filters or {}
     base_url = (base_url or 'http://localhost:5523').rstrip('/')
 
-    channels = _build_channel_query(filters).order_by(Channel.name.asc()).all()
-
-    max_ch = filters.get('max_channels')
-    if max_ch:
-        channels = channels[:int(max_ch)]
+    # Standard XMLTV must expose the same channel identity set as the standard
+    # XMLTV-backed M3U; otherwise clients that join on tvg-id see orphaned or
+    # shifted channels. Gracenote-backed channels are intentionally excluded.
+    channels = _selected_channels(filters, gracenote=False)
 
     tvg_map      = {ch.id: _tvg_id(ch) for ch in channels}
     # Channel category map — used as fallback when prog.category is None

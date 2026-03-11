@@ -60,6 +60,29 @@ def _build_channel_query(filters: dict):
     return query.order_by(Channel.number.asc().nullslast(), Channel.name.asc())
 
 
+def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = False):
+    """
+    Return the concrete channel list for playlist/XMLTV generation.
+
+    gracenote=False  -> channels for the standard XMLTV-backed M3U
+    gracenote=True   -> channels for the Gracenote-backed M3U
+    gracenote=None   -> all filtered channels without Gracenote partitioning
+    """
+    filters = filters or {}
+    channels = _build_channel_query(filters).all()
+
+    if gracenote is True:
+        channels = [ch for ch in channels if _parse_gracenote_id(ch)]
+    elif gracenote is False:
+        channels = [ch for ch in channels if not _parse_gracenote_id(ch)]
+
+    max_ch = filters.get('max_channels')
+    if max_ch:
+        channels = channels[:int(max_ch)]
+
+    return channels
+
+
 def feed_to_query_filters(feed_filters: dict) -> dict:
     """Translate Feed.filters (plural keys) to _build_channel_query format."""
     f = {}
@@ -209,8 +232,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
 
-    all_channels = _build_channel_query(filters).all()
-    channels = [ch for ch in all_channels if not _parse_gracenote_id(ch)]
+    channels = _selected_channels(filters, gracenote=False)
 
     if feed_chnum_start is not None:
         chnum_map = _build_feed_chnum_map(channels, feed_chnum_start)
@@ -253,8 +275,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
 
-    all_channels = _build_channel_query(filters).all()
-    channels = [ch for ch in all_channels if _parse_gracenote_id(ch)]
+    channels = _selected_channels(filters, gracenote=True)
 
     if feed_chnum_start is not None:
         chnum_map = _build_feed_chnum_map(channels, feed_chnum_start)
