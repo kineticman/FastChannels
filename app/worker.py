@@ -34,6 +34,14 @@ logger = logging.getLogger(__name__)
 flask_app = create_app()
 
 
+def _utc_aware(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def run_scraper(source_name: str):
     with flask_app.app_context():
         source = Source.query.filter_by(name=source_name).first()
@@ -61,7 +69,7 @@ def run_scraper(source_name: str):
             # only refresh EPG using the existing DB channel list.
             skip_channels = False
             if refresh_hours > 0 and source.last_scraped_at:
-                last = source.last_scraped_at.replace(tzinfo=timezone.utc) if source.last_scraped_at.tzinfo is None else source.last_scraped_at
+                last = _utc_aware(source.last_scraped_at)
                 age_hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
                 skip_channels = age_hours < refresh_hours
 
@@ -466,20 +474,28 @@ def _upsert_programs(source, program_data_list):
 
         preserve_ids: set[int] = set()
         for channel_id, incoming_rows in incoming_by_channel_id.items():
-            future_rows = [row for row in incoming_rows if row.end_time > now]
-            has_now_coverage = any(row.start_time <= now < row.end_time for row in future_rows)
+            future_rows = [row for row in incoming_rows if _utc_aware(row.end_time) > now]
+            has_now_coverage = any(
+                _utc_aware(row.start_time) <= now < _utc_aware(row.end_time)
+                for row in future_rows
+            )
             if has_now_coverage:
                 continue
 
-            earliest_incoming_start = min((row.start_time for row in future_rows), default=None)
+            earliest_incoming_start = min(
+                (_utc_aware(row.start_time) for row in future_rows),
+                default=None,
+            )
             rows_to_preserve = []
             for existing in existing_by_channel_id.get(channel_id, []):
-                if existing.end_time <= now:
+                existing_start = _utc_aware(existing.start_time)
+                existing_end = _utc_aware(existing.end_time)
+                if existing_end <= now:
                     continue
                 if earliest_incoming_start is None:
                     rows_to_preserve.append(existing.id)
                     continue
-                if existing.start_time < earliest_incoming_start and existing.end_time <= earliest_incoming_start:
+                if existing_start < earliest_incoming_start and existing_end <= earliest_incoming_start:
                     rows_to_preserve.append(existing.id)
 
             if rows_to_preserve:
@@ -538,11 +554,8 @@ def _schedule_due_scrapes():
         for source in sources:
             interval_secs = (source.scrape_interval or 360) * 60
 
-            last_scraped = source.last_scraped_at
-            if last_scraped and last_scraped.tzinfo is None:
-                last_scraped = last_scraped.replace(tzinfo=timezone.utc)
-
-            last_queued = _last_enqueued.get(source.name)
+            last_scraped = _utc_aware(source.last_scraped_at)
+            last_queued = _utc_aware(_last_enqueued.get(source.name))
             candidates = [t for t in (last_scraped, last_queued) if t is not None]
             last = max(candidates) if candidates else None
 
