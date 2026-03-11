@@ -10,7 +10,7 @@ disabled and manually re-enable if desired.
 import logging
 import threading
 
-from flask import Blueprint, redirect, abort, current_app
+from flask import Blueprint, redirect, abort, current_app, request
 from ..models import Channel, Source
 from ..extensions import db
 from ..scrapers import registry
@@ -21,6 +21,16 @@ play_bp = Blueprint('play', __name__)
 
 # DRM encryption methods that indicate a channel is unplayable on open clients
 _DRM_METHODS = ('SAMPLE-AES',)  # AES-128 with key URL is standard HLS, not FairPlay
+
+
+def _client_ip() -> str:
+    forwarded = (request.headers.get('X-Forwarded-For') or '').strip()
+    if forwarded:
+        return forwarded.split(',', 1)[0].strip()
+    real_ip = (request.headers.get('X-Real-IP') or '').strip()
+    if real_ip:
+        return real_ip
+    return request.remote_addr or 'unknown'
 
 
 def _check_manifest(url: str, session) -> str | None:
@@ -65,6 +75,7 @@ def _check_manifest(url: str, session) -> str | None:
 
 @play_bp.route('/play/<source_name>/<channel_id>.m3u8')
 def play(source_name: str, channel_id: str):
+    client_ip = _client_ip()
     channel = (
         Channel.query
         .join(Source)
@@ -72,8 +83,13 @@ def play(source_name: str, channel_id: str):
         .first()
     )
     if not channel:
-        logger.warning('[play] unknown channel %s/%s', source_name, channel_id)
+        logger.warning('[play] request ip=%s unknown channel %s/%s', client_ip, source_name, channel_id)
         abort(404)
+
+    logger.info(
+        '[play] request ip=%s source=%s channel_id=%s channel_name=%s',
+        client_ip, source_name, channel_id, channel.name,
+    )
 
     scraper_cls = registry.get(source_name)
     scraper = None
@@ -82,7 +98,10 @@ def play(source_name: str, channel_id: str):
         try:
             resolved_url = scraper.resolve(channel.stream_url)
         except Exception as e:
-            logger.error('[play] resolve failed for %s/%s: %s', source_name, channel_id, e)
+            logger.error(
+                '[play] resolve failed ip=%s source=%s channel_id=%s channel_name=%s: %s',
+                client_ip, source_name, channel_id, channel.name, e,
+            )
             resolved_url = channel.stream_url
         finally:
             if scraper._pending_config_updates:
@@ -129,5 +148,8 @@ def play(source_name: str, channel_id: str):
 
         threading.Thread(target=_bg_check, daemon=True).start()
 
-    logger.debug('[play] %s/%s → %s', source_name, channel_id, resolved_url[:80])
+    logger.debug(
+        '[play] redirect ip=%s source=%s channel_id=%s channel_name=%s → %s',
+        client_ip, source_name, channel_id, channel.name, resolved_url[:80],
+    )
     return redirect(resolved_url, 302)

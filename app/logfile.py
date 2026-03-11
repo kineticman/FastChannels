@@ -13,6 +13,16 @@ _FORMATTER = logging.Formatter('%(asctime)s %(levelname)-8s %(name)s: %(message)
 def setup():
     """Attach a FileHandler to the root logger (idempotent)."""
     root = logging.getLogger()
+    if root.getEffectiveLevel() > logging.INFO:
+        root.setLevel(logging.INFO)
+
+    has_stream = any(isinstance(h, logging.StreamHandler) for h in root.handlers)
+    if not has_stream:
+        sh = logging.StreamHandler()
+        sh.setLevel(logging.INFO)
+        sh.setFormatter(_FORMATTER)
+        root.addHandler(sh)
+
     for h in root.handlers:
         if isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', '') == LOG_PATH:
             return
