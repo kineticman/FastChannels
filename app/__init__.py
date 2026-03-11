@@ -1,3 +1,4 @@
+import os
 from flask import Flask
 from .extensions import db
 from .config import Config, VERSION
@@ -5,10 +6,28 @@ from . import logfile
 from .schema import ensure_runtime_schema
 
 
+def _ensure_sqlite_parent_dir(database_uri: str | None) -> None:
+    if not database_uri or not database_uri.startswith("sqlite:"):
+        return
+
+    path = database_uri[len("sqlite:"):]
+    if path.startswith("////"):
+        fs_path = path[3:]
+    elif path.startswith("///"):
+        fs_path = path[2:]
+    else:
+        return
+
+    parent = os.path.dirname(fs_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
 def create_app(config_class=Config):
     logfile.setup()
     app = Flask(__name__)
     app.config.from_object(config_class)
+    _ensure_sqlite_parent_dir(app.config.get("SQLALCHEMY_DATABASE_URI"))
 
     @app.context_processor
     def inject_version():

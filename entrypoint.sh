@@ -21,6 +21,9 @@ for i in $(seq 1 30); do
     sleep 0.5
 done
 
+# Ensure the default SQLite data directory exists before app startup.
+mkdir -p /data
+
 # Create DB tables directly from models
 cd /app
 python -c "from app import create_app; from app.extensions import db; app = create_app(); app.app_context().push(); db.create_all()"
