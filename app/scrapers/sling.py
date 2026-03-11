@@ -298,18 +298,21 @@ class SlingScraper(BaseScraper):
         selected    = channels if limit <= 0 else channels[:limit]
         total       = len(selected)
 
-        # Snapshot the current headers (including auth) once; each thread gets
-        # its own Session to avoid concurrent mutation of self.session.
+        # Snapshot the current headers (including auth) once; each worker thread
+        # reuses its own Session to avoid shared mutation and repeated fresh
+        # connection pools for every channel task.
         headers_snapshot = dict(self.session.headers)
 
         programs: list[ProgramData] = []
         lock     = threading.Lock()
+        thread_local = threading.local()
         done     = [0]   # mutable counter accessible from threads
 
         def fetch_one(channel_id: str) -> None:
-            import requests as _req
-            sess = _req.Session()
-            sess.headers.update(headers_snapshot)
+            sess = getattr(thread_local, "session", None)
+            if sess is None:
+                sess = self.new_session(headers=headers_snapshot)
+                thread_local.session = sess
             try:
                 result = self._fetch_epg_for_channel_with_session(channel_id, max_windows, sess)
             except Exception as exc:  # noqa: BLE001

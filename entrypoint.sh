@@ -38,8 +38,10 @@ import socket
 import sys
 
 targets = [
+    ("therokuchannel.roku.com", 443),
     ("watch.sling.com", 443),
     ("tubitv.com", 443),
+    ("valencia-app-mds.xumo.com", 443),
 ]
 
 try:

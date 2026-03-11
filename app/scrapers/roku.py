@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
-from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, is_transient_network_error
 
 logger = logging.getLogger(__name__)
 
@@ -373,6 +373,8 @@ class RokuScraper(BaseScraper):
             return True
 
         except Exception as exc:
+            if is_transient_network_error(exc):
+                raise
             logger.error("[roku] session refresh failed: %s", exc)
             return False
 
@@ -550,7 +552,6 @@ class RokuScraper(BaseScraper):
 
     def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
         import threading
-        import requests as _req
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         if not self._ensure_session():
@@ -558,8 +559,8 @@ class RokuScraper(BaseScraper):
 
         total = len(channels)
         # Snapshot merged headers (session defaults + API-specific) and cookies
-        # so each thread can build an independent session — avoids concurrent
-        # mutation of the shared self.session.
+        # so each worker thread can reuse its own independent session without
+        # mutating the shared scraper session or opening a fresh pool per task.
         headers_snapshot = {**self.session.headers, **self._api_headers()}
         cookies_snapshot  = dict(self.session.cookies)
 
@@ -567,13 +568,16 @@ class RokuScraper(BaseScraper):
         # Map content_id → programs within 48h that need a description backfill
         cid_to_progs: dict[str, list[ProgramData]] = {}
         lock = threading.Lock()
+        thread_local = threading.local()
         done = [0]
 
         cutoff_48h = datetime.now(timezone.utc) + timedelta(hours=48)
 
         def fetch_one(ch: ChannelData) -> tuple[list[ProgramData], dict]:
-            sess = _req.Session()
-            sess.headers.update(headers_snapshot)
+            sess = getattr(thread_local, "session", None)
+            if sess is None:
+                sess = self.new_session(headers=headers_snapshot, cookies=cookies_snapshot)
+                thread_local.session = sess
             sess.cookies.update(cookies_snapshot)
             sid = ch.source_channel_id
             try:
@@ -600,6 +604,8 @@ class RokuScraper(BaseScraper):
                             local_cid_map.setdefault(cid, []).append(prog)
                 return result, local_cid_map
             except Exception as exc:
+                if is_transient_network_error(exc):
+                    raise
                 logger.warning("[roku] EPG error for %s (%s): %s", ch.name, sid, exc)
                 return [], {}
 
@@ -608,6 +614,9 @@ class RokuScraper(BaseScraper):
             for future in as_completed(futures):
                 exc = future.exception()
                 if exc and type(exc).__name__ == 'JobTimeoutException':
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise exc
+                if exc and is_transient_network_error(exc):
                     executor.shutdown(wait=False, cancel_futures=True)
                     raise exc
                 result, local_cid_map = future.result() if not exc else ([], {})

@@ -2,7 +2,6 @@
 Background worker — run with: python -m app.worker
 """
 import logging
-import socket
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -15,10 +14,9 @@ from app import create_app
 from app.extensions import db
 from app.models import Source, Channel, Program
 import time as _time
-import requests as _requests
 from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
-from app.scrapers.base import StreamDeadError, ScrapeSkipError
+from app.scrapers.base import StreamDeadError, ScrapeSkipError, is_transient_network_error
 
 logging.basicConfig(
     level=logging.INFO,
@@ -162,34 +160,7 @@ def _iter_exception_chain(exc: Exception):
 
 
 def _is_transient_network_error(exc: Exception) -> bool:
-    network_types = (
-        _requests.exceptions.ConnectionError,
-        _requests.exceptions.Timeout,
-        socket.gaierror,
-        ConnectionError,
-        TimeoutError,
-        OSError,
-    )
-    network_markers = (
-        'name resolution',
-        'failed to resolve',
-        'temporary failure in name resolution',
-        'network is unreachable',
-        'err_name_not_resolved',
-        'max retries exceeded',
-        'failed to establish a new connection',
-    )
-
-    for err in _iter_exception_chain(exc):
-        if isinstance(err, network_types):
-            text = str(err).lower()
-            if any(marker in text for marker in network_markers):
-                return True
-        else:
-            text = str(err).lower()
-            if any(marker in text for marker in network_markers):
-                return True
-    return False
+    return is_transient_network_error(exc)
 
 
 def _network_error_summary(exc: Exception) -> str:

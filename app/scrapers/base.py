@@ -1,10 +1,45 @@
 import logging
+import socket
 from abc import ABC, abstractmethod
 from typing import Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
+
+
+def is_transient_network_error(exc: Exception) -> bool:
+    network_types = (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+        socket.gaierror,
+        ConnectionError,
+        TimeoutError,
+        OSError,
+    )
+    network_markers = (
+        'name resolution',
+        'failed to resolve',
+        'temporary failure in name resolution',
+        'network is unreachable',
+        'err_name_not_resolved',
+        'max retries exceeded',
+        'failed to establish a new connection',
+    )
+
+    seen = set()
+    current = exc
+    while current and id(current) not in seen:
+        seen.add(id(current))
+        text = str(current).lower()
+        if isinstance(current, network_types) and any(marker in text for marker in network_markers):
+            return True
+        if any(marker in text for marker in network_markers):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class StreamDeadError(Exception):
@@ -98,9 +133,34 @@ class BaseScraper(ABC):
         self._pending_config_updates: dict = {}
         self._progress_cb = None   # optional callable(phase, done, total) set by worker
         self.session = requests.Session()
+        self._configure_session(self.session)
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (compatible; FastChannels/1.0)'
         })
+
+    def _retry_config(self) -> Retry:
+        return Retry(
+            total=3,
+            connect=3,
+            read=2,
+            status=2,
+            backoff_factor=1.0,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=None,
+            raise_on_status=False,
+        )
+
+    def _configure_session(self, session: requests.Session) -> None:
+        adapter = HTTPAdapter(max_retries=self._retry_config())
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
+
+    def new_session(self, *, headers: dict | None = None, cookies: dict | None = None) -> requests.Session:
+        session = requests.Session()
+        self._configure_session(session)
+        session.headers.update(headers or dict(self.session.headers))
+        session.cookies.update(cookies or dict(self.session.cookies))
+        return session
 
     def _update_config(self, key: str, value) -> None:
         """Queue a config key/value to be persisted by the worker after this run.
@@ -135,5 +195,8 @@ class BaseScraper(ABC):
             r.raise_for_status()
             return r
         except requests.RequestException as e:
-            logger.error(f'[{self.source_name}] GET {url} failed: {e}')
+            if is_transient_network_error(e):
+                logger.warning(f'[{self.source_name}] transient GET failure for {url}: {e}')
+            else:
+                logger.error(f'[{self.source_name}] GET {url} failed: {e}')
             return None
