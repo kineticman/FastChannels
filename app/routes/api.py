@@ -9,7 +9,7 @@ from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
 from ..url import public_base_url
 from .tasks import trigger_scrape, trigger_stream_audit
-from ..generators.m3u import get_chnum_overlaps
+from ..generators.m3u import get_global_chnum_overlaps
 from .. import logfile
 
 api_bp = Blueprint('api', __name__)
@@ -148,16 +148,18 @@ def audit_status(source_id):
 
 @api_bp.route('/sources/chnum-overlaps')
 def chnum_overlaps():
-    """Return a list of channel-number overlap warnings for the current source config."""
-    return jsonify({'warnings': get_chnum_overlaps()})
+    """Return a list of channel-number overlap warnings across all M3U outputs."""
+    return jsonify({'warnings': get_global_chnum_overlaps()})
 
 
 @api_bp.route('/sources/<int:source_id>', methods=['PATCH'])
 def update_source(source_id):
     source = Source.query.get_or_404(source_id)
     data = request.get_json()
+    changed = False
     if 'is_enabled' in data:
         source.is_enabled = bool(data['is_enabled'])
+        changed = True
     if 'scrape_interval' in data:
         source.scrape_interval = int(data['scrape_interval'])
     if 'chnum_start' in data:
@@ -170,8 +172,15 @@ def update_source(source_id):
                 source.chnum_start = n if n > 0 else None
             except (ValueError, TypeError):
                 return jsonify({'error': 'chnum_start must be a positive integer'}), 422
+        changed = True
     if 'epg_only' in data:
         source.epg_only = bool(data['epg_only'])
+        changed = True
+    if changed:
+        warnings = get_global_chnum_overlaps()
+        if warnings:
+            db.session.rollback()
+            return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
     db.session.commit()
     return jsonify(source.to_dict())
 
@@ -576,13 +585,20 @@ def app_settings():
     row = AppSettings.get()
     if request.method == 'POST':
         data = request.get_json(force=True) or {}
+        changed = False
         if 'global_chnum_start' in data:
             val = data['global_chnum_start']
             row.global_chnum_start = int(val) if val is not None else None
+            changed = True
         if 'channels_dvr_url' in data:
             row.channels_dvr_url = _normalize_server_url(data['channels_dvr_url'], default_port=8089)
         if 'public_base_url' in data:
             row.public_base_url = _normalize_server_url(data['public_base_url'], default_port=5523)
+        if changed:
+            warnings = get_global_chnum_overlaps()
+            if warnings:
+                db.session.rollback()
+                return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
         db.session.commit()
     return jsonify({
         'global_chnum_start': row.global_chnum_start,

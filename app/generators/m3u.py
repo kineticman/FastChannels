@@ -1,8 +1,12 @@
 import logging
 import re
-from ..models import Channel, Source, AppSettings
+from ..models import Channel, Source, Feed, AppSettings
 
 log = logging.getLogger(__name__)
+
+_CHNUM_NAMESPACE_BLOCK = 100000
+_MASTER_GRACENOTE_START = 100000
+_FEED_NAMESPACE_BASE = 200000
 
 # Gracenote ID prefixes recognised by Channels DVR
 _GRACENOTE_PREFIX_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
@@ -81,6 +85,16 @@ def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = 
         channels = channels[:int(max_ch)]
 
     return channels
+
+
+def feed_namespace_start(feed: Feed, *, gracenote: bool) -> int:
+    idx = (
+        Feed.query
+        .filter(Feed.is_enabled == True, Feed.slug < feed.slug)
+        .count()
+    )
+    base = _FEED_NAMESPACE_BASE + (idx * _CHNUM_NAMESPACE_BLOCK * 2)
+    return base + (_CHNUM_NAMESPACE_BLOCK if gracenote else 0)
 
 
 def feed_to_query_filters(feed_filters: dict) -> dict:
@@ -207,6 +221,14 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int):
     return {ch.id: feed_chnum_start + idx for idx, ch in enumerate(channels)}
 
 
+def _resolve_chnum_map(channels, *, feed_chnum_start: int = None, namespace_start: int = None):
+    if namespace_start is not None:
+        return _build_feed_chnum_map(channels, namespace_start), []
+    if feed_chnum_start is not None:
+        return _build_feed_chnum_map(channels, feed_chnum_start), []
+    return _build_source_chnum_map(channels)
+
+
 def get_chnum_overlaps() -> list[str]:
     """
     Return a list of overlap warning strings for the current source configuration.
@@ -217,8 +239,67 @@ def get_chnum_overlaps() -> list[str]:
     return warnings
 
 
+def get_global_chnum_overlaps() -> list[str]:
+    """
+    Return warnings for duplicate tvg-chno values across every generated M3U:
+    master standard, master gracenote, and all enabled feed outputs.
+    """
+    outputs: list[tuple[str, list, dict[int, int]]] = []
+
+    master_standard = _selected_channels({}, gracenote=False)
+    master_standard_map, _ = _resolve_chnum_map(master_standard)
+    outputs.append(('master /m3u', master_standard, master_standard_map))
+
+    master_gracenote = _selected_channels({}, gracenote=True)
+    master_gracenote_map, _ = _resolve_chnum_map(
+        master_gracenote,
+        namespace_start=_MASTER_GRACENOTE_START,
+    )
+    outputs.append(('master /m3u/gracenote', master_gracenote, master_gracenote_map))
+
+    feeds = Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all()
+    for feed in feeds:
+        filters = feed_to_query_filters(feed.filters or {})
+
+        std_channels = _selected_channels(filters, gracenote=False)
+        std_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=False)
+        std_map, _ = _resolve_chnum_map(
+            std_channels,
+            feed_chnum_start=feed.chnum_start,
+            namespace_start=std_ns,
+        )
+        outputs.append((f'feed {feed.slug} /m3u', std_channels, std_map))
+
+        gn_channels = _selected_channels(filters, gracenote=True)
+        gn_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=True)
+        gn_map, _ = _resolve_chnum_map(
+            gn_channels,
+            feed_chnum_start=feed.chnum_start,
+            namespace_start=gn_ns,
+        )
+        outputs.append((f'feed {feed.slug} /m3u/gracenote', gn_channels, gn_map))
+
+    seen: dict[int, tuple[str, str]] = {}
+    warnings: list[str] = []
+    for output_name, channels, chnum_map in outputs:
+        for ch in channels:
+            chnum = chnum_map.get(ch.id)
+            if not chnum:
+                continue
+            current = (output_name, ch.name)
+            previous = seen.get(chnum)
+            if previous and previous != current:
+                warnings.append(
+                    f"ch {chnum} is duplicated: {previous[1]} in {previous[0]} and "
+                    f"{ch.name} in {output_name}"
+                )
+            else:
+                seen[chnum] = current
+    return warnings
+
+
 def generate_m3u(filters: dict = None, base_url: str = None,
-                 feed_chnum_start: int = None) -> str:
+                 feed_chnum_start: int = None, namespace_start: int = None) -> str:
     """
     Standard XMLTV-backed playlist.
     Excludes channels with a valid Gracenote ID — those belong in /m3u/gracenote
@@ -234,10 +315,12 @@ def generate_m3u(filters: dict = None, base_url: str = None,
 
     channels = _selected_channels(filters, gracenote=False)
 
-    if feed_chnum_start is not None:
-        chnum_map = _build_feed_chnum_map(channels, feed_chnum_start)
-    else:
-        chnum_map, warnings = _build_source_chnum_map(channels)
+    chnum_map, warnings = _resolve_chnum_map(
+        channels,
+        feed_chnum_start=feed_chnum_start,
+        namespace_start=namespace_start,
+    )
+    if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap: %s', w)
 
@@ -261,7 +344,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
 
 
 def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
-                            feed_chnum_start: int = None) -> str:
+                            feed_chnum_start: int = None, namespace_start: int = None) -> str:
     """
     Gracenote-backed playlist for Channels DVR.
 
@@ -277,10 +360,12 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
 
     channels = _selected_channels(filters, gracenote=True)
 
-    if feed_chnum_start is not None:
-        chnum_map = _build_feed_chnum_map(channels, feed_chnum_start)
-    else:
-        chnum_map, warnings = _build_source_chnum_map(channels)
+    chnum_map, warnings = _resolve_chnum_map(
+        channels,
+        feed_chnum_start=feed_chnum_start,
+        namespace_start=namespace_start,
+    )
+    if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap (gracenote): %s', w)
 

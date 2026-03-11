@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, request
 from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings
-from ..generators.m3u import _parse_gracenote_id, get_chnum_overlaps, _build_source_chnum_map
+from ..generators.m3u import _parse_gracenote_id, get_global_chnum_overlaps, _build_source_chnum_map
 from ..scrapers import registry as _scraper_registry
 from ..url import public_base_url, detected_base_url
 
@@ -25,7 +25,7 @@ def dashboard():
 
 @admin_bp.route('/sources')
 def sources():
-    chnum_warnings = get_chnum_overlaps()
+    chnum_warnings = get_global_chnum_overlaps()
     all_scrapers   = _scraper_registry.get_all()
     audit_enabled  = {
         name: getattr(cls, 'stream_audit_enabled', False)

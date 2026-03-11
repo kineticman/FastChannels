@@ -5,6 +5,7 @@ Mounted at /api/feeds by app/__init__.py.
 import re
 from flask import Blueprint, jsonify, request
 from ..extensions import db
+from ..generators.m3u import get_global_chnum_overlaps
 from ..models import Feed
 from ..url import public_base_url
 
@@ -44,6 +45,10 @@ def create_feed():
         is_enabled  = data.get('is_enabled', True),
     )
     db.session.add(feed)
+    warnings = get_global_chnum_overlaps()
+    if warnings:
+        db.session.rollback()
+        return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
     db.session.commit()
     return jsonify(feed.to_dict(public_base_url())), 201
 
@@ -70,6 +75,10 @@ def update_feed(feed_id):
     if 'is_enabled' in data:
         feed.is_enabled = bool(data['is_enabled'])
 
+    warnings = get_global_chnum_overlaps()
+    if warnings:
+        db.session.rollback()
+        return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
     db.session.commit()
     return jsonify(feed.to_dict(public_base_url()))
 

@@ -154,7 +154,7 @@
   <div class="container">
     {% if chnum_warnings %}
     <div class="overlap-banner" id="overlap-banner">
-      <strong>⚠ Channel number overlaps detected in combined /m3u output</strong>
+      <strong>⚠ Channel number overlaps detected across generated M3U outputs</strong>
       <ul>
         {% for w in chnum_warnings %}<li>{{ w }}</li>{% endfor %}
       </ul>
@@ -513,7 +513,7 @@
             banner = document.createElement('div');
             banner.id = 'overlap-banner';
             banner.className = 'overlap-banner';
-            banner.innerHTML = `<strong>⚠ Channel number overlaps detected in combined /m3u output</strong><ul>${items}</ul>`;
+            banner.innerHTML = `<strong>⚠ Channel number overlaps detected across generated M3U outputs</strong><ul>${items}</ul>`;
             document.querySelector('.container').prepend(banner);
           }
         } else if (banner) {
