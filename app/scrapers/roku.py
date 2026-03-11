@@ -26,6 +26,22 @@ from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError
 
 logger = logging.getLogger(__name__)
 
+
+def _join_categories(values: list[str] | tuple[str, ...] | None) -> str | None:
+    if not values:
+        return None
+    normalized = []
+    for value in values:
+        if not value:
+            continue
+        clean = value.strip()
+        if not clean:
+            continue
+        label = clean[0].upper() + clean[1:]
+        if label not in normalized:
+            normalized.append(label)
+    return ';'.join(normalized) or None
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 _BASE        = "https://therokuchannel.roku.com"
@@ -701,7 +717,7 @@ class RokuScraper(BaseScraper):
 
         # Category from genres
         genres = c.get("genres") or []
-        category = genres[0].capitalize() if genres else None
+        category = _join_categories(genres)
 
         return ProgramData(
             source_channel_id = station_id,

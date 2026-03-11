@@ -22,6 +22,13 @@ except ImportError:  # pragma: no cover - local staging outside FastChannels pac
 logger = logging.getLogger(__name__)
 
 
+def _join_categories(values: list[str] | tuple[str, ...] | None) -> str | None:
+    if not values:
+        return None
+    unique = list(dict.fromkeys(v.strip() for v in values if v and v.strip()))
+    return ';'.join(unique) or None
+
+
 class SlingScraper(BaseScraper):
     """
     Best-effort FastChannels scraper for Sling Freestream.
@@ -636,7 +643,7 @@ class SlingScraper(BaseScraper):
 
         genre = asset.get("genre") or asset.get("channel_genre")
         if isinstance(genre, list):
-            genre = ", ".join(x for x in genre if x)
+            genre = _join_categories(genre)
 
         rating = asset.get("rating")
         if isinstance(rating, list):

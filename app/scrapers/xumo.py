@@ -144,7 +144,12 @@ class XumoScraper(BaseScraper):
         seen: set[tuple[str, str, str]] = set()
 
         now_utc = datetime.now(timezone.utc)
-        dates = [(now_utc + timedelta(days=day)).strftime("%Y%m%d") for day in range(self.MAX_EPG_DAYS)]
+        # Xumo's "day" buckets run on a US-local boundary, so the current
+        # overnight UTC window lives under the previous date key.
+        dates = [
+            (now_utc + timedelta(days=day)).strftime("%Y%m%d")
+            for day in range(-1, self.MAX_EPG_DAYS)
+        ]
 
         for date_str in dates:
             for page in range(1, self.EPG_PAGES_PER_DAY + 1):
@@ -191,6 +196,8 @@ class XumoScraper(BaseScraper):
                             start = self._parse_xumo_dt(slot.get("start"))
                             end = self._parse_xumo_dt(slot.get("end"))
                             if not asset_id or not start or not end:
+                                continue
+                            if end <= now_utc:
                                 continue
 
                             asset = assets.get(asset_id) or self._asset_cache.get(asset_id) or {}
@@ -436,23 +443,34 @@ class XumoScraper(BaseScraper):
         return str(cur)
 
     @staticmethod
+    def _join_genres(values: list[Any] | None) -> str | None:
+        if not values:
+            return None
+        labels: list[str] = []
+        for value in values:
+            if isinstance(value, dict):
+                label = value.get("value") or value.get("title")
+            else:
+                label = str(value) if value is not None else None
+            if not label:
+                continue
+            label = label.strip()
+            if label and label not in labels:
+                labels.append(label)
+        return ';'.join(labels) or None
+
+    @staticmethod
     def _extract_genre(item: dict[str, Any]) -> str | None:
         genres = item.get("genre") or []
-        if isinstance(genres, list) and genres:
-            first = genres[0]
-            if isinstance(first, dict):
-                return first.get("value") or first.get("title")
-            return str(first)
+        if isinstance(genres, list):
+            return XumoScraper._join_genres(genres)
         return None
 
     @staticmethod
     def _extract_asset_genre(asset: dict[str, Any]) -> str | None:
         genres = asset.get("genres") or []
-        if isinstance(genres, list) and genres:
-            first = genres[0]
-            if isinstance(first, dict):
-                return first.get("value") or first.get("title")
-            return str(first)
+        if isinstance(genres, list):
+            return XumoScraper._join_genres(genres)
         return None
 
     @staticmethod

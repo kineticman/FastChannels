@@ -66,6 +66,51 @@ BOOT_PARAMS_BASE = {
     'lastAppLaunchDate': '',
 }
 
+_SERIES_GENRES = {
+    ("Animated",): ["Family Animation", "Cartoons"],
+    ("Educational",): ["Education & Guidance", "Instructional & Educational"],
+    ("News",): ["News and Information", "General News", "News + Opinion", "General News"],
+    ("History",): ["History & Social Studies"],
+    ("Politics",): ["Politics"],
+    ("Action",): [
+        "Action & Adventure", "Action Classics", "Martial Arts", "Crime Action",
+        "Family Adventures", "Action Sci-Fi & Fantasy", "Action Thrillers", "African-American Action",
+    ],
+    ("Adventure",): ["Action & Adventure", "Adventures", "Sci-Fi Adventure"],
+    ("Reality",): ["Reality", "Reality Drama", "Courtroom Reality", "Occupational Reality", "Celebrity Reality"],
+    ("Documentary",): [
+        "Documentaries", "Social & Cultural Documentaries", "Science and Nature Documentaries",
+        "Miscellaneous Documentaries", "Crime Documentaries", "Travel & Adventure Documentaries",
+        "Sports Documentaries", "Military Documentaries", "Political Documentaries", "Foreign Documentaries",
+        "Religion & Mythology Documentaries", "Historical Documentaries", "Biographical Documentaries",
+        "Faith & Spirituality Documentaries",
+    ],
+    ("Biography",): ["Biographical Documentaries", "Inspirational Biographies"],
+    ("Science Fiction",): ["Sci-Fi Thrillers", "Sci-Fi Adventure", "Action Sci-Fi & Fantasy"],
+    ("Thriller",): ["Sci-Fi Thrillers", "Thrillers", "Crime Thrillers"],
+    ("Talk",): ["Talk & Variety", "Talk Show"],
+    ("Variety",): ["Sketch Comedies"],
+    ("Home Improvement",): ["Art & Design", "DIY & How To", "Home Improvement"],
+    ("House/garden",): ["Home & Garden"],
+    ("Cooking",): ["Cooking Instruction", "Food & Wine", "Food Stories"],
+    ("Travel",): ["Travel & Adventure Documentaries", "Travel"],
+    ("Western",): ["Westerns", "Classic Westerns"],
+    ("LGBTQ",): ["Gay & Lesbian", "Gay & Lesbian Dramas", "Gay"],
+    ("Game show",): ["Game Show"],
+    ("Military",): ["Classic War Stories"],
+    ("Comedy",): [
+        "Cult Comedies", "Spoofs and Satire", "Slapstick", "Classic Comedies", "Stand-Up",
+        "Sports Comedies", "African-American Comedies", "Showbiz Comedies", "Sketch Comedies",
+        "Teen Comedies", "Latino Comedies", "Family Comedies",
+    ],
+    ("Crime",): ["Crime Action", "Crime Drama", "Crime Documentaries"],
+    ("Sports",): ["Sports", "Sports & Sports Highlights", "Sports Documentaries", "Poker & Gambling"],
+    ("Poker & Gambling",): ["Poker & Gambling"],
+    ("Crime drama",): ["Crime Drama"],
+    ("Drama",): ["Classic Dramas", "Family Drama", "Indie Drama", "Romantic Drama", "Crime Drama"],
+    ("Children",): ["Kids", "Children & Family", "Kids' TV", "Cartoons", "Animals", "Family Animation", "Ages 2-4", "Ages 11-12"],
+}
+
 
 class _StreamSession:
     """One virtual device — own clientID, session, and per-country token cache."""
@@ -340,6 +385,14 @@ class PlutoScraper(BaseScraper):
             v = clean(s)
             return None if v.lower() in _filler else (v or None)
 
+        def mapped_categories(value):
+            if not value or value.lower() in _filler:
+                return []
+            for labels, raw_values in _SERIES_GENRES.items():
+                if value in raw_values:
+                    return list(labels)
+            return [value]
+
         for entry in data:
             channel_id = entry.get('channelId')
             for tl in entry.get('timelines', []):
@@ -352,9 +405,18 @@ class PlutoScraper(BaseScraper):
                 series   = ep.get('series', {})
                 title    = clean(tl.get('title', ''))
                 ep_title = clean(ep.get('name', ''))
+                categories = []
                 # Skip Pluto filler slots — no real program data
                 if not title or title.lower() in _filler:
                     continue
+                categories.extend(mapped_categories(ep.get('genre')))
+                series_type = series.get('type', '')
+                if series_type == 'tv':
+                    categories.append('Series')
+                elif series_type == 'film':
+                    categories.append('Movie')
+                categories.extend(mapped_categories(ep.get('subGenre')))
+                unique_categories = list(dict.fromkeys(cat for cat in categories if cat))
                 programs.append(ProgramData(
                     source_channel_id = channel_id,
                     title             = title,
@@ -362,11 +424,7 @@ class PlutoScraper(BaseScraper):
                     start_time        = start,
                     end_time          = end,
                     poster_url        = series.get('tile', {}).get('path') or None,
-                    category          = next(
-                        (v for v in (ep.get('genre'), ep.get('subGenre'))
-                         if v and v.lower() not in ('no info available', 'n/a', '')),
-                        None,
-                    ),
+                    category          = ';'.join(unique_categories) or None,
                     season            = ep.get('season'),
                     episode           = ep.get('number'),
                     episode_title     = ep_title if ep_title.lower() != title.lower() else None,
