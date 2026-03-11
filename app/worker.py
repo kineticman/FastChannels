@@ -2,6 +2,7 @@
 Background worker — run with: python -m app.worker
 """
 import logging
+import socket
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -32,6 +33,8 @@ _setup_logfile()
 logger = logging.getLogger(__name__)
 
 flask_app = create_app()
+_NETWORK_OUTAGE_UNTIL = 0.0
+_NETWORK_OUTAGE_REASON = ''
 
 
 def _utc_aware(dt: datetime | None) -> datetime | None:
@@ -47,6 +50,13 @@ def run_scraper(source_name: str):
         source = Source.query.filter_by(name=source_name).first()
         if not source:
             logger.error(f'Source not found: {source_name}')
+            return
+
+        outage_reason = _active_network_outage()
+        if outage_reason:
+            source.last_error = outage_reason
+            db.session.commit()
+            logger.warning('[%s] Scrape skipped: %s', source_name, outage_reason)
             return
 
         scraper_cls = registry.get(source_name)
@@ -122,6 +132,16 @@ def run_scraper(source_name: str):
             _progress('done')
         except Exception as e:
             elapsed = time.monotonic() - t0
+            if _is_transient_network_error(e):
+                reason = _network_error_summary(e)
+                _mark_network_outage(reason)
+                logger.warning('[%s] Scrape skipped after %.1fs due to transient network failure: %s',
+                               source_name, elapsed, reason)
+                _apply_scraper_config_updates(source, scraper)
+                source.last_error = reason
+                db.session.commit()
+                _progress('done')
+                return
             logger.exception('[%s] Scrape failed after %.1fs', source_name, elapsed)
             # Persist any config updates the scraper queued before the failure
             # (e.g. a freshly bootstrapped token — don't lose it just because a
@@ -130,6 +150,69 @@ def run_scraper(source_name: str):
             source.last_error = str(e)
             db.session.commit()
             _progress('done')
+
+
+def _iter_exception_chain(exc: Exception):
+    seen = set()
+    current = exc
+    while current and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _is_transient_network_error(exc: Exception) -> bool:
+    network_types = (
+        _requests.exceptions.ConnectionError,
+        _requests.exceptions.Timeout,
+        socket.gaierror,
+        ConnectionError,
+        TimeoutError,
+        OSError,
+    )
+    network_markers = (
+        'name resolution',
+        'failed to resolve',
+        'temporary failure in name resolution',
+        'network is unreachable',
+        'err_name_not_resolved',
+        'max retries exceeded',
+        'failed to establish a new connection',
+    )
+
+    for err in _iter_exception_chain(exc):
+        if isinstance(err, network_types):
+            text = str(err).lower()
+            if any(marker in text for marker in network_markers):
+                return True
+        else:
+            text = str(err).lower()
+            if any(marker in text for marker in network_markers):
+                return True
+    return False
+
+
+def _network_error_summary(exc: Exception) -> str:
+    for err in _iter_exception_chain(exc):
+        text = str(err).strip()
+        lowered = text.lower()
+        if 'network is unreachable' in lowered:
+            return 'Network unavailable: no route to the internet. FastChannels will retry automatically.'
+        if 'temporary failure in name resolution' in lowered or 'failed to resolve' in lowered or 'err_name_not_resolved' in lowered:
+            return 'Network unavailable: DNS resolution failed. FastChannels will retry automatically.'
+    return 'Network unavailable: transient connectivity failure. FastChannels will retry automatically.'
+
+
+def _mark_network_outage(reason: str, cooldown_seconds: int = 90) -> None:
+    global _NETWORK_OUTAGE_UNTIL, _NETWORK_OUTAGE_REASON
+    _NETWORK_OUTAGE_UNTIL = time.monotonic() + cooldown_seconds
+    _NETWORK_OUTAGE_REASON = reason
+
+
+def _active_network_outage() -> str | None:
+    if time.monotonic() < _NETWORK_OUTAGE_UNTIL:
+        return _NETWORK_OUTAGE_REASON
+    return None
 
 
 

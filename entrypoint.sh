@@ -30,6 +30,51 @@ echo "✅ DB ready"
 python -c "from app.worker import seed_sources; seed_sources()" || true
 echo "✅ Sources seeded"
 
+wait_for_network() {
+    echo "⏳ Waiting for outbound network and DNS..."
+    for i in $(seq 1 30); do
+        if python - <<'PY'
+import socket
+import sys
+
+targets = [
+    ("watch.sling.com", 443),
+    ("tubitv.com", 443),
+]
+
+try:
+    for host, port in targets:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        last_error = None
+        connected = False
+        for family, socktype, proto, _, sockaddr in infos:
+            try:
+                with socket.socket(family, socktype, proto) as sock:
+                    sock.settimeout(3)
+                    sock.connect(sockaddr)
+                connected = True
+                break
+            except OSError as exc:
+                last_error = exc
+        if not connected:
+            raise last_error or OSError(f"could not connect to {host}:{port}")
+except Exception as exc:
+    print(f"network check failed: {exc}", file=sys.stderr)
+    sys.exit(1)
+PY
+        then
+            echo "✅ Network ready"
+            return 0
+        fi
+        sleep 2
+    done
+
+    echo "⚠ Network was not ready after 60s; starting anyway"
+    return 0
+}
+
+wait_for_network
+
 # Start background worker
 python -m app.worker &
 echo "✅ Worker started"
