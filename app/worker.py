@@ -437,25 +437,63 @@ def _upsert_programs(source, program_data_list):
     if not program_data_list:
         return
     channels = {ch.source_channel_id: ch for ch in source.channels.all()}
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=2)
+
+    incoming_by_channel_id: dict[int, list] = {}
+    for pd in program_data_list:
+        ch = channels.get(pd.source_channel_id)
+        if not ch:
+            continue
+        incoming_by_channel_id.setdefault(ch.id, []).append(pd)
 
     # Collect DB channel IDs that have incoming programs, then delete their
     # existing future programs before inserting fresh data.  This prevents
     # duplicates caused by the same channel appearing in multiple country
     # feeds or by repeated scrape runs appending to the same window.
-    incoming_channel_ids = {
-        channels[pd.source_channel_id].id
-        for pd in program_data_list
-        if pd.source_channel_id in channels
-    }
+    incoming_channel_ids = set(incoming_by_channel_id)
     if incoming_channel_ids:
-        # Delete any program that hasn't fully expired yet (end_time >= now - 2h),
-        # matching the prune cutoff so programs in the "just aired" zone are
-        # replaced rather than left as stale duplicates.
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
-        Program.query.filter(
+        existing_rows = Program.query.filter(
             Program.channel_id.in_(incoming_channel_ids),
             Program.end_time >= cutoff,
-        ).delete(synchronize_session=False)
+        ).all()
+
+        existing_by_channel_id: dict[int, list[Program]] = {}
+        for row in existing_rows:
+            existing_by_channel_id.setdefault(row.channel_id, []).append(row)
+
+        preserve_ids: set[int] = set()
+        for channel_id, incoming_rows in incoming_by_channel_id.items():
+            future_rows = [row for row in incoming_rows if row.end_time > now]
+            has_now_coverage = any(row.start_time <= now < row.end_time for row in future_rows)
+            if has_now_coverage:
+                continue
+
+            earliest_incoming_start = min((row.start_time for row in future_rows), default=None)
+            rows_to_preserve = []
+            for existing in existing_by_channel_id.get(channel_id, []):
+                if existing.end_time <= now:
+                    continue
+                if earliest_incoming_start is None:
+                    rows_to_preserve.append(existing.id)
+                    continue
+                if existing.start_time < earliest_incoming_start and existing.end_time <= earliest_incoming_start:
+                    rows_to_preserve.append(existing.id)
+
+            if rows_to_preserve:
+                preserve_ids.update(rows_to_preserve)
+                logger.warning(
+                    '[%s] preserving %d existing EPG rows for channel_id=%s; incoming scrape has no now coverage',
+                    source.name, len(rows_to_preserve), channel_id,
+                )
+
+        delete_query = Program.query.filter(
+            Program.channel_id.in_(incoming_channel_ids),
+            Program.end_time >= cutoff,
+        )
+        if preserve_ids:
+            delete_query = delete_query.filter(~Program.id.in_(preserve_ids))
+        delete_query.delete(synchronize_session=False)
 
     for pd in program_data_list:
         ch = channels.get(pd.source_channel_id)
