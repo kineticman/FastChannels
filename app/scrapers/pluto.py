@@ -266,7 +266,6 @@ class PlutoScraper(BaseScraper):
 
         for elem in channel_list:
             ch_id    = elem.get('id')
-            watch_id = elem.get('slug') or ch_id
             name     = elem.get('name') or elem.get('call_sign', '')
             number   = elem.get('number')
             if number is not None:
@@ -280,7 +279,10 @@ class PlutoScraper(BaseScraper):
             channels.append(ChannelData(
                 source_channel_id = ch_id,
                 name              = name,
-                stream_url        = f"pluto://{country_code}/{watch_id}",
+                # Resolve by stable Pluto channel ID rather than slug. Slugs can
+                # drift or be repointed, while source_channel_id is what the M3U
+                # and XMLTV already key on.
+                stream_url        = f"pluto://{country_code}/{ch_id}",
                 stream_type       = 'hls',
                 logo_url          = logo,
                 slug              = elem.get('slug') or name.lower().replace(' ', '-'),

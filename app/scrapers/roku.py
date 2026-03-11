@@ -42,6 +42,15 @@ def _join_categories(values: list[str] | tuple[str, ...] | None) -> str | None:
             normalized.append(label)
     return ';'.join(normalized) or None
 
+
+def _language_from_category(category: str | None) -> str:
+    if not category:
+        return "en"
+    folded = category.casefold()
+    if "spanish" in folded or "español" in folded or "espanol" in folded:
+        return "es"
+    return "en"
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 _BASE        = "https://therokuchannel.roku.com"
@@ -484,7 +493,7 @@ class RokuScraper(BaseScraper):
             stream_url        = f"roku://{station_id}",
             logo_url          = logo,
             category          = category,
-            language          = "en",
+            language          = _language_from_category(category),
             country           = "US",
             stream_type       = "hls",
             number            = number,
@@ -531,7 +540,7 @@ class RokuScraper(BaseScraper):
             stream_url        = f"roku://{station_id}",
             logo_url          = logo,
             category          = category,
-            language          = "en",
+            language          = _language_from_category(category),
             country           = "US",
             stream_type       = "hls",
             slug              = f"{play_id or ''}|{gracenote_id}",

@@ -28,6 +28,15 @@ from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 
 logger = logging.getLogger(__name__)
 
+
+def _language_from_category(category: str | None) -> str:
+    if not category:
+        return 'en'
+    folded = category.casefold()
+    if 'spanish' in folded or 'español' in folded or 'espanol' in folded:
+        return 'es'
+    return 'en'
+
 # ── API endpoints ────────────────────────────────────────────────────────────
 _LIVE_PAGE_URL   = 'https://tubitv.com/live'
 _EPG_ANON_URL    = 'https://tubitv.com/oz/epg/programming'
@@ -272,7 +281,7 @@ class TubiScraper(BaseScraper):
                 stream_url        = f'tubi://{cid}',
                 logo_url          = logo,
                 category          = category,
-                language          = 'en',
+                language          = _language_from_category(category),
                 country           = 'US',
                 stream_type       = 'hls',
                 gracenote_id      = gracenote_id,
@@ -428,7 +437,7 @@ class TubiScraper(BaseScraper):
                 stream_url        = f'tubi://{scid}',
                 logo_url          = logo,
                 category          = category,
-                language          = 'en',
+                language          = _language_from_category(category),
                 country           = 'US',
                 stream_type       = 'hls',
                 gracenote_id      = gracenote_id,

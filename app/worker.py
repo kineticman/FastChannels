@@ -383,6 +383,8 @@ def _upsert_channels(source, channel_data_list):
             ch.logo_url      = cd.logo_url
             ch.slug          = cd.slug
             ch.category      = cd.category
+            ch.language      = cd.language
+            ch.country       = cd.country
             ch.number        = cd.number
             # Don't resurrect channels the stream audit flagged as Dead or DRM
             # unless the stream URL changed (source may have fixed the channel).
