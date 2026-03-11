@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
-from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, is_transient_network_error
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, ScrapeSkipError, is_transient_network_error
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ _TAG_CATEGORY_PRIORITY = [
 ]
 
 _SESSION_TTL = 55 * 60  # seconds before we refresh cookies + csrf
+_LIVE_TV_403_RETRIES = 3
 
 # Name-based category keywords — checked in order, first match wins.
 # Each entry: (set-of-substrings, category).  All comparisons are lowercase.
@@ -346,8 +347,17 @@ class RokuScraper(BaseScraper):
         """Boot a fresh Roku browser session. Returns True on success."""
         try:
             # Step 1: hit live-tv to collect cookies
-            r1 = self.session.get(_LIVE_TV, timeout=15)
-            if r1.status_code != 200:
+            r1 = None
+            for attempt in range(_LIVE_TV_403_RETRIES + 1):
+                r1 = self.session.get(_LIVE_TV, timeout=15)
+                if r1.status_code == 200:
+                    break
+                if r1.status_code == 403 and attempt < _LIVE_TV_403_RETRIES:
+                    wait = 2 ** attempt
+                    logger.warning("[roku] live-tv returned 403, retry %d/%d in %ds",
+                                   attempt + 1, _LIVE_TV_403_RETRIES, wait)
+                    time.sleep(wait)
+                    continue
                 logger.error("[roku] live-tv returned %d", r1.status_code)
                 return False
 
@@ -418,7 +428,7 @@ class RokuScraper(BaseScraper):
 
     def fetch_channels(self) -> list[ChannelData]:
         if not self._ensure_session():
-            return []
+            raise ScrapeSkipError("[roku] session bootstrap failed; keeping previous channel data")
 
         channels: list[ChannelData] = []
         seen: set[str] = set()
@@ -459,8 +469,9 @@ class RokuScraper(BaseScraper):
 
         if not channels:
             logger.error("[roku] fetch_channels returned 0 channels — session may be bad")
-        else:
-            logger.info("[roku] %d channels fetched", len(channels))
+            raise ScrapeSkipError("[roku] channel fetch returned 0 channels; keeping previous channel data")
+
+        logger.info("[roku] %d channels fetched", len(channels))
 
         return channels
 
@@ -555,7 +566,7 @@ class RokuScraper(BaseScraper):
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         if not self._ensure_session():
-            return []
+            raise ScrapeSkipError("[roku] session bootstrap failed before EPG fetch; keeping previous EPG data")
 
         total = len(channels)
         # Snapshot merged headers (session defaults + API-specific) and cookies
