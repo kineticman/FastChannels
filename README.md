@@ -57,6 +57,15 @@ GHCR_OWNER=kineticman
 FASTCHANNELS_IMAGE_TAG=latest
 ```
 
+Optional: advanced users can also preseed a few app settings with environment variables. These are not required, and the normal setup path is still the **Settings** page in the admin UI.
+
+```yaml
+environment:
+  MASTER_CHANNEL_NUMBER_START: "1000"
+  FASTCHANNELS_SERVER_URL: "http://192.168.1.50:5523"
+  CHANNELS_DVR_SERVER_URL: "http://192.168.1.60:8089"
+```
+
 If you access the admin UI via `localhost` but want generated M3U / EPG / feed URLs to use a LAN IP or hostname instead, set:
 
 ```bash
@@ -100,6 +109,18 @@ Filter keys: `sources`, `categories`, `languages`, `max_channels`.
 ## Configuration
 
 Source credentials and source-specific options are set through the **Settings** page in the admin UI.
+
+Advanced users may optionally set a few defaults with environment variables:
+
+- `MASTER_CHANNEL_NUMBER_START` — default for the master tvg-chno start used by sources without their own start value
+- `FASTCHANNELS_SERVER_URL` — default for the FastChannels server URL used in generated M3U/feed links
+- `CHANNELS_DVR_SERVER_URL` — default for the Channels DVR server URL used by the DVR push integration
+
+These environment variables are optional.
+
+- You do not need them for a normal install.
+- Values saved later in **admin/settings** override the environment variable.
+- If a DB value is cleared in the UI, FastChannels falls back to the environment variable again.
 
 ## Architecture
 

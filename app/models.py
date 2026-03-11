@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timezone
 from .extensions import db
 
@@ -181,6 +182,45 @@ class AppSettings(db.Model):
     global_chnum_start = db.Column(db.Integer, nullable=True)  # master tvg-chno start for ungrouped sources
     channels_dvr_url   = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
     public_base_url    = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
+
+    @staticmethod
+    def _env_int(name: str) -> int | None:
+        raw = (os.environ.get(name) or '').strip()
+        if not raw:
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
+    @staticmethod
+    def _env_str(name: str) -> str | None:
+        raw = (os.environ.get(name) or '').strip().rstrip('/')
+        return raw or None
+
+    @classmethod
+    def env_global_chnum_start(cls) -> int | None:
+        return cls._env_int('MASTER_CHANNEL_NUMBER_START')
+
+    @classmethod
+    def env_public_base_url(cls) -> str | None:
+        return cls._env_str('FASTCHANNELS_SERVER_URL')
+
+    @classmethod
+    def env_channels_dvr_url(cls) -> str | None:
+        return cls._env_str('CHANNELS_DVR_SERVER_URL')
+
+    def effective_global_chnum_start(self) -> int | None:
+        return self.global_chnum_start if self.global_chnum_start is not None else self.env_global_chnum_start()
+
+    def effective_public_base_url(self) -> str | None:
+        value = (self.public_base_url or '').strip().rstrip('/')
+        return value or self.env_public_base_url()
+
+    def effective_channels_dvr_url(self) -> str | None:
+        value = (self.channels_dvr_url or '').strip().rstrip('/')
+        return value or self.env_channels_dvr_url()
 
     @classmethod
     def get(cls):

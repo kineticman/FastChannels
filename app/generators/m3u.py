@@ -182,7 +182,7 @@ def _build_source_chnum_map(channels):
     global_start = None
     try:
         settings = AppSettings.get()
-        global_start = settings.global_chnum_start
+        global_start = settings.effective_global_chnum_start()
     except Exception:
         pass
 

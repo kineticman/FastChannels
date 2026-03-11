@@ -531,7 +531,7 @@ def push_feed_to_dvr(feed_id):
     feed = Feed.query.get_or_404(feed_id)
     settings = AppSettings.get()
 
-    dvr_url = (settings.channels_dvr_url or '').strip()
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
     if not dvr_url:
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
 
@@ -600,8 +600,12 @@ def app_settings():
                 db.session.rollback()
                 return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
         db.session.commit()
+        row = AppSettings.get()
     return jsonify({
-        'global_chnum_start': row.global_chnum_start,
-        'channels_dvr_url':   row.channels_dvr_url,
-        'public_base_url':    row.public_base_url,
+        'global_chnum_start': row.effective_global_chnum_start(),
+        'channels_dvr_url':   row.effective_channels_dvr_url(),
+        'public_base_url':    row.effective_public_base_url(),
+        'global_chnum_start_source': 'db' if row.global_chnum_start is not None else ('env' if row.env_global_chnum_start() is not None else 'unset'),
+        'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
+        'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.env_public_base_url() is not None else 'unset'),
     })

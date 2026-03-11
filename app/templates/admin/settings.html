@@ -223,6 +223,9 @@
           <input type="number" id="global-chnum-start" min="1" max="99999"
                  placeholder="e.g. 1000" value="{{ global_chnum_start or '' }}">
           <div class="help">Sequential tvg-chno numbers assigned to sources without their own channel number start. Leave blank to disable.</div>
+          {% if global_chnum_start_from_env %}
+          <div class="help">Currently coming from environment variable <code>MASTER_CHANNEL_NUMBER_START</code>. Saving here will override it in the database.</div>
+          {% endif %}
         </div>
       </div>
       <div class="field-actions">
@@ -250,6 +253,9 @@
           <input type="text" id="public-base-url"
                  placeholder="192.168.1.50 or 192.168.1.50:5523" value="{{ public_base_url }}">
           <div class="help">Address other devices should use to reach this FastChannels server. You can enter just the IP or hostname and FastChannels will fill in <code>http://</code> and port <code>5523</code> automatically.</div>
+          {% if public_base_url_from_env %}
+          <div class="help">Currently coming from environment variable <code>FASTCHANNELS_SERVER_URL</code>. Saving here will override it in the database.</div>
+          {% endif %}
           <div class="hint-box">
             Browser address: <code>{{ request_base_url }}</code><br>
             Detected server address: <code>{{ detected_base_url }}</code><br>
@@ -262,6 +268,9 @@
           <input type="url" id="channels-dvr-url"
                  placeholder="http://192.168.1.x:8089" value="{{ channels_dvr_url }}">
           <div class="help">Base URL of your Channels DVR server (port 8089). Find it in Channels DVR → Settings → About.</div>
+          {% if channels_dvr_url_from_env %}
+          <div class="help">Currently coming from environment variable <code>CHANNELS_DVR_SERVER_URL</code>. Saving here will override it in the database.</div>
+          {% endif %}
         </div>
       </div>
       <div class="field-actions">

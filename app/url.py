@@ -49,7 +49,7 @@ def detected_base_url() -> str:
 
 
 def public_base_url() -> str:
-    settings_value = (AppSettings.get().public_base_url or "").strip().rstrip("/")
+    settings_value = (AppSettings.get().effective_public_base_url() or "").strip().rstrip("/")
     if settings_value:
         return settings_value
 
