@@ -3,7 +3,7 @@ import re
 import requests as _req
 from urllib.parse import urljoin as _urljoin, urlsplit
 from flask import Blueprint, jsonify, request, current_app
-from sqlalchemy.orm.attributes import flag_modified
+from app.config_store import persist_source_config_updates
 from ..extensions import db
 from ..models import Source, Channel, AppSettings, Feed
 from ..scrapers import registry
@@ -309,11 +309,10 @@ def inspect_channel(channel_id):
         finally:
             if scraper._pending_config_updates:
                 try:
-                    updated = dict(source.config or {})
-                    updated.update(scraper._pending_config_updates)
-                    source.config = updated
-                    flag_modified(source, 'config')
-                    db.session.commit()
+                    persist_source_config_updates(
+                        source.id,
+                        scraper._pending_config_updates,
+                    )
                 except Exception:
                     db.session.rollback()
         sess = scraper.session

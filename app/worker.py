@@ -9,15 +9,18 @@ from datetime import datetime, timedelta, timezone
 import redis
 from rq import Worker, Queue, Connection
 from apscheduler.schedulers.background import BackgroundScheduler
-from sqlalchemy.orm.attributes import flag_modified
-
 from app import create_app
+from app.config_store import persist_source_config_updates
 from app.extensions import db
 from app.models import Source, Channel, Program
 import time as _time
 from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
-from app.scrapers.base import StreamDeadError, ScrapeSkipError, is_transient_network_error
+from app.scrapers.base import (
+    StreamDeadError,
+    ScrapeSkipError,
+    is_transient_network_error,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -417,10 +420,7 @@ def _make_progress_writer(source_name: str):
 def _apply_scraper_config_updates(source, scraper) -> None:
     """Merge any config updates the scraper queued back into source.config."""
     if scraper and scraper._pending_config_updates:
-        updated = dict(source.config or {})
-        updated.update(scraper._pending_config_updates)
-        source.config = updated
-        flag_modified(source, 'config')
+        persist_source_config_updates(source.id, scraper._pending_config_updates)
         logger.debug('[%s] persisting %d config update(s): %s',
                      source.name, len(scraper._pending_config_updates),
                      list(scraper._pending_config_updates.keys()))

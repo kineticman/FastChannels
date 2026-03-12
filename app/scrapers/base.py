@@ -43,6 +43,17 @@ def is_transient_network_error(exc: Exception) -> bool:
     return False
 
 
+def merge_config_updates(existing: dict | None, updates: dict | None) -> dict:
+    """Recursively merge scraper config updates into existing config JSON."""
+    merged = copy.deepcopy(existing or {})
+    for key, value in (updates or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_config_updates(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
 class StreamDeadError(Exception):
     """Raised by audit_resolve() when a channel is confirmed dead (not a transient error)."""
 

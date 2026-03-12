@@ -11,7 +11,7 @@ import logging
 import threading
 
 from flask import Blueprint, redirect, abort, current_app, request
-from sqlalchemy.orm.attributes import flag_modified
+from app.config_store import persist_source_config_updates
 from ..models import Channel, Source
 from ..extensions import db
 from ..scrapers import registry
@@ -107,14 +107,13 @@ def play(source_name: str, channel_id: str):
         finally:
             if scraper._pending_config_updates:
                 try:
-                    updated = dict(channel.source.config or {})
-                    updated.update(scraper._pending_config_updates)
-                    channel.source.config = updated
-                    flag_modified(channel.source, 'config')
-                    db.session.commit()
+                    persist_source_config_updates(
+                        channel.source_id,
+                        scraper._pending_config_updates,
+                    )
                 except Exception as ce:
-                    logger.warning('[play] failed to persist config updates: %s', ce)
                     db.session.rollback()
+                    logger.warning('[play] failed to persist config updates: %s', ce)
     else:
         resolved_url = channel.stream_url
 
