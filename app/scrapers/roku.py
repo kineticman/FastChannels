@@ -87,7 +87,8 @@ _TAG_CATEGORY_PRIORITY = [
 _SESSION_TTL = 55 * 60  # seconds before we refresh cookies + csrf
 _SESSION_HARD_TTL = 12 * 60 * 60  # discard persisted session state after 12h
 _PLAY_ID_TTL = 6 * 60 * 60  # reuse playIds for a few hours to reduce tune-time content lookups
-_STREAM_URL_TTL = 10 * 60  # cache final Roku HLS URLs briefly to absorb client retries
+_STREAM_URL_TTL = 2 * 60 * 60  # reuse exact HLS URLs for a while; JWTs appear to last ~6h
+_REUSABLE_JWT_TTL = 4 * 60 * 60  # shorter than observed JWT life to leave margin for cross-channel reuse
 _LIVE_TV_403_RETRIES = 3
 _OSM_BASE = "https://osm.sr.roku.com"
 
@@ -434,7 +435,7 @@ class RokuScraper(BaseScraper):
             cached_at = entry.get("cached_at")
             if not stream_url or not isinstance(cached_at, (int, float)):
                 continue
-            if (now - float(cached_at)) >= _STREAM_URL_TTL:
+            if not self._stream_entry_is_usable(entry, now=now, ttl=_STREAM_URL_TTL):
                 continue
             self._stream_url_cache[station_id] = {
                 "stream_url": stream_url,
@@ -461,7 +462,7 @@ class RokuScraper(BaseScraper):
         cached_at = entry.get("cached_at")
         if not stream_url or not isinstance(cached_at, (int, float)):
             return None
-        if (time.time() - float(cached_at)) >= _STREAM_URL_TTL:
+        if not self._stream_entry_is_usable(entry, ttl=_STREAM_URL_TTL):
             self._stream_url_cache.pop(station_id, None)
             self._persist_stream_url_cache()
             return None
@@ -472,15 +473,54 @@ class RokuScraper(BaseScraper):
             self._stream_url_cache.pop(station_id, None)
             self._persist_stream_url_cache()
 
+    @staticmethod
+    def _jwt_exp(stream_url: str | None) -> int | None:
+        if not stream_url:
+            return None
+        try:
+            jwt = (parse_qs(urlparse(stream_url).query).get("jwt") or [""])[0]
+            if not jwt:
+                return None
+            parts = jwt.split(".")
+            if len(parts) < 2:
+                return None
+            payload = parts[1] + "=" * (-len(parts[1]) % 4)
+            decoded = base64.urlsafe_b64decode(payload)
+            return int(__import__("json").loads(decoded).get("exp"))
+        except Exception:
+            return None
+
+    def _stream_entry_is_usable(
+        self,
+        entry: dict[str, object],
+        *,
+        now: float | None = None,
+        ttl: int,
+    ) -> bool:
+        now = now or time.time()
+        cached_at = entry.get("cached_at")
+        stream_url = entry.get("stream_url")
+        if not stream_url or not isinstance(cached_at, (int, float)):
+            return False
+        if (now - float(cached_at)) >= ttl:
+            return False
+        exp = self._jwt_exp(str(stream_url))
+        if exp is not None and now >= exp:
+            return False
+        return True
+
     def _reusable_stream_query(self) -> dict[str, str] | None:
         latest_entry = None
         latest_cached_at = 0.0
+        now = time.time()
         for entry in self._stream_url_cache.values():
             if not isinstance(entry, dict):
                 continue
             cached_at = entry.get("cached_at")
             stream_url = entry.get("stream_url")
             if not stream_url or not isinstance(cached_at, (int, float)):
+                continue
+            if not self._stream_entry_is_usable(entry, now=now, ttl=_REUSABLE_JWT_TTL):
                 continue
             if float(cached_at) > latest_cached_at:
                 latest_cached_at = float(cached_at)
