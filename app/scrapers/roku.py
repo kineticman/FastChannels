@@ -662,6 +662,15 @@ class RokuScraper(BaseScraper):
         if not self._ensure_session():
             raise ScrapeSkipError("[roku] session bootstrap failed before EPG fetch; keeping previous EPG data")
 
+        # Validate the cached session against a real Roku API before starting
+        # the threaded content-proxy fanout. Otherwise an upstream-expired
+        # session can yield a misleading "0 programs" success on EPG-only runs.
+        epg_probe = self._api_get(_EPG_URL, timeout=20, label="epg")
+        if not epg_probe or epg_probe.status_code != 200:
+            logger.warning("[roku] EPG validation returned %s before threaded fetch",
+                           getattr(epg_probe, "status_code", "no response"))
+            raise ScrapeSkipError("[roku] session rejected before EPG fetch; keeping previous EPG data")
+
         total = len(channels)
         # Snapshot merged headers (session defaults + API-specific) and cookies
         # so each worker thread can reuse its own independent session without
@@ -691,6 +700,7 @@ class RokuScraper(BaseScraper):
                 proxy_url   = _PROXY_BASE + quote(content_url, safe="")
                 r = sess.get(proxy_url, timeout=10)
                 if r.status_code != 200:
+                    logger.debug("[roku] content proxy returned %d for %s", r.status_code, sid)
                     return [], {}
                 data = r.json()
                 schedule = data.get("features", {}).get("linearSchedule", [])
