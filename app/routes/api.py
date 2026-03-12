@@ -3,6 +3,7 @@ import re
 import requests as _req
 from urllib.parse import urljoin as _urljoin, urlsplit
 from flask import Blueprint, jsonify, request, current_app
+from sqlalchemy import select
 from app.config_store import persist_source_config_updates
 from ..extensions import db
 from ..models import Source, Channel, AppSettings, Feed
@@ -441,11 +442,10 @@ def duplicate_summary():
     """Return per-source stats for channels involved in duplicates, sorted by gracenote coverage."""
     from collections import defaultdict
 
-    dup_names_sq = db.session.query(Channel.name)\
+    dup_names_sq = select(Channel.name)\
         .filter(Channel.is_enabled == True)\
         .group_by(Channel.name)\
-        .having(db.func.count(Channel.id) > 1)\
-        .subquery()
+        .having(db.func.count(Channel.id) > 1)
 
     dup_channels = Channel.query.join(Source)\
         .filter(Channel.is_enabled == True, Channel.name.in_(dup_names_sq))\
@@ -495,36 +495,50 @@ def resolve_duplicates():
     data = request.get_json(force=True) or {}
     priority = data.get('source_priority', [])  # ordered list of source names, index 0 = highest
 
-    dup_names_sq = db.session.query(Channel.name)\
-        .filter(Channel.is_enabled == True)\
+    dup_names_sq = select(Channel.name)\
         .group_by(Channel.name)\
-        .having(db.func.count(Channel.id) > 1)\
-        .subquery()
+        .having(db.func.count(Channel.id) > 1)
 
     dup_channels = Channel.query.join(Source)\
-        .filter(Channel.is_enabled == True, Channel.name.in_(dup_names_sq))\
+        .filter(Channel.name.in_(dup_names_sq))\
         .all()
 
     groups = defaultdict(list)
     for ch in dup_channels:
         groups[ch.name].append(ch)
 
+    def is_unhealthy(ch):
+        return ch.disable_reason in {'DRM', 'Dead'} or not ch.is_active
+
     def priority_key(ch):
         try:
-            return priority.index(ch.source.name)
+            source_rank = priority.index(ch.source.name)
         except ValueError:
-            return len(priority)  # unlisted sources rank last
+            source_rank = len(priority)  # unlisted sources rank last
+        return (
+            1 if is_unhealthy(ch) else 0,
+            source_rank,
+        )
 
     disabled_count = 0
+    enabled_count = 0
     for name, channels in groups.items():
         channels.sort(key=priority_key)
+        winner = channels[0]
+        if not is_unhealthy(winner) and not winner.is_enabled:
+            winner.is_enabled = True
+            enabled_count += 1
         for ch in channels[1:]:
             if ch.is_enabled:
                 ch.is_enabled = False
                 disabled_count += 1
 
     db.session.commit()
-    return jsonify({'disabled': disabled_count, 'groups_resolved': len(groups)})
+    return jsonify({
+        'disabled': disabled_count,
+        'enabled': enabled_count,
+        'groups_resolved': len(groups),
+    })
 
 
 @api_bp.route('/feeds/<int:feed_id>/push-to-dvr', methods=['POST'])

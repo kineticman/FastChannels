@@ -1,4 +1,5 @@
 from flask import Blueprint, render_template, request
+from sqlalchemy import select
 from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings
 from ..generators.m3u import _parse_gracenote_id, get_global_chnum_overlaps, _build_source_chnum_map
@@ -75,10 +76,9 @@ def channels():
         q = q.filter(Channel.name.ilike(f'%{search}%'))
 
     if duplicates_filter == '1':
-        dup_names_sq = db.session.query(Channel.name)\
+        dup_names_sq = select(Channel.name)\
             .group_by(Channel.name)\
-            .having(db.func.count(Channel.id) > 1)\
-            .subquery()
+            .having(db.func.count(Channel.id) > 1)
         q = q.filter(Channel.name.in_(dup_names_sq))
 
     _sort_cols = {
