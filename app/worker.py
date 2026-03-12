@@ -517,14 +517,19 @@ def _upsert_programs(source, program_data_list):
     # feeds or by repeated scrape runs appending to the same window.
     incoming_channel_ids = set(incoming_by_channel_id)
     if incoming_channel_ids:
-        existing_rows = Program.query.filter(
+        existing_rows = db.session.query(
+            Program.id,
+            Program.channel_id,
+            Program.start_time,
+            Program.end_time,
+        ).filter(
             Program.channel_id.in_(incoming_channel_ids),
             Program.end_time >= cutoff,
         ).all()
 
-        existing_by_channel_id: dict[int, list[Program]] = {}
-        for row in existing_rows:
-            existing_by_channel_id.setdefault(row.channel_id, []).append(row)
+        existing_by_channel_id: dict[int, list[tuple[int, datetime, datetime]]] = {}
+        for row_id, channel_id, start_time, end_time in existing_rows:
+            existing_by_channel_id.setdefault(channel_id, []).append((row_id, start_time, end_time))
 
         preserve_ids: set[int] = set()
         for channel_id, incoming_rows in incoming_by_channel_id.items():
@@ -541,16 +546,16 @@ def _upsert_programs(source, program_data_list):
                 default=None,
             )
             rows_to_preserve = []
-            for existing in existing_by_channel_id.get(channel_id, []):
-                existing_start = _utc_aware(existing.start_time)
-                existing_end = _utc_aware(existing.end_time)
+            for existing_id, existing_start_raw, existing_end_raw in existing_by_channel_id.get(channel_id, []):
+                existing_start = _utc_aware(existing_start_raw)
+                existing_end = _utc_aware(existing_end_raw)
                 if existing_end <= now:
                     continue
                 if earliest_incoming_start is None:
-                    rows_to_preserve.append(existing.id)
+                    rows_to_preserve.append(existing_id)
                     continue
                 if existing_start < earliest_incoming_start and existing_end <= earliest_incoming_start:
-                    rows_to_preserve.append(existing.id)
+                    rows_to_preserve.append(existing_id)
 
             if rows_to_preserve:
                 preserve_ids.update(rows_to_preserve)
