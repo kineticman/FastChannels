@@ -489,10 +489,10 @@ def _upsert_channels(source, channel_data_list):
 def _prune_old_programs():
     """Delete programs that ended more than 2 hours ago.
 
-    Uses naive UTC (datetime.utcnow) to match how SQLite stores the values,
-    avoiding string-comparison issues with timezone-aware datetimes.
+    Use timezone-aware UTC to match the rest of the worker's program handling
+    and avoid Python 3.12's utcnow() deprecation warning.
     """
-    cutoff = datetime.utcnow() - timedelta(hours=2)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
     deleted = Program.query.filter(Program.end_time < cutoff).delete()
     db.session.commit()
     if deleted:
