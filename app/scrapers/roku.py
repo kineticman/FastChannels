@@ -3,7 +3,7 @@
 # The Roku Channel — FAST live TV scraper
 #
 # Auth flow (fully headless, no browser):
-#   1. GET /live-tv              → session cookies
+#   1. GET /                     → session cookies
 #   2. GET /api/v1/csrf          → csrf token
 #   3. GET content proxy         → playId + linearSchedule (now/next EPG)
 #   4. POST /api/v3/playback     → JWT-signed osm.sr.roku.com stream URL
@@ -54,6 +54,7 @@ def _language_from_category(category: str | None) -> str:
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 _BASE        = "https://therokuchannel.roku.com"
+_HOME        = f"{_BASE}/"
 _LIVE_TV     = f"{_BASE}/live-tv"
 _CSRF_URL    = f"{_BASE}/api/v1/csrf"
 _PLAYBACK    = f"{_BASE}/api/v3/playback"
@@ -378,7 +379,7 @@ class RokuScraper(BaseScraper):
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Cache-Control": "max-age=0",
             "Pragma": "no-cache",
-            "Referer": _BASE + "/",
+            "Referer": _HOME,
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "same-origin",
@@ -390,21 +391,23 @@ class RokuScraper(BaseScraper):
         """Boot a fresh Roku browser session. Returns True on success."""
         try:
             self._clear_cached_session()
-            # Step 1: hit live-tv to collect cookies
+            # Step 1: hit home page to collect cookies. /live-tv is intermittently
+            # blocked by CloudFront, but the root page yields the same anonymous
+            # cookies and works for csrf + API bootstrap.
             r1 = None
             for attempt in range(_LIVE_TV_403_RETRIES + 1):
-                r1 = self.session.get(_LIVE_TV, headers=self._live_tv_headers(), timeout=15)
+                r1 = self.session.get(_HOME, headers=self._live_tv_headers(), timeout=15)
                 if r1.status_code == 200:
                     break
                 if r1.status_code == 403 and attempt < _LIVE_TV_403_RETRIES:
                     wait = 2 ** attempt
-                    logger.warning("[roku] live-tv returned 403, retry %d/%d in %ds",
+                    logger.warning("[roku] home bootstrap returned 403, retry %d/%d in %ds",
                                    attempt + 1, _LIVE_TV_403_RETRIES, wait)
                     time.sleep(wait)
                     continue
                 if r1.status_code == 403:
-                    self._log_live_tv_403(r1)
-                logger.error("[roku] live-tv returned %d", r1.status_code)
+                    self._log_bootstrap_403(r1)
+                logger.error("[roku] home bootstrap returned %d", r1.status_code)
                 return False
 
             # Step 2: fetch csrf token (retry up to 4 times)
@@ -467,7 +470,7 @@ class RokuScraper(BaseScraper):
         return None
 
     @staticmethod
-    def _log_live_tv_403(response) -> None:
+    def _log_bootstrap_403(response) -> None:
         body = ""
         try:
             body = (response.text or "").strip().replace("\n", " ").replace("\r", " ")
@@ -476,7 +479,7 @@ class RokuScraper(BaseScraper):
         if len(body) > 160:
             body = body[:160] + "..."
         logger.warning(
-            "[roku] live-tv 403 details: cf_pop=%s x_cache=%s server=%s content_type=%s body=%r",
+            "[roku] bootstrap 403 details: cf_pop=%s x_cache=%s server=%s content_type=%s body=%r",
             response.headers.get("x-amz-cf-pop"),
             response.headers.get("x-cache"),
             response.headers.get("server"),
@@ -488,7 +491,7 @@ class RokuScraper(BaseScraper):
         return {
             "csrf-token":                         self._csrf_token or "",
             "origin":                             _BASE,
-            "referer":                            _LIVE_TV,
+            "referer":                            _HOME,
             "content-type":                       "application/json",
             "x-roku-reserved-amoeba-ids":         "",
             "x-roku-reserved-experiment-configs": "e30=",
