@@ -86,6 +86,8 @@ _TAG_CATEGORY_PRIORITY = [
 
 _SESSION_TTL = 55 * 60  # seconds before we refresh cookies + csrf
 _SESSION_HARD_TTL = 12 * 60 * 60  # discard persisted session state after 12h
+_PLAY_ID_TTL = 6 * 60 * 60  # reuse playIds for a few hours to reduce tune-time content lookups
+_STREAM_URL_TTL = 10 * 60  # cache final Roku HLS URLs briefly to absorb client retries
 _LIVE_TV_403_RETRIES = 3
 
 # Name-based category keywords — checked in order, first match wins.
@@ -337,7 +339,11 @@ class RokuScraper(BaseScraper):
         # Session state — refreshed when expired
         self._csrf_token:    Optional[str]   = None
         self._session_born:  Optional[float] = None   # epoch seconds
+        self._play_id_cache: dict[str, dict[str, object]] = {}
+        self._stream_url_cache: dict[str, dict[str, object]] = {}
         self._load_cached_session()
+        self._load_play_id_cache()
+        self._load_stream_url_cache()
 
     # ── Session management ─────────────────────────────────────────────────────
 
@@ -364,6 +370,106 @@ class RokuScraper(BaseScraper):
         self._update_config("csrf_token", self._csrf_token)
         self._update_config("session_born", self._session_born)
         self._update_config("session_cookies", self.session.cookies.get_dict())
+
+    def _load_play_id_cache(self) -> None:
+        raw = self.config.get("play_id_cache") or {}
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        for station_id, entry in raw.items():
+            if not isinstance(station_id, str) or not isinstance(entry, dict):
+                continue
+            play_id = entry.get("play_id")
+            cached_at = entry.get("cached_at")
+            if not play_id or not isinstance(cached_at, (int, float)):
+                continue
+            if (now - float(cached_at)) >= _PLAY_ID_TTL:
+                continue
+            self._play_id_cache[station_id] = {
+                "play_id": play_id,
+                "cached_at": float(cached_at),
+            }
+
+    def _persist_play_id_cache(self) -> None:
+        self._update_config("play_id_cache", self._play_id_cache)
+
+    def _cache_play_id(self, station_id: str, play_id: str | None) -> None:
+        if not station_id or not play_id:
+            return
+        self._play_id_cache[station_id] = {
+            "play_id": play_id,
+            "cached_at": time.time(),
+        }
+        self._persist_play_id_cache()
+
+    def _cached_play_id(self, station_id: str) -> str | None:
+        entry = self._play_id_cache.get(station_id)
+        if not entry:
+            return None
+        play_id = entry.get("play_id")
+        cached_at = entry.get("cached_at")
+        if not play_id or not isinstance(cached_at, (int, float)):
+            return None
+        if (time.time() - float(cached_at)) >= _PLAY_ID_TTL:
+            self._play_id_cache.pop(station_id, None)
+            self._persist_play_id_cache()
+            return None
+        return str(play_id)
+
+    def _invalidate_play_id(self, station_id: str) -> None:
+        if station_id in self._play_id_cache:
+            self._play_id_cache.pop(station_id, None)
+            self._persist_play_id_cache()
+
+    def _load_stream_url_cache(self) -> None:
+        raw = self.config.get("stream_url_cache") or {}
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        for station_id, entry in raw.items():
+            if not isinstance(station_id, str) or not isinstance(entry, dict):
+                continue
+            stream_url = entry.get("stream_url")
+            cached_at = entry.get("cached_at")
+            if not stream_url or not isinstance(cached_at, (int, float)):
+                continue
+            if (now - float(cached_at)) >= _STREAM_URL_TTL:
+                continue
+            self._stream_url_cache[station_id] = {
+                "stream_url": stream_url,
+                "cached_at": float(cached_at),
+            }
+
+    def _persist_stream_url_cache(self) -> None:
+        self._update_config("stream_url_cache", self._stream_url_cache)
+
+    def _cache_stream_url(self, station_id: str, stream_url: str | None) -> None:
+        if not station_id or not stream_url:
+            return
+        self._stream_url_cache[station_id] = {
+            "stream_url": stream_url,
+            "cached_at": time.time(),
+        }
+        self._persist_stream_url_cache()
+
+    def _cached_stream_url(self, station_id: str) -> str | None:
+        entry = self._stream_url_cache.get(station_id)
+        if not entry:
+            return None
+        stream_url = entry.get("stream_url")
+        cached_at = entry.get("cached_at")
+        if not stream_url or not isinstance(cached_at, (int, float)):
+            return None
+        if (time.time() - float(cached_at)) >= _STREAM_URL_TTL:
+            self._stream_url_cache.pop(station_id, None)
+            self._persist_stream_url_cache()
+            return None
+        return str(stream_url)
+
+    def _invalidate_stream_url(self, station_id: str) -> None:
+        if station_id in self._stream_url_cache:
+            self._stream_url_cache.pop(station_id, None)
+            self._persist_stream_url_cache()
 
     def _clear_cached_session(self) -> None:
         self._csrf_token = None
@@ -635,6 +741,7 @@ class RokuScraper(BaseScraper):
         # playId from viewOptions
         view_opts = item.get("viewOptions") or [{}]
         play_id   = view_opts[0].get("playId") if view_opts else None
+        self._cache_play_id(station_id, play_id)
 
         # Gracenote station ID (numeric stationId in the EPG schedule)
         gracenote_id = item.get("gracenoteStationId") or item.get("stationId") or ""
@@ -676,7 +783,7 @@ class RokuScraper(BaseScraper):
         # so each worker thread can reuse its own independent session without
         # mutating the shared scraper session or opening a fresh pool per task.
         headers_snapshot = {**self.session.headers, **self._api_headers()}
-        cookies_snapshot  = dict(self.session.cookies)
+        cookies_snapshot  = self.session.cookies.get_dict()
 
         programs: list[ProgramData] = []
         # Map content_id → programs within 48h that need a description backfill
@@ -687,7 +794,7 @@ class RokuScraper(BaseScraper):
 
         cutoff_48h = datetime.now(timezone.utc) + timedelta(hours=48)
 
-        def fetch_one(ch: ChannelData) -> tuple[list[ProgramData], dict]:
+        def fetch_one(ch: ChannelData) -> tuple[list[ProgramData], dict, str | None]:
             sess = getattr(thread_local, "session", None)
             if sess is None:
                 sess = self.new_session(headers=headers_snapshot, cookies=cookies_snapshot)
@@ -701,8 +808,10 @@ class RokuScraper(BaseScraper):
                 r = sess.get(proxy_url, timeout=10)
                 if r.status_code != 200:
                     logger.debug("[roku] content proxy returned %d for %s", r.status_code, sid)
-                    return [], {}
+                    return [], {}, None
                 data = r.json()
+                view_opts = data.get("viewOptions") or [{}]
+                play_id = view_opts[0].get("playId") if view_opts else None
                 schedule = data.get("features", {}).get("linearSchedule", [])
                 result = []
                 local_cid_map: dict[str, list[ProgramData]] = {}
@@ -717,12 +826,12 @@ class RokuScraper(BaseScraper):
                         cid = (entry.get("content") or {}).get("meta", {}).get("id")
                         if cid:
                             local_cid_map.setdefault(cid, []).append(prog)
-                return result, local_cid_map
+                return result, local_cid_map, play_id
             except Exception as exc:
                 if is_transient_network_error(exc):
                     raise
                 logger.warning("[roku] EPG error for %s (%s): %s", ch.name, sid, exc)
-                return [], {}
+                return [], {}, None
 
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = {executor.submit(fetch_one, ch): ch for ch in channels}
@@ -734,11 +843,12 @@ class RokuScraper(BaseScraper):
                 if exc and is_transient_network_error(exc):
                     executor.shutdown(wait=False, cancel_futures=True)
                     raise exc
-                result, local_cid_map = future.result() if not exc else ([], {})
+                result, local_cid_map, play_id = future.result() if not exc else ([], {}, None)
                 with lock:
                     programs.extend(result)
                     for cid, progs in local_cid_map.items():
                         cid_to_progs.setdefault(cid, []).extend(progs)
+                    self._cache_play_id(futures[future].source_channel_id, play_id)
                     done[0] += 1
                     if self._progress_cb:
                         self._progress_cb('epg', done[0], total)
@@ -880,15 +990,25 @@ class RokuScraper(BaseScraper):
 
         station_id = raw_url[len("roku://"):]
 
+        cached_stream_url = self._cached_stream_url(station_id)
+        if cached_stream_url:
+            logger.info("[roku] resolve cache hit (stream_url) for %s", station_id)
+            return cached_stream_url
+
         if not self._ensure_session():
             raise RuntimeError(f"[roku] resolve failed — could not obtain session for {station_id}")
 
-        # Step 1: get playId from content proxy (404 → StreamDeadError)
-        data    = self._fetch_content(station_id, _raise_on_404=True)
-        play_id = None
-        if data:
-            view_opts = data.get("viewOptions") or [{}]
-            play_id   = view_opts[0].get("playId") if view_opts else None
+        # Step 1: prefer cached playId to avoid content lookups on tune.
+        play_id = self._cached_play_id(station_id)
+        if play_id:
+            logger.info("[roku] resolve cache hit (play_id) for %s", station_id)
+        if not play_id:
+            logger.info("[roku] resolve cache miss for %s", station_id)
+            data = self._fetch_content(station_id, _raise_on_404=True)
+            if data:
+                view_opts = data.get("viewOptions") or [{}]
+                play_id = view_opts[0].get("playId") if view_opts else None
+                self._cache_play_id(station_id, play_id)
 
         if not play_id:
             # Try regex fallback from raw response
@@ -898,6 +1018,7 @@ class RokuScraper(BaseScraper):
                 r = self._api_get(proxy_url, timeout=10, label=f"content fallback for {station_id}")
                 pids = re.findall(r's-[a-z0-9_]+\.[A-Za-z0-9+/=]+', r.text)
                 play_id = pids[0] if pids else None
+                self._cache_play_id(station_id, play_id)
             except Exception:
                 pass
 
@@ -935,12 +1056,18 @@ class RokuScraper(BaseScraper):
                 stream_url = r2.json().get("url", "")
                 if stream_url:
                     self._persist_session()
+                    self._cache_play_id(station_id, play_id)
+                    self._cache_stream_url(station_id, stream_url)
                     logger.debug("[roku] resolved %s -> %s…", station_id, stream_url[:60])
                     return stream_url
+            if r2.status_code in (401, 403, 404):
+                self._invalidate_play_id(station_id)
+                self._invalidate_stream_url(station_id)
             raise RuntimeError(f"[roku] playback returned {r2.status_code} for {station_id}")
         except RuntimeError:
             raise
         except Exception as exc:
+            self._invalidate_stream_url(station_id)
             raise RuntimeError(f"[roku] playback request failed for {station_id}: {exc}") from exc
 
     # ── M3U extras ─────────────────────────────────────────────────────────────

@@ -102,7 +102,7 @@ def play(source_name: str, channel_id: str):
                 '[play] resolve failed ip=%s source=%s channel_id=%s channel_name=%s: %s',
                 client_ip, source_name, channel_id, channel.name, e,
             )
-            resolved_url = channel.stream_url
+            resolved_url = None
         finally:
             if scraper._pending_config_updates:
                 try:
@@ -115,6 +115,9 @@ def play(source_name: str, channel_id: str):
                     db.session.rollback()
     else:
         resolved_url = channel.stream_url
+
+    if not resolved_url or (source_name == 'roku' and resolved_url.startswith('roku://')):
+        abort(502)
 
     # Fire-and-forget manifest check — detect DRM or dead streams without
     # blocking the redirect. The check runs in a background thread so Channels

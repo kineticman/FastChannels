@@ -159,7 +159,7 @@ class BaseScraper(ABC):
         session = requests.Session()
         self._configure_session(session)
         session.headers.update(headers or dict(self.session.headers))
-        session.cookies.update(cookies or dict(self.session.cookies))
+        session.cookies.update(cookies or self.session.cookies.get_dict())
         return session
 
     def _update_config(self, key: str, value) -> None:
