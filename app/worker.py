@@ -532,6 +532,8 @@ def _upsert_programs(source, program_data_list):
             existing_by_channel_id.setdefault(channel_id, []).append((row_id, start_time, end_time))
 
         preserve_ids: set[int] = set()
+        preserved_channel_ids: list[int] = []
+        preserved_row_count = 0
         for channel_id, incoming_rows in incoming_by_channel_id.items():
             future_rows = [row for row in incoming_rows if _utc_aware(row.end_time) > now]
             has_now_coverage = any(
@@ -559,10 +561,20 @@ def _upsert_programs(source, program_data_list):
 
             if rows_to_preserve:
                 preserve_ids.update(rows_to_preserve)
-                logger.warning(
-                    '[%s] preserving %d existing EPG rows for channel_id=%s; incoming scrape has no now coverage',
-                    source.name, len(rows_to_preserve), channel_id,
-                )
+                preserved_channel_ids.append(channel_id)
+                preserved_row_count += len(rows_to_preserve)
+
+        if preserved_channel_ids:
+            sample = ",".join(str(channel_id) for channel_id in preserved_channel_ids[:10])
+            extra = "" if len(preserved_channel_ids) <= 10 else ",..."
+            logger.info(
+                '[%s] preserved %d existing EPG rows across %d channels with no now coverage (sample channel_ids=%s%s)',
+                source.name,
+                preserved_row_count,
+                len(preserved_channel_ids),
+                sample,
+                extra,
+            )
 
         delete_query = Program.query.filter(
             Program.channel_id.in_(incoming_channel_ids),
