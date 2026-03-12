@@ -240,6 +240,14 @@ def list_channels():
     page     = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     q        = Channel.query.join(Source)
+    if request.args.get('feed_eligible') in ('1', 'true', 'yes'):
+        q = q.filter(
+            Channel.is_active == True,
+            Channel.is_enabled == True,
+            Source.is_enabled == True,
+            Source.epg_only == False,
+            Channel.stream_url != None,
+        )
     if s := request.args.get('source'):
         q = q.filter(Source.name == s)
     if c := request.args.get('category'):

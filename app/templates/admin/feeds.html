@@ -356,7 +356,7 @@ async function ensureChannelsLoaded() {
   try {
     let page = 1, all = [];
     while (true) {
-      const r = await fetch(`/api/channels?per_page=2000&page=${page}`);
+      const r = await fetch(`/api/channels?feed_eligible=1&per_page=2000&page=${page}`);
       const d = await r.json();
       all = all.concat(d.channels);
       if (page >= (d.pages || 1)) break;
