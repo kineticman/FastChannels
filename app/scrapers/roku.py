@@ -476,6 +476,21 @@ class RokuScraper(BaseScraper):
             self._selector_url_cache.pop(station_id, None)
             self._persist_selector_url_cache()
 
+    @staticmethod
+    def _extract_selector_url(view_opts: list[dict] | None) -> str | None:
+        media = (view_opts[0].get("media") or {}) if view_opts else {}
+        videos = media.get("videos") or []
+        return next(
+            (
+                video.get("url")
+                for video in videos
+                if isinstance(video, dict)
+                and str(video.get("videoType", "")).upper() == "HLS"
+                and video.get("url")
+            ),
+            None,
+        )
+
     def _load_stream_url_cache(self) -> None:
         raw = self.config.get("stream_url_cache") or {}
         if not isinstance(raw, dict):
@@ -907,7 +922,9 @@ class RokuScraper(BaseScraper):
         # playId from viewOptions
         view_opts = item.get("viewOptions") or [{}]
         play_id   = view_opts[0].get("playId") if view_opts else None
+        selector_url = self._extract_selector_url(view_opts)
         self._cache_play_id(station_id, play_id)
+        self._cache_selector_url(station_id, selector_url)
 
         # Gracenote station ID (numeric stationId in the EPG schedule)
         gracenote_id = item.get("gracenoteStationId") or item.get("stationId") or ""
@@ -960,7 +977,7 @@ class RokuScraper(BaseScraper):
 
         cutoff_48h = datetime.now(timezone.utc) + timedelta(hours=48)
 
-        def fetch_one(ch: ChannelData) -> tuple[list[ProgramData], dict, str | None]:
+        def fetch_one(ch: ChannelData) -> tuple[list[ProgramData], dict, str | None, str | None]:
             sess = getattr(thread_local, "session", None)
             if sess is None:
                 sess = self.new_session(headers=headers_snapshot, cookies=cookies_snapshot)
@@ -978,6 +995,7 @@ class RokuScraper(BaseScraper):
                 data = r.json()
                 view_opts = data.get("viewOptions") or [{}]
                 play_id = view_opts[0].get("playId") if view_opts else None
+                selector_url = self._extract_selector_url(view_opts)
                 schedule = data.get("features", {}).get("linearSchedule", [])
                 result = []
                 local_cid_map: dict[str, list[ProgramData]] = {}
@@ -992,12 +1010,12 @@ class RokuScraper(BaseScraper):
                         cid = (entry.get("content") or {}).get("meta", {}).get("id")
                         if cid:
                             local_cid_map.setdefault(cid, []).append(prog)
-                return result, local_cid_map, play_id
+                return result, local_cid_map, play_id, selector_url
             except Exception as exc:
                 if is_transient_network_error(exc):
                     raise
                 logger.warning("[roku] EPG error for %s (%s): %s", ch.name, sid, exc)
-                return [], {}, None
+                return [], {}, None, None
 
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = {executor.submit(fetch_one, ch): ch for ch in channels}
@@ -1009,12 +1027,13 @@ class RokuScraper(BaseScraper):
                 if exc and is_transient_network_error(exc):
                     executor.shutdown(wait=False, cancel_futures=True)
                     raise exc
-                result, local_cid_map, play_id = future.result() if not exc else ([], {}, None)
+                result, local_cid_map, play_id, selector_url = future.result() if not exc else ([], {}, None, None)
                 with lock:
                     programs.extend(result)
                     for cid, progs in local_cid_map.items():
                         cid_to_progs.setdefault(cid, []).extend(progs)
                     self._cache_play_id(futures[future].source_channel_id, play_id)
+                    self._cache_selector_url(futures[future].source_channel_id, selector_url)
                     done[0] += 1
                     if self._progress_cb:
                         self._progress_cb('epg', done[0], total)
@@ -1189,18 +1208,7 @@ class RokuScraper(BaseScraper):
                 view_opts = content_data.get("viewOptions") or [{}]
                 play_id = view_opts[0].get("playId") if view_opts else None
                 self._cache_play_id(station_id, play_id)
-                media = (view_opts[0].get("media") or {}) if view_opts else {}
-                videos = media.get("videos") or []
-                selector_url = next(
-                    (
-                        video.get("url")
-                        for video in videos
-                        if isinstance(video, dict)
-                        and str(video.get("videoType", "")).upper() == "HLS"
-                        and video.get("url")
-                    ),
-                    None,
-                )
+                selector_url = self._extract_selector_url(view_opts)
                 self._cache_selector_url(station_id, selector_url)
 
         if not play_id:
