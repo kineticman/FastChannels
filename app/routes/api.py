@@ -525,6 +525,12 @@ def resolve_duplicates():
     for name, channels in groups.items():
         channels.sort(key=priority_key)
         winner = channels[0]
+        if all(is_unhealthy(ch) for ch in channels):
+            for ch in channels:
+                if ch.is_enabled:
+                    ch.is_enabled = False
+                    disabled_count += 1
+            continue
         if not is_unhealthy(winner) and not winner.is_enabled:
             winner.is_enabled = True
             enabled_count += 1
