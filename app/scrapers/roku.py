@@ -20,7 +20,7 @@ import base64
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, ScrapeSkipError, is_transient_network_error
 
@@ -89,6 +89,7 @@ _SESSION_HARD_TTL = 12 * 60 * 60  # discard persisted session state after 12h
 _PLAY_ID_TTL = 6 * 60 * 60  # reuse playIds for a few hours to reduce tune-time content lookups
 _STREAM_URL_TTL = 10 * 60  # cache final Roku HLS URLs briefly to absorb client retries
 _LIVE_TV_403_RETRIES = 3
+_OSM_BASE = "https://osm.sr.roku.com"
 
 # Name-based category keywords — checked in order, first match wins.
 # Each entry: (set-of-substrings, category).  All comparisons are lowercase.
@@ -470,6 +471,65 @@ class RokuScraper(BaseScraper):
         if station_id in self._stream_url_cache:
             self._stream_url_cache.pop(station_id, None)
             self._persist_stream_url_cache()
+
+    def _reusable_stream_query(self) -> dict[str, str] | None:
+        latest_entry = None
+        latest_cached_at = 0.0
+        for entry in self._stream_url_cache.values():
+            if not isinstance(entry, dict):
+                continue
+            cached_at = entry.get("cached_at")
+            stream_url = entry.get("stream_url")
+            if not stream_url or not isinstance(cached_at, (int, float)):
+                continue
+            if float(cached_at) > latest_cached_at:
+                latest_cached_at = float(cached_at)
+                latest_entry = str(stream_url)
+        if not latest_entry:
+            return None
+        parsed = urlparse(latest_entry)
+        query = parse_qs(parsed.query)
+        jwt = (query.get("jwt") or [""])[0]
+        if not jwt:
+            return None
+        params = {
+            "jwt": jwt,
+            "ssai.ovp_mode": (query.get("ssai.ovp_mode") or [""])[0],
+            "ssai.adslate": (query.get("ssai.adslate") or [""])[0],
+            "ads.queryString": (query.get("ads.queryString") or [""])[0],
+        }
+        cdn = (query.get("cdn") or [""])[0]
+        if cdn:
+            params["cdn"] = cdn
+        return params
+
+    @staticmethod
+    def _selector_hls_path(selector_url: str | None) -> str | None:
+        if not selector_url:
+            return None
+        parsed = urlparse(selector_url)
+        match = re.search(r"/v1/([0-9a-f-]+)$", parsed.path)
+        if not match:
+            return None
+        asset_id = match.group(1)
+        return f"/osm/v1/hls/master/{asset_id}/live.m3u8"
+
+    def _synthetic_stream_url(self, selector_url: str | None) -> str | None:
+        path = self._selector_hls_path(selector_url)
+        params = self._reusable_stream_query()
+        if not path or not params:
+            return None
+        return f"{_OSM_BASE}{path}?{urlencode(params)}"
+
+    def _validate_stream_url(self, stream_url: str) -> bool:
+        try:
+            response = self.session.get(stream_url, timeout=8)
+            if response.status_code != 200:
+                return False
+            text = response.text or ""
+            return "#EXTM3U" in text
+        except Exception:
+            return False
 
     def _clear_cached_session(self) -> None:
         self._csrf_token = None
@@ -999,14 +1059,15 @@ class RokuScraper(BaseScraper):
             raise RuntimeError(f"[roku] resolve failed — could not obtain session for {station_id}")
 
         # Step 1: prefer cached playId to avoid content lookups on tune.
+        content_data = None
         play_id = self._cached_play_id(station_id)
         if play_id:
             logger.info("[roku] resolve cache hit (play_id) for %s", station_id)
-        if not play_id:
-            logger.info("[roku] resolve cache miss for %s", station_id)
-            data = self._fetch_content(station_id, _raise_on_404=True)
-            if data:
-                view_opts = data.get("viewOptions") or [{}]
+        if not play_id or self._reusable_stream_query():
+            logger.info("[roku] loading content details for %s", station_id)
+            content_data = self._fetch_content(station_id, _raise_on_404=True)
+            if content_data:
+                view_opts = content_data.get("viewOptions") or [{}]
                 play_id = view_opts[0].get("playId") if view_opts else None
                 self._cache_play_id(station_id, play_id)
 
@@ -1033,7 +1094,33 @@ class RokuScraper(BaseScraper):
         except Exception:
             media_format = "m3u"
 
-        # Step 2: call /api/v3/playback
+        # Step 2: if we have a reusable Roku JWT from another recent successful
+        # tune, try synthesizing the target HLS URL directly from the selector
+        # UUID exposed in content data. Fall back to playback if validation fails.
+        if media_format == "m3u" and content_data:
+            view_opts = content_data.get("viewOptions") or [{}]
+            media = (view_opts[0].get("media") or {}) if view_opts else {}
+            videos = media.get("videos") or []
+            selector_url = next(
+                (
+                    video.get("url")
+                    for video in videos
+                    if isinstance(video, dict)
+                    and str(video.get("videoType", "")).upper() == "HLS"
+                    and video.get("url")
+                ),
+                None,
+            )
+            synthetic_url = self._synthetic_stream_url(selector_url)
+            if synthetic_url:
+                if self._validate_stream_url(synthetic_url):
+                    self._cache_play_id(station_id, play_id)
+                    self._cache_stream_url(station_id, synthetic_url)
+                    logger.info("[roku] resolved %s via cached JWT + selector UUID", station_id)
+                    return synthetic_url
+                logger.info("[roku] synthesized stream URL rejected for %s; falling back to playback", station_id)
+
+        # Step 3: call /api/v3/playback
         session_id = self.session.cookies.get("_usn", "roku-scraper")
         body = {
             "rokuId":      station_id,
