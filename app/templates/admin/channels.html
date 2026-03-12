@@ -15,16 +15,65 @@
     .container { max-width: 1400px; margin: 2rem auto; padding: 0 2rem; }
 
     /* Filters */
-    .toolbar { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; align-items: center; }
-    .toolbar input, .toolbar select {
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.2fr) repeat(5, minmax(150px, 1fr)) auto;
+      gap: 0.9rem;
+      margin-bottom: 1rem;
+      align-items: end;
+    }
+    .filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      min-width: 0;
+    }
+    .filter-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #64748b;
+      font-weight: 700;
+    }
+    .filter-group input, .filter-group select {
       background: #1e293b; border: 1px solid #334155; color: #e2e8f0;
       padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.875rem; outline: none;
+      width: 100%;
     }
-    .toolbar input:focus, .toolbar select:focus { border-color: #38bdf8; }
-    .toolbar input { flex: 1; min-width: 200px; }
-    .toolbar button { background: #0284c7; color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.875rem; }
-    .toolbar button:hover { background: #0369a1; }
-    .toolbar a.clear { color: #64748b; font-size: 0.85rem; }
+    .filter-group input:focus, .filter-group select:focus { border-color: #38bdf8; }
+    .filter-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+    }
+    .filter-actions button { background: #0284c7; color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.875rem; }
+    .filter-actions button:hover { background: #0369a1; }
+    .filter-actions a.clear { color: #64748b; font-size: 0.85rem; }
+    .filter-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .filter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.3rem 0.55rem;
+      border-radius: 999px;
+      background: #172033;
+      border: 1px solid #334155;
+      color: #cbd5e1;
+      font-size: 0.76rem;
+    }
+    .filter-chip strong {
+      color: #7dd3fc;
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 0.64rem;
+      letter-spacing: 0.06em;
+    }
 
     /* Sortable headers */
     th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
@@ -242,6 +291,17 @@
     .inspect-badge.no_data { background: #431407; color: #fb923c; }
     .inspect-badge.error   { background: #1e1b4b; color: #a5b4fc; }
     .inspect-badge.spin    { background: transparent; color: #64748b; animation: spin 0.8s linear infinite; }
+
+    @media (max-width: 1180px) {
+      .toolbar { grid-template-columns: repeat(3, minmax(180px, 1fr)); }
+      .filter-actions { grid-column: span 3; }
+    }
+
+    @media (max-width: 760px) {
+      .container { padding: 0 1rem; }
+      .toolbar { grid-template-columns: 1fr; }
+      .filter-actions { grid-column: auto; }
+    }
   </style>
 </head>
 <body>
@@ -260,48 +320,79 @@
 
   <div class="container">
     <form class="toolbar" method="get">
-      <input name="search" placeholder="Search channels…" value="{{ search }}">
-      <select name="source">
-        <option value="">All Sources</option>
-        {% for s in sources %}
-        <option value="{{ s.name }}" {% if source_filter == s.name %}selected{% endif %}>{{ s.display_name }}</option>
-        {% endfor %}
-      </select>
-      <select name="category">
-        <option value="">All Categories</option>
-        {% for cat, count in categories %}
-        <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }} ({{ count }})</option>
-        {% endfor %}
-      </select>
-      <select name="enabled">
-        <option value="">All Status</option>
-        <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
-        <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
-      </select>
-      <select name="drm">
-        <option value="">All channels</option>
-        <option value="1" {% if drm_filter == '1' %}selected{% endif %}>🔒 DRM only</option>
-        <option value="dead" {% if drm_filter == 'dead' %}selected{% endif %}>💀 Dead only</option>
-        <option value="0" {% if drm_filter == '0' %}selected{% endif %}>No DRM</option>
-      </select>
-      <select name="language">
-        <option value="">All Languages</option>
-        {% for lang, count in languages %}
-        <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }} ({{ count }})</option>
-        {% endfor %}
-      </select>
-      <select name="duplicates">
-        <option value="">All channels</option>
-        <option value="1" {% if duplicates_filter == '1' %}selected{% endif %}>⚠ Duplicates only</option>
-      </select>
+      <div class="filter-group">
+        <label class="filter-label" for="channel-search">Search</label>
+        <input id="channel-search" name="search" placeholder="Channel name contains…" value="{{ search }}">
+      </div>
+      <div class="filter-group">
+        <label class="filter-label" for="source-filter">Source</label>
+        <select id="source-filter" name="source">
+          <option value="">All Sources</option>
+          {% for s in sources %}
+          <option value="{{ s.name }}" {% if source_filter == s.name %}selected{% endif %}>{{ s.display_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label" for="category-filter">Category</label>
+        <select id="category-filter" name="category">
+          <option value="">All Categories</option>
+          {% for cat, count in categories %}
+          <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }} ({{ count }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label" for="enabled-filter">Channel State</label>
+        <select id="enabled-filter" name="enabled">
+          <option value="">Enabled + Disabled</option>
+          <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
+          <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label" for="drm-filter">Stream Health</label>
+        <select id="drm-filter" name="drm">
+          <option value="">All stream states</option>
+          <option value="1" {% if drm_filter == '1' %}selected{% endif %}>🔒 DRM only</option>
+          <option value="dead" {% if drm_filter == 'dead' %}selected{% endif %}>💀 Dead only</option>
+          <option value="0" {% if drm_filter == '0' %}selected{% endif %}>No DRM / Dead flag</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label" for="language-filter">Language + View</label>
+        <select id="language-filter" name="language">
+          <option value="">All Languages</option>
+          {% for lang, count in languages %}
+          <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }} ({{ count }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label" for="duplicates-filter">Duplicates</label>
+        <select id="duplicates-filter" name="duplicates">
+          <option value="">Normal list</option>
+          <option value="1" {% if duplicates_filter == '1' %}selected{% endif %}>⚠ Duplicates only</option>
+        </select>
+      </div>
       <input type="hidden" name="sort" value="{{ sort_by }}">
       <input type="hidden" name="dir" value="{{ sort_dir }}">
-      <button type="submit">Filter</button>
-      <a class="clear" href="/admin/channels">Clear</a>
-      {% if duplicates_filter == '1' %}
-      <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Duplicates</button>
-      {% endif %}
+      <div class="filter-actions">
+        <button type="submit">Apply</button>
+        <a class="clear" href="/admin/channels">Clear</a>
+        <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Duplicates</button>
+      </div>
     </form>
+
+    <div class="filter-summary">
+      <span class="filter-chip"><strong>Search</strong>{{ search or 'Any name' }}</span>
+      <span class="filter-chip"><strong>Source</strong>{{ source_filter or 'All sources' }}</span>
+      <span class="filter-chip"><strong>Category</strong>{{ category_filter or 'All categories' }}</span>
+      <span class="filter-chip"><strong>State</strong>{% if enabled_filter == '1' %}Enabled only{% elif enabled_filter == '0' %}Disabled only{% else %}Enabled + Disabled{% endif %}</span>
+      <span class="filter-chip"><strong>Health</strong>{% if drm_filter == '1' %}DRM only{% elif drm_filter == 'dead' %}Dead only{% elif drm_filter == '0' %}No DRM / Dead flag{% else %}All stream states{% endif %}</span>
+      <span class="filter-chip"><strong>Language</strong>{{ language_filter or 'All languages' }}</span>
+      <span class="filter-chip"><strong>Duplicates</strong>{% if duplicates_filter == '1' %}Duplicates only{% else %}Normal list{% endif %}</span>
+    </div>
 
     <!-- Bulk action bar (shown when rows selected) -->
     <div class="bulk-bar" id="bulk-bar">

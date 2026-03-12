@@ -442,12 +442,13 @@ def duplicate_summary():
     from collections import defaultdict
 
     dup_names_sq = db.session.query(Channel.name)\
+        .filter(Channel.is_enabled == True)\
         .group_by(Channel.name)\
         .having(db.func.count(Channel.id) > 1)\
         .subquery()
 
     dup_channels = Channel.query.join(Source)\
-        .filter(Channel.name.in_(dup_names_sq))\
+        .filter(Channel.is_enabled == True, Channel.name.in_(dup_names_sq))\
         .all()
 
     if not dup_channels:
@@ -495,12 +496,13 @@ def resolve_duplicates():
     priority = data.get('source_priority', [])  # ordered list of source names, index 0 = highest
 
     dup_names_sq = db.session.query(Channel.name)\
+        .filter(Channel.is_enabled == True)\
         .group_by(Channel.name)\
         .having(db.func.count(Channel.id) > 1)\
         .subquery()
 
     dup_channels = Channel.query.join(Source)\
-        .filter(Channel.name.in_(dup_names_sq))\
+        .filter(Channel.is_enabled == True, Channel.name.in_(dup_names_sq))\
         .all()
 
     groups = defaultdict(list)
