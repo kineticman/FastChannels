@@ -1,3 +1,4 @@
+import copy
 import logging
 import socket
 from abc import ABC, abstractmethod
@@ -129,7 +130,10 @@ class BaseScraper(ABC):
     config_schema: list[ConfigField] = []
 
     def __init__(self, config: dict = None):
-        self.config  = config or {}
+        # Scrapers mutate config at runtime to queue persisted tokens/caches.
+        # Work on a deep copy so SQLAlchemy-backed JSON objects are not mutated
+        # in-place before the caller explicitly saves pending updates.
+        self.config  = copy.deepcopy(config or {})
         self._pending_config_updates: dict = {}
         self._progress_cb = None   # optional callable(phase, done, total) set by worker
         self.session = requests.Session()

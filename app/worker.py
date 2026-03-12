@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import redis
 from rq import Worker, Queue, Connection
 from apscheduler.schedulers.background import BackgroundScheduler
+from sqlalchemy.orm.attributes import flag_modified
 
 from app import create_app
 from app.extensions import db
@@ -419,6 +420,7 @@ def _apply_scraper_config_updates(source, scraper) -> None:
         updated = dict(source.config or {})
         updated.update(scraper._pending_config_updates)
         source.config = updated
+        flag_modified(source, 'config')
         logger.debug('[%s] persisting %d config update(s): %s',
                      source.name, len(scraper._pending_config_updates),
                      list(scraper._pending_config_updates.keys()))

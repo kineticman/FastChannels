@@ -3,6 +3,7 @@ import re
 import requests as _req
 from urllib.parse import urljoin as _urljoin, urlsplit
 from flask import Blueprint, jsonify, request, current_app
+from sqlalchemy.orm.attributes import flag_modified
 from ..extensions import db
 from ..models import Source, Channel, AppSettings, Feed
 from ..scrapers import registry
@@ -311,6 +312,7 @@ def inspect_channel(channel_id):
                     updated = dict(source.config or {})
                     updated.update(scraper._pending_config_updates)
                     source.config = updated
+                    flag_modified(source, 'config')
                     db.session.commit()
                 except Exception:
                     db.session.rollback()

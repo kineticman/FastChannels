@@ -11,6 +11,7 @@ import logging
 import threading
 
 from flask import Blueprint, redirect, abort, current_app, request
+from sqlalchemy.orm.attributes import flag_modified
 from ..models import Channel, Source
 from ..extensions import db
 from ..scrapers import registry
@@ -109,6 +110,7 @@ def play(source_name: str, channel_id: str):
                     updated = dict(channel.source.config or {})
                     updated.update(scraper._pending_config_updates)
                     channel.source.config = updated
+                    flag_modified(channel.source, 'config')
                     db.session.commit()
                 except Exception as ce:
                     logger.warning('[play] failed to persist config updates: %s', ce)
