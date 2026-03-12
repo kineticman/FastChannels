@@ -18,6 +18,7 @@ import logging
 import re
 import base64
 import time
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlencode, urlparse
@@ -45,7 +46,6 @@ def _join_categories(values: list[str] | tuple[str, ...] | None) -> str | None:
 
 _SPANISH_LANGUAGE_MARKERS = (
     "spanish",
-    "español",
     "espanol",
     "latino",
     "latina",
@@ -53,21 +53,38 @@ _SPANISH_LANGUAGE_MARKERS = (
     "latinos",
     "telemundo",
     "univision",
-    "venevisión",
     "venevision",
     "canela",
-    "pasión",
     "pasion",
-    "clásicos",
     "clasicos",
+    "telediario",
+    "noticias",
+    "deportes",
+    "accion",
+    "comedia",
+    "novelas",
+    "mas pasiones",
+    "azteca",
+    "filmex",
+    "flixlatino",
+    "freetv accion",
+    "n+ univision",
+    "rcn noticias",
+    "adn noticias",
 )
+
+
+def _fold_text(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_only = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return ascii_only.casefold()
 
 
 def _language_from_metadata(*values: str | None) -> str:
     for value in values:
-        if not value:
-            continue
-        folded = value.casefold()
+        folded = _fold_text(value)
         if any(marker in folded for marker in _SPANISH_LANGUAGE_MARKERS):
             return "es"
     return "en"
@@ -347,7 +364,7 @@ class RokuScraper(BaseScraper):
     source_name           = "roku"
     display_name          = "The Roku Channel"
     scrape_interval       = 60    # EPG refreshed every hour
-    channel_refresh_hours = 24    # channel list refreshed once a day
+    channel_refresh_hours = 6     # refresh channel metadata several times a day to warm Roku caches
     stream_audit_enabled  = True
 
     # No config needed — fully anonymous, no credentials
