@@ -1029,7 +1029,7 @@ class RokuScraper(BaseScraper):
                 r = sess.get(proxy_url, timeout=10)
                 if r.status_code != 200:
                     logger.debug("[roku] content proxy returned %d for %s", r.status_code, sid)
-                    return [], {}, None
+                    return [], {}, None, None
                 data = r.json()
                 view_opts = data.get("viewOptions") or [{}]
                 play_id = view_opts[0].get("playId") if view_opts else None
