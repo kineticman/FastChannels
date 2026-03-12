@@ -43,12 +43,33 @@ def _join_categories(values: list[str] | tuple[str, ...] | None) -> str | None:
     return ';'.join(normalized) or None
 
 
-def _language_from_category(category: str | None) -> str:
-    if not category:
-        return "en"
-    folded = category.casefold()
-    if "spanish" in folded or "español" in folded or "espanol" in folded:
-        return "es"
+_SPANISH_LANGUAGE_MARKERS = (
+    "spanish",
+    "español",
+    "espanol",
+    "latino",
+    "latina",
+    "latinas",
+    "latinos",
+    "telemundo",
+    "univision",
+    "venevisión",
+    "venevision",
+    "canela",
+    "pasión",
+    "pasion",
+    "clásicos",
+    "clasicos",
+)
+
+
+def _language_from_metadata(*values: str | None) -> str:
+    for value in values:
+        if not value:
+            continue
+        folded = value.casefold()
+        if any(marker in folded for marker in _SPANISH_LANGUAGE_MARKERS):
+            return "es"
     return "en"
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -887,7 +908,7 @@ class RokuScraper(BaseScraper):
             stream_url        = f"roku://{station_id}",
             logo_url          = logo,
             category          = category,
-            language          = _language_from_category(category),
+            language          = _language_from_metadata(title, category),
             country           = "US",
             stream_type       = "hls",
             number            = number,
@@ -937,7 +958,7 @@ class RokuScraper(BaseScraper):
             stream_url        = f"roku://{station_id}",
             logo_url          = logo,
             category          = category,
-            language          = _language_from_category(category),
+            language          = _language_from_metadata(title, category),
             country           = "US",
             stream_type       = "hls",
             slug              = f"{play_id or ''}|{gracenote_id}",
