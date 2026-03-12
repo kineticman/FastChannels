@@ -84,6 +84,7 @@ _TAG_CATEGORY_PRIORITY = [
 ]
 
 _SESSION_TTL = 55 * 60  # seconds before we refresh cookies + csrf
+_SESSION_HARD_TTL = 12 * 60 * 60  # discard persisted session state after 12h
 _LIVE_TV_403_RETRIES = 3
 
 # Name-based category keywords — checked in order, first match wins.
@@ -335,21 +336,64 @@ class RokuScraper(BaseScraper):
         # Session state — refreshed when expired
         self._csrf_token:    Optional[str]   = None
         self._session_born:  Optional[float] = None   # epoch seconds
+        self._load_cached_session()
 
     # ── Session management ─────────────────────────────────────────────────────
 
     def _session_is_fresh(self) -> bool:
         if not self._csrf_token or not self._session_born:
             return False
-        return (time.time() - self._session_born) < _SESSION_TTL
+        age = time.time() - self._session_born
+        return age < _SESSION_HARD_TTL and bool(self.session.cookies)
+
+    def _load_cached_session(self) -> None:
+        csrf = (self.config.get("csrf_token") or "").strip()
+        born = self.config.get("session_born")
+        cookies = self.config.get("session_cookies") or {}
+        if not csrf or not isinstance(born, (int, float)) or not isinstance(cookies, dict):
+            return
+        age = time.time() - float(born)
+        if age >= _SESSION_HARD_TTL:
+            return
+        self._csrf_token = csrf
+        self._session_born = float(born)
+        self.session.cookies.update(cookies)
+
+    def _persist_session(self) -> None:
+        self._update_config("csrf_token", self._csrf_token)
+        self._update_config("session_born", self._session_born)
+        self._update_config("session_cookies", self.session.cookies.get_dict())
+
+    def _clear_cached_session(self) -> None:
+        self._csrf_token = None
+        self._session_born = None
+        self.session.cookies.clear()
+        self._update_config("csrf_token", None)
+        self._update_config("session_born", None)
+        self._update_config("session_cookies", {})
+
+    @staticmethod
+    def _live_tv_headers() -> dict:
+        return {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Cache-Control": "max-age=0",
+            "Pragma": "no-cache",
+            "Referer": _BASE + "/",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+        }
 
     def _refresh_session(self) -> bool:
         """Boot a fresh Roku browser session. Returns True on success."""
         try:
+            self._clear_cached_session()
             # Step 1: hit live-tv to collect cookies
             r1 = None
             for attempt in range(_LIVE_TV_403_RETRIES + 1):
-                r1 = self.session.get(_LIVE_TV, timeout=15)
+                r1 = self.session.get(_LIVE_TV, headers=self._live_tv_headers(), timeout=15)
                 if r1.status_code == 200:
                     break
                 if r1.status_code == 403 and attempt < _LIVE_TV_403_RETRIES:
@@ -358,6 +402,8 @@ class RokuScraper(BaseScraper):
                                    attempt + 1, _LIVE_TV_403_RETRIES, wait)
                     time.sleep(wait)
                     continue
+                if r1.status_code == 403:
+                    self._log_live_tv_403(r1)
                 logger.error("[roku] live-tv returned %d", r1.status_code)
                 return False
 
@@ -379,6 +425,7 @@ class RokuScraper(BaseScraper):
 
             self._csrf_token   = csrf
             self._session_born = time.time()
+            self._persist_session()
             logger.debug("[roku] session refreshed, csrf=%s…", csrf[:12])
             return True
 
@@ -391,7 +438,51 @@ class RokuScraper(BaseScraper):
     def _ensure_session(self) -> bool:
         if not self._session_is_fresh():
             return self._refresh_session()
+        if self._session_born and (time.time() - self._session_born) >= _SESSION_TTL:
+            logger.info("[roku] reusing cached session older than soft TTL; will refresh only if Roku rejects it")
         return True
+
+    def _api_get(self, url: str, *, timeout: int, label: str) -> Optional[object]:
+        for attempt in range(2):
+            headers = self._api_headers()
+            response = self.session.get(url, headers=headers, timeout=timeout)
+            if response.status_code not in (401, 403) or attempt == 1:
+                return response
+            logger.warning("[roku] %s returned %d, refreshing session and retrying once",
+                           label, response.status_code)
+            if not self._refresh_session():
+                return response
+        return None
+
+    def _api_post(self, url: str, *, json_body: dict, timeout: int, label: str):
+        for attempt in range(2):
+            headers = self._api_headers()
+            response = self.session.post(url, headers=headers, json=json_body, timeout=timeout)
+            if response.status_code not in (401, 403) or attempt == 1:
+                return response
+            logger.warning("[roku] %s returned %d, refreshing session and retrying once",
+                           label, response.status_code)
+            if not self._refresh_session():
+                return response
+        return None
+
+    @staticmethod
+    def _log_live_tv_403(response) -> None:
+        body = ""
+        try:
+            body = (response.text or "").strip().replace("\n", " ").replace("\r", " ")
+        except Exception:
+            body = ""
+        if len(body) > 160:
+            body = body[:160] + "..."
+        logger.warning(
+            "[roku] live-tv 403 details: cf_pop=%s x_cache=%s server=%s content_type=%s body=%r",
+            response.headers.get("x-amz-cf-pop"),
+            response.headers.get("x-cache"),
+            response.headers.get("server"),
+            response.headers.get("content-type"),
+            body,
+        )
 
     def _api_headers(self) -> dict:
         return {
@@ -413,7 +504,7 @@ class RokuScraper(BaseScraper):
         content_url = _CONTENT_TPL.format(sid=station_id) + qs
         proxy_url   = _PROXY_BASE + quote(content_url, safe="")
         try:
-            r = self.session.get(proxy_url, headers=self._api_headers(), timeout=10)
+            r = self._api_get(proxy_url, timeout=10, label=f"content proxy for {station_id}")
             if r.status_code == 200:
                 return r.json()
             if _raise_on_404 and r.status_code == 404:
@@ -436,7 +527,7 @@ class RokuScraper(BaseScraper):
         # ── Phase 1: /api/v2/epg — returns all ~795 live channels ─────────────
         # Each collection item has features.station with full channel metadata.
         try:
-            r = self.session.get(_EPG_URL, headers=self._api_headers(), timeout=20)
+            r = self._api_get(_EPG_URL, timeout=20, label="epg")
             if r.status_code == 200:
                 for col in r.json().get("collections", []):
                     station = col.get("features", {}).get("station")
@@ -791,7 +882,7 @@ class RokuScraper(BaseScraper):
             content_url = _CONTENT_TPL.format(sid=station_id)
             proxy_url   = _PROXY_BASE + quote(content_url, safe="")
             try:
-                r = self.session.get(proxy_url, headers=self._api_headers(), timeout=10)
+                r = self._api_get(proxy_url, timeout=10, label=f"content fallback for {station_id}")
                 pids = re.findall(r's-[a-z0-9_]+\.[A-Za-z0-9+/=]+', r.text)
                 play_id = pids[0] if pids else None
             except Exception:
@@ -826,15 +917,11 @@ class RokuScraper(BaseScraper):
             ),
         }
         try:
-            r2 = self.session.post(
-                _PLAYBACK,
-                headers=self._api_headers(),
-                json=body,
-                timeout=10,
-            )
+            r2 = self._api_post(_PLAYBACK, json_body=body, timeout=10, label=f"playback for {station_id}")
             if r2.status_code == 200:
                 stream_url = r2.json().get("url", "")
                 if stream_url:
+                    self._persist_session()
                     logger.debug("[roku] resolved %s -> %s…", station_id, stream_url[:60])
                     return stream_url
             raise RuntimeError(f"[roku] playback returned {r2.status_code} for {station_id}")
