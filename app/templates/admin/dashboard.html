@@ -51,6 +51,7 @@
     <a href="/admin/feeds">Feeds</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/logs">Logs</a>
+    <a href="/admin/help">Help</a>
     <a href="/m3u" target="_blank">M3U ↗</a>
     <a href="/epg.xml" target="_blank">EPG XML ↗</a>
     <span class="version">v{{ app_version }}</span>
@@ -142,7 +143,7 @@
             <td><span class="badge {% if source.is_enabled %}badge-green{% else %}badge-red{% endif %}">{% if source.is_enabled %}Enabled{% else %}Disabled{% endif %}</span></td>
             <td>{{ source.to_dict().channel_count }}</td>
             <td style="color:#64748b">{% if source.last_scraped_at %}{{ source.last_scraped_at.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}Never{% endif %}</td>
-            <td><button class="btn btn-sm" onclick="run({{ source.id }}, this)">Run Now</button></td>
+            <td><button class="btn btn-sm" onclick="run({{ source.id }}, this)">Scrape Now</button></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -156,7 +157,7 @@
       const r = await fetch(`/api/sources/${id}/run`, {method:'POST'});
       const d = await r.json();
       btn.textContent = d.status === 'queued' ? '✓ Queued' : 'Error';
-      setTimeout(() => { btn.textContent = 'Run Now'; btn.disabled = false; }, 3000);
+      setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
     }
     function copyUrl(e, url) {
       e.preventDefault(); e.stopPropagation();

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import redis
 from rq import Worker, Queue, Connection
 from apscheduler.schedulers.background import BackgroundScheduler
+from sqlalchemy import text
 from app import create_app
 from app.config_store import persist_source_config_updates
 from app.extensions import db
@@ -29,6 +30,8 @@ logging.basicConfig(
 )
 # APScheduler logs every job execution at INFO — suppress to WARNING
 logging.getLogger('apscheduler').setLevel(logging.WARNING)
+logging.getLogger('rq.worker').setLevel(logging.WARNING)
+logging.getLogger('rq.registry').setLevel(logging.WARNING)
 
 from app.logfile import setup as _setup_logfile
 _setup_logfile()
@@ -499,6 +502,25 @@ def _prune_old_programs():
         logger.info('[worker] pruned %d expired EPG entries', deleted)
 
 
+def _cleanup_orphans():
+    """Delete rows whose parent records no longer exist."""
+    deleted_programs = db.session.execute(text("""
+        DELETE FROM programs
+        WHERE channel_id NOT IN (SELECT id FROM channels)
+    """)).rowcount or 0
+    deleted_channels = db.session.execute(text("""
+        DELETE FROM channels
+        WHERE source_id NOT IN (SELECT id FROM sources)
+    """)).rowcount or 0
+    db.session.commit()
+    if deleted_programs or deleted_channels:
+        logger.info(
+            '[worker] cleaned %d orphan programs and %d orphan channels',
+            deleted_programs,
+            deleted_channels,
+        )
+
+
 def _upsert_programs(source, program_data_list):
     if not program_data_list:
         return
@@ -672,16 +694,34 @@ if __name__ == '__main__':
         with flask_app.app_context():
             _prune_old_programs()
 
+    def _scheduled_integrity_cleanup():
+        with flask_app.app_context():
+            _cleanup_orphans()
+
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(_schedule_due_scrapes, 'interval', minutes=1, id='auto_scrape',
                       max_instances=1, coalesce=True)
     scheduler.add_job(_scheduled_prune, 'interval', hours=1, id='epg_prune',
                       max_instances=1, coalesce=True)
+    scheduler.add_job(_scheduled_integrity_cleanup, 'interval', days=1, id='integrity_cleanup',
+                      max_instances=1, coalesce=True)
     scheduler.start()
     logger.info('Scheduler started — checking sources every 60s')
+    with flask_app.app_context():
+        _cleanup_orphans()
+        enabled_sources = Source.query.filter_by(is_enabled=True).count()
+        total_sources = Source.query.count()
+        from app.models import Feed
+        enabled_feeds = Feed.query.filter_by(is_enabled=True).count()
+        logger.info(
+            'Startup summary — enabled_sources=%d total_sources=%d enabled_feeds=%d',
+            enabled_sources,
+            total_sources,
+            enabled_feeds,
+        )
 
     r = redis.from_url(flask_app.config['REDIS_URL'])
     with Connection(r):
         worker = Worker(queues=[Queue('scraper', connection=r)])
         logger.info('Worker listening on queue: scraper')
-        worker.work()
+        worker.work(logging_level=logging.WARNING)

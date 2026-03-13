@@ -767,7 +767,7 @@ class RokuScraper(BaseScraper):
         if not self._session_is_fresh():
             return self._refresh_session()
         if self._session_born and (time.time() - self._session_born) >= _SESSION_TTL:
-            logger.info("[roku] reusing cached session older than soft TTL; will refresh only if Roku rejects it")
+            logger.debug("[roku] reusing cached session older than soft TTL; will refresh only if Roku rejects it")
         return True
 
     def _api_get(self, url: str, *, timeout: int, label: str) -> Optional[object]:
@@ -1212,102 +1212,107 @@ class RokuScraper(BaseScraper):
             return raw_url
 
         station_id = raw_url[len("roku://"):]
+        had_play_id = False
+        had_selector_url = False
+        need_content_details = False
+        reusable_params = None
+        failure_stage = "cache"
 
-        cached_stream_url = self._cached_stream_url(station_id)
-        if cached_stream_url:
-            logger.info("[roku] resolve cache hit (stream_url) for %s", station_id)
-            return cached_stream_url
-
-        reusable_params, reusable_reason = self._reusable_stream_query()
-        logger.info(
-            "[roku] resolve start for %s exact_stream_cache=%s reusable_jwt=%s reason=%s",
-            station_id,
-            bool(cached_stream_url),
-            bool(reusable_params),
-            reusable_reason or "available",
-        )
-
-        if not self._ensure_session():
-            raise RuntimeError(f"[roku] resolve failed — could not obtain session for {station_id}")
-
-        # Step 1: prefer cached playId to avoid content lookups on tune.
-        content_data = None
-        play_id = self._cached_play_id(station_id)
-        selector_url = self._cached_selector_url(station_id)
-        if play_id:
-            logger.info("[roku] resolve cache hit (play_id) for %s", station_id)
-        if selector_url:
-            logger.info("[roku] resolve cache hit (selector_url) for %s", station_id)
-        need_content_details = not play_id or (reusable_params and not selector_url)
-        if need_content_details:
-            logger.info("[roku] loading content details for %s", station_id)
-            content_data = self._fetch_content(station_id, _raise_on_404=True)
-            if content_data:
-                view_opts = content_data.get("viewOptions") or [{}]
-                play_id = view_opts[0].get("playId") if view_opts else None
-                self._cache_play_id(station_id, play_id)
-                selector_url = self._extract_selector_url(view_opts)
-                self._cache_selector_url(station_id, selector_url)
-
-        if not play_id:
-            # Try regex fallback from raw response
-            content_url = _CONTENT_TPL.format(sid=station_id)
-            proxy_url   = _PROXY_BASE + quote(content_url, safe="")
-            try:
-                r = self._api_get(proxy_url, timeout=10, label=f"content fallback for {station_id}")
-                pids = re.findall(r's-[a-z0-9_]+\.[A-Za-z0-9+/=]+', r.text)
-                play_id = pids[0] if pids else None
-                self._cache_play_id(station_id, play_id)
-            except Exception:
-                pass
-
-        if not play_id:
-            logger.warning("[roku] no playId found for %s", station_id)
-            raise RuntimeError(f"[roku] no playId found for {station_id}")
-
-        # Decode to determine media format
         try:
-            decoded = base64.b64decode(play_id.split(".", 1)[1]).decode()
-            media_format = "mpeg-dash" if "dash" in decoded.lower() else "m3u"
-        except Exception:
-            media_format = "m3u"
+            cached_stream_url = self._cached_stream_url(station_id)
+            if cached_stream_url:
+                logger.info("[roku] resolve %s via stream_url cache", station_id)
+                return cached_stream_url
 
-        # Step 2: if we have a reusable Roku JWT from another recent successful
-        # tune, try synthesizing the target HLS URL directly from the selector
-        # UUID exposed in content data. Fall back to playback if validation fails.
-        if media_format == "m3u" and selector_url:
-            synthetic_url = self._synthetic_stream_url(selector_url)
-            if synthetic_url:
-                if self._validate_stream_url(synthetic_url):
+            reusable_params, reusable_reason = self._reusable_stream_query()
+
+            failure_stage = "bootstrap"
+            if not self._ensure_session():
+                raise RuntimeError(f"[roku] resolve failed — could not obtain session for {station_id}")
+
+            # Step 1: prefer cached playId to avoid content lookups on tune.
+            failure_stage = "content"
+            content_data = None
+            play_id = self._cached_play_id(station_id)
+            selector_url = self._cached_selector_url(station_id)
+            had_play_id = bool(play_id)
+            had_selector_url = bool(selector_url)
+            need_content_details = not play_id or (reusable_params and not selector_url)
+            if need_content_details:
+                content_data = self._fetch_content(station_id, _raise_on_404=True)
+                if content_data:
+                    view_opts = content_data.get("viewOptions") or [{}]
+                    play_id = view_opts[0].get("playId") if view_opts else None
                     self._cache_play_id(station_id, play_id)
+                    selector_url = self._extract_selector_url(view_opts)
                     self._cache_selector_url(station_id, selector_url)
-                    self._cache_stream_url(station_id, synthetic_url)
-                    logger.info("[roku] resolved %s via cached JWT + selector UUID", station_id)
-                    return synthetic_url
-                logger.info("[roku] synthesized stream URL rejected for %s; falling back to playback", station_id)
-            elif reusable_reason:
-                logger.info("[roku] skipping cached JWT shortcut for %s: %s", station_id, reusable_reason)
-        elif media_format == "m3u" and reusable_reason:
-            logger.info("[roku] skipping cached JWT shortcut for %s: content details unavailable (%s)", station_id, reusable_reason)
 
-        # Step 3: call /api/v3/playback
-        session_id = self.session.cookies.get("_usn", "roku-scraper")
-        body = {
-            "rokuId":      station_id,
-            "playId":      play_id,
-            "mediaFormat": media_format,
-            "drmType":     "widevine",
-            "quality":     "fhd",
-            "bifUrl":      None,
-            "adPolicyId":  "",
-            "providerId":  "rokuavod",
-            "playbackContextParams": (
-                f"sessionId={session_id}"
-                "&pageId=trc-us-live-ml-page-en-current"
-                "&isNewSession=0&idType=roku-trc"
-            ),
-        }
-        try:
+            if not play_id:
+                # Try regex fallback from raw response
+                content_url = _CONTENT_TPL.format(sid=station_id)
+                proxy_url   = _PROXY_BASE + quote(content_url, safe="")
+                try:
+                    r = self._api_get(proxy_url, timeout=10, label=f"content fallback for {station_id}")
+                    pids = re.findall(r's-[a-z0-9_]+\.[A-Za-z0-9+/=]+', r.text)
+                    play_id = pids[0] if pids else None
+                    self._cache_play_id(station_id, play_id)
+                except Exception:
+                    pass
+
+            if not play_id:
+                logger.warning("[roku] no playId found for %s", station_id)
+                raise RuntimeError(f"[roku] no playId found for {station_id}")
+
+            # Decode to determine media format
+            try:
+                decoded = base64.b64decode(play_id.split(".", 1)[1]).decode()
+                media_format = "mpeg-dash" if "dash" in decoded.lower() else "m3u"
+            except Exception:
+                media_format = "m3u"
+
+            # Step 2: if we have a reusable Roku JWT from another recent successful
+            # tune, try synthesizing the target HLS URL directly from the selector
+            # UUID exposed in content data. Fall back to playback if validation fails.
+            failure_stage = "synthetic"
+            if media_format == "m3u" and selector_url:
+                synthetic_url = self._synthetic_stream_url(selector_url)
+                if synthetic_url:
+                    if self._validate_stream_url(synthetic_url):
+                        self._cache_play_id(station_id, play_id)
+                        self._cache_selector_url(station_id, selector_url)
+                        self._cache_stream_url(station_id, synthetic_url)
+                        logger.info(
+                            "[roku] resolve %s via cached_jwt+selector play_id_cache=%s selector_cache=%s content_lookup=%s",
+                            station_id,
+                            had_play_id,
+                            had_selector_url,
+                            need_content_details,
+                        )
+                        return synthetic_url
+                    logger.debug("[roku] synthesized stream URL rejected for %s; falling back to playback", station_id)
+                elif reusable_reason:
+                    logger.debug("[roku] skipping cached JWT shortcut for %s: %s", station_id, reusable_reason)
+            elif media_format == "m3u" and reusable_reason:
+                logger.debug("[roku] skipping cached JWT shortcut for %s: content details unavailable (%s)", station_id, reusable_reason)
+
+            # Step 3: call /api/v3/playback
+            failure_stage = "playback"
+            session_id = self.session.cookies.get("_usn", "roku-scraper")
+            body = {
+                "rokuId":      station_id,
+                "playId":      play_id,
+                "mediaFormat": media_format,
+                "drmType":     "widevine",
+                "quality":     "fhd",
+                "bifUrl":      None,
+                "adPolicyId":  "",
+                "providerId":  "rokuavod",
+                "playbackContextParams": (
+                    f"sessionId={session_id}"
+                    "&pageId=trc-us-live-ml-page-en-current"
+                    "&isNewSession=0&idType=roku-trc"
+                ),
+            }
             r2 = self._api_post(_PLAYBACK, json_body=body, timeout=10, label=f"playback for {station_id}")
             if r2.status_code == 200:
                 stream_url = r2.json().get("url", "")
@@ -1316,7 +1321,14 @@ class RokuScraper(BaseScraper):
                     self._cache_play_id(station_id, play_id)
                     self._cache_selector_url(station_id, selector_url)
                     self._cache_stream_url(station_id, stream_url)
-                    logger.debug("[roku] resolved %s -> %s…", station_id, stream_url[:60])
+                    logger.info(
+                        "[roku] resolve %s via playback_api play_id_cache=%s selector_cache=%s content_lookup=%s reusable_jwt=%s",
+                        station_id,
+                        had_play_id,
+                        had_selector_url,
+                        need_content_details,
+                        bool(reusable_params),
+                    )
                     return stream_url
             if r2.status_code in (401, 403, 404):
                 self._invalidate_play_id(station_id)
@@ -1324,9 +1336,27 @@ class RokuScraper(BaseScraper):
                 self._invalidate_stream_url(station_id)
             raise RuntimeError(f"[roku] playback returned {r2.status_code} for {station_id}")
         except RuntimeError:
+            logger.warning(
+                "[roku] resolve %s failed stage=%s play_id_cache=%s selector_cache=%s content_lookup=%s reusable_jwt=%s",
+                station_id,
+                failure_stage,
+                had_play_id,
+                had_selector_url,
+                need_content_details,
+                bool(reusable_params),
+            )
             raise
         except Exception as exc:
             self._invalidate_stream_url(station_id)
+            logger.warning(
+                "[roku] resolve %s failed stage=%s play_id_cache=%s selector_cache=%s content_lookup=%s reusable_jwt=%s",
+                station_id,
+                failure_stage,
+                had_play_id,
+                had_selector_url,
+                need_content_details,
+                bool(reusable_params),
+            )
             raise RuntimeError(f"[roku] playback request failed for {station_id}: {exc}") from exc
 
     # ── M3U extras ─────────────────────────────────────────────────────────────

@@ -157,6 +157,47 @@
       border-top: 1px solid #334155;
     }
 
+    .advanced-box {
+      margin-top: 1rem;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #162033;
+    }
+    .advanced-toggle {
+      width: 100%;
+      background: transparent;
+      border: none;
+      color: #cbd5e1;
+      padding: 0.9rem 1rem;
+      text-align: left;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .advanced-toggle:hover { background: #1b283d; }
+    .advanced-copy {
+      color: #94a3b8;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      padding: 0 1rem 0.95rem;
+    }
+    .advanced-body {
+      display: none;
+      padding: 0 1rem 1rem;
+      border-top: 1px solid #334155;
+    }
+    .advanced-body.open { display: block; }
+    .advanced-chevron {
+      color: #64748b;
+      font-size: 0.78rem;
+      transition: transform 0.2s;
+    }
+    .advanced-chevron.open { transform: rotate(180deg); }
+
     .btn {
       padding: 0.5rem 1.2rem;
       border-radius: 6px;
@@ -196,6 +237,7 @@
   <a href="/admin/feeds">Feeds</a>
   <a href="/admin/settings" class="active">Settings</a>
   <a href="/admin/logs">Logs</a>
+  <a href="/admin/help">Help</a>
   <a href="/m3u" target="_blank">M3U ↗</a>
   <a href="/epg.xml" target="_blank">EPG XML ↗</a>
   <span class="version">v{{ app_version }}</span>
@@ -222,7 +264,7 @@
           <label for="global-chnum-start">Master Channel Number Start</label>
           <input type="number" id="global-chnum-start" min="1" max="99999"
                  placeholder="e.g. 1000" value="{{ global_chnum_start or '' }}">
-          <div class="help">Sequential tvg-chno numbers assigned to sources without their own channel number start. Leave blank to disable.</div>
+          <div class="help">Sequential <code>tvg-chno</code> numbers assigned in the combined master M3U for sources without their own channel number start. Feed-specific channel numbering is configured on each feed under <code>Feeds</code>.</div>
           {% if global_chnum_start_from_env %}
           <div class="help">Currently coming from environment variable <code>MASTER_CHANNEL_NUMBER_START</code>. Saving here will override it in the database.</div>
           {% endif %}
@@ -384,7 +426,7 @@ async function buildCard(source) {
       </div>
     </div>
     <div class="source-body">
-      ${hasSchema ? renderFields(schema, values) : '<p class="no-config-msg">This source requires no configuration — it works anonymously out of the box.</p>'}
+      ${hasSchema ? renderFields(source, schema, values) : '<p class="no-config-msg">This source requires no configuration — it works anonymously out of the box.</p>'}
     </div>
   `;
 
@@ -397,14 +439,35 @@ async function buildCard(source) {
   return card;
 }
 
-function renderFields(schema, values) {
-  const fieldsHtml = schema.map(f => {
+function renderFields(source, schema, values) {
+  const slingPrimaryKeys = new Set(['bearer_jwt']);
+  const amazonPrimaryKeys = new Set(['cookie_header']);
+  const isSling = source.name === 'sling';
+  const isAmazonPrimeFree = source.name === 'amazon_prime_free';
+  let primarySchema = schema;
+  let advancedSchema = [];
+  let advancedTitle = '';
+  let advancedCopy = '';
+
+  if (isSling) {
+    primarySchema = schema.filter(f => slingPrimaryKeys.has(f.key));
+    advancedSchema = schema.filter(f => !slingPrimaryKeys.has(f.key));
+    advancedTitle = 'Advanced Sling Settings';
+    advancedCopy = 'These values are mainly for troubleshooting or manual browser token capture. Most installs should leave them alone.';
+  } else if (isAmazonPrimeFree) {
+    primarySchema = [];
+    advancedSchema = schema;
+    advancedTitle = 'Advanced Amazon Settings';
+    advancedCopy = 'These values rarely need changes. Use them only if you are troubleshooting session capture or targeting a different Amazon locale.';
+  }
+
+  const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {
     const val   = values[f.key] ?? f.default ?? '';
     const req   = f.required ? '<span class="req">*</span>' : '';
     const itype = f.field_type === 'password' ? 'password' : (f.field_type === 'number' ? 'number' : 'text');
     const phld  = f.placeholder ? `placeholder="${escHtml(f.placeholder)}"` : '';
     const help  = f.help_text  ? `<div class="help">${escHtml(f.help_text)}</div>` : '';
-    const cls   = schema.length === 1 ? 'field field-full' : 'field';
+    const cls   = fieldSchema.length === 1 ? 'field field-full' : 'field';
 
     return `
       <div class="${cls}">
@@ -415,8 +478,26 @@ function renderFields(schema, values) {
       </div>`;
   }).join('');
 
+  const primaryFieldsHtml = renderFieldSet(primarySchema);
+  const advancedFieldsHtml = advancedSchema.length
+    ? `
+      <div class="advanced-box">
+        <button type="button" class="advanced-toggle" onclick="toggleAdvanced(this)">
+          <span>${advancedTitle}</span>
+          <span class="advanced-chevron">▼</span>
+        </button>
+        <div class="advanced-copy">
+          ${advancedCopy}
+        </div>
+        <div class="advanced-body">
+          <div class="fields-grid">${renderFieldSet(advancedSchema)}</div>
+        </div>
+      </div>`
+    : '';
+
   return `
-    <div class="fields-grid">${fieldsHtml}</div>
+    ${primaryFieldsHtml ? `<div class="fields-grid">${primaryFieldsHtml}</div>` : ''}
+    ${advancedFieldsHtml}
     <div class="field-actions">
       <span class="save-status"></span>
       <button class="btn btn-ghost btn-clear">Clear</button>
@@ -470,6 +551,13 @@ function toggleCard(header) {
   const body    = header.nextElementSibling;
   const chevron = header.querySelector('.chevron');
   const isOpen  = body.classList.toggle('open');
+  chevron.classList.toggle('open', isOpen);
+}
+
+function toggleAdvanced(button) {
+  const body = button.parentElement.querySelector('.advanced-body');
+  const chevron = button.querySelector('.advanced-chevron');
+  const isOpen = body.classList.toggle('open');
   chevron.classList.toggle('open', isOpen);
 }
 

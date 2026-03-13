@@ -82,6 +82,7 @@ There is not currently a separate Docker Hub image documented in this repo.
 | `http://localhost:5523/admin/sources` | Enable/disable sources, run scrapes |
 | `http://localhost:5523/admin/channels` | Browse channels and enable/disable them |
 | `http://localhost:5523/admin/settings` | Enter source credentials and options |
+| `http://localhost:5523/admin/help` | Quick in-app help and common gotchas |
 | `http://localhost:5523/m3u` | Full M3U playlist |
 | `http://localhost:5523/epg.xml` | Full XMLTV EPG |
 
@@ -105,6 +106,12 @@ Feeds are named, persistent filtered sub-feeds that expose their own `/m3u` and 
 ```
 
 Filter keys: `sources`, `categories`, `languages`, `max_channels`.
+
+Feed notes:
+
+- Feed-specific channel numbering is configured per feed with `Channel Number Start`.
+- The global `MASTER_CHANNEL_NUMBER_START` setting only affects the combined master `/m3u`.
+- `Add to Channels DVR` uses the server URLs configured in **Settings**.
 
 ## Configuration
 
@@ -144,6 +151,23 @@ This means streams never go stale — every play request gets a fresh URL.
 
 Sources that opt in (`stream_audit_enabled = True`) support a Stream Audit job that health-checks every channel's stream and marks dead channels inactive. Triggered from the admin UI per source. Currently enabled for: Pluto TV, Tubi, Roku, Sling Freestream, DistroTV.
 
+### Channel Inspect
+
+Use the **Inspect** button on the Channels page to test a single channel's resolve/playback path. This helps identify:
+
+- dead manifests
+- VOD-only streams
+- DRM-protected streams
+- source-specific resolver failures
+
+### Duplicate resolution
+
+The **Resolve Duplicates** helper on the Channels page works on currently enabled duplicate-name channels. It:
+
+- prefers healthy channels over channels flagged `DRM`, `Dead`, or inactive
+- uses source priority as a tie-breaker between otherwise healthy matches
+- disables the whole group if every duplicate is unhealthy
+
 ### EPG-only sources
 
 A source can be flagged **EPG Only** in the admin UI. EPG-only sources are excluded from M3U output but their program data is used to enrich EPG for title-matched channels from other sources. Amazon Prime Free is the primary use case — it has no playable streams but provides accurate guide data.
@@ -156,6 +180,12 @@ Two separate flags on each channel:
 - **`is_enabled`** — set by you via the admin UI toggle. Means include this channel in M3U/EPG output. Survives re-scrapes.
 
 Disabling a **source** deletes all its channels from the DB. Re-enabling and running a scrape restores them.
+
+## Source caveats
+
+- **Roku**: playback now relies heavily on cached session/JWT metadata for stability. Some Roku channels only expose sparse future guide data, so short EPG windows are expected on those channels.
+- **Amazon Prime Free**: EPG-only by default. Without a valid Amazon cookie header, pagination is limited and channel discovery may be incomplete.
+- **Sling Freestream**: metadata and EPG can still be useful, but many Sling streams remain DRM-limited for generic IPTV clients.
 
 ## Current Sources
 

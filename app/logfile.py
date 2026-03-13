@@ -19,6 +19,11 @@ def setup():
     if root.getEffectiveLevel() > logging.INFO:
         root.setLevel(logging.INFO)
 
+    # RQ's queue housekeeping is very noisy at INFO and doesn't add much
+    # operational value compared with our own scrape start/finish logs.
+    logging.getLogger('rq.worker').setLevel(logging.WARNING)
+    logging.getLogger('rq.registry').setLevel(logging.WARNING)
+
     has_stream = any(isinstance(h, logging.StreamHandler) for h in root.handlers)
     if not has_stream:
         sh = logging.StreamHandler()

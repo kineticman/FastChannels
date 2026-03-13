@@ -168,3 +168,8 @@ def settings():
 @admin_bp.route('/logs')
 def logs():
     return render_template('admin/logs.html')
+
+
+@admin_bp.route('/help')
+def help():
+    return render_template('admin/help.html')
