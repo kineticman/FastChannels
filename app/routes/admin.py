@@ -159,6 +159,7 @@ def channels():
 
 @admin_bp.route('/feeds')
 def feeds():
+    app_settings = AppSettings.get()
     sources    = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
     feeds      = Feed.query.order_by(Feed.name).all()
     cats = db.session.query(Channel.category)\
@@ -173,7 +174,9 @@ def feeds():
     return render_template('admin/feeds.html',
                            feeds=feeds, sources=sources,
                            categories=categories, languages=languages,
-                           base_url=base_url)
+                           base_url=base_url,
+                           global_chnum_start=app_settings.effective_global_chnum_start(),
+                           global_chnum_start_from_env=app_settings.global_chnum_start is None and app_settings.env_global_chnum_start() is not None)
 
 
 @admin_bp.route('/settings')
@@ -181,10 +184,8 @@ def settings():
     app_settings = AppSettings.get()
     request_base_url = request.host_url.rstrip('/')
     return render_template('admin/settings.html',
-                           global_chnum_start=app_settings.effective_global_chnum_start(),
                            channels_dvr_url=app_settings.effective_channels_dvr_url() or '',
                            public_base_url=app_settings.effective_public_base_url() or '',
-                           global_chnum_start_from_env=app_settings.global_chnum_start is None and app_settings.env_global_chnum_start() is not None,
                            channels_dvr_url_from_env=(not (app_settings.channels_dvr_url or '').strip()) and app_settings.env_channels_dvr_url() is not None,
                            public_base_url_from_env=(not (app_settings.public_base_url or '').strip()) and app_settings.env_public_base_url() is not None,
                            request_base_url=request_base_url,

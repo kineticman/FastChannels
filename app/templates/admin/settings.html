@@ -23,7 +23,8 @@
       display: flex;
       align-items: center;
       gap: 2rem;
-      height: 56px;
+      min-height: 56px;
+      flex-wrap: wrap;
     }
     nav .version { margin-left: auto; color: #475569; font-size: 0.75rem; }
     nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
@@ -225,6 +226,17 @@
     /* ── Loading / empty states ── */
     .loading { text-align: center; padding: 3rem; color: #475569; }
     .error-msg { color: #f87171; padding: 1rem; }
+    @media (max-width: 760px) {
+      html { font-size: 16px; }
+      nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
+      nav h1 { width: 100%; }
+      nav .version { margin-left: 0; width: 100%; order: 99; }
+      .page { padding: 1.25rem 1rem 2rem; }
+      .source-header { padding: 1rem; align-items: flex-start; }
+      .source-body { padding: 0 1rem 1rem; }
+      .field-actions { flex-wrap: wrap; justify-content: flex-start; }
+      .save-status { min-width: 0; text-align: left; }
+    }
   </style>
 </head>
 <body>
@@ -243,37 +255,7 @@
 
 <div class="page">
   <h1>Settings</h1>
-  <p class="subtitle">Configure global output and Channels DVR settings. Source-specific credentials and advanced options now live on the Sources page.</p>
-
-  <!-- Global settings card -->
-  <div class="source-card">
-    <div class="source-header" style="cursor:default">
-      <div class="source-title">
-        <div class="source-icon">⚙️</div>
-        <div>
-          <div class="source-name">Global Output Settings</div>
-          <div class="source-meta">Applied to M3U / channel numbering across all sources</div>
-        </div>
-      </div>
-    </div>
-    <div class="source-body open">
-      <div class="fields-grid" style="max-width:480px">
-        <div class="field field-full">
-          <label for="global-chnum-start">Master Channel Number Start</label>
-          <input type="number" id="global-chnum-start" min="1" max="99999"
-                 placeholder="e.g. 1000" value="{{ global_chnum_start or '' }}">
-          <div class="help">Sequential <code>tvg-chno</code> numbers assigned in the combined master M3U for sources without their own channel number start. Feed-specific channel numbering is configured on each feed under <code>Feeds</code>.</div>
-          {% if global_chnum_start_from_env %}
-          <div class="help">Currently coming from environment variable <code>MASTER_CHANNEL_NUMBER_START</code>. Saving here will override it in the database.</div>
-          {% endif %}
-        </div>
-      </div>
-      <div class="field-actions">
-        <span class="save-status" id="global-settings-status"></span>
-        <button class="btn btn-primary" onclick="saveGlobalSettings()">Save</button>
-      </div>
-    </div>
-  </div>
+  <p class="subtitle">Configure Channels DVR connectivity and server URLs. Source-specific credentials and advanced options now live on the Sources page.</p>
 
   <!-- Channels DVR card -->
   <div class="source-card">
@@ -341,11 +323,6 @@ async function saveSettings(body, statusId) {
     status.className = 'save-status error';
     status.textContent = '✕ ' + e.message;
   }
-}
-
-function saveGlobalSettings() {
-  const val = document.getElementById('global-chnum-start').value.trim();
-  saveSettings({ global_chnum_start: val ? parseInt(val, 10) : null }, 'global-settings-status');
 }
 
 function saveDvrSettings() {

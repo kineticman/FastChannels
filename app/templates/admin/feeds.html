@@ -2,12 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Feeds — FastChannels</title>
   <style>
     html { font-size: 17px; }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
-    nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; }
+    nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; flex-wrap: wrap; }
     nav .version { margin-left: auto; color: #475569; font-size: 0.75rem; }
     nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
     nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
@@ -42,6 +43,13 @@
     .feed-meta { display: flex; gap: 1.5rem; margin-top: 0.9rem; flex-wrap: wrap; }
     .feed-stat { font-size: 0.8rem; color: #64748b; }
     .feed-stat strong { color: #e2e8f0; }
+    .feed-settings {
+      margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid #334155;
+      display: grid; gap: 0.75rem;
+    }
+    .inline-setting { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
+    .inline-setting .field { margin-bottom: 0; min-width: 260px; flex: 1; }
+    .inline-setting .save-status { min-width: 0; text-align: left; align-self: center; }
     .feed-urls { margin-top: 0.9rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
     .url-chip {
       background: #0f172a; border: 1px solid #334155; border-radius: 6px;
@@ -157,6 +165,20 @@
     .ch-item.excluded .ch-name { text-decoration: line-through; }
     .pill-manual { background: #1e3a5f; color: #7dd3fc; }
     .pill-red { background: #3b1a1a; color: #f87171; }
+    @media (max-width: 760px) {
+      html { font-size: 16px; }
+      nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
+      nav h1 { width: 100%; }
+      nav .version { margin-left: 0; width: 100%; order: 99; }
+      .container { margin: 1rem auto; padding: 0 1rem; }
+      .page-header, .feed-top, .feed-actions, .modal-footer { flex-direction: column; align-items: stretch; }
+      .feed-card { padding: 1rem; }
+      .feed-actions { flex-wrap: wrap; }
+      .inline-setting { align-items: stretch; }
+      .inline-setting .field { min-width: 0; }
+      .url-chip { width: 100%; justify-content: space-between; }
+      .modal { padding: 1rem; }
+    }
   </style>
 </head>
 <body>
@@ -253,6 +275,26 @@
           <strong>{% if feed.is_enabled %}Enabled{% else %}Disabled{% endif %}</strong>
         </div>
       </div>
+
+      {% if feed.slug == 'default' %}
+      <div class="feed-settings">
+        <div class="field">
+          <label>Master Channel Number Start</label>
+          <div class="help">Sequential <code>tvg-chno</code> numbers assigned in the default/master output for sources without their own channel number start.</div>
+          {% if global_chnum_start_from_env %}
+          <div class="help">Currently coming from environment variable <code>MASTER_CHANNEL_NUMBER_START</code>. Saving here will override it in the database.</div>
+          {% endif %}
+        </div>
+        <div class="inline-setting">
+          <div class="field">
+            <input type="number" id="default-global-chnum-start" min="1" max="99999"
+                   placeholder="e.g. 1000" value="{{ global_chnum_start or '' }}">
+          </div>
+          <span class="save-status" id="default-global-chnum-status"></span>
+          <button class="btn btn-ghost" type="button" onclick="saveDefaultChannelNumbering()">Save Numbering</button>
+        </div>
+      </div>
+      {% endif %}
 
       <div class="feed-urls">
         <a class="url-chip" href="{{ base_url }}/feeds/{{ feed.slug }}/m3u" target="_blank">
@@ -642,6 +684,33 @@ async function saveFeed() {
     status.textContent = '✗ ' + e.message;
     status.className   = 'save-status error';
     btn.disabled = false;
+  }
+}
+
+async function saveDefaultChannelNumbering() {
+  const input = document.getElementById('default-global-chnum-start');
+  const status = document.getElementById('default-global-chnum-status');
+  if (!input || !status) return;
+
+  status.textContent = 'Saving…';
+  status.className = 'save-status';
+  try {
+    const raw = input.value.trim();
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        global_chnum_start: raw ? parseInt(raw, 10) : null,
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    status.textContent = '✓ Saved';
+    status.className = 'save-status ok';
+    setTimeout(() => { status.textContent = ''; }, 2500);
+  } catch (e) {
+    status.textContent = '✗ ' + e.message;
+    status.className = 'save-status error';
   }
 }
 
