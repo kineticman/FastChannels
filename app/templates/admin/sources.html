@@ -2,12 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sources — FastChannels</title>
   <style>
     html { font-size: 17px; }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
-    nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; }
+    nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; flex-wrap: wrap; }
     nav .version { margin-left: auto; color: #475569; font-size: 0.75rem; }
     nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
     nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
@@ -204,6 +205,19 @@
     }
     .config-badge.configured { background: #14532d33; color: #4ade80; border-color: #15803d44; }
     .config-badge.anon { background: #1e293b; color: #64748b; border-color: #334155; }
+    @media (max-width: 760px) {
+      html { font-size: 16px; }
+      nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
+      nav h1 { width: 100%; }
+      nav .version { margin-left: 0; width: 100%; order: 99; }
+      .container { margin: 1rem auto; padding: 0 1rem; }
+      .card { padding: 1rem; flex-direction: column; align-items: stretch; gap: 1rem; }
+      .actions { flex-wrap: wrap; }
+      .error { white-space: normal; max-width: none; }
+      .chnum-wrap, .epg-toggle-wrap, .config-actions, .modal-actions { flex-wrap: wrap; }
+      .config-actions { justify-content: flex-start; }
+      .config-status { min-width: 0; text-align: left; }
+    }
   </style>
 </head>
 <body>
