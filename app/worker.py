@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import redis
+import requests as _req
 from rq import Worker, Queue, Connection
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import text
@@ -22,6 +23,7 @@ from app.scrapers.base import (
     ScrapeSkipError,
     is_transient_network_error,
 )
+from app.xml_cache import invalidate_xml_cache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -98,7 +100,7 @@ def run_scraper(source_name: str):
 
             if skip_channels:
                 from app.scrapers.base import ChannelData as _CD
-                db_channels = source.channels.filter_by(is_active=True).all()
+                db_channels = _epg_channels_for_source(source)
                 epg_input   = [_CD(source_channel_id=ch.source_channel_id,
                                    name=ch.name,
                                    stream_url=ch.stream_url or '',
@@ -110,6 +112,7 @@ def run_scraper(source_name: str):
                 source.last_error      = None
                 _apply_scraper_config_updates(source, scraper)
                 db.session.commit()
+                invalidate_xml_cache()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] EPG-only run complete — %d channels, %d programs (%.1fs)',
                             source_name, len(db_channels), len(programs), elapsed)
@@ -124,6 +127,7 @@ def run_scraper(source_name: str):
                 source.last_error      = None
                 _apply_scraper_config_updates(source, scraper)
                 db.session.commit()
+                invalidate_xml_cache()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
@@ -444,8 +448,57 @@ def _apply_scraper_config_updates(source, scraper) -> None:
                      list(scraper._pending_config_updates.keys()))
 
 
+def _epg_channels_for_source(source) -> list[Channel]:
+    """Return DB channels that should participate in EPG refreshes.
+
+    DRM-marked channels stay disabled for playback, but keeping them in the
+    EPG refresh set preserves guide data in case support improves later.
+    """
+    return source.channels.filter(
+        (Channel.is_active == True) | (Channel.disable_reason == 'DRM')
+    ).all()
+
+
+def _validate_logo_url(url: str, cache: dict[str, bool]) -> bool:
+    cached = cache.get(url)
+    if cached is not None:
+        return cached
+
+    ok = False
+    try:
+        resp = _req.head(url, allow_redirects=True, timeout=5)
+        content_type = (resp.headers.get('content-type') or '').lower()
+        ok = resp.ok and (not content_type or content_type.startswith('image/'))
+        if not ok:
+            resp = _req.get(url, allow_redirects=True, timeout=5, stream=True)
+            content_type = (resp.headers.get('content-type') or '').lower()
+            ok = resp.ok and content_type.startswith('image/')
+            resp.close()
+    except Exception:
+        ok = False
+
+    cache[url] = ok
+    return ok
+
+
+def _resolved_logo_url(existing_logo: str | None, incoming_logo: str | None, cache: dict[str, bool]) -> str | None:
+    current = (existing_logo or '').strip() or None
+    incoming = (incoming_logo or '').strip() or None
+
+    if not incoming:
+        return current
+    if not current or incoming == current:
+        return incoming
+    if not incoming.startswith(('http://', 'https://')):
+        return current
+    if _validate_logo_url(incoming, cache):
+        return incoming
+    return current
+
+
 def _upsert_channels(source, channel_data_list):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
+    logo_validation_cache: dict[str, bool] = {}
     for cd in channel_data_list:
         ch = existing.get(cd.source_channel_id)
 
@@ -462,7 +515,11 @@ def _upsert_channels(source, channel_data_list):
             ch.name          = cd.name
             ch.stream_url    = cd.stream_url
             ch.stream_type   = cd.stream_type
-            ch.logo_url      = cd.logo_url
+            next_logo = _resolved_logo_url(ch.logo_url, cd.logo_url, logo_validation_cache)
+            if next_logo != (ch.logo_url or None) and next_logo != (cd.logo_url or '').strip():
+                logger.info('[%s] keeping existing logo for %s after invalid replacement URL from scrape',
+                            source.name, cd.name)
+            ch.logo_url      = next_logo
             ch.slug          = cd.slug
             ch.category      = cd.category
             ch.language      = cd.language

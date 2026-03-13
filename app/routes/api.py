@@ -1,18 +1,20 @@
 import json
 import re
 import requests as _req
+from datetime import datetime, timezone
 from urllib.parse import urljoin as _urljoin, urlsplit
 from flask import Blueprint, jsonify, request, current_app
 from sqlalchemy import select
 from app.config_store import persist_source_config_updates
 from ..extensions import db
-from ..models import Source, Channel, AppSettings, Feed
+from ..models import Source, Channel, Program, AppSettings, Feed
 from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
 from ..url import public_base_url
 from .tasks import trigger_scrape, trigger_stream_audit
 from ..generators.m3u import get_global_chnum_overlaps
 from .. import logfile
+from ..xml_cache import invalidate_xml_cache
 
 api_bp = Blueprint('api', __name__)
 
@@ -185,6 +187,7 @@ def update_source(source_id):
             db.session.rollback()
             return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
     db.session.commit()
+    invalidate_xml_cache()
     return jsonify(source.to_dict())
 
 
@@ -194,6 +197,7 @@ def delete_source_channels(source_id):
     source = Source.query.get_or_404(source_id)
     deleted = source.channels.delete()
     db.session.commit()
+    invalidate_xml_cache()
     return jsonify({'status': 'deleted', 'source': source.name, 'deleted': deleted})
 
 
@@ -278,6 +282,7 @@ def update_channel(channel_id):
         else:
             return jsonify({'error': 'Invalid Gracenote ID — must be numeric (e.g. 122912) or start with EP/SH/MV/SP/TR (e.g. EP012345678)'}), 422
     db.session.commit()
+    invalidate_xml_cache()
     return jsonify(ch.to_dict())
 
 
@@ -408,6 +413,86 @@ def inspect_channel(channel_id):
         return jsonify({'status': 'error', 'detail': str(e)})
 
 
+@api_bp.route('/channels/<int:channel_id>/preview', methods=['GET'])
+def preview_channel(channel_id):
+    ch = Channel.query.get_or_404(channel_id)
+    now = datetime.now(timezone.utc)
+
+    current_program = (
+        Program.query
+        .filter(
+            Program.channel_id == ch.id,
+            Program.start_time <= now,
+            Program.end_time > now,
+        )
+        .order_by(Program.start_time.asc())
+        .first()
+    )
+    next_program = (
+        Program.query
+        .filter(
+            Program.channel_id == ch.id,
+            Program.start_time >= now,
+        )
+        .order_by(Program.start_time.asc())
+        .first()
+    )
+
+    if current_program and next_program and current_program.id == next_program.id:
+        next_program = (
+            Program.query
+            .filter(
+                Program.channel_id == ch.id,
+                Program.start_time >= current_program.end_time,
+            )
+            .order_by(Program.start_time.asc())
+            .first()
+        )
+
+    def _program_dict(p):
+        if not p:
+            return None
+        return {
+            'title': p.title,
+            'description': p.description,
+            'start_time': p.start_time.isoformat() if p.start_time else None,
+            'end_time': p.end_time.isoformat() if p.end_time else None,
+            'category': p.category,
+            'episode_title': p.episode_title,
+            'season': p.season,
+            'episode': p.episode,
+        }
+
+    play_url = None
+    if (
+        ch.stream_url
+        and ch.source
+        and not ch.source.epg_only
+        and ch.source.name
+        and ch.source_channel_id
+    ):
+        play_url = f'/play/{ch.source.name}/{ch.source_channel_id}.m3u8'
+
+    return jsonify({
+        'channel': {
+            'id': ch.id,
+            'name': ch.name,
+            'source_name': ch.source.name if ch.source else None,
+            'source_display_name': ch.source.display_name if ch.source else None,
+            'source_channel_id': ch.source_channel_id,
+            'category': ch.category,
+            'language': ch.language,
+            'logo_url': ch.logo_url,
+            'disable_reason': ch.disable_reason,
+            'is_active': ch.is_active,
+            'is_enabled': ch.is_enabled,
+        },
+        'current_program': _program_dict(current_program),
+        'next_program': _program_dict(next_program),
+        'play_url': play_url,
+    })
+
+
 @api_bp.route('/logs')
 def get_logs():
     n = request.args.get('n', 2500, type=int)
@@ -428,6 +513,11 @@ def stats():
         q = q.filter(Channel.category.in_(categories))
     if languages := request.args.getlist('language'):
         q = q.filter(Channel.language.in_(languages))
+    if gracenote := request.args.get('gracenote'):
+        if gracenote == 'has':
+            q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+        elif gracenote == 'missing':
+            q = q.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
     cat_rows = db.session.query(Channel.category, db.func.count(Channel.id))\
         .filter(Channel.is_active == True).group_by(Channel.category)\
         .order_by(db.func.count(Channel.id).desc()).all()
@@ -772,6 +862,7 @@ def app_settings():
                 db.session.rollback()
                 return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
         db.session.commit()
+        invalidate_xml_cache()
         row = AppSettings.get()
     return jsonify({
         'global_chnum_start': row.effective_global_chnum_start(),

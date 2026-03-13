@@ -135,6 +135,75 @@
     .btn-cancel:hover { color: #e2e8f0; }
     .btn-confirm { background: #b91c1c; color: white; }
     .btn-confirm:hover { background: #dc2626; }
+
+    /* Source-specific settings */
+    .source-config {
+      margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #334155;
+    }
+    .source-config.hidden { display: none; }
+    .config-title {
+      font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; color: #94a3b8; margin-bottom: 0.75rem;
+    }
+    .config-note {
+      color: #64748b; font-size: 0.8rem; line-height: 1.45; margin-bottom: 0.9rem;
+    }
+    .fields-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem;
+      margin-top: 0.8rem;
+    }
+    @media (max-width: 700px) { .fields-grid { grid-template-columns: 1fr; } }
+    .field-full { grid-column: 1 / -1; }
+    .field label {
+      display: block; font-size: 0.74rem; font-weight: 600; color: #94a3b8;
+      margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .field label .req { color: #f87171; margin-left: 2px; }
+    .field input[type=text],
+    .field input[type=password],
+    .field input[type=number] {
+      width: 100%; background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+      padding: 0.5rem 0.7rem; color: #e2e8f0; font-size: 0.84rem; outline: none;
+    }
+    .field input:focus { border-color: #6366f1; }
+    .field .help { font-size: 0.76rem; color: #64748b; margin-top: 0.32rem; line-height: 1.45; }
+    .config-actions {
+      display: flex; align-items: center; justify-content: flex-end; gap: 0.7rem;
+      margin-top: 1rem;
+    }
+    .config-status {
+      font-size: 0.78rem; font-weight: 500; min-width: 110px; text-align: right;
+    }
+    .config-status.ok { color: #4ade80; }
+    .config-status.error { color: #f87171; }
+    .advanced-box {
+      margin-top: 1rem; border: 1px solid #334155; border-radius: 8px;
+      overflow: hidden; background: #162033;
+    }
+    .advanced-toggle {
+      width: 100%; background: transparent; border: none; color: #cbd5e1;
+      padding: 0.8rem 0.95rem; text-align: left; font-size: 0.84rem; font-weight: 600;
+      cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+    }
+    .advanced-toggle:hover { background: #1b283d; }
+    .advanced-copy {
+      color: #94a3b8; font-size: 0.76rem; line-height: 1.45; padding: 0 0.95rem 0.85rem;
+    }
+    .advanced-body {
+      display: none; padding: 0 0.95rem 0.95rem; border-top: 1px solid #334155;
+    }
+    .advanced-body.open { display: block; }
+    .advanced-chevron {
+      color: #64748b; font-size: 0.76rem; transition: transform 0.2s;
+    }
+    .advanced-chevron.open { transform: rotate(180deg); }
+    .config-badge {
+      display: inline-block; margin-left: 0.55rem; font-size: 0.64rem; font-weight: 700;
+      letter-spacing: 0.04em; padding: 2px 7px; border-radius: 20px; text-transform: uppercase;
+      background: #1e293b; color: #64748b; border: 1px solid #334155;
+    }
+    .config-badge.configured { background: #14532d33; color: #4ade80; border-color: #15803d44; }
+    .config-badge.anon { background: #1e293b; color: #64748b; border-color: #334155; }
   </style>
 </head>
 <body>
@@ -161,12 +230,12 @@
     {% endif %}
 
     {% for source in sources %}
-    <div class="card {% if not source.is_enabled %}disabled{% endif %}" id="card-{{ source.id }}">
+    <div class="card {% if not source.is_enabled %}disabled{% endif %}" id="card-{{ source.id }}" data-source-name="{{ source.name }}">
       <div class="card-info">
         <h3>
           {{ source.display_name }}
           {% if source.epg_only %}<span class="badge-epg-only">EPG Only</span>{% endif %}
-
+          <span class="config-badge" id="config-badge-{{ source.id }}">Loading…</span>
         </h3>
         <div class="meta">
           Every {{ source.scrape_interval }}min &nbsp;·&nbsp;
@@ -195,6 +264,7 @@
           </label>
           <span class="epg-toggle-label">EPG Only mode (exclude from M3U, use for guide enrichment)</span>
         </div>
+        <div class="source-config hidden" id="source-config-{{ source.id }}"></div>
       </div>
       <div class="actions">
         <div class="toggle-wrap">
@@ -235,6 +305,7 @@
   </div>
 
   <script>
+    const MASK = '••••••••';
     let _pendingSourceId   = null;
     let _pendingCheckbox   = null;
 
@@ -289,7 +360,7 @@
         labelEl.className = `toggle-label ${enabled ? 'on' : 'off'}`;
         card.classList.toggle('disabled', !enabled);
         runBtn.disabled = !enabled;
-        drmBtn.disabled = !enabled;
+        if (drmBtn) drmBtn.disabled = !enabled;
 
       } catch (e) {
         checkbox.checked = !enabled;
@@ -490,8 +561,167 @@
       poll();
     }
 
+    async function loadSourceConfig(sourceId, sourceName) {
+      const container = document.getElementById(`source-config-${sourceId}`);
+      const badge = document.getElementById(`config-badge-${sourceId}`);
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/config`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const cfg = await r.json();
+        const schema = cfg.schema || [];
+        const values = cfg.values || {};
+
+        if (!schema.length) {
+          badge.textContent = 'No config';
+          badge.className = 'config-badge anon';
+          container.innerHTML = '';
+          container.classList.add('hidden');
+          return;
+        }
+
+        const configured = schema.some(f => {
+          const val = values[f.key];
+          return val && val !== MASK && val !== (f.default || '');
+        });
+        badge.textContent = configured ? 'Configured' : 'Anonymous';
+        badge.className = `config-badge ${configured ? 'configured' : 'anon'}`;
+        container.innerHTML = renderConfigFields(sourceId, sourceName, schema, values);
+        container.classList.remove('hidden');
+      } catch (e) {
+        badge.textContent = 'Config error';
+        badge.className = 'config-badge anon';
+        container.innerHTML = `<div class="config-title">Source Settings</div><div class="config-note">Failed to load source-specific settings: ${escapeHtml(e.message)}</div>`;
+        container.classList.remove('hidden');
+      }
+    }
+
+    function renderConfigFields(sourceId, sourceName, schema, values) {
+      const slingPrimaryKeys = new Set(['bearer_jwt']);
+      const isSling = sourceName === 'sling';
+      const isAmazonPrimeFree = sourceName === 'amazon_prime_free';
+      let primarySchema = schema;
+      let advancedSchema = [];
+      let advancedTitle = '';
+      let advancedCopy = '';
+
+      if (isSling) {
+        primarySchema = schema.filter(f => slingPrimaryKeys.has(f.key));
+        advancedSchema = schema.filter(f => !slingPrimaryKeys.has(f.key));
+        advancedTitle = 'Advanced Sling Settings';
+        advancedCopy = 'These values are mainly for troubleshooting or manual browser token capture. Most installs should leave them alone.';
+      } else if (isAmazonPrimeFree) {
+        primarySchema = [];
+        advancedSchema = schema;
+        advancedTitle = 'Advanced Amazon Settings';
+        advancedCopy = 'These values rarely need changes. Use them only if you are troubleshooting session capture or targeting a different Amazon locale.';
+      }
+
+      const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {
+        const val = values[f.key] ?? f.default ?? '';
+        const req = f.required ? '<span class="req">*</span>' : '';
+        const inputType = f.field_type === 'password' ? 'password' : (f.field_type === 'number' ? 'number' : 'text');
+        const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : '';
+        const help = f.help_text ? `<div class="help">${escapeHtml(f.help_text)}</div>` : '';
+        const cls = fieldSchema.length === 1 ? 'field field-full' : 'field';
+        return `
+          <div class="${cls}">
+            <label for="cfg-${sourceId}-${f.key}">${escapeHtml(f.label)}${req}</label>
+            <input type="${inputType}" id="cfg-${sourceId}-${f.key}" data-key="${f.key}"
+                   data-secret="${f.secret}" value="${escapeHtml(String(val))}" ${placeholder} autocomplete="off">
+            ${help}
+          </div>`;
+      }).join('');
+
+      const primaryFieldsHtml = renderFieldSet(primarySchema);
+      const advancedFieldsHtml = advancedSchema.length
+        ? `
+          <div class="advanced-box">
+            <button type="button" class="advanced-toggle" onclick="toggleAdvanced(this)">
+              <span>${advancedTitle}</span>
+              <span class="advanced-chevron">▼</span>
+            </button>
+            <div class="advanced-copy">${advancedCopy}</div>
+            <div class="advanced-body">
+              <div class="fields-grid">${renderFieldSet(advancedSchema)}</div>
+            </div>
+          </div>`
+        : '';
+
+      return `
+        <div class="config-title">Source Settings</div>
+        <div class="config-note">These settings apply only to ${escapeHtml(sourceName)}. Changes take effect on the next scrape.</div>
+        ${primaryFieldsHtml ? `<div class="fields-grid">${primaryFieldsHtml}</div>` : ''}
+        ${advancedFieldsHtml}
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
+    }
+
+    async function saveSourceConfig(sourceId) {
+      const container = document.getElementById(`source-config-${sourceId}`);
+      const status = document.getElementById(`config-status-${sourceId}`);
+      const inputs = container.querySelectorAll('input[data-key]');
+      const payload = {};
+      inputs.forEach(inp => { payload[inp.dataset.key] = inp.value; });
+
+      status.textContent = 'Saving…';
+      status.className = 'config-status';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/config`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        status.textContent = '✓ Saved';
+        status.className = 'config-status ok';
+        inputs.forEach(inp => {
+          if (inp.dataset.secret === 'true' && inp.value && inp.value !== MASK) {
+            inp.value = MASK;
+          }
+        });
+        setTimeout(() => { status.textContent = ''; }, 2500);
+        loadSourceConfig(sourceId, getSourceName(sourceId));
+      } catch (e) {
+        status.textContent = '✗ ' + e.message;
+        status.className = 'config-status error';
+      }
+    }
+
+    function clearConfigFields(sourceId) {
+      document.querySelectorAll(`#source-config-${sourceId} input[data-key]`).forEach(inp => {
+        inp.value = '';
+      });
+    }
+
+    function toggleAdvanced(button) {
+      const body = button.parentElement.querySelector('.advanced-body');
+      const chevron = button.querySelector('.advanced-chevron');
+      const isOpen = body.classList.toggle('open');
+      chevron.classList.toggle('open', isOpen);
+    }
+
+    function getSourceName(sourceId) {
+      return document.getElementById(`card-${sourceId}`)?.dataset.sourceName || '';
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;')
+        .replace(/'/g,'&#39;');
+    }
+
     // On page load, start polling for any source that may already be running
     document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('[id^="card-"]').forEach(el => {
+        const id = parseInt(el.id.replace('card-', ''), 10);
+        loadSourceConfig(id, el.dataset.sourceName || '');
+      });
       document.querySelectorAll('[id^="scrape-status-"]').forEach(el => {
         const id = parseInt(el.id.replace('scrape-status-', ''));
         _startPolling(id);

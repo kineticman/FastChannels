@@ -9,6 +9,7 @@ from ..generators.m3u import (
 from ..generators.xmltv import generate_xmltv
 from ..models import Feed
 from ..url import public_base_url
+from ..xml_cache import get_or_build_xml
 
 output_bp = Blueprint('output', __name__)
 
@@ -58,7 +59,11 @@ def m3u_gracenote():
 @output_bp.route('/epg.xml')
 def epg_xml():
     base_url = public_base_url()
-    content  = generate_xmltv(_filters(), base_url=base_url)
+    filters = _filters()
+    if filters:
+        content = generate_xmltv(filters, base_url=base_url)
+    else:
+        content = get_or_build_xml('master', lambda: generate_xmltv({}, base_url=base_url))
     return Response(content, mimetype='application/xml',
                     headers={'Content-Disposition': 'attachment; filename="fastchannels.xml"'})
 
@@ -97,6 +102,9 @@ def feed_m3u_gracenote(slug):
 def feed_epg(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = public_base_url()
-    content  = generate_xmltv(feed_to_query_filters(feed.filters or {}), base_url=base_url)
+    content  = get_or_build_xml(
+        f'feed-{feed.slug}',
+        lambda: generate_xmltv(feed_to_query_filters(feed.filters or {}), base_url=base_url),
+    )
     return Response(content, mimetype='application/xml',
                     headers={'Content-Disposition': f'attachment; filename="{slug}.xml"'})

@@ -57,6 +57,11 @@ def _build_channel_query(filters: dict):
             query = query.filter(Channel.language.in_(languages))
         elif language := filters.get('language'):
             query = query.filter(Channel.language == language)
+        if gracenote := filters.get('gracenote'):
+            if gracenote == 'has':
+                query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+            elif gracenote == 'missing':
+                query = query.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
         if search := filters.get('search'):
             query = query.filter(Channel.name.ilike(f'%{search}%'))
         if excluded_ids := filters.get('excluded_channel_ids'):
@@ -112,6 +117,8 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
         f['category'] = categories
     if languages := feed_filters.get('languages'):
         f['languages'] = languages
+    if gracenote := feed_filters.get('gracenote'):
+        f['gracenote'] = gracenote
     if excluded_ids := feed_filters.get('excluded_channel_ids'):
         f['excluded_channel_ids'] = excluded_ids
     if max_ch := feed_filters.get('max_channels'):

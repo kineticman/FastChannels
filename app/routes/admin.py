@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request
-from sqlalchemy import select
+from sqlalchemy import select, case
 from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings
 from ..generators.m3u import (
@@ -58,6 +58,7 @@ def channels():
     search           = request.args.get('search', '')
     enabled_filter   = request.args.get('enabled', '')
     drm_filter       = request.args.get('drm', '')
+    gracenote_filter = request.args.get('gracenote', '')
     language_filter  = request.args.get('language', '')
     category_filter  = request.args.get('category', '')
     duplicates_filter = request.args.get('duplicates', '')
@@ -79,6 +80,11 @@ def channels():
     elif enabled_filter == '0':
         q = q.filter(Channel.is_enabled == False)
 
+    if gracenote_filter == '1':
+        q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+    elif gracenote_filter == '0':
+        q = q.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+
     if source_filter:
         q = q.filter(Source.name == source_filter)
     if language_filter:
@@ -94,12 +100,19 @@ def channels():
             .having(db.func.count(Channel.id) > 1)
         q = q.filter(Channel.name.in_(dup_names_sq))
 
+    sort_name = case(
+        (db.func.lower(Channel.name).like('the %'), db.func.substr(Channel.name, 5)),
+        (db.func.lower(Channel.name).like('an %'), db.func.substr(Channel.name, 4)),
+        (db.func.lower(Channel.name).like('a %'), db.func.substr(Channel.name, 3)),
+        else_=Channel.name,
+    )
+
     _sort_cols = {
-        'name':     [Channel.name],
+        'name':     [sort_name, Channel.name],
         'source':   [Source.display_name, Channel.name],
         'category': [Channel.category, Channel.name],
         # Approximate M3U order: sources with explicit start first, then by source name + channel name
-        'number':   [db.func.coalesce(Source.chnum_start, 999999), Source.display_name, Channel.name],
+        'number':   [db.func.coalesce(Source.chnum_start, 999999), Source.display_name, sort_name, Channel.name],
     }
     _cols = _sort_cols.get(sort_by, [Channel.name])
     if sort_dir == 'desc':
@@ -108,7 +121,12 @@ def channels():
         _order = [c.asc() for c in _cols]
 
     channels = q.order_by(*_order).paginate(page=page, per_page=50, error_out=False)
-    sources  = Source.query.order_by(Source.display_name).all()
+    sources_q = Source.query.filter(Source.is_enabled == True)
+    if source_filter:
+        sources_q = sources_q.union(
+            Source.query.filter(Source.name == source_filter)
+        )
+    sources = sources_q.order_by(Source.display_name).all()
 
     # Build computed channel number map for display
     all_active = Channel.query.join(Source).filter(Channel.is_active == True).all()
@@ -136,6 +154,7 @@ def channels():
                            channels=channels, sources=sources,
                            source_filter=source_filter, search=search,
                            enabled_filter=enabled_filter, drm_filter=drm_filter,
+                           gracenote_filter=gracenote_filter,
                            language_filter=language_filter, languages=languages,
                            category_filter=category_filter, categories=categories,
                            duplicates_filter=duplicates_filter,

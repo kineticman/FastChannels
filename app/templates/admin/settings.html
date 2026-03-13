@@ -243,7 +243,7 @@
 
 <div class="page">
   <h1>Settings</h1>
-  <p class="subtitle">Configure credentials and options for each source. Changes take effect on the next scrape.</p>
+  <p class="subtitle">Configure global output and Channels DVR settings. Source-specific credentials and advanced options now live on the Sources page.</p>
 
   <!-- Global settings card -->
   <div class="source-card">
@@ -320,14 +320,9 @@
     </div>
   </div>
 
-  <div id="cards-container">
-    <div class="loading">Loading sources…</div>
-  </div>
 </div>
 
 <script>
-const MASK = '••••••••';
-
 async function saveSettings(body, statusId) {
   const status = document.getElementById(statusId);
   status.className = 'save-status';
@@ -361,216 +356,6 @@ function saveDvrSettings() {
     public_base_url: publicBaseUrl || null,
   }, 'dvr-settings-status');
 }
-
-// ── Fetch all sources, then load each schema ──────────────────────────────
-async function init() {
-  const container = document.getElementById('cards-container');
-  try {
-    const sources = await apiFetch('/api/sources');
-    if (!sources.length) {
-      container.innerHTML = '<p class="subtitle">No sources found.</p>';
-      return;
-    }
-    container.innerHTML = '';
-    for (const source of sources) {
-      const card = await buildCard(source);
-      container.appendChild(card);
-    }
-  } catch (e) {
-    container.innerHTML = `<p class="error-msg">Failed to load sources: ${e.message}</p>`;
-  }
-}
-
-async function buildCard(source) {
-  const card = document.createElement('div');
-  card.className = 'source-card';
-  card.dataset.sourceId = source.id;
-
-  // Fetch schema + current values
-  let schema = [], values = {};
-  try {
-    const cfg = await apiFetch(`/api/sources/${source.id}/config`);
-    schema = cfg.schema || [];
-    values = cfg.values || {};
-  } catch (e) {
-    console.warn(`Could not load config for ${source.name}`, e);
-  }
-
-  const hasSchema     = schema.length > 0;
-  const isConfigured  = hasSchema && schema.some(f => values[f.key] && values[f.key] !== MASK && values[f.key] !== (f.default || ''));
-  const hasSecrets    = schema.some(f => f.secret);
-
-  const badgeHtml = !hasSchema
-    ? `<span class="badge badge-noconfig">No config</span>`
-    : isConfigured
-      ? `<span class="badge badge-configured">● Configured</span>`
-      : `<span class="badge badge-anon">Anonymous</span>`;
-
-  const icons = { pluto: '📺', distro: '📡' };
-  const icon  = icons[source.name] || '🔌';
-
-  card.innerHTML = `
-    <div class="source-header" onclick="toggleCard(this)">
-      <div class="source-title">
-        <div class="source-icon">${icon}</div>
-        <div>
-          <div class="source-name">${source.display_name}</div>
-          <div class="source-meta">${source.channel_count} channels · ${source.is_enabled ? 'enabled' : 'disabled'}</div>
-        </div>
-      </div>
-      <div class="source-badges">
-        ${badgeHtml}
-        <span class="chevron">▼</span>
-      </div>
-    </div>
-    <div class="source-body">
-      ${hasSchema ? renderFields(source, schema, values) : '<p class="no-config-msg">This source requires no configuration — it works anonymously out of the box.</p>'}
-    </div>
-  `;
-
-  if (hasSchema) {
-    const form = card.querySelector('.source-body');
-    form.querySelector('.btn-save').addEventListener('click', () => saveConfig(source.id, schema, card));
-    form.querySelector('.btn-clear').addEventListener('click', () => clearFields(card, schema));
-  }
-
-  return card;
-}
-
-function renderFields(source, schema, values) {
-  const slingPrimaryKeys = new Set(['bearer_jwt']);
-  const amazonPrimaryKeys = new Set(['cookie_header']);
-  const isSling = source.name === 'sling';
-  const isAmazonPrimeFree = source.name === 'amazon_prime_free';
-  let primarySchema = schema;
-  let advancedSchema = [];
-  let advancedTitle = '';
-  let advancedCopy = '';
-
-  if (isSling) {
-    primarySchema = schema.filter(f => slingPrimaryKeys.has(f.key));
-    advancedSchema = schema.filter(f => !slingPrimaryKeys.has(f.key));
-    advancedTitle = 'Advanced Sling Settings';
-    advancedCopy = 'These values are mainly for troubleshooting or manual browser token capture. Most installs should leave them alone.';
-  } else if (isAmazonPrimeFree) {
-    primarySchema = [];
-    advancedSchema = schema;
-    advancedTitle = 'Advanced Amazon Settings';
-    advancedCopy = 'These values rarely need changes. Use them only if you are troubleshooting session capture or targeting a different Amazon locale.';
-  }
-
-  const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {
-    const val   = values[f.key] ?? f.default ?? '';
-    const req   = f.required ? '<span class="req">*</span>' : '';
-    const itype = f.field_type === 'password' ? 'password' : (f.field_type === 'number' ? 'number' : 'text');
-    const phld  = f.placeholder ? `placeholder="${escHtml(f.placeholder)}"` : '';
-    const help  = f.help_text  ? `<div class="help">${escHtml(f.help_text)}</div>` : '';
-    const cls   = fieldSchema.length === 1 ? 'field field-full' : 'field';
-
-    return `
-      <div class="${cls}">
-        <label for="cfg-${f.key}">${escHtml(f.label)}${req}</label>
-        <input type="${itype}" id="cfg-${f.key}" data-key="${f.key}"
-               data-secret="${f.secret}" value="${escHtml(String(val))}" ${phld} autocomplete="off">
-        ${help}
-      </div>`;
-  }).join('');
-
-  const primaryFieldsHtml = renderFieldSet(primarySchema);
-  const advancedFieldsHtml = advancedSchema.length
-    ? `
-      <div class="advanced-box">
-        <button type="button" class="advanced-toggle" onclick="toggleAdvanced(this)">
-          <span>${advancedTitle}</span>
-          <span class="advanced-chevron">▼</span>
-        </button>
-        <div class="advanced-copy">
-          ${advancedCopy}
-        </div>
-        <div class="advanced-body">
-          <div class="fields-grid">${renderFieldSet(advancedSchema)}</div>
-        </div>
-      </div>`
-    : '';
-
-  return `
-    ${primaryFieldsHtml ? `<div class="fields-grid">${primaryFieldsHtml}</div>` : ''}
-    ${advancedFieldsHtml}
-    <div class="field-actions">
-      <span class="save-status"></span>
-      <button class="btn btn-ghost btn-clear">Clear</button>
-      <button class="btn btn-primary btn-save">Save</button>
-    </div>`;
-}
-
-async function saveConfig(sourceId, schema, card) {
-  const btn    = card.querySelector('.btn-save');
-  const status = card.querySelector('.save-status');
-  const inputs = card.querySelectorAll('input[data-key]');
-
-  const payload = {};
-  inputs.forEach(inp => { payload[inp.dataset.key] = inp.value; });
-
-  btn.disabled = true;
-  status.textContent = 'Saving…';
-  status.className   = 'save-status';
-
-  try {
-    await apiFetch(`/api/sources/${sourceId}/config`, {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify(payload),
-    });
-    status.textContent = '✓ Saved';
-    status.className   = 'save-status ok';
-    // Re-mask secret fields after save
-    inputs.forEach(inp => {
-      if (inp.dataset.secret === 'true' && inp.value && inp.value !== MASK) {
-        inp.value = MASK;
-      }
-    });
-    setTimeout(() => { status.textContent = ''; }, 3000);
-  } catch (e) {
-    status.textContent = '✗ ' + e.message;
-    status.className   = 'save-status error';
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function clearFields(card, schema) {
-  schema.forEach(f => {
-    const inp = card.querySelector(`#cfg-${f.key}`);
-    if (inp) inp.value = '';
-  });
-}
-
-function toggleCard(header) {
-  const body    = header.nextElementSibling;
-  const chevron = header.querySelector('.chevron');
-  const isOpen  = body.classList.toggle('open');
-  chevron.classList.toggle('open', isOpen);
-}
-
-function toggleAdvanced(button) {
-  const body = button.parentElement.querySelector('.advanced-body');
-  const chevron = button.querySelector('.advanced-chevron');
-  const isOpen = body.classList.toggle('open');
-  chevron.classList.toggle('open', isOpen);
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────
-async function apiFetch(url, opts = {}) {
-  const r = await fetch(url, opts);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-init();
 </script>
 </body>
 </html>

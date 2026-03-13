@@ -17,7 +17,7 @@
     /* Filters */
     .toolbar {
       display: grid;
-      grid-template-columns: minmax(220px, 1.2fr) repeat(5, minmax(150px, 1fr)) auto;
+      grid-template-columns: minmax(220px, 1.2fr) repeat(6, minmax(145px, 1fr)) auto;
       gap: 0.9rem;
       margin-bottom: 1rem;
       align-items: end;
@@ -291,6 +291,44 @@
     .inspect-badge.no_data { background: #431407; color: #fb923c; }
     .inspect-badge.error   { background: #1e1b4b; color: #a5b4fc; }
     .inspect-badge.spin    { background: transparent; color: #64748b; animation: spin 0.8s linear infinite; }
+    .channel-actions { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
+    .btn-preview {
+      background: none; border: 1px solid #334155; color: #7dd3fc;
+      padding: 0.2rem 0.5rem; border-radius: 4px; cursor: pointer;
+      font-size: 0.75rem; line-height: 1; transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .btn-preview:hover { border-color: #7dd3fc; background: #1e3a5f; color: #fff; }
+    .preview-modal { width: 760px; max-width: 95vw; }
+    .preview-header { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 1rem; }
+    .preview-logo {
+      width: 54px; height: 54px; border-radius: 8px; background: #0f172a;
+      object-fit: contain; flex-shrink: 0;
+    }
+    .preview-title { font-size: 1.1rem; font-weight: 700; color: #f1f5f9; }
+    .preview-meta { color: #94a3b8; font-size: 0.82rem; margin-top: 0.2rem; }
+    .preview-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 0.9rem; margin-bottom: 1rem;
+    }
+    .preview-card {
+      background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 0.9rem 1rem;
+    }
+    .preview-card h3 {
+      color: #7dd3fc; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.65rem;
+    }
+    .preview-program-title { font-size: 0.95rem; font-weight: 600; color: #e2e8f0; margin-bottom: 0.35rem; }
+    .preview-program-time { color: #94a3b8; font-size: 0.8rem; margin-bottom: 0.45rem; }
+    .preview-program-desc { color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; }
+    .preview-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
+    .preview-player-wrap {
+      display: none; background: #0b1220; border: 1px solid #1e3a5f; border-radius: 8px;
+      padding: 0.85rem; margin-top: 0.75rem;
+    }
+    .preview-player-wrap.open { display: block; }
+    .preview-player-wrap video { width: 100%; max-height: 420px; background: #000; border-radius: 6px; }
+    .preview-note { color: #94a3b8; font-size: 0.78rem; margin-top: 0.55rem; line-height: 1.45; }
+    .preview-empty { color: #64748b; font-size: 0.84rem; }
+    .preview-player-status { color: #94a3b8; font-size: 0.78rem; margin-top: 0.55rem; line-height: 1.45; }
 
     @media (max-width: 1180px) {
       .toolbar { grid-template-columns: repeat(3, minmax(180px, 1fr)); }
@@ -359,12 +397,20 @@
         </select>
       </div>
       <div class="filter-group">
-        <label class="filter-label" for="language-filter">Language + View</label>
+        <label class="filter-label" for="language-filter">Language</label>
         <select id="language-filter" name="language">
           <option value="">All Languages</option>
           {% for lang, count in languages %}
           <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }} ({{ count }})</option>
           {% endfor %}
+        </select>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label" for="gracenote-filter">Gracenote</label>
+        <select id="gracenote-filter" name="gracenote">
+          <option value="">Any</option>
+          <option value="1" {% if gracenote_filter == '1' %}selected{% endif %}>Has Gracenote ID</option>
+          <option value="0" {% if gracenote_filter == '0' %}selected{% endif %}>Missing Gracenote ID</option>
         </select>
       </div>
       <div class="filter-group">
@@ -390,6 +436,7 @@
       <span class="filter-chip"><strong>State</strong>{% if enabled_filter == '1' %}Enabled only{% elif enabled_filter == '0' %}Disabled only{% else %}Enabled + Disabled{% endif %}</span>
       <span class="filter-chip"><strong>Health</strong>{% if drm_filter == '1' %}DRM only{% elif drm_filter == 'dead' %}Dead only{% elif drm_filter == '0' %}No DRM / Dead flag{% else %}All stream states{% endif %}</span>
       <span class="filter-chip"><strong>Language</strong>{{ language_filter or 'All languages' }}</span>
+      <span class="filter-chip"><strong>Gracenote</strong>{% if gracenote_filter == '1' %}Has Gracenote ID{% elif gracenote_filter == '0' %}Missing Gracenote ID{% else %}Any{% endif %}</span>
       <span class="filter-chip"><strong>Duplicates</strong>{% if duplicates_filter == '1' %}Duplicates only{% else %}Normal list{% endif %}</span>
     </div>
 
@@ -419,9 +466,9 @@
             <th>Lang</th>
             <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')"># <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
-            <th>Status</th>
-            <th>Inspect</th>
-            <th>Status</th>
+            <th>Stream Flags</th>
+            <th>Preview / Inspect</th>
+            <th>Enabled</th>
           </tr>
         </thead>
         <tbody id="channel-tbody">
@@ -475,8 +522,11 @@
               <button class="btn-reenable" onclick="reenable({{ ch.id }}, this)" title="Clear Dead flag and re-enable">Re-enable</button>
               {% endif %}
             </td>
-            <td id="inspect-cell-{{ ch.id }}" style="white-space:nowrap">
-              <button class="btn-inspect" onclick="inspectChannel({{ ch.id }}, this)" title="Test stream: check DRM, liveness, and segment data">&#128269;</button>
+            <td id="inspect-cell-{{ ch.id }}">
+              <div class="channel-actions">
+                <button class="btn-preview" onclick="openPreview({{ ch.id }})" title="View current and next program, and preview playback">Preview</button>
+                <button class="btn-inspect" onclick="inspectChannel({{ ch.id }}, this)" title="Test stream: check DRM, liveness, and segment data">&#128269;</button>
+              </div>
             </td>
             <td class="toggle-col">
               <div class="toggle-wrap">
@@ -494,7 +544,7 @@
     </div>
 
     {% if channels.pages > 1 %}
-    {% set qs = 'source=' ~ source_filter ~ '&search=' ~ search ~ '&enabled=' ~ enabled_filter ~ '&drm=' ~ drm_filter ~ '&language=' ~ language_filter ~ '&category=' ~ category_filter ~ '&duplicates=' ~ duplicates_filter ~ '&sort=' ~ sort_by ~ '&dir=' ~ sort_dir %}
+    {% set qs = 'source=' ~ source_filter ~ '&search=' ~ search ~ '&enabled=' ~ enabled_filter ~ '&drm=' ~ drm_filter ~ '&language=' ~ language_filter ~ '&gracenote=' ~ gracenote_filter ~ '&category=' ~ category_filter ~ '&duplicates=' ~ duplicates_filter ~ '&sort=' ~ sort_by ~ '&dir=' ~ sort_dir %}
     <div class="pagination">
       {% if channels.has_prev %}
       <a href="?page={{ channels.prev_num }}&{{ qs }}">← Prev</a>
@@ -511,7 +561,197 @@
     {% endif %}
   </div>
 
+  <div class="modal-overlay" id="preview-modal" onclick="closePreviewModal(event)">
+    <div class="modal-box preview-modal">
+      <div id="preview-content">
+        <div class="modal-loading">Loading preview…</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
   <script>
+    let _previewHls = null;
+
+    function formatPreviewTime(iso) {
+      if (!iso) return 'Unknown time';
+      const d = new Date(iso);
+      return d.toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderProgramCard(title, program) {
+      if (!program) {
+        return `
+          <div class="preview-card">
+            <h3>${title}</h3>
+            <div class="preview-empty">No program data available.</div>
+          </div>
+        `;
+      }
+
+      const episodeBits = [];
+      if (program.episode_title) episodeBits.push(program.episode_title);
+      if (program.season && program.episode) episodeBits.push(`S${program.season} E${program.episode}`);
+      const episodeLine = episodeBits.length ? `<div class="preview-program-time">${episodeBits.join(' · ')}</div>` : '';
+
+      return `
+        <div class="preview-card">
+          <h3>${title}</h3>
+          <div class="preview-program-title">${escapeHtml(program.title || 'Untitled')}</div>
+          <div class="preview-program-time">${formatPreviewTime(program.start_time)} – ${formatPreviewTime(program.end_time)}</div>
+          ${episodeLine}
+          ${program.description ? `<div class="preview-program-desc">${escapeHtml(program.description)}</div>` : ''}
+        </div>
+      `;
+    }
+
+    async function openPreview(channelId) {
+      const modal = document.getElementById('preview-modal');
+      const content = document.getElementById('preview-content');
+      content.innerHTML = '<div class="modal-loading">Loading preview…</div>';
+      modal.classList.add('open');
+
+      try {
+        const r = await fetch(`/api/channels/${channelId}/preview`);
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+        const ch = data.channel || {};
+        const playUrl = data.play_url;
+        const warning = ch.disable_reason
+          ? `<div class="modal-preview">This channel is currently flagged <strong>${escapeHtml(ch.disable_reason)}</strong>. Preview playback may fail or may have been disabled for a reason.</div>`
+          : '';
+        const playbackNote = !playUrl
+          ? `<div class="modal-preview">Browser preview is not available for this source or channel. You can still use the program details here for quick guide verification.</div>`
+          : '';
+
+        content.innerHTML = `
+          <div class="preview-header">
+            ${ch.logo_url ? `<img class="preview-logo" src="${escapeHtml(ch.logo_url)}" alt="">` : '<div class="preview-logo"></div>'}
+            <div>
+              <div class="preview-title">${escapeHtml(ch.name || 'Channel')}</div>
+              <div class="preview-meta">
+                ${escapeHtml(ch.source_display_name || 'Unknown source')}
+                ${ch.category ? ` · ${escapeHtml(ch.category)}` : ''}
+                ${ch.language ? ` · ${escapeHtml(ch.language)}` : ''}
+              </div>
+            </div>
+          </div>
+          ${warning}
+          ${playbackNote}
+          <div class="preview-grid">
+            ${renderProgramCard('Now Playing', data.current_program)}
+            ${renderProgramCard('Up Next', data.next_program)}
+          </div>
+          <div class="preview-actions">
+            ${playUrl ? `<button class="btn-enable" onclick="loadPreviewPlayer('${escapeHtml(playUrl)}')">Play Preview</button>` : ''}
+            ${playUrl ? `<a class="btn-cancel-modal" style="text-decoration:none; display:inline-flex; align-items:center;" href="${escapeHtml(playUrl)}" target="_blank">Open Stream URL</a>` : ''}
+            <button class="btn-cancel-modal" onclick="closePreviewModal()">Close</button>
+          </div>
+          <div class="preview-player-wrap" id="preview-player-wrap">
+            <video id="preview-player" controls playsinline preload="none"></video>
+            <div class="preview-player-status" id="preview-player-status"></div>
+            <div class="preview-note">
+              Browser playback depends on the stream format, source restrictions, and DRM. If playback fails here, the channel may still work in Channels DVR or another HLS client.
+            </div>
+          </div>
+        `;
+      } catch (e) {
+        content.innerHTML = `
+          <h2>Preview</h2>
+          <p class="modal-sub">Could not load preview data.</p>
+          <div class="modal-preview">${escapeHtml(String(e.message || e))}</div>
+          <div class="modal-actions">
+            <button class="btn-cancel-modal" onclick="closePreviewModal()">Close</button>
+          </div>
+        `;
+      }
+    }
+
+    function loadPreviewPlayer(playUrl) {
+      const wrap = document.getElementById('preview-player-wrap');
+      const video = document.getElementById('preview-player');
+      const status = document.getElementById('preview-player-status');
+      if (!wrap || !video) return;
+      if (_previewHls) {
+        _previewHls.destroy();
+        _previewHls = null;
+      }
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      wrap.classList.add('open');
+      if (status) status.textContent = 'Loading stream…';
+
+      if (window.Hls && window.Hls.isSupported()) {
+        _previewHls = new window.Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+        });
+        _previewHls.loadSource(playUrl);
+        _previewHls.attachMedia(video);
+        _previewHls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+          if (status) status.textContent = 'Stream loaded with hls.js.';
+          video.play().catch(() => {});
+        });
+        _previewHls.on(window.Hls.Events.ERROR, (_event, data) => {
+          if (status) {
+            const fatal = data && data.fatal ? ' Fatal error.' : '';
+            status.textContent = `Preview playback error:${fatal} ${data?.details || 'Unknown hls.js error'}`;
+          }
+          if (data?.fatal && _previewHls) {
+            _previewHls.destroy();
+            _previewHls = null;
+          }
+        });
+        return;
+      }
+
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = playUrl;
+        video.load();
+        if (status) status.textContent = 'Using native HLS playback.';
+        video.play().catch(() => {});
+        return;
+      }
+
+      video.src = playUrl;
+      video.load();
+      if (status) status.textContent = 'This browser does not support HLS playback here.';
+    }
+
+    function closePreviewModal(event) {
+      if (event && event.target !== event.currentTarget) return;
+      const modal = document.getElementById('preview-modal');
+      const video = document.getElementById('preview-player');
+      const status = document.getElementById('preview-player-status');
+      if (_previewHls) {
+        _previewHls.destroy();
+        _previewHls = null;
+      }
+      if (video) {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      }
+      if (status) status.textContent = '';
+      modal.classList.remove('open');
+    }
+
     // ── Channel inspector ─────────────────────────────────────────────────
     const INSPECT_LABELS = {
       live:    '✓ Live',

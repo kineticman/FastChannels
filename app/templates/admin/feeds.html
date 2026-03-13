@@ -85,12 +85,12 @@
     .field { margin-bottom: 1rem; }
     .field label { display: block; font-size: 0.78rem; font-weight: 500; color: #94a3b8;
                    text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.35rem; }
-    .field input[type=text], .field input[type=number], .field textarea {
+    .field input[type=text], .field input[type=number], .field textarea, .field select {
       width: 100%; background: #0f172a; border: 1px solid #2d3148;
       border-radius: 6px; padding: 0.55rem 0.75rem; color: #e2e8f0;
       font-size: 0.9rem; outline: none; font-family: inherit;
     }
-    .field input:focus, .field textarea:focus { border-color: #6366f1; }
+    .field input:focus, .field textarea:focus, .field select:focus { border-color: #6366f1; }
     .field .help { font-size: 0.75rem; color: #475569; margin-top: 0.3rem; }
 
     /* Checkbox groups */
@@ -219,6 +219,11 @@
                   <span class="badge-pill pill-gray">{{ l }}</span>
                 {% endfor %}
               {% endif %}
+              {% if f.get('gracenote') == 'has' %}
+                <span class="badge-pill pill-green">has gracenote</span>
+              {% elif f.get('gracenote') == 'missing' %}
+                <span class="badge-pill pill-gray">missing gracenote</span>
+              {% endif %}
             {% endif %}
             {% if f.get('excluded_channel_ids') %}
               <span class="badge-pill pill-red">−{{ f['excluded_channel_ids']|length }} excluded</span>
@@ -311,6 +316,15 @@
       </div>
     </div>
     <div class="field">
+      <label>Gracenote Coverage</label>
+      <select id="f-gracenote">
+        <option value="">Any channels</option>
+        <option value="has">Has Gracenote ID only</option>
+        <option value="missing">Missing Gracenote ID only</option>
+      </select>
+      <div class="help">Useful when you want a feed that is only Gracenote-capable or only XMLTV-backed.</div>
+    </div>
+    <div class="field">
       <label>Channels <span style="color:#475569;font-weight:400;text-transform:none">(leave none checked to use filters above)</span></label>
       <div class="ch-bar">
         <span id="ch-selected-count">loading…</span>
@@ -375,6 +389,7 @@ function renderChannelList() {
   const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
   const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
   const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
+  const gracenoteMode = document.getElementById('f-gracenote').value;
 
   // Three modes:
   //   explicit — manual channel_ids list (selectedChannelIds > 0)
@@ -393,6 +408,8 @@ function renderChannelList() {
     if (activeSources.size && !activeSources.has(ch.source_name)) continue;
     if (activeCats.size   && !activeCats.has(ch.category))        continue;
     if (activeLangs.size  && !activeLangs.has(ch.language))       continue;
+    if (gracenoteMode === 'has' && !ch.gracenote_id) continue;
+    if (gracenoteMode === 'missing' && ch.gracenote_id) continue;
     if (!groups[ch.source_name]) groups[ch.source_name] = [];
     groups[ch.source_name].push(ch);
   }
@@ -469,6 +486,7 @@ async function openModal(feed = null) {
   document.getElementById('f-desc').value     = feed ? (feed.description || '') : '';
   document.getElementById('f-max').value      = feed ? (feed.filters.max_channels || '') : '';
   document.getElementById('f-chnum').value    = feed ? (feed.chnum_start || '') : '';
+  document.getElementById('f-gracenote').value = feed ? (feed.filters.gracenote || '') : '';
   document.getElementById('modal-status').textContent = '';
   document.getElementById('ch-search').value  = '';
 
@@ -520,6 +538,7 @@ async function updateCountPreview() {
     (filters.sources    || []).forEach(s => params.append('source', s));
     (filters.categories || []).forEach(c => params.append('category', c));
     (filters.languages  || []).forEach(l => params.append('language', l));
+    if (filters.gracenote) params.set('gracenote', filters.gracenote);
     try {
       const r = await fetch(`/api/stats?${params}`);
       const d = await r.json();
@@ -553,6 +572,11 @@ document.querySelectorAll('.cat-cb').forEach(cb => {
   });
 });
 
+document.getElementById('f-gracenote').addEventListener('change', () => {
+  renderChannelList();
+  schedulePreview();
+});
+
 document.getElementById('f-max').addEventListener('input', schedulePreview);
 
 // ── Build filters from modal state ────────────────────────────────────────
@@ -567,6 +591,8 @@ function buildFilters() {
     if (cats.length) f.categories = cats;
     const langs = [...document.querySelectorAll('.lang-cb:checked')].map(c => c.value);
     if (langs.length) f.languages = langs;
+    const gracenote = document.getElementById('f-gracenote').value;
+    if (gracenote) f.gracenote = gracenote;
     if (_excludedChannelIds.size > 0) f.excluded_channel_ids = [..._excludedChannelIds];
   }
   const max = parseInt(document.getElementById('f-max').value);

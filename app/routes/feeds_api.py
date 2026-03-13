@@ -8,6 +8,7 @@ from ..extensions import db
 from ..generators.m3u import get_global_chnum_overlaps
 from ..models import Feed
 from ..url import public_base_url
+from ..xml_cache import invalidate_xml_cache
 
 feeds_api_bp = Blueprint('feeds_api', __name__)
 
@@ -50,6 +51,7 @@ def create_feed():
         db.session.rollback()
         return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
     db.session.commit()
+    invalidate_xml_cache()
     return jsonify(feed.to_dict(public_base_url())), 201
 
 
@@ -80,6 +82,7 @@ def update_feed(feed_id):
         db.session.rollback()
         return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
     db.session.commit()
+    invalidate_xml_cache()
     return jsonify(feed.to_dict(public_base_url()))
 
 
@@ -88,6 +91,7 @@ def delete_feed(feed_id):
     feed = Feed.query.get_or_404(feed_id)
     db.session.delete(feed)
     db.session.commit()
+    invalidate_xml_cache()
     return jsonify({'status': 'deleted', 'slug': feed.slug})
 
 
@@ -126,6 +130,9 @@ def _clean_filters(raw: dict) -> dict:
     elif language := raw.get('language'):
         # backward compat with old single-language saves
         out['languages'] = [str(language)]
+    if gracenote := raw.get('gracenote'):
+        if gracenote in ('has', 'missing'):
+            out['gracenote'] = gracenote
     if excluded_ids := raw.get('excluded_channel_ids'):
         out['excluded_channel_ids'] = [int(i) for i in excluded_ids if str(i).isdigit() or isinstance(i, int)]
     if max_ch := raw.get('max_channels'):
