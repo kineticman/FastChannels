@@ -2,7 +2,12 @@ from flask import Blueprint, render_template, request
 from sqlalchemy import select
 from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings
-from ..generators.m3u import _parse_gracenote_id, get_global_chnum_overlaps, _build_source_chnum_map
+from ..generators.m3u import (
+    _parse_gracenote_id,
+    get_global_chnum_overlaps,
+    _build_source_chnum_map,
+    _build_channel_query,
+)
 from ..scrapers import registry as _scraper_registry
 from ..url import public_base_url, detected_base_url
 
@@ -19,9 +24,17 @@ def dashboard():
         1 for ch in Channel.query.filter_by(is_active=True, is_enabled=True).all()
         if _parse_gracenote_id(ch)
     )
+    source_output_meta = {}
+    for source in sources:
+        channels = _build_channel_query({'source': [source.name]}).all()
+        source_output_meta[source.id] = {
+            'channel_count': len(channels),
+            'has_gracenote': any(_parse_gracenote_id(ch) for ch in channels),
+        }
     return render_template('admin/dashboard.html', sources=sources,
                            total_channels=total_channels, base_url=base_url,
-                           feeds=feeds, gracenote_count=gracenote_count)
+                           feeds=feeds, gracenote_count=gracenote_count,
+                           source_output_meta=source_output_meta)
 
 
 @admin_bp.route('/sources')

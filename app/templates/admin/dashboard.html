@@ -29,6 +29,8 @@
     .btn { padding: 0.4rem 1rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: none; background: #0284c7; color: white; }
     .btn:hover { background: #0369a1; }
     .btn-sm { padding: 0.3rem 0.75rem; font-size: 0.75rem; }
+    .btn-dvr { background: #1e3a5f; color: #7dd3fc; border: 1px solid #1e40af44; }
+    .btn-dvr:hover { background: #1d4ed8; color: #fff; }
     .link-box { display: block; background: #0f172a; border: 1px solid #334155; border-radius: 6px;
                 padding: 0.65rem 1rem; font-family: monospace; font-size: 0.78rem; color: #38bdf8;
                 margin-top: 0.5rem; text-decoration: none; display: flex; align-items: center;
@@ -40,6 +42,10 @@
     .pill { display:inline-block; padding: 0.12rem 0.5rem; border-radius:9999px; font-size:0.68rem;
             font-weight:600; background:#1e3a5f; color:#93c5fd; margin-right:0.25rem; }
     .warn { color: #fbbf24; font-size: 0.75rem; }
+    .raw-stats { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+    .raw-stat { font-size: 0.78rem; color: #94a3b8; background: #172033; border: 1px solid #334155;
+                border-radius: 999px; padding: 0.28rem 0.65rem; }
+    .raw-stat strong { color: #e2e8f0; }
   </style>
 </head>
 <body>
@@ -52,8 +58,6 @@
     <a href="/admin/settings">Settings</a>
     <a href="/admin/logs">Logs</a>
     <a href="/admin/help">Help</a>
-    <a href="/m3u" target="_blank">M3U ↗</a>
-    <a href="/epg.xml" target="_blank">EPG XML ↗</a>
     <span class="version">v{{ app_version }}</span>
   </nav>
   <div class="container">
@@ -113,7 +117,17 @@
 
     <!-- Raw output links -->
     <div class="section">
-      <h2 style="margin-bottom:0.75rem">Raw Output (all enabled channels)</h2>
+      <div class="section-header">
+        <h2>Raw Output (all enabled channels)</h2>
+        <button class="btn btn-sm btn-dvr"
+                onclick="pushRawOutputToDvr({{ total_channels }}, this)">
+          📺 Add to Channels DVR
+        </button>
+      </div>
+      <div class="raw-stats">
+        <span class="raw-stat"><strong>{{ total_channels }}</strong> channels in master M3U</span>
+        <span class="raw-stat"><strong>{{ gracenote_count }}</strong> channels in Gracenote M3U</span>
+      </div>
       <a class="link-box" href="{{ base_url }}/m3u" target="_blank">
         <span>{{ base_url }}/m3u</span>
         <span class="link-label">Full M3U · XMLTV EPG</span>
@@ -141,7 +155,10 @@
           <tr>
             <td><strong>{{ source.display_name }}</strong></td>
             <td><span class="badge {% if source.is_enabled %}badge-green{% else %}badge-red{% endif %}">{% if source.is_enabled %}Enabled{% else %}Disabled{% endif %}</span></td>
-            <td>{{ source.to_dict().channel_count }}</td>
+            <td>
+              {{ source_output_meta[source.id].channel_count }}
+              {% if source_output_meta[source.id].channel_count > 750 %}<span class="warn">⚠</span>{% endif %}
+            </td>
             <td style="color:#64748b">{% if source.last_scraped_at %}{{ source.last_scraped_at.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}Never{% endif %}</td>
             <td><button class="btn btn-sm" onclick="run({{ source.id }}, this)">Scrape Now</button></td>
           </tr>
@@ -158,6 +175,44 @@
       const d = await r.json();
       btn.textContent = d.status === 'queued' ? '✓ Queued' : 'Error';
       setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
+    }
+    async function pushRawOutputToDvr(count, btn, force = false) {
+      if (count > 750 && !force) {
+        const ok = confirm(
+          `Raw Output has ${count} channels.\n\nChannels DVR usually works best at 750 or fewer.\n\nAdd it anyway?`
+        );
+        if (!ok) return;
+      }
+      const old = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Adding…';
+      try {
+        const r = await fetch('/api/raw-output/push-to-dvr', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(force || count > 750 ? {force: true} : {}),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          if (r.status === 400 && (data.error || '').includes('Channels DVR URL is not configured')) {
+            alert('Channels DVR URL is not configured.\n\nGo to Settings and enter your Channels DVR server URL (e.g. http://192.168.1.x:8089).');
+          } else if (r.status === 409 && data.requires_confirm && !force) {
+            return pushRawOutputToDvr(count, btn, true);
+          } else {
+            alert(data.error || 'Failed to add Raw Output to Channels DVR.');
+          }
+          return;
+        }
+        btn.textContent = '✓ Added';
+        setTimeout(() => { btn.textContent = old; btn.disabled = false; }, 3000);
+      } catch (e) {
+        alert(`Failed to add Raw Output to Channels DVR.\n\n${e.message}`);
+      } finally {
+        if (btn.textContent !== '✓ Added') {
+          btn.textContent = old;
+          btn.disabled = false;
+        }
+      }
     }
     function copyUrl(e, url) {
       e.preventDefault(); e.stopPropagation();

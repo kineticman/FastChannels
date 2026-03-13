@@ -160,19 +160,17 @@
   </style>
 </head>
 <body>
-<nav>
-  <h1>⚡ FastChannels</h1>
-  <a href="/admin/">Dashboard</a>
-  <a href="/admin/sources">Sources</a>
-  <a href="/admin/channels">Channels</a>
-  <a href="/admin/feeds" class="active">Feeds</a>
-  <a href="/admin/settings">Settings</a>
-  <a href="/admin/logs">Logs</a>
-  <a href="/admin/help">Help</a>
-  <a href="/m3u" target="_blank">M3U ↗</a>
-  <a href="/epg.xml" target="_blank">EPG XML ↗</a>
-  <span class="version">v{{ app_version }}</span>
-</nav>
+  <nav>
+    <h1>⚡ FastChannels</h1>
+    <a href="/admin/">Dashboard</a>
+    <a href="/admin/sources">Sources</a>
+    <a href="/admin/channels">Channels</a>
+    <a href="/admin/feeds" class="active">Feeds</a>
+    <a href="/admin/settings">Settings</a>
+    <a href="/admin/logs">Logs</a>
+    <a href="/admin/help">Help</a>
+    <span class="version">v{{ app_version }}</span>
+  </nav>
 
 <div class="container">
   <div class="page-header">
@@ -237,7 +235,7 @@
           <button class="btn btn-ghost" style="font-size:0.78rem;padding:0.3rem 0.7rem"
                   onclick='openModal({{ feed.to_dict(base_url)|tojson }})'>Edit</button>
           <button class="btn btn-dvr" title="Register this feed as a custom M3U source in Channels DVR"
-                  onclick="pushToDvr({{ feed.id }}, '{{ feed.name|e }}', this)">📺 Add to Channels DVR</button>
+                  onclick="pushToDvr({{ feed.id }}, '{{ feed.name|e }}', {{ feed.channel_count() }}, this)">📺 Add to Channels DVR</button>
           <button class="btn btn-danger" onclick="deleteFeed({{ feed.id }}, '{{ feed.name|e }}', this)">Delete</button>
         </div>
       </div>
@@ -620,16 +618,30 @@ async function saveFeed() {
 }
 
 // ── Push to Channels DVR ──────────────────────────────────────────────────
-async function pushToDvr(id, name, btn) {
+async function pushToDvr(id, name, count, btn, force = false) {
+  if (count > 750 && !force) {
+    const ok = confirm(
+      `${name} has ${count} channels.\n\nChannels DVR usually works best at 750 or fewer.\n\nAdd it anyway?`
+    );
+    if (!ok) return;
+  }
   const orig = btn.textContent;
   btn.disabled = true;
   btn.textContent = '⏳ Adding…';
   try {
-    const r = await fetch(`/api/feeds/${id}/push-to-dvr`, { method: 'POST' });
+    const r = await fetch(`/api/feeds/${id}/push-to-dvr`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(force || count > 750 ? {force: true} : {}),
+    });
     const data = await r.json();
     if (!r.ok) {
       if (r.status === 400 && data.error?.includes('not configured')) {
         alert('Channels DVR URL is not configured.\n\nGo to Settings and enter your Channels DVR server URL (e.g. http://192.168.1.x:8089).');
+      } else if (r.status === 409 && data.requires_confirm && !force) {
+        btn.disabled = false;
+        btn.textContent = orig;
+        return pushToDvr(id, name, count, btn, true);
       } else {
         alert('Failed: ' + (data.error || `HTTP ${r.status}`));
       }

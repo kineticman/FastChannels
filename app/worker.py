@@ -280,6 +280,10 @@ def run_stream_audit(source_name: str):
                     logger.info('[audit] dead stream: %s  (confirmed by scraper)', ch.name)
                     continue
                 except Exception as re_exc:
+                    if _is_transient_network_error(re_exc):
+                        logger.warning('[audit] transient resolve failure for %s: %s', ch.name, re_exc)
+                        errors += 1
+                        continue
                     logger.warning('[audit] resolve failed for %s: %s', ch.name, re_exc)
                     errors += 1
                     consecutive_errors += 1
@@ -288,7 +292,14 @@ def run_stream_audit(source_name: str):
                         break
                     continue
 
-                r = sess.get(resolved_url, timeout=15, allow_redirects=True)
+                try:
+                    r = sess.get(resolved_url, timeout=15, allow_redirects=True)
+                except Exception as req_exc:
+                    if _is_transient_network_error(req_exc):
+                        logger.warning('[audit] transient manifest fetch failure for %s: %s', ch.name, req_exc)
+                        errors += 1
+                        continue
+                    raise
 
                 if r.status_code in (403, 429, 503):
                     wait = 30
@@ -380,6 +391,10 @@ def run_stream_audit(source_name: str):
                     logger.info('[audit] DRM: %s  →  %s', ch.name, manifest_url[:80])
 
             except Exception as e:
+                if _is_transient_network_error(e):
+                    logger.warning('[audit] transient audit failure for %s: %s', ch.name, e)
+                    errors += 1
+                    continue
                 logger.debug('[audit] error for %s: %s', ch.name, e)
                 errors += 1
                 consecutive_errors += 1
