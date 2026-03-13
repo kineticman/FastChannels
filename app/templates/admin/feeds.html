@@ -57,8 +57,17 @@
       text-decoration: none; display: flex; align-items: center; gap: 0.4rem;
     }
     .url-chip:hover { border-color: #38bdf8; }
+    .url-chip span { min-width: 0; }
+    .url-chip-text {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .url-chip .copy-btn {
       background: none; border: none; color: #64748b; cursor: pointer; font-size: 0.7rem; padding: 0;
+      flex-shrink: 0;
     }
     .url-chip .copy-btn:hover { color: #e2e8f0; }
     .feed-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
@@ -153,8 +162,10 @@
     .ch-bar {
       display: flex; align-items: center; justify-content: space-between;
       margin-bottom: 0.4rem; font-size: 0.78rem; color: #64748b;
+      gap: 0.75rem;
+      flex-wrap: wrap;
     }
-    .ch-bar-actions { display: flex; gap: 0.5rem; }
+    .ch-bar-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .ch-bar-btn {
       background: none; border: none; color: #38bdf8; cursor: pointer;
       font-size: 0.75rem; padding: 0; text-decoration: underline;
@@ -177,6 +188,7 @@
       .inline-setting { align-items: stretch; }
       .inline-setting .field { min-width: 0; }
       .url-chip { width: 100%; justify-content: space-between; }
+      .url-chip-text { white-space: normal; word-break: break-all; }
       .modal { padding: 1rem; }
     }
   </style>
@@ -298,15 +310,15 @@
 
       <div class="feed-urls">
         <a class="url-chip" href="{{ base_url }}/feeds/{{ feed.slug }}/m3u" target="_blank">
-          M3U&nbsp;↗&nbsp;<span style="opacity:0.5">{{ base_url }}/feeds/{{ feed.slug }}/m3u</span>
+          M3U&nbsp;↗&nbsp;<span class="url-chip-text" style="opacity:0.5">{{ base_url }}/feeds/{{ feed.slug }}/m3u</span>
           <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">⎘</button>
         </a>
         <a class="url-chip" href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank">
-          EPG&nbsp;↗&nbsp;<span style="opacity:0.5">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
+          EPG&nbsp;↗&nbsp;<span class="url-chip-text" style="opacity:0.5">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
           <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">⎘</button>
         </a>
         <a class="url-chip" href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote" target="_blank">
-          Gracenote&nbsp;↗&nbsp;<span style="opacity:0.5">{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote</span>
+          Gracenote&nbsp;↗&nbsp;<span class="url-chip-text" style="opacity:0.5">{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote</span>
           <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote')">⎘</button>
         </a>
       </div>
