@@ -11,6 +11,7 @@ from ..url import public_base_url
 from ..xml_cache import invalidate_xml_cache
 
 feeds_api_bp = Blueprint('feeds_api', __name__)
+SYSTEM_FEED_SLUGS = {'default'}
 
 
 def _slugify(text: str) -> str:
@@ -64,6 +65,8 @@ def get_feed(feed_id):
 @feeds_api_bp.route('/<int:feed_id>', methods=['PATCH'])
 def update_feed(feed_id):
     feed = Feed.query.get_or_404(feed_id)
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        return jsonify({'error': 'Built-in feeds cannot be edited.'}), 403
     data = request.get_json() or {}
 
     if 'name' in data:
@@ -89,6 +92,8 @@ def update_feed(feed_id):
 @feeds_api_bp.route('/<int:feed_id>', methods=['DELETE'])
 def delete_feed(feed_id):
     feed = Feed.query.get_or_404(feed_id)
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        return jsonify({'error': 'Built-in feeds cannot be deleted.'}), 403
     db.session.delete(feed)
     db.session.commit()
     invalidate_xml_cache()

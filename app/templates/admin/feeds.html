@@ -177,20 +177,13 @@
     <div>
       <h2>Output Feeds</h2>
       <p style="color:#64748b;font-size:0.85rem;margin-top:0.25rem">
-        Each feed is a named M3U + EPG pair you add as a source in Channels DVR. Keep each feed under 750 channels.
+        The built-in Default feed includes all enabled channels. Add custom feeds when you want smaller or filtered outputs for Channels DVR.
       </p>
     </div>
     <button class="btn btn-primary" onclick="openModal()">+ New Feed</button>
   </div>
 
   <div class="feed-grid" id="feed-grid">
-    {% if not feeds %}
-    <div class="empty">
-      <h3>No feeds yet</h3>
-      <p>Create your first feed to get stable M3U + EPG URLs for Channels DVR.</p>
-    </div>
-    {% endif %}
-
     {% for feed in feeds %}
     <div class="feed-card {% if not feed.is_enabled %}disabled{% endif %}" id="card-{{ feed.id }}">
       <div class="feed-top">
@@ -228,6 +221,9 @@
             {% if f.get('excluded_channel_ids') %}
               <span class="badge-pill pill-red">−{{ f['excluded_channel_ids']|length }} excluded</span>
             {% endif %}
+            {% if feed.slug == 'default' %}
+              <span class="badge-pill pill-gray">built-in</span>
+            {% endif %}
             {% if f.get('max_channels') %}
               <span class="badge-pill pill-gray">max {{ f['max_channels'] }}</span>
             {% endif %}
@@ -237,11 +233,17 @@
           </div>
         </div>
         <div class="feed-actions">
+          {% if feed.slug == 'default' %}
+          <span class="badge-pill pill-gray" style="align-self:center">built-in</span>
+          {% else %}
           <button class="btn btn-ghost" style="font-size:0.78rem;padding:0.3rem 0.7rem"
                   onclick='openModal({{ feed.to_dict(base_url)|tojson }})'>Edit</button>
+          {% endif %}
           <button class="btn btn-dvr" title="Register this feed as a custom M3U source in Channels DVR"
                   onclick="pushToDvr({{ feed.id }}, '{{ feed.name|e }}', {{ feed.channel_count() }}, this)">📺 Add to Channels DVR</button>
+          {% if feed.slug != 'default' %}
           <button class="btn btn-danger" onclick="deleteFeed({{ feed.id }}, '{{ feed.name|e }}', this)">Delete</button>
+          {% endif %}
         </div>
       </div>
 

@@ -20,21 +20,15 @@ def dashboard():
     total_channels = Channel.query.filter_by(is_active=True, is_enabled=True).count()
     base_url       = public_base_url()
     feeds          = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
-    gracenote_count = sum(
-        1 for ch in Channel.query.filter_by(is_active=True, is_enabled=True).all()
-        if _parse_gracenote_id(ch)
-    )
     source_output_meta = {}
     for source in sources:
         channels = _build_channel_query({'source': [source.name]}).all()
         source_output_meta[source.id] = {
             'channel_count': len(channels),
-            'has_gracenote': any(_parse_gracenote_id(ch) for ch in channels),
         }
     return render_template('admin/dashboard.html', sources=sources,
                            total_channels=total_channels, base_url=base_url,
-                           feeds=feeds, gracenote_count=gracenote_count,
-                           source_output_meta=source_output_meta)
+                           feeds=feeds, source_output_meta=source_output_meta)
 
 
 @admin_bp.route('/sources')

@@ -2,6 +2,17 @@ from sqlalchemy import text
 
 from .extensions import db
 
+_DEFAULT_FEEDS = (
+    {
+        "slug": "default",
+        "name": "Default",
+        "description": "Built-in feed with all enabled channels.",
+        "filters": "{}",
+        "chnum_start": None,
+        "is_enabled": 1,
+    },
+)
+
 
 def _merge_source_name(conn, old_name: str, new_name: str) -> None:
     old_rows = conn.execute(
@@ -86,15 +97,16 @@ def ensure_runtime_schema() -> None:
             row[0]
             for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
         }
-        if "app_settings" not in tables:
+        if "feeds" not in tables:
             return
 
-        cols = {
-            row[1]
-            for row in conn.execute(text("PRAGMA table_info(app_settings)"))
-        }
-        if "public_base_url" not in cols:
-            conn.execute(text("ALTER TABLE app_settings ADD COLUMN public_base_url TEXT"))
+        if "app_settings" in tables:
+            cols = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(app_settings)"))
+            }
+            if "public_base_url" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN public_base_url TEXT"))
 
         # Normalize the one hyphenated internal source id to snake_case so
         # source naming stays consistent across code paths and fresh installs.
@@ -123,4 +135,20 @@ def ensure_runtime_schema() -> None:
             conn.execute(
                 text("UPDATE feeds SET filters = :filters WHERE id = :feed_id"),
                 {"filters": json.dumps(filters), "feed_id": feed_id},
+            )
+
+        existing_slugs = {
+            row[0]
+            for row in conn.execute(text("SELECT slug FROM feeds"))
+        }
+        for feed in _DEFAULT_FEEDS:
+            if feed["slug"] in existing_slugs:
+                continue
+            conn.execute(
+                text(
+                    "INSERT INTO feeds "
+                    "(slug, name, description, filters, chnum_start, is_enabled) "
+                    "VALUES (:slug, :name, :description, :filters, :chnum_start, :is_enabled)"
+                ),
+                feed,
             )
