@@ -71,7 +71,7 @@
       </div>
       {% if feeds %}
       <table>
-        <thead><tr><th>Feed</th><th>Filters</th><th>Channels</th><th>M3U</th><th>EPG</th></tr></thead>
+        <thead><tr><th>Feed</th><th>Filters</th><th>Channels</th></tr></thead>
         <tbody>
           {% for feed in feeds %}
           <tr>
@@ -85,20 +85,6 @@
             <td>
               {{ feed.channel_count() }}
               {% if feed.channel_count() > 750 %}<span class="warn">⚠</span>{% endif %}
-            </td>
-            <td>
-              <a class="link-box" href="{{ base_url }}/feeds/{{ feed.slug }}/m3u" target="_blank"
-                 style="margin-top:0;font-size:0.72rem;padding:0.3rem 0.6rem">
-                /feeds/{{ feed.slug }}/m3u
-                <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">⎘</button>
-              </a>
-            </td>
-            <td>
-              <a class="link-box" href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank"
-                 style="margin-top:0;font-size:0.72rem;padding:0.3rem 0.6rem">
-                /feeds/{{ feed.slug }}/epg.xml
-                <button class="copy-btn" onclick="copyUrl(event, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">⎘</button>
-              </a>
             </td>
           </tr>
           {% endfor %}
@@ -144,13 +130,6 @@
       const d = await r.json();
       btn.textContent = d.status === 'queued' ? '✓ Queued' : 'Error';
       setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
-    }
-    function copyUrl(e, url) {
-      e.preventDefault(); e.stopPropagation();
-      navigator.clipboard.writeText(url).then(() => {
-        const b = e.target; b.textContent = '✓';
-        setTimeout(() => b.textContent = '⎘', 1500);
-      });
     }
   </script>
 </body>
