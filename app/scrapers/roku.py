@@ -131,6 +131,7 @@ _REUSABLE_JWT_TTL = 5 * 60 * 60  # fallback bound if a JWT has no decodable exp
 _JWT_EXP_SAFETY_MARGIN = 15 * 60  # stop reusing shortly before exp to avoid edge-of-expiry failures
 _LIVE_TV_403_RETRIES = 3
 _CACHE_WARM_RETRY_WORKERS = 4
+_ROKU_403_COOLDOWN = 5 * 60
 _OSM_BASE = "https://osm.sr.roku.com"
 
 # Name-based category keywords — checked in order, first match wins.
@@ -386,11 +387,14 @@ class RokuScraper(BaseScraper):
         self._selector_url_cache: dict[str, dict[str, object]] = {}
         self._stream_url_cache: dict[str, dict[str, object]] = {}
         self._playback_query_cache: dict[str, object] | None = None
+        self._cooldown_until: float | None = None
+        self._cooldown_reason: str | None = None
         self._load_cached_session()
         self._load_play_id_cache()
         self._load_selector_url_cache()
         self._load_stream_url_cache()
         self._load_playback_query_cache()
+        self._load_403_cooldown()
 
     # ── Session management ─────────────────────────────────────────────────────
 
@@ -417,6 +421,44 @@ class RokuScraper(BaseScraper):
         self._update_config("csrf_token", self._csrf_token)
         self._update_config("session_born", self._session_born)
         self._update_config("session_cookies", self.session.cookies.get_dict())
+
+    def _load_403_cooldown(self) -> None:
+        until = self.config.get("roku_403_cooldown_until")
+        reason = self.config.get("roku_403_cooldown_reason")
+        if isinstance(until, (int, float)) and float(until) > time.time():
+            self._cooldown_until = float(until)
+            self._cooldown_reason = str(reason or "Roku returned 403")
+
+    def _persist_403_cooldown(self) -> None:
+        self._update_config("roku_403_cooldown_until", self._cooldown_until)
+        self._update_config("roku_403_cooldown_reason", self._cooldown_reason)
+
+    def _cooldown_active(self) -> bool:
+        if not self._cooldown_until:
+            return False
+        if time.time() >= self._cooldown_until:
+            self._cooldown_until = None
+            self._cooldown_reason = None
+            self._persist_403_cooldown()
+            return False
+        return True
+
+    def _cooldown_remaining(self) -> int:
+        if not self._cooldown_until:
+            return 0
+        return max(0, int(self._cooldown_until - time.time()))
+
+    def _set_403_cooldown(self, reason: str) -> None:
+        self._cooldown_until = time.time() + _ROKU_403_COOLDOWN
+        self._cooldown_reason = reason
+        self._persist_403_cooldown()
+        logger.warning("[roku] entering %ds cooldown after 403 (%s)", _ROKU_403_COOLDOWN, reason)
+
+    def _clear_403_cooldown(self) -> None:
+        if self._cooldown_until or self._cooldown_reason:
+            self._cooldown_until = None
+            self._cooldown_reason = None
+            self._persist_403_cooldown()
 
     def _load_play_id_cache(self) -> None:
         raw = self.config.get("play_id_cache") or {}
@@ -911,6 +953,13 @@ class RokuScraper(BaseScraper):
 
     def _refresh_session(self) -> bool:
         """Boot a fresh Roku browser session. Returns True on success."""
+        if self._cooldown_active():
+            logger.warning(
+                "[roku] bootstrap cooldown active for %ds (%s)",
+                self._cooldown_remaining(),
+                self._cooldown_reason or "Roku returned 403",
+            )
+            return False
         try:
             self._clear_cached_session()
             # Step 1: hit home page to collect cookies. /live-tv is intermittently
@@ -920,14 +969,10 @@ class RokuScraper(BaseScraper):
             for attempt in range(_LIVE_TV_403_RETRIES + 1):
                 r1 = self.session.get(_HOME, headers=self._live_tv_headers(), timeout=15)
                 if r1.status_code == 200:
+                    self._clear_403_cooldown()
                     break
-                if r1.status_code == 403 and attempt < _LIVE_TV_403_RETRIES:
-                    wait = 2 ** attempt
-                    logger.warning("[roku] home bootstrap returned 403, retry %d/%d in %ds",
-                                   attempt + 1, _LIVE_TV_403_RETRIES, wait)
-                    time.sleep(wait)
-                    continue
                 if r1.status_code == 403:
+                    self._set_403_cooldown("bootstrap")
                     self._log_bootstrap_403(r1)
                 logger.error("[roku] home bootstrap returned %d", r1.status_code)
                 return False
@@ -971,6 +1016,9 @@ class RokuScraper(BaseScraper):
         for attempt in range(2):
             headers = self._api_headers()
             response = self.session.get(url, headers=headers, timeout=timeout)
+            if response.status_code == 403:
+                self._set_403_cooldown(label)
+                return response
             if response.status_code not in (401, 403) or attempt == 1:
                 return response
             logger.warning("[roku] %s returned %d, refreshing session and retrying once",
@@ -983,6 +1031,9 @@ class RokuScraper(BaseScraper):
         for attempt in range(2):
             headers = self._api_headers()
             response = self.session.post(url, headers=headers, json=json_body, timeout=timeout)
+            if response.status_code == 403:
+                self._set_403_cooldown(label)
+                return response
             if response.status_code not in (401, 403) or attempt == 1:
                 return response
             logger.warning("[roku] %s returned %d, refreshing session and retrying once",
@@ -1448,6 +1499,10 @@ class RokuScraper(BaseScraper):
                 return cached_stream_url
 
             reusable_params, reusable_reason = self._reusable_stream_query()
+            if self._cooldown_active() and not reusable_params:
+                raise RuntimeError(
+                    f"[roku] resolve blocked by temporary 403 cooldown for {self._cooldown_remaining()}s"
+                )
 
             failure_stage = "bootstrap"
             if not self._ensure_session():
