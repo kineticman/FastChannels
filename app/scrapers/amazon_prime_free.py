@@ -165,7 +165,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
         logger.info("[%s] %d channels", self.source_name, len(channels))
         return channels
 
-    def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
+    def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         programs: list[ProgramData] = []
         seen: set[tuple[str, int, int, str]] = set()
 

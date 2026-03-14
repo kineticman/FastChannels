@@ -240,7 +240,7 @@ class BaseScraper(ABC):
     @abstractmethod
     def fetch_channels(self) -> list[ChannelData]: ...
 
-    def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
+    def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         return []
 
     def resolve(self, raw_url: str) -> str:

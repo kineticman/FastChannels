@@ -298,7 +298,7 @@ class DistroScraper(BaseScraper):
         logger.info("[distro] parsed %d channels", len(channels))
         return channels
 
-    def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
+    def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         if not channels:
             return []
         all_ids = ",".join(ch.source_channel_id for ch in channels)

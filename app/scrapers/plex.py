@@ -335,7 +335,7 @@ class PlexScraper(BaseScraper):
 
     # ── fetch_epg ──────────────────────────────────────────────────────────────
 
-    def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
+    def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         """
         Fetch full EPG from the Plex grid API (epg.provider.plex.tv/grid).
 

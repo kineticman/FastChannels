@@ -138,7 +138,7 @@ class XumoScraper(BaseScraper):
         logger.info("[xumo] %d channels", len(channels))
         return channels
 
-    def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
+    def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         if not channels:
             return []
 

@@ -289,7 +289,7 @@ class SlingScraper(BaseScraper):
         logger.info("[%s] %d channels", self.source_name, len(result))
         return result
 
-    def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
+    def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         self._ensure_bearer()
 
         limit       = int(self._cfg("epg_channel_limit", 0))

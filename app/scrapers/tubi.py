@@ -169,7 +169,7 @@ class TubiScraper(BaseScraper):
 
     # ── Optional ─────────────────────────────────────────────────────────────
 
-    def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
+    def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         ids = [ch.source_channel_id for ch in channels]
         if not ids:
             return []

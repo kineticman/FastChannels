@@ -114,7 +114,7 @@ class FreeLiveSportsScraper(BaseScraper):
 
     # ── Optional: EPG ─────────────────────────────────────────────────────────
 
-    def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
+    def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         # EPG data is bundled in the same catalog response — re-fetch to get entries
         r = self.get(EPG_URL)
         if not r:

@@ -295,7 +295,7 @@ class PlutoScraper(BaseScraper):
         logger.info("[pluto] %s: %d channels", country_code, len(channels))
         return channels
 
-    def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
+    def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         programs: list[ProgramData] = []
         by_country: dict[str, list[ChannelData]] = {}
         for ch in channels:
