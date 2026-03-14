@@ -29,6 +29,7 @@ class XumoScraper(BaseScraper):
     display_name = "Xumo Play"
     scrape_interval = 720
     stream_audit_enabled = True
+    audit_ignore_playlist_type_vod = True
     config_schema = []
 
     BASE_URL = "https://valencia-app-mds.xumo.com"

@@ -378,7 +378,10 @@ def run_stream_audit(source_name: str):
                         except Exception as ve:
                             logger.debug('[audit] variant fetch failed for %s: %s', ch.name, ve)
 
-                if 'EXT-X-PLAYLIST-TYPE:VOD' in manifest_text:
+                if (
+                    'EXT-X-PLAYLIST-TYPE:VOD' in manifest_text
+                    and not getattr(scraper, 'audit_ignore_playlist_type_vod', False)
+                ):
                     ch.is_active      = False
                     ch.is_enabled     = False
                     ch.disable_reason = 'Dead'
