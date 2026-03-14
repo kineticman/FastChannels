@@ -335,6 +335,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
     for ch in channels:
         tvg_id = _tvg_id(ch)
         attrs = [
+            f'channel-id="{tvg_id}"',
             f'tvg-id="{tvg_id}"',
             f'tvg-name="{_esc(ch.name)}"',
             f'group-title="{_esc(ch.category or ch.source.display_name)}"',
@@ -380,6 +381,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
     for ch in channels:
         gracenote_id = _parse_gracenote_id(ch)
         attrs = [
+            f'channel-id="{gracenote_id}"',
             f'tvc-guide-stationid="{gracenote_id}"',
             f'tvg-name="{_esc(ch.name)}"',
             f'group-title="{_esc(ch.category or ch.source.display_name)}"',
