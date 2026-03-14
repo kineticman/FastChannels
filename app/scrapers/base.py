@@ -31,6 +31,15 @@ _SPANISH_LANGUAGE_MARKERS = (
     'azteca',
     'nuevo latino',
     'siempre latino',
+    # Spanish-language channel names / phrases
+    'cine de',       # "Cine de Horror", "Cine de Accion"
+    'todo cine',     # "Todo Cine"
+    'lamusica',      # "LaMúsica TV" (accent stripped by fold)
+    'tv amor',       # "TV Amor"
+    'multimedios',   # Mexican broadcast network
+    'bandamax',      # Mexican music channel
+    'ritmoson',      # Latin music channel
+    'tele hit',      # Mexican pop music channel
 )
 
 

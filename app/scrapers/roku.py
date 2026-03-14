@@ -1029,6 +1029,7 @@ class RokuScraper(BaseScraper):
 
         # Category from kidsDirected flag or tags
         category = _category_from_station(station)
+        tags_str = ' '.join(station.get('tags') or [])
 
         channels.append(ChannelData(
             source_channel_id = station_id,
@@ -1036,7 +1037,7 @@ class RokuScraper(BaseScraper):
             stream_url        = f"roku://{station_id}",
             logo_url          = logo,
             category          = category,
-            language          = _language_from_metadata(title, category),
+            language          = _language_from_metadata(title, category, tags_str),
             country           = "US",
             stream_type       = "hls",
             number            = number,
