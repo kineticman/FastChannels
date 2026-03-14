@@ -793,12 +793,20 @@ if __name__ == '__main__':
         with flask_app.app_context():
             _cleanup_orphans()
 
+    def _scheduled_logo_cache_cleanup():
+        from app.routes.images import cleanup_logo_cache
+        removed = cleanup_logo_cache()
+        if removed:
+            logger.info('[logo_cache] removed %d expired files', removed)
+
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(_schedule_due_scrapes, 'interval', minutes=1, id='auto_scrape',
                       max_instances=1, coalesce=True)
     scheduler.add_job(_scheduled_prune, 'interval', hours=1, id='epg_prune',
                       max_instances=1, coalesce=True)
     scheduler.add_job(_scheduled_integrity_cleanup, 'interval', days=1, id='integrity_cleanup',
+                      max_instances=1, coalesce=True)
+    scheduler.add_job(_scheduled_logo_cache_cleanup, 'interval', hours=6, id='logo_cache_cleanup',
                       max_instances=1, coalesce=True)
     scheduler.start()
     logger.info('Scheduler started — checking sources every 60s')

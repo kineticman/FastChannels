@@ -1,6 +1,7 @@
 import logging
 import re
 from ..models import Channel, Source, Feed, AppSettings
+from ..url import proxy_logo_url
 
 log = logging.getLogger(__name__)
 
@@ -341,7 +342,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
             f'group-title="{_esc(ch.category or ch.source.display_name)}"',
         ]
         if ch.logo_url:
-            attrs.append(f'tvg-logo="{ch.logo_url}"')
+            attrs.append(f'tvg-logo="{proxy_logo_url(ch.logo_url, base_url) or ch.logo_url}"')
         chnum = chnum_map.get(ch.id)
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')
@@ -387,7 +388,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
             f'group-title="{_esc(ch.category or ch.source.display_name)}"',
         ]
         if ch.logo_url:
-            attrs.append(f'tvg-logo="{ch.logo_url}"')
+            attrs.append(f'tvg-logo="{proxy_logo_url(ch.logo_url, base_url) or ch.logo_url}"')
         chnum = chnum_map.get(ch.id)
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')

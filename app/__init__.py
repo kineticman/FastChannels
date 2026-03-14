@@ -42,11 +42,13 @@ def create_app(config_class=Config):
     from .routes.feeds_api import feeds_api_bp
     from .routes.admin import admin_bp
     from .routes.play import play_bp
+    from .routes.images import images_bp
 
     app.register_blueprint(output_bp)
     app.register_blueprint(api_bp, url_prefix='/api')
     app.register_blueprint(feeds_api_bp, url_prefix='/api/feeds')
     app.register_blueprint(admin_bp, url_prefix='/admin')
     app.register_blueprint(play_bp)   # /play/<source>/<id>.m3u8
+    app.register_blueprint(images_bp) # /images/proxy
 
     return app

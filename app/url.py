@@ -1,6 +1,6 @@
 import socket
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from flask import current_app, request
 
@@ -46,6 +46,13 @@ def detected_base_url() -> str:
 
     port = f":{parsed.port}" if parsed.port else ""
     return f"{parsed.scheme}://{lan_ip}{port}"
+
+
+def proxy_logo_url(url: str | None, base_url: str) -> str | None:
+    """Rewrite a remote logo URL to route through our local image proxy."""
+    if not url or not base_url:
+        return url
+    return f"{base_url}/images/proxy?url={quote(url, safe='')}"
 
 
 def public_base_url() -> str:

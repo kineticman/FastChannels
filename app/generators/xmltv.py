@@ -25,6 +25,7 @@ from flask import request as flask_request
 
 from ..extensions import db
 from ..models import Channel, Program, Source
+from ..url import proxy_logo_url
 from .m3u import _build_channel_query, _selected_channels, _tvg_id
 
 log = logging.getLogger(__name__)
@@ -184,7 +185,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None):
         el = Element('channel', id=tvg_map[ch.id])
         SubElement(el, 'display-name').text = ch.name
         if ch.logo_url:
-            SubElement(el, 'icon', src=ch.logo_url)
+            SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url) or ch.logo_url)
         yield tostring(el, encoding='unicode') + '\n'
 
     # ── Programme elements — JOIN + keyset pagination ─────────────────────
@@ -255,7 +256,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None):
             if src_name:
                 SubElement(el, 'category', lang='en').text = src_name
             if poster:
-                SubElement(el, 'icon', src=poster)
+                SubElement(el, 'icon', src=proxy_logo_url(poster, base_url) or poster)
             if rating:
                 r = SubElement(el, 'rating', system='MPAA')
                 SubElement(r, 'value').text = rating
