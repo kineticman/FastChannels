@@ -349,6 +349,7 @@ class RokuScraper(BaseScraper):
         self._selector_url_cache: dict[str, dict[str, object]] = {}
         self._stream_url_cache: dict[str, dict[str, object]] = {}
         self._osm_session: tuple[str, str] | None = None  # (session_token, traceId) from latest cached OSM URL
+        self._last_epg_ok: float = 0.0  # epoch of last successful EPG API response
         self._cooldown_until: float | None = None
         self._cooldown_reason: str | None = None
         self._description_cache: dict[str, str] = {}       # content_id → description text
@@ -968,6 +969,7 @@ class RokuScraper(BaseScraper):
         try:
             r = self._api_get(_EPG_URL, timeout=20, label="epg")
             if r.status_code == 200:
+                self._last_epg_ok = time.time()
                 for col in r.json().get("collections", []):
                     station = col.get("features", {}).get("station")
                     if not station:
@@ -1105,11 +1107,14 @@ class RokuScraper(BaseScraper):
         # Validate the cached session against a real Roku API before starting
         # the threaded content-proxy fanout. Otherwise an upstream-expired
         # session can yield a misleading "0 programs" success on EPG-only runs.
-        epg_probe = self._api_get(_EPG_URL, timeout=20, label="epg")
-        if not epg_probe or epg_probe.status_code != 200:
-            logger.warning("[roku] EPG validation returned %s before threaded fetch",
-                           getattr(epg_probe, "status_code", "no response"))
-            raise ScrapeSkipError("[roku] session rejected before EPG fetch; keeping previous EPG data")
+        # Skip probe if fetch_channels() already confirmed the session within 60s.
+        if (time.time() - self._last_epg_ok) > 60:
+            epg_probe = self._api_get(_EPG_URL, timeout=20, label="epg")
+            if not epg_probe or epg_probe.status_code != 200:
+                logger.warning("[roku] EPG validation returned %s before threaded fetch",
+                               getattr(epg_probe, "status_code", "no response"))
+                raise ScrapeSkipError("[roku] session rejected before EPG fetch; keeping previous EPG data")
+            self._last_epg_ok = time.time()
 
         total = len(channels)
         skipped = len(skip_ids & {ch.source_channel_id for ch in channels}) if skip_ids else 0
