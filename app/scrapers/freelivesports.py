@@ -6,7 +6,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-from .base import BaseScraper, ChannelData, ProgramData
+from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ class FreeLiveSportsScraper(BaseScraper):
                 stream_type       = "hls",
                 logo_url          = ch.get("thumbnail") or None,
                 category          = "Sports",
-                language          = "en",
+                language          = infer_language_from_metadata(ch.get("language"), name),
                 country           = "US",
                 number            = ch.get("channelNumber") or None,
             ))

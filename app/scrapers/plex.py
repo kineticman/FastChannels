@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import quote_plus
 from uuid import uuid4
 
-from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, infer_language_from_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -312,14 +312,18 @@ class PlexScraper(BaseScraper):
                 logo  = node.get("thumb") or (
                     ((data.get("cast") or {}).get("image") or {}).get("url")
                 )
-                lang = "es" if channel_id in spanish_ids else "en"
+                category = cat_map.get(channel_id)
+                lang = "es" if channel_id in spanish_ids else infer_language_from_metadata(
+                    node.get("title"),
+                    category,
+                )
                 channels[channel_id] = ChannelData(
                     source_channel_id = channel_id,
                     name              = node.get("title") or node.get("slug") or channel_id,
                     stream_url        = f"plex://{channel_id}",
                     logo_url          = logo,
                     slug              = node.get("slug") or channel_id,
-                    category          = cat_map.get(channel_id),
+                    category          = category,
                     language          = lang,
                     country           = "US",
                     stream_type       = "hls",

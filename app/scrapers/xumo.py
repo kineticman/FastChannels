@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from .base import BaseScraper, ChannelData, ProgramData
+from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,7 @@ class XumoScraper(BaseScraper):
             name = str(item.get("title") or "").strip()
             if not channel_id or not name:
                 continue
+            category = self._extract_genre(item)
 
             channels.append(
                 ChannelData(
@@ -128,7 +129,8 @@ class XumoScraper(BaseScraper):
                     name=name,
                     stream_url=f"{self.CHANNEL_SCHEME}{channel_id}",
                     logo_url=self._extract_logo(item),
-                    category=self._extract_genre(item),
+                    category=category,
+                    language=infer_language_from_metadata(name, category),
                 )
             )
 

@@ -24,18 +24,13 @@ from urllib.parse import unquote
 
 import requests
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
 
 logger = logging.getLogger(__name__)
 
 
-def _language_from_category(category: str | None) -> str:
-    if not category:
-        return 'en'
-    folded = category.casefold()
-    if 'spanish' in folded or 'español' in folded or 'espanol' in folded:
-        return 'es'
-    return 'en'
+def _language_from_metadata(name: str | None, category: str | None) -> str:
+    return infer_language_from_metadata(name, category)
 
 # ── API endpoints ────────────────────────────────────────────────────────────
 _LIVE_PAGE_URL   = 'https://tubitv.com/live'
@@ -281,7 +276,7 @@ class TubiScraper(BaseScraper):
                 stream_url        = f'tubi://{cid}',
                 logo_url          = logo,
                 category          = category,
-                language          = _language_from_category(category),
+                language          = _language_from_metadata(name, category),
                 country           = 'US',
                 stream_type       = 'hls',
                 gracenote_id      = gracenote_id,
@@ -437,7 +432,7 @@ class TubiScraper(BaseScraper):
                 stream_url        = f'tubi://{scid}',
                 logo_url          = logo,
                 category          = category,
-                language          = _language_from_category(category),
+                language          = _language_from_metadata(name, category),
                 country           = 'US',
                 stream_type       = 'hls',
                 gracenote_id      = gracenote_id,

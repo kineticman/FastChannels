@@ -19,12 +19,11 @@ import re
 import base64
 import json
 import time
-import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
-from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, ScrapeSkipError, is_transient_network_error
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, ScrapeSkipError, infer_language_from_metadata, is_transient_network_error
 
 logger = logging.getLogger(__name__)
 
@@ -45,50 +44,8 @@ def _join_categories(values: list[str] | tuple[str, ...] | None) -> str | None:
     return ';'.join(normalized) or None
 
 
-_SPANISH_LANGUAGE_MARKERS = (
-    "spanish",
-    "espanol",
-    "latino",
-    "latina",
-    "latinas",
-    "latinos",
-    "telemundo",
-    "univision",
-    "venevision",
-    "canela",
-    "pasion",
-    "clasicos",
-    "telediario",
-    "noticias",
-    "deportes",
-    "accion",
-    "comedia",
-    "novelas",
-    "mas pasiones",
-    "azteca",
-    "filmex",
-    "flixlatino",
-    "freetv accion",
-    "n+ univision",
-    "rcn noticias",
-    "adn noticias",
-)
-
-
-def _fold_text(value: str | None) -> str:
-    if not value:
-        return ""
-    normalized = unicodedata.normalize("NFKD", value)
-    ascii_only = "".join(ch for ch in normalized if not unicodedata.combining(ch))
-    return ascii_only.casefold()
-
-
 def _language_from_metadata(*values: str | None) -> str:
-    for value in values:
-        folded = _fold_text(value)
-        if any(marker in folded for marker in _SPANISH_LANGUAGE_MARKERS):
-            return "es"
-    return "en"
+    return infer_language_from_metadata(*values)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 

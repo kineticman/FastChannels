@@ -15,7 +15,7 @@ from typing import Optional
 import pytz
 import requests
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
 
 import logging
 logger = logging.getLogger(__name__)
@@ -287,7 +287,7 @@ class PlutoScraper(BaseScraper):
                 logo_url          = logo,
                 slug              = elem.get('slug') or name.lower().replace(' ', '-'),
                 category          = cat_map.get(ch_id),
-                language          = 'en',
+                language          = infer_language_from_metadata(name, cat_map.get(ch_id)),
                 country           = country_code,
                 number            = number,
             ))

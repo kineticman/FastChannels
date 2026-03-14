@@ -1,6 +1,7 @@
 import copy
 import logging
 import socket
+import unicodedata
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -9,6 +10,44 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
+
+_SPANISH_LANGUAGE_MARKERS = (
+    'en espanol',
+    'espanol',
+    'español',
+    'spanish',
+    'latino',
+    'latina',
+    'latinos',
+    'latinas',
+    'noticias',
+    'deportes',
+    'novelas',
+    'telenovela',
+    'telemundo',
+    'univision',
+    'canela',
+    'estrella',
+    'azteca',
+    'nuevo latino',
+    'siempre latino',
+)
+
+
+def fold_language_hint(value: str | None) -> str:
+    if not value:
+        return ''
+    normalized = unicodedata.normalize('NFKD', value)
+    ascii_only = ''.join(ch for ch in normalized if not unicodedata.combining(ch))
+    return ascii_only.casefold()
+
+
+def infer_language_from_metadata(*values: str | None, default: str = 'en') -> str:
+    for value in values:
+        folded = fold_language_hint(value)
+        if any(marker in folded for marker in _SPANISH_LANGUAGE_MARKERS):
+            return 'es'
+    return default
 
 
 def is_transient_network_error(exc: Exception) -> bool:

@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -399,6 +399,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
             stream_url=f"primefree://{station_id}",
             logo_url=station.get("logo"),
             category=category,
+            language=infer_language_from_metadata(name, category),
         )
 
     def _program_from_schedule(self, source_channel_id: str, airing: dict[str, Any]) -> ProgramData | None:

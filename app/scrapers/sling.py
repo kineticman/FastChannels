@@ -15,9 +15,9 @@ from urllib.parse import parse_qsl, quote, urlparse
 import requests
 
 try:
-    from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, ScrapeSkipError
+    from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, ScrapeSkipError, infer_language_from_metadata
 except ImportError:  # pragma: no cover - local staging outside FastChannels package
-    from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, ScrapeSkipError
+    from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, ScrapeSkipError, infer_language_from_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -689,7 +689,7 @@ class SlingScraper(BaseScraper):
             logo_url=logo_url,
             slug=self._slugify(name),
             category=category,
-            language="en",
+            language=infer_language_from_metadata(name, category),
             country="US",
             stream_type="dash",
         )
