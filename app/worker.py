@@ -131,6 +131,7 @@ def run_scraper(source_name: str):
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
+                _prewarm_logos(source_name, [ch.logo_url for ch in channels])
             _progress('done')
         except ScrapeSkipError as e:
             elapsed = time.monotonic() - t0
@@ -460,6 +461,22 @@ def _epg_channels_for_source(source) -> list[Channel]:
     return source.channels.filter(
         (Channel.is_active == True) | (Channel.disable_reason == 'DRM')
     ).all()
+
+
+def _prewarm_logos(source_name: str, logo_urls: list[str]) -> None:
+    """
+    Pre-warm the logo cache for *logo_urls*.  Runs inside the RQ job process
+    after a full channel scrape; uses an internal ThreadPoolExecutor so fetches
+    are concurrent without blocking the job thread.
+    """
+    from app.routes.images import prewarm_logo_cache
+    urls = [u for u in logo_urls if u]
+    if not urls:
+        return
+    try:
+        prewarm_logo_cache(urls)
+    except Exception:
+        logger.exception('[%s] logo cache pre-warm failed', source_name)
 
 
 def _fresh_epg_sids(source, horizon_hours: float = 2.0) -> set[str]:
