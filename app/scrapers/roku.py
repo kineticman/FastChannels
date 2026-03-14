@@ -19,9 +19,10 @@ import re
 import base64
 import json
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, ScrapeSkipError, infer_language_from_metadata, is_transient_network_error
 
@@ -83,13 +84,17 @@ _TAG_CATEGORY_PRIORITY = [
 _SESSION_TTL = 55 * 60  # seconds before we refresh cookies + csrf
 _SESSION_HARD_TTL = 12 * 60 * 60  # discard persisted session state after 12h
 _PLAY_ID_TTL = 6 * 60 * 60  # reuse playIds for a few hours to reduce tune-time content lookups
-_STREAM_URL_TTL = 5 * 60 * 60  # reuse exact HLS URLs for most of the observed ~6h JWT life
-_REUSABLE_JWT_TTL = 5 * 60 * 60  # fallback bound if a JWT has no decodable exp
-_JWT_EXP_SAFETY_MARGIN = 15 * 60  # stop reusing shortly before exp to avoid edge-of-expiry failures
+_STREAM_URL_TTL = 5 * 60 * 60  # reuse exact HLS URLs; Roku traceId URLs stay valid ~6h
+_OSM_BASE = "https://osm.sr.roku.com"
+# OSM stream URL pattern: /osm/v1/hls/master/{selector_uuid}/{session_token}/index.m3u8
+_OSM_STREAM_RE = re.compile(r"/osm/v1/hls/master/([0-9a-f-]{36})/([0-9a-f]+)/index\.m3u8")
+_SELECTOR_UUID_RE = re.compile(r"/v1/([0-9a-f-]{36})$")
 _LIVE_TV_403_RETRIES = 3
 _CACHE_WARM_RETRY_WORKERS = 4
+_EPG_WORKERS = 5
+_DESC_WORKERS = 5
 _ROKU_403_COOLDOWN = 5 * 60
-_OSM_BASE = "https://osm.sr.roku.com"
+_DESC_CACHE_TTL = 14 * 24 * 60 * 60  # keep descriptions for 14 days; content doesn't change
 
 # Name-based category keywords — checked in order, first match wins.
 # Each entry: (set-of-substrings, category).  All comparisons are lowercase.
@@ -343,15 +348,17 @@ class RokuScraper(BaseScraper):
         self._play_id_cache: dict[str, dict[str, object]] = {}
         self._selector_url_cache: dict[str, dict[str, object]] = {}
         self._stream_url_cache: dict[str, dict[str, object]] = {}
-        self._playback_query_cache: dict[str, object] | None = None
+        self._osm_session: tuple[str, str] | None = None  # (session_token, traceId) from latest cached OSM URL
         self._cooldown_until: float | None = None
         self._cooldown_reason: str | None = None
+        self._description_cache: dict[str, str] = {}       # content_id → description text
+        self._description_cache_times: dict[str, float] = {}  # content_id → epoch when cached
         self._load_cached_session()
         self._load_play_id_cache()
         self._load_selector_url_cache()
         self._load_stream_url_cache()
-        self._load_playback_query_cache()
         self._load_403_cooldown()
+        self._load_description_cache()
 
     # ── Session management ─────────────────────────────────────────────────────
 
@@ -537,6 +544,7 @@ class RokuScraper(BaseScraper):
         if not isinstance(raw, dict):
             return
         now = time.time()
+        best_cached_at = 0.0
         for station_id, entry in raw.items():
             if not isinstance(station_id, str) or not isinstance(entry, dict):
                 continue
@@ -544,106 +552,26 @@ class RokuScraper(BaseScraper):
             cached_at = entry.get("cached_at")
             if not stream_url or not isinstance(cached_at, (int, float)):
                 continue
-            if not self._stream_entry_is_usable(entry, now=now, ttl=_STREAM_URL_TTL):
+            if (now - float(cached_at)) >= _STREAM_URL_TTL:
                 continue
             self._stream_url_cache[station_id] = {
                 "stream_url": stream_url,
                 "cached_at": float(cached_at),
             }
+            if float(cached_at) > best_cached_at:
+                self._try_update_osm_session(str(stream_url))
+                if self._osm_session:
+                    best_cached_at = float(cached_at)
 
     def _persist_stream_url_cache(self) -> None:
         self._update_config("stream_url_cache", self._stream_url_cache)
 
-    def _load_playback_query_cache(self) -> None:
-        raw = self.config.get("playback_query_cache") or {}
-        if not isinstance(raw, dict):
-            return
-        params = raw.get("params")
-        cached_at = raw.get("cached_at")
-        if not isinstance(params, dict) or not isinstance(cached_at, (int, float)):
-            return
-        if (time.time() - float(cached_at)) >= _REUSABLE_JWT_TTL:
-            return
-        jwt = str(params.get("jwt") or "")
-        if not jwt:
-            return
-        exp = self._jwt_exp_from_token(jwt)
-        if exp is not None and time.time() >= (exp - _JWT_EXP_SAFETY_MARGIN):
-            return
-        self._playback_query_cache = {
-            "params": {str(k): str(v) for k, v in params.items() if v is not None},
-            "cached_at": float(cached_at),
-            "exp": exp,
-        }
-
-    def _persist_playback_query_cache(self) -> None:
-        self._update_config("playback_query_cache", self._playback_query_cache or {})
-
-    @staticmethod
-    def _jwt_exp_from_token(jwt: str | None) -> int | None:
-        if not jwt:
-            return None
-        try:
-            parts = jwt.split(".")
-            if len(parts) < 2:
-                return None
-            payload = parts[1] + "=" * (-len(parts[1]) % 4)
-            decoded = base64.urlsafe_b64decode(payload)
-            return int(json.loads(decoded).get("exp"))
-        except Exception:
-            return None
-
-    def _cache_playback_query(self, params: dict[str, str] | None) -> None:
-        if not params or not params.get("jwt"):
-            return
-        exp = self._jwt_exp_from_token(str(params.get("jwt")))
-        self._playback_query_cache = {
-            "params": {str(k): str(v) for k, v in params.items() if v},
-            "cached_at": time.time(),
-            "exp": exp,
-        }
-        self._persist_playback_query_cache()
-
-    def _cache_playback_query_from_stream_url(self, stream_url: str | None) -> None:
-        if not stream_url:
-            return
-        parsed = urlparse(stream_url)
-        query = parse_qs(parsed.query)
-        jwt = (query.get("jwt") or [""])[0]
-        if not jwt:
-            return
-        params = {
-            "jwt": jwt,
-            "ssai.ovp_mode": (query.get("ssai.ovp_mode") or [""])[0],
-            "ssai.adslate": (query.get("ssai.adslate") or [""])[0],
-            "ads.queryString": (query.get("ads.queryString") or [""])[0],
-        }
-        cdn = (query.get("cdn") or [""])[0]
-        if cdn:
-            params["cdn"] = cdn
-        self._cache_playback_query(params)
-
-    def _cached_playback_query(self) -> tuple[dict[str, str] | None, str]:
-        entry = self._playback_query_cache or {}
-        params = entry.get("params") if isinstance(entry, dict) else None
-        cached_at = entry.get("cached_at") if isinstance(entry, dict) else None
-        if not isinstance(params, dict) or not isinstance(cached_at, (int, float)):
-            return None, "no cached playback query"
-        if (time.time() - float(cached_at)) >= _REUSABLE_JWT_TTL:
-            self._playback_query_cache = None
-            self._persist_playback_query_cache()
-            return None, "cached Roku JWT expired"
-        jwt = str(params.get("jwt") or "")
-        if not jwt:
-            self._playback_query_cache = None
-            self._persist_playback_query_cache()
-            return None, "cached stream URL missing JWT"
-        exp = self._jwt_exp_from_token(jwt)
-        if exp is not None and time.time() >= (exp - _JWT_EXP_SAFETY_MARGIN):
-            self._playback_query_cache = None
-            self._persist_playback_query_cache()
-            return None, "cached Roku JWT expired"
-        return {str(k): str(v) for k, v in params.items() if v}, ""
+    def _try_update_osm_session(self, stream_url: str) -> None:
+        """Extract session_token+traceId from an OSM stream URL and update _osm_session."""
+        m = _OSM_STREAM_RE.search(stream_url)
+        if m:
+            trace = (parse_qs(urlparse(stream_url).query).get("traceId") or [""])[0]
+            self._osm_session = (m.group(2), trace)
 
     def _cache_stream_url(self, station_id: str, stream_url: str | None) -> None:
         if not station_id or not stream_url:
@@ -653,6 +581,7 @@ class RokuScraper(BaseScraper):
             "cached_at": time.time(),
         }
         self._persist_stream_url_cache()
+        self._try_update_osm_session(stream_url)
 
     def _cached_stream_url(self, station_id: str) -> str | None:
         entry = self._stream_url_cache.get(station_id)
@@ -662,7 +591,7 @@ class RokuScraper(BaseScraper):
         cached_at = entry.get("cached_at")
         if not stream_url or not isinstance(cached_at, (int, float)):
             return None
-        if not self._stream_entry_is_usable(entry, ttl=_STREAM_URL_TTL):
+        if (time.time() - float(cached_at)) >= _STREAM_URL_TTL:
             self._stream_url_cache.pop(station_id, None)
             self._persist_stream_url_cache()
             return None
@@ -673,85 +602,58 @@ class RokuScraper(BaseScraper):
             self._stream_url_cache.pop(station_id, None)
             self._persist_stream_url_cache()
 
-    @staticmethod
-    def _jwt_exp(stream_url: str | None) -> int | None:
-        if not stream_url:
-            return None
-        try:
-            jwt = (parse_qs(urlparse(stream_url).query).get("jwt") or [""])[0]
-            return RokuScraper._jwt_exp_from_token(jwt)
-        except Exception:
-            return None
-
-    def _stream_entry_is_usable(
-        self,
-        entry: dict[str, object],
-        *,
-        now: float | None = None,
-        ttl: int,
-    ) -> bool:
-        now = now or time.time()
-        cached_at = entry.get("cached_at")
-        stream_url = entry.get("stream_url")
-        if not stream_url or not isinstance(cached_at, (int, float)):
-            return False
-        if (now - float(cached_at)) >= ttl:
-            return False
-        exp = self._jwt_exp(str(stream_url))
-        if exp is not None and now >= (exp - _JWT_EXP_SAFETY_MARGIN):
-            return False
-        return True
-
-    def _reusable_stream_query(self) -> tuple[dict[str, str] | None, str]:
-        params, reason = self._cached_playback_query()
-        if params:
-            return params, ""
-
-        latest_entry = None
-        latest_cached_at = 0.0
+    def _load_description_cache(self) -> None:
+        raw = self.config.get("description_cache") or {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                return
+        if not isinstance(raw, dict):
+            return
         now = time.time()
-        had_entries = False
-        had_jwt_expired = False
-        for entry in self._stream_url_cache.values():
+        for cid, entry in raw.items():
             if not isinstance(entry, dict):
                 continue
-            had_entries = True
-            cached_at = entry.get("cached_at")
-            stream_url = entry.get("stream_url")
-            if not stream_url or not isinstance(cached_at, (int, float)):
+            desc = entry.get("d")
+            t = entry.get("t")
+            if not desc or not isinstance(t, (int, float)):
                 continue
-            exp = self._jwt_exp(str(stream_url))
-            if exp is not None:
-                if now >= (exp - _JWT_EXP_SAFETY_MARGIN):
-                    had_jwt_expired = True
-                    continue
-            elif (now - float(cached_at)) >= _REUSABLE_JWT_TTL:
-                had_jwt_expired = True
+            if (now - float(t)) >= _DESC_CACHE_TTL:
                 continue
-            if float(cached_at) > latest_cached_at:
-                latest_cached_at = float(cached_at)
-                latest_entry = str(stream_url)
-        if not latest_entry:
-            if not had_entries:
-                return None, "no cached stream URLs"
-            if had_jwt_expired:
-                return None, "cached Roku JWT expired"
-            return None, "no reusable Roku JWT found"
-        parsed = urlparse(latest_entry)
-        query = parse_qs(parsed.query)
-        jwt = (query.get("jwt") or [""])[0]
-        if not jwt:
-            return None, "cached stream URL missing JWT"
-        params = {
-            "jwt": jwt,
-            "ssai.ovp_mode": (query.get("ssai.ovp_mode") or [""])[0],
-            "ssai.adslate": (query.get("ssai.adslate") or [""])[0],
-            "ads.queryString": (query.get("ads.queryString") or [""])[0],
+            self._description_cache[cid] = str(desc)
+            self._description_cache_times[cid] = float(t)
+        if len(self._description_cache) > self._DESC_CACHE_MAX_ENTRIES:
+            keep = sorted(self._description_cache, key=lambda c: self._description_cache_times.get(c, 0), reverse=True)[:self._DESC_CACHE_MAX_ENTRIES]
+            self._description_cache = {c: self._description_cache[c] for c in keep}
+            self._description_cache_times = {c: self._description_cache_times[c] for c in keep}
+
+    _DESC_CACHE_MAX_ENTRIES = 5000  # cap to ~1.5MB worst-case; evict oldest first
+
+    def _persist_description_cache(self) -> None:
+        cache = self._description_cache
+        times = self._description_cache_times
+        if len(cache) > self._DESC_CACHE_MAX_ENTRIES:
+            keep = sorted(cache, key=lambda c: times.get(c, 0), reverse=True)[:self._DESC_CACHE_MAX_ENTRIES]
+            cache = {c: cache[c] for c in keep}
+            times = {c: times.get(c, 0) for c in keep}
+        serialized = {
+            cid: {"d": desc, "t": times.get(cid, time.time())}
+            for cid, desc in cache.items()
         }
-        cdn = (query.get("cdn") or [""])[0]
-        if cdn:
-            params["cdn"] = cdn
-        return params, ""
+        # Store as a JSON string, not a dict — merge_config_updates replaces strings
+        # but recursively merges dicts, which would prevent expired entries from ever
+        # being pruned from Source.config.
+        self._update_config("description_cache", json.dumps(serialized))
+
+    def _cache_descriptions(self, new_descs: dict[str, str]) -> None:
+        if not new_descs:
+            return
+        now = time.time()
+        for cid, desc in new_descs.items():
+            self._description_cache[cid] = desc
+            self._description_cache_times[cid] = now
+        self._persist_description_cache()
 
     def _warm_missing_metadata(
         self,
@@ -805,84 +707,88 @@ class RokuScraper(BaseScraper):
                         warmed_selector += 1
         return warmed_play, warmed_selector
 
-    def _seed_reusable_playback_query(self, channels: list[ChannelData]) -> bool:
-        params, _ = self._reusable_stream_query()
-        if params:
-            return True
+    def _cached_osm_session(self) -> tuple[str, str] | None:
+        """Return (session_token, traceId) from the most recently cached OSM stream URL, or None.
+
+        Updated eagerly on every _cache_stream_url call and on load, so this is O(1).
+        """
+        return self._osm_session
+
+    def _synthetic_osm_url(self, selector_url: str, session_token: str, trace_id: str) -> str | None:
+        """Build a synthetic OSM stream URL by combining selector UUID with a reusable session token."""
+        m = _SELECTOR_UUID_RE.search(urlparse(selector_url).path)
+        if not m:
+            return None
+        selector_uuid = m.group(1)
+        url = f"{_OSM_BASE}/osm/v1/hls/master/{selector_uuid}/{session_token}/index.m3u8"
+        if trace_id:
+            url += f"?traceId={trace_id}"
+        return url
+
+    def _seed_osm_session(self, channels: list[ChannelData]) -> bool:
+        """Call the playback API for one channel to seed _osm_session.
+
+        Used when _osm_session is None (cold start / cache flush) so prewarm
+        can proceed without waiting for a user tune.  Makes exactly one
+        playback API call.  Returns True if the session was seeded.
+        """
+        if self._cooldown_active():
+            logger.debug("[roku] prewarm seed skipped — cooldown active")
+            return False
         if not self._ensure_session():
+            logger.debug("[roku] prewarm seed skipped — could not obtain session")
             return False
 
-        candidate = next(
-            (
-                ch for ch in channels
-                if self._cached_play_id(ch.source_channel_id)
-                and self._cached_selector_url(ch.source_channel_id)
-            ),
-            None,
-        )
-        if not candidate:
-            logger.info("[roku] cache warm summary: no candidate available to seed reusable playback JWT")
-            return False
-
-        play_id = self._cached_play_id(candidate.source_channel_id)
-        if not play_id:
-            return False
-
-        try:
-            session_id = self.session.cookies.get("_usn", "roku-scraper")
+        session_id = self.session.cookies.get("_usn", "roku-scraper")
+        for ch in channels:
+            sid = ch.source_channel_id
+            play_id = self._cached_play_id(sid)
+            selector_url = self._cached_selector_url(sid)
+            if not play_id or not selector_url:
+                continue
+            try:
+                decoded = base64.b64decode(play_id.split(".", 1)[1]).decode()
+                media_format = "mpeg-dash" if "dash" in decoded.lower() else "m3u"
+            except Exception:
+                media_format = "m3u"
+            if media_format != "m3u":
+                continue
             body = {
-                "rokuId": candidate.source_channel_id,
-                "playId": play_id,
-                "mediaFormat": "m3u",
-                "drmType": "widevine",
-                "quality": "fhd",
-                "bifUrl": None,
-                "adPolicyId": "",
-                "providerId": "rokuavod",
+                "rokuId":      sid,
+                "playId":      play_id,
+                "mediaFormat": media_format,
+                "drmType":     "widevine",
+                "quality":     "fhd",
+                "bifUrl":      None,
+                "adPolicyId":  "",
+                "providerId":  "rokuavod",
                 "playbackContextParams": (
                     f"sessionId={session_id}"
                     "&pageId=trc-us-live-ml-page-en-current"
                     "&isNewSession=0&idType=roku-trc"
                 ),
             }
-            response = self._api_post(_PLAYBACK, json_body=body, timeout=10, label=f"playback seed for {candidate.source_channel_id}")
-            if response and response.status_code == 200:
-                stream_url = response.json().get("url", "")
+            r = self._api_post(_PLAYBACK, json_body=body, timeout=10, label=f"prewarm seed for {sid}")
+            if r and r.status_code == 200:
+                stream_url = r.json().get("url", "")
                 if stream_url:
-                    self._cache_stream_url(candidate.source_channel_id, stream_url)
-                    self._cache_playback_query_from_stream_url(stream_url)
-                    logger.info("[roku] cache warm summary: seeded reusable playback JWT from %s", candidate.source_channel_id)
+                    self._cache_stream_url(sid, stream_url)
+                    logger.info("[roku] prewarm seed: seeded osm_session from %s", sid)
                     return True
-        except Exception:
-            pass
-        logger.info("[roku] cache warm summary: could not seed reusable playback JWT")
+            # If this channel failed (404, 401, etc.) try the next one
+        logger.warning("[roku] prewarm seed: could not seed osm_session — no channel succeeded")
         return False
-
-    @staticmethod
-    def _selector_hls_path(selector_url: str | None) -> str | None:
-        if not selector_url:
-            return None
-        parsed = urlparse(selector_url)
-        match = re.search(r"/v1/([0-9a-f-]+)$", parsed.path)
-        if not match:
-            return None
-        asset_id = match.group(1)
-        return f"/osm/v1/hls/master/{asset_id}/live.m3u8"
-
-    def _synthetic_stream_url(self, selector_url: str | None) -> str | None:
-        path = self._selector_hls_path(selector_url)
-        params, _ = self._reusable_stream_query()
-        if not path or not params:
-            return None
-        return f"{_OSM_BASE}{path}?{urlencode(params)}"
 
     def _validate_stream_url(self, stream_url: str) -> bool:
         try:
-            response = self.session.get(stream_url, timeout=8)
+            response = self.session.get(stream_url, timeout=8, stream=True)
             if response.status_code != 200:
+                logger.debug("[roku] validate_stream_url %s → %d", stream_url, response.status_code)
+                response.close()
                 return False
-            text = response.text or ""
-            return "#EXTM3U" in text
+            chunk = next(response.iter_content(chunk_size=4096), b"")
+            response.close()
+            return b"#EXTM3U" in chunk
         except Exception:
             return False
 
@@ -1188,7 +1094,7 @@ class RokuScraper(BaseScraper):
 
     # ── fetch_epg ──────────────────────────────────────────────────────────────
 
-    def fetch_epg(self, channels: list[ChannelData]) -> list[ProgramData]:
+    def fetch_epg(self, channels: list[ChannelData], skip_ids: set[str] | None = None) -> list[ProgramData]:
         import threading
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1205,6 +1111,9 @@ class RokuScraper(BaseScraper):
             raise ScrapeSkipError("[roku] session rejected before EPG fetch; keeping previous EPG data")
 
         total = len(channels)
+        skipped = len(skip_ids & {ch.source_channel_id for ch in channels}) if skip_ids else 0
+        if skipped:
+            logger.info("[roku] EPG skip: %d/%d channels have fresh programs, skipping content proxy", skipped, total)
         # Snapshot merged headers (session defaults + API-specific) and cookies
         # so each worker thread can reuse its own independent session without
         # mutating the shared scraper session or opening a fresh pool per task.
@@ -1227,6 +1136,8 @@ class RokuScraper(BaseScraper):
                 thread_local.session = sess
             sess.cookies.update(cookies_snapshot)
             sid = ch.source_channel_id
+            if skip_ids and sid in skip_ids:
+                return [], {}, self._cached_play_id(sid), self._cached_selector_url(sid)
             try:
                 qs = "?featureInclude=linearSchedule"
                 content_url = _CONTENT_TPL.format(sid=sid) + qs
@@ -1260,7 +1171,7 @@ class RokuScraper(BaseScraper):
                 logger.warning("[roku] EPG error for %s (%s): %s", ch.name, sid, exc)
                 return [], {}, None, None
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=_EPG_WORKERS) as executor:
             futures = {executor.submit(fetch_one, ch): ch for ch in channels}
             for future in as_completed(futures):
                 exc = future.exception()
@@ -1296,31 +1207,48 @@ class RokuScraper(BaseScraper):
 
         # ── Description backfill for 48h window ───────────────────────────────
         if cid_to_progs:
-            desc_map = self._fetch_descriptions(
-                list(cid_to_progs.keys()), headers_snapshot, cookies_snapshot
-            )
+            uncached_cids = [cid for cid in cid_to_progs if cid not in self._description_cache]
+            if uncached_cids:
+                new_descs = self._fetch_descriptions(uncached_cids, headers_snapshot, cookies_snapshot)
+                self._cache_descriptions(new_descs)
             filled = 0
-            for cid, desc in desc_map.items():
-                for prog in cid_to_progs.get(cid, []):
-                    if not prog.description:
-                        prog.description = desc
-                        filled += 1
-            logger.info("[roku] description backfill: %d unique IDs → %d programs filled",
-                        len(desc_map), filled)
+            for cid, progs in cid_to_progs.items():
+                desc = self._description_cache.get(cid)
+                if desc:
+                    for prog in progs:
+                        if not prog.description:
+                            prog.description = desc
+                            filled += 1
+            logger.info(
+                "[roku] description backfill: %d unique IDs (%d cached, %d fetched) → %d programs filled",
+                len(cid_to_progs),
+                len(cid_to_progs) - len(uncached_cids),
+                len(uncached_cids),
+                filled,
+            )
 
         programs.sort(key=lambda p: (p.source_channel_id, p.start_time))
-        play_cached = sum(1 for ch in channels if self._cached_play_id(ch.source_channel_id))
-        selector_cached = sum(1 for ch in channels if self._cached_selector_url(ch.source_channel_id))
-        seeded_playback = self._seed_reusable_playback_query(channels)
+        play_cached = selector_cached = stream_cached = 0
+        for ch in channels:
+            sid = ch.source_channel_id
+            if self._cached_play_id(sid):
+                play_cached += 1
+            if self._cached_selector_url(sid):
+                selector_cached += 1
+            if self._cached_stream_url(sid):
+                stream_cached += 1
+        if not self._cached_osm_session():
+            self._seed_osm_session(channels)
         logger.info(
-            "[roku] cache warm summary: play_id=%d/%d selector=%d/%d retry_play=%d retry_selector=%d reusable_jwt=%s",
+            "[roku] cache warm summary: play_id=%d/%d selector=%d/%d stream_url=%d/%d retry_play=%d retry_selector=%d",
             play_cached,
             total,
             selector_cached,
             total,
+            stream_cached,
+            total,
             retried_play,
             retried_selector,
-            seeded_playback,
         )
         logger.info("[roku] %d EPG entries fetched for %d channels", len(programs), total)
         return programs
@@ -1363,7 +1291,7 @@ class RokuScraper(BaseScraper):
                 pass
             return cid, None
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=_DESC_WORKERS) as executor:
             for cid, desc in executor.map(fetch_desc, content_ids):
                 if desc:
                     with lock:
@@ -1446,7 +1374,6 @@ class RokuScraper(BaseScraper):
         had_play_id = False
         had_selector_url = False
         need_content_details = False
-        reusable_params = None
         failure_stage = "cache"
 
         try:
@@ -1455,8 +1382,7 @@ class RokuScraper(BaseScraper):
                 logger.info("[roku] resolve %s via stream_url cache", station_id)
                 return cached_stream_url
 
-            reusable_params, reusable_reason = self._reusable_stream_query()
-            if self._cooldown_active() and not reusable_params:
+            if self._cooldown_active():
                 raise RuntimeError(
                     f"[roku] resolve blocked by temporary 403 cooldown for {self._cooldown_remaining()}s"
                 )
@@ -1472,7 +1398,7 @@ class RokuScraper(BaseScraper):
             selector_url = self._cached_selector_url(station_id)
             had_play_id = bool(play_id)
             had_selector_url = bool(selector_url)
-            need_content_details = not play_id or (reusable_params and not selector_url)
+            need_content_details = not play_id
             if need_content_details:
                 content_data = self._fetch_content(station_id, _raise_on_404=True)
                 if content_data:
@@ -1505,30 +1431,21 @@ class RokuScraper(BaseScraper):
             except Exception:
                 media_format = "m3u"
 
-            # Step 2: if we have a reusable Roku JWT from another recent successful
-            # tune, try synthesizing the target HLS URL directly from the selector
-            # UUID exposed in content data. Fall back to playback if validation fails.
-            failure_stage = "synthetic"
+            # Step 2: try synthesizing from a cached OSM session token (no API call)
             if media_format == "m3u" and selector_url:
-                synthetic_url = self._synthetic_stream_url(selector_url)
-                if synthetic_url:
-                    if self._validate_stream_url(synthetic_url):
+                osm_session = self._cached_osm_session()
+                if osm_session:
+                    session_token, _ = osm_session
+                    synthetic = self._synthetic_osm_url(selector_url, session_token, str(uuid.uuid4()))
+                    if synthetic and self._validate_stream_url(synthetic):
                         self._cache_play_id(station_id, play_id)
                         self._cache_selector_url(station_id, selector_url)
-                        self._cache_stream_url(station_id, synthetic_url)
+                        self._cache_stream_url(station_id, synthetic)
                         logger.info(
-                            "[roku] resolve %s via cached_jwt+selector play_id_cache=%s selector_cache=%s content_lookup=%s",
-                            station_id,
-                            had_play_id,
-                            had_selector_url,
-                            need_content_details,
+                            "[roku] resolve %s via synthetic_osm play_id_cache=%s selector_cache=%s content_lookup=%s",
+                            station_id, had_play_id, had_selector_url, need_content_details,
                         )
-                        return synthetic_url
-                    logger.debug("[roku] synthesized stream URL rejected for %s; falling back to playback", station_id)
-                elif reusable_reason:
-                    logger.debug("[roku] skipping cached JWT shortcut for %s: %s", station_id, reusable_reason)
-            elif media_format == "m3u" and reusable_reason:
-                logger.debug("[roku] skipping cached JWT shortcut for %s: content details unavailable (%s)", station_id, reusable_reason)
+                        return synthetic
 
             # Step 3: call /api/v3/playback
             failure_stage = "playback"
@@ -1556,14 +1473,12 @@ class RokuScraper(BaseScraper):
                     self._cache_play_id(station_id, play_id)
                     self._cache_selector_url(station_id, selector_url)
                     self._cache_stream_url(station_id, stream_url)
-                    self._cache_playback_query_from_stream_url(stream_url)
                     logger.info(
-                        "[roku] resolve %s via playback_api play_id_cache=%s selector_cache=%s content_lookup=%s reusable_jwt=%s",
+                        "[roku] resolve %s via playback_api play_id_cache=%s selector_cache=%s content_lookup=%s",
                         station_id,
                         had_play_id,
                         had_selector_url,
                         need_content_details,
-                        bool(reusable_params),
                     )
                     return stream_url
             if r2.status_code in (401, 403, 404):
@@ -1573,25 +1488,23 @@ class RokuScraper(BaseScraper):
             raise RuntimeError(f"[roku] playback returned {r2.status_code} for {station_id}")
         except RuntimeError:
             logger.warning(
-                "[roku] resolve %s failed stage=%s play_id_cache=%s selector_cache=%s content_lookup=%s reusable_jwt=%s",
+                "[roku] resolve %s failed stage=%s play_id_cache=%s selector_cache=%s content_lookup=%s",
                 station_id,
                 failure_stage,
                 had_play_id,
                 had_selector_url,
                 need_content_details,
-                bool(reusable_params),
             )
             raise
         except Exception as exc:
             self._invalidate_stream_url(station_id)
             logger.warning(
-                "[roku] resolve %s failed stage=%s play_id_cache=%s selector_cache=%s content_lookup=%s reusable_jwt=%s",
+                "[roku] resolve %s failed stage=%s play_id_cache=%s selector_cache=%s content_lookup=%s",
                 station_id,
                 failure_stage,
                 had_play_id,
                 had_selector_url,
                 need_content_details,
-                bool(reusable_params),
             )
             raise RuntimeError(f"[roku] playback request failed for {station_id}: {exc}") from exc
 

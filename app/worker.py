@@ -106,7 +106,7 @@ def run_scraper(source_name: str):
                                    stream_url=ch.stream_url or '',
                                    slug=ch.slug or '') for ch in db_channels]
                 _progress('epg', 0, len(epg_input))
-                programs = scraper.fetch_epg(epg_input)
+                programs = scraper.fetch_epg(epg_input, skip_ids=_fresh_epg_sids(source))
                 _upsert_programs(source, programs)
                 source.last_scraped_at = datetime.now(timezone.utc)
                 source.last_error      = None
@@ -120,7 +120,7 @@ def run_scraper(source_name: str):
                 _progress('channels')
                 channels = scraper.fetch_channels()
                 _progress('epg', 0, len(channels))
-                programs = scraper.fetch_epg(channels)
+                programs = scraper.fetch_epg(channels, skip_ids=_fresh_epg_sids(source))
                 _upsert_channels(source, channels)
                 _upsert_programs(source, programs)
                 source.last_scraped_at = datetime.now(timezone.utc)
@@ -460,6 +460,26 @@ def _epg_channels_for_source(source) -> list[Channel]:
     return source.channels.filter(
         (Channel.is_active == True) | (Channel.disable_reason == 'DRM')
     ).all()
+
+
+def _fresh_epg_sids(source, horizon_hours: float = 2.0) -> set[str]:
+    """Return source_channel_ids whose programs already cover the next horizon_hours.
+
+    Used to skip redundant content-proxy calls for channels whose EPG data is
+    still fresh, reducing API request volume during scrape runs.
+    """
+    min_end = datetime.now(timezone.utc) + timedelta(hours=horizon_hours)
+    rows = (
+        db.session.query(Channel.source_channel_id)
+        .join(Program, Program.channel_id == Channel.id)
+        .filter(
+            Channel.source_id == source.id,
+            Program.end_time > min_end,
+        )
+        .distinct()
+        .all()
+    )
+    return {row[0] for row in rows}
 
 
 def _validate_logo_url(url: str, cache: dict[str, bool]) -> bool:
