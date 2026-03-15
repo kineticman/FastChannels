@@ -49,10 +49,22 @@ def detected_base_url() -> str:
 
 
 def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> str | None:
-    """Rewrite a remote image URL to route through our local image proxy."""
+    """Rewrite a remote image URL to route through our local image proxy.
+
+    A dummy filename with extension is included in the path so clients that
+    require a file extension (e.g. Channels DVR native apps) recognise the
+    response as an image.
+    """
     if not url or not base_url:
         return url
-    return f"{base_url}/images/proxy?url={quote(url, safe='')}&type={img_type}"
+    # Carry the original extension if present, otherwise default to .jpg
+    ext = '.jpg'
+    for candidate in ('.jpg', '.jpeg', '.png', '.gif', '.webp'):
+        if candidate in url.lower():
+            ext = candidate
+            break
+    filename = f'image{ext}'
+    return f"{base_url}/images/proxy/{filename}?url={quote(url, safe='')}&type={img_type}"
 
 
 def public_base_url() -> str:
