@@ -18,6 +18,52 @@ from ..xml_cache import invalidate_xml_cache
 
 api_bp = Blueprint('api', __name__)
 
+
+def _parse_hls_variants(master_text: str) -> list[dict]:
+    """Parse #EXT-X-STREAM-INF variant entries from an HLS master playlist."""
+    _CODEC_NAMES = {
+        'avc1': 'H.264', 'avc3': 'H.264',
+        'hvc1': 'H.265', 'hev1': 'H.265',
+        'mp4a': 'AAC',
+        'ac-3': 'AC-3', 'ec-3': 'E-AC-3',
+        'vp09': 'VP9', 'av01': 'AV1',
+    }
+
+    def _friendly_codecs(raw: str) -> str:
+        seen, result = set(), []
+        for part in raw.split(','):
+            prefix = part.strip().split('.')[0].lower()
+            name = _CODEC_NAMES.get(prefix, prefix)
+            if name not in seen:
+                seen.add(name)
+                result.append(name)
+        return '+'.join(result)
+
+    variants = []
+    lines = master_text.splitlines()
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line.startswith('#EXT-X-STREAM-INF:'):
+            continue
+        attrs = line[len('#EXT-X-STREAM-INF:'):]
+        v = {}
+        m = re.search(r'BANDWIDTH=(\d+)', attrs)
+        if m:
+            v['bandwidth'] = int(m.group(1))
+        m = re.search(r'RESOLUTION=(\d+x\d+)', attrs, re.I)
+        if m:
+            v['resolution'] = m.group(1)
+        m = re.search(r'CODECS="([^"]+)"', attrs)
+        if m:
+            v['codecs'] = _friendly_codecs(m.group(1))
+        m = re.search(r'FRAME-RATE=([\d.]+)', attrs)
+        if m:
+            v['fps'] = round(float(m.group(1)), 3)
+        variants.append(v)
+
+    variants.sort(key=lambda v: v.get('bandwidth', 0), reverse=True)
+    return variants
+
 _GRACENOTE_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
 _CHANNELS_DVR_RECOMMENDED_MAX = 750
 
@@ -360,8 +406,10 @@ def inspect_channel(channel_id):
                 return jsonify({'status': 'drm', 'detail': 'DASH DRM detected (Widevine/PlayReady)'})
             return jsonify({'status': 'live', 'detail': 'DASH manifest OK (live)'})
 
-        # Master playlist → drill into first variant to get media playlist
+        # Master playlist → parse variant stats then drill into first variant
+        variants = []
         if '#EXT-X-STREAM-INF' in manifest_text:
+            variants = _parse_hls_variants(manifest_text)
             for line in manifest_text.splitlines():
                 line = line.strip()
                 if line and not line.startswith('#'):
@@ -391,21 +439,25 @@ def inspect_channel(channel_id):
                 break
 
         if not segment_url:
-            return jsonify({'status': 'live', 'detail': 'Manifest OK (no segments listed yet)'})
+            return jsonify({'status': 'live', 'detail': 'Manifest OK (no segments listed yet)',
+                            'variants': variants})
 
         try:
             rs = sess.get(segment_url, timeout=10, stream=True)
             if rs.status_code != 200:
                 return jsonify({'status': 'no_data',
-                                'detail': f'Manifest OK but segment returned HTTP {rs.status_code}'})
+                                'detail': f'Manifest OK but segment returned HTTP {rs.status_code}',
+                                'variants': variants})
             chunk = next(rs.iter_content(8192), None)
             rs.close()
             seg_bytes = len(chunk) if chunk else 0
             if seg_bytes == 0:
-                return jsonify({'status': 'no_data', 'detail': 'Segment returned 0 bytes'})
+                return jsonify({'status': 'no_data', 'detail': 'Segment returned 0 bytes',
+                                'variants': variants})
             return jsonify({'status': 'live',
                             'detail': f'Stream OK — {seg_bytes} bytes received from segment',
-                            'segment_bytes': seg_bytes})
+                            'segment_bytes': seg_bytes,
+                            'variants': variants})
         except Exception as e:
             return jsonify({'status': 'error', 'detail': f'Segment fetch failed: {e}'})
 

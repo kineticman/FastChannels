@@ -787,8 +787,28 @@
 
         const badge = document.createElement('span');
         badge.className = `inspect-badge ${status}`;
-        badge.textContent = label;
-        badge.title = data.detail || '';
+
+        // Append best resolution to live badge label
+        let badgeText = label;
+        if (status === 'live' && data.variants && data.variants.length > 0) {
+          const best = data.variants[0];
+          if (best.resolution) badgeText += `  ${best.resolution}`;
+        }
+        badge.textContent = badgeText;
+
+        // Build tooltip: detail line + variant table for nerds
+        let tooltip = data.detail || '';
+        if (data.variants && data.variants.length > 0) {
+          tooltip += '\n\nVariants (high → low):';
+          data.variants.forEach(v => {
+            const mbps  = v.bandwidth ? `${(v.bandwidth/1e6).toFixed(1)} Mbps` : '';
+            const res   = v.resolution || '';
+            const codec = v.codecs || '';
+            const fps   = v.fps ? `${v.fps}fps` : '';
+            tooltip += '\n  ' + [res, mbps, codec, fps].filter(Boolean).join('  ');
+          });
+        }
+        badge.title = tooltip;
 
         // Allow re-running by clicking the badge
         badge.style.cursor = 'pointer';
