@@ -811,7 +811,12 @@ if __name__ == '__main__':
             _cleanup_orphans()
 
     def _scheduled_logo_cache_cleanup():
-        from app.routes.images import cleanup_logo_cache, cleanup_poster_cache
+        import os as _os
+        from app.routes.images import (
+            cleanup_logo_cache, cleanup_poster_cache,
+            _LOGO_DIR, _POSTER_DIR,
+        )
+
         removed = cleanup_logo_cache()
         if removed:
             logger.info('[logo_cache] removed %d expired logo files', removed)
@@ -829,6 +834,27 @@ if __name__ == '__main__':
         poster_removed = cleanup_poster_cache(expired_urls)
         if poster_removed:
             logger.info('[logo_cache] removed %d expired poster files', poster_removed)
+
+        # Cache stats
+        def _dir_stats(path):
+            files = size = 0
+            try:
+                for f in _os.scandir(path):
+                    if f.is_file() and not f.name.endswith('.ct'):
+                        files += 1
+                        size  += f.stat().st_size
+            except FileNotFoundError:
+                pass
+            return files, size
+
+        logo_n,   logo_b   = _dir_stats(_LOGO_DIR)
+        poster_n, poster_b = _dir_stats(_POSTER_DIR)
+        logger.info(
+            '[logo_cache] stats — logos: %d files / %.1fMB  |  posters: %d files / %.1fMB  |  total: %.1fMB',
+            logo_n,   logo_b   / 1024 / 1024,
+            poster_n, poster_b / 1024 / 1024,
+            (logo_b + poster_b) / 1024 / 1024,
+        )
 
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(_schedule_due_scrapes, 'interval', minutes=1, id='auto_scrape',
