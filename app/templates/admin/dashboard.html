@@ -43,6 +43,14 @@
     .copy-btn:hover { color: #e2e8f0; }
     .pill { display:inline-block; padding: 0.12rem 0.5rem; border-radius:9999px; font-size:0.68rem;
             font-weight:600; background:#1e3a5f; color:#93c5fd; margin-right:0.25rem; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+    .scrape-status { font-size:0.73rem; margin-top:0.25rem; display:flex; align-items:center; gap:0.35rem; min-height:1rem; }
+    .scrape-status:empty { display:none; }
+    .status-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+    .status-running .status-dot { background:#38bdf8; animation:pulse 1.2s ease-in-out infinite; }
+    .status-queued  .status-dot { background:#fbbf24; }
+    .status-running .status-text { color:#7dd3fc; }
+    .status-queued  .status-text { color:#fcd34d; }
     .warn { color: #fbbf24; font-size: 0.75rem; }
     @media (max-width: 760px) {
       html { font-size: 16px; }
@@ -131,7 +139,10 @@
               {% if source_output_meta[source.id].channel_count > 750 %}<span class="warn">⚠</span>{% endif %}
             </td>
             <td style="color:#64748b">{% if source.last_scraped_at %}{{ source.last_scraped_at.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}Never{% endif %}</td>
-            <td><button class="btn btn-sm" onclick="run({{ source.id }}, this)">Scrape Now</button></td>
+            <td>
+              <button class="btn btn-sm" onclick="run({{ source.id }}, this)">Scrape Now</button>
+              <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -141,11 +152,64 @@
   </div>
 
   <script>
+    const _pollTimers  = {};
+    const _scrapeGrace = {};
+    const _phaseLabel  = { bootstrap:'Authenticating…', channels:'Fetching channels…', starting:'Starting…' };
+
+    function _statusText(data, sourceId) {
+      if (data.status === 'queued') return { cls:'status-queued', text:'Queued' };
+      if (data.status === 'running') {
+        if (data.phase === 'epg' && data.total > 0) {
+          const pct = Math.round(data.done / data.total * 100);
+          return { cls:'status-running', text:`EPG ${data.done} / ${data.total} (${pct}%)` };
+        }
+        return { cls:'status-running', text:_phaseLabel[data.phase] || 'Running…' };
+      }
+      if (Date.now() < (_scrapeGrace[sourceId] || 0)) return { cls:'status-running', text:'Running…' };
+      return null;
+    }
+
+    function _renderStatus(sourceId, data) {
+      const el = document.getElementById(`scrape-status-${sourceId}`);
+      if (!el) return;
+      const info = _statusText(data, sourceId);
+      if (!info) { el.innerHTML = ''; el.className = 'scrape-status'; return; }
+      el.className = `scrape-status ${info.cls}`;
+      el.innerHTML = `<span class="status-dot"></span><span class="status-text">${info.text}</span>`;
+    }
+
+    function _startPolling(sourceId) {
+      if (_pollTimers[sourceId]) return;
+      async function poll() {
+        try {
+          const r = await fetch(`/api/sources/${sourceId}/scrape-status`);
+          const d = await r.json();
+          _renderStatus(sourceId, d);
+          if (d.status === 'running' || d.status === 'queued' || Date.now() < (_scrapeGrace[sourceId] || 0)) {
+            _pollTimers[sourceId] = setTimeout(poll, 2000);
+          } else {
+            delete _pollTimers[sourceId];
+          }
+        } catch (e) {
+          delete _pollTimers[sourceId];
+        }
+      }
+      poll();
+    }
+
     async function run(id, btn) {
       btn.disabled = true; btn.textContent = 'Queued…';
-      const r = await fetch(`/api/sources/${id}/run`, {method:'POST'});
-      const d = await r.json();
-      btn.textContent = d.status === 'queued' ? '✓ Queued' : 'Error';
+      try {
+        const r = await fetch(`/api/sources/${id}/run`, {method:'POST'});
+        const d = await r.json();
+        btn.textContent = d.status === 'queued' ? '✓ Queued' : 'Error';
+        if (d.status === 'queued') {
+          _scrapeGrace[id] = Date.now() + 300000;
+          _startPolling(id);
+        }
+      } catch (e) {
+        btn.textContent = 'Error';
+      }
       setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
     }
   </script>

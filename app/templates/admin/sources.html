@@ -373,7 +373,10 @@
         const r = await fetch(`/api/sources/${id}/run`, {method: 'POST'});
         const d = await r.json();
         btn.textContent = d.status === 'queued' ? '✓ Queued' : 'Error';
-        if (d.status === 'queued') _startPolling(id);
+        if (d.status === 'queued') {
+          _scrapeGrace[id] = Date.now() + 300000;  // 5 min grace; real Redis progress overrides
+          _startPolling(id);
+        }
       } catch (e) {
         btn.textContent = 'Error';
       }
@@ -422,6 +425,7 @@
 
     // ── Scrape progress polling ───────────────────────────────────────────
     const _pollTimers = {};
+    const _scrapeGrace = {};   // sourceId → ms timestamp: keep showing Running… until then
     const _phaseLabel = {
       bootstrap: 'Authenticating…',
       channels:  'Fetching channels…',
@@ -429,7 +433,7 @@
       starting:  'Starting…',
     };
 
-    function _statusText(data) {
+    function _statusText(data, sourceId) {
       if (data.status === 'queued') return { cls: 'status-queued', text: 'Queued' };
       if (data.status === 'running') {
         if (data.phase === 'epg' && data.total > 0) {
@@ -438,13 +442,17 @@
         }
         return { cls: 'status-running', text: _phaseLabel[data.phase] || 'Running…' };
       }
+      // idle — show Running… during grace period (covers Redis-unavailable case)
+      if (Date.now() < (_scrapeGrace[sourceId] || 0)) {
+        return { cls: 'status-running', text: 'Running…' };
+      }
       return null;
     }
 
     function _renderStatus(sourceId, data) {
       const el = document.getElementById(`scrape-status-${sourceId}`);
       if (!el) return;
-      const info = _statusText(data);
+      const info = _statusText(data, sourceId);
       if (!info) { el.innerHTML = ''; el.className = 'scrape-status'; return; }
       el.className = `scrape-status ${info.cls}`;
       el.innerHTML = `<span class="status-dot"></span><span class="status-text">${info.text}</span>`;
@@ -457,8 +465,7 @@
           const r = await fetch(`/api/sources/${sourceId}/scrape-status`);
           const d = await r.json();
           _renderStatus(sourceId, d);
-          // Update channel count live during EPG phase
-          if (d.status === 'running' || d.status === 'queued') {
+          if (d.status === 'running' || d.status === 'queued' || Date.now() < (_scrapeGrace[sourceId] || 0)) {
             _pollTimers[sourceId] = setTimeout(poll, 2000);
           } else {
             // Job finished — refresh channel count from DB
