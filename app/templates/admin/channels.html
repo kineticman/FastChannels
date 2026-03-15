@@ -717,8 +717,10 @@
         });
         _previewHls.on(window.Hls.Events.ERROR, (_event, data) => {
           if (status) {
-            const fatal = data && data.fatal ? ' Fatal error.' : '';
-            status.textContent = `Preview playback error:${fatal} ${data?.details || 'Unknown hls.js error'}`;
+            const isCors = data?.details === 'manifestLoadError';
+            status.textContent = isCors
+              ? 'Browser preview unavailable for this source (CORS restriction). Use "Open Stream URL" to play externally.'
+              : `Preview playback error: ${data?.details || 'Unknown hls.js error'}`;
           }
           if (data?.fatal && _previewHls) {
             _previewHls.destroy();
