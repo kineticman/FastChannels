@@ -18,10 +18,10 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
     # Sports — checked before News so "CBS Sports" doesn't fall through
     ({
         'sport', 'deportes',
-        'nfl', 'nba', 'nhl', 'mlb', 'nascar', 'nhra', 'pga tour',
+        'nfl', 'nba ', 'nhl', 'mlb', 'nascar', 'nhra', 'pga tour',
         'ufc', 'mma', 'tennis', 'golf', 'wrestling', 'boxing', 'ringside',
         'billiard', 'pickleball', 'bassmaster', 'x games', 'pbr:',
-        'motocross', 'f1 channel', 'espn', 'fubo', 'fanduel tv',
+        'motocross', 'f1 channel', 'espn', 'fubo', 'fanduel tv', 'fanduel',
         'draftkings', 'sportsgrid', 'speed sport', 'swerve combat',
         'swerve women', 'hbo boxing', 'one championship', 'pfl mma',
         'dazn', 'top rank', 'lucha plus', 'big 12 studios', 'acc digital',
@@ -31,6 +31,8 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'american ninja', 'american gladiator', 'meateater',
         'nesn', 'overtime', 'fuel tv', 'team usa tv', 'fear factor',
         'jim rome',
+        'nhl network', 'nbc sports', 'bowling', 'poker', 'surf league',
+        'baseball tv', 'beinsport', 'bein sport', 'sportsnet', 'willow sport',
     }, 'Sports'),
     # Music
     ({
@@ -38,6 +40,8 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'circle country', 'electric now', 'mvstv', 'lamusica', 'lamúsica',
         'musica tv', 'música tv', 'fuse +',
         'bet pluto', 'mtv pluto',
+        'mtv ', 'concerts by stingray', 'country network',
+        'b4u music', 'yrf music', 'raj mus', 'saga music', 'aghani',
     }, 'Music'),
     # News / Weather
     ({
@@ -49,6 +53,8 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'kiro 7', 'wpxi', 'wsb ', 'wsoc', 'wftv', 'wapa+',
         "arizona's family", "america's voice", 'first alert',
         'abc localish', 'inside edition',
+        'cheddar', 'bloomberg', 'euronews', 'france 24',
+        'al jazeera', 'al arabiya', 'al hadath', 'al araby',
     }, 'News'),
     # True Crime & Mystery
     ({
@@ -60,6 +66,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'murder she wrote', 'mysteria', 'mysterious', 'caught in providence',
         'confess by nosey', 'paternity court', 'ghost hunter',
         '48 hours', '20/20',
+        'murder', 'killer', 'chasing criminal', 'bounty hunter',
     }, 'True Crime'),
     # Horror
     ({
@@ -75,6 +82,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
     # Anime
     ({
         'anime', 'crunchyroll', 'retrocrush', 'retro crush', 'yu-gi-oh',
+        'hidive',
     }, 'Anime'),
     # Food & Cooking
     ({
@@ -82,6 +90,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'emeril', 'jamie oliver', 'bon appetit', 'pbs food',
         "america's test kitchen", 'bobby flay', 'martha stewart',
         'great british baking', 'bbc food', 'delicious eats',
+        'gusto', 'foodxp',
     }, 'Food'),
     # Nature & Wildlife
     ({
@@ -90,6 +99,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'dog whisperer', 'incredible dr. pol', 'paws & claws',
         'magellan', 'curiosity', 'earthday', 'love the planet',
         'bbc earth', 'real disaster', 'pet collective',
+        'earth touch', 'wild ocean', 'terra mater',
     }, 'Nature'),
     # Home & DIY
     ({
@@ -133,11 +143,15 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'the conners', 'bernie mac', 'dick van dyke', 'life with derek',
         'blossom', 'seinfeld', 'the goldbergs', 'leave it to beaver',
         'ed sullivan', 'the red green channel',
+        'funny', 'gags', 'always funny', 'comedy central',
     }, 'Comedy'),
     # Kids & Family
     ({
         'kids', 'family', 'children',
         'dino', 'animation+', 'animation +',
+        'junior', 'jr.', 'cartoon', 'barney', 'dinos 24',
+        'my little pony', 'strawberry shortcake', 'power rangers',
+        'kartoon', 'pocket.watch', 'baby',
     }, 'Kids'),
     # Drama & Soaps
     ({
@@ -174,12 +188,15 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'dove channel', 'osteen', 'up faith', 'aspire', 'highway to heaven',
         'little house',
         'holiday', 'christmas', 'lifestyle',
+        'tbn', 'quran', 'bhajan', 'dharm', 'faith & family', 'christian',
+        'padre pio', 'noursat', 'aastha',
     }, 'Faith'),
     # Travel & Adventure
     ({
         'travel', 'adventure', 'exploration', 'xplore', 'places & spaces',
         'no reservations', 'bizarre foods', 'highway thru hell',
         'locked up abroad',
+        'voyage', 'travelxp', 'go traveler', 'tv5monde voyage',
     }, 'Travel'),
     # Science, History & Documentary
     ({
@@ -189,6 +206,8 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'docu', 'docurama', 'magellan tv', 'pbs genealogy',
         'antiques roadshow', 'get factual',
         'pbs',
+        'documentary', 'curiosity stream', 'nhk', 'history & warfare',
+        'combat war',
     }, 'Science'),
     # Gaming & Esports
     ({
@@ -201,6 +220,10 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'in the garage', 'car chase', 'motortrend', 'velocity',
         'roadkill channel', 'hot rod',
     }, 'Automotive'),
+    # Outdoors
+    ({
+        'outdoor', 'waypoint tv', 'wired2fish', 'xtreme outdoor',
+    }, 'Outdoors'),
     # Spanish — name-based fallback for channels without a language tag
     ({
         'flixlatino', 'vix ', 'vix+', 'canela.tv', 'canela tv',
