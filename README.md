@@ -1,6 +1,6 @@
 # FastChannels
 
-FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Sling Freestream, Plex, DistroTV, Xumo, and more, outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
+FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo, and more, outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
 
 ## Deploy with Portainer
 
@@ -186,6 +186,7 @@ Disabling a **source** deletes all its channels from the DB. Re-enabling and run
 - **Roku**: playback now relies heavily on cached session/JWT metadata for stability. Some Roku channels only expose sparse future guide data, so short EPG windows are expected on those channels.
 - **Amazon Prime Free**: EPG-only by default. Without a valid Amazon cookie header, pagination is limited and channel discovery may be incomplete.
 - **Sling Freestream**: metadata and EPG can still be useful, but many Sling streams remain DRM-limited for generic IPTV clients.
+- **Samsung TV Plus**: channel metadata, EPG, and stream URL resolution are all provided by [Matt Huisman's samsung-tvplus-for-channels project](https://github.com/matthuisman/samsung-tvplus-for-channels). We consume his publicly available `i.mjh.nz` endpoints directly. All credit for this data goes to him. EPG covers only the current day; scrape interval is 6 hours.
 
 ## Current Sources
 
@@ -199,4 +200,5 @@ Disabling a **source** deletes all its channels from the DB. Re-enabling and run
 | Plex | None | Session cookie auth |
 | Xumo Play | None | Public API |
 | Amazon Prime Free | Optional cookie header | EPG-only by default; pagination requires auth. Streams are DRM-only right now, but the scraper remains active for potential EPG data. |
+| Samsung TV Plus | None | Channel data and EPG via [Matt Huisman's public mirror](https://github.com/matthuisman/samsung-tvplus-for-channels). Region configurable (default: `us`). |
 | FreeLiveSports | None | Public API |
