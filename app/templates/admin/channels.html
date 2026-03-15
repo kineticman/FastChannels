@@ -770,14 +770,13 @@
     };
 
     async function inspectChannel(channelId, btn) {
-      const cell = document.getElementById(`inspect-cell-${channelId}`);
       btn.disabled = true;
 
-      // Show spinner
+      // Replace only the inspect button with a spinner
       const spinner = document.createElement('span');
       spinner.className = 'inspect-badge spin';
       spinner.textContent = '↻';
-      cell.replaceChildren(spinner);
+      btn.replaceWith(spinner);
 
       try {
         const r = await fetch(`/api/channels/${channelId}/inspect`, { method: 'POST' });
@@ -810,7 +809,7 @@
         }
         badge.title = tooltip;
 
-        // Allow re-running by clicking the badge
+        // Click badge to re-run inspect
         badge.style.cursor = 'pointer';
         badge.onclick = () => {
           const newBtn = document.createElement('button');
@@ -818,10 +817,10 @@
           newBtn.title = 'Test stream: check DRM, liveness, and segment data';
           newBtn.innerHTML = '&#128269;';
           newBtn.onclick = () => inspectChannel(channelId, newBtn);
-          cell.replaceChildren(newBtn);
+          badge.replaceWith(newBtn);
         };
 
-        cell.replaceChildren(badge);
+        spinner.replaceWith(badge);
       } catch (e) {
         const badge = document.createElement('span');
         badge.className = 'inspect-badge error';
@@ -834,9 +833,9 @@
           newBtn.title = 'Test stream: check DRM, liveness, and segment data';
           newBtn.innerHTML = '&#128269;';
           newBtn.onclick = () => inspectChannel(channelId, newBtn);
-          cell.replaceChildren(newBtn);
+          badge.replaceWith(newBtn);
         };
-        cell.replaceChildren(badge);
+        spinner.replaceWith(badge);
       }
     }
 
