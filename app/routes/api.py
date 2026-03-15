@@ -1,7 +1,11 @@
 import json
+import os as _os
 import re
+import time as _time
 import requests as _req
 from datetime import datetime, timezone
+
+_APP_START = _time.time()
 from urllib.parse import urljoin as _urljoin, urlsplit
 from flask import Blueprint, jsonify, request, current_app
 from sqlalchemy import select
@@ -929,4 +933,59 @@ def app_settings():
         'global_chnum_start_source': 'db' if row.global_chnum_start is not None else ('env' if row.env_global_chnum_start() is not None else 'unset'),
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.env_public_base_url() is not None else 'unset'),
+    })
+
+
+@api_bp.route('/system-stats')
+def system_stats():
+    # ── Database ──────────────────────────────────────────────────────────
+    _DB_FILES = [
+        '/data/fastchannels.db',
+        '/data/fastchannels.db-shm',
+        '/data/fastchannels.db-wal',
+    ]
+    db_size = sum(_os.path.getsize(f) for f in _DB_FILES if _os.path.exists(f))
+
+    channels_total   = Channel.query.count()
+    channels_active  = Channel.query.filter_by(is_active=True, is_enabled=True).count()
+    channels_drm     = Channel.query.filter_by(disable_reason='DRM').count()
+    channels_dead    = Channel.query.filter_by(disable_reason='Dead').count()
+    sources_enabled  = Source.query.filter_by(is_enabled=True).count()
+    sources_total    = Source.query.count()
+    programs_total   = Program.query.count()
+
+    # ── Image cache ───────────────────────────────────────────────────────
+    def _dir_stats(d):
+        if not _os.path.exists(d):
+            return 0, 0
+        files = [f for f in _os.listdir(d) if not f.endswith('.ct')]
+        size  = sum(_os.path.getsize(_os.path.join(d, f)) for f in files)
+        return len(files), size
+
+    logo_count,   logo_bytes   = _dir_stats('/data/logo_cache/logos')
+    poster_count, poster_bytes = _dir_stats('/data/logo_cache/posters')
+
+    # ── Uptime ────────────────────────────────────────────────────────────
+    uptime_seconds = int(_time.time() - _APP_START)
+
+    return jsonify({
+        'uptime_seconds': uptime_seconds,
+        'db': {
+            'size_bytes':       db_size,
+            'channels_total':   channels_total,
+            'channels_active':  channels_active,
+            'channels_drm':     channels_drm,
+            'channels_dead':    channels_dead,
+            'sources_enabled':  sources_enabled,
+            'sources_total':    sources_total,
+            'programs_total':   programs_total,
+        },
+        'image_cache': {
+            'logos_count':    logo_count,
+            'logos_bytes':    logo_bytes,
+            'posters_count':  poster_count,
+            'posters_bytes':  poster_bytes,
+            'logo_ttl_days':  3,
+            'poster_ttl_days': 4,
+        },
     })

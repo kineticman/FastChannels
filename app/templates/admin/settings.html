@@ -223,6 +223,30 @@
     .save-status.ok    { color: #4ade80; }
     .save-status.error { color: #f87171; }
 
+    /* ── Stats card ── */
+    .stats-card {
+      background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+      padding: 1.4rem; margin-bottom: 1.5rem;
+    }
+    .stats-card-title {
+      font-size: 0.85rem; font-weight: 600; color: #94a3b8;
+      text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1rem;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .stats-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem; }
+    .stats-section-label {
+      font-size: 0.72rem; font-weight: 600; color: #38bdf8;
+      text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.6rem;
+    }
+    .stat-row { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; margin-bottom: 0.3rem; }
+    .stat-label { font-size: 0.8rem; color: #64748b; }
+    .stat-value { font-size: 0.85rem; font-weight: 600; color: #e2e8f0; white-space: nowrap; }
+    .stat-value.ok    { color: #4ade80; }
+    .stat-value.warn  { color: #fbbf24; }
+    .stat-value.muted { color: #475569; }
+    .stats-uptime { font-size: 0.78rem; color: #475569; margin-top: 0.75rem; }
+    .stats-loading { color: #475569; font-size: 0.85rem; }
+
     /* ── Loading / empty states ── */
     .loading { text-align: center; padding: 3rem; color: #475569; }
     .error-msg { color: #f87171; padding: 1rem; }
@@ -302,6 +326,12 @@
     </div>
   </div>
 
+  <!-- System Stats card -->
+  <div class="stats-card">
+    <div class="stats-card-title">📊 System Stats</div>
+    <div id="system-stats-body"><span class="stats-loading">Loading…</span></div>
+  </div>
+
 </div>
 
 <script>
@@ -333,6 +363,61 @@ function saveDvrSettings() {
     public_base_url: publicBaseUrl || null,
   }, 'dvr-settings-status');
 }
+
+// ── System Stats ──────────────────────────────────────────────────────────
+function _fmt_bytes(b) {
+  if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+  if (b >= 1048576)    return (b / 1048576).toFixed(1) + ' MB';
+  if (b >= 1024)       return (b / 1024).toFixed(0) + ' KB';
+  return b + ' B';
+}
+function _fmt_uptime(s) {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+function _stat(label, value, cls = '') {
+  return `<div class="stat-row"><span class="stat-label">${label}</span><span class="stat-value ${cls}">${value}</span></div>`;
+}
+
+async function loadSystemStats() {
+  const body = document.getElementById('system-stats-body');
+  try {
+    const r = await fetch('/api/system-stats');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+
+    const db = d.db, ic = d.image_cache;
+    const totalCacheBytes = ic.logos_bytes + ic.posters_bytes;
+
+    body.innerHTML = `
+      <div class="stats-sections">
+        <div>
+          <div class="stats-section-label">Database</div>
+          ${_stat('File size', _fmt_bytes(db.size_bytes))}
+          ${_stat('Channels (active)', `${db.channels_active.toLocaleString()} / ${db.channels_total.toLocaleString()}`)}
+          ${_stat('DRM flagged', db.channels_drm > 0 ? db.channels_drm.toLocaleString() : '0', db.channels_drm > 0 ? 'warn' : 'muted')}
+          ${_stat('Dead flagged', db.channels_dead > 0 ? db.channels_dead.toLocaleString() : '0', db.channels_dead > 0 ? 'warn' : 'muted')}
+          ${_stat('EPG programs', db.programs_total.toLocaleString())}
+          ${_stat('Sources enabled', `${db.sources_enabled} / ${db.sources_total}`)}
+        </div>
+        <div>
+          <div class="stats-section-label">Image Cache</div>
+          ${_stat('Logos', `${ic.logos_count.toLocaleString()} files / ${_fmt_bytes(ic.logos_bytes)}`)}
+          ${_stat('Logo TTL', `${ic.logo_ttl_days} days`)}
+          ${_stat('Posters', `${ic.posters_count.toLocaleString()} files / ${_fmt_bytes(ic.posters_bytes)}`)}
+          ${_stat('Poster TTL', `${ic.poster_ttl_days} days`)}
+          ${_stat('Total cache', _fmt_bytes(totalCacheBytes), totalCacheBytes > 2147483648 ? 'warn' : '')}
+        </div>
+      </div>
+      <div class="stats-uptime">Uptime: ${_fmt_uptime(d.uptime_seconds)}</div>`;
+  } catch(e) {
+    body.innerHTML = `<span style="color:#f87171;font-size:0.85rem">Failed to load stats: ${e.message}</span>`;
+  }
+}
+
+loadSystemStats();
 </script>
 </body>
 </html>
