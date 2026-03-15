@@ -20,7 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests as _req
-from flask import Blueprint, abort, request, send_file
+from flask import Blueprint, Response, abort, request
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +69,25 @@ def _fetch_and_cache(url: str, img_path: str, ct_path: str) -> bool:
         return False
 
 
+def _image_response(img_path: str, content_type: str, ttl: int) -> Response:
+    """Return a plain image response — no Content-Disposition, no ETag magic."""
+    with open(img_path, 'rb') as f:
+        data = f.read()
+    return Response(
+        data,
+        status=200,
+        mimetype=content_type,
+        headers={
+            'Content-Length': str(len(data)),
+            'Cache-Control': f'public, max-age={ttl}',
+            'Connection': 'close',
+        },
+    )
+
+
 @images_bp.route('/images/proxy')
-def proxy_image():
+@images_bp.route('/images/proxy/<path:filename>')
+def proxy_image(filename=None):
     url      = request.args.get('url', '').strip()
     img_type = request.args.get('type', 'logo')   # 'logo' or 'poster'
     if not url:
@@ -82,16 +99,12 @@ def proxy_image():
     if _is_fresh(img_path, ttl) and os.path.exists(ct_path):
         logger.debug('[images] cache hit (%s): %s', img_type, url)
         content_type = open(ct_path).read().strip() or 'image/jpeg'
-        resp = send_file(img_path, mimetype=content_type, conditional=True, max_age=ttl)
-        resp.headers['Connection'] = 'close'
-        return resp
+        return _image_response(img_path, content_type, ttl)
 
     logger.debug('[images] cache miss (%s): %s', img_type, url)
     if _fetch_and_cache(url, img_path, ct_path):
         content_type = open(ct_path).read().strip() or 'image/jpeg'
-        resp = send_file(img_path, mimetype=content_type, conditional=True, max_age=ttl)
-        resp.headers['Connection'] = 'close'
-        return resp
+        return _image_response(img_path, content_type, ttl)
 
     abort(404)
 
