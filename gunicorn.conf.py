@@ -9,6 +9,8 @@ _SUPPRESS_PATTERNS = (
     '/images/proxy',           # per-image cache hits — too noisy
     '/api/sources/chnum',      # overlap-banner polling
     'GET /api/sources HTTP',   # sources list fetched on every poll cycle finish
+    '"GET /admin/',            # admin page navigation GETs (POSTs still logged)
+    'GET /api/logs',           # log viewer polling
 )
 
 # Suppress GET /api/sources/{id}/config but keep POSTs and action endpoints
