@@ -184,14 +184,29 @@
     function _scrapeComplete(sourceId) {
       delete _scrapeGrace[sourceId];
       delete _scrapeActive[sourceId];
-      const el = document.getElementById(`scrape-status-${sourceId}`);
-      if (el) {
-        el.className = 'scrape-status';
-        el.innerHTML = '<span class="status-text" style="color:#34d399">✓ Complete</span>';
-        setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 8000);
-      }
       const btn = _scrapeBtn[sourceId];
       if (btn) { btn.textContent = 'Scrape Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
+      fetch('/api/sources').then(r => r.json()).then(sources => {
+        const src = sources.find(s => s.id === sourceId);
+        const el = document.getElementById(`scrape-status-${sourceId}`);
+        if (!el) return;
+        if (src && src.last_error) {
+          el.className = 'scrape-status';
+          el.innerHTML = `<span class="status-text" style="color:#f87171">⚠ ${src.last_error}</span>`;
+          setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 12000);
+        } else {
+          el.className = 'scrape-status';
+          el.innerHTML = '<span class="status-text" style="color:#34d399">✓ Complete</span>';
+          setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 8000);
+        }
+      }).catch(() => {
+        const el = document.getElementById(`scrape-status-${sourceId}`);
+        if (el) {
+          el.className = 'scrape-status';
+          el.innerHTML = '<span class="status-text" style="color:#34d399">✓ Complete</span>';
+          setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 8000);
+        }
+      });
     }
 
     function _startPolling(sourceId, btn) {
