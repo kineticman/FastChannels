@@ -261,15 +261,10 @@
             {% if f.get('max_channels') %}
               <span class="badge-pill pill-gray">max {{ f['max_channels'] }}</span>
             {% endif %}
-            {% if feed.chnum_start %}
-              <span class="badge-pill pill-gray">ch# from {{ feed.chnum_start }}</span>
-            {% endif %}
           </div>
         </div>
         <div class="feed-actions">
-          {% if feed.slug == 'default' %}
-          <span class="badge-pill pill-gray" style="align-self:center">built-in</span>
-          {% else %}
+          {% if feed.slug != 'default' %}
           <button class="btn btn-ghost" style="font-size:0.78rem;padding:0.3rem 0.7rem"
                   onclick='openModal({{ feed.to_dict(base_url)|tojson }})'>Edit</button>
           {% endif %}
@@ -290,20 +285,29 @@
 
       {% if feed.slug == 'default' %}
       <div class="feed-settings">
-        <div class="field">
-          <label>Master Channel Number Start</label>
-          <div class="help">Sequential <code>tvg-chno</code> numbers assigned in the default/master output for sources without their own channel number start.</div>
-          {% if global_chnum_start_from_env %}
-          <div class="help">Currently coming from environment variable <code>MASTER_CHANNEL_NUMBER_START</code>. Saving here will override it in the database.</div>
-          {% endif %}
-        </div>
         <div class="inline-setting">
           <div class="field">
+            <label>Master Channel Number Start <span style="color:#475569;font-weight:400;text-transform:none;font-size:0.75rem">(tvg-chno)</span></label>
             <input type="number" id="default-global-chnum-start" min="1" max="99999"
                    placeholder="e.g. 1000" value="{{ global_chnum_start or '' }}">
+            <div class="help">Applies to all sources without their own channel number start.{% if global_chnum_start_from_env %} Currently from env var <code>MASTER_CHANNEL_NUMBER_START</code> — saving here overrides it.{% endif %}</div>
           </div>
           <span class="save-status" id="default-global-chnum-status"></span>
-          <button class="btn btn-ghost" type="button" onclick="saveDefaultChannelNumbering()">Save Numbering</button>
+          <button class="btn btn-ghost" type="button" onclick="saveDefaultChannelNumbering()">Save</button>
+        </div>
+      </div>
+      {% else %}
+      <div class="feed-settings">
+        <div class="inline-setting">
+          <div class="field">
+            <label>Channel Number Start <span style="color:#475569;font-weight:400;text-transform:none;font-size:0.75rem">(tvg-chno)</span></label>
+            <input type="number" id="chnum-{{ feed.id }}" min="1" max="99999"
+                   placeholder="{{ feed_chnum_placeholder.get(feed.id, 'auto') }}"
+                   value="{{ feed.chnum_start or '' }}">
+            <div class="help">Leave blank to auto-assign (currently {{ feed_chnum_placeholder.get(feed.id, 'auto') }}). Set a value to number all channels in this feed sequentially from here.</div>
+          </div>
+          <span class="save-status" id="chnum-status-{{ feed.id }}"></span>
+          <button class="btn btn-ghost" type="button" onclick="saveFeedChnum({{ feed.id }})">Save</button>
         </div>
       </div>
       {% endif %}
@@ -400,8 +404,8 @@
     </div>
     <div class="field">
       <label>Starting Channel Number <span style="color:#475569;font-weight:400;text-transform:none">(tvg-chno)</span></label>
-      <input type="number" id="f-chnum" min="1" placeholder="e.g. 1000 — leave blank to use per-source settings">
-      <div class="help">When set, all channels in this feed are numbered sequentially starting here, overriding per-source channel number settings.</div>
+      <input type="number" id="f-chnum" min="1" placeholder="auto">
+      <div class="help" id="f-chnum-help">Leave blank to auto-assign. Set a value to number all channels in this feed sequentially from here.</div>
     </div>
     <div class="count-preview" id="count-preview"></div>
 
@@ -414,6 +418,8 @@
 </div>
 
 <script>
+const FEED_CHNUM_PLACEHOLDER = {{ feed_chnum_placeholder | tojson }};
+
 // ── Channel list cache ─────────────────────────────────────────────────────
 let _allChannels = [];
 let _selectedChannelIds = new Set();
@@ -542,6 +548,10 @@ async function openModal(feed = null) {
   document.getElementById('f-desc').value     = feed ? (feed.description || '') : '';
   document.getElementById('f-max').value      = feed ? (feed.filters.max_channels || '') : '';
   document.getElementById('f-chnum').value    = feed ? (feed.chnum_start || '') : '';
+  const chnumPh = feed ? (FEED_CHNUM_PLACEHOLDER[feed.id] ?? 'auto') : 'auto';
+  document.getElementById('f-chnum').placeholder = String(chnumPh);
+  document.getElementById('f-chnum-help').textContent =
+    `Leave blank to auto-assign (currently ${chnumPh}). Set a value to number all channels in this feed sequentially from here.`;
   document.getElementById('f-gracenote').value = feed ? (feed.filters.gracenote || '') : '';
   document.getElementById('modal-status').textContent = '';
   document.getElementById('ch-search').value  = '';
@@ -797,6 +807,30 @@ function copyUrl(e, url) {
     btn.textContent = '✓';
     setTimeout(() => btn.textContent = '⎘', 1500);
   });
+}
+
+// ── Save feed channel number start (inline on card) ──────────────────────
+async function saveFeedChnum(feedId) {
+  const input  = document.getElementById(`chnum-${feedId}`);
+  const status = document.getElementById(`chnum-status-${feedId}`);
+  const raw    = input.value.trim();
+  status.textContent = 'Saving…';
+  status.className   = 'save-status';
+  try {
+    const r = await fetch(`/api/feeds/${feedId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ chnum_start: raw ? parseInt(raw, 10) : null }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    status.textContent = '✓ Saved';
+    status.className   = 'save-status ok';
+    setTimeout(() => { status.textContent = ''; }, 2500);
+  } catch(e) {
+    status.textContent = '✗ ' + e.message;
+    status.className   = 'save-status error';
+  }
 }
 
 // Close on backdrop click

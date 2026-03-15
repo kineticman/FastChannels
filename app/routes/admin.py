@@ -4,9 +4,9 @@ from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings
 from ..generators.m3u import (
     _parse_gracenote_id,
-
     _build_source_chnum_map,
     _build_channel_query,
+    feed_namespace_start,
 )
 from ..scrapers import registry as _scraper_registry
 from ..url import public_base_url, detected_base_url
@@ -170,11 +170,20 @@ def feeds():
         .distinct().order_by(Channel.language).all()
     languages  = [{'code': r[0], 'label': r[0]} for r in langs]
     base_url   = public_base_url()
+    global_chnum_start = app_settings.effective_global_chnum_start()
+    # Effective starting channel number for each custom feed:
+    #   - feed.chnum_start set → that value (shown as input value, not placeholder)
+    #   - not set → auto-namespace (200000, 400000, … based on slug order)
+    feed_chnum_placeholder = {}
+    for feed in feeds:
+        if feed.slug != 'default' and feed.chnum_start is None:
+            feed_chnum_placeholder[feed.id] = feed_namespace_start(feed, gracenote=False)
     return render_template('admin/feeds.html',
                            feeds=feeds, sources=sources,
                            categories=categories, languages=languages,
                            base_url=base_url,
-                           global_chnum_start=app_settings.effective_global_chnum_start(),
+                           global_chnum_start=global_chnum_start,
+                           feed_chnum_placeholder=feed_chnum_placeholder,
                            global_chnum_start_from_env=app_settings.global_chnum_start is None and app_settings.env_global_chnum_start() is not None)
 
 
