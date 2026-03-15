@@ -114,12 +114,14 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'rig tv', 'monster jam', 'hong kong fight', 'hi-yah',
         'american ninja', 'american gladiator', 'meateater',
         'nesn', 'overtime', 'fuel tv', 'team usa tv', 'fear factor',
+        'jim rome',
     }, 'Sports'),
     # Music — iHeart, Vevo, Stingray ambient, music radio
     ({
         'iheart', 'vevo', 'stingray', 'tiktok radio', 'revolt mixtape',
         'circle country', 'electric now', 'mvstv', 'lamusica', 'lamúsica',
         'musica tv', 'música tv', 'fuse +',
+        'bet pluto', 'mtv pluto',
     }, 'Music'),
     # News / Weather — national brands + local stations
     ({
@@ -141,6 +143,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'chaos on cam', 'untold stories of the er',
         'murder she wrote', 'mysteria', 'mysterious', 'caught in providence',
         'confess by nosey', 'paternity court', 'ghost hunter',
+        '48 hours', '20/20',
     }, 'True Crime'),
     # Horror
     ({
@@ -170,7 +173,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'naturaleza', 'national geographic', 'wicked tuna', 'life below zero',
         'dog whisperer', 'incredible dr. pol', 'paws & claws',
         'magellan', 'curiosity', 'earthday', 'love the planet',
-        'bbc earth', 'real disaster',
+        'bbc earth', 'real disaster', 'pet collective',
     }, 'Nature'),
     # Home & DIY
     ({
@@ -194,6 +197,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'the amazing race', 'e! keeping up', 'cheaters',
         'divorce court', 'judge nosey', 'the judge judy channel',
         'judge judy', 'dr. phil', 'the doctors',
+        'caso cerrado', 'ellen channel', 'nosey',
     }, 'Reality TV'),
     # Game Shows
     ({
@@ -228,6 +232,9 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'degrassi', 'baywatch', 'beverly hills 90210', 'xena',
         'nash bridges', 'bull ', 'heartland classic', 'acorn tv',
         'britbox', 'sundance now',
+        'cw forever', 'cw gold', 'allblk', 'alfred hitchcock',
+        'tyler perry', 'in the heat of the night', 'tribeca',
+        'shout factory',
     }, 'Drama'),
     # Movies
     ({
@@ -237,6 +244,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'universal westerns', 'xumo free', 'just movies', 'cine',
         'filmex', 'great american rom', 'my time movie', 'cinépolis',
         'maverick black cinema', 'pam grier',
+        'amc+', 'kino lorber', 'blackpix', 'shades of black',
     }, 'Movies'),
     # Westerns
     ({
@@ -267,6 +275,23 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'gaming', 'esports', 'league of legends', 'fgteev', 'unspeakable',
         'mrbeast', 'mythical', 'team liquid',
     }, 'Gaming'),
+    # Automotive
+    ({
+        'top gear', 'torque tv', 'mecum', 'discovery turbo',
+        'in the garage', 'car chase', 'motortrend', 'velocity',
+        'roadkill channel', 'hot rod',
+    }, 'Automotive'),
+    # Spanish — name-based fallback for channels without the spanish-language tag
+    ({
+        'flixlatino', 'vix ', 'vix+', 'canela.tv', 'canela tv',
+        'venevisión', 'novelísima', 'novelisima',
+        'remezcla', 'en español', 'atresplayer', 'pitufo',
+        'mi raza', 'sobreviví', 'sobrevivi', 'c4 en alerta',
+        'telemundo acción', 'telemundo accion', 'telemundo puerto',
+        'emoción atres', 'emocion atres', 'única tv', 'unica tv',
+        'cine exclusivo', 'azteca', 'univision', 'canal estrellas',
+        'imagen tv', 'tvnotas', 'bandamax', 'ritmoson',
+    }, 'Spanish'),
     # Shopping
     ({
         'qvc', 'hsn', 'jewelry television', 'deal zone',
