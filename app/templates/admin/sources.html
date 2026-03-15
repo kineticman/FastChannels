@@ -375,7 +375,7 @@
         const d = await r.json();
         if (d.status === 'queued') {
           btn.textContent = 'Running…';
-          _scrapeGrace[id] = Date.now() + 300000;  // 5 min grace; real Redis progress overrides
+          _scrapeGrace[id] = Date.now() + 30000;  // 30s grace for job startup
           _startPolling(id, btn);
         } else {
           btn.textContent = 'Error';
@@ -428,10 +428,11 @@
 
 
     // ── Scrape progress polling ───────────────────────────────────────────
-    const _pollTimers  = {};
-    const _scrapeGrace = {};   // sourceId → ms deadline: keep showing Running… until then
-    const _scrapeBtn   = {};   // sourceId → button element
-    const _phaseLabel  = {
+    const _pollTimers    = {};
+    const _scrapeGrace   = {};   // sourceId → ms deadline: keep polling even if idle (Redis-down fallback)
+    const _scrapeBtn     = {};   // sourceId → button element
+    const _scrapeActive  = {};   // sourceId → bool: have we seen queued/running at least once?
+    const _phaseLabel    = {
       bootstrap: 'Authenticating…',
       channels:  'Fetching channels…',
       epg:       null,   // built dynamically
@@ -447,8 +448,8 @@
         }
         return { cls: 'status-running', text: _phaseLabel[data.phase] || 'Running…' };
       }
-      // idle — show Running… during grace period (covers Redis-unavailable case)
-      if (Date.now() < (_scrapeGrace[sourceId] || 0)) {
+      // idle — show Running… only during grace period AND we haven't seen active yet
+      if (!_scrapeActive[sourceId] && Date.now() < (_scrapeGrace[sourceId] || 0)) {
         return { cls: 'status-running', text: 'Running…' };
       }
       return null;
@@ -465,17 +466,15 @@
 
     function _scrapeComplete(sourceId) {
       delete _scrapeGrace[sourceId];
-      // Show ✓ Complete briefly then clear
+      delete _scrapeActive[sourceId];
       const el = document.getElementById(`scrape-status-${sourceId}`);
       if (el) {
-        el.className = 'scrape-status status-done';
+        el.className = 'scrape-status';
         el.innerHTML = '<span class="status-text" style="color:#34d399">✓ Complete</span>';
-        setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 4000);
+        setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 8000);
       }
-      // Re-enable button
       const btn = _scrapeBtn[sourceId];
       if (btn) { btn.textContent = 'Scrape Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
-      // Refresh channel count
       fetch('/api/sources').then(r => r.json()).then(sources => {
         const src = sources.find(s => s.id === sourceId);
         if (src) {
@@ -492,10 +491,21 @@
         try {
           const r = await fetch(`/api/sources/${sourceId}/scrape-status`);
           const d = await r.json();
+          const wasActive = _scrapeActive[sourceId];
+          if (d.status === 'running' || d.status === 'queued') _scrapeActive[sourceId] = true;
           _renderStatus(sourceId, d);
-          if (d.status === 'running' || d.status === 'queued' || Date.now() < (_scrapeGrace[sourceId] || 0)) {
+          if (d.status === 'running' || d.status === 'queued') {
+            // Still going
+            _pollTimers[sourceId] = setTimeout(poll, 2000);
+          } else if (wasActive) {
+            // Transitioned from active → idle: job finished
+            delete _pollTimers[sourceId];
+            _scrapeComplete(sourceId);
+          } else if (Date.now() < (_scrapeGrace[sourceId] || 0)) {
+            // Never saw active yet but still in grace (Redis unavailable): keep waiting
             _pollTimers[sourceId] = setTimeout(poll, 2000);
           } else {
+            // Grace expired without ever seeing active: give up
             delete _pollTimers[sourceId];
             _scrapeComplete(sourceId);
           }

@@ -152,10 +152,11 @@
   </div>
 
   <script>
-    const _pollTimers  = {};
-    const _scrapeGrace = {};
-    const _scrapeBtn   = {};
-    const _phaseLabel  = { bootstrap:'Authenticating…', channels:'Fetching channels…', starting:'Starting…' };
+    const _pollTimers   = {};
+    const _scrapeGrace  = {};
+    const _scrapeBtn    = {};
+    const _scrapeActive = {};
+    const _phaseLabel   = { bootstrap:'Authenticating…', channels:'Fetching channels…', starting:'Starting…' };
 
     function _statusText(data, sourceId) {
       if (data.status === 'queued') return { cls:'status-queued', text:'Queued' };
@@ -166,7 +167,8 @@
         }
         return { cls:'status-running', text:_phaseLabel[data.phase] || 'Running…' };
       }
-      if (Date.now() < (_scrapeGrace[sourceId] || 0)) return { cls:'status-running', text:'Running…' };
+      if (!_scrapeActive[sourceId] && Date.now() < (_scrapeGrace[sourceId] || 0))
+        return { cls:'status-running', text:'Running…' };
       return null;
     }
 
@@ -181,11 +183,12 @@
 
     function _scrapeComplete(sourceId) {
       delete _scrapeGrace[sourceId];
+      delete _scrapeActive[sourceId];
       const el = document.getElementById(`scrape-status-${sourceId}`);
       if (el) {
         el.className = 'scrape-status';
         el.innerHTML = '<span class="status-text" style="color:#34d399">✓ Complete</span>';
-        setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 4000);
+        setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 8000);
       }
       const btn = _scrapeBtn[sourceId];
       if (btn) { btn.textContent = 'Scrape Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
@@ -198,8 +201,15 @@
         try {
           const r = await fetch(`/api/sources/${sourceId}/scrape-status`);
           const d = await r.json();
+          const wasActive = _scrapeActive[sourceId];
+          if (d.status === 'running' || d.status === 'queued') _scrapeActive[sourceId] = true;
           _renderStatus(sourceId, d);
-          if (d.status === 'running' || d.status === 'queued' || Date.now() < (_scrapeGrace[sourceId] || 0)) {
+          if (d.status === 'running' || d.status === 'queued') {
+            _pollTimers[sourceId] = setTimeout(poll, 2000);
+          } else if (wasActive) {
+            delete _pollTimers[sourceId];
+            _scrapeComplete(sourceId);
+          } else if (Date.now() < (_scrapeGrace[sourceId] || 0)) {
             _pollTimers[sourceId] = setTimeout(poll, 2000);
           } else {
             delete _pollTimers[sourceId];
@@ -215,14 +225,14 @@
     }
 
     async function run(id, btn) {
-      if (_pollTimers[id]) return;  // already running — ignore
+      if (_pollTimers[id]) return;
       btn.disabled = true; btn.textContent = 'Queued…';
       try {
         const r = await fetch(`/api/sources/${id}/run`, {method:'POST'});
         const d = await r.json();
         if (d.status === 'queued') {
           btn.textContent = 'Running…';
-          _scrapeGrace[id] = Date.now() + 300000;
+          _scrapeGrace[id] = Date.now() + 30000;  // 30s grace for job startup
           _startPolling(id, btn);
         } else {
           btn.textContent = 'Error';
