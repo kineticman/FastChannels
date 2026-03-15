@@ -586,10 +586,16 @@ def resolve_duplicates():
     data = request.get_json(force=True) or {}
     priority = data.get('source_priority', [])  # ordered list of source names, index 0 = highest
 
+    # Find names where 2+ channels are currently ENABLED (matches duplicate-summary).
+    # Using all channels (including disabled) here would cause already-resolved
+    # groups to be reprocessed, risking ping-pong if priority order changes.
     dup_names_sq = select(Channel.name)\
+        .filter(Channel.is_enabled == True)\
         .group_by(Channel.name)\
         .having(db.func.count(Channel.id) > 1)
 
+    # Fetch ALL channels for those names (incl. disabled) so the winner-selection
+    # sort can prefer a healthy channel over a dead one within each group.
     dup_channels = Channel.query.join(Source)\
         .filter(Channel.name.in_(dup_names_sq))\
         .all()
