@@ -206,7 +206,7 @@
             _pollTimers[sourceId] = setTimeout(poll, 2000);
           } else {
             // idle — check if last_scraped_at is newer than when we triggered the scrape
-            const scraped = d.last_scraped_at ? new Date(d.last_scraped_at).getTime() : 0;
+            const scraped = d.last_scraped_ms || 0;
             const start   = _scrapeStart[sourceId] || 0;
             if (scraped > start) {
               // confirmed done
