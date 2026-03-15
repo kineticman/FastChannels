@@ -57,14 +57,13 @@ def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> st
     """
     if not url or not base_url:
         return url
-    # Carry the original extension if present, otherwise default to .jpg
-    ext = '.jpg'
-    for candidate in ('.jpg', '.jpeg', '.png', '.gif', '.webp'):
-        if candidate in url.lower():
+    # Carry the original extension if present, otherwise default to jpg
+    ext = 'jpg'
+    for candidate in ('jpg', 'jpeg', 'png', 'gif', 'webp'):
+        if f'.{candidate}' in url.lower():
             ext = candidate
             break
-    filename = f'image{ext}'
-    return f"{base_url}/images/proxy/{filename}?url={quote(url, safe='')}&type={img_type}"
+    return f"{base_url}/images/proxy/{img_type}/image.{ext}?url={quote(url, safe='')}"
 
 
 def public_base_url() -> str:

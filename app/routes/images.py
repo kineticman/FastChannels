@@ -85,11 +85,9 @@ def _image_response(img_path: str, content_type: str, ttl: int) -> Response:
     )
 
 
-@images_bp.route('/images/proxy')
-@images_bp.route('/images/proxy/<path:filename>')
-def proxy_image(filename=None):
-    url      = request.args.get('url', '').strip()
-    img_type = request.args.get('type', 'logo')   # 'logo' or 'poster'
+@images_bp.route('/images/proxy/<img_type>/image.<ext>')
+def proxy_image(img_type='logo', ext='jpg'):
+    url = request.args.get('url', '').strip()
     if not url:
         abort(400)
 
