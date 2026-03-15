@@ -138,7 +138,7 @@
               {{ source_output_meta[source.id].channel_count }}
               {% if source_output_meta[source.id].channel_count > 750 %}<span class="warn">⚠</span>{% endif %}
             </td>
-            <td style="color:#64748b">{% if source.last_scraped_at %}{{ source.last_scraped_at.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}Never{% endif %}</td>
+            <td style="color:#64748b" id="last-scraped-{{ source.id }}">{% if source.last_scraped_at %}{{ source.last_scraped_at.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}Never{% endif %}</td>
             <td>
               <button class="btn btn-sm" onclick="run({{ source.id }}, this)">Scrape Now</button>
               <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
@@ -177,10 +177,20 @@
       el.innerHTML = `<span class="status-dot"></span><span class="status-text">${info.text}</span>`;
     }
 
-    function _showResult(sourceId, lastError) {
+    function _showResult(sourceId, lastError, lastScrapedMs) {
       delete _scrapeStart[sourceId];
       const btn = _scrapeBtn[sourceId];
       if (btn) { btn.textContent = 'Scrape Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
+      if (lastScrapedMs) {
+        const d = new Date(lastScrapedMs);
+        const ts = d.getUTCFullYear() + '-' +
+          String(d.getUTCMonth()+1).padStart(2,'0') + '-' +
+          String(d.getUTCDate()).padStart(2,'0') + ' ' +
+          String(d.getUTCHours()).padStart(2,'0') + ':' +
+          String(d.getUTCMinutes()).padStart(2,'0') + ' UTC';
+        const cell = document.getElementById(`last-scraped-${sourceId}`);
+        if (cell) cell.textContent = ts;
+      }
       const el = document.getElementById(`scrape-status-${sourceId}`);
       if (!el) return;
       if (lastError) {
@@ -211,7 +221,7 @@
             if (scraped > start) {
               // confirmed done
               delete _pollTimers[sourceId];
-              _showResult(sourceId, d.last_error || null);
+              _showResult(sourceId, d.last_error || null, scraped);
             } else if (Date.now() - start < 30000) {
               // job hasn't completed yet — keep waiting (up to 30s)
               _renderStatus(sourceId, d);
