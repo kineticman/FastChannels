@@ -177,6 +177,12 @@ class PlutoScraper(BaseScraper):
             placeholder='us_east,us_west,ca,uk,fr,de',
             help_text=f'Comma-separated list. Available: {", ".join(ALLOWED_COUNTRY_CODES)}',
         ),
+        ConfigField(
+            key='pool_size', label='Session Pool Size',
+            field_type='number', default=str(STREAM_POOL_SIZE),
+            placeholder=str(STREAM_POOL_SIZE),
+            help_text='Number of concurrent Pluto TV sessions for stream resolution. Default is 10. Increase if you have many concurrent viewers.',
+        ),
     ]
 
     def __init__(self, config: dict = None):
@@ -190,14 +196,20 @@ class PlutoScraper(BaseScraper):
             if c.strip() in ALLOWED_COUNTRY_CODES
         ] or ['us_east']
 
-        self._pool      = [_StreamSession(username, password) for _ in range(STREAM_POOL_SIZE)]
+        try:
+            pool_size = max(1, int(self.config.get('pool_size') or STREAM_POOL_SIZE))
+        except (ValueError, TypeError):
+            pool_size = STREAM_POOL_SIZE
+
+        self._pool      = [_StreamSession(username, password) for _ in range(pool_size)]
+        self._pool_size = pool_size
         self._pool_idx  = 0
         self._pool_lock = threading.Lock()
         self._meta_slot = self._pool[0]
 
     def _next_slot(self) -> _StreamSession:
         with self._pool_lock:
-            slot = self._pool[self._pool_idx % STREAM_POOL_SIZE]
+            slot = self._pool[self._pool_idx % self._pool_size]
             self._pool_idx += 1
         return slot
 
