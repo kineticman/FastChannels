@@ -87,65 +87,67 @@
 
   <div class="page">
     <h1>Help</h1>
-    <p class="subtitle">Quick reference for the admin UI, common terms, and source-specific gotchas before beta release.</p>
+    <p class="subtitle">Quick reference for the admin UI, common terms, and source-specific notes.</p>
 
     <div class="grid">
       <section class="card">
         <h2>Quick Start</h2>
         <ul>
-          <li>Use <code>Sources</code> to enable providers and run scrapes.</li>
+          <li>Use <code>Sources</code> to enable providers, configure credentials, and run scrapes.</li>
           <li>Use <code>Channels</code> to enable, disable, inspect, and resolve duplicates.</li>
-          <li>Use <code>Feeds</code> to build named M3U + EPG outputs for Channels DVR.</li>
-          <li>Use <code>Settings</code> for source credentials and global server/channel-number settings.</li>
+          <li>Use <code>Feeds</code> to build named M3U + EPG outputs for your players.</li>
+          <li>Use <code>Settings</code> to configure your server URL and Channels DVR address.</li>
         </ul>
       </section>
 
       <section class="card">
         <h2>Channel Terms</h2>
         <ul>
-          <li><code>Active</code>: channel still exists upstream.</li>
-          <li><code>Enabled</code>: channel is included in your M3U / EPG output.</li>
-          <li><code>DRM</code>: stream is protected and usually not playable in generic IPTV clients.</li>
-          <li><code>Dead</code>: stream audit marked the channel as not currently playable.</li>
+          <li><code>Active</code>: channel still exists upstream (set by scraper).</li>
+          <li><code>Enabled</code>: channel is included in your M3U / EPG output (set by you).</li>
+          <li><code>DRM</code>: stream is protected — not playable in generic IPTV clients.</li>
+          <li><code>Dead</code>: stream audit found this channel is not currently playable.</li>
         </ul>
       </section>
 
       <section class="card">
         <h2>Feeds</h2>
         <ul>
-          <li>A built-in <code>Default</code> feed is created automatically and includes all enabled channels.</li>
-          <li>Each feed gets its own stable <code>/feeds/&lt;slug&gt;/m3u</code> and <code>/epg.xml</code>.</li>
-          <li>Feed-specific channel numbering is set on the feed itself with <code>Channel Number Start</code>.</li>
-          <li><code>/m3u/gracenote</code> feed variants are for Channels DVR guide matching.</li>
-          <li><code>Add to Channels DVR</code> uses the server URLs configured in <code>Settings</code>.</li>
+          <li>The built-in <code>Default</code> feed includes all enabled channels.</li>
+          <li>Create custom feeds to filter by source, category, language, or a hand-picked channel list.</li>
+          <li>Each feed has its own stable <code>/feeds/&lt;slug&gt;/m3u</code> and <code>/epg.xml</code> — cached for fast delivery.</li>
+          <li>Set <code>Channel Number Start</code> on a feed to number channels sequentially from a given number.</li>
+          <li><code>/m3u/gracenote</code> feed variants are for Channels DVR guide matching via Gracenote.</li>
+          <li><code>Add to Channels DVR</code> registers the feed directly in your DVR. Configure the DVR URL in <code>Settings</code> first.</li>
         </ul>
       </section>
 
       <section class="card">
         <h2>Duplicates Helper</h2>
         <ul>
-          <li>The helper compares channels with the same name across sources.</li>
+          <li>Finds channels with the same name across multiple sources.</li>
           <li>Healthy channels are preferred over <code>DRM</code>, <code>Dead</code>, or inactive ones.</li>
+          <li>Source priority breaks ties between equally healthy matches.</li>
           <li>If every duplicate is unhealthy, the whole group is disabled.</li>
-          <li>The modal works on currently enabled duplicates, not already-resolved disabled rows.</li>
         </ul>
       </section>
 
       <section class="card">
-        <h2>Inspect</h2>
+        <h2>Inspect &amp; Stream Audit</h2>
         <ul>
-          <li><code>Inspect</code> checks stream behavior for a single channel.</li>
-          <li>It helps identify dead manifests, VOD-only streams, DRM flags, and tune-time resolver problems.</li>
-          <li>Inspect uses the same resolve logic as playback, so cached Roku/Sling behavior matters there too.</li>
+          <li><code>Inspect</code> tests a single channel's full resolve path — identifies dead manifests, VOD-only streams, DRM, and resolver failures. Also shows stream variant stats (resolution, bitrate, codecs).</li>
+          <li><code>Stream Audit</code> health-checks every channel for a source in bulk and marks dead/DRM channels inactive automatically.</li>
         </ul>
       </section>
 
       <section class="card">
         <h2>Source Notes</h2>
         <ul>
-          <li><strong>Roku</strong>: some channels expose sparse future guide data. Playback may self-recover from intermittent upstream <code>403</code> windows via cache reuse.</li>
-          <li><strong>Amazon Prime Free</strong>: EPG-only by default. Without cookie auth, pagination is limited.</li>
-          <li><strong>Sling</strong>: metadata and EPG are useful, but many streams remain DRM-limited.</li>
+          <li><strong>Roku</strong>: some channels expose sparse future guide data; short EPG windows are expected.</li>
+          <li><strong>Sling Freestream</strong>: EPG and metadata work, but streams are DRM-only for generic IPTV clients.</li>
+          <li><strong>Amazon Prime Free</strong>: EPG-only by default. Without cookie auth, channel discovery is limited.</li>
+          <li><strong>Samsung TV Plus</strong>: EPG covers approximately the current day. Region is configurable in source settings.</li>
+          <li><strong>Pluto TV</strong>: session pool size is configurable in source settings if you have many concurrent viewers.</li>
         </ul>
       </section>
     </div>

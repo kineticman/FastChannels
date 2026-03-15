@@ -1,6 +1,6 @@
 # FastChannels
 
-FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo, and more, outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
+FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
 
 ## Deploy with Portainer
 
@@ -31,8 +31,6 @@ volumes:
 
 ## Deploy with Docker
 
-The published image is currently hosted on GitHub Container Registry:
-
 ```bash
 docker run -d \
   --name fastchannels \
@@ -50,119 +48,86 @@ If you prefer Docker Compose with the published image:
 docker compose -f docker-compose.ghcr.yml up -d
 ```
 
-This works without a `.env` file. Only use `.env` if you want to override the image owner or tag:
-
-```bash
-GHCR_OWNER=kineticman
-FASTCHANNELS_IMAGE_TAG=latest
-```
-
-Optional: advanced users can also preseed a few app settings with environment variables. These are not required, and the normal setup path is still the **Settings** page in the admin UI.
-
-```yaml
-environment:
-  MASTER_CHANNEL_NUMBER_START: "1000"
-  FASTCHANNELS_SERVER_URL: "http://192.168.1.50:5523"
-  CHANNELS_DVR_SERVER_URL: "http://192.168.1.60:8089"
-```
-
-If you access the admin UI via `localhost` but want generated M3U / EPG / feed URLs to use a LAN IP or hostname instead, set:
-
-```bash
-PUBLIC_BASE_URL=http://192.168.1.50:5523
-```
-
-There is not currently a separate Docker Hub image documented in this repo.
-
-## URLs
+## Admin UI
 
 | URL | Description |
 |-----|-------------|
-| `http://localhost:5523/admin/` | Admin dashboard |
-| `http://localhost:5523/admin/sources` | Enable/disable sources, run scrapes |
-| `http://localhost:5523/admin/channels` | Browse channels and enable/disable them |
-| `http://localhost:5523/admin/settings` | Enter source credentials and options |
-| `http://localhost:5523/admin/help` | Quick in-app help and common gotchas |
-| `http://localhost:5523/m3u` | Full M3U playlist |
-| `http://localhost:5523/epg.xml` | Full XMLTV EPG |
+| `/admin/` | Dashboard — source status, channel counts, feed links |
+| `/admin/sources` | Enable/disable sources, run scrapes, configure credentials |
+| `/admin/channels` | Browse, enable/disable, inspect, and resolve duplicate channels |
+| `/admin/feeds` | Create and manage named output feeds |
+| `/admin/settings` | Server URLs and system stats |
+| `/admin/logs` | Live log tail |
+| `/admin/help` | In-app help and source gotchas |
 
-## Filtered M3U Output
+## Feeds
 
-```
-/m3u?source=pluto
-/m3u?source=pluto&source=distro
-/m3u?source=pluto&category=Sports
-/m3u?search=news
-```
+Feeds are the primary way to get output out of FastChannels. Each feed is a named, filtered slice of your channels with its own stable M3U and EPG URLs.
 
-## Named Feeds
-
-Feeds are named, persistent filtered sub-feeds that expose their own `/m3u` and `/epg.xml` URLs. Create and manage them in the admin UI or via the API.
+A built-in **Default** feed is created automatically and includes all enabled channels. Create additional feeds to build filtered outputs for specific players or purposes — by source, category, language, or a manually picked channel list.
 
 ```
+/feeds/default/m3u
+/feeds/default/epg.xml
 /feeds/sports/m3u
 /feeds/sports/epg.xml
-/feeds/sports/m3u/gracenote   # Channels DVR gracenote variant
+/feeds/sports/m3u/gracenote    # Channels DVR gracenote variant
 ```
 
-Filter keys: `sources`, `categories`, `languages`, `max_channels`.
+Feed outputs are cached and served from disk — fast for players polling on a schedule.
 
-Feed notes:
-
-- Feed-specific channel numbering is configured per feed with `Channel Number Start`.
-- The global `MASTER_CHANNEL_NUMBER_START` setting only affects the combined master `/m3u`.
-- `Add to Channels DVR` uses the server URLs configured in **Settings**.
+- **Channel Number Start**: set per feed to number all channels sequentially from a given number.
+- **Add to Channels DVR**: registers the feed as a custom M3U source in your DVR with one click. Configure the DVR server URL in **Settings** first.
+- **Max Channels**: Channels DVR works best with 750 or fewer channels per source.
 
 ## Configuration
 
-Source credentials and source-specific options are set through the **Settings** page in the admin UI.
+Source credentials and options are configured on the **Sources** page — click into any source card to expand its settings. Changes take effect on the next scrape.
 
-Advanced users may optionally set a few defaults with environment variables:
+A few global defaults can optionally be set with environment variables (not required for a normal install):
 
-- `MASTER_CHANNEL_NUMBER_START` — default for the master tvg-chno start used by sources without their own start value
-- `FASTCHANNELS_SERVER_URL` — default for the FastChannels server URL used in generated M3U/feed links
-- `CHANNELS_DVR_SERVER_URL` — default for the Channels DVR server URL used by the DVR push integration
+```yaml
+environment:
+  FASTCHANNELS_SERVER_URL: "http://192.168.1.50:5523"   # LAN address other devices use to reach FastChannels
+  CHANNELS_DVR_SERVER_URL: "http://192.168.1.60:8089"   # Channels DVR server
+  MASTER_CHANNEL_NUMBER_START: "1000"                   # Default tvg-chno start for the master feed
+```
 
-These environment variables are optional.
-
-- You do not need them for a normal install.
-- Values saved later in **admin/settings** override the environment variable.
-- If a DB value is cleared in the UI, FastChannels falls back to the environment variable again.
+Values saved in **Settings** override environment variables. If a DB value is cleared, FastChannels falls back to the environment variable.
 
 ## Architecture
 
 ### Proxy-based stream resolution
 
-M3U entries do **not** contain direct CDN URLs. Instead they point to a proxy endpoint:
+M3U entries point to a proxy endpoint rather than direct CDN URLs:
 
 ```
 http://host:5523/play/{source}/{channel_id}.m3u8
 ```
 
-At playback time the proxy calls `scraper.resolve(raw_url)` which:
-- Substitutes URL macros (cache busters, device IDs, etc.) with fresh values
-- Resolves HLS master playlists to the best-bandwidth variant
-- Handles JWT auth (Pluto TV stitcher tokens, Sling bearer tokens, etc.)
-- Issues a `302` redirect to the final CDN URL
+At playback time the proxy resolves the stream by:
+- Substituting URL macros (cache busters, device IDs, etc.) with fresh values
+- Resolving HLS master playlists to the best-bandwidth variant
+- Handling JWT auth (Pluto TV stitcher tokens, Sling bearer tokens, etc.)
+- Issuing a `302` redirect to the final CDN URL
 
-This means streams never go stale — every play request gets a fresh URL.
+Streams never go stale — every play request gets a fresh URL.
+
+### Output caching
+
+M3U and EPG XML outputs are cached to disk and served as fast file reads. The cache is invalidated automatically after each scrape. Cold builds of the full EPG can take a few seconds; subsequent requests are near-instant.
 
 ### Stream Audit
 
-Sources that opt in (`stream_audit_enabled = True`) support a Stream Audit job that health-checks every channel's stream and marks dead channels inactive. Triggered from the admin UI per source. Currently enabled for: Pluto TV, Tubi, Roku, Sling Freestream, DistroTV.
+Sources that support it have a **Stream Audit** button that health-checks every channel's stream URL and marks dead or DRM-protected channels inactive. Currently supported: Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, DistroTV.
 
 ### Channel Inspect
 
-Use the **Inspect** button on the Channels page to test a single channel's resolve/playback path. This helps identify:
-
-- dead manifests
-- VOD-only streams
-- DRM-protected streams
-- source-specific resolver failures
+The **Inspect** button on the Channels page tests a single channel's full resolve/playback path. Useful for diagnosing dead manifests, VOD-only streams, DRM-protected streams, and resolver failures. Also shows stream variant stats (resolution, bitrate, codecs).
 
 ### Duplicate resolution
 
-The **Resolve Duplicates** helper on the Channels page works on currently enabled duplicate-name channels. It:
+The **Resolve Duplicates** helper on the Channels page works on enabled channels with matching names across sources. It:
 
 - prefers healthy channels over channels flagged `DRM`, `Dead`, or inactive
 - uses source priority as a tie-breaker between otherwise healthy matches
@@ -170,35 +135,30 @@ The **Resolve Duplicates** helper on the Channels page works on currently enable
 
 ### EPG-only sources
 
-A source can be flagged **EPG Only** in the admin UI. EPG-only sources are excluded from M3U output but their program data is used to enrich EPG for title-matched channels from other sources. Amazon Prime Free is the primary use case — it has no playable streams but provides accurate guide data.
+A source can be flagged **EPG Only** on the Sources page. EPG-only sources are excluded from M3U output but their program data enriches EPG for title-matched channels from other sources. Amazon Prime Free is the primary use case.
 
-### Channel enable/disable
+### Channel flags
 
-Two separate flags on each channel:
+- **`is_active`** — set by the scraper; means the channel still exists upstream. Updated automatically on re-scrape.
+- **`is_enabled`** — set by you; means include this channel in M3U/EPG output. Survives re-scrapes.
 
-- **`is_active`** — set by the scraper. Means the channel still exists upstream. Re-scrapes update this automatically.
-- **`is_enabled`** — set by you via the admin UI toggle. Means include this channel in M3U/EPG output. Survives re-scrapes.
+Disabling a source deletes all its channels from the DB. Re-enabling and running a scrape restores them.
 
-Disabling a **source** deletes all its channels from the DB. Re-enabling and running a scrape restores them.
-
-## Source caveats
-
-- **Roku**: playback now relies heavily on cached session/JWT metadata for stability. Some Roku channels only expose sparse future guide data, so short EPG windows are expected on those channels.
-- **Amazon Prime Free**: EPG-only by default. Without a valid Amazon cookie header, pagination is limited and channel discovery may be incomplete.
-- **Sling Freestream**: metadata and EPG can still be useful, but many Sling streams remain DRM-limited for generic IPTV clients.
-- **Samsung TV Plus**: channel metadata, EPG, and stream URL resolution are all provided by [Matt Huisman's samsung-tvplus-for-channels project](https://github.com/matthuisman/samsung-tvplus-for-channels). We consume his publicly available `i.mjh.nz` endpoints directly. All credit for this data goes to him. EPG covers only the current day; scrape interval is 6 hours.
-
-## Current Sources
+## Source Notes
 
 | Source | Auth | Notes |
 |--------|------|-------|
-| Pluto TV | Optional login | Session pool (10 slots), per-country feeds, JWT stitcher auth |
+| Pluto TV | Optional login | Session pool size configurable (default 10); per-country feeds; JWT stitcher auth |
 | DistroTV | None | Android TV UA required, URL macro substitution |
 | Tubi TV | Optional email/password | Bearer token auth |
 | The Roku Channel | None | Session cookie auth, HLS variant selection |
-| Sling Freestream | Optional OAuth creds | Falls back to browser bootstrap to capture Bearer JWT. Streams are DRM-only right now, but the scraper remains active for potential EPG data. |
+| Sling Freestream | Optional OAuth creds | Streams are DRM-only for generic IPTV clients; scraper provides EPG data |
 | Plex | None | Session cookie auth |
 | Xumo Play | None | Public API |
-| Amazon Prime Free | Optional cookie header | EPG-only by default; pagination requires auth. Streams are DRM-only right now, but the scraper remains active for potential EPG data. |
+| Amazon Prime Free | Optional cookie header | EPG-only by default; streams are DRM-only |
 | Samsung TV Plus | None | Channel data and EPG via [Matt Huisman's public mirror](https://github.com/matthuisman/samsung-tvplus-for-channels). Region configurable (default: `us`). |
 | FreeLiveSports | None | Public API |
+
+- **Roku**: some channels expose sparse future guide data; short EPG windows are expected on those channels.
+- **Amazon Prime Free**: without a valid cookie header, channel discovery pagination is limited.
+- **Samsung TV Plus**: EPG covers approximately the current day. All credit for the data to [Matt Huisman](https://github.com/matthuisman/samsung-tvplus-for-channels).
