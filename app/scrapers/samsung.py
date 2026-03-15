@@ -47,9 +47,10 @@ def _parse_xmltv_ts(ts: str) -> datetime | None:
 
 
 class SamsungScraper(BaseScraper):
-    source_name      = 'samsung'
-    display_name     = 'Samsung TV Plus'
-    scrape_interval  = 360   # 6 hours — upstream data refreshes ~hourly
+    source_name           = 'samsung'
+    display_name          = 'Samsung TV Plus'
+    scrape_interval       = 360   # 6 hours — upstream data refreshes ~hourly
+    stream_audit_enabled  = True
 
     config_schema = [
         ConfigField(
