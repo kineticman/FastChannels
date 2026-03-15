@@ -14,8 +14,8 @@ _SUPPRESS_PATTERNS = (
 # Suppress GET /api/sources/{id}/config but keep POSTs and action endpoints
 _SUPPRESS_RE = re.compile(r'GET /api/sources/\d+/config ')
 
-# Demote feed/M3U/EPG requests to DEBUG — they're healthy DVR polling, not errors
-_DEMOTE_RE = re.compile(r'"GET /feeds/|"GET /m3u/|"GET /output/')
+# Suppress feed/M3U/EPG requests — healthy DVR polling, not worth logging
+_SUPPRESS_FEED_RE = re.compile(r'"GET /feeds/|"GET /m3u/|"GET /output/')
 
 
 class _AccessFilter(logging.Filter):
@@ -25,9 +25,8 @@ class _AccessFilter(logging.Filter):
             return False
         if _SUPPRESS_RE.search(msg):
             return False
-        if _DEMOTE_RE.search(msg):
-            record.levelno   = logging.DEBUG
-            record.levelname = 'DEBUG'
+        if _SUPPRESS_FEED_RE.search(msg):
+            return False
         return True
 
 
