@@ -717,10 +717,13 @@
         });
         _previewHls.on(window.Hls.Events.ERROR, (_event, data) => {
           if (status) {
-            const isCors = data?.details === 'manifestLoadError';
-            status.textContent = isCors
-              ? 'Browser preview unavailable for this source (CORS restriction). Use "Open Stream URL" to play externally.'
-              : `Preview playback error: ${data?.details || 'Unknown hls.js error'}`;
+            const details = data?.details || '';
+            if (details.includes('manifestLoad') || details.includes('manifestParse')) {
+              status.textContent = 'Browser preview unavailable for this source (CORS restriction on stream CDN). Use "Open Stream URL" to play externally.';
+            } else {
+              const fatal = data?.fatal ? 'Fatal — ' : '';
+              status.textContent = `Preview error: ${fatal}${details || 'Unknown hls.js error'}`;
+            }
           }
           if (data?.fatal && _previewHls) {
             _previewHls.destroy();
