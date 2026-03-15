@@ -154,6 +154,7 @@
   <script>
     const _pollTimers  = {};
     const _scrapeGrace = {};
+    const _scrapeBtn   = {};
     const _phaseLabel  = { bootstrap:'Authenticating…', channels:'Fetching channels…', starting:'Starting…' };
 
     function _statusText(data, sourceId) {
@@ -178,7 +179,20 @@
       el.innerHTML = `<span class="status-dot"></span><span class="status-text">${info.text}</span>`;
     }
 
-    function _startPolling(sourceId) {
+    function _scrapeComplete(sourceId) {
+      delete _scrapeGrace[sourceId];
+      const el = document.getElementById(`scrape-status-${sourceId}`);
+      if (el) {
+        el.className = 'scrape-status';
+        el.innerHTML = '<span class="status-text" style="color:#34d399">✓ Complete</span>';
+        setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 4000);
+      }
+      const btn = _scrapeBtn[sourceId];
+      if (btn) { btn.textContent = 'Scrape Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
+    }
+
+    function _startPolling(sourceId, btn) {
+      if (btn) _scrapeBtn[sourceId] = btn;
       if (_pollTimers[sourceId]) return;
       async function poll() {
         try {
@@ -189,28 +203,35 @@
             _pollTimers[sourceId] = setTimeout(poll, 2000);
           } else {
             delete _pollTimers[sourceId];
+            _scrapeComplete(sourceId);
           }
         } catch (e) {
           delete _pollTimers[sourceId];
+          const b = _scrapeBtn[sourceId];
+          if (b) { b.textContent = 'Scrape Now'; b.disabled = false; delete _scrapeBtn[sourceId]; }
         }
       }
       poll();
     }
 
     async function run(id, btn) {
+      if (_pollTimers[id]) return;  // already running — ignore
       btn.disabled = true; btn.textContent = 'Queued…';
       try {
         const r = await fetch(`/api/sources/${id}/run`, {method:'POST'});
         const d = await r.json();
-        btn.textContent = d.status === 'queued' ? '✓ Queued' : 'Error';
         if (d.status === 'queued') {
+          btn.textContent = 'Running…';
           _scrapeGrace[id] = Date.now() + 300000;
-          _startPolling(id);
+          _startPolling(id, btn);
+        } else {
+          btn.textContent = 'Error';
+          setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
         }
       } catch (e) {
         btn.textContent = 'Error';
+        setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
       }
-      setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
     }
   </script>
 </body>

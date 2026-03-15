@@ -367,20 +367,24 @@
     }
 
     async function run(id, btn) {
+      if (_pollTimers[id]) return;  // already running — ignore
       btn.disabled = true;
       btn.textContent = 'Queued…';
       try {
         const r = await fetch(`/api/sources/${id}/run`, {method: 'POST'});
         const d = await r.json();
-        btn.textContent = d.status === 'queued' ? '✓ Queued' : 'Error';
         if (d.status === 'queued') {
+          btn.textContent = 'Running…';
           _scrapeGrace[id] = Date.now() + 300000;  // 5 min grace; real Redis progress overrides
-          _startPolling(id);
+          _startPolling(id, btn);
+        } else {
+          btn.textContent = 'Error';
+          setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
         }
       } catch (e) {
         btn.textContent = 'Error';
+        setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
       }
-      setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
     }
 
     async function streamAudit(id, btn) {
@@ -424,9 +428,10 @@
 
 
     // ── Scrape progress polling ───────────────────────────────────────────
-    const _pollTimers = {};
-    const _scrapeGrace = {};   // sourceId → ms timestamp: keep showing Running… until then
-    const _phaseLabel = {
+    const _pollTimers  = {};
+    const _scrapeGrace = {};   // sourceId → ms deadline: keep showing Running… until then
+    const _scrapeBtn   = {};   // sourceId → button element
+    const _phaseLabel  = {
       bootstrap: 'Authenticating…',
       channels:  'Fetching channels…',
       epg:       null,   // built dynamically
@@ -458,7 +463,30 @@
       el.innerHTML = `<span class="status-dot"></span><span class="status-text">${info.text}</span>`;
     }
 
-    function _startPolling(sourceId) {
+    function _scrapeComplete(sourceId) {
+      delete _scrapeGrace[sourceId];
+      // Show ✓ Complete briefly then clear
+      const el = document.getElementById(`scrape-status-${sourceId}`);
+      if (el) {
+        el.className = 'scrape-status status-done';
+        el.innerHTML = '<span class="status-text" style="color:#34d399">✓ Complete</span>';
+        setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 4000);
+      }
+      // Re-enable button
+      const btn = _scrapeBtn[sourceId];
+      if (btn) { btn.textContent = 'Scrape Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
+      // Refresh channel count
+      fetch('/api/sources').then(r => r.json()).then(sources => {
+        const src = sources.find(s => s.id === sourceId);
+        if (src) {
+          const el = document.getElementById(`ch-count-${sourceId}`);
+          if (el) el.textContent = src.channel_count;
+        }
+      }).catch(() => {});
+    }
+
+    function _startPolling(sourceId, btn) {
+      if (btn) _scrapeBtn[sourceId] = btn;
       if (_pollTimers[sourceId]) return;
       async function poll() {
         try {
@@ -468,15 +496,13 @@
           if (d.status === 'running' || d.status === 'queued' || Date.now() < (_scrapeGrace[sourceId] || 0)) {
             _pollTimers[sourceId] = setTimeout(poll, 2000);
           } else {
-            // Job finished — refresh channel count from DB
             delete _pollTimers[sourceId];
-            const sr = await fetch('/api/sources');
-            const sources = await sr.json();
-            const src = sources.find(s => s.id === sourceId);
-            if (src) document.getElementById(`ch-count-${sourceId}`).textContent = src.channel_count;
+            _scrapeComplete(sourceId);
           }
         } catch (e) {
           delete _pollTimers[sourceId];
+          const b = _scrapeBtn[sourceId];
+          if (b) { b.textContent = 'Scrape Now'; b.disabled = false; delete _scrapeBtn[sourceId]; }
         }
       }
       poll();
