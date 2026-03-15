@@ -40,6 +40,17 @@ _SPANISH_LANGUAGE_MARKERS = (
     'bandamax',      # Mexican music channel
     'ritmoson',      # Latin music channel
     'tele hit',      # Mexican pop music channel
+    # Spanish channel names / title words
+    'cuando',        # "Cuando Los Angeles Caen"
+    'unica',         # "ÚNICA TV" (accent stripped)
+    'vas o no',      # "Vas O No Vas USA"
+    'en alerta',     # "C4 en Alerta"
+    'apostaria',     # "Apostarías por Mí" (accent stripped)
+    'naturaleza',    # "Naturaleza Salvaje"
+    'atresplayer',   # AtresmediaPlayer (Spanish broadcaster)
+    'el rey',        # El Rey Network (Robert Rodriguez's Spanish channel)
+    'pitufo',        # "Pitufo TV" (Los Pitufos = The Smurfs, Spanish)
+    'vix',           # ViX / Vix+ (Univision/Televisa FAST service)
 )
 
 
