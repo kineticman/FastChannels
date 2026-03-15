@@ -152,13 +152,12 @@
   </div>
 
   <script>
-    const _pollTimers   = {};
-    const _scrapeGrace  = {};
-    const _scrapeBtn    = {};
-    const _scrapeActive = {};
-    const _phaseLabel   = { bootstrap:'Authenticating…', channels:'Fetching channels…', starting:'Starting…' };
+    const _pollTimers  = {};
+    const _scrapeBtn   = {};
+    const _scrapeStart = {};  // sourceId → ms timestamp when scrape was triggered
+    const _phaseLabel  = { bootstrap:'Authenticating…', channels:'Fetching channels…', starting:'Starting…' };
 
-    function _statusText(data, sourceId) {
+    function _statusText(data) {
       if (data.status === 'queued') return { cls:'status-queued', text:'Queued' };
       if (data.status === 'running') {
         if (data.phase === 'epg' && data.total > 0) {
@@ -167,46 +166,32 @@
         }
         return { cls:'status-running', text:_phaseLabel[data.phase] || 'Running…' };
       }
-      if (!_scrapeActive[sourceId] && Date.now() < (_scrapeGrace[sourceId] || 0))
-        return { cls:'status-running', text:'Running…' };
-      return null;
+      return { cls:'status-running', text:'Running…' };
     }
 
     function _renderStatus(sourceId, data) {
       const el = document.getElementById(`scrape-status-${sourceId}`);
       if (!el) return;
-      const info = _statusText(data, sourceId);
-      if (!info) { el.innerHTML = ''; el.className = 'scrape-status'; return; }
+      const info = _statusText(data);
       el.className = `scrape-status ${info.cls}`;
       el.innerHTML = `<span class="status-dot"></span><span class="status-text">${info.text}</span>`;
     }
 
-    function _scrapeComplete(sourceId) {
-      delete _scrapeGrace[sourceId];
-      delete _scrapeActive[sourceId];
+    function _showResult(sourceId, lastError) {
+      delete _scrapeStart[sourceId];
       const btn = _scrapeBtn[sourceId];
       if (btn) { btn.textContent = 'Scrape Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
-      fetch('/api/sources').then(r => r.json()).then(sources => {
-        const src = sources.find(s => s.id === sourceId);
-        const el = document.getElementById(`scrape-status-${sourceId}`);
-        if (!el) return;
-        if (src && src.last_error) {
-          el.className = 'scrape-status';
-          el.innerHTML = `<span class="status-text" style="color:#f87171">⚠ ${src.last_error}</span>`;
-          setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 12000);
-        } else {
-          el.className = 'scrape-status';
-          el.innerHTML = '<span class="status-text" style="color:#34d399">✓ Complete</span>';
-          setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 8000);
-        }
-      }).catch(() => {
-        const el = document.getElementById(`scrape-status-${sourceId}`);
-        if (el) {
-          el.className = 'scrape-status';
-          el.innerHTML = '<span class="status-text" style="color:#34d399">✓ Complete</span>';
-          setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 8000);
-        }
-      });
+      const el = document.getElementById(`scrape-status-${sourceId}`);
+      if (!el) return;
+      if (lastError) {
+        el.className = 'scrape-status';
+        el.innerHTML = `<span class="status-text" style="color:#f87171">⚠ ${lastError}</span>`;
+        setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 12000);
+      } else {
+        el.className = 'scrape-status';
+        el.innerHTML = '<span class="status-text" style="color:#34d399">✓ Complete</span>';
+        setTimeout(() => { el.innerHTML = ''; el.className = 'scrape-status'; }, 8000);
+      }
     }
 
     function _startPolling(sourceId, btn) {
@@ -216,19 +201,26 @@
         try {
           const r = await fetch(`/api/sources/${sourceId}/scrape-status`);
           const d = await r.json();
-          const wasActive = _scrapeActive[sourceId];
-          if (d.status === 'running' || d.status === 'queued') _scrapeActive[sourceId] = true;
-          _renderStatus(sourceId, d);
           if (d.status === 'running' || d.status === 'queued') {
-            _pollTimers[sourceId] = setTimeout(poll, 2000);
-          } else if (wasActive) {
-            delete _pollTimers[sourceId];
-            _scrapeComplete(sourceId);
-          } else if (Date.now() < (_scrapeGrace[sourceId] || 0)) {
+            _renderStatus(sourceId, d);
             _pollTimers[sourceId] = setTimeout(poll, 2000);
           } else {
-            delete _pollTimers[sourceId];
-            _scrapeComplete(sourceId);
+            // idle — check if last_scraped_at is newer than when we triggered the scrape
+            const scraped = d.last_scraped_at ? new Date(d.last_scraped_at).getTime() : 0;
+            const start   = _scrapeStart[sourceId] || 0;
+            if (scraped > start) {
+              // confirmed done
+              delete _pollTimers[sourceId];
+              _showResult(sourceId, d.last_error || null);
+            } else if (Date.now() - start < 30000) {
+              // job hasn't completed yet — keep waiting (up to 30s)
+              _renderStatus(sourceId, d);
+              _pollTimers[sourceId] = setTimeout(poll, 2000);
+            } else {
+              // 30s elapsed, still no update — give up
+              delete _pollTimers[sourceId];
+              _showResult(sourceId, null);
+            }
           }
         } catch (e) {
           delete _pollTimers[sourceId];
@@ -247,7 +239,7 @@
         const d = await r.json();
         if (d.status === 'queued') {
           btn.textContent = 'Running…';
-          _scrapeGrace[id] = Date.now() + 30000;  // 30s grace for job startup
+          _scrapeStart[id] = Date.now();
           _startPolling(id, btn);
         } else {
           btn.textContent = 'Error';

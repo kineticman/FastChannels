@@ -147,7 +147,8 @@ def scrape_status(source_id):
                 pass
     except Exception:
         pass
-    return jsonify({'status': 'idle'})
+    last_scraped = source.last_scraped_at.isoformat() if source.last_scraped_at else None
+    return jsonify({'status': 'idle', 'last_scraped_at': last_scraped, 'last_error': source.last_error})
 
 
 @api_bp.route('/sources/<int:source_id>/stream-audit', methods=['POST'])
