@@ -7,8 +7,6 @@ FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling
 In Portainer, create a new stack and paste this:
 
 ```yaml
-version: '3.9'
-
 services:
   fastchannels:
     image: ghcr.io/kineticman/fastchannels:latest
