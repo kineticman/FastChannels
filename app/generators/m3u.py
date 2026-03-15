@@ -1,5 +1,6 @@
 import logging
 import re
+from sqlalchemy.orm import contains_eager
 from ..models import Channel, Source, Feed, AppSettings
 from ..url import proxy_logo_url
 
@@ -40,7 +41,7 @@ def _parse_gracenote_id(ch) -> str | None:
 
 def _build_channel_query(filters: dict):
     """Shared filtered query for active, enabled channels."""
-    query = Channel.query.join(Source).filter(
+    query = Channel.query.join(Source).options(contains_eager(Channel.source)).filter(
         Channel.is_active  == True,
         Channel.is_enabled == True,
         Source.is_enabled  == True,

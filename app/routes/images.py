@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 images_bp = Blueprint('images', __name__)
 
 _CACHE_DIR = '/data/logo_cache'
-_CACHE_TTL  = 24 * 60 * 60  # seconds
+_CACHE_TTL  = 7 * 24 * 60 * 60  # seconds (7 days — logos rarely change)
 _PREWARM_WORKERS = 8
 
 
@@ -55,14 +55,19 @@ def proxy_image():
         return Response(
             open(img_path, 'rb').read(),
             content_type=content_type,
-            headers={'Cache-Control': f'public, max-age={_CACHE_TTL}'},
+            headers={
+                'Cache-Control': f'public, max-age={_CACHE_TTL}',
+                'Connection': 'close',
+            },
         )
 
     # Cache miss — redirect to origin so the client isn't blocked waiting on
     # our outbound fetch.  The worker pre-warms the cache after each scrape so
     # subsequent requests are served from disk.
     logger.debug('[images] cache miss, redirecting: %s', url)
-    return redirect(url, code=302)
+    resp = redirect(url, code=302)
+    resp.headers['Connection'] = 'close'
+    return resp
 
 
 def cache_logo(url: str) -> bool:

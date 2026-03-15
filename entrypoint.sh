@@ -89,6 +89,8 @@ exec gunicorn \
     --bind 0.0.0.0:5523 \
     --workers 4 \
     --timeout 300 \
-    --keep-alive 5 \
+    --keep-alive 0 \
     --worker-tmp-dir /dev/shm \
+    --access-logfile - \
+    --access-logformat '%(h)s "%(r)s" %(s)s %(b)s %(T)ss' \
     "app:create_app()"

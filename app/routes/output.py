@@ -9,7 +9,7 @@ from ..generators.m3u import (
 from ..generators.xmltv import generate_xmltv
 from ..models import Feed
 from ..url import public_base_url
-from ..xml_cache import get_or_build_xml
+from ..xml_cache import get_or_build_xml, get_or_build
 
 output_bp = Blueprint('output', __name__)
 
@@ -29,7 +29,11 @@ def _filters():
 @output_bp.route('/m3u')
 def m3u():
     base_url = public_base_url()
-    content  = generate_m3u(_filters(), base_url=base_url)
+    filters  = _filters()
+    if filters:
+        content = generate_m3u(filters, base_url=base_url)
+    else:
+        content = get_or_build('master-m3u', lambda: generate_m3u({}, base_url=base_url), ext='m3u')
     return Response(content, mimetype='application/x-mpegurl',
                     headers={'Content-Disposition': 'attachment; filename="fastchannels.m3u"'})
 
@@ -47,11 +51,15 @@ def m3u_gracenote():
     as the standard /m3u endpoint.
     """
     base_url = public_base_url()
-    content  = generate_gracenote_m3u(
-        _filters(),
-        base_url=base_url,
-        namespace_start=_MASTER_GRACENOTE_START,
-    )
+    filters  = _filters()
+    if filters:
+        content = generate_gracenote_m3u(filters, base_url=base_url, namespace_start=_MASTER_GRACENOTE_START)
+    else:
+        content = get_or_build(
+            'master-gracenote-m3u',
+            lambda: generate_gracenote_m3u({}, base_url=base_url, namespace_start=_MASTER_GRACENOTE_START),
+            ext='m3u',
+        )
     return Response(content, mimetype='application/x-mpegurl',
                     headers={'Content-Disposition': 'attachment; filename="fastchannels-gracenote.m3u"'})
 
@@ -73,11 +81,12 @@ def feed_m3u(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = public_base_url()
     namespace_start = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=False)
-    content  = generate_m3u(
-        feed_to_query_filters(feed.filters or {}),
-        base_url=base_url,
-        feed_chnum_start=feed.chnum_start,
-        namespace_start=namespace_start,
+    filters  = feed_to_query_filters(feed.filters or {})
+    content  = get_or_build(
+        f'feed-{slug}-m3u',
+        lambda: generate_m3u(filters, base_url=base_url,
+                              feed_chnum_start=feed.chnum_start, namespace_start=namespace_start),
+        ext='m3u',
     )
     return Response(content, mimetype='application/x-mpegurl',
                     headers={'Content-Disposition': f'attachment; filename="{slug}.m3u"'})
@@ -88,11 +97,12 @@ def feed_m3u_gracenote(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = public_base_url()
     namespace_start = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=True)
-    content  = generate_gracenote_m3u(
-        feed_to_query_filters(feed.filters or {}),
-        base_url=base_url,
-        feed_chnum_start=feed.chnum_start,
-        namespace_start=namespace_start,
+    filters  = feed_to_query_filters(feed.filters or {})
+    content  = get_or_build(
+        f'feed-{slug}-gracenote-m3u',
+        lambda: generate_gracenote_m3u(filters, base_url=base_url,
+                                        feed_chnum_start=feed.chnum_start, namespace_start=namespace_start),
+        ext='m3u',
     )
     return Response(content, mimetype='application/x-mpegurl',
                     headers={'Content-Disposition': f'attachment; filename="{slug}-gracenote.m3u"'})
