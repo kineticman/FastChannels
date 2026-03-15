@@ -168,7 +168,9 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None):
     # Channel category map — used as fallback when prog.category is None
     ch_cat_map   = {ch.id: ch.category for ch in channels if ch.category}
     # Source display name map — added as a final <category> tag on every programme
-    ch_src_map   = {ch.id: ch.source.display_name for ch in channels}
+    ch_src_map      = {ch.id: ch.source.display_name for ch in channels}
+    # Source internal name map — used to decide poster proxy policy per source
+    ch_src_name_map = {ch.id: ch.source.name for ch in channels}
     # Channel name map — used for enrichment lookup
     ch_name_map  = {ch.id: ch.name for ch in channels}
     channel_ids = set(tvg_map.keys())
@@ -256,7 +258,13 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None):
             if src_name:
                 SubElement(el, 'category', lang='en').text = src_name
             if poster:
-                SubElement(el, 'icon', src=proxy_logo_url(poster, base_url) or poster)
+                # Only proxy/cache Roku posters (CDN returns 403 to clients).
+                # All other sources serve artwork directly — no caching overhead.
+                if ch_src_name_map.get(prog.channel_id) == 'roku':
+                    poster_src = proxy_logo_url(poster, base_url, 'poster') or poster
+                else:
+                    poster_src = poster
+                SubElement(el, 'icon', src=poster_src)
             if rating:
                 r = SubElement(el, 'rating', system='MPAA')
                 SubElement(r, 'value').text = rating

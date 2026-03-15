@@ -86,7 +86,10 @@ echo "✅ Worker started"
 
 echo "✅ Starting gunicorn on port 5523"
 exec gunicorn \
+    --config /app/gunicorn.conf.py \
     --bind 0.0.0.0:5523 \
+    --worker-class gevent \
+    --worker-connections 1000 \
     --workers 4 \
     --timeout 300 \
     --keep-alive 0 \

@@ -811,10 +811,24 @@ if __name__ == '__main__':
             _cleanup_orphans()
 
     def _scheduled_logo_cache_cleanup():
-        from app.routes.images import cleanup_logo_cache
+        from app.routes.images import cleanup_logo_cache, cleanup_poster_cache
         removed = cleanup_logo_cache()
         if removed:
-            logger.info('[logo_cache] removed %d expired files', removed)
+            logger.info('[logo_cache] removed %d expired logo files', removed)
+
+        # Delete cached posters for programs that ended more than 2 hours ago
+        with flask_app.app_context():
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+            expired_urls = [
+                row[0] for row in
+                db.session.query(Program.poster_url)
+                .filter(Program.end_time < cutoff, Program.poster_url.isnot(None))
+                .distinct()
+                .all()
+            ]
+        poster_removed = cleanup_poster_cache(expired_urls)
+        if poster_removed:
+            logger.info('[logo_cache] removed %d expired poster files', poster_removed)
 
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(_schedule_due_scrapes, 'interval', minutes=1, id='auto_scrape',

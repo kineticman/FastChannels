@@ -2,12 +2,16 @@
 Image proxy — caches remote logo/poster images locally so clients
 (e.g. Channels DVR) fetch from us instead of hitting source CDNs directly.
 
-Cache location : /data/logo_cache/
-TTL            : 24 hours (enforced by scheduled cleanup in worker)
+Cache layout:
+  /data/logo_cache/logos/    — channel station logos  (3-day TTL)
+  /data/logo_cache/posters/  — programme artwork       (kept until program ends + 2h,
+                                                         enforced by worker DB query;
+                                                         4-day safety-net TTL as fallback)
 
-On cache miss the proxy redirects the client to the original URL rather than
-blocking a gunicorn worker on an outbound fetch.  The background worker
-pre-warms the cache after each scrape so most requests are cache hits.
+On cache miss the image is fetched inline and served directly — no redirect.
+Under gevent workers the outbound fetch yields to other greenlets so it does
+not block concurrent requests.  The background worker pre-warms logo cache
+after each scrape so most logo requests are cache hits.
 """
 import hashlib
 import logging
@@ -16,74 +20,43 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests as _req
-from flask import Blueprint, Response, abort, redirect, request
+from flask import Blueprint, abort, request, send_file
 
 logger = logging.getLogger(__name__)
 
 images_bp = Blueprint('images', __name__)
 
-_CACHE_DIR = '/data/logo_cache'
-_CACHE_TTL  = 7 * 24 * 60 * 60  # seconds (7 days — logos rarely change)
+_LOGO_DIR     = '/data/logo_cache/logos'
+_POSTER_DIR   = '/data/logo_cache/posters'
+_LOGO_TTL     = 3 * 24 * 60 * 60   # 3 days
+_POSTER_TTL   = 4 * 24 * 60 * 60   # safety-net; primary expiry is DB-driven
 _PREWARM_WORKERS = 8
 
 
-def _cache_paths(url: str) -> tuple[str, str]:
+def _cache_dir(img_type: str) -> str:
+    return _POSTER_DIR if img_type == 'poster' else _LOGO_DIR
+
+
+def _cache_paths(url: str, img_type: str = 'logo') -> tuple[str, str]:
     key = hashlib.md5(url.encode()).hexdigest()
-    os.makedirs(_CACHE_DIR, exist_ok=True)
-    return os.path.join(_CACHE_DIR, key), os.path.join(_CACHE_DIR, key + '.ct')
+    d = _cache_dir(img_type)
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, key), os.path.join(d, key + '.ct')
 
 
-def _is_fresh(img_path: str) -> bool:
+def _is_fresh(img_path: str, ttl: int) -> bool:
     try:
-        return (time.time() - os.path.getmtime(img_path)) < _CACHE_TTL
+        return (time.time() - os.path.getmtime(img_path)) < ttl
     except OSError:
         return False
 
 
-@images_bp.route('/images/proxy')
-def proxy_image():
-    url = request.args.get('url', '').strip()
-    if not url:
-        abort(400)
-
-    img_path, ct_path = _cache_paths(url)
-
-    # Serve from cache if fresh
-    if _is_fresh(img_path) and os.path.exists(ct_path):
-        content_type = open(ct_path).read().strip() or 'image/jpeg'
-        logger.debug('[images] cache hit: %s', url)
-        return Response(
-            open(img_path, 'rb').read(),
-            content_type=content_type,
-            headers={
-                'Cache-Control': f'public, max-age={_CACHE_TTL}',
-                'Connection': 'close',
-            },
-        )
-
-    # Cache miss — redirect to origin so the client isn't blocked waiting on
-    # our outbound fetch.  The worker pre-warms the cache after each scrape so
-    # subsequent requests are served from disk.
-    logger.debug('[images] cache miss, redirecting: %s', url)
-    resp = redirect(url, code=302)
-    resp.headers['Connection'] = 'close'
-    return resp
-
-
-def cache_logo(url: str) -> bool:
-    """
-    Fetch *url* and store it in the logo cache.  Returns True on success.
-    Skips URLs that are already cached and fresh.
-    """
-    if not url:
-        return False
-    img_path, ct_path = _cache_paths(url)
-    if _is_fresh(img_path):
-        return True
+def _fetch_and_cache(url: str, img_path: str, ct_path: str) -> bool:
+    """Fetch *url* and write it to *img_path*/*ct_path*. Returns True on success."""
     try:
         r = _req.get(url, timeout=10, headers={'User-Agent': 'FastChannels/1.0'})
         if not r.ok:
-            logger.debug('[images] cache_logo HTTP %s for %s', r.status_code, url)
+            logger.debug('[images] fetch HTTP %s for %s', r.status_code, url)
             return False
         content_type = (r.headers.get('content-type') or 'image/jpeg').split(';')[0].strip()
         with open(img_path, 'wb') as f:
@@ -92,24 +65,63 @@ def cache_logo(url: str) -> bool:
             f.write(content_type)
         return True
     except Exception as exc:
-        logger.debug('[images] cache_logo failed for %s: %s', url, exc)
+        logger.debug('[images] fetch failed for %s: %s', url, exc)
         return False
+
+
+@images_bp.route('/images/proxy')
+def proxy_image():
+    url      = request.args.get('url', '').strip()
+    img_type = request.args.get('type', 'logo')   # 'logo' or 'poster'
+    if not url:
+        abort(400)
+
+    ttl = _POSTER_TTL if img_type == 'poster' else _LOGO_TTL
+    img_path, ct_path = _cache_paths(url, img_type)
+
+    if _is_fresh(img_path, ttl) and os.path.exists(ct_path):
+        logger.debug('[images] cache hit (%s): %s', img_type, url)
+        content_type = open(ct_path).read().strip() or 'image/jpeg'
+        resp = send_file(img_path, mimetype=content_type, conditional=True, max_age=ttl)
+        resp.headers['Connection'] = 'close'
+        return resp
+
+    logger.debug('[images] cache miss (%s): %s', img_type, url)
+    if _fetch_and_cache(url, img_path, ct_path):
+        content_type = open(ct_path).read().strip() or 'image/jpeg'
+        resp = send_file(img_path, mimetype=content_type, conditional=True, max_age=ttl)
+        resp.headers['Connection'] = 'close'
+        return resp
+
+    abort(404)
+
+
+def cache_logo(url: str, img_type: str = 'logo') -> bool:
+    """
+    Fetch *url* and store it in the cache.  Returns True on success.
+    Skips URLs that are already cached and fresh.
+    """
+    if not url:
+        return False
+    ttl = _POSTER_TTL if img_type == 'poster' else _LOGO_TTL
+    img_path, ct_path = _cache_paths(url, img_type)
+    if _is_fresh(img_path, ttl):
+        return True
+    return _fetch_and_cache(url, img_path, ct_path)
 
 
 def prewarm_logo_cache(urls: list[str]) -> tuple[int, int]:
     """
-    Download *urls* into the logo cache using a thread pool.
-    Skips URLs already cached and fresh.
-    Returns (cached, failed) counts.
+    Download channel logo *urls* into the logo cache using a thread pool.
+    Skips URLs already cached and fresh.  Returns (cached, failed) counts.
     """
     urls = [u for u in urls if u]
     if not urls:
         return 0, 0
-    # Split into already-fresh (skip) and stale/missing (fetch)
     stale, skipped = [], 0
     for u in urls:
-        img_path, _ = _cache_paths(u)
-        if _is_fresh(img_path):
+        img_path, _ = _cache_paths(u, 'logo')
+        if _is_fresh(img_path, _LOGO_TTL):
             skipped += 1
         else:
             stale.append(u)
@@ -118,7 +130,7 @@ def prewarm_logo_cache(urls: list[str]) -> tuple[int, int]:
                 total, skipped, len(stale), _PREWARM_WORKERS)
     cached = failed = 0
     with ThreadPoolExecutor(max_workers=_PREWARM_WORKERS) as pool:
-        futures = {pool.submit(cache_logo, u): u for u in stale}
+        futures = {pool.submit(cache_logo, u, 'logo'): u for u in stale}
         for fut in as_completed(futures):
             if fut.result():
                 cached += 1
@@ -133,18 +145,45 @@ def prewarm_logo_cache(urls: list[str]) -> tuple[int, int]:
     return cached, failed
 
 
-def cleanup_logo_cache() -> int:
-    """Delete cache files older than _CACHE_TTL. Returns count removed."""
-    if not os.path.exists(_CACHE_DIR):
+def _cleanup_dir(directory: str, ttl: int) -> int:
+    """Delete files in *directory* older than *ttl* seconds. Returns count removed."""
+    if not os.path.exists(directory):
         return 0
-    cutoff = time.time() - _CACHE_TTL
+    cutoff = time.time() - ttl
     removed = 0
-    for fname in os.listdir(_CACHE_DIR):
-        fpath = os.path.join(_CACHE_DIR, fname)
+    for fname in os.listdir(directory):
+        fpath = os.path.join(directory, fname)
         try:
             if os.path.getmtime(fpath) < cutoff:
                 os.unlink(fpath)
                 removed += 1
         except OSError:
             pass
+    return removed
+
+
+def cleanup_logo_cache() -> int:
+    """Delete logo cache files older than _LOGO_TTL. Returns count removed."""
+    return _cleanup_dir(_LOGO_DIR, _LOGO_TTL)
+
+
+def cleanup_poster_cache(expired_urls: list[str]) -> int:
+    """
+    Delete cached poster files for programs whose end_time has passed.
+    *expired_urls* is a list of poster_url values from the DB query in worker.py.
+    Also prunes any poster files older than _POSTER_TTL as a safety net.
+    Returns total count removed.
+    """
+    removed = 0
+    for url in expired_urls:
+        if not url:
+            continue
+        img_path, ct_path = _cache_paths(url, 'poster')
+        for p in (img_path, ct_path):
+            try:
+                os.unlink(p)
+                removed += 1
+            except OSError:
+                pass
+    removed += _cleanup_dir(_POSTER_DIR, _POSTER_TTL)
     return removed

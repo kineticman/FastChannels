@@ -48,11 +48,11 @@ def detected_base_url() -> str:
     return f"{parsed.scheme}://{lan_ip}{port}"
 
 
-def proxy_logo_url(url: str | None, base_url: str) -> str | None:
-    """Rewrite a remote logo URL to route through our local image proxy."""
+def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> str | None:
+    """Rewrite a remote image URL to route through our local image proxy."""
     if not url or not base_url:
         return url
-    return f"{base_url}/images/proxy?url={quote(url, safe='')}"
+    return f"{base_url}/images/proxy?url={quote(url, safe='')}&type={img_type}"
 
 
 def public_base_url() -> str:
