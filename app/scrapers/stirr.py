@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import re
 import xml.etree.ElementTree as ET
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from html import unescape
@@ -180,12 +180,16 @@ class StirrScraper(BaseScraper):
         programs: list[ProgramData] = []
         with ThreadPoolExecutor(max_workers=8) as pool:
             futures = {pool.submit(_fetch_one, ch): ch for ch in channels}
-            for future in as_completed(futures):
-                try:
-                    programs.extend(future.result())
-                except Exception as exc:
-                    ch = futures[future]
-                    logger.debug("[%s] EPG worker error for %s: %s", self.source_name, ch.source_channel_id, exc)
+            try:
+                for future in as_completed(futures, timeout=300):
+                    try:
+                        programs.extend(future.result())
+                    except Exception as exc:
+                        ch = futures[future]
+                        logger.debug("[%s] EPG worker error for %s: %s", self.source_name, ch.source_channel_id, exc)
+            except FuturesTimeoutError:
+                incomplete = sum(1 for f in futures if not f.done())
+                logger.warning("[%s] EPG fetch timed out after 300s; %d channel(s) incomplete", self.source_name, incomplete)
 
         logger.info("[%s] %d total programs fetched", self.source_name, len(programs))
         return programs
@@ -221,8 +225,8 @@ class StirrScraper(BaseScraper):
             if "#EXT-X-STREAM-INF" in rr.text:
                 best = self._pick_best_variant(media_url, rr.text)
                 return best or media_url
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[%s] HLS variant resolution failed for %s: %s", self.source_name, videoid, exc)
 
         return media_url
 
@@ -293,7 +297,7 @@ class StirrScraper(BaseScraper):
 
     def _coerce_int(self, val: Any) -> int | None:
         try: return int(val)
-        except: return None
+        except (TypeError, ValueError): return None
 
     # File extensions that indicate a value is a filename, not a URL hostname
     _FILE_EXTS = frozenset(("xml", "json", "m3u8", "m3u", "csv", "txt", "zip"))
@@ -384,8 +388,11 @@ class StirrScraper(BaseScraper):
         return results
 
     def _extract_programs_from_xmltv(self, channel_id: str, xml_text: str, epg_id: str) -> list[ProgramData]:
-        try: root = ET.fromstring(xml_text)
-        except: return []
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError as exc:
+            logger.debug("[%s] XMLTV parse error for %s: %s", self.source_name, channel_id, exc)
+            return []
 
         programmes = root.findall(".//programme")
         if not programmes:
@@ -466,7 +473,8 @@ class StirrScraper(BaseScraper):
             try:
                 dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
                 return dt.replace(tzinfo=timezone.utc) if not dt.tzinfo else dt.astimezone(timezone.utc)
-            except: pass
+            except ValueError:
+                pass
         return None
 
     def _parse_xmltv_dt(self, val: str | None) -> datetime | None:
@@ -474,4 +482,5 @@ class StirrScraper(BaseScraper):
         s = val.strip()
         try:
             return datetime.strptime(s[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-        except: return None
+        except ValueError:
+            return None
