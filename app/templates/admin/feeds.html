@@ -807,6 +807,11 @@ async function saveFeed() {
       try { const d = await r.json(); msg = d.error || msg; } catch {}
       throw new Error(msg);
     }
+    const saved = await r.json().catch(() => ({}));
+    // Fire prewarm requests before reload so cache is warm when page returns
+    const prewarmUrls = [saved.m3u_url, saved.epg_url, saved.gracenote_url].filter(Boolean);
+    if (saved.slug === 'default') prewarmUrls.push('/m3u', '/epg.xml', '/m3u/gracenote');
+    await Promise.allSettled(prewarmUrls.map(u => fetch(u)));
     closeModal();
     location.reload();
   } catch(e) {
@@ -890,6 +895,27 @@ function copyUrl(e, url) {
   });
 }
 
+// ── Post-save cache prewarm ───────────────────────────────────────────────
+function _prewarmFeed(feedData, statusEl) {
+  const urls = [feedData.m3u_url, feedData.epg_url, feedData.gracenote_url].filter(Boolean);
+  // For the default feed also prewarm the top-level /m3u and /epg.xml routes
+  if (feedData.slug === 'default') {
+    urls.push('/m3u', '/epg.xml', '/m3u/gracenote');
+  }
+  if (statusEl) { statusEl.textContent = '↻ Regenerating…'; statusEl.className = 'save-status'; }
+  let done = 0;
+  for (const url of urls) {
+    fetch(url).then(() => {
+      done++;
+      if (done === urls.length && statusEl) {
+        statusEl.textContent = '✓ Saved & regenerated';
+        statusEl.className   = 'save-status ok';
+        setTimeout(() => { statusEl.textContent = ''; }, 3000);
+      }
+    }).catch(() => { done++; });
+  }
+}
+
 // ── Save feed channel number start (inline on card) ──────────────────────
 async function saveFeedChnum(feedId) {
   const input  = document.getElementById(`chnum-${feedId}`);
@@ -905,9 +931,7 @@ async function saveFeedChnum(feedId) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    status.textContent = '✓ Saved';
-    status.className   = 'save-status ok';
-    setTimeout(() => { status.textContent = ''; }, 2500);
+    _prewarmFeed(data, status);
   } catch(e) {
     status.textContent = '✗ ' + e.message;
     status.className   = 'save-status error';
