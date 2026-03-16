@@ -32,7 +32,7 @@ def chnum_ranges():
     ranges = []
     exclude_id = request.args.get('exclude_id', type=int)
 
-    # Master M3U: count non-gracenote enabled channels
+    # Master M3U: count non-gracenote enabled channels; gracenote channels live at 100,000+
     master_count = _build_channel_query({'gracenote': 'missing'}).count()
     if master_count:
         master_start = AppSettings.get().effective_global_chnum_start()
@@ -40,7 +40,7 @@ def chnum_ranges():
             'feed_id':   None,
             'feed_name': 'Master M3U',
             'start':     master_start,
-            'end':       master_start + master_count - 1,
+            'end':       master_start + max(master_count, 1) - 1,
             'count':     master_count,
             'explicit':  True,
         })
@@ -51,8 +51,13 @@ def chnum_ranges():
         if exclude_id and feed.id == exclude_id:
             continue
         filters = feed_to_query_filters(feed.filters or {})
-        count = _build_channel_query(filters).count()
-        if count == 0:
+        # Standard M3U excludes gracenote channels; gracenote M3U is the complement.
+        # Both start at the same chnum_start, so use std_count for range end.
+        std_filters = {**filters, 'gracenote': 'missing'}
+        std_count = _build_channel_query(std_filters).count()
+        gn_filters = {**filters, 'gracenote': 'has'}
+        gn_count  = _build_channel_query(gn_filters).count()
+        if std_count + gn_count == 0:
             continue
         if feed.chnum_start:
             start = feed.chnum_start
@@ -62,8 +67,9 @@ def chnum_ranges():
             'feed_id':   feed.id,
             'feed_name': feed.name,
             'start':     start,
-            'end':       start + count - 1,
-            'count':     count,
+            'end':       start + max(std_count, 1) - 1,
+            'count':     std_count,
+            'gn_count':  gn_count,
             'explicit':  bool(feed.chnum_start),
         })
     return jsonify(ranges)

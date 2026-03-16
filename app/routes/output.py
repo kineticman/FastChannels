@@ -80,12 +80,19 @@ def epg_xml():
 def feed_m3u(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = public_base_url()
-    namespace_start = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=False)
     filters  = feed_to_query_filters(feed.filters or {})
+    # Default feed has no chnum_start on the Feed row — its numbering comes from
+    # AppSettings.global_chnum_start, same as /m3u.  Pass neither feed_chnum_start
+    # nor namespace_start so generate_m3u falls through to _build_source_chnum_map.
+    if feed.chnum_start is not None:
+        kw = {'feed_chnum_start': feed.chnum_start}
+    elif feed.slug == 'default':
+        kw = {}
+    else:
+        kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
     content  = get_or_build(
         f'feed-{slug}-m3u',
-        lambda: generate_m3u(filters, base_url=base_url,
-                              feed_chnum_start=feed.chnum_start, namespace_start=namespace_start),
+        lambda: generate_m3u(filters, base_url=base_url, **kw),
         ext='m3u',
     )
     return Response(content, mimetype='application/x-mpegurl',
@@ -96,12 +103,16 @@ def feed_m3u(slug):
 def feed_m3u_gracenote(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = public_base_url()
-    namespace_start = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=True)
     filters  = feed_to_query_filters(feed.filters or {})
+    if feed.chnum_start is not None:
+        kw = {'feed_chnum_start': feed.chnum_start}
+    elif feed.slug == 'default':
+        kw = {'namespace_start': _MASTER_GRACENOTE_START}
+    else:
+        kw = {'namespace_start': feed_namespace_start(feed, gracenote=True)}
     content  = get_or_build(
         f'feed-{slug}-gracenote-m3u',
-        lambda: generate_gracenote_m3u(filters, base_url=base_url,
-                                        feed_chnum_start=feed.chnum_start, namespace_start=namespace_start),
+        lambda: generate_gracenote_m3u(filters, base_url=base_url, **kw),
         ext='m3u',
     )
     return Response(content, mimetype='application/x-mpegurl',

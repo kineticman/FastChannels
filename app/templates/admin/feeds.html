@@ -289,8 +289,10 @@
           <div class="field">
             <label>Master Channel Number Start <span style="color:#475569;font-weight:400;text-transform:none;font-size:0.75rem">(tvg-chno)</span></label>
             <input type="number" id="default-global-chnum-start" min="1" max="99999"
-                   placeholder="e.g. 1000" value="{{ global_chnum_start or '' }}">
-            <div class="help">Applies to all sources without their own channel number start.{% if global_chnum_start_from_env %} Currently from env var <code>MASTER_CHANNEL_NUMBER_START</code> — saving here overrides it.{% endif %}</div>
+                   placeholder="e.g. 10000" value="{{ global_chnum_start or '' }}"
+                   oninput="checkDefaultChnumConflict()">
+            <div class="help">Applies to all sources without their own channel number start.{% if global_chnum_start_from_env %} Currently from env var <code>MASTER_CHANNEL_NUMBER_START</code> — saving here overrides it.{% endif %} Note: channel numbers 100,000+ are reserved for internal namespaces.</div>
+            <div id="default-chnum-hint" style="margin-top:4px;font-size:0.78rem;line-height:1.6"></div>
           </div>
           <span class="save-status" id="default-global-chnum-status"></span>
           <button class="btn btn-ghost" type="button" onclick="saveDefaultChannelNumbering()">Save</button>
@@ -629,10 +631,67 @@ async function checkInlineChnumConflict(feedId) {
   }
   if (shown.length > 0) {
     html += '<span style="color:#64748b">In use: </span>';
-    html += shown.map(r =>
-      `<span style="color:#94a3b8">${r.feed_name} (${r.start.toLocaleString()}–${r.end.toLocaleString()})</span>`
-    ).join(' &nbsp;·&nbsp; ');
+    html += shown.map(r => {
+      let label = `${r.feed_name} (${r.start.toLocaleString()}–${r.end.toLocaleString()}`;
+      if (r.gn_count) label += ` +${r.gn_count.toLocaleString()} gracenote`;
+      label += ')';
+      return `<span style="color:#94a3b8">${label}</span>`;
+    }).join(' &nbsp;·&nbsp; ');
   }
+  el.innerHTML = html;
+}
+
+let _defaultRanges = null;
+
+async function checkDefaultChnumConflict() {
+  const input = document.getElementById('default-global-chnum-start');
+  const el    = document.getElementById('default-chnum-hint');
+  if (!input || !el) return;
+
+  if (!_defaultRanges) {
+    try {
+      const r = await fetch('/api/feeds/chnum-ranges');
+      _defaultRanges = await r.json();
+    } catch { _defaultRanges = []; }
+  }
+
+  const val = parseInt(input.value, 10);
+  if (isNaN(val)) { el.innerHTML = ''; return; }
+
+  // Master M3U entry from the ranges response
+  const masterEntry = _defaultRanges.find(r => r.feed_id === null);
+  const masterCount = masterEntry ? masterEntry.count : 0;
+  const masterEnd   = masterCount ? val + masterCount - 1 : val;
+
+  let html = '';
+
+  // Show estimated master range (standard M3U only; gracenote M3U is always at 100,000+)
+  if (masterCount) {
+    html += `<span style="color:#64748b">Master M3U: </span>`
+          + `<span style="color:#94a3b8">${val.toLocaleString()}–${masterEnd.toLocaleString()} (${masterCount.toLocaleString()} channels)</span>`;
+  }
+
+  // Note when approaching auto-assigned namespaces (advisory only — these are separate M3U sources)
+  const GRACENOTE_NS  = 100000;
+  const FEED_NS_BASE  = 200000;
+  if (masterEnd >= FEED_NS_BASE) {
+    html += `<div style="color:#fbbf24">⚠ Enters auto-assigned feed namespace (${FEED_NS_BASE.toLocaleString()}+) — only matters if someone subscribes to both master and an auto-numbered feed</div>`;
+  } else if (masterEnd >= GRACENOTE_NS) {
+    html += `<div style="color:#fbbf24">⚠ Enters Gracenote namespace (${GRACENOTE_NS.toLocaleString()}+) — only matters if someone subscribes to both /m3u and /m3u/gracenote simultaneously</div>`;
+  }
+
+  // Show other explicit feed ranges as context (master/feed overlap is expected but useful to see)
+  const feedRanges = _defaultRanges.filter(r => r.feed_id !== null && r.explicit);
+  if (feedRanges.length > 0) {
+    html += (html ? '<br>' : '') + '<span style="color:#64748b">Feed ranges: </span>';
+    html += feedRanges.map(r => {
+      let label = `${r.feed_name} (${r.start.toLocaleString()}–${r.end.toLocaleString()}`;
+      if (r.gn_count) label += ` +${r.gn_count.toLocaleString()} gracenote`;
+      label += ')';
+      return `<span style="color:#94a3b8">${label}</span>`;
+    }).join(' &nbsp;·&nbsp; ');
+  }
+
   el.innerHTML = html;
 }
 
@@ -820,11 +879,12 @@ async function saveDefaultChannelNumbering() {
   status.className = 'save-status';
   try {
     const raw = input.value.trim();
+    const n = raw ? parseInt(raw, 10) : null;
     const r = await fetch('/api/settings', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        global_chnum_start: raw ? parseInt(raw, 10) : null,
+        global_chnum_start: n,
       }),
     });
     const data = await r.json().catch(() => ({}));
@@ -945,6 +1005,7 @@ document.querySelectorAll('[id^="chnum-"]').forEach(input => {
   const m = input.id.match(/^chnum-(\d+)$/);
   if (m && input.value) checkInlineChnumConflict(parseInt(m[1], 10));
 });
+if (document.getElementById('default-global-chnum-start')?.value) checkDefaultChnumConflict();
 </script>
 </body>
 </html>
