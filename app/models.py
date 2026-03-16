@@ -212,7 +212,13 @@ class AppSettings(db.Model):
         return cls._env_str('CHANNELS_DVR_SERVER_URL')
 
     def effective_global_chnum_start(self) -> int | None:
-        return self.global_chnum_start if self.global_chnum_start is not None else self.env_global_chnum_start()
+        # Primary source is now the default Feed's chnum_start column.
+        # AppSettings.global_chnum_start is legacy; schema migration copies it
+        # to the feed row on first boot after upgrade.
+        default_feed = Feed.query.filter_by(slug='default').first()
+        if default_feed and default_feed.chnum_start is not None:
+            return default_feed.chnum_start
+        return self.env_global_chnum_start()
 
     def effective_public_base_url(self) -> str | None:
         value = (self.public_base_url or '').strip().rstrip('/')

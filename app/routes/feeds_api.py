@@ -121,20 +121,25 @@ def get_feed(feed_id):
 @feeds_api_bp.route('/<int:feed_id>', methods=['PATCH'])
 def update_feed(feed_id):
     feed = Feed.query.get_or_404(feed_id)
-    if feed.slug in SYSTEM_FEED_SLUGS:
-        return jsonify({'error': 'Built-in feeds cannot be edited.'}), 403
     data = request.get_json() or {}
 
-    if 'name' in data:
-        feed.name = data['name'].strip()
-    if 'description' in data:
-        feed.description = data['description']
-    if 'filters' in data:
-        feed.filters = _clean_filters(data['filters'])
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        # System feeds only allow chnum_start to be changed.
+        disallowed = set(data.keys()) - {'chnum_start'}
+        if disallowed:
+            return jsonify({'error': 'Built-in feeds cannot be edited.'}), 403
+    else:
+        if 'name' in data:
+            feed.name = data['name'].strip()
+        if 'description' in data:
+            feed.description = data['description']
+        if 'filters' in data:
+            feed.filters = _clean_filters(data['filters'])
+        if 'is_enabled' in data:
+            feed.is_enabled = bool(data['is_enabled'])
+
     if 'chnum_start' in data:
         feed.chnum_start = _parse_chnum_start(data['chnum_start'])
-    if 'is_enabled' in data:
-        feed.is_enabled = bool(data['is_enabled'])
 
     with db.session.no_autoflush:
         warnings = get_global_chnum_overlaps()

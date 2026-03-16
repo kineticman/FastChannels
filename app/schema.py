@@ -152,3 +152,24 @@ def ensure_runtime_schema() -> None:
                 ),
                 feed,
             )
+
+        # Migrate global_chnum_start from AppSettings → default Feed.chnum_start.
+        # AppSettings.global_chnum_start is now legacy; the Feed column is authoritative.
+        if "app_settings" in tables:
+            as_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(app_settings)"))}
+            if "global_chnum_start" in as_cols:
+                row = conn.execute(
+                    text("SELECT global_chnum_start FROM app_settings WHERE id = 1")
+                ).fetchone()
+                if row and row[0] is not None:
+                    default_feed_row = conn.execute(
+                        text("SELECT id, chnum_start FROM feeds WHERE slug = 'default' LIMIT 1")
+                    ).fetchone()
+                    if default_feed_row and default_feed_row[1] is None:
+                        conn.execute(
+                            text("UPDATE feeds SET chnum_start = :val WHERE id = :fid"),
+                            {"val": row[0], "fid": default_feed_row[0]},
+                        )
+                    conn.execute(
+                        text("UPDATE app_settings SET global_chnum_start = NULL WHERE id = 1")
+                    )

@@ -919,28 +919,16 @@ def app_settings():
     row = AppSettings.get()
     if request.method == 'POST':
         data = request.get_json(force=True) or {}
-        changed = False
-        if 'global_chnum_start' in data:
-            val = data['global_chnum_start']
-            row.global_chnum_start = int(val) if val is not None else None
-            changed = True
         if 'channels_dvr_url' in data:
             row.channels_dvr_url = _normalize_server_url(data['channels_dvr_url'], default_port=8089)
         if 'public_base_url' in data:
             row.public_base_url = _normalize_server_url(data['public_base_url'], default_port=5523)
-        if changed:
-            warnings = get_global_chnum_overlaps()
-            if warnings:
-                db.session.rollback()
-                return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
         db.session.commit()
         invalidate_xml_cache()
         row = AppSettings.get()
     return jsonify({
-        'global_chnum_start': row.effective_global_chnum_start(),
-        'channels_dvr_url':   row.effective_channels_dvr_url(),
-        'public_base_url':    row.effective_public_base_url(),
-        'global_chnum_start_source': 'db' if row.global_chnum_start is not None else ('env' if row.env_global_chnum_start() is not None else 'unset'),
+        'channels_dvr_url':  row.effective_channels_dvr_url(),
+        'public_base_url':   row.effective_public_base_url(),
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.env_public_base_url() is not None else 'unset'),
     })

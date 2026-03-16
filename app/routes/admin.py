@@ -170,21 +170,19 @@ def feeds():
         .distinct().order_by(Channel.language).all()
     languages  = [{'code': r[0], 'label': r[0]} for r in langs]
     base_url   = public_base_url()
-    global_chnum_start = app_settings.effective_global_chnum_start()
-    # Effective starting channel number for each custom feed:
-    #   - feed.chnum_start set → that value (shown as input value, not placeholder)
-    #   - not set → auto-namespace (200000, 400000, … based on slug order)
+    default_feed = next((f for f in feeds if f.slug == 'default'), None)
+    # chnum_start is now the single source of truth for all feeds including default.
+    # Show the auto-assigned namespace as placeholder for feeds without an explicit value.
     feed_chnum_placeholder = {}
     for feed in feeds:
-        if feed.slug != 'default' and feed.chnum_start is None:
+        if feed.chnum_start is None and feed.slug != 'default':
             feed_chnum_placeholder[feed.id] = feed_namespace_start(feed, gracenote=False)
     return render_template('admin/feeds.html',
                            feeds=feeds, sources=sources,
                            categories=categories, languages=languages,
                            base_url=base_url,
-                           global_chnum_start=global_chnum_start,
                            feed_chnum_placeholder=feed_chnum_placeholder,
-                           global_chnum_start_from_env=app_settings.global_chnum_start is None and app_settings.env_global_chnum_start() is not None)
+                           default_chnum_from_env=default_feed and default_feed.chnum_start is None and app_settings.env_global_chnum_start() is not None)
 
 
 @admin_bp.route('/settings')
