@@ -214,7 +214,15 @@ def update_source(source_id):
     data = request.get_json()
     changed = False
     if 'is_enabled' in data:
-        source.is_enabled = bool(data['is_enabled'])
+        new_enabled = bool(data['is_enabled'])
+        if not new_enabled and source.is_enabled:
+            # Purge all channels and programs for this source so the Channels
+            # page stays clean. Re-enabling will repopulate on next scrape.
+            ch_ids = [r[0] for r in source.channels.with_entities(Channel.id).all()]
+            if ch_ids:
+                Program.query.filter(Program.channel_id.in_(ch_ids)).delete(synchronize_session=False)
+                source.channels.delete(synchronize_session=False)
+        source.is_enabled = new_enabled
         changed = True
     if 'scrape_interval' in data:
         source.scrape_interval = int(data['scrape_interval'])
