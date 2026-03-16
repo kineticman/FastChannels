@@ -592,6 +592,8 @@ class RokuScraper(BaseScraper):
                     self._cache_stream_url(sid, stream_url)
                     logger.info("[roku] prewarm seed: seeded osm_session from %s", sid)
                     return True
+            if self._cooldown_active():
+                return False
             # If this channel failed (404, 401, etc.) try the next one
         logger.warning("[roku] prewarm seed: could not seed osm_session — no channel succeeded")
         return False
