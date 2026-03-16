@@ -104,6 +104,36 @@ def feed_namespace_start(feed: Feed, *, gracenote: bool) -> int:
     return base + (_CHNUM_NAMESPACE_BLOCK if gracenote else 0)
 
 
+def feed_gracenote_start(feed: Feed) -> int:
+    """
+    Starting channel number for a feed's gracenote M3U.
+
+    Gracenote channels are placed immediately after the standard (non-gracenote)
+    channels so the entire feed shares one contiguous numeric pool with no gaps
+    or overlaps between the two M3U variants.
+
+    For feeds with an explicit chnum_start this is a simple COUNT query.
+    For the default feed (source-based numbering) we build the full chnum map
+    to find the actual highest number in use.
+    """
+    filters = feed_to_query_filters(feed.filters or {})
+    std_filters = {**filters, 'gracenote': 'missing'}
+
+    if feed.slug == 'default':
+        std_channels = _selected_channels(std_filters, gracenote=None)
+        if not std_channels:
+            return AppSettings.get().effective_global_chnum_start() or 1
+        chnum_map, _ = _build_source_chnum_map(std_channels)
+        if not chnum_map:
+            return AppSettings.get().effective_global_chnum_start() or 1
+        return max(chnum_map.values()) + 1
+    elif feed.chnum_start is not None:
+        std_count = _build_channel_query(std_filters).count()
+        return feed.chnum_start + std_count
+    else:
+        return feed_namespace_start(feed, gracenote=True)
+
+
 def feed_to_query_filters(feed_filters: dict) -> dict:
     """Translate Feed.filters (plural keys) to _build_channel_query format."""
     f = {}

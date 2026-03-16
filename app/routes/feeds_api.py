@@ -31,19 +31,19 @@ def chnum_ranges():
     ranges = []
     exclude_id = request.args.get('exclude_id', type=int)
 
-    # Per-feed ranges (default feed IS the master M3U — no separate master entry needed)
+    # Per-feed ranges — gracenote and standard share the same pool, so the
+    # reported range covers both (start to start + std_count + gn_count - 1).
     feeds = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
     for feed in feeds:
         if exclude_id and feed.id == exclude_id:
             continue
         filters = feed_to_query_filters(feed.filters or {})
-        # Standard M3U excludes gracenote channels; gracenote M3U is the complement.
-        # Both start at the same chnum_start, so use std_count for range end.
         std_filters = {**filters, 'gracenote': 'missing'}
         std_count = _build_channel_query(std_filters).count()
-        gn_filters = {**filters, 'gracenote': 'has'}
-        gn_count  = _build_channel_query(gn_filters).count()
-        if std_count + gn_count == 0:
+        gn_filters  = {**filters, 'gracenote': 'has'}
+        gn_count    = _build_channel_query(gn_filters).count()
+        total_count = std_count + gn_count
+        if total_count == 0:
             continue
         if feed.chnum_start:
             start = feed.chnum_start
@@ -53,7 +53,7 @@ def chnum_ranges():
             'feed_id':   feed.id,
             'feed_name': feed.name,
             'start':     start,
-            'end':       start + max(std_count, 1) - 1,
+            'end':       start + total_count - 1,
             'count':     std_count,
             'gn_count':  gn_count,
             'explicit':  bool(feed.chnum_start),

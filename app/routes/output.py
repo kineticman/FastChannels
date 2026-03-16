@@ -3,6 +3,7 @@ from ..generators.m3u import (
     generate_m3u,
     generate_gracenote_m3u,
     feed_namespace_start,
+    feed_gracenote_start,
     feed_to_query_filters,
     _MASTER_GRACENOTE_START,
 )
@@ -50,14 +51,17 @@ def m3u_gracenote():
     Supports the same ?source=, ?category=, ?language=, ?search= filters
     as the standard /m3u endpoint.
     """
-    base_url = public_base_url()
-    filters  = _filters()
+    from ..models import Feed
+    base_url     = public_base_url()
+    filters      = _filters()
+    default_feed = Feed.query.filter_by(slug='default').first()
+    gn_start     = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
     if filters:
-        content = generate_gracenote_m3u(filters, base_url=base_url, namespace_start=_MASTER_GRACENOTE_START)
+        content = generate_gracenote_m3u(filters, base_url=base_url, namespace_start=gn_start)
     else:
         content = get_or_build(
             'master-gracenote-m3u',
-            lambda: generate_gracenote_m3u({}, base_url=base_url, namespace_start=_MASTER_GRACENOTE_START),
+            lambda: generate_gracenote_m3u({}, base_url=base_url, namespace_start=gn_start),
             ext='m3u',
         )
     return Response(content, mimetype='application/x-mpegurl',
@@ -104,12 +108,9 @@ def feed_m3u_gracenote(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = public_base_url()
     filters  = feed_to_query_filters(feed.filters or {})
-    if feed.slug == 'default':
-        kw = {'namespace_start': _MASTER_GRACENOTE_START}
-    elif feed.chnum_start is not None:
-        kw = {'feed_chnum_start': feed.chnum_start}
-    else:
-        kw = {'namespace_start': feed_namespace_start(feed, gracenote=True)}
+    # Gracenote channels start immediately after standard channels in the same pool.
+    # feed_gracenote_start() computes the right offset for all feed types.
+    kw = {'namespace_start': feed_gracenote_start(feed)}
     content  = get_or_build(
         f'feed-{slug}-gracenote-m3u',
         lambda: generate_gracenote_m3u(filters, base_url=base_url, **kw),
