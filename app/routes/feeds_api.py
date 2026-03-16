@@ -28,24 +28,10 @@ def chnum_ranges():
     even with thousands of channels.
     """
     from ..generators.m3u import _build_channel_query, feed_namespace_start
-    from ..models import AppSettings
     ranges = []
     exclude_id = request.args.get('exclude_id', type=int)
 
-    # Master M3U: count non-gracenote enabled channels; gracenote channels live at 100,000+
-    master_count = _build_channel_query({'gracenote': 'missing'}).count()
-    if master_count:
-        master_start = AppSettings.get().effective_global_chnum_start()
-        ranges.append({
-            'feed_id':   None,
-            'feed_name': 'Master M3U',
-            'start':     master_start,
-            'end':       master_start + max(master_count, 1) - 1,
-            'count':     master_count,
-            'explicit':  True,
-        })
-
-    # Per-feed ranges
+    # Per-feed ranges (default feed IS the master M3U — no separate master entry needed)
     feeds = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
     for feed in feeds:
         if exclude_id and feed.id == exclude_id:

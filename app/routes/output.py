@@ -81,13 +81,13 @@ def feed_m3u(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = public_base_url()
     filters  = feed_to_query_filters(feed.filters or {})
-    # Default feed has no chnum_start on the Feed row — its numbering comes from
-    # AppSettings.global_chnum_start, same as /m3u.  Pass neither feed_chnum_start
-    # nor namespace_start so generate_m3u falls through to _build_source_chnum_map.
-    if feed.chnum_start is not None:
-        kw = {'feed_chnum_start': feed.chnum_start}
-    elif feed.slug == 'default':
+    # Default feed: chnum_start is the global fallback start for ungrouped sources,
+    # not a feed-level override — always delegate to _build_source_chnum_map (same
+    # as /m3u) so per-source chnum_start values are still respected.
+    if feed.slug == 'default':
         kw = {}
+    elif feed.chnum_start is not None:
+        kw = {'feed_chnum_start': feed.chnum_start}
     else:
         kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
     content  = get_or_build(
@@ -104,10 +104,10 @@ def feed_m3u_gracenote(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = public_base_url()
     filters  = feed_to_query_filters(feed.filters or {})
-    if feed.chnum_start is not None:
-        kw = {'feed_chnum_start': feed.chnum_start}
-    elif feed.slug == 'default':
+    if feed.slug == 'default':
         kw = {'namespace_start': _MASTER_GRACENOTE_START}
+    elif feed.chnum_start is not None:
+        kw = {'feed_chnum_start': feed.chnum_start}
     else:
         kw = {'namespace_start': feed_namespace_start(feed, gracenote=True)}
     content  = get_or_build(
