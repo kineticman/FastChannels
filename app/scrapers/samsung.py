@@ -60,14 +60,18 @@ class SamsungScraper(BaseScraper):
             required=False,
             default='us',
             placeholder='us',
-            help_text='Region code to scrape: us, ca, gb, de, fr, es, it, au, kr, in, at, ch',
+            help_text='One or more region codes separated by commas: us, ca, gb, de, fr, es, it, au, kr, in, at, ch',
         ),
     ]
 
     # ── helpers ────────────────────────────────────────────────────────────────
 
-    def _region(self) -> str:
-        return (self.config.get('region') or 'us').lower().strip()
+    def _regions(self) -> list[str]:
+        """Return a list of normalised region codes from config (supports comma/pipe/space separators)."""
+        import re
+        raw = self.config.get('region') or 'us'
+        codes = [c.strip().lower() for c in re.split(r'[,|/\s]+', raw) if c.strip()]
+        return codes or ['us']
 
     def _fetch_gz_json(self, url: str) -> dict:
         r = self.session.get(url, timeout=30, headers={'User-Agent': 'okhttp/4.12.0'})
@@ -84,86 +88,103 @@ class SamsungScraper(BaseScraper):
     # ── fetch_channels ─────────────────────────────────────────────────────────
 
     def fetch_channels(self) -> list[ChannelData]:
-        region = self._region()
-        logger.info('[samsung] fetching channel list for region=%s', region)
+        regions = self._regions()
+        logger.info('[samsung] fetching channel list for regions=%s', regions)
 
         data = self._fetch_gz_json(_CHANNELS_URL)
-        regions = data.get('regions', {})
-        region_data = regions.get(region)
-        if not region_data:
-            logger.warning('[samsung] region %r not found; available: %s',
-                           region, list(regions.keys()))
-            return []
+        all_regions = data.get('regions', {})
 
-        channels_raw = region_data.get('channels', {})
         channels: list[ChannelData] = []
+        seen_ids: set[str] = set()
 
-        for ch_id, ch in channels_raw.items():
-            # Skip DRM/licensed channels — they won't play without the license
-            if ch.get('license_url'):
+        for region in regions:
+            region_data = all_regions.get(region)
+            if not region_data:
+                logger.warning('[samsung] region %r not found; available: %s',
+                               region, list(all_regions.keys()))
                 continue
 
-            name     = ch.get('name') or ch_id
-            logo     = ch.get('logo')
-            group    = ch.get('group') or 'Live TV'
-            chno     = ch.get('chno')
-            language = infer_language_from_metadata(name, group)
+            channels_raw = region_data.get('channels', {})
+            region_count = 0
 
-            channels.append(ChannelData(
-                source_channel_id = ch_id,
-                name              = name,
-                stream_url        = _STREAM_URL.format(id=ch_id),
-                logo_url          = logo,
-                category          = group,
-                language          = language,
-                country           = region.upper(),
-                stream_type       = 'hls',
-                number            = int(chno) if chno else None,
-            ))
+            for ch_id, ch in channels_raw.items():
+                if ch_id in seen_ids:
+                    continue
+                # Skip DRM/licensed channels — they won't play without the license
+                if ch.get('license_url'):
+                    continue
 
-        logger.info('[samsung] %d channels fetched (region=%s)', len(channels), region)
+                seen_ids.add(ch_id)
+                name     = ch.get('name') or ch_id
+                logo     = ch.get('logo')
+                group    = ch.get('group') or 'Live TV'
+                chno     = ch.get('chno')
+                language = infer_language_from_metadata(name, group)
+
+                channels.append(ChannelData(
+                    source_channel_id = ch_id,
+                    name              = name,
+                    stream_url        = _STREAM_URL.format(id=ch_id),
+                    logo_url          = logo,
+                    category          = group,
+                    language          = language,
+                    country           = region.upper(),
+                    stream_type       = 'hls',
+                    number            = int(chno) if chno else None,
+                ))
+                region_count += 1
+
+            logger.info('[samsung] %d channels fetched (region=%s)', region_count, region)
+
+        logger.info('[samsung] %d total channels across %d region(s)', len(channels), len(regions))
         return channels
 
     # ── fetch_epg ──────────────────────────────────────────────────────────────
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
-        region = self._region()
+        regions = self._regions()
         known_ids = {ch.source_channel_id for ch in channels}
 
-        logger.info('[samsung] fetching EPG for region=%s (%d channels)', region, len(known_ids))
-
-        try:
-            root = self._fetch_gz_xml(_EPG_URL.format(region=region))
-        except Exception as exc:
-            logger.warning('[samsung] EPG fetch failed: %s', exc)
-            return []
+        logger.info('[samsung] fetching EPG for regions=%s (%d channels)', regions, len(known_ids))
 
         programs: list[ProgramData] = []
-        for prog in root.iter('programme'):
-            ch_id = prog.get('channel', '')
-            if ch_id not in known_ids:
+
+        for region in regions:
+            try:
+                root = self._fetch_gz_xml(_EPG_URL.format(region=region))
+            except Exception as exc:
+                logger.warning('[samsung] EPG fetch failed for region=%s: %s', region, exc)
                 continue
 
-            start = _parse_xmltv_ts(prog.get('start', ''))
-            stop  = _parse_xmltv_ts(prog.get('stop', ''))
-            if not start or not stop:
-                continue
+            region_count = 0
+            for prog in root.iter('programme'):
+                ch_id = prog.get('channel', '')
+                if ch_id not in known_ids:
+                    continue
 
-            title     = (prog.findtext('title') or '').strip() or 'Unknown'
-            desc      = (prog.findtext('desc') or '').strip() or None
-            rating    = (prog.findtext('rating/value') or '').strip() or None
-            icon_el   = prog.find('icon')
-            poster    = icon_el.get('src') if icon_el is not None else None
+                start = _parse_xmltv_ts(prog.get('start', ''))
+                stop  = _parse_xmltv_ts(prog.get('stop', ''))
+                if not start or not stop:
+                    continue
 
-            programs.append(ProgramData(
-                source_channel_id = ch_id,
-                title             = title,
-                start_time        = start,
-                end_time          = stop,
-                description       = desc,
-                poster_url        = poster,
-                rating            = rating,
-            ))
+                title     = (prog.findtext('title') or '').strip() or 'Unknown'
+                desc      = (prog.findtext('desc') or '').strip() or None
+                rating    = (prog.findtext('rating/value') or '').strip() or None
+                icon_el   = prog.find('icon')
+                poster    = icon_el.get('src') if icon_el is not None else None
 
-        logger.info('[samsung] %d programs parsed (region=%s)', len(programs), region)
+                programs.append(ProgramData(
+                    source_channel_id = ch_id,
+                    title             = title,
+                    start_time        = start,
+                    end_time          = stop,
+                    description       = desc,
+                    poster_url        = poster,
+                    rating            = rating,
+                ))
+                region_count += 1
+
+            logger.info('[samsung] %d programs parsed (region=%s)', region_count, region)
+
+        logger.info('[samsung] %d total programs across %d region(s)', len(programs), len(regions))
         return programs
