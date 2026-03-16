@@ -39,43 +39,7 @@ class LGChannelsScraper(BaseScraper):
             required=False,
             default="US",
             placeholder="US",
-            help_text="LG device country header and URL macro value. Default: US.",
-        ),
-        ConfigField(
-            key="language",
-            label="Language",
-            field_type="text",
-            required=False,
-            default="en",
-            placeholder="en",
-            help_text="LG device language header. Default: en.",
-        ),
-        ConfigField(
-            key="device_type",
-            label="LG Device Type Header",
-            field_type="text",
-            required=False,
-            default="WEB",
-            placeholder="WEB",
-            help_text="Value for x-device-type header on API requests. Default: WEB.",
-        ),
-        ConfigField(
-            key="play_device_type",
-            label="Playback Device Type",
-            field_type="text",
-            required=False,
-            default="Personal Computer",
-            placeholder="Personal Computer",
-            help_text="Value substituted into playback URL macros like [DEVICE_TYPE].",
-        ),
-        ConfigField(
-            key="app_name",
-            label="Playback App Name",
-            field_type="text",
-            required=False,
-            default="lgchannels_web",
-            placeholder="lgchannels_web",
-            help_text="Value substituted into playback URL macros like [APP_NAME].",
+            help_text="Country code for channel/EPG filtering. Default: US.",
         ),
         ConfigField(
             key="probe_best_variant",
@@ -93,13 +57,11 @@ class LGChannelsScraper(BaseScraper):
         super().__init__(config)
         self._schedulelist_cache: dict | None = None
 
-        self.country = (self.config.get("country") or "US").strip() or "US"
-        self.language = (self.config.get("language") or "en").strip() or "en"
-        self.device_type = (self.config.get("device_type") or "WEB").strip() or "WEB"
-        self.play_device_type = (
-            self.config.get("play_device_type") or "Personal Computer"
-        ).strip() or "Personal Computer"
-        self.app_name = (self.config.get("app_name") or "lgchannels_web").strip() or "lgchannels_web"
+        self.country          = (self.config.get("country") or "US").strip() or "US"
+        self.language         = "en"
+        self.device_type      = "WEB"
+        self.play_device_type = "Personal Computer"
+        self.app_name         = "lgchannels_web"
         self.probe_best_variant = bool(self.config.get("probe_best_variant", True))
 
         self.session.headers.update(
