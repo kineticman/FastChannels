@@ -233,7 +233,8 @@ def update_source(source_id):
         source.epg_only = bool(data['epg_only'])
         changed = True
     if changed:
-        warnings = get_global_chnum_overlaps()
+        with db.session.no_autoflush:
+            warnings = get_global_chnum_overlaps()
         if warnings:
             db.session.rollback()
             return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409

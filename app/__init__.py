@@ -35,6 +35,15 @@ def create_app(config_class=Config):
 
     db.init_app(app)
     with app.app_context():
+        from sqlalchemy import event
+        import sqlite3 as _sqlite3
+
+        @event.listens_for(db.engine, "connect")
+        def _set_sqlite_pragmas(dbapi_conn, _):
+            if isinstance(dbapi_conn, _sqlite3.Connection):
+                dbapi_conn.execute("PRAGMA journal_mode=WAL")
+                dbapi_conn.execute("PRAGMA busy_timeout=5000")
+
         ensure_runtime_schema()
 
     from .routes.output import output_bp
