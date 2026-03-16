@@ -51,4 +51,10 @@ def create_app(config_class=Config):
     app.register_blueprint(play_bp)   # /play/<source>/<id>.m3u8
     app.register_blueprint(images_bp) # /images/proxy
 
+    from flask import redirect, url_for
+
+    @app.route('/')
+    def root():
+        return redirect(url_for('admin.dashboard'))
+
     return app
