@@ -614,18 +614,28 @@ def duplicate_summary():
     # Count unique name groups
     unique_names = {ch.name for ch in dup_channels}
 
-    stats = defaultdict(lambda: {'display_name': '', 'total': 0, 'with_gn': 0, 'epg_only': False})
+    # Find which duplicate channels actually have program data
+    dup_channel_ids = [ch.id for ch in dup_channels]
+    channels_with_epg = {
+        row[0] for row in
+        db.session.query(Program.channel_id)
+        .filter(Program.channel_id.in_(dup_channel_ids))
+        .distinct()
+        .all()
+    }
+
+    stats = defaultdict(lambda: {'display_name': '', 'total': 0, 'with_epg': 0, 'epg_only': False})
     for ch in dup_channels:
         s = stats[ch.source.name]
         s['display_name'] = ch.source.display_name
         s['epg_only'] = ch.source.epg_only
         s['total'] += 1
-        if ch.gracenote_id:
-            s['with_gn'] += 1
+        if ch.id in channels_with_epg:
+            s['with_epg'] += 1
 
     sources = []
     for name, s in stats.items():
-        pct = round(100 * s['with_gn'] / s['total']) if s['total'] else 0
+        pct = round(100 * s['with_epg'] / s['total']) if s['total'] else 0
         sources.append({
             'name':         name,
             'display_name': s['display_name'],
@@ -634,7 +644,7 @@ def duplicate_summary():
             'epg_only':     s['epg_only'],
         })
 
-    # EPG-only sources always rank last; within each tier sort by gracenote coverage descending
+    # EPG-only sources always rank last; within each tier sort by EPG coverage descending
     sources.sort(key=lambda x: (1 if x['epg_only'] else 0, -x['gn_pct']))
 
     return jsonify({
