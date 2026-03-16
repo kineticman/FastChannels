@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData
+from .base import BaseScraper, ChannelData, ProgramData
 
 logger = logging.getLogger(__name__)
 
@@ -31,25 +31,7 @@ class LGChannelsScraper(BaseScraper):
     scrape_interval = 720  # lineup looks fairly stable
     stream_audit_enabled = True
 
-    config_schema = [
-        ConfigField(
-            key="country",
-            label="Country",
-            field_type="text",
-            required=False,
-            default="US",
-            placeholder="US",
-            help_text="Country code for channel/EPG filtering. Default: US.",
-        ),
-        ConfigField(
-            key="probe_best_variant",
-            label="Resolve best HLS variant",
-            field_type="toggle",
-            required=False,
-            default=True,
-            help_text="If enabled, resolve master playlists to the highest-bandwidth media playlist during playback.",
-        ),
-    ]
+    config_schema = []
 
     API_BASE = "https://api.lgchannels.com/api/v1.0"
 
@@ -57,12 +39,12 @@ class LGChannelsScraper(BaseScraper):
         super().__init__(config)
         self._schedulelist_cache: dict | None = None
 
-        self.country          = (self.config.get("country") or "US").strip() or "US"
+        self.country          = "US"
         self.language         = "en"
         self.device_type      = "WEB"
         self.play_device_type = "Personal Computer"
         self.app_name         = "lgchannels_web"
-        self.probe_best_variant = bool(self.config.get("probe_best_variant", True))
+        self.probe_best_variant = True
 
         self.session.headers.update(
             {
