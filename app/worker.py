@@ -781,6 +781,7 @@ def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
         default_epg_only_sources = {'amazon_prime_free', 'sling'}
+        default_disabled_sources = {'amazon_prime_free', 'sling'}
         seeded_names = set()
         for name, cls in scrapers.items():
             canonical_name = getattr(cls, 'source_name', None) or name
@@ -794,6 +795,7 @@ def seed_sources():
                     scrape_interval = cls.scrape_interval,
                     config          = {},
                     epg_only        = canonical_name in default_epg_only_sources,
+                    is_enabled      = canonical_name not in default_disabled_sources,
                 ))
         db.session.commit()
         logger.info(f'Seeded {len(seeded_names)} sources')

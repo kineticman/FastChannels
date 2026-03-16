@@ -245,6 +245,9 @@
           Last: {% if source.last_scraped_at %}{{ source.last_scraped_at.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}Never{% endif %}
           {% if source.epg_only %}&nbsp;·&nbsp;<span style="color:#a78bfa">Excluded from M3U · enriches EPG for matching channels</span>{% endif %}
         </div>
+        {% if source.name in ('amazon_prime_free', 'sling') %}
+        <div class="config-note" style="color:#f59e0b">⚠ All streams from this source are DRM-protected and will not play. Disabled by default.</div>
+        {% endif %}
         {% if source.last_error %}
         <div class="error">⚠ {{ source.last_error }}</div>
         {% endif %}
