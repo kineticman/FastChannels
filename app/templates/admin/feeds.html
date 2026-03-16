@@ -898,7 +898,8 @@ async function deleteFeed(id, name, btn) {
 function copyChip(e, chip, url) {
   e.preventDefault();
   e.stopPropagation();
-  navigator.clipboard.writeText(url).then(() => {
+
+  function _flash() {
     const btn = chip.querySelector('.copy-btn');
     chip.classList.add('copied');
     if (btn) { btn.textContent = 'Copied!'; btn.classList.add('ok'); }
@@ -906,7 +907,21 @@ function copyChip(e, chip, url) {
       chip.classList.remove('copied');
       if (btn) { btn.textContent = 'Copy'; btn.classList.remove('ok'); }
     }, 2000);
-  });
+  }
+
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(url).then(_flash);
+  } else {
+    // Fallback for HTTP (non-secure) local network access
+    const ta = document.createElement('textarea');
+    ta.value = url;
+    ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); _flash(); } catch {}
+    document.body.removeChild(ta);
+  }
 }
 
 // ── Post-save cache prewarm ───────────────────────────────────────────────
