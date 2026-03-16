@@ -303,8 +303,10 @@
             <label>Channel Number Start <span style="color:#475569;font-weight:400;text-transform:none;font-size:0.75rem">(tvg-chno)</span></label>
             <input type="number" id="chnum-{{ feed.id }}" min="1" max="99999"
                    placeholder="{{ feed_chnum_placeholder.get(feed.id, 'auto') }}"
-                   value="{{ feed.chnum_start or '' }}">
+                   value="{{ feed.chnum_start or '' }}"
+                   oninput="checkInlineChnumConflict({{ feed.id }})">
             <div class="help">Leave blank to auto-assign (currently {{ feed_chnum_placeholder.get(feed.id, 'auto') }}). Set a value to number all channels in this feed sequentially from here.</div>
+            <div id="chnum-conflict-{{ feed.id }}" style="margin-top:4px;font-size:0.78rem;line-height:1.6"></div>
           </div>
           <span class="save-status" id="chnum-status-{{ feed.id }}"></span>
           <button class="btn btn-ghost" type="button" onclick="saveFeedChnum({{ feed.id }})">Save</button>
@@ -592,6 +594,47 @@ function closeModal() {
 
 // ── Channel number range conflict checker ───────────────────────────────────
 let _chnumRanges = [];
+const _inlineRangeCache = {};  // keyed by excludeId
+
+async function checkInlineChnumConflict(feedId) {
+  const input = document.getElementById(`chnum-${feedId}`);
+  const el    = document.getElementById(`chnum-conflict-${feedId}`);
+  if (!input || !el) return;
+
+  if (!_inlineRangeCache[feedId]) {
+    try {
+      const r = await fetch(`/api/feeds/chnum-ranges?exclude_id=${feedId}`);
+      _inlineRangeCache[feedId] = await r.json();
+    } catch { _inlineRangeCache[feedId] = []; }
+  }
+
+  const ranges = _inlineRangeCache[feedId];
+  const val = parseInt(input.value, 10);
+  if (isNaN(val)) { el.innerHTML = ''; return; }
+
+  // Use feed's current channel count from placeholder text as estimate
+  const ph = input.placeholder;
+  const phMatch = ph && ph !== 'auto' ? null : null;
+  const myCount = 500; // conservative fallback; exact count not critical for advisory
+  const myEnd = val + myCount - 1;
+
+  const conflicts = ranges.filter(r => val <= r.end && myEnd >= r.start && r.explicit);
+  const shown     = ranges.filter(r => r.explicit && !conflicts.find(c => c.feed_id === r.feed_id));
+
+  let html = '';
+  if (conflicts.length > 0) {
+    html += conflicts.map(r =>
+      `<div style="color:#f87171;font-weight:600">⚠ Overlaps with "${r.feed_name}" (${r.start.toLocaleString()}–${r.end.toLocaleString()})</div>`
+    ).join('');
+  }
+  if (shown.length > 0) {
+    html += '<span style="color:#64748b">In use: </span>';
+    html += shown.map(r =>
+      `<span style="color:#94a3b8">${r.feed_name} (${r.start.toLocaleString()}–${r.end.toLocaleString()})</span>`
+    ).join(' &nbsp;·&nbsp; ');
+  }
+  el.innerHTML = html;
+}
 
 async function loadChnumRanges(excludeId) {
   const qs = excludeId ? `?exclude_id=${excludeId}` : '';
@@ -895,6 +938,12 @@ async function saveFeedChnum(feedId) {
 // Close on backdrop click
 document.getElementById('modal-overlay').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeModal();
+});
+
+// Run conflict check on page load for inline inputs that already have a value
+document.querySelectorAll('[id^="chnum-"]').forEach(input => {
+  const m = input.id.match(/^chnum-(\d+)$/);
+  if (m && input.value) checkInlineChnumConflict(parseInt(m[1], 10));
 });
 </script>
 </body>
