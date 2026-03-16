@@ -133,21 +133,21 @@ def _enrich_prog(index: dict, ch_name: str, prog: Program):
     return prog.description, prog.poster_url, prog.rating
 
 
-def generate_xmltv(filters: dict = None, base_url: str = None) -> str:
+def generate_xmltv(filters: dict = None, base_url: str = None, feed_name: str = None) -> str:
     """Compatibility wrapper — full XML as a string. Use streaming for HTTP."""
-    return ''.join(generate_xmltv_stream(filters, base_url))
+    return ''.join(generate_xmltv_stream(filters, base_url, feed_name=feed_name))
 
 
-def generate_xmltv_gz(filters: dict = None, base_url: str = None) -> bytes:
+def generate_xmltv_gz(filters: dict = None, base_url: str = None, feed_name: str = None) -> bytes:
     """Return the full XML gzip-compressed as bytes."""
     buf = io.BytesIO()
     with gzip.GzipFile(fileobj=buf, mode='wb', compresslevel=6) as gz:
-        for chunk in generate_xmltv_stream(filters, base_url):
+        for chunk in generate_xmltv_stream(filters, base_url, feed_name=feed_name):
             gz.write(chunk.encode('utf-8'))
     return buf.getvalue()
 
 
-def generate_xmltv_stream(filters: dict = None, base_url: str = None):
+def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name: str = None):
     """
     Generator — yields UTF-8 text chunks of the XMLTV document.
 
@@ -257,6 +257,9 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None):
             src_name = ch_src_map.get(prog.channel_id)
             if src_name:
                 SubElement(el, 'category', lang='en').text = src_name
+            # Add feed name as a category when generating a feed-specific EPG
+            if feed_name:
+                SubElement(el, 'category', lang='en').text = feed_name
             if poster:
                 # Only proxy/cache Roku posters (CDN returns 403 to clients).
                 # All other sources serve artwork directly — no caching overhead.

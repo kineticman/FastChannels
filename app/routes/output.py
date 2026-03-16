@@ -126,7 +126,7 @@ def feed_epg(slug):
     base_url = public_base_url()
     content  = get_or_build_xml(
         f'feed-{feed.slug}',
-        lambda: generate_xmltv(feed_to_query_filters(feed.filters or {}), base_url=base_url),
+        lambda: generate_xmltv(feed_to_query_filters(feed.filters or {}), base_url=base_url, feed_name=feed.name),
     )
     return Response(content, mimetype='application/xml',
                     headers={'Content-Disposition': f'attachment; filename="{slug}.xml"'})
