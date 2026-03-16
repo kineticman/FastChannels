@@ -5,7 +5,7 @@ Mounted at /api/feeds by app/__init__.py.
 import re
 from flask import Blueprint, jsonify, request
 from ..extensions import db
-from ..generators.m3u import get_global_chnum_overlaps
+from ..generators.m3u import get_global_chnum_overlaps, _selected_channels, feed_to_query_filters
 from ..models import Feed
 from ..url import public_base_url
 from ..xml_cache import invalidate_xml_cache
@@ -18,6 +18,55 @@ def _slugify(text: str) -> str:
     s = text.lower().strip()
     s = re.sub(r'[^a-z0-9]+', '-', s)
     return s.strip('-')[:64]
+
+
+@feeds_api_bp.route('/chnum-ranges', methods=['GET'])
+def chnum_ranges():
+    """Return the occupied channel number ranges for the master M3U and every enabled feed.
+
+    Uses COUNT queries instead of loading all channel objects so this stays fast
+    even with thousands of channels.
+    """
+    from ..generators.m3u import _build_channel_query, feed_namespace_start
+    from ..models import AppSettings
+    ranges = []
+    exclude_id = request.args.get('exclude_id', type=int)
+
+    # Master M3U: count non-gracenote enabled channels
+    master_count = _build_channel_query({'gracenote': 'missing'}).count()
+    if master_count:
+        master_start = AppSettings.get().effective_global_chnum_start()
+        ranges.append({
+            'feed_id':   None,
+            'feed_name': 'Master M3U',
+            'start':     master_start,
+            'end':       master_start + master_count - 1,
+            'count':     master_count,
+            'explicit':  True,
+        })
+
+    # Per-feed ranges
+    feeds = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
+    for feed in feeds:
+        if exclude_id and feed.id == exclude_id:
+            continue
+        filters = feed_to_query_filters(feed.filters or {})
+        count = _build_channel_query(filters).count()
+        if count == 0:
+            continue
+        if feed.chnum_start:
+            start = feed.chnum_start
+        else:
+            start = feed_namespace_start(feed, gracenote=False)
+        ranges.append({
+            'feed_id':   feed.id,
+            'feed_name': feed.name,
+            'start':     start,
+            'end':       start + count - 1,
+            'count':     count,
+            'explicit':  bool(feed.chnum_start),
+        })
+    return jsonify(ranges)
 
 
 @feeds_api_bp.route('', methods=['GET'])
@@ -47,7 +96,8 @@ def create_feed():
         is_enabled  = data.get('is_enabled', True),
     )
     db.session.add(feed)
-    warnings = get_global_chnum_overlaps()
+    with db.session.no_autoflush:
+        warnings = get_global_chnum_overlaps()
     if warnings:
         db.session.rollback()
         return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
@@ -80,7 +130,8 @@ def update_feed(feed_id):
     if 'is_enabled' in data:
         feed.is_enabled = bool(data['is_enabled'])
 
-    warnings = get_global_chnum_overlaps()
+    with db.session.no_autoflush:
+        warnings = get_global_chnum_overlaps()
     if warnings:
         db.session.rollback()
         return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409

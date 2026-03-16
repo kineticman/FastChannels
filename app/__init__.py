@@ -42,7 +42,7 @@ def create_app(config_class=Config):
         def _set_sqlite_pragmas(dbapi_conn, _):
             if isinstance(dbapi_conn, _sqlite3.Connection):
                 dbapi_conn.execute("PRAGMA journal_mode=WAL")
-                dbapi_conn.execute("PRAGMA busy_timeout=5000")
+                dbapi_conn.execute("PRAGMA busy_timeout=15000")
 
         ensure_runtime_schema()
 

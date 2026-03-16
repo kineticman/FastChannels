@@ -250,21 +250,26 @@ def get_chnum_overlaps() -> list[str]:
 
 def get_global_chnum_overlaps() -> list[str]:
     """
-    Return warnings for duplicate tvg-chno values across every generated M3U:
-    master standard, master gracenote, and all enabled feed outputs.
+    Return warnings for duplicate tvg-chno values.
+
+    Master outputs are checked against themselves only — overlap between a
+    master M3U and a feed M3U is expected (users subscribe to one OR the other,
+    not both).  Feed outputs are checked against each other so that a user who
+    subscribes to multiple feeds doesn't see duplicate channel numbers.
     """
-    outputs: list[tuple[str, list, dict[int, int]]] = []
+    master_outputs: list[tuple[str, list, dict[int, int]]] = []
+    feed_outputs:   list[tuple[str, list, dict[int, int]]] = []
 
     master_standard = _selected_channels({}, gracenote=False)
     master_standard_map, _ = _resolve_chnum_map(master_standard)
-    outputs.append(('master /m3u', master_standard, master_standard_map))
+    master_outputs.append(('master /m3u', master_standard, master_standard_map))
 
     master_gracenote = _selected_channels({}, gracenote=True)
     master_gracenote_map, _ = _resolve_chnum_map(
         master_gracenote,
         namespace_start=_MASTER_GRACENOTE_START,
     )
-    outputs.append(('master /m3u/gracenote', master_gracenote, master_gracenote_map))
+    master_outputs.append(('master /m3u/gracenote', master_gracenote, master_gracenote_map))
 
     feeds = Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all()
     for feed in feeds:
@@ -277,7 +282,7 @@ def get_global_chnum_overlaps() -> list[str]:
             feed_chnum_start=feed.chnum_start,
             namespace_start=std_ns,
         )
-        outputs.append((f'feed {feed.slug} /m3u', std_channels, std_map))
+        feed_outputs.append((f'feed {feed.slug} /m3u', std_channels, std_map))
 
         gn_channels = _selected_channels(filters, gracenote=True)
         gn_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=True)
@@ -286,24 +291,32 @@ def get_global_chnum_overlaps() -> list[str]:
             feed_chnum_start=feed.chnum_start,
             namespace_start=gn_ns,
         )
-        outputs.append((f'feed {feed.slug} /m3u/gracenote', gn_channels, gn_map))
+        feed_outputs.append((f'feed {feed.slug} /m3u/gracenote', gn_channels, gn_map))
 
-    seen: dict[int, tuple[str, str]] = {}
     warnings: list[str] = []
-    for output_name, channels, chnum_map in outputs:
-        for ch in channels:
-            chnum = chnum_map.get(ch.id)
-            if not chnum:
-                continue
-            current = (output_name, ch.name)
-            previous = seen.get(chnum)
-            if previous and previous != current:
-                warnings.append(
-                    f"ch {chnum} is duplicated: {previous[1]} in {previous[0]} and "
-                    f"{ch.name} in {output_name}"
-                )
-            else:
-                seen[chnum] = current
+
+    def _check(outputs):
+        seen: dict[int, tuple[str, str]] = {}
+        for output_name, channels, chnum_map in outputs:
+            for ch in channels:
+                chnum = chnum_map.get(ch.id)
+                if not chnum:
+                    continue
+                current = (output_name, ch.name)
+                previous = seen.get(chnum)
+                if previous and previous != current:
+                    warnings.append(
+                        f"ch {chnum} is duplicated: {previous[1]} in {previous[0]} and "
+                        f"{ch.name} in {output_name}"
+                    )
+                else:
+                    seen[chnum] = current
+
+    _check(master_outputs)
+    # Check std feeds against each other, gracenote feeds against each other.
+    # Never compare std vs gracenote — users subscribe to one OR the other.
+    _check([o for o in feed_outputs if not o[0].endswith('/gracenote')])
+    _check([o for o in feed_outputs if o[0].endswith('/gracenote')])
     return warnings
 
 

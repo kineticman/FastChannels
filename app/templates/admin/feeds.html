@@ -404,8 +404,9 @@
     </div>
     <div class="field">
       <label>Starting Channel Number <span style="color:#475569;font-weight:400;text-transform:none">(tvg-chno)</span></label>
-      <input type="number" id="f-chnum" min="1" placeholder="auto">
+      <input type="number" id="f-chnum" min="1" placeholder="auto" oninput="checkChnumConflict()">
       <div class="help" id="f-chnum-help">Leave blank to auto-assign. Set a value to number all channels in this feed sequentially from here.</div>
+      <div id="f-chnum-ranges" style="margin-top:6px;font-size:0.78rem;color:#94a3b8;line-height:1.6"></div>
     </div>
     <div class="count-preview" id="count-preview"></div>
 
@@ -580,10 +581,68 @@ async function openModal(feed = null) {
   await ensureChannelsLoaded();
   renderChannelList();
   updateCountPreview();
+  await loadChnumRanges(feed ? feed.id : null);
+  checkChnumConflict();
 }
 
 function closeModal() {
   document.getElementById('modal-overlay').classList.remove('open');
+  _chnumRanges = [];
+}
+
+// ── Channel number range conflict checker ───────────────────────────────────
+let _chnumRanges = [];
+
+async function loadChnumRanges(excludeId) {
+  const qs = excludeId ? `?exclude_id=${excludeId}` : '';
+  try {
+    const r = await fetch(`/api/feeds/chnum-ranges${qs}`);
+    _chnumRanges = await r.json();
+  } catch { _chnumRanges = []; }
+}
+
+function checkChnumConflict() {
+  const el = document.getElementById('f-chnum-ranges');
+  const input = document.getElementById('f-chnum');
+  if (!el) return;
+
+  const val = parseInt(input.value, 10);
+  let conflicts = [];
+
+  if (!isNaN(val)) {
+    // Estimate end of THIS feed's range from count preview, fallback to 500
+    const countEl = document.getElementById('count-preview');
+    const countMatch = countEl ? countEl.textContent.match(/(\d+)\s+channel/) : null;
+    const myCount = countMatch ? parseInt(countMatch[1], 10) : 500;
+    const myEnd = val + myCount - 1;
+
+    for (const r of _chnumRanges) {
+      if (val <= r.end && myEnd >= r.start) {
+        conflicts.push(r);
+      }
+    }
+  }
+
+  // Show all explicit ranges as a reference
+  const shown = _chnumRanges.filter(r => r.explicit);
+  const conflictIds = new Set(conflicts.map(r => r.feed_id));
+
+  let html = '';
+  if (conflicts.length > 0) {
+    html += conflicts.map(r =>
+      `<div style="color:#f87171;font-weight:600">⚠ Overlaps with "${r.feed_name}" (${r.start.toLocaleString()}–${r.end.toLocaleString()})</div>`
+    ).join('');
+  }
+  if (shown.length > 0) {
+    const nonConflict = shown.filter(r => !conflictIds.has(r.feed_id));
+    if (nonConflict.length > 0) {
+      html += '<span style="color:#64748b">In use: </span>';
+      html += nonConflict.map(r =>
+        `<span style="color:#94a3b8">${r.feed_name} (${r.start.toLocaleString()}–${r.end.toLocaleString()})</span>`
+      ).join(' &nbsp;·&nbsp; ');
+    }
+  }
+  el.innerHTML = html;
 }
 
 // ── Live channel count preview ────────────────────────────────────────────
