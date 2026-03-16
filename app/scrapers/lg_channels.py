@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin
 
-from .base import BaseScraper, ChannelData, ProgramData
+from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ class LGChannelsScraper(BaseScraper):
                         stream_url=stream_url,
                         logo_url=self._clean_str(ch.get("channelLogoUrl")),
                         category=category_value,
-                        language=self._normalize_language(self.language),
+                        language=infer_language_from_metadata(name, category_value),
                         country=self.country.upper(),
                         stream_type="hls",
                         number=number,
@@ -295,14 +295,3 @@ class LGChannelsScraper(BaseScraper):
         except (TypeError, ValueError):
             return None
 
-    @staticmethod
-    def _normalize_language(value: str) -> str:
-        value = (value or "en").strip()
-        if not value:
-            return "en"
-        # XMLTV/M3U users generally expect two-letter language where possible.
-        if len(value) == 2:
-            return value.lower()
-        if "-" in value:
-            return value.split("-", 1)[0].lower()
-        return value.lower()
