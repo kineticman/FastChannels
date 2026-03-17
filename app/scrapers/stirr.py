@@ -293,7 +293,47 @@ class StirrScraper(BaseScraper):
         # Normalize dash spacing: ensure " - " around dashes between words
         name = re.sub(r"\s*-\s*\(", " - (", name)
         name = re.sub(r"(\w)-\s{2,}", r"\1 - ", name)
+        name = self._normalize_local_news_name(name)
         return name.strip()
+
+    def _normalize_local_news_name(self, name: str) -> str:
+        """
+        Simplify local-news channel names:
+          'FOX 9 - WTOV - (Steubenville, OH)'  →  'FOX 9 Steubenville OH'
+          'ABC 5 - KSTP - (Minneapolis-St. Paul, MN)'  →  'ABC 5 Minneapolis-St. Paul MN'
+        Only applied when the name contains the '- (Location)' pattern.
+        """
+        if ' - (' not in name:
+            return name
+
+        m = re.search(r'\(([^)]+)\)\s*(?:#(\d+))?\s*$', name)
+        if not m:
+            return name
+
+        location_raw = m.group(1)
+        number_suffix = m.group(2)
+
+        # Only transform geographic locations: comma (City, ST), ampersand, or trailing 2-letter code
+        if ',' not in location_raw and '&' not in location_raw \
+                and not re.search(r'\b[A-Z]{2}$', location_raw):
+            return name
+
+        # Clean location: strip commas, collapse spaces
+        location = re.sub(r'\s+', ' ', location_raw.replace(',', '')).strip()
+
+        # Prefix = everything before '(', strip trailing dashes/spaces
+        prefix = name[:m.start()].rstrip(' -').strip()
+
+        # Remove trailing standalone callsign: last ' - WXYZ' segment (2–5 all-caps)
+        parts = re.split(r'\s+-\s+', prefix)
+        if len(parts) > 1 and re.fullmatch(r'[A-Z]{2,5}', parts[-1]):
+            parts = parts[:-1]
+        prefix = ' - '.join(parts).strip()
+
+        result = f"{prefix} {location}"
+        if number_suffix:
+            result += f" {number_suffix}"
+        return result.strip()
 
     def _coerce_int(self, val: Any) -> int | None:
         try: return int(val)
