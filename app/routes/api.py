@@ -371,7 +371,8 @@ def inspect_channel(channel_id):
     if scraper_cls:
         scraper = scraper_cls(config=source.config or {})
         try:
-            resolved_url = scraper.resolve(ch.stream_url)
+            _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
+            resolved_url = _resolve(ch.stream_url)
         except StreamDeadError as e:
             return jsonify({'status': 'dead', 'detail': str(e)})
         except Exception as e:

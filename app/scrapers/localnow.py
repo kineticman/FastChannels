@@ -230,6 +230,21 @@ class LocalNowScraper(BaseScraper):
         logger.info("[localnow] %d EPG entries fetched", len(programs))
         return programs
 
+    def audit_resolve(self, raw_url: str) -> str:
+        """Like resolve() but always returns the master playlist URL so the
+        stream inspector and audit can see all variants (stats for nerds)."""
+        if not raw_url.startswith("localnow://"):
+            return raw_url
+        self._ensure_runtime_bootstrapped()
+        source_channel_id, slug = self._parse_internal_url(raw_url)
+        playback = self._fetch_playback(source_channel_id=source_channel_id, slug=slug)
+        preferred = (
+            [playback.get("session_m3u8"), playback.get("video_m3u8")]
+            if self._prefer_session_m3u8
+            else [playback.get("video_m3u8"), playback.get("session_m3u8")]
+        )
+        return next((u for u in preferred if u), raw_url)
+
     def resolve(self, raw_url: str) -> str:
         if not raw_url.startswith("localnow://"):
             return raw_url
