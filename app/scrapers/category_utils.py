@@ -43,16 +43,22 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'mtv ', 'concerts by stingray', 'country network',
         'b4u music', 'yrf music', 'raj mus', 'saga music', 'aghani',
     }, 'Music'),
+    # Local News — checked before general News so local stations don't fall through
+    ({
+        'local now',           # Local Now city-specific channels (all markets)
+        'abc7', 'abc13', 'abc30', 'abc6 ', 'abc11',
+        'kiro 7', 'wpxi', 'wsb ', 'wsoc', 'wftv', 'wapa+',
+        "arizona's family", 'first alert',
+        'abc localish',
+        'news center',         # e.g. News Center Maine
+    }, 'Local News'),
     # News / Weather
     ({
         'news', 'noticias', 'weather', 'cnn', 'fox local',
         'usa today', 'the hill', 'tyt-go', 'newsmax', 'oan plus',
         'liveno', 'scripps', 'rcn noticias', 'telemundo al día',
         'telemundo ahora', 'fuerza informativa', 'telediario',
-        'abc7', 'abc13', 'abc30', 'abc6 ', 'abc11',
-        'kiro 7', 'wpxi', 'wsb ', 'wsoc', 'wftv', 'wapa+',
-        "arizona's family", "america's voice", 'first alert',
-        'abc localish', 'inside edition',
+        'inside edition',
         'cheddar', 'bloomberg', 'euronews', 'france 24',
         'al jazeera', 'al arabiya', 'al hadath', 'al araby',
     }, 'News'),
