@@ -22,6 +22,9 @@ from ..xml_cache import invalidate_xml_cache
 
 api_bp = Blueprint('api', __name__)
 
+# Simple in-process cache so repeated city searches don't re-bootstrap every time.
+_localnow_city_scraper: dict = {}  # {'scraper': LocalNowScraper, 'expires': float}
+
 
 def _parse_hls_variants(master_text: str) -> list[dict]:
     """Parse #EXT-X-STREAM-INF variant entries from an HLS master playlist."""
@@ -997,3 +1000,25 @@ def system_stats():
             'poster_ttl_days': 4,
         },
     })
+
+
+@api_bp.route('/localnow/cities')
+def localnow_cities():
+    """Search Local Now cities/markets by name. Returns [{label, dma, market}]."""
+    q = request.args.get('q', '').strip()
+    if len(q) < 2:
+        return jsonify([])
+    try:
+        from ..scrapers.localnow import LocalNowScraper
+        now = _time.time()
+        cached = _localnow_city_scraper.get('scraper')
+        if not cached or _localnow_city_scraper.get('expires', 0) < now:
+            s = LocalNowScraper()
+            s._ensure_runtime_bootstrapped()
+            _localnow_city_scraper['scraper'] = s
+            _localnow_city_scraper['expires'] = now + 3600
+        else:
+            s = cached
+        return jsonify(s.search_cities(q))
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500

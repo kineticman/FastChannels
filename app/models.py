@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from .extensions import db
 
 
@@ -19,6 +19,15 @@ class Source(db.Model):
 
     channels = db.relationship('Channel', backref='source', lazy='dynamic',
                                 cascade='all, delete-orphan')
+
+    def next_scrape_at(self):
+        """Return the datetime when this source is next due to be scraped, or None if never scraped."""
+        if self.last_scraped_at is None:
+            return None
+        last = self.last_scraped_at
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return last + timedelta(minutes=self.scrape_interval or 360)
 
     def __repr__(self):
         return f'<Source {self.name}>'

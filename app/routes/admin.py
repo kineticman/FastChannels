@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from flask import Blueprint, render_template, request
 from sqlalchemy import select, case
 from ..extensions import db
@@ -28,7 +29,8 @@ def dashboard():
         }
     return render_template('admin/dashboard.html', sources=sources,
                            total_channels=total_channels, base_url=base_url,
-                           feeds=feeds, source_output_meta=source_output_meta)
+                           feeds=feeds, source_output_meta=source_output_meta,
+                           now=datetime.now(timezone.utc))
 
 
 @admin_bp.route('/sources')

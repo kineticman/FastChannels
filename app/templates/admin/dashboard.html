@@ -128,7 +128,7 @@
       </div>
       <div class="table-wrap">
       <table>
-        <thead><tr><th>Source</th><th>Status</th><th>Channels</th><th>Last Scraped</th><th>Action</th></tr></thead>
+        <thead><tr><th>Source</th><th>Status</th><th>Channels</th><th>Last Scraped</th><th>Next Scrape</th><th>Action</th></tr></thead>
         <tbody>
           {% for source in sources %}
           <tr>
@@ -139,6 +139,8 @@
               {% if source_output_meta[source.id].channel_count > 750 %}<span class="warn">⚠</span>{% endif %}
             </td>
             <td style="color:#64748b" id="last-scraped-{{ source.id }}">{{ source.last_scraped_at | localtime }}</td>
+            {% set nxt = source.next_scrape_at() %}
+            <td style="color:{% if not source.is_enabled %}#475569{% elif nxt and nxt < now %}#fbbf24{% else %}#64748b{% endif %}" id="next-scrape-{{ source.id }}">{% if not source.is_enabled %}Disabled{% else %}{{ nxt | localtime }}{% endif %}</td>
             <td>
               <button class="btn btn-sm" onclick="run({{ source.id }}, this)">Scrape Now</button>
               <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>

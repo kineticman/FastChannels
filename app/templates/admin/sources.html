@@ -193,6 +193,21 @@
     }
     .config-badge.configured { background: #14532d33; color: #4ade80; border-color: #15803d44; }
     .config-badge.anon { background: #1e293b; color: #64748b; border-color: #334155; }
+
+    /* City search autocomplete */
+    .city-search-wrap { position: relative; }
+    .city-search-results {
+      position: absolute; top: 100%; left: 0; right: 0; z-index: 50;
+      background: #1e293b; border: 1px solid #475569; border-top: none;
+      border-radius: 0 0 6px 6px; max-height: 220px; overflow-y: auto;
+    }
+    .city-result-item {
+      padding: 0.5rem 0.75rem; font-size: 0.84rem; cursor: pointer; color: #e2e8f0;
+    }
+    .city-result-item:hover { background: #0f172a; }
+    .city-result-meta { font-size: 0.73rem; color: #64748b; margin-top: 1px; }
+    .city-searching { padding: 0.5rem 0.75rem; font-size: 0.8rem; color: #64748b; font-style: italic; }
+
     @media (max-width: 760px) {
       html { font-size: 16px; }
       nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
@@ -579,6 +594,111 @@
       poll();
     }
 
+    // ── Local Now city search ─────────────────────────────────────────
+    const _citySearchTimers = {};
+
+    function renderLocalNowConfig(sourceId, schema, values) {
+      const dma    = values['dma']    || '';
+      const market = values['market'] || '';
+      const currentHtml = (dma && market)
+        ? `<div id="city-selected-display-${sourceId}" style="font-size:0.78rem;color:#4ade80;margin-top:0.35rem">✓ DMA ${escapeHtml(dma)} &nbsp;·&nbsp; ${escapeHtml(market)}</div>`
+        : `<div id="city-selected-display-${sourceId}" style="font-size:0.78rem;color:#64748b;margin-top:0.35rem">No city configured — defaulting to New York, NY</div>`;
+
+      // render all schema fields (dma, market, etc) inside Advanced
+      const renderFieldSet = (fields) => fields.map(f => {
+        const val = values[f.key] ?? f.default ?? '';
+        const req = f.required ? '<span class="req">*</span>' : '';
+        const inputType = f.field_type === 'number' ? 'number' : 'text';
+        const help = f.help_text ? `<div class="help">${escapeHtml(f.help_text)}</div>` : '';
+        return `<div class="field">
+          <label for="cfg-${sourceId}-${f.key}">${escapeHtml(f.label)}${req}</label>
+          <input type="${inputType}" id="cfg-${sourceId}-${f.key}" data-key="${f.key}"
+                 data-secret="false" value="${escapeHtml(String(val))}" autocomplete="off">
+          ${help}
+        </div>`;
+      }).join('');
+
+      return `
+        <div class="config-title">Source Settings</div>
+        <div class="config-note">Search for your city to configure local channels and DMA market.</div>
+        <div class="field field-full" style="margin-top:0.8rem">
+          <label>City / Market</label>
+          <div class="city-search-wrap">
+            <input type="text" id="city-search-input-${sourceId}"
+                   placeholder="Search for your city…"
+                   oninput="debounceCitySearch(${sourceId}, this.value)"
+                   autocomplete="off">
+            <div class="city-search-results" id="city-results-${sourceId}"></div>
+          </div>
+          ${currentHtml}
+          <div class="help">Selecting a city sets DMA and Market automatically.</div>
+        </div>
+        <div class="advanced-box">
+          <button type="button" class="advanced-toggle" onclick="toggleAdvanced(this)">
+            <span>Advanced Options</span>
+            <span class="advanced-chevron">▼</span>
+          </button>
+          <div class="advanced-copy">Manually override DMA, market slug, program count, and playback settings. Updated automatically when you pick a city above.</div>
+          <div class="advanced-body">
+            <div class="fields-grid">${renderFieldSet(schema)}</div>
+          </div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
+    }
+
+    function debounceCitySearch(sourceId, query) {
+      clearTimeout(_citySearchTimers[sourceId]);
+      const resultsEl = document.getElementById(`city-results-${sourceId}`);
+      if (!query || query.length < 2) { resultsEl.innerHTML = ''; return; }
+      resultsEl.innerHTML = '<div class="city-searching">Searching…</div>';
+      _citySearchTimers[sourceId] = setTimeout(() => _doCitySearch(sourceId, query), 350);
+    }
+
+    async function _doCitySearch(sourceId, query) {
+      const resultsEl = document.getElementById(`city-results-${sourceId}`);
+      try {
+        const r = await fetch(`/api/localnow/cities?q=${encodeURIComponent(query)}`);
+        const data = await r.json();
+        if (!Array.isArray(data) || !data.length) {
+          resultsEl.innerHTML = '<div class="city-searching">No results found</div>';
+          return;
+        }
+        resultsEl.innerHTML = data.map(c =>
+          `<div class="city-result-item"
+                data-dma="${escapeHtml(c.dma)}"
+                data-market="${escapeHtml(c.market)}"
+                data-label="${escapeHtml(c.label)}"
+                onclick="selectCity(${sourceId}, this)">
+            ${escapeHtml(c.label)}
+            <div class="city-result-meta">DMA ${escapeHtml(c.dma)} &nbsp;·&nbsp; ${escapeHtml(c.market)}</div>
+          </div>`
+        ).join('');
+      } catch (e) {
+        resultsEl.innerHTML = '<div class="city-searching">Search failed</div>';
+      }
+    }
+
+    function selectCity(sourceId, el) {
+      const dma    = el.dataset.dma;
+      const market = el.dataset.market;
+      const label  = el.dataset.label;
+      const dmaInp    = document.getElementById(`cfg-${sourceId}-dma`);
+      const marketInp = document.getElementById(`cfg-${sourceId}-market`);
+      if (dmaInp)    dmaInp.value    = dma;
+      if (marketInp) marketInp.value = market;
+      document.getElementById(`city-results-${sourceId}`).innerHTML = '';
+      document.getElementById(`city-search-input-${sourceId}`).value = '';
+      const sel = document.getElementById(`city-selected-display-${sourceId}`);
+      if (sel) {
+        sel.style.color = '#4ade80';
+        sel.textContent = `✓ ${label} (DMA ${dma} · ${market})`;
+      }
+    }
+
     async function loadSourceConfig(sourceId, sourceName) {
       const container = document.getElementById(`source-config-${sourceId}`);
       const badge = document.getElementById(`config-badge-${sourceId}`);
@@ -632,6 +752,8 @@
         advancedSchema = schema;
         advancedTitle = 'Advanced Amazon Settings';
         advancedCopy = 'These values rarely need changes. Use them only if you are troubleshooting session capture or targeting a different Amazon locale.';
+      } else if (sourceName === 'localnow') {
+        return renderLocalNowConfig(sourceId, schema, values);
       }
 
       const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {
