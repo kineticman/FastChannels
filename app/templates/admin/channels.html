@@ -134,6 +134,23 @@
       transition: background 0.15s; margin-left: 0.25rem;
     }
     .btn-resolve-dupes:hover { background: #a16207; }
+    .badge-manual-dup {
+      display: inline-block; font-size: 0.6rem; font-weight: 700; padding: 0.1rem 0.35rem;
+      border-radius: 3px; background: #2e1065; color: #a78bfa; margin-left: 0.4rem;
+      vertical-align: middle; letter-spacing: 0.05em; border: 1px solid #4c1d9544;
+    }
+    .btn-mark-dup {
+      background: none; border: 1px solid #4c1d95; color: #a78bfa; border-radius: 4px;
+      font-size: 0.72rem; padding: 0.2rem 0.45rem; cursor: pointer; line-height: 1;
+    }
+    .btn-mark-dup:hover { background: #4c1d95; color: #fff; }
+    .btn-clear-dup {
+      font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 4px; border: none;
+      background: #1e1b4b; color: #a78bfa; cursor: pointer; margin-left: 0.4rem;
+      font-weight: 500; transition: background 0.15s;
+    }
+    .btn-clear-dup:hover { background: #3730a3; color: #fff; }
+    .btn-clear-dup:disabled { opacity: 0.4; cursor: not-allowed; }
 
     /* Resolve duplicates modal */
     .modal-overlay {
@@ -494,7 +511,7 @@
               <div class="logo"></div>
               {% endif %}
             </td>
-            <td><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="This channel name exists in multiple sources">DUP</span>{% endif %}</td>
+            <td><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="This channel name exists in multiple sources">DUP</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup" title="Manually marked as duplicate">DUPL</span>{% endif %}</td>
             <td style="color:#64748b">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
             <td style="color:#94a3b8">{{ ch.category or '—' }}</td>
             <td style="color:#64748b">{{ ch.language or '—' }}</td>
@@ -520,7 +537,7 @@
               </div>
             </td>
 
-            <td>
+            <td id="flags-cell-{{ ch.id }}">
               {% if ch.disable_reason == 'DRM' %}
               <span style="color:#f87171;font-size:0.75rem;font-weight:600;">🔒 DRM</span>
               <button class="btn-reenable" onclick="reenable({{ ch.id }}, this)" title="Clear DRM flag and re-enable">Re-enable</button>
@@ -528,11 +545,17 @@
               <span style="color:#94a3b8;font-size:0.75rem;font-weight:600;">💀 Dead</span>
               <button class="btn-reenable" onclick="reenable({{ ch.id }}, this)" title="Clear Dead flag and re-enable">Re-enable</button>
               {% endif %}
+              {% if ch.is_duplicate %}
+              <button class="btn-clear-dup" id="cleardup-{{ ch.id }}" onclick="clearManualDup({{ ch.id }}, this)" title="Remove duplicate label">⊘ Clear DUPL</button>
+              {% endif %}
             </td>
             <td id="inspect-cell-{{ ch.id }}">
               <div class="channel-actions">
                 <button class="btn-preview" onclick="openPreview({{ ch.id }})" title="View current and next program, and preview playback">Preview</button>
                 <button class="btn-inspect" onclick="inspectChannel({{ ch.id }}, this)" title="Test stream: check DRM, liveness, and segment data">&#128269;</button>
+                {% if not ch.is_duplicate %}
+                <button class="btn-mark-dup" id="markdup-{{ ch.id }}" onclick="markManualDup({{ ch.id }}, this)" title="Mark as duplicate — adds a DUPL label for filtering (does not disable the channel)">⊘</button>
+                {% endif %}
               </div>
             </td>
             <td class="toggle-col">
@@ -945,6 +968,75 @@
       } finally {
         label.classList.remove('saving');
         checkbox.disabled = false;
+      }
+    }
+
+    async function markManualDup(channelId, btn) {
+      btn.disabled = true;
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method:  'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({is_duplicate: true}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        // Add DUPL badge to name cell
+        const row = document.getElementById(`row-${channelId}`);
+        const nameCell = row.querySelector('td:nth-child(3)');
+        if (nameCell && !nameCell.querySelector('.badge-manual-dup')) {
+          const badge = document.createElement('span');
+          badge.className = 'badge-manual-dup';
+          badge.title = 'Manually marked as duplicate';
+          badge.textContent = 'DUPL';
+          nameCell.appendChild(badge);
+        }
+        // Add clear button to flags cell
+        const flagsCell = document.getElementById(`flags-cell-${channelId}`);
+        if (flagsCell && !flagsCell.querySelector('.btn-clear-dup')) {
+          const clearBtn = document.createElement('button');
+          clearBtn.className = 'btn-clear-dup';
+          clearBtn.id = `cleardup-${channelId}`;
+          clearBtn.title = 'Remove duplicate label';
+          clearBtn.textContent = '⊘ Clear DUPL';
+          clearBtn.onclick = () => clearManualDup(channelId, clearBtn);
+          flagsCell.appendChild(clearBtn);
+        }
+        // Remove the ⊘ mark button
+        btn.remove();
+      } catch (e) {
+        btn.disabled = false;
+        console.error('markManualDup failed:', e);
+      }
+    }
+
+    async function clearManualDup(channelId, btn) {
+      btn.disabled = true;
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method:  'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({is_duplicate: false}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        // Remove DUPL badge from name cell
+        const row = document.getElementById(`row-${channelId}`);
+        row.querySelector('.badge-manual-dup')?.remove();
+        // Remove clear button
+        btn.remove();
+        // Re-add the ⊘ mark button to channel-actions
+        const actionsDiv = document.querySelector(`#inspect-cell-${channelId} .channel-actions`);
+        if (actionsDiv) {
+          const markBtn = document.createElement('button');
+          markBtn.className = 'btn-mark-dup';
+          markBtn.id = `markdup-${channelId}`;
+          markBtn.title = 'Mark as duplicate — adds a DUPL label for filtering (does not disable the channel)';
+          markBtn.textContent = '⊘';
+          markBtn.onclick = () => markManualDup(channelId, markBtn);
+          actionsDiv.appendChild(markBtn);
+        }
+      } catch (e) {
+        btn.disabled = false;
+        console.error('clearManualDup failed:', e);
       }
     }
 

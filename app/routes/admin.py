@@ -93,7 +93,7 @@ def channels():
         dup_names_sq = select(Channel.name)\
             .group_by(Channel.name)\
             .having(db.func.count(Channel.id) > 1)
-        q = q.filter(Channel.name.in_(dup_names_sq))
+        q = q.filter(db.or_(Channel.name.in_(dup_names_sq), Channel.is_duplicate == True))
 
     sort_name = case(
         (db.func.lower(Channel.name).like('the %'), db.func.substr(Channel.name, 5)),

@@ -39,5 +39,6 @@ Thumbs.db
 .idea/
 *.swp
 
-# Internal docs (never push)
+# Internal docs / research (never push)
+dev/
 Dev/

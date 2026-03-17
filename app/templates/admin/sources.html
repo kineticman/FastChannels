@@ -94,13 +94,10 @@
     .audit-status-queued  .status-text { color: #fcd34d; }
 
     /* EPG-only toggle */
-    .epg-only-wrap { margin-top: 0.5rem; display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap; }
+    .epg-only-wrap { margin-top: 0.5rem; }
     .epg-only-wrap label { font-size: 0.74rem; color: #475569; cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 0.35rem; }
     .epg-only-wrap label:hover { color: #94a3b8; }
     .epg-only-wrap input[type=checkbox] { accent-color: #7c3aed; cursor: pointer; }
-    .chnum-wrap { font-size: 0.74rem; color: #475569; display: inline-flex; align-items: center; gap: 0.35rem; }
-    .chnum-input { width: 5.5rem; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #94a3b8; font-size: 0.74rem; padding: 0.15rem 0.4rem; }
-    .chnum-input:focus { outline: none; border-color: #38bdf8; color: #e2e8f0; }
     .badge-epg-only {
       display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
       padding: 2px 7px; border-radius: 20px; text-transform: uppercase;
@@ -278,15 +275,6 @@
                    onchange="setEpgOnly({{ source.id }}, this)">
             EPG Only mode
           </label>
-          <span class="chnum-wrap" title="Starting channel number for this source in the master M3U (leave blank for auto)">
-            Ch# start:
-            <input type="number" class="chnum-input" min="1" step="1"
-                   id="chnum-{{ source.id }}"
-                   value="{{ source.chnum_start or '' }}"
-                   placeholder="auto"
-                   onblur="saveChnumStart({{ source.id }}, this)"
-                   onkeydown="if(event.key==='Enter')this.blur()">
-          </span>
         </div>
         <div class="source-config hidden" id="source-config-{{ source.id }}"></div>
       </div>
@@ -435,25 +423,6 @@
       } catch (e) {
         btn.textContent = 'Error';
         setTimeout(() => { btn.textContent = '📋 Stream Audit'; btn.disabled = false; }, 3000);
-      }
-    }
-
-    async function saveChnumStart(sourceId, inp) {
-      const raw = inp.value.trim();
-      const val = raw === '' ? null : parseInt(raw, 10);
-      if (raw !== '' && (isNaN(val) || val < 1)) { inp.value = ''; return; }
-      try {
-        const r = await fetch(`/api/sources/${sourceId}`, {
-          method:  'PATCH',
-          headers: {'Content-Type': 'application/json'},
-          body:    JSON.stringify({chnum_start: val}),
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        inp.style.borderColor = '#34d399';
-        setTimeout(() => { inp.style.borderColor = ''; }, 1500);
-      } catch (e) {
-        inp.style.borderColor = '#f87171';
-        console.error('Failed to save chnum_start:', e);
       }
     }
 

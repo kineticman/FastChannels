@@ -77,7 +77,22 @@ class AmazonPrimeFreeScraper(BaseScraper):
         "Referer": "https://www.amazon.com/gp/video/storefront/",
     }
 
+    PAGINATE_HEADERS = {
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Referer": "https://www.amazon.com/gp/video/livetv",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "X-Requested-With": "XMLHttpRequest",
+        "X-Amzn-Client-Ttl-Seconds": "15",
+    }
+
     # Observed in the analyzed HAR. Keep these centralized so they are easy to adjust.
+    # The full dynamicFeatures list (matching what browsers send) is required for
+    # hasMoreItems=True — a shorter list causes Amazon to truncate pagination at ~10 items.
     PAGINATE_DEFAULT_PARAMS: dict[str, Any] = {
         "pageType": "home",
         "pageId": "live",
@@ -147,6 +162,10 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
         seed = self._extract_pagination_seed(html)
         if seed:
+            logger.info("[%s] pagination seed: start_index=%s target_id=%s token_prefix=%s",
+                        self.source_name, seed["start_index"],
+                        seed["pagination_target_id"][:40],
+                        seed["service_token"][:20])
             paged = self._paginate_stations(seed)
             for station in paged.values():
                 station_id = self._station_id(station)
@@ -235,47 +254,60 @@ class AmazonPrimeFreeScraper(BaseScraper):
             if station_id:
                 stations[station_id] = station
 
-        logger.debug("[%s] extracted %d stations from initial HTML", self.source_name, len(stations))
+        logger.info("[%s] extracted %d stations from initial HTML", self.source_name, len(stations))
         return stations
 
     def _extract_pagination_seed(self, html: str) -> dict[str, Any] | None:
-        # We prefer the EPG/live carousel seed because it is the one that yielded
-        # linearStationCard data in the analyzed HAR. This keeps the scraper simple
-        # while still matching observed behavior.
-        match = re.search(
-            r'"paginationStartIndex":(?P<start>\d+),"paginationTargetId":"(?P<target>[^"]+)"',
-            html,
+        # All three fields live in the same JSON object in the page HTML.
+        # There may be multiple pagination blocks (e.g. "Live events" and "Your stations").
+        # We want the one whose EpgGroup entities contain station objects.
+        pattern = re.compile(
+            r'"paginationServiceToken":"(?P<token>[^"]+)"'
+            r'[^}]{0,300}?"paginationStartIndex":(?P<start>\d+)'
+            r'[^}]{0,300}?"paginationTargetId":"(?P<target>[^"]+)"',
+            re.DOTALL,
         )
-        if not match:
-            return None
+        best = None
+        for m in pattern.finditer(html):
+            # Check if station objects appear in the 5000 chars following this block —
+            # that indicates this is the linear-station carousel, not a content carousel.
+            window = html[m.start(): m.start() + 5000]
+            if '"station":{' in window:
+                best = m
+                break  # take the first block that has station entities after it
 
-        token_match = re.search(r'"serviceToken":"(?P<token>[^"]+)"', html)
-        if not token_match:
-            return None
+        if best is None:
+            # Fallback: use the last pagination block found (stations tend to be last)
+            matches = list(pattern.finditer(html))
+            if not matches:
+                return None
+            best = matches[-1]
 
         return {
-            "start_index": int(match.group("start")),
-            "pagination_target_id": match.group("target"),
-            "service_token": token_match.group("token"),
+            "start_index": int(best.group("start")),
+            "pagination_target_id": best.group("target"),
+            "service_token": best.group("token"),
         }
 
     def _paginate_stations(self, seed: dict[str, Any]) -> dict[str, dict[str, Any]]:
         stations: dict[str, dict[str, Any]] = {}
         start_index = int(seed["start_index"])
+        pagination_target_id = seed["pagination_target_id"]
+        service_token = seed["service_token"]
         has_more = True
         page_no = 0
 
-        while has_more and page_no < 50:
+        while has_more and page_no < 200:
             params = dict(self.PAGINATE_DEFAULT_PARAMS)
             params.update(
                 {
-                    "paginationTargetId": seed["pagination_target_id"],
-                    "serviceToken": seed["service_token"],
+                    "paginationTargetId": pagination_target_id,
+                    "serviceToken": service_token,
                     "startIndex": str(start_index),
                 }
             )
 
-            response = self.get(self.PAGINATE_URL, params=params)
+            response = self.get(self.PAGINATE_URL, params=params, headers=self.PAGINATE_HEADERS)
             if not response:
                 break
 
@@ -283,12 +315,14 @@ class AmazonPrimeFreeScraper(BaseScraper):
                 payload = response.json()
             except ValueError:
                 if self._cookie_header:
-                    logger.warning("[%s] non-JSON paginateCollection response at startIndex=%s — cookies may be expired", self.source_name, start_index)
+                    logger.warning("[%s] non-JSON paginateCollection response at startIndex=%s — cookies may be expired. Response: %s", self.source_name, start_index, response.text[:200])
                 else:
                     logger.info("[%s] pagination requires auth (no cookie configured) — using %d channels from initial page only", self.source_name, len(stations))
                 break
 
             entities = payload.get("entities", []) or []
+            logger.debug("[%s] page startIndex=%s: %d entities, hasMoreItems=%s",
+                         self.source_name, start_index, len(entities), payload.get("hasMoreItems"))
             for entity in entities:
                 station = entity.get("station") or {}
                 station_id = self._station_id(station)
@@ -296,6 +330,14 @@ class AmazonPrimeFreeScraper(BaseScraper):
                     stations[station_id] = station
 
             has_more = bool(payload.get("hasMoreItems"))
+
+            # Amazon returns an updated serviceToken in each response — must use it
+            # for the next request or subsequent pages return empty results.
+            pagination = payload.get("pagination") or {}
+            next_token = pagination.get("serviceToken") or pagination.get("token")
+            if next_token:
+                service_token = next_token
+
             next_index = payload.get("startIndex")
             if has_more:
                 if isinstance(next_index, int) and next_index > start_index:
@@ -306,7 +348,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
                         break
             page_no += 1
 
-        logger.debug("[%s] extracted %d stations from pagination", self.source_name, len(stations))
+        logger.info("[%s] extracted %d stations from pagination (%d pages)", self.source_name, len(stations), page_no)
         return stations
 
     @staticmethod

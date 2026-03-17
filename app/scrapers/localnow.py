@@ -11,7 +11,7 @@ _CALL_SIGN_RE = re.compile(r'^[WK][A-Z]{2,4}\b')
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote, urljoin
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
 from .category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
@@ -175,7 +175,7 @@ class LocalNowScraper(BaseScraper):
                     logo_url=ch.get("logo"),
                     slug=slug or None,
                     category=category,
-                    language=(ch.get("language") or "en"),
+                    language=infer_language_from_metadata(ch.get("language"), name, category),
                     country="US",
                     stream_type="hls",
                     number=self._safe_int(ch.get("channel_number"), None),

@@ -335,7 +335,7 @@ def list_channels():
 def update_channel(channel_id):
     ch   = Channel.query.get_or_404(channel_id)
     data = request.get_json()
-    for field in ('name', 'logo_url', 'category', 'is_active', 'is_enabled', 'number', 'disable_reason'):
+    for field in ('name', 'logo_url', 'category', 'is_active', 'is_enabled', 'number', 'disable_reason', 'is_duplicate'):
         if field in data:
             setattr(ch, field, data[field])
     if 'gracenote_id' in data:
