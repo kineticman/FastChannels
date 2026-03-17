@@ -33,6 +33,13 @@ def create_app(config_class=Config):
     def inject_version():
         return {'app_version': VERSION}
 
+    @app.template_filter('localtime')
+    def localtime_filter(dt):
+        """Format a UTC datetime as local time (respects TZ env var)."""
+        if dt is None:
+            return 'Never'
+        return dt.astimezone().strftime('%Y-%m-%d %H:%M')
+
     db.init_app(app)
     with app.app_context():
         from sqlalchemy import event
