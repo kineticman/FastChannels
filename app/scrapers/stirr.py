@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from html import unescape
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -218,16 +218,9 @@ class StirrScraper(BaseScraper):
         if not media_url:
             return raw_url
 
-        # Handle HLS master to variant resolution
-        try:
-            rr = self.session.get(media_url, timeout=10)
-            rr.raise_for_status()
-            if "#EXT-X-STREAM-INF" in rr.text:
-                best = self._pick_best_variant(media_url, rr.text)
-                return best or media_url
-        except Exception as exc:
-            logger.debug("[%s] HLS variant resolution failed for %s: %s", self.source_name, videoid, exc)
-
+        # Return the master playlist URL directly — SSAI variant URLs contain
+        # short-lived session tokens that expire before the client plays them.
+        # Let the client handle variant selection.
         return media_url
 
     # ── Internal Helpers ─────────────────────────────────────
@@ -382,21 +375,6 @@ class StirrScraper(BaseScraper):
                     return media
         return None
 
-    def _pick_best_variant(self, master_url: str, text: str) -> str | None:
-        best_bw = -1
-        best_uri = None
-        lines = text.splitlines()
-        for i, line in enumerate(lines):
-            if line.startswith("#EXT-X-STREAM-INF"):
-                match = re.search(r"BANDWIDTH=(\d+)", line)
-                bw = int(match.group(1)) if match else 0
-                j = i + 1
-                while j < len(lines) and lines[j].startswith("#"): j += 1
-                if j < len(lines):
-                    uri = urljoin(master_url, lines[j].strip())
-                    if bw > best_bw:
-                        best_bw, best_uri = bw, uri
-        return best_uri
 
     def _extract_programs_from_wurl(self, channel_id: str, payload: dict) -> list[ProgramData]:
         movies = {str(m["id"]): m for m in payload.get("movies", []) if "id" in m}
