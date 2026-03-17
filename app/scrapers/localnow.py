@@ -146,13 +146,14 @@ class LocalNowScraper(BaseScraper):
             # Detect local broadcast stations:
             #  - 'My City' genre from the API
             #  - slug contains 'hyperlocal' or 'local-now' (LocalNow marker)
-            #  - name starts with a TV call sign (W/K + 2-4 letters, e.g. WXYZ, KERO)
+            #  - name contains a TV call sign anywhere (W/K + 2-4 letters, e.g. WXYZ,
+            #    KERO) — covers "WTAE", "KCRA-TV", "Very Pittsburgh by WTAE", etc.
             slug_lower = slug.lower()
             if (
                 "My City" in genres
                 or "hyperlocal" in slug_lower
                 or slug_lower.startswith("epg-local-now")
-                or _CALL_SIGN_RE.match(name)
+                or _CALL_SIGN_RE.search(name)
             ):
                 category = "Local News"
             else:
