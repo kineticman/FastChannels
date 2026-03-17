@@ -26,7 +26,7 @@ from flask import request as flask_request
 from ..extensions import db
 from ..models import Channel, Program, Source
 from ..url import proxy_logo_url
-from .m3u import _build_channel_query, _selected_channels, _tvg_id
+from .m3u import _selected_channels, _tvg_id
 
 log = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     Generator — yields UTF-8 text chunks of the XMLTV document.
 
     Key changes vs previous version:
-      - Programs fetched via JOIN on the filtered channel set, not IN(ids).
+      - Programs fetched via IN(non-gracenote channel ids), matching tvg_map exactly.
       - Keyset pagination: WHERE program.id > last_seen_id ORDER BY id.
         Avoids the O(n²) OFFSET scan that made page 700 read 140k rows.
     """
@@ -174,6 +174,9 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     # Channel name map — used for enrichment lookup
     ch_name_map  = {ch.id: ch.name for ch in channels}
     channel_ids = set(tvg_map.keys())
+    # Pre-sorted list for use in SQL IN() — matches exactly the non-gracenote
+    # channel set so program fetching is bounded to XMLTV-visible channels only.
+    channel_id_list = sorted(channel_ids)
 
     # Build EPG enrichment index from epg_only sources (e.g. Amazon Prime Free)
     enrich_index = _build_enrich_index()
@@ -190,21 +193,12 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url) or ch.logo_url)
         yield tostring(el, encoding='unicode') + '\n'
 
-    # ── Programme elements — JOIN + keyset pagination ─────────────────────
-    # JOIN against the filtered channel set rather than IN(1001 ids).
+    # ── Programme elements — keyset pagination ────────────────────────────
     # Keyset: track last Program.id seen, next page = WHERE id > last_id.
     # This is O(1) per page regardless of offset depth.
+    # channel_id_list is already bounded to XMLTV-visible (non-gracenote) channels.
     BATCH   = 500
     last_id = 0
-
-    # Build a select() of filtered channel IDs for use in .in_()
-    # Using .select() avoids SAWarning from passing a Subquery directly to .in_()
-    ch_id_subq = (
-        _build_channel_query(filters)
-        .with_entities(Channel.id)
-        .subquery()
-        .select()
-    )
 
     # Rolling 5-day window: include currently-airing programs (up to 2h ago)
     # through 5 days from now. Naive UTC matches how SQLite stores the values.
@@ -212,11 +206,12 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     epg_end   = datetime.utcnow() + timedelta(days=5)
 
     while True:
+        if not channel_id_list:
+            break
         programs = (
             db.session.query(Program)
-            .join(Channel, Program.channel_id == Channel.id)
             .filter(
-                Channel.id.in_(ch_id_subq),
+                Program.channel_id.in_(channel_id_list),
                 Program.id > last_id,
                 Program.end_time   > epg_start,
                 Program.start_time < epg_end,

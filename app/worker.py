@@ -40,6 +40,8 @@ _setup_logfile()
 logger = logging.getLogger(__name__)
 
 flask_app = create_app()
+from app.config import VERSION as _VERSION
+logger.info('FastChannels worker v%s starting', _VERSION)
 _NETWORK_OUTAGE_UNTIL = 0.0
 _NETWORK_OUTAGE_REASON = ''
 
@@ -720,24 +722,26 @@ def _upsert_programs(source, program_data_list):
             delete_query = delete_query.filter(~Program.id.in_(preserve_ids))
         delete_query.delete(synchronize_session=False)
 
+    rows = []
     for pd in program_data_list:
         ch = channels.get(pd.source_channel_id)
         if not ch:
             continue
-        db.session.add(Program(
-            channel_id    = ch.id,
-            title         = pd.title,
-            description   = pd.description,
-            start_time    = pd.start_time,
-            end_time      = pd.end_time,
-            poster_url    = pd.poster_url,
-            category      = pd.category,
-            rating        = pd.rating,
-            episode_title = pd.episode_title,
-            season        = pd.season,
-            episode       = pd.episode,
-        ))
-    db.session.flush()
+        rows.append({
+            'channel_id':    ch.id,
+            'title':         pd.title,
+            'description':   pd.description,
+            'start_time':    pd.start_time,
+            'end_time':      pd.end_time,
+            'poster_url':    pd.poster_url,
+            'category':      pd.category,
+            'rating':        pd.rating,
+            'episode_title': pd.episode_title,
+            'season':        pd.season,
+            'episode':       pd.episode,
+        })
+    if rows:
+        db.session.execute(Program.__table__.insert(), rows)
     _prune_old_programs()
 
 

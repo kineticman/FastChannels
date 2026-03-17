@@ -4,6 +4,7 @@ Mounted at /api/feeds by app/__init__.py.
 """
 import re
 from flask import Blueprint, jsonify, request
+from sqlalchemy.exc import OperationalError
 from ..extensions import db
 from ..generators.m3u import get_global_chnum_overlaps, _selected_channels, feed_to_query_filters
 from ..models import Feed
@@ -12,6 +13,18 @@ from ..xml_cache import invalidate_xml_cache
 
 feeds_api_bp = Blueprint('feeds_api', __name__)
 SYSTEM_FEED_SLUGS = {'default'}
+
+
+def _safe_commit():
+    """Commit session, returning a 503 response tuple if SQLite is locked."""
+    try:
+        db.session.commit()
+        return None
+    except OperationalError as exc:
+        if 'database is locked' in str(exc).lower():
+            db.session.rollback()
+            return jsonify({'error': 'Server is busy (a scrape is in progress). Please try again in a moment.'}), 503
+        raise
 
 
 def _slugify(text: str) -> str:
@@ -93,7 +106,9 @@ def create_feed():
     if warnings:
         db.session.rollback()
         return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
-    db.session.commit()
+    err = _safe_commit()
+    if err:
+        return err
     invalidate_xml_cache()
     return jsonify(feed.to_dict(public_base_url())), 201
 
@@ -132,7 +147,9 @@ def update_feed(feed_id):
     if warnings:
         db.session.rollback()
         return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
-    db.session.commit()
+    err = _safe_commit()
+    if err:
+        return err
     invalidate_xml_cache()
     return jsonify(feed.to_dict(public_base_url()))
 
@@ -143,7 +160,9 @@ def delete_feed(feed_id):
     if feed.slug in SYSTEM_FEED_SLUGS:
         return jsonify({'error': 'Built-in feeds cannot be deleted.'}), 403
     db.session.delete(feed)
-    db.session.commit()
+    err = _safe_commit()
+    if err:
+        return err
     invalidate_xml_cache()
     return jsonify({'status': 'deleted', 'slug': feed.slug})
 
