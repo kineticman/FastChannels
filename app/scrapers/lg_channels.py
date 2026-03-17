@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urljoin
 
 from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata
 
@@ -44,7 +42,6 @@ class LGChannelsScraper(BaseScraper):
         self.device_type      = "WEB"
         self.play_device_type = "Personal Computer"
         self.app_name         = "lgchannels_web"
-        self.probe_best_variant = True
 
         self.session.headers.update(
             {
@@ -166,47 +163,7 @@ class LGChannelsScraper(BaseScraper):
     def resolve(self, raw_url: str) -> str:
         if not raw_url:
             return raw_url
-
-        resolved = self._expand_stream_macros(raw_url)
-
-        if not self.probe_best_variant:
-            return resolved
-
-        try:
-            r = self.session.get(resolved, timeout=10)
-            r.raise_for_status()
-            text = r.text or ""
-
-            if "#EXT-X-STREAM-INF" not in text:
-                return resolved
-
-            best_uri = None
-            best_bw = -1
-            lines = text.splitlines()
-
-            for idx, line in enumerate(lines):
-                if not line.startswith("#EXT-X-STREAM-INF"):
-                    continue
-
-                match = re.search(r"BANDWIDTH=(\d+)", line)
-                bw = int(match.group(1)) if match else -1
-
-                j = idx + 1
-                while j < len(lines) and lines[j].startswith("#"):
-                    j += 1
-                if j >= len(lines):
-                    continue
-
-                candidate = urljoin(resolved, lines[j].strip())
-                if bw > best_bw:
-                    best_bw = bw
-                    best_uri = candidate
-
-            return best_uri or resolved
-
-        except Exception as exc:
-            logger.warning("[lg-channels] resolve fallback to raw expanded URL: %s", exc)
-            return resolved
+        return self._expand_stream_macros(raw_url)
 
     # ── Internal helpers ─────────────────────────────────────
 
