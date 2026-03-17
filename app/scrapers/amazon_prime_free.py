@@ -162,10 +162,6 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
         seed = self._extract_pagination_seed(html)
         if seed:
-            logger.info("[%s] pagination seed: start_index=%s target_id=%s token_prefix=%s",
-                        self.source_name, seed["start_index"],
-                        seed["pagination_target_id"][:40],
-                        seed["service_token"][:20])
             paged = self._paginate_stations(seed)
             for station in paged.values():
                 station_id = self._station_id(station)
@@ -315,7 +311,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
                 payload = response.json()
             except ValueError:
                 if self._cookie_header:
-                    logger.warning("[%s] non-JSON paginateCollection response at startIndex=%s — cookies may be expired. Response: %s", self.source_name, start_index, response.text[:200])
+                    logger.warning("[%s] non-JSON paginateCollection response at startIndex=%s — cookies may be expired", self.source_name, start_index)
                 else:
                     logger.info("[%s] pagination requires auth (no cookie configured) — using %d channels from initial page only", self.source_name, len(stations))
                 break
