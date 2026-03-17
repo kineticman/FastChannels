@@ -331,6 +331,49 @@ def list_channels():
     })
 
 
+@api_bp.route('/channels/bulk', methods=['POST'])
+def bulk_update_channels():
+    data    = request.get_json() or {}
+    action  = data.get('action')
+    filters = data.get('filters') or {}
+
+    if action not in ('enable', 'disable'):
+        return jsonify({'error': 'action must be enable or disable'}), 400
+
+    enable = action == 'enable'
+    q = Channel.query.join(Source)
+
+    if src := filters.get('source'):
+        q = q.filter(Source.name == src)
+    if cat := filters.get('category'):
+        q = q.filter(Channel.category == cat)
+    if lang := filters.get('language'):
+        q = q.filter(Channel.language == lang)
+    if search := filters.get('search'):
+        q = q.filter(Channel.name.ilike(f'%{search}%'))
+    if drm := filters.get('drm'):
+        if drm == '1':
+            q = q.filter(Channel.disable_reason == 'DRM')
+        elif drm == 'dead':
+            q = q.filter(Channel.disable_reason == 'Dead')
+        elif drm == '0':
+            q = q.filter(Channel.disable_reason == None)
+    if ef := filters.get('enabled'):
+        if ef == '1':
+            q = q.filter(Channel.is_enabled == True)
+        elif ef == '0':
+            q = q.filter(Channel.is_enabled == False)
+
+    ids = [ch.id for ch in q.with_entities(Channel.id).all()]
+    if ids:
+        Channel.query.filter(Channel.id.in_(ids)).update(
+            {'is_enabled': enable}, synchronize_session=False
+        )
+        db.session.commit()
+        invalidate_xml_cache()
+    return jsonify({'updated': len(ids)})
+
+
 @api_bp.route('/channels/<int:channel_id>', methods=['PATCH'])
 def update_channel(channel_id):
     ch   = Channel.query.get_or_404(channel_id)

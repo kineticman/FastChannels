@@ -134,6 +134,15 @@
       transition: background 0.15s; margin-left: 0.25rem;
     }
     .btn-resolve-dupes:hover { background: #a16207; }
+    .btn-disable-all { background: #7f1d1d !important; color: #fecaca !important; }
+    .btn-disable-all:hover { background: #991b1b !important; }
+    .btn-enable-all  { background: #14532d !important; color: #bbf7d0 !important; }
+    .btn-enable-all:hover  { background: #15803d !important; }
+    .btn-hide-disabled {
+      background: none; border: 1px solid #475569; color: #94a3b8; border-radius: 5px;
+      padding: 0.2rem 0.6rem; font-size: 0.75rem; cursor: pointer; margin-left: auto;
+    }
+    .btn-hide-disabled:hover { border-color: #94a3b8; color: #e2e8f0; }
     .badge-manual-dup {
       display: inline-block; font-size: 0.6rem; font-weight: 700; padding: 0.1rem 0.35rem;
       border-radius: 3px; background: #2e1065; color: #a78bfa; margin-left: 0.4rem;
@@ -449,6 +458,8 @@
       <div class="filter-actions">
         <button type="submit">Apply</button>
         <a class="clear" href="/admin/channels">Clear</a>
+        <button type="button" class="btn-disable-all" onclick="bulkFilterAction(false)">Disable All Shown</button>
+        <button type="button" class="btn-enable-all"  onclick="bulkFilterAction(true)">Enable All Shown</button>
         <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Duplicates</button>
       </div>
     </form>
@@ -462,6 +473,7 @@
       <span class="filter-chip"><strong>Language</strong>{{ language_filter or 'All languages' }}</span>
       <span class="filter-chip"><strong>Gracenote</strong>{% if gracenote_filter == '1' %}Has Gracenote ID{% elif gracenote_filter == '0' %}Missing Gracenote ID{% else %}Any{% endif %}</span>
       <span class="filter-chip"><strong>Duplicates</strong>{% if duplicates_filter == '1' %}Duplicates only{% else %}Normal list{% endif %}</span>
+      <button type="button" class="btn-hide-disabled" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}Show disabled{% else %}Hide disabled{% endif %}</button>
     </div>
 
     <!-- Bulk action bar (shown when rows selected) -->
@@ -1090,6 +1102,39 @@
       const curDir = params.get('dir')  || 'asc';
       params.set('sort', col);
       params.set('dir', cur === col && curDir === 'asc' ? 'desc' : 'asc');
+      params.set('page', '1');
+      window.location.search = params.toString();
+    }
+
+    async function bulkFilterAction(enable) {
+      const params  = new URLSearchParams(window.location.search);
+      const total   = {{ channels.total }};
+      const label   = enable ? 'enable' : 'disable';
+      if (!confirm(`${label.charAt(0).toUpperCase() + label.slice(1)} all ${total} matching channels?`)) return;
+
+      const filters = {
+        source:   params.get('source')   || '',
+        category: params.get('category') || '',
+        language: params.get('language') || '',
+        search:   params.get('search')   || '',
+        drm:      params.get('drm')      || '',
+        enabled:  params.get('enabled')  || '',
+      };
+      const r = await fetch('/api/channels/bulk', {
+        method:  'POST',
+        headers: {'Content-Type': 'application/json'},
+        body:    JSON.stringify({action: label, filters}),
+      });
+      if (r.ok) window.location.reload();
+    }
+
+    function toggleHideDisabled() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('enabled') === '1') {
+        params.delete('enabled');
+      } else {
+        params.set('enabled', '1');
+      }
       params.set('page', '1');
       window.location.search = params.toString();
     }
