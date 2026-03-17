@@ -915,7 +915,7 @@ class RokuScraper(BaseScraper):
 
     # ── fetch_epg ──────────────────────────────────────────────────────────────
 
-    def fetch_epg(self, channels: list[ChannelData], skip_ids: set[str] | None = None) -> list[ProgramData]:
+    def fetch_epg(self, channels: list[ChannelData], skip_ids: set[str] | None = None, **kwargs) -> list[ProgramData]:
         import threading
         from concurrent.futures import ThreadPoolExecutor, as_completed
 

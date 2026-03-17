@@ -183,11 +183,12 @@
       if (btn) { btn.textContent = 'Scrape Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
       if (lastScrapedMs) {
         const d = new Date(lastScrapedMs);
+        const tz = d.toLocaleTimeString(undefined, {timeZoneName:'short'}).split(' ').pop();
         const ts = d.getFullYear() + '-' +
           String(d.getMonth()+1).padStart(2,'0') + '-' +
           String(d.getDate()).padStart(2,'0') + ' ' +
           String(d.getHours()).padStart(2,'0') + ':' +
-          String(d.getMinutes()).padStart(2,'0');
+          String(d.getMinutes()).padStart(2,'0') + ' ' + tz;
         const cell = document.getElementById(`last-scraped-${sourceId}`);
         if (cell) cell.textContent = ts;
       }

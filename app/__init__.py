@@ -38,7 +38,7 @@ def create_app(config_class=Config):
         """Format a UTC datetime as local time (respects TZ env var)."""
         if dt is None:
             return 'Never'
-        return dt.astimezone().strftime('%Y-%m-%d %H:%M')
+        return dt.astimezone().strftime('%Y-%m-%d %H:%M %Z')
 
     db.init_app(app)
     with app.app_context():
