@@ -845,7 +845,7 @@
     }
 
     // ── Gracenote ID — inline edit, save on blur ───────────────────────────
-    const GN_RE = /^(EP|SH|MV|SP|TR)\d+$/;
+    const GN_RE = /^(\d+|(EP|SH|MV|SP|TR)\d+)$/;
 
     document.querySelectorAll('.gn-input').forEach(inp => {
       inp.addEventListener('blur',  () => gnSave(inp));
@@ -866,7 +866,7 @@
         gnSetStatus(inp, 'err', '✕');
         inp.classList.add('gn-err');
         inp.classList.remove('gn-set');
-        inp.title = 'Invalid ID — must be EP/SH/MV/SP/TR followed by digits (e.g. EP012345678)';
+        inp.title = 'Invalid ID — must be numeric (e.g. 122912) or EP/SH/MV/SP/TR + digits (e.g. EP012345678)';
         return;
       }
 

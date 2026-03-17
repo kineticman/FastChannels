@@ -106,8 +106,9 @@ def channels():
         'name':     [sort_name, Channel.name],
         'source':   [Source.display_name, Channel.name],
         'category': [Channel.category, Channel.name],
-        # Approximate M3U order: sources with explicit start first, then by source name + channel name
-        'number':   [db.func.coalesce(Source.chnum_start, 999999), Source.display_name, sort_name, Channel.name],
+        # Approximate M3U order: sources with explicit chnum_start first, then by
+        # actual channel number within each source block, then name as tiebreak.
+        'number':   [db.func.coalesce(Source.chnum_start, 999999), db.func.coalesce(Channel.number, 999999), Source.display_name, sort_name, Channel.name],
     }
     _cols = _sort_cols.get(sort_by, [Channel.name])
     if sort_dir == 'desc':

@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,16 @@ class LGChannelsScraper(BaseScraper):
     scrape_interval = 720  # lineup looks fairly stable
     stream_audit_enabled = True
 
-    config_schema = []
+    config_schema = [
+        ConfigField(
+            "country",
+            "Country",
+            field_type="text",
+            required=False,
+            help_text="Two-letter country code for the LG Channels lineup (e.g. US, GB, DE, CA). Default: US.",
+            default="US",
+        ),
+    ]
 
     API_BASE = "https://api.lgchannels.com/api/v1.0"
 
@@ -37,7 +46,7 @@ class LGChannelsScraper(BaseScraper):
         super().__init__(config)
         self._schedulelist_cache: dict | None = None
 
-        self.country          = "US"
+        self.country          = (self.config.get("country") or "US").upper().strip()
         self.language         = "en"
         self.device_type      = "WEB"
         self.play_device_type = "Personal Computer"

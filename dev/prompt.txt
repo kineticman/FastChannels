@@ -1,0 +1,168 @@
+You are a senior reverse engineer and streaming API analyst.
+
+I am building a FAST (Free Ad-Supported TV) aggregation platform similar to Channels DVR / FastChannels.
+
+I will provide you with a HAR file from a streaming service. Your job is to reverse engineer how the service works and produce a working scraper design.
+
+## 🎯 GOALS
+
+1. Identify ALL relevant API endpoints used by the service
+2. Determine how to retrieve:
+
+   * Channel lineup
+   * Stream URLs (HLS/DASH)
+   * EPG / schedule data
+3. Determine whether streams are:
+
+   * DRM protected (Widevine/FairPlay/PlayReady)
+   * Clear HLS (playable in VLC/ffmpeg)
+4. Identify authentication requirements (if any)
+
+---
+
+## 🔍 ANALYSIS INSTRUCTIONS
+
+### Step 1: Find API calls
+
+* Extract all XHR/fetch requests
+* Ignore ads, analytics, tracking, telemetry
+* Focus only on endpoints that return:
+
+  * channels
+  * schedule/programs
+  * playback/stream URLs
+
+For each useful endpoint provide:
+
+* Full URL
+* Method (GET/POST)
+* Required headers
+* Required query params
+* Example response structure
+
+---
+
+### Step 2: Identify core endpoints
+
+Try to map the service into:
+
+* INIT / CONFIG endpoint
+* CHANNEL LIST endpoint
+* SCHEDULE / EPG endpoint
+* PLAYBACK / STREAM endpoint
+
+Explain how they connect.
+
+---
+
+### Step 3: Extract stream info
+
+For any stream URLs found:
+
+* Show example URLs
+* Identify if they are:
+
+  * .m3u8 (HLS)
+  * .mpd (DASH)
+* Look for:
+
+  * #EXT-X-KEY
+  * Widevine license URLs
+  * tokenized URLs
+
+Clearly state:
+
+👉 "DRM: YES / NO / UNKNOWN"
+
+---
+
+### Step 4: Parameter analysis
+
+If URLs contain placeholders or tokens like:
+
+[DEVICE_ID], [COUNTRY], tokens, JWTs, etc.
+
+Explain:
+
+* What they are
+* Whether they can be faked
+* Safe default values to use
+
+---
+
+### Step 5: Build a minimal probe script
+
+Write a Python script that:
+
+* Calls the key endpoints
+* Prints response summaries
+* Extracts:
+
+  * channels
+  * stream URLs
+* Saves JSON output to disk
+
+Requirements:
+
+* Use `requests`
+* No proxies
+* No authentication bypassing
+* Clean logging output
+* Safe defaults for headers
+
+---
+
+### Step 6: Build a FastChannels-style scraper
+
+Write a production-ready scraper module that:
+
+Implements:
+
+* fetch_channels()
+* fetch_epg()
+* resolve()
+
+Should:
+
+* Use BaseScraper pattern
+* Return ChannelData + ProgramData
+* Handle stream URL templating
+* Optionally resolve HLS master playlists
+
+---
+
+### Step 7: Final verdict
+
+Summarize:
+
+* Is this service viable for scraping?
+* Any blockers?
+* Estimated difficulty (Easy / Medium / Hard)
+* Recommended next steps
+
+---
+
+## ⚠️ IMPORTANT RULES
+
+* Do NOT use third-party datasets (like i.mjh.nz)
+* Only use what is visible in the HAR
+* Do NOT assume undocumented endpoints
+* Be precise and technical
+* Prefer working code over theory
+
+---
+
+## OUTPUT FORMAT
+
+Return in this order:
+
+1. API Analysis
+2. Endpoint Map
+3. DRM Analysis
+4. Python Probe Script
+5. Full Scraper Module
+6. Final Verdict
+
+---
+
+I will now upload the HAR file.
