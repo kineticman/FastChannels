@@ -48,8 +48,49 @@
       gap: 0.6rem;
       flex-wrap: wrap;
     }
-    .filter-actions button { background: #0284c7; color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.875rem; }
-    .filter-actions button:hover { background: #0369a1; }
+    .filter-actions .btn-apply {
+      background: #0284c7; color: #fff; border: none;
+      padding: 0.48rem 1.1rem; border-radius: 6px; cursor: pointer; font-size: 0.875rem; font-weight: 500;
+      transition: background 0.15s;
+    }
+    .filter-actions .btn-apply:hover { background: #0369a1; }
+    .filter-actions a.clear { color: #64748b; font-size: 0.85rem; }
+    .filter-sep { width: 1px; height: 1.4rem; background: #334155; flex-shrink: 0; }
+    .btn-disable-all, .btn-enable-all, .btn-resolve-dupes {
+      background: none; border-radius: 6px; cursor: pointer;
+      font-size: 0.8rem; font-weight: 500; padding: 0.4rem 0.85rem;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      white-space: nowrap;
+    }
+    .btn-disable-all {
+      border: 1px solid rgba(239,68,68,0.35); color: #fca5a5;
+    }
+    .btn-disable-all:hover {
+      background: rgba(127,29,29,0.35); border-color: #f87171; color: #fecaca;
+    }
+    .btn-enable-all {
+      border: 1px solid rgba(34,197,94,0.3); color: #86efac;
+    }
+    .btn-enable-all:hover {
+      background: rgba(20,83,45,0.4); border-color: #4ade80; color: #bbf7d0;
+    }
+    .btn-resolve-dupes {
+      border: 1px solid rgba(167,139,250,0.3); color: #a78bfa;
+    }
+    .btn-resolve-dupes:hover {
+      background: rgba(76,29,149,0.3); border-color: #c4b5fd; color: #c4b5fd;
+    }
+    .btn-hide-disabled {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      padding: 0.28rem 0.65rem; border-radius: 999px;
+      background: #172033; border: 1px solid #334155; color: #64748b;
+      font-size: 0.74rem; cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .btn-hide-disabled:hover { border-color: #64748b; color: #94a3b8; }
+    .btn-hide-disabled.active {
+      border-color: #38bdf8; color: #38bdf8; background: #0c2237;
+    }
     .filter-actions a.clear { color: #64748b; font-size: 0.85rem; }
     .filter-summary {
       display: flex;
@@ -128,21 +169,6 @@
       background: #2e1065; color: #c4b5fd; border: 1px solid #6d28d944;
       margin-left: 0.35rem; vertical-align: middle;
     }
-    .btn-resolve-dupes {
-      background: #854d0e; color: #fef3c7; border: none; border-radius: 6px;
-      padding: 0.4rem 0.85rem; font-size: 0.8rem; font-weight: 600; cursor: pointer;
-      transition: background 0.15s; margin-left: 0.25rem;
-    }
-    .btn-resolve-dupes:hover { background: #a16207; }
-    .btn-disable-all { background: #7f1d1d !important; color: #fecaca !important; }
-    .btn-disable-all:hover { background: #991b1b !important; }
-    .btn-enable-all  { background: #14532d !important; color: #bbf7d0 !important; }
-    .btn-enable-all:hover  { background: #15803d !important; }
-    .btn-hide-disabled {
-      background: none; border: 1px solid #475569; color: #94a3b8; border-radius: 5px;
-      padding: 0.2rem 0.6rem; font-size: 0.75rem; cursor: pointer; margin-left: auto;
-    }
-    .btn-hide-disabled:hover { border-color: #94a3b8; color: #e2e8f0; }
     .badge-manual-dup {
       display: inline-block; font-size: 0.6rem; font-weight: 700; padding: 0.1rem 0.35rem;
       border-radius: 3px; background: #2e1065; color: #a78bfa; margin-left: 0.4rem;
@@ -456,11 +482,12 @@
       <input type="hidden" name="sort" value="{{ sort_by }}">
       <input type="hidden" name="dir" value="{{ sort_dir }}">
       <div class="filter-actions">
-        <button type="submit">Apply</button>
+        <button type="submit" class="btn-apply">Apply</button>
         <a class="clear" href="/admin/channels">Clear</a>
-        <button type="button" class="btn-disable-all" onclick="bulkFilterAction(false)">Disable All Shown</button>
-        <button type="button" class="btn-enable-all"  onclick="bulkFilterAction(true)">Enable All Shown</button>
-        <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Duplicates</button>
+        <span class="filter-sep"></span>
+        <button type="button" class="btn-disable-all" onclick="bulkFilterAction(false)">✕ Disable All</button>
+        <button type="button" class="btn-enable-all"  onclick="bulkFilterAction(true)">✓ Enable All</button>
+        <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
       </div>
     </form>
 
@@ -473,7 +500,7 @@
       <span class="filter-chip"><strong>Language</strong>{{ language_filter or 'All languages' }}</span>
       <span class="filter-chip"><strong>Gracenote</strong>{% if gracenote_filter == '1' %}Has Gracenote ID{% elif gracenote_filter == '0' %}Missing Gracenote ID{% else %}Any{% endif %}</span>
       <span class="filter-chip"><strong>Duplicates</strong>{% if duplicates_filter == '1' %}Duplicates only{% else %}Normal list{% endif %}</span>
-      <button type="button" class="btn-hide-disabled" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}Show disabled{% else %}Hide disabled{% endif %}</button>
+      <button type="button" class="btn-hide-disabled{% if enabled_filter == '1' %} active{% endif %}" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}◉ Hiding disabled{% else %}○ Hide disabled{% endif %}</button>
     </div>
 
     <!-- Bulk action bar (shown when rows selected) -->
