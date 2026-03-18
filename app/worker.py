@@ -11,6 +11,7 @@ import requests as _req
 from rq import Worker, Queue, Connection
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError as _SAOperationalError
 from app import create_app
 from app.config_store import persist_source_config_updates
 from app.extensions import db
@@ -124,12 +125,23 @@ def run_scraper(source_name: str):
                 channels = scraper.fetch_channels()
                 _progress('epg', 0, len(channels))
                 programs = scraper.fetch_epg(channels, skip_ids=_fresh_epg_sids(source))
-                _upsert_channels(source, channels)
-                _upsert_programs(source, programs)
-                source.last_scraped_at = datetime.now(timezone.utc)
-                source.last_error      = None
-                _apply_scraper_config_updates(source, scraper)
-                db.session.commit()
+                for _attempt in range(3):
+                    try:
+                        _upsert_channels(source, channels)
+                        _upsert_programs(source, programs)
+                        source.last_scraped_at = datetime.now(timezone.utc)
+                        source.last_error      = None
+                        _apply_scraper_config_updates(source, scraper)
+                        db.session.commit()
+                        break
+                    except _SAOperationalError as _dbe:
+                        db.session.rollback()
+                        if _attempt == 2:
+                            raise
+                        _wait = 5 * (_attempt + 1)
+                        logger.warning('[%s] DB locked (attempt %d/3), retrying in %ds',
+                                       source_name, _attempt + 1, _wait)
+                        time.sleep(_wait)
                 invalidate_xml_cache()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
