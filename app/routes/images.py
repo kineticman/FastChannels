@@ -14,6 +14,7 @@ not block concurrent requests.  The background worker pre-warms logo cache
 after each scrape so most logo requests are cache hits.
 """
 import hashlib
+import io
 import logging
 import os
 import time
@@ -21,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests as _req
 from flask import Blueprint, Response, abort, request, send_file
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,13 @@ _POSTER_DIR   = '/data/logo_cache/posters'
 _LOGO_TTL     = 3 * 24 * 60 * 60   # 3 days
 _POSTER_TTL   = 4 * 24 * 60 * 60   # safety-net; primary expiry is DB-driven
 _PREWARM_WORKERS = 8
+
+# Channels DVR logo constraints (community-confirmed):
+#   - max ~150 KB file size; oversized logos cause silent failures / crashes
+#   - recommended 720x540 (4:3) with padding; 1:1 squares also work
+#   - PNG preferred; WebP/SVG unsupported by native apps
+_LOGO_MAX_PX  = 270   # fit within this box before padding to 4:3
+_LOGO_TARGET  = (360, 270)  # final canvas size (4:3, well under 150 KB)
 
 
 def _cache_dir(img_type: str) -> str:
@@ -51,7 +60,37 @@ def _is_fresh(img_path: str, ttl: int) -> bool:
         return False
 
 
-def _fetch_and_cache(url: str, img_path: str, ct_path: str) -> bool:
+def _normalize_logo(data: bytes) -> tuple[bytes, str]:
+    """
+    Resize and reformat a logo image for Channels DVR compatibility.
+
+    - Fits the image inside _LOGO_MAX_PX × _LOGO_MAX_PX (preserving aspect ratio)
+    - Pads to _LOGO_TARGET (4:3 canvas) with a transparent background
+    - Strips all metadata (EXIF, C2PA, ICC profiles, etc.)
+    - Saves as PNG (max ~50–150 KB at these dimensions)
+
+    Returns (png_bytes, 'image/png').  Falls back to original data/content-type
+    on any error so a bad image never causes a cache miss.
+    """
+    try:
+        img = Image.open(io.BytesIO(data))
+        # Convert to RGBA so transparency padding works for all source modes
+        img = img.convert('RGBA')
+        img.thumbnail((_LOGO_MAX_PX, _LOGO_MAX_PX), Image.LANCZOS)
+        canvas = Image.new('RGBA', _LOGO_TARGET, (0, 0, 0, 0))
+        x = (_LOGO_TARGET[0] - img.width)  // 2
+        y = (_LOGO_TARGET[1] - img.height) // 2
+        canvas.paste(img, (x, y), img)
+        buf = io.BytesIO()
+        canvas.save(buf, format='PNG', optimize=True, compress_level=9)
+        return buf.getvalue(), 'image/png'
+    except Exception as exc:
+        logger.debug('[images] logo normalize failed: %s', exc)
+        return data, 'image/jpeg'
+
+
+def _fetch_and_cache(url: str, img_path: str, ct_path: str,
+                     img_type: str = 'logo') -> bool:
     """Fetch *url* and write it to *img_path*/*ct_path*. Returns True on success."""
     try:
         r = _req.get(url, timeout=10, headers={'User-Agent': 'FastChannels/1.0'})
@@ -59,8 +98,11 @@ def _fetch_and_cache(url: str, img_path: str, ct_path: str) -> bool:
             logger.debug('[images] fetch HTTP %s for %s', r.status_code, url)
             return False
         content_type = (r.headers.get('content-type') or 'image/jpeg').split(';')[0].strip()
+        data = r.content
+        if img_type == 'logo':
+            data, content_type = _normalize_logo(data)
         with open(img_path, 'wb') as f:
-            f.write(r.content)
+            f.write(data)
         with open(ct_path, 'w') as f:
             f.write(content_type)
         return True
@@ -130,7 +172,7 @@ def proxy_image(img_type='logo', hash_ext=''):
         abort(404)
 
     logger.debug('[images] cache miss (%s): %s', img_type, key)
-    if _fetch_and_cache(url, img_path, ct_path):
+    if _fetch_and_cache(url, img_path, ct_path, img_type):
         content_type = open(ct_path).read().strip() or 'image/jpeg'
         return _image_response(img_path, content_type, ttl)
 
@@ -151,7 +193,7 @@ def proxy_image_legacy(img_type='logo', ext='jpg'):
         content_type = open(ct_path).read().strip() or 'image/jpeg'
         return _image_response(img_path, content_type, ttl)
 
-    if _fetch_and_cache(url, img_path, ct_path):
+    if _fetch_and_cache(url, img_path, ct_path, img_type):
         content_type = open(ct_path).read().strip() or 'image/jpeg'
         return _image_response(img_path, content_type, ttl)
 
@@ -169,7 +211,7 @@ def cache_logo(url: str, img_type: str = 'logo') -> bool:
     img_path, ct_path = _cache_paths(url, img_type)
     if _is_fresh(img_path, ttl):
         return True
-    return _fetch_and_cache(url, img_path, ct_path)
+    return _fetch_and_cache(url, img_path, ct_path, img_type)
 
 
 def prewarm_logo_cache(urls: list[str]) -> tuple[int, int]:
