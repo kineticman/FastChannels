@@ -108,6 +108,16 @@ def ensure_runtime_schema() -> None:
             if "public_base_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN public_base_url TEXT"))
 
+        if "channels" in tables:
+            ch_cols = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(channels)"))
+            }
+            if "is_duplicate" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN is_duplicate BOOLEAN NOT NULL DEFAULT 0"
+                ))
+
         # Normalize the one hyphenated internal source id to snake_case so
         # source naming stays consistent across code paths and fresh installs.
         # Older installs may have both names present due to alias seeding, so
