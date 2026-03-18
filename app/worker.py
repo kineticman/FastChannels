@@ -119,11 +119,22 @@ def run_scraper(source_name: str):
                                    slug=ch.slug or '') for ch in db_channels]
                 _progress('epg', 0, len(epg_input))
                 programs = scraper.fetch_epg(epg_input, skip_ids=_fresh_epg_sids(source))
-                _upsert_programs(source, programs)
-                source.last_scraped_at = datetime.now(timezone.utc)
-                source.last_error      = None
-                _apply_scraper_config_updates(source, scraper)
-                db.session.commit()
+                for _attempt in range(3):
+                    try:
+                        _upsert_programs(source, programs)
+                        source.last_scraped_at = datetime.now(timezone.utc)
+                        source.last_error      = None
+                        _apply_scraper_config_updates(source, scraper)
+                        db.session.commit()
+                        break
+                    except _SAOperationalError:
+                        db.session.rollback()
+                        if _attempt == 2:
+                            raise
+                        _wait = 5 * (_attempt + 1)
+                        logger.warning('[%s] DB locked (EPG-only, attempt %d/3), retrying in %ds',
+                                       source_name, _attempt + 1, _wait)
+                        time.sleep(_wait)
                 invalidate_xml_cache()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] EPG-only run complete — %d channels, %d programs (%.1fs)',
@@ -159,6 +170,7 @@ def run_scraper(source_name: str):
         except ScrapeSkipError as e:
             elapsed = time.monotonic() - t0
             logger.warning('[%s] Scrape skipped after %.1fs: %s', source_name, elapsed, e)
+            db.session.rollback()
             _apply_scraper_config_updates(source, scraper)
             source.last_error = str(e)
             db.session.commit()
@@ -170,18 +182,22 @@ def run_scraper(source_name: str):
                 _mark_network_outage(reason)
                 logger.warning('[%s] Scrape skipped after %.1fs due to transient network failure: %s',
                                source_name, elapsed, reason)
+                db.session.rollback()
                 _apply_scraper_config_updates(source, scraper)
                 source.last_error = reason
                 db.session.commit()
                 _progress('done')
                 return
             logger.exception('[%s] Scrape failed after %.1fs', source_name, elapsed)
-            # Persist any config updates the scraper queued before the failure
-            # (e.g. a freshly bootstrapped token — don't lose it just because a
-            # subsequent API call failed).
+            # Rollback any partial writes before recording the error, otherwise
+            # the commit below will fail if the session is in a dirty/locked state.
+            db.session.rollback()
             _apply_scraper_config_updates(source, scraper)
             source.last_error = str(e)
-            db.session.commit()
+            try:
+                db.session.commit()
+            except Exception:
+                logger.warning('[%s] Could not persist last_error to DB', source_name)
             _progress('done')
 
 
