@@ -55,7 +55,7 @@ class XumoScraper(BaseScraper):
     MAX_EPG_DAYS = 2
     EPG_PAGES_PER_DAY = 24
     EPG_LIMIT = 50
-    EPG_MAX_OFFSET = 400
+    EPG_MAX_OFFSET = 1000
     EPG_OFFSET_STEP = 50
     REQUEST_TIMEOUT_SECONDS = 12
 
@@ -232,10 +232,6 @@ class XumoScraper(BaseScraper):
                                 )
                             )
 
-                    if matched_channel_count == 0 and offset == 0:
-                        # This page exists but doesn't include any of our channels.
-                        # Keep going to next page rather than walking all offsets.
-                        break
 
                 if page_no_data or not found_any_for_page:
                     # 400 = server has no data for this hour; later hours won't
