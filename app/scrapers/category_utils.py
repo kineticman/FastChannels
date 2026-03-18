@@ -1,19 +1,220 @@
 # app/scrapers/category_utils.py
 #
-# Shared name-based category inference for FAST channel scrapers.
+# Shared name-based category inference and normalization for FAST channel scrapers.
 #
 # Usage:
-#   from .category_utils import infer_category_from_name
+#   from .category_utils import infer_category_from_name, normalize_category
 #
 #   category = infer_category_from_name(channel_name)  # returns str | None
-#
-# Rules are checked in order; the first keyword match wins.
-# Add new keywords here — all scrapers that call this function benefit.
+#   category = normalize_category(raw_category)        # maps dirty → canonical
 
 from __future__ import annotations
 
-# Each entry: (set-of-substrings, category label).
+# ---------------------------------------------------------------------------
+# Canonical category list
+# ---------------------------------------------------------------------------
+# Every category stored in the DB should be one of these strings.
+CANONICAL_CATEGORIES: tuple[str, ...] = (
+    'Action & Adventure',
+    'Ambiance',
+    'Anime',
+    'Automotive',
+    'Classic TV',
+    'Comedy',
+    'Documentary',
+    'Drama',
+    'Entertainment',
+    'Faith',
+    'Food',
+    'Game Shows',
+    'Gaming',
+    'History',
+    'Home & DIY',
+    'Horror',
+    'International',
+    'Kids',
+    'Latino',
+    'Lifestyle',
+    'Local News',
+    'Movies',
+    'Music',
+    'Nature',
+    'News',
+    'Outdoors',
+    'Reality TV',
+    'Sci-Fi',
+    'Science',
+    'Shopping',
+    'Sports',
+    'Travel',
+    'True Crime',
+    'Westerns',
+)
+
+# ---------------------------------------------------------------------------
+# Normalization map — lowercase raw value → canonical label
+# ---------------------------------------------------------------------------
+# Any category NOT in this map and NOT already in CANONICAL_CATEGORIES is
+# passed through unchanged (future-proofing for new scrapers).
+_CANONICAL_MAP: dict[str, str] = {
+    # Action & Adventure
+    'action':                       'Action & Adventure',
+    'action & drama':               'Action & Adventure',
+    'action/adventure':             'Action & Adventure',
+
+    # Anime
+    'anime & gaming':               'Anime',
+
+    # Classic TV
+    'classics':                     'Classic TV',
+
+    # Documentary
+    'documentaries':                'Documentary',
+    'factual':                      'Documentary',
+
+    # Drama
+    'tv dramas':                    'Drama',
+
+    # Entertainment — misc catch-alls and source artifacts
+    'general':                      'Entertainment',
+    'pop culture':                  'Entertainment',
+    'black entertainment':          'Entertainment',
+    'recommended':                  'Entertainment',
+    'her stories':                  'Entertainment',
+    'new on local now':             'Entertainment',
+    'more cities':                  'Entertainment',
+    'live tv':                      'Entertainment',
+    'daytime tv':                   'Entertainment',
+    'talk show':                    'Entertainment',
+
+    # Faith
+    'faith & family':               'Faith',
+    'family and faith':             'Faith',
+
+    # Food
+    'cooking':                      'Food',
+    'good eats':                    'Food',
+
+    # Game Shows
+    'game show':                    'Game Shows',
+    'games & competition':          'Game Shows',
+    'daytime + game shows':         'Game Shows',
+
+    # History
+    'history & learning':           'History',
+    'history + science':            'History',
+
+    # Home & DIY
+    'home & design':                'Home & DIY',
+
+    # Home & Food — lifestyle-oriented combo, mapped to Lifestyle
+    'home & food':                  'Lifestyle',
+    'home + food':                  'Lifestyle',
+
+    # Horror (combos leading with Horror)
+    'horror & sci-fi':              'Horror',
+    'horror and scifi':             'Horror',
+
+    # International
+    'bollywood':                    'International',
+
+    # Kids
+    'kids & family':                'Kids',
+    'family':                       'Kids',
+
+    # Latino — all Spanish-language genre variants
+    'en espanol':                   'Latino',
+    'en español':                   'Latino',
+    'español':                      'Latino',
+    'spanish':                      'Latino',
+    'spanish language':             'Latino',
+    'latin':                        'Latino',
+
+    # Lifestyle
+    'lifestyle & pop culture':      'Lifestyle',
+
+    # Movies
+    'movie channels':               'Movies',
+    'movies and tv':                'Movies',
+    'tv & movies':                  'Movies',
+
+    # Music
+    'music & radio':                'Music',
+    'music video':                  'Music',
+    'music videos':                 'Music',
+
+    # Nature
+    'animals & nature':             'Nature',
+    'animals + nature':             'Nature',
+    'nature and outdoors':          'Nature',
+    'science & nature':             'Nature',
+    'nature, history & science':    'Science',
+
+    # News
+    'national news':                'News',
+    'global news':                  'News',
+    'news & opinion':               'News',
+    'news + opinion':               'News',
+    'news and opinion':             'News',
+    'business news':                'News',
+    'business':                     'News',
+    'weather':                      'News',
+
+    # Outdoors
+    'sports & outdoors':            'Outdoors',
+
+    # Reality TV
+    'reality':                      'Reality TV',
+    'reality competition':          'Reality TV',
+    'competition reality':          'Reality TV',
+    'competition and reality':      'Reality TV',
+
+    # Sci-Fi (combos leading with Sci-Fi)
+    'sci-fi & horror':              'Sci-Fi',
+    'sci-fi & supernatural':        'Sci-Fi',
+    'science fiction':              'Sci-Fi',
+
+    # Science
+    'technology':                   'Science',
+
+    # Sports
+    'motor sports':                 'Sports',
+    'combat sports':                'Sports',
+    'sports on now':                'Sports',
+
+    # Travel
+    'travel & lifestyle':           'Travel',
+
+    # True Crime
+    'crime':                        'True Crime',
+    'crime tv':                     'True Crime',
+    'mystery':                      'True Crime',
+    'thriller':                     'True Crime',
+
+    # Westerns
+    'western':                      'Westerns',
+    'western & classic tv':         'Westerns',
+    'westerns & country':           'Westerns',
+}
+
+
+def normalize_category(raw: str | None) -> str | None:
+    """Map a raw scraper category string to a canonical category label.
+
+    Already-canonical values pass through unchanged. Unknown values also
+    pass through unchanged so new scrapers don't silently lose their data.
+    """
+    if not raw:
+        return raw
+    return _CANONICAL_MAP.get(raw.strip().lower(), raw)
+
+
+# ---------------------------------------------------------------------------
+# Name-based category inference
+# ---------------------------------------------------------------------------
+# Each entry: (set-of-substrings, canonical category label).
 # All comparisons are lowercased before matching.
+# Rules are checked in order; the first keyword match wins.
 _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
     # Sports — checked before News so "CBS Sports" doesn't fall through
     ({
@@ -204,16 +405,21 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'locked up abroad',
         'voyage', 'travelxp', 'go traveler', 'tv5monde voyage',
     }, 'Travel'),
-    # Science, History & Documentary
+    # History — checked before Science so "history" keyword routes correctly
     ({
-        'science', 'mythbusters', 'history', 'smithsonian', 'ancient aliens',
-        'modern marvels', 'science is amazing', 'science quest',
-        'military heroes', 'classic car auction', 'modern innovations',
+        'history', 'smithsonian', 'ancient aliens', 'modern marvels',
+        'military heroes', 'history & warfare', 'combat war',
+        'antiques roadshow', 'american pickers',
+    }, 'History'),
+    # Documentary
+    ({
         'docu', 'docurama', 'magellan tv', 'pbs genealogy',
-        'antiques roadshow', 'get factual',
-        'pbs',
-        'documentary', 'curiosity stream', 'nhk', 'history & warfare',
-        'combat war',
+        'documentary', 'curiosity stream', 'nhk', 'get factual', 'pbs',
+    }, 'Documentary'),
+    # Science
+    ({
+        'science', 'mythbusters', 'science is amazing', 'science quest',
+        'modern innovations', 'classic car auction',
     }, 'Science'),
     # Gaming & Esports
     ({
@@ -230,7 +436,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
     ({
         'outdoor', 'waypoint tv', 'wired2fish', 'xtreme outdoor',
     }, 'Outdoors'),
-    # Spanish — name-based fallback for channels without a language tag
+    # Latino — name-based fallback for channels without a language tag
     ({
         'flixlatino', 'vix ', 'vix+', 'canela.tv', 'canela tv',
         'venevisión', 'novelísima', 'novelisima',
@@ -240,7 +446,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'emoción atres', 'emocion atres', 'única tv', 'unica tv',
         'cine exclusivo', 'azteca', 'univision', 'canal estrellas',
         'imagen tv', 'tvnotas', 'bandamax', 'ritmoson',
-    }, 'Spanish'),
+    }, 'Latino'),
     # Shopping
     ({
         'qvc', 'hsn', 'jewelry television', 'deal zone', 'shopping',
@@ -250,10 +456,10 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
 
 
 def infer_category_from_name(title: str) -> str | None:
-    """Infer a category label from a channel name via keyword matching.
+    """Infer a canonical category label from a channel name via keyword matching.
 
     Returns the matched category string, or None if nothing matches.
-    The caller decides the fallback (e.g. "Live TV", "Entertainment").
+    The caller decides the fallback (e.g. "Entertainment").
     """
     tl = title.lower()
     for keywords, label in _NAME_CATEGORY_RULES:
