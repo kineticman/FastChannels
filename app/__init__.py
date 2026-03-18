@@ -1,5 +1,6 @@
 import os
 from flask import Flask
+from werkzeug.middleware.proxy_fix import ProxyFix
 from .extensions import db
 from .config import Config, VERSION
 from . import logfile
@@ -26,6 +27,10 @@ def _ensure_sqlite_parent_dir(database_uri: str | None) -> None:
 def create_app(config_class=Config):
     logfile.setup()
     app = Flask(__name__)
+    # Trust X-Forwarded-Proto/Host from reverse proxies (Nginx, Traefik, Caddy, etc.)
+    # so that request.host_url reflects the public https:// scheme instead of the
+    # internal http:// connection, keeping logo proxy URLs scheme-correct in M3U output.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
     app.config.from_object(config_class)
     _ensure_sqlite_parent_dir(app.config.get("SQLALCHEMY_DATABASE_URI"))
 
