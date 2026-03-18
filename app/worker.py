@@ -100,7 +100,15 @@ def run_scraper(source_name: str):
             _progress('bootstrap')
             scraper.pre_run_setup()
             _apply_scraper_config_updates(source, scraper)
-            db.session.commit()
+            for _pre_attempt in range(3):
+                try:
+                    db.session.commit()
+                    break
+                except _SAOperationalError:
+                    db.session.rollback()
+                    if _pre_attempt == 2:
+                        raise
+                    time.sleep(5 * (_pre_attempt + 1))
 
             if skip_channels:
                 from app.scrapers.base import ChannelData as _CD
@@ -755,7 +763,6 @@ def _upsert_programs(source, program_data_list):
         })
     if rows:
         db.session.execute(Program.__table__.insert(), rows)
-    _prune_old_programs()
 
 
 # In-memory record of when each source was last enqueued, so we don't
