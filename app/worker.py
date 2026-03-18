@@ -841,16 +841,38 @@ def seed_sources():
         logger.info(f'Seeded {len(seeded_names)} sources')
 
 
+def _rq_prune():
+    """RQ job target: prune expired EPG entries. Runs inside the RQ worker process."""
+    with flask_app.app_context():
+        _prune_old_programs()
+
+
+def _rq_integrity_cleanup():
+    """RQ job target: delete orphan channels/programs. Runs inside the RQ worker process."""
+    with flask_app.app_context():
+        _cleanup_orphans()
+
+
 if __name__ == '__main__':
     seed_sources()
 
     def _scheduled_prune():
-        with flask_app.app_context():
-            _prune_old_programs()
+        try:
+            _r = redis.from_url(flask_app.config['REDIS_URL'])
+            _q = Queue('scraper', connection=_r)
+            _q.enqueue('app.worker._rq_prune', job_timeout=300)
+            logger.info('[scheduler] enqueued _rq_prune job')
+        except Exception as e:
+            logger.error('[scheduler] could not enqueue prune job: %s', e)
 
     def _scheduled_integrity_cleanup():
-        with flask_app.app_context():
-            _cleanup_orphans()
+        try:
+            _r = redis.from_url(flask_app.config['REDIS_URL'])
+            _q = Queue('scraper', connection=_r)
+            _q.enqueue('app.worker._rq_integrity_cleanup', job_timeout=300)
+            logger.info('[scheduler] enqueued _rq_integrity_cleanup job')
+        except Exception as e:
+            logger.error('[scheduler] could not enqueue integrity_cleanup job: %s', e)
 
     def _scheduled_logo_cache_cleanup():
         import os as _os
