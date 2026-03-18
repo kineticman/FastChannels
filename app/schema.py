@@ -163,6 +163,22 @@ def ensure_runtime_schema() -> None:
                 feed,
             )
 
+        # Apply category corrections to all existing channels on startup so
+        # upgrading users don't have to wait for a full re-scrape cycle.
+        if "channels" in tables:
+            from .scrapers.category_utils import category_for_channel
+            rows = conn.execute(text("SELECT id, name, category FROM channels")).fetchall()
+            updates = [
+                (category_for_channel(name, cat), row_id)
+                for row_id, name, cat in rows
+                if category_for_channel(name, cat) != cat
+            ]
+            if updates:
+                conn.executemany(
+                    text("UPDATE channels SET category = :cat WHERE id = :id"),
+                    [{"cat": cat, "id": row_id} for cat, row_id in updates],
+                )
+
         # Migrate global_chnum_start from AppSettings → default Feed.chnum_start.
         # AppSettings.global_chnum_start is now legacy; the Feed column is authoritative.
         if "app_settings" in tables:
