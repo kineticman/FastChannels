@@ -257,7 +257,8 @@
         <div class="meta">
           Every {{ source.scrape_interval }}min &nbsp;·&nbsp;
           <span id="ch-count-{{ source.id }}">{{ source.to_dict().channel_count }}</span> channels &nbsp;·&nbsp;
-          Last: {{ source.last_scraped_at | localtime }}
+          Last scraped: {{ source.last_scraped_at | localtime }}
+          {% if source.last_audited_at %}&nbsp;·&nbsp; Last audited: {{ source.last_audited_at | localtime }}{% endif %}
           {% if source.epg_only %}&nbsp;·&nbsp;<span style="color:#a78bfa">Excluded from M3U · enriches EPG for matching channels</span>{% endif %}
         </div>
         {% if source.name in ('amazon_prime_free', 'sling') %}

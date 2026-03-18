@@ -12,6 +12,7 @@ class Source(db.Model):
     scrape_interval = db.Column(db.Integer, default=360)
     is_enabled      = db.Column(db.Boolean, default=True)
     last_scraped_at = db.Column(db.DateTime(timezone=True))
+    last_audited_at = db.Column(db.DateTime(timezone=True))
     last_error      = db.Column(db.Text)
     config          = db.Column(db.JSON, default=dict)
     chnum_start     = db.Column(db.Integer, nullable=True)   # starting tvg-chno in combined /m3u output
@@ -40,6 +41,7 @@ class Source(db.Model):
             'scrape_interval': self.scrape_interval,
             'is_enabled':     self.is_enabled,
             'last_scraped_at': self.last_scraped_at.isoformat() if self.last_scraped_at else None,
+            'last_audited_at': self.last_audited_at.isoformat() if self.last_audited_at else None,
             'last_error':     self.last_error,
             'channel_count':  self.channels.filter_by(is_active=True).count(),
             'chnum_start':    self.chnum_start,

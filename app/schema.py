@@ -108,6 +108,16 @@ def ensure_runtime_schema() -> None:
             if "public_base_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN public_base_url TEXT"))
 
+        if "sources" in tables:
+            src_cols = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(sources)"))
+            }
+            if "last_audited_at" not in src_cols:
+                conn.execute(text(
+                    "ALTER TABLE sources ADD COLUMN last_audited_at DATETIME"
+                ))
+
         if "channels" in tables:
             ch_cols = {
                 row[1]

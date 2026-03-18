@@ -454,6 +454,7 @@ def run_stream_audit(source_name: str):
 
             _time.sleep(0.3)
 
+        source.last_audited_at = datetime.now(timezone.utc)
         db.session.commit()
         _audit_progress(0, 0, phase='done')
         logger.info('[audit] %s: done — total=%d checked=%d flagged=%d dead=%d errors=%d',
