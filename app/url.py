@@ -69,10 +69,19 @@ def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> st
 def public_base_url() -> str:
     settings_value = (AppSettings.get().effective_public_base_url() or "").strip().rstrip("/")
     if settings_value:
-        return settings_value
+        url = settings_value
+    else:
+        configured = (current_app.config.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+        url = configured if configured else detected_base_url()
 
-    configured = (current_app.config.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
-    if configured:
-        return configured
+    # If the request arrived over HTTPS (via a reverse proxy that sets
+    # X-Forwarded-Proto, trusted by ProxyFix), upgrade any stored http://
+    # base URL to https:// so logo proxy URLs in M3U output match the
+    # scheme the client is using — prevents mixed-content failures.
+    try:
+        if request.scheme == "https" and url.startswith("http://"):
+            url = "https://" + url[7:]
+    except RuntimeError:
+        pass  # called outside a request context (e.g. worker); leave scheme as-is
 
-    return detected_base_url()
+    return url
