@@ -579,7 +579,12 @@ def _upsert_channels(source, channel_data_list):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
     logo_validation_cache: dict[str, bool] = {}
     for cd in channel_data_list:
-        cd.name = cd.name.replace(',', '') if cd.name else cd.name
+        if cd.name:
+            try:
+                cd.name = cd.name.encode('latin-1').decode('utf-8')
+            except (UnicodeDecodeError, UnicodeEncodeError):
+                pass
+            cd.name = cd.name.replace(',', '')
         ch = existing.get(cd.source_channel_id)
 
         # Extract gracenote_id from ChannelData if the scraper set it directly,
