@@ -69,19 +69,17 @@ def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> st
 def public_base_url() -> str:
     settings_value = (AppSettings.get().effective_public_base_url() or "").strip().rstrip("/")
     if settings_value:
-        url = settings_value
-    else:
-        configured = (current_app.config.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
-        url = configured if configured else detected_base_url()
+        # User explicitly set a URL — honour it as-is. If they've configured
+        # http:// deliberately (e.g. Channels DVR accesses FastChannels directly
+        # over HTTP while the admin UI is behind an HTTPS reverse proxy) we must
+        # not silently upgrade the scheme or feed/play URLs will break.
+        return settings_value
 
-    # If the request arrived over HTTPS (via a reverse proxy that sets
-    # X-Forwarded-Proto, trusted by ProxyFix), upgrade any stored http://
-    # base URL to https:// so logo proxy URLs in M3U output match the
-    # scheme the client is using — prevents mixed-content failures.
-    try:
-        if request.scheme == "https" and url.startswith("http://"):
-            url = "https://" + url[7:]
-    except RuntimeError:
-        pass  # called outside a request context (e.g. worker); leave scheme as-is
+    configured = (current_app.config.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if configured:
+        return configured
 
-    return url
+    # No explicit URL configured — fall back to auto-detection. ProxyFix has
+    # already corrected request.host_url to reflect the public scheme/host set
+    # by the reverse proxy, so detected_base_url() returns the right value.
+    return detected_base_url()
