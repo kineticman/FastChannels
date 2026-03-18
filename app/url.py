@@ -1,3 +1,5 @@
+import hashlib
+import os
 import socket
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -48,22 +50,42 @@ def detected_base_url() -> str:
     return f"{parsed.scheme}://{lan_ip}{port}"
 
 
+_LOGO_CACHE_ROOT   = '/data/logo_cache/logos'
+_POSTER_CACHE_ROOT = '/data/logo_cache/posters'
+
+
 def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> str | None:
     """Rewrite a remote image URL to route through our local image proxy.
 
-    A dummy filename with extension is included in the path so clients that
-    require a file extension (e.g. Channels DVR native apps) recognise the
-    response as an image.
+    Uses a hash-based filename so the URL genuinely ends in an image extension
+    (e.g. /images/proxy/logo/a3f2c1d4….jpg) — clients that check the path
+    extension recognise it as an image without needing to parse query params.
+
+    A .url sidecar file is written alongside the cache entry so the proxy
+    route can fetch the image on a cache miss without a query parameter.
     """
     if not url or not base_url:
         return url
-    # Carry the original extension if present, otherwise default to jpg
+
+    key = hashlib.md5(url.encode()).hexdigest()
     ext = 'jpg'
     for candidate in ('jpg', 'jpeg', 'png', 'gif', 'webp'):
         if f'.{candidate}' in url.lower():
             ext = candidate
             break
-    return f"{base_url}/images/proxy/{img_type}/image.{ext}?url={quote(url, safe='')}"
+
+    # Write .url sidecar so the proxy route can fetch the original on cache miss.
+    cache_root = _POSTER_CACHE_ROOT if img_type == 'poster' else _LOGO_CACHE_ROOT
+    try:
+        os.makedirs(cache_root, exist_ok=True)
+        url_path = os.path.join(cache_root, key + '.url')
+        if not os.path.exists(url_path):
+            with open(url_path, 'w') as fh:
+                fh.write(url)
+    except OSError:
+        pass
+
+    return f"{base_url}/images/proxy/{img_type}/{key}.{ext}"
 
 
 def public_base_url() -> str:

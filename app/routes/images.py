@@ -63,6 +63,11 @@ def _fetch_and_cache(url: str, img_path: str, ct_path: str) -> bool:
             f.write(r.content)
         with open(ct_path, 'w') as f:
             f.write(content_type)
+        # Write .url sidecar so hash-based route can re-fetch if cache expires
+        url_path = img_path + '.url'
+        if not os.path.exists(url_path):
+            with open(url_path, 'w') as f:
+                f.write(url)
         return True
     except Exception as exc:
         logger.debug('[images] fetch failed for %s: %s', url, exc)
@@ -85,8 +90,46 @@ def _image_response(img_path: str, content_type: str, ttl: int) -> Response:
     )
 
 
+@images_bp.route('/images/proxy/<img_type>/<hash_ext>')
+def proxy_image(img_type='logo', hash_ext=''):
+    """Hash-based image proxy — URL ends cleanly in an image extension.
+
+    hash_ext is "{md5_of_original_url}.{ext}".  The original URL is read from
+    a .url sidecar file written by proxy_logo_url() at M3U build time and by
+    _fetch_and_cache() at prewarm time.
+    """
+    if '.' not in hash_ext:
+        abort(400)
+    key = hash_ext.rsplit('.', 1)[0]
+
+    ttl = _POSTER_TTL if img_type == 'poster' else _LOGO_TTL
+    d = _cache_dir(img_type)
+    img_path = os.path.join(d, key)
+    ct_path  = os.path.join(d, key + '.ct')
+    url_path = os.path.join(d, key + '.url')
+
+    if _is_fresh(img_path, ttl) and os.path.exists(ct_path):
+        logger.debug('[images] cache hit (%s): %s', img_type, key)
+        content_type = open(ct_path).read().strip() or 'image/jpeg'
+        return _image_response(img_path, content_type, ttl)
+
+    if not os.path.exists(url_path):
+        abort(404)
+    url = open(url_path).read().strip()
+    if not url:
+        abort(404)
+
+    logger.debug('[images] cache miss (%s): %s', img_type, key)
+    if _fetch_and_cache(url, img_path, ct_path):
+        content_type = open(ct_path).read().strip() or 'image/jpeg'
+        return _image_response(img_path, content_type, ttl)
+
+    abort(404)
+
+
 @images_bp.route('/images/proxy/<img_type>/image.<ext>')
-def proxy_image(img_type='logo', ext='jpg'):
+def proxy_image_legacy(img_type='logo', ext='jpg'):
+    """Legacy query-param route — kept for backward compat with cached M3U/EPG output."""
     url = request.args.get('url', '').strip()
     if not url:
         abort(400)
@@ -95,11 +138,9 @@ def proxy_image(img_type='logo', ext='jpg'):
     img_path, ct_path = _cache_paths(url, img_type)
 
     if _is_fresh(img_path, ttl) and os.path.exists(ct_path):
-        logger.debug('[images] cache hit (%s): %s', img_type, url)
         content_type = open(ct_path).read().strip() or 'image/jpeg'
         return _image_response(img_path, content_type, ttl)
 
-    logger.debug('[images] cache miss (%s): %s', img_type, url)
     if _fetch_and_cache(url, img_path, ct_path):
         content_type = open(ct_path).read().strip() or 'image/jpeg'
         return _image_response(img_path, content_type, ttl)
