@@ -20,7 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests as _req
-from flask import Blueprint, Response, abort, request
+from flask import Blueprint, Response, abort, request, send_file
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +63,6 @@ def _fetch_and_cache(url: str, img_path: str, ct_path: str) -> bool:
             f.write(r.content)
         with open(ct_path, 'w') as f:
             f.write(content_type)
-        # Write .url sidecar so hash-based route can re-fetch if cache expires
-        url_path = img_path + '.url'
-        if not os.path.exists(url_path):
-            with open(url_path, 'w') as f:
-                f.write(url)
         return True
     except Exception as exc:
         logger.debug('[images] fetch failed for %s: %s', url, exc)
@@ -88,6 +83,21 @@ def _image_response(img_path: str, content_type: str, ttl: int) -> Response:
             'Connection': 'close',
         },
     )
+
+
+@images_bp.route('/logos/<filename>')
+def serve_logo_static(filename):
+    """Serve a cached channel logo as a static file — no proxy, no fetching."""
+    if '.' not in filename:
+        abort(404)
+    key      = filename.rsplit('.', 1)[0]
+    img_path = os.path.join(_LOGO_DIR, key)
+    ct_path  = os.path.join(_LOGO_DIR, key + '.ct')
+    if not os.path.exists(img_path):
+        abort(404)
+    content_type = open(ct_path).read().strip() if os.path.exists(ct_path) else 'image/jpeg'
+    return send_file(img_path, mimetype=content_type or 'image/jpeg',
+                     max_age=_LOGO_TTL, conditional=True)
 
 
 @images_bp.route('/images/proxy/<img_type>/<hash_ext>')

@@ -53,16 +53,21 @@ def detected_base_url() -> str:
 _LOGO_CACHE_ROOT   = '/data/logo_cache/logos'
 _POSTER_CACHE_ROOT = '/data/logo_cache/posters'
 
+# Formats that Channels DVR native apps (Android TV, iOS, etc.) cannot display.
+# Fall back to the upstream CDN URL for these so the client gets something usable.
+_UNSUPPORTED_TYPES = ('webp', 'svg')
+
 
 def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> str | None:
-    """Rewrite a remote image URL to route through our local image proxy.
+    """Return the best logo URL for M3U/XMLTV output.
 
-    Uses a hash-based filename so the URL genuinely ends in an image extension
-    (e.g. /images/proxy/logo/a3f2c1d4….jpg) — clients that check the path
-    extension recognise it as an image without needing to parse query params.
+    If the image is already cached locally, return a direct static-file URL
+    (/logos/{hash}.jpg) — no proxy overhead, no query params, no client compat
+    issues.  If not cached yet, return the upstream CDN URL directly so the
+    client can still fetch it while the prewarm catches up.
 
-    A .url sidecar file is written alongside the cache entry so the proxy
-    route can fetch the image on a cache miss without a query parameter.
+    WebP/SVG cached files fall back to the upstream URL because Channels DVR
+    native apps cannot display those formats.
     """
     if not url or not base_url:
         return url
@@ -74,18 +79,21 @@ def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> st
             ext = candidate
             break
 
-    # Write .url sidecar so the proxy route can fetch the original on cache miss.
     cache_root = _POSTER_CACHE_ROOT if img_type == 'poster' else _LOGO_CACHE_ROOT
-    try:
-        os.makedirs(cache_root, exist_ok=True)
-        url_path = os.path.join(cache_root, key + '.url')
-        if not os.path.exists(url_path):
-            with open(url_path, 'w') as fh:
-                fh.write(url)
-    except OSError:
-        pass
+    img_path   = os.path.join(cache_root, key)
 
-    return f"{base_url}/images/proxy/{img_type}/{key}.{ext}"
+    if os.path.exists(img_path):
+        # Skip unsupported formats — serve upstream URL instead
+        ct_path = img_path + '.ct'
+        if os.path.exists(ct_path):
+            ct = open(ct_path).read().strip().lower()
+            if any(t in ct for t in _UNSUPPORTED_TYPES):
+                return url
+        static_dir = 'posters' if img_type == 'poster' else 'logos'
+        return f"{base_url}/{static_dir}/{key}.{ext}"
+
+    # Not cached yet — use upstream CDN URL directly as fallback
+    return url
 
 
 def public_base_url() -> str:
