@@ -174,7 +174,7 @@ def ensure_runtime_schema() -> None:
                 if category_for_channel(name, cat) != cat
             ]
             if updates:
-                conn.executemany(
+                conn.execute(
                     text("UPDATE channels SET category = :cat WHERE id = :id"),
                     [{"cat": cat, "id": row_id} for cat, row_id in updates],
                 )
