@@ -455,6 +455,439 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Name-based hard overrides
+# ---------------------------------------------------------------------------
+# Maps lowercase channel name → canonical category.  These take priority over
+# whatever category the scraper reports, so scrape runs won't undo manual
+# corrections.  Add entries here whenever an audit finds a channel that is
+# consistently miscategorized by its upstream source.
+_NAME_OVERRIDES: dict[str, str] = {
+    # ── Action & Adventure ───────────────────────────────────────────────────
+    'universal action':                     'Action & Adventure',
+    'xena':                                 'Action & Adventure',
+    'xena warrior princess':               'Action & Adventure',
+    'the outpost':                          'Action & Adventure',
+
+    # ── Anime ────────────────────────────────────────────────────────────────
+    'hunter x hunter':                      'Anime',
+    'naruto':                               'Anime',
+    'one piece':                            'Anime',
+    'boruto: naruto next generations':      'Anime',
+    'inuyasha':                             'Anime',
+    "jojo's bizarre adventure":             'Anime',
+    'sailor moon':                          'Anime',
+    'yu-gi-oh!':                            'Anime',
+
+    # ── Automotive ───────────────────────────────────────────────────────────
+    'bbc top gear':                         'Automotive',
+    'top gear':                             'Automotive',
+    'the grand tour':                       'Automotive',
+    'drivetribe':                           'Automotive',
+    'fifth gear':                           'Automotive',
+    'fifth gear (uk)':                      'Automotive',
+    'hagerty':                              'Automotive',
+    'torque':                               'Automotive',
+    'choppertown':                          'Automotive',
+    'classic car auctions':                 'Automotive',
+    'classic car auctions by history':      'Automotive',
+    'powertube tv':                         'Automotive',
+    'speedvision':                          'Automotive',
+    'motorvision tv':                       'Automotive',
+    'motorvision tv español':               'Automotive',
+    'discovery turbo tv':                   'Automotive',
+    'powernation':                          'Automotive',
+    'power nation':                         'Automotive',
+
+    # ── Classic TV ───────────────────────────────────────────────────────────
+    'shout! tv':                            'Classic TV',
+    'a-z best classic tv':                  'Classic TV',
+    'a-z classic flix':                     'Classic TV',
+    'filmrise classic tv':                  'Classic TV',
+    "non-stop '90s":                        'Classic TV',
+
+    # ── Comedy ───────────────────────────────────────────────────────────────
+    'the conners':                          'Comedy',
+    'the marvelous mrs. maisel':            'Comedy',
+    'upload':                               'Comedy',
+    "wild 'n out":                          'Comedy',
+    'classic tv comedy':                    'Comedy',
+    'mystery science theater 3000':        'Comedy',
+    'mystery science theater 3000 (mst3k)':'Comedy',
+    'mst3k':                                'Comedy',
+
+    # ── Documentary ──────────────────────────────────────────────────────────
+    'documentary+':                         'Documentary',
+    'ted':                                  'Documentary',
+    'vice':                                 'Documentary',
+    'pbs genealogy':                        'Documentary',
+    'real disaster channel':                'Documentary',
+    'inwonder':                             'Documentary',
+
+    # ── Drama ────────────────────────────────────────────────────────────────
+    'bbc drama':                            'Drama',
+    'bet x tyler perry drama':             'Drama',
+    'drama life':                           'Drama',
+    'tv land drama':                        'Drama',
+    'murdoch mysteries':                    'Drama',
+    'bosch':                                'Drama',
+    'designated survivor':                  'Drama',
+    'heartland':                            'Drama',
+    'ion':                                  'Drama',
+    'ion plus':                             'Drama',
+    'las vegas':                            'Drama',
+    'lawless':                              'Drama',
+    'leverage':                             'Drama',
+    'primetime soaps':                      'Drama',
+    'the bold and the beautiful':           'Drama',
+    'rings of power':                       'Drama',
+    'stories by amc':                       'Drama',
+    'teen wolf':                            'Drama',
+    'teen wolf by mgm':                     'Drama',
+    'weeds & nurse jackie':                 'Drama',
+    'weeds and nurse jackie':               'Drama',
+    'nash bridges':                         'Drama',
+    'nashville':                            'Drama',
+    'nikita':                               'Drama',
+    'nip/tuck':                             'Drama',
+    'nip / tuck':                           'Drama',
+    'spooks (mi-5)':                        'Drama',
+    'mi-5':                                 'Drama',
+    'law & order':                          'Drama',
+    'midsomer murders':                     'Drama',
+    'murder, she wrote':                    'Drama',
+    'silent witness and new tricks':        'Drama',
+    'silent witness & new tricks':          'Drama',
+    'silent witness|new tricks':            'Drama',
+    "mcleod's daughters":                   'Drama',
+    'britbox mysteries':                    'Drama',
+    'series k edge':                        'Drama',
+    'series k heart':                       'Drama',
+    'series k legacy':                      'Drama',
+    'k-drama by cj enm':                   'Drama',
+    'k-drama+':                             'Drama',
+    'k-stories by cj enm':                 'Drama',
+    'kocowa k-drama':                       'Drama',
+    'genie k-drama':                        'Drama',
+
+    # ── Faith ────────────────────────────────────────────────────────────────
+    'daystar tv':                           'Faith',
+    'daystar tv - espanol':                 'Faith',
+    'elevation church':                     'Faith',
+    'elevation church network':             'Faith',
+    'impact gospel':                        'Faith',
+    'in touch +':                           'Faith',
+    'jltv':                                 'Faith',
+    'rightnow tv':                          'Faith',
+    'right now tv':                         'Faith',
+    't.d. jakes':                           'Faith',
+    'joel osteen network':                  'Faith',
+
+    # ── Food ─────────────────────────────────────────────────────────────────
+    'bizarre foods with andrew zimmern':    'Food',
+    "cook's country":                       'Food',
+    'come dine with me':                    'Food',
+    'great british menu':                   'Food',
+
+    # ── Game Shows ───────────────────────────────────────────────────────────
+    'deal or no deal':                      'Game Shows',
+    'supermarket sweep':                    'Game Shows',
+
+    # ── Gaming ───────────────────────────────────────────────────────────────
+    'gameplay minecraft':                   'Gaming',
+    'gameplay roblox':                      'Gaming',
+    'estrella games':                       'Gaming',
+    'dungeons & dragons adventures':        'Gaming',
+    'jacksepticeye':                        'Gaming',
+    'lazarbeam':                            'Gaming',
+    'prestonplayz':                         'Gaming',
+    'team liquid':                          'Gaming',
+
+    # ── History ──────────────────────────────────────────────────────────────
+    'history & warfare now':                'History',
+    'history 365':                          'History',
+    'history film channel':                 'History',
+    'military heroes':                      'History',
+    'modern marvels presented by history':  'History',
+    'true history':                         'History',
+    'the curse of oak island':              'History',
+    'the unxplained with william shatner':  'History',
+    'unidentified':                         'History',
+    'declassified':                         'History',
+
+    # ── Home & DIY ───────────────────────────────────────────────────────────
+    'at home with family handyman':         'Home & DIY',
+    'bbc home & garden':                    'Home & DIY',
+    'craftsytv':                            'Home & DIY',
+    'gardening with monty don':             'Home & DIY',
+    'the design network':                   'Home & DIY',
+    'this old house':                       'Home & DIY',
+    'tiny house nation':                    'Home & DIY',
+    'welcome home':                         'Home & DIY',
+    'property brothers':                    'Home & DIY',
+    'property brothers channel':            'Home & DIY',
+    'grand designs':                        'Home & DIY',
+    'my first place':                       'Home & DIY',
+    'nbc lx home':                          'Home & DIY',
+    'tastemade home':                       'Home & DIY',
+
+    # ── Horror ───────────────────────────────────────────────────────────────
+    'ghost dimension':                      'Horror',
+    'ghost hunters':                        'Horror',
+    'ghost hunters channel':                'Horror',
+    'ghosts are real':                      'Horror',
+    'ghost stories':                        'Horror',
+    'the walking dead channel':             'Horror',
+    'the walking dead universe':            'Horror',
+    'beyond paranormal':                    'Horror',
+    'paranormal files':                     'Horror',
+    'screams tv':                           'Horror',
+    'universal monsters':                   'Horror',
+    'van helsing':                          'Horror',
+    'amc thrillers':                        'Horror',
+    'trailers from hell':                   'Horror',
+    'watch it scream':                      'Horror',
+
+    # ── Kids ─────────────────────────────────────────────────────────────────
+    'pokémon':                              'Kids',
+    'super mario':                          'Kids',
+    'tmnt':                                 'Kids',
+    'transformers':                         'Kids',
+    'he-man & the masters of the universe': 'Kids',
+    'dinos 24/7':                           'Kids',
+    'kiddo+':                               'Kids',
+    'toon goggles en español':              'Kids',
+    'sonic':                                'Kids',
+
+    # ── Lifestyle ────────────────────────────────────────────────────────────
+    'growthday network':                    'Lifestyle',
+    'tony robbins network':                 'Lifestyle',
+    'antiques road trip':                   'Lifestyle',
+    'pbs antiques roadshow':                'Lifestyle',
+    'omstars tv':                           'Lifestyle',
+    'more u':                               'Lifestyle',
+
+    # ── Local News ───────────────────────────────────────────────────────────
+    '9&10 news northern michigan':          'Local News',
+    '12 news beaumont tx':                  'Local News',
+    'erie news now':                        'Local News',
+    'news center maine nbc portland-bangor me': 'Local News',
+    'newsday tv long island ny':            'Local News',
+    'onnj on new jersey':                   'Local News',
+    'localish':                             'Local News',
+    'fox 11 green bay wi 2':                'Local News',
+
+    # ── Movies ───────────────────────────────────────────────────────────────
+    'outflix movies':                       'Movies',
+    'lifetime movie favorites':             'Movies',
+
+    # ── Music ────────────────────────────────────────────────────────────────
+    'smooth jazz':                          'Music',
+    'easy listening':                       'Music',
+    'def jam':                              'Music',
+    'circle country':                       'Music',
+
+    # ── Nature ───────────────────────────────────────────────────────────────
+    'dog whisperer':                        'Nature',
+    'nat geo sharks':                       'Nature',
+    'wild nature':                          'Nature',
+    'paws and claws':                       'Nature',
+    'paws & claws':                         'Nature',
+    'love pets':                            'Nature',
+    'unleashed by dogtv':                   'Nature',
+    'lucky dog':                            'Nature',
+    'rovr pets':                            'Nature',
+    'samsung wild life':                    'Nature',
+    'the pet collective':                   'Nature',
+    'inwild':                               'Nature',
+
+    # ── News ─────────────────────────────────────────────────────────────────
+    'fox weather':                          'News',
+    'weatherspy':                           'News',
+    'cnn originals':                        'News',
+    'reuters 60':                           'News',
+    "real america's voice":                 'News',
+    'spot on news':                         'News',
+    'telemundo al dia':                     'News',
+    '60 minutes':                           'News',
+    'today all day':                        'News',
+    'usa today':                            'News',
+    'cheddar news':                         'News',
+    'american stories network':             'News',
+
+    # ── Outdoors ─────────────────────────────────────────────────────────────
+    'wild tv':                              'Outdoors',
+    'rvtv':                                 'Outdoors',
+    'the boat show':                        'Outdoors',
+    'yachting tv':                          'Outdoors',
+
+    # ── Reality TV ───────────────────────────────────────────────────────────
+    "america's got talent":                 'Reality TV',
+    'bad girls club':                       'Reality TV',
+    'reality gone wild':                    'Reality TV',
+    'the biggest loser':                    'Reality TV',
+    'the apprentice':                       'Reality TV',
+    'the osbournes':                        'Reality TV',
+    'the girls next door':                  'Reality TV',
+    'bondi rescue':                         'Reality TV',
+    'highway thru hell':                    'Reality TV',
+    'fear factor':                          'Reality TV',
+    'fear factor usa':                      'Reality TV',
+    'wipeout extra':                        'Reality TV',
+    'wipeout xtra':                         'Reality TV',
+    'wipeoutxtra':                          'Reality TV',
+    'confess by nosey':                     'Reality TV',
+    'best of dr. phil':                     'Reality TV',
+    'judge nosey':                          'Reality TV',
+    'nosey':                                'Reality TV',
+
+    # ── Sci-Fi ───────────────────────────────────────────────────────────────
+    'bbc sci-fi':                           'Sci-Fi',
+    'filmrise sci-fi':                      'Sci-Fi',
+    'farscape':                             'Sci-Fi',
+    'stargate by mgm':                      'Sci-Fi',
+    'the outer limits':                     'Sci-Fi',
+    'z nation':                             'Sci-Fi',
+    'classic doctor who':                   'Sci-Fi',
+    'ancient aliens':                       'Sci-Fi',
+    'mysterious worlds':                    'Sci-Fi',
+    'unxplained zone':                      'Sci-Fi',
+
+    # ── Science ──────────────────────────────────────────────────────────────
+    'mythbusters':                          'Science',
+    'pluto tv science':                     'Science',
+    'robot wars by mech+':                  'Science',
+    'startalk':                             'Science',
+    'nasa+':                                'Science',
+
+    # ── Shopping ─────────────────────────────────────────────────────────────
+    'hsn':                                  'Shopping',
+    'qvc':                                  'Shopping',
+    'qvc2':                                 'Shopping',
+    'shop lc':                              'Shopping',
+    'shoplc':                               'Shopping',
+    'jtv jewelry love':                     'Shopping',
+
+    # ── Sports ───────────────────────────────────────────────────────────────
+    'acc digital network':                  'Sports',
+    'big 12 studios':                       'Sports',
+    'billiard tv':                          'Sports',
+    'cbs sports hq':                        'Sports',
+    'combate global mma':                   'Sports',
+    'draftkings network':                   'Sports',
+    "espn8: the ocho":                      'Sports',
+    'fifa+':                                'Sports',
+    'fifa +':                               'Sports',
+    'fox sports':                           'Sports',
+    'fanduel tv extra':                     'Sports',
+    'golfpass':                             'Sports',
+    'msg sportszone':                       'Sports',
+    'milb':                                 'Sports',
+    'nbc sports now':                       'Sports',
+    'nesn nation':                          'Sports',
+    'pac-12 insider':                       'Sports',
+    'pickleballtv':                         'Sports',
+    'pickletv':                             'Sports',
+    'roku sports channel':                  'Sports',
+    'slvr':                                 'Sports',
+    'surfer tv':                            'Sports',
+    'sportsgrid':                           'Sports',
+    'stadium':                              'Sports',
+    'tna wrestling':                        'Sports',
+    'team usa tv':                          'Sports',
+    'the jim rome show':                    'Sports',
+    'the nba channel':                      'Sports',
+    'ufc':                                  'Sports',
+    'unbeaten sports channel':              'Sports',
+    'victory+':                             'Sports',
+    "women's sports network":               'Sports',
+    'world poker tour':                     'Sports',
+    "yahoo! sports network":                'Sports',
+    'bein sports xtra':                     'Sports',
+    'fubo sports network':                  'Sports',
+    't2':                                   'Sports',
+    'pfl':                                  'Sports',
+    'pga tour':                             'Sports',
+    'american ninja warrior':               'Sports',
+    'sports first - stream free now':       'Sports',
+    'real madrid tv':                       'Sports',
+    'rugbypass tv':                         'Sports',
+    'nascar channel':                       'Sports',
+    'motogp':                               'Sports',
+    'monster jam':                          'Sports',
+    'f1 tv':                                'Sports',
+    'speed sport 1':                        'Sports',
+    'flohockey 24/7':                       'Sports',
+    'floracing 24/7':                       'Sports',
+    'msg national':                         'Sports',
+    'msgsn national':                       'Sports',
+
+    # ── Travel ───────────────────────────────────────────────────────────────
+    'travel + adventure':                   'Travel',
+    'tastemade travel':                     'Travel',
+
+    # ── True Crime ───────────────────────────────────────────────────────────
+    'crime beat tv':                        'True Crime',
+    'crime thrillher':                      'True Crime',
+    'ion mystery':                          'True Crime',
+    'pluto tv crime drama':                 'True Crime',
+    'mhz mysteries':                        'True Crime',
+    'crimeflix - free crime tv that\'ll keep you hooked': 'True Crime',
+    'lapd: life on the beat':               'True Crime',
+    'the fbi':                              'True Crime',
+    'the fbi files':                        'True Crime',
+    'the new detectives':                   'True Crime',
+    "sheriffs: el dorado county":           'True Crime',
+    'i  (almost) got away with it':         'True Crime',
+    'introuble':                            'True Crime',
+    'locked up abroad':                     'True Crime',
+
+    # ── Westerns ─────────────────────────────────────────────────────────────
+    'the rifleman':                         'Westerns',
+    'wanted: dead or alive':                'Westerns',
+    'death valley days':                    'Westerns',
+    'lone star':                            'Westerns',
+    'outlaw':                               'Westerns',
+    'bonanza-billies tv':                   'Westerns',
+    'the young riders':                     'Westerns',
+    'life and legend of wyatt earp':        'Westerns',
+    'cowboy movie channel':                 'Westerns',
+}
+
+
+def category_for_channel(name: str, raw_category: str | None) -> str | None:
+    """Return the canonical category for a channel, applying hard overrides first.
+
+    Priority order:
+      1. Exact name match in _NAME_OVERRIDES (scraper-proof corrections)
+      2. Pattern checks for reliable name-based signals (XITE, K-Drama, Very Local)
+      3. normalize_category(raw_category) — scraper-provided value after mapping
+
+    This ensures that re-scraping never undoes manual category corrections.
+    """
+    name_lower = (name or '').strip().lower()
+
+    # 1. Exact override
+    override = _NAME_OVERRIDES.get(name_lower)
+    if override:
+        return override
+
+    # 2. High-confidence name patterns
+    if name_lower.startswith('xite '):
+        return 'Music'
+    if name_lower.startswith('very ') and ' by ' in name_lower:
+        return 'Local News'
+    if 'k-drama' in name_lower or 'kdrama' in name_lower:
+        return 'Drama'
+    if name_lower.endswith(' westerns') or name_lower.endswith(' western'):
+        return 'Westerns'
+    if name_lower.startswith('western ') or ' western ' in name_lower:
+        return 'Westerns'
+
+    # 3. Scraper-provided category, normalized
+    return normalize_category(raw_category)
+
+
 def infer_category_from_name(title: str) -> str | None:
     """Infer a canonical category label from a channel name via keyword matching.
 

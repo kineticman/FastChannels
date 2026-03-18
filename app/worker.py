@@ -24,7 +24,7 @@ from app.scrapers.base import (
     ScrapeSkipError,
     is_transient_network_error,
 )
-from app.scrapers.category_utils import normalize_category
+from app.scrapers.category_utils import category_for_channel
 from app.xml_cache import invalidate_xml_cache
 
 logging.basicConfig(
@@ -584,7 +584,7 @@ def _upsert_channels(source, channel_data_list):
                             source.name, cd.name)
             ch.logo_url      = next_logo
             ch.slug          = cd.slug
-            ch.category      = normalize_category(cd.category)
+            ch.category      = category_for_channel(cd.name, cd.category)
             ch.language      = cd.language
             ch.country       = cd.country
             ch.number        = cd.number
@@ -610,7 +610,7 @@ def _upsert_channels(source, channel_data_list):
                 stream_type       = cd.stream_type,
                 logo_url          = cd.logo_url,
                 slug              = cd.slug,
-                category          = normalize_category(cd.category),
+                category          = category_for_channel(cd.name, cd.category),
                 language          = cd.language,
                 country           = cd.country,
                 number            = cd.number,
