@@ -24,7 +24,7 @@ volumes:
 - Deploy the stack.
 - Open `http://<your-server>:5523/admin/`.
 - On first boot, sources seed automatically and channels begin populating within a few minutes.
-- If you want a specific published version, replace `:latest` with a tag like `:v1.0.0`.
+- If you want a specific published version, replace `:latest` with a tag like `:v1.7.0`.
 - Keep the `/data` volume mount so the SQLite database survives container recreation.
 
 ## Deploy with Docker
@@ -150,9 +150,8 @@ A few global defaults can optionally be set with environment variables (not requ
 
 ```yaml
 environment:
-  FASTCHANNELS_SERVER_URL: "http://192.168.1.50:5523"   # LAN address other devices use to reach FastChannels
-  CHANNELS_DVR_SERVER_URL: "http://192.168.1.60:8089"   # Channels DVR server
-  MASTER_CHANNEL_NUMBER_START: "1000"                   # Default tvg-chno start for the master feed
+  PUBLIC_BASE_URL: "http://192.168.1.50:5523"         # LAN address other devices use to reach FastChannels
+  CHANNELS_DVR_SERVER_URL: "http://192.168.1.60:8089" # Channels DVR server
 ```
 
 Values saved in **Settings** override environment variables. If a DB value is cleared, FastChannels falls back to the environment variable.
@@ -181,7 +180,7 @@ M3U and EPG XML outputs are cached to disk and served as fast file reads. The ca
 
 ### Stream Audit
 
-Sources that support it have a **📋 Stream Audit** button on the Sources page that health-checks every channel's stream URL and automatically marks dead or DRM-protected channels inactive. Currently supported: Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, DistroTV.
+Sources that support it have a **📋 Stream Audit** button on the Sources page that health-checks every channel's stream URL and automatically marks dead or DRM-protected channels inactive. Currently supported: Pluto TV, Tubi TV, The Roku Channel, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo Play, Local Now, LG Channels, FreeLiveSports, STIRR.
 
 Running a Stream Audit after your initial scrape is strongly recommended. It shows a live progress bar and a running count of DRM and dead channels found as it works through the list. Depending on channel count it may take several minutes.
 
@@ -217,15 +216,18 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Source | Auth | Notes |
 |--------|------|-------|
 | Pluto TV | Optional login | Session pool size configurable (default 10); per-country feeds; JWT stitcher auth |
-| DistroTV | None | Android TV UA required, URL macro substitution |
 | Tubi TV | Optional email/password | Bearer token auth |
 | The Roku Channel | None | Session cookie auth, HLS variant selection; Cloudflare-sensitive — avoid hammering if you get 403s |
-| Sling Freestream | Optional OAuth creds | Streams are DRM-only for generic IPTV clients; scraper provides EPG data |
 | Plex | None | Session cookie auth |
 | Xumo Play | None | Public API |
-| Amazon Prime Free | Optional cookie header | EPG-only by default; streams are DRM-only |
 | Samsung TV Plus | None | Channel data and EPG via [Matt Huisman's public mirror](https://github.com/matthuisman/samsung-tvplus-for-channels). Region configurable (default: `us`). |
+| Sling Freestream | Optional OAuth creds | Streams are DRM-only for generic IPTV clients; keep enabled for EPG enrichment |
+| DistroTV | None | Android TV UA required, URL macro substitution |
+| LG Channels | None | Country configurable (default: `US`) |
+| Local Now | None | Public API |
+| STIRR | None | Public API |
 | FreeLiveSports | None | Public API |
+| Amazon Prime Free | Optional cookie header | EPG-only by default; streams are DRM-only |
 
 - **Roku**: Cloudflare rate-limiting can cause occasional 403 errors during scraping or playback. If this happens, wait a few minutes before retrying — repeated attempts make it worse. Some channels also expose sparse future guide data; short EPG windows are expected on those channels.
 - **Amazon Prime Free**: without a valid cookie header, channel discovery pagination is limited.
