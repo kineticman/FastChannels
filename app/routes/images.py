@@ -139,7 +139,7 @@ def serve_logo_static(filename):
         abort(404)
     content_type = open(ct_path).read().strip() if os.path.exists(ct_path) else 'image/jpeg'
     return send_file(img_path, mimetype=content_type or 'image/jpeg',
-                     max_age=_LOGO_TTL, conditional=True)
+                     download_name=filename, max_age=_LOGO_TTL, conditional=True)
 
 
 @images_bp.route('/images/proxy/<img_type>/<hash_ext>')
