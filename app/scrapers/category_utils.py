@@ -668,6 +668,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'more u':                               'Lifestyle',
 
     # ── Local News ───────────────────────────────────────────────────────────
+    # Stations that don't match the call-sign or network patterns above
     '9&10 news northern michigan':          'Local News',
     '12 news beaumont tx':                  'Local News',
     'erie news now':                        'Local News',
@@ -676,6 +677,42 @@ _NAME_OVERRIDES: dict[str, str] = {
     'onnj on new jersey':                   'Local News',
     'localish':                             'Local News',
     'fox 11 green bay wi 2':                'Local News',
+    'fox 9 steubenville oh':                'Local News',
+    'fox45 wbff baltimore':                 'Local News',
+    'fox47 news lansing (wsym)':            'Local News',
+    'fox 25 oklahoma city ok':              'Local News',
+    'fox 26 fresno ca':                     'Local News',
+    'action news jax (cbs47 / fox30)':      'Local News',
+    'atlanta news first':                   'Local News',
+    'boston 25 news (fox)':                 'Local News',
+    'channel 3 eyewitness news':            'Local News',
+    'cleveland 19 news plus':               'Local News',
+    'local 12 cincinnati oh':               'Local News',
+    'local now':                            'Local News',
+    'news 3 nbc las vegas nv':              'Local News',
+    'news 4 san antonio tx':                'Local News',
+    'news 4 tucson (kvoa)':                 'Local News',
+    'news 9 oklahoma city ok':              'Local News',
+    'news on 6 tulsa ok':                   'Local News',
+    'news10nbc rochester ny':               'Local News',
+    'newschannel 13 albany ny':             'Local News',
+    'spectrum news+':                       'Local News',
+    'tampa bay 28':                         'Local News',
+    'tmj4 news milwaukee':                  'Local News',
+    'wbtv news':                            'Local News',
+    'wbtv news 3':                          'Local News',
+    'wcnc':                                 'Local News',
+    'wn charlotte':                         'Local News',
+    'wral news+ raleigh-durham':            'Local News',
+    'wsmv 4 news':                          'Local News',
+    'wsoc charlotte':                       'Local News',
+    '10 nbc wjar providence ri':            'Local News',
+    '6 news nbc johnstown pa':              'Local News',
+    'apple valley news now':                'Local News',
+    'argus news':                           'Local News',
+    'ksl-tv -5 salt lake city ut':          'Local News',
+    'news22 abc dayton oh':                 'Local News',
+    'news 22 abc dayton oh':                'Local News',
 
     # ── Movies ───────────────────────────────────────────────────────────────
     'outflix movies':                       'Movies',
@@ -875,14 +912,44 @@ def category_for_channel(name: str, raw_category: str | None) -> str | None:
     # 2. High-confidence name patterns
     if name_lower.startswith('xite '):
         return 'Music'
-    if name_lower.startswith('very ') and ' by ' in name_lower:
-        return 'Local News'
     if 'k-drama' in name_lower or 'kdrama' in name_lower:
         return 'Drama'
     if name_lower.endswith(' westerns') or name_lower.endswith(' western'):
         return 'Westerns'
     if name_lower.startswith('western ') or ' western ' in name_lower:
         return 'Westerns'
+
+    # Local News patterns
+    # Hearst "Very Local" stations
+    if name_lower.startswith('very ') and ' by ' in name_lower:
+        return 'Local News'
+    # FOX Local city streams
+    if 'fox local' in name_lower:
+        return 'Local News'
+    # CBS News [City] local streams — but not national feeds
+    if name_lower.startswith('cbs news ') and not any(
+        x in name_lower for x in ('24/7', ' now', '24x7')
+    ):
+        return 'Local News'
+    # CBS [N] News [City] affiliate stations
+    if name_lower.startswith('cbs ') and name_lower[4:5].isdigit():
+        return 'Local News'
+    # NBC [N] [City] News city streams
+    if name_lower.startswith('nbc ') and name_lower[4:5].isdigit():
+        return 'Local News'
+    # ABC [N] [City] local affiliates (not "ABC News Live" which is national)
+    if name_lower.startswith('abc ') and name_lower[4:5].isdigit():
+        return 'Local News'
+    if name_lower.startswith('abc news ') and name_lower[9:10].isdigit():
+        return 'Local News'
+    # US broadcast call-sign stations: K/W + 2-4 letters, then space/digit/end
+    if len(name_lower) >= 3 and name_lower[0] in ('k', 'w') and name_lower[1:4].isalpha():
+        fourth = name_lower[4:5]
+        if not fourth or not fourth.isalpha():
+            return 'Local News'
+    # Numbered local affiliates: "10 NBC ...", "6 NEWS NBC ...", "News 12 ..."
+    if name_lower.startswith(('news 12', 'news10', 'news channel', 'newsday')):
+        return 'Local News'
 
     # 3. Scraper-provided category, normalized
     return normalize_category(raw_category)
