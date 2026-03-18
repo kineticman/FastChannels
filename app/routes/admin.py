@@ -96,10 +96,10 @@ def channels():
         q = q.filter(db.or_(Channel.name.in_(dup_names_sq), Channel.is_duplicate == True))
 
     sort_name = case(
-        (db.func.lower(Channel.name).like('the %'), db.func.substr(Channel.name, 5)),
-        (db.func.lower(Channel.name).like('an %'), db.func.substr(Channel.name, 4)),
-        (db.func.lower(Channel.name).like('a %'), db.func.substr(Channel.name, 3)),
-        else_=Channel.name,
+        (db.func.lower(Channel.name).like('the %'), db.func.lower(db.func.substr(Channel.name, 5))),
+        (db.func.lower(Channel.name).like('an %'),  db.func.lower(db.func.substr(Channel.name, 4))),
+        (db.func.lower(Channel.name).like('a %'),   db.func.lower(db.func.substr(Channel.name, 3))),
+        else_=db.func.lower(Channel.name),
     )
 
     _sort_cols = {

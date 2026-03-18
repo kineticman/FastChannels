@@ -388,6 +388,17 @@
       .filter-actions { grid-column: span 3; }
     }
 
+    /* Toast notification */
+    #bulk-toast {
+      position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+      background: #1e293b; border: 1px solid #334155; color: #e2e8f0;
+      padding: 0.65rem 1.2rem; border-radius: 8px; font-size: 0.875rem;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4); opacity: 0;
+      transition: opacity 0.2s; pointer-events: none; z-index: 9999;
+      white-space: nowrap;
+    }
+    #bulk-toast.show { opacity: 1; }
+
     @media (max-width: 760px) {
       html { font-size: 16px; }
       nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
@@ -402,6 +413,20 @@
   </style>
 </head>
 <body>
+  <div id="bulk-toast"></div>
+  <script>
+    // Server-rendered filter state — always matches the current page view.
+    const _pageFilters = {
+      source:     {{ source_filter    | tojson }},
+      category:   {{ category_filter  | tojson }},
+      language:   {{ language_filter  | tojson }},
+      search:     {{ search           | tojson }},
+      drm:        {{ drm_filter       | tojson }},
+      enabled:    {{ enabled_filter   | tojson }},
+      gracenote:  {{ gracenote_filter | tojson }},
+      duplicates: {{ duplicates_filter| tojson }},
+    };
+  </script>
   <nav>
     <h1>⚡ FastChannels</h1>
     <a href="/admin/">Dashboard</a>
@@ -485,8 +510,10 @@
         <button type="submit" class="btn-apply">Apply</button>
         <a class="clear" href="/admin/channels">Clear</a>
         <span class="filter-sep"></span>
+        {% if source_filter or search or language_filter or category_filter or drm_filter or enabled_filter or gracenote_filter or duplicates_filter %}
         <button type="button" class="btn-disable-all" onclick="bulkFilterAction(false)">✕ Disable All</button>
         <button type="button" class="btn-enable-all"  onclick="bulkFilterAction(true)">✓ Enable All</button>
+        {% endif %}
         <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
       </div>
     </form>
@@ -1133,26 +1160,34 @@
       window.location.search = params.toString();
     }
 
+    function showToast(msg, ms = 3500) {
+      const t = document.getElementById('bulk-toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), ms);
+    }
+
     async function bulkFilterAction(enable) {
-      const params  = new URLSearchParams(window.location.search);
-      const total   = {{ channels.total }};
-      const label   = enable ? 'enable' : 'disable';
+      const total = {{ channels.total }};
+      const label = enable ? 'enable' : 'disable';
       if (!confirm(`${label.charAt(0).toUpperCase() + label.slice(1)} all ${total} matching channels?`)) return;
 
-      const filters = {
-        source:   params.get('source')   || '',
-        category: params.get('category') || '',
-        language: params.get('language') || '',
-        search:   params.get('search')   || '',
-        drm:      params.get('drm')      || '',
-        enabled:  params.get('enabled')  || '',
-      };
-      const r = await fetch('/api/channels/bulk', {
-        method:  'POST',
-        headers: {'Content-Type': 'application/json'},
-        body:    JSON.stringify({action: label, filters}),
-      });
-      if (r.ok) window.location.reload();
+      try {
+        const r = await fetch('/api/channels/bulk', {
+          method:  'POST',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({action: label, filters: _pageFilters}),
+        });
+        if (r.ok) {
+          const data = await r.json();
+          showToast(`✓ ${label.charAt(0).toUpperCase() + label.slice(1)}d ${data.updated} channel${data.updated !== 1 ? 's' : ''}`);
+          setTimeout(() => window.location.reload(), 800);
+        } else {
+          showToast('⚠ Request failed — check the console');
+        }
+      } catch (e) {
+        showToast('⚠ Network error — ' + e.message);
+      }
     }
 
     function toggleHideDisabled() {
