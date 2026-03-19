@@ -7,6 +7,8 @@ _SUPPRESS_PATTERNS = (
     'scrape-status',           # admin UI polls every 2s during scrape
     'audit-status',            # admin UI polls every 2s during audit
     '/images/proxy',           # per-image cache hits — too noisy
+    '/logos/',                 # cached logo file hits — too noisy
+    '/posters/',               # cached poster file hits — too noisy
     '/api/sources/chnum',      # overlap-banner polling
     'GET /api/sources HTTP',   # sources list fetched on every poll cycle finish
     '"GET /admin/',            # admin page navigation GETs (POSTs still logged)
