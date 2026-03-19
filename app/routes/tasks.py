@@ -32,7 +32,12 @@ def _job_already_active(q: Queue, job_id: str) -> bool:
 
 def trigger_scrape(source_name: str):
     try:
-        get_queue().enqueue('app.worker.run_scraper', source_name, job_timeout=3600)
+        q = get_queue()
+        job_id = f'scrape-{source_name}'
+        if _job_already_active(q, job_id):
+            logger.info('Scrape already queued/running for %s', source_name)
+            return
+        q.enqueue('app.worker.run_scraper', source_name, job_timeout=3600, job_id=job_id)
         logger.info(f'Enqueued scrape for {source_name}')
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for {source_name}')

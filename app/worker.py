@@ -75,6 +75,18 @@ def _enqueue_xml_refresh_job() -> None:
         logger.exception('[xml-cache] could not enqueue refresh job')
 
 
+def _scrape_job_already_active(q: Queue, source_name: str) -> bool:
+    job_id = f'scrape-{source_name}'
+    active_ids = set(q.get_job_ids()) | set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
+    if job_id in active_ids:
+        return True
+    try:
+        job = Job.fetch(job_id, connection=q.connection)
+        return job.get_status(refresh=False) in {'queued', 'started', 'deferred', 'scheduled'}
+    except Exception:
+        return False
+
+
 def _utc_aware(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
@@ -1003,7 +1015,11 @@ def _schedule_due_scrapes():
 
             if last is None or (now - last).total_seconds() >= interval_secs:
                 try:
-                    q.enqueue('app.worker.run_scraper', source.name, job_timeout=3600)
+                    if _scrape_job_already_active(q, source.name):
+                        logger.info('[scheduler] %s already queued/running; skipping duplicate enqueue', source.name)
+                        _last_enqueued[source.name] = now
+                        continue
+                    q.enqueue('app.worker.run_scraper', source.name, job_timeout=3600, job_id=f'scrape-{source.name}')
                     _last_enqueued[source.name] = now
                     logger.info('[scheduler] Enqueued %s (interval=%dm, age=%s)',
                                 source.name, source.scrape_interval,
