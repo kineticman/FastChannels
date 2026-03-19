@@ -32,7 +32,7 @@ _LOGO_DIR     = '/data/logo_cache/logos'
 _POSTER_DIR   = '/data/logo_cache/posters'
 _LOGO_TTL     = 3 * 24 * 60 * 60   # 3 days
 _POSTER_TTL   = 4 * 24 * 60 * 60   # safety-net; primary expiry is DB-driven
-_PREWARM_WORKERS = 8
+_PREWARM_WORKERS = 4
 
 # Channels DVR logo constraints (community-confirmed):
 #   - max ~150 KB file size; oversized logos cause silent failures / crashes
@@ -105,6 +105,9 @@ def _fetch_and_cache(url: str, img_path: str, ct_path: str,
             f.write(data)
         with open(ct_path, 'w') as f:
             f.write(content_type)
+        url_path = img_path + '.url'
+        with open(url_path, 'w') as f:
+            f.write(url)
         return True
     except Exception as exc:
         logger.debug('[images] fetch failed for %s: %s', url, exc)
@@ -147,8 +150,8 @@ def proxy_image(img_type='logo', hash_ext=''):
     """Hash-based image proxy — URL ends cleanly in an image extension.
 
     hash_ext is "{md5_of_original_url}.{ext}".  The original URL is read from
-    a .url sidecar file written by proxy_logo_url() at M3U build time and by
-    _fetch_and_cache() at prewarm time.
+    a .url sidecar file written by `_fetch_and_cache()` after the first successful
+    fetch so later cache misses can be refreshed without query-string URLs.
     """
     if '.' not in hash_ext:
         abort(400)
@@ -222,6 +225,9 @@ def prewarm_logo_cache(urls: list[str]) -> tuple[int, int]:
     urls = [u for u in urls if u]
     if not urls:
         return 0, 0
+    # Avoid redundant freshness checks and duplicate fetches when multiple
+    # channels share the same logo URL.
+    urls = list(dict.fromkeys(urls))
     stale, skipped = [], 0
     for u in urls:
         img_path, _ = _cache_paths(u, 'logo')

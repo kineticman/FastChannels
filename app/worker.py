@@ -3,6 +3,7 @@ Background worker — run with: python -m app.worker
 """
 import logging
 import multiprocessing
+import gc
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -10,7 +11,9 @@ from typing import Callable
 
 import redis
 import requests as _req
+from rq.job import Job
 from rq import Worker, Queue, Connection
+from rq.registry import StartedJobRegistry
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError as _SAOperationalError
@@ -50,6 +53,28 @@ _NETWORK_OUTAGE_UNTIL = 0.0
 _NETWORK_OUTAGE_REASON = ''
 
 
+def _enqueue_xml_refresh_job() -> None:
+    try:
+        r = redis.from_url(flask_app.config['REDIS_URL'])
+        q = Queue('scraper', connection=r)
+        job_id = 'xml-refresh'
+        active_ids = set(q.get_job_ids()) | set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
+        if job_id in active_ids:
+            logger.info('[xml-cache] refresh already queued/running')
+            return
+        try:
+            job = Job.fetch(job_id, connection=q.connection)
+            if job.get_status(refresh=False) in {'queued', 'started', 'deferred', 'scheduled'}:
+                logger.info('[xml-cache] refresh already queued/running')
+                return
+        except Exception:
+            pass
+        q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id=job_id)
+        logger.info('[xml-cache] enqueued refresh job')
+    except Exception:
+        logger.exception('[xml-cache] could not enqueue refresh job')
+
+
 def _utc_aware(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
@@ -81,6 +106,10 @@ def run_scraper(source_name: str):
         t0 = time.monotonic()
         logger.info('[%s] Scrape job started', source_name)
         scraper = None
+        channels = None
+        programs = None
+        db_channels = None
+        epg_input = None
         _progress = _make_progress_writer(source_name)
         try:
             scraper  = scraper_cls(config=source.config or {})
@@ -138,7 +167,7 @@ def run_scraper(source_name: str):
                                        source_name, _attempt + 1, _wait)
                         time.sleep(_wait)
                 invalidate_xml_cache()
-                _refresh_xml_artifacts_subprocess()
+                _enqueue_xml_refresh_job()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] EPG-only run complete — %d channels, %d programs (%.1fs)',
                             source_name, len(db_channels), len(programs), elapsed)
@@ -165,7 +194,7 @@ def run_scraper(source_name: str):
                                        source_name, _attempt + 1, _wait)
                         time.sleep(_wait)
                 invalidate_xml_cache()
-                _refresh_xml_artifacts_subprocess()
+                _enqueue_xml_refresh_job()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
@@ -203,6 +232,13 @@ def run_scraper(source_name: str):
             except Exception:
                 logger.warning('[%s] Could not persist last_error to DB', source_name)
             _progress('done')
+        finally:
+            channels = None
+            programs = None
+            db_channels = None
+            epg_input = None
+            scraper = None
+            gc.collect()
 
 
 def _iter_exception_chain(exc: Exception):
@@ -1103,7 +1139,7 @@ if __name__ == '__main__':
             enabled_feeds,
         )
         try:
-            _refresh_xml_artifacts_subprocess()
+            _enqueue_xml_refresh_job()
         except Exception:
             logger.exception('[xml-cache] startup refresh failed')
 

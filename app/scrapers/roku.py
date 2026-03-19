@@ -779,46 +779,90 @@ class RokuScraper(BaseScraper):
         if not self._ensure_session():
             raise ScrapeSkipError("[roku] session bootstrap failed; keeping previous channel data")
 
-        channels: list[ChannelData] = []
-        seen: set[str] = set()
+        def _fetch_channels_once() -> tuple[list[ChannelData], dict[str, int | str | None]]:
+            channels: list[ChannelData] = []
+            seen: set[str] = set()
+            epg_status = None
+            epg_collections = 0
+            epg_station_rows = 0
+            billboard_status = None
+            billboard_items = 0
 
-        # ── Phase 1: /api/v2/epg — returns all ~795 live channels ─────────────
-        # Each collection item has features.station with full channel metadata.
-        try:
-            r = self._api_get(_EPG_URL, timeout=20, label="epg")
-            if r.status_code == 200:
-                self._last_epg_ok = time.time()
-                for col in r.json().get("collections", []):
-                    station = col.get("features", {}).get("station")
-                    if not station:
-                        continue
-                    sid = station.get("meta", {}).get("id")
-                    if not sid or sid in seen:
-                        continue
-                    self._add_channel_from_station(channels, seen, sid, station)
-            else:
-                logger.warning("[roku] EPG returned %d", r.status_code)
-        except Exception as exc:
-            logger.warning("[roku] EPG fetch failed: %s", exc)
+            # ── Phase 1: /api/v2/epg — returns all ~795 live channels ────────
+            # Each collection item has features.station with full channel metadata.
+            try:
+                r = self._api_get(_EPG_URL, timeout=20, label="epg")
+                epg_status = getattr(r, 'status_code', None)
+                if r and r.status_code == 200:
+                    payload = r.json()
+                    collections = payload.get("collections", [])
+                    epg_collections = len(collections)
+                    self._last_epg_ok = time.time()
+                    for col in collections:
+                        station = col.get("features", {}).get("station")
+                        if not station:
+                            continue
+                        epg_station_rows += 1
+                        sid = station.get("meta", {}).get("id")
+                        if not sid or sid in seen:
+                            continue
+                        self._add_channel_from_station(channels, seen, sid, station)
+                elif r is not None:
+                    logger.warning("[roku] EPG returned %d", r.status_code)
+            except Exception as exc:
+                logger.warning("[roku] EPG fetch failed: %s", exc)
 
-        # ── Phase 2: billboard (hero channels, fills any EPG gaps) ────────────
-        try:
-            r2 = self.session.get(
-                f"{_BASE}/api/v1/billboard/landing/trc-us-live-ml-page-en-current",
-                headers=self._api_headers(),
-                timeout=10,
+            # ── Phase 2: billboard (hero channels, fills any EPG gaps) ───────
+            try:
+                r2 = self.session.get(
+                    f"{_BASE}/api/v1/billboard/landing/trc-us-live-ml-page-en-current",
+                    headers=self._api_headers(),
+                    timeout=10,
+                )
+                billboard_status = r2.status_code
+                if r2.status_code == 200:
+                    items = r2.json()
+                    billboard_items = len(items)
+                    for item in items:
+                        sid = (item.get("meta") or {}).get("id")
+                        if not sid or sid in seen:
+                            continue
+                        self._add_channel_from_content(channels, seen, sid, item)
+            except Exception as exc:
+                logger.warning("[roku] billboard fetch failed: %s", exc)
+
+            return channels, {
+                'epg_status': epg_status,
+                'epg_collections': epg_collections,
+                'epg_station_rows': epg_station_rows,
+                'billboard_status': billboard_status,
+                'billboard_items': billboard_items,
+            }
+
+        channels, stats = _fetch_channels_once()
+        if not channels:
+            logger.warning(
+                "[roku] empty channel payload; refreshing session and retrying once "
+                "(epg_status=%s epg_collections=%s epg_station_rows=%s billboard_status=%s billboard_items=%s)",
+                stats['epg_status'],
+                stats['epg_collections'],
+                stats['epg_station_rows'],
+                stats['billboard_status'],
+                stats['billboard_items'],
             )
-            if r2.status_code == 200:
-                for item in r2.json():
-                    sid = (item.get("meta") or {}).get("id")
-                    if not sid or sid in seen:
-                        continue
-                    self._add_channel_from_content(channels, seen, sid, item)
-        except Exception as exc:
-            logger.warning("[roku] billboard fetch failed: %s", exc)
+            if self._refresh_session():
+                channels, stats = _fetch_channels_once()
 
         if not channels:
-            logger.error("[roku] fetch_channels returned 0 channels — session may be bad")
+            logger.error(
+                "[roku] fetch_channels returned 0 channels after retry "
+                "(epg_status=%s epg_collections=%s epg_station_rows=%s billboard_status=%s billboard_items=%s)",
+                stats['epg_status'],
+                stats['epg_collections'],
+                stats['epg_station_rows'],
+                stats['billboard_status'],
+                stats['billboard_items'],
+            )
             raise ScrapeSkipError("[roku] channel fetch returned 0 channels; keeping previous channel data")
 
         logger.info("[roku] %d channels fetched", len(channels))

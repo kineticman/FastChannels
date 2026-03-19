@@ -6,7 +6,6 @@ from .config import Config, VERSION
 from . import logfile
 from .schema import ensure_runtime_schema
 
-
 def _ensure_sqlite_parent_dir(database_uri: str | None) -> None:
     if not database_uri or not database_uri.startswith("sqlite:"):
         return
