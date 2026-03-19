@@ -34,6 +34,14 @@ api_bp = Blueprint('api', __name__)
 _localnow_city_scraper: dict = {}  # {'scraper': LocalNowScraper, 'expires': float}
 
 
+def _scrape_interval_limits(source_name: str) -> tuple[int, int, int]:
+    scraper_cls = registry.get(source_name)
+    recommended = getattr(scraper_cls, 'scrape_interval', 360) if scraper_cls else 360
+    minimum = getattr(scraper_cls, 'min_scrape_interval', 30) if scraper_cls else 30
+    maximum = getattr(scraper_cls, 'max_scrape_interval', 10080) if scraper_cls else 10080
+    return int(recommended), int(minimum), int(maximum)
+
+
 def _parse_hls_variants(master_text: str) -> list[dict]:
     """Parse #EXT-X-STREAM-INF variant entries from an HLS master playlist."""
     _CODEC_NAMES = {
@@ -568,7 +576,19 @@ def update_source(source_id):
     else:
         should_purge = False
     if 'scrape_interval' in data:
-        source.scrape_interval = int(data['scrape_interval'])
+        try:
+            interval = int(data['scrape_interval'])
+        except (TypeError, ValueError):
+            return jsonify({'error': 'scrape_interval must be an integer number of minutes'}), 422
+        recommended, minimum, maximum = _scrape_interval_limits(source.name)
+        if interval < minimum or interval > maximum:
+            return jsonify({
+                'error': f'scrape_interval must be between {minimum} and {maximum} minutes for {source.display_name}',
+                'recommended': recommended,
+                'min': minimum,
+                'max': maximum,
+            }), 422
+        source.scrape_interval = interval
     if 'chnum_start' in data:
         val = data['chnum_start']
         if val is None or val == '':

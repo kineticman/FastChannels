@@ -38,6 +38,14 @@
     .meta { color: #64748b; font-size: 0.8rem; margin-top: 0.3rem; }
     .error { color: #f87171; font-size: 0.75rem; margin-top: 0.4rem; font-family: monospace;
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 500px; }
+    .interval-control { margin-top: 0.7rem; display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+    .interval-control label { font-size: 0.76rem; color: #94a3b8; font-weight: 600; }
+    .interval-control input {
+      width: 84px; background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+      padding: 0.35rem 0.5rem; color: #e2e8f0; font-size: 0.8rem;
+    }
+    .interval-control .unit { font-size: 0.76rem; color: #94a3b8; }
+    .interval-control .help { width: 100%; font-size: 0.74rem; color: #64748b; line-height: 1.4; }
 
     .actions { display: flex; gap: 0.75rem; align-items: center; flex-shrink: 0; }
     .btn { padding: 0.4rem 0.9rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;
@@ -293,6 +301,23 @@
         {% endif %}
         <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
         <div class="audit-status" id="audit-status-{{ source.id }}"></div>
+        {% set interval_meta = source_interval_meta.get(source.name, {'recommended': source.scrape_interval, 'min': 30, 'max': 10080}) %}
+        <div class="interval-control">
+          <label for="scrape-interval-{{ source.id }}">Scrape every</label>
+          <input type="number"
+                 id="scrape-interval-{{ source.id }}"
+                 min="{{ interval_meta.min }}"
+                 max="{{ interval_meta.max }}"
+                 value="{{ source.scrape_interval }}"
+                 {% if not source.is_enabled %}disabled{% endif %}
+                 onkeydown="if (event.key === 'Enter') saveScrapeInterval({{ source.id }})">
+          <span class="unit">min</span>
+          <button class="btn btn-cancel" type="button"
+                  id="scrape-interval-save-{{ source.id }}"
+                  onclick="saveScrapeInterval({{ source.id }})"
+                  {% if not source.is_enabled %}disabled{% endif %}>Save</button>
+          <div class="help">Recommended {{ interval_meta.recommended }} min · allowed {{ interval_meta.min }}-{{ interval_meta.max }} min.</div>
+        </div>
 
         <div class="epg-only-wrap">
           <label id="epg-toggle-{{ source.id }}" title="EPG Only: scrape for guide data only, exclude from M3U output">
@@ -345,6 +370,37 @@
     const MASK = '••••••••';
     let _pendingSourceId   = null;
     let _pendingCheckbox   = null;
+
+    async function saveScrapeInterval(sourceId) {
+      const input = document.getElementById(`scrape-interval-${sourceId}`);
+      const saveBtn = document.getElementById(`scrape-interval-save-${sourceId}`);
+      const card = document.getElementById(`card-${sourceId}`);
+      if (!input || !saveBtn || !card) return;
+      const value = parseInt(input.value, 10);
+      if (!Number.isFinite(value)) return;
+      saveBtn.disabled = true;
+      const prevText = saveBtn.textContent;
+      saveBtn.textContent = 'Saving…';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({scrape_interval: value}),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        const meta = card.querySelector('.meta');
+        if (meta) {
+          meta.innerHTML = meta.innerHTML.replace(/Every \d+min/, `Every ${data.scrape_interval}min`);
+        }
+        saveBtn.textContent = 'Saved';
+        setTimeout(() => { saveBtn.textContent = prevText; saveBtn.disabled = false; }, 1200);
+      } catch (e) {
+        saveBtn.textContent = 'Error';
+        console.error('Failed to save scrape interval:', e);
+        setTimeout(() => { saveBtn.textContent = prevText; saveBtn.disabled = false; }, 1800);
+      }
+    }
 
     async function forceCompleteRefresh() {
       if (!confirm('Force a complete refresh for all enabled sources? This clears the last scrape time and queues a full channel + guide refresh for each enabled source.')) return;
@@ -401,6 +457,8 @@
       const card     = document.getElementById(`card-${sourceId}`);
       const runBtn   = card.querySelector('.btn-run');
       const drmBtn   = card.querySelector('.btn-audit');
+      const intervalInput = document.getElementById(`scrape-interval-${sourceId}`);
+      const intervalSaveBtn = document.getElementById(`scrape-interval-save-${sourceId}`);
       toggleEl.classList.add('saving');
 
       try {
@@ -419,6 +477,8 @@
         card.classList.toggle('disabled', !enabled);
         runBtn.disabled = !enabled;
         if (drmBtn) drmBtn.disabled = !enabled;
+        if (intervalInput) intervalInput.disabled = !enabled;
+        if (intervalSaveBtn) intervalSaveBtn.disabled = !enabled;
 
       } catch (e) {
         checkbox.checked = !enabled;

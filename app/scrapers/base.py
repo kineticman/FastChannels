@@ -189,6 +189,8 @@ class BaseScraper(ABC):
     source_aliases:  tuple[str, ...] = ()
     display_name:    str = None
     scrape_interval: int = 360
+    min_scrape_interval: int = 30
+    max_scrape_interval: int = 10080
     stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
 

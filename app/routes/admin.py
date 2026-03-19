@@ -160,10 +160,19 @@ def sources():
         name: getattr(cls, 'stream_audit_enabled', False)
         for name, cls in all_scrapers.items()
     }
+    source_interval_meta = {
+        name: {
+            'recommended': getattr(cls, 'scrape_interval', 360),
+            'min': getattr(cls, 'min_scrape_interval', 30),
+            'max': getattr(cls, 'max_scrape_interval', 10080),
+        }
+        for name, cls in all_scrapers.items()
+    }
     return render_template('admin/sources.html',
                            sources=Source.query.order_by(Source.display_name).all(),
                            chnum_warnings=[],
-                           audit_enabled=audit_enabled)
+                           audit_enabled=audit_enabled,
+                           source_interval_meta=source_interval_meta)
 
 
 @admin_bp.route('/channels')
