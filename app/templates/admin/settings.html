@@ -398,6 +398,8 @@ async function loadSystemStats() {
     const totalCacheBytes = ic.logos_bytes + ic.posters_bytes;
     const containerUsage = mem.container_bytes ? _fmt_bytes(mem.container_bytes) : 'Unavailable';
     const containerLimit = mem.container_limit_bytes ? _fmt_bytes(mem.container_limit_bytes) : null;
+    const anonBytes = mem.container_anon_bytes ? _fmt_bytes(mem.container_anon_bytes) : 'Unavailable';
+    const fileCacheBytes = mem.container_file_cache_bytes ? _fmt_bytes(mem.container_file_cache_bytes) : 'Unavailable';
     const processRss = mem.process_rss_bytes ? _fmt_bytes(mem.process_rss_bytes) : 'Unavailable';
     const processSwap = mem.process_swap_bytes ? _fmt_bytes(mem.process_swap_bytes) : '0 B';
     const hostAvailable = mem.host_mem_available_bytes ? _fmt_bytes(mem.host_mem_available_bytes) : 'Unavailable';
@@ -424,8 +426,10 @@ async function loadSystemStats() {
         </div>
         <div>
           <div class="stats-section-label">Memory</div>
-          ${_stat('Container', containerLimit ? `${containerUsage} / ${containerLimit}` : containerUsage, (mem.container_percent || 0) >= 80 ? 'warn' : '')}
+          ${_stat('Container total', containerLimit ? `${containerUsage} / ${containerLimit}` : containerUsage, (mem.container_percent || 0) >= 80 ? 'warn' : '')}
           ${_stat('Container %', mem.container_percent != null ? `${mem.container_percent}%` : 'Unavailable', (mem.container_percent || 0) >= 80 ? 'warn' : 'muted')}
+          ${_stat('Process/anon', anonBytes)}
+          ${_stat('File cache', fileCacheBytes)}
           ${_stat('Web process RSS', processRss)}
           ${_stat('Web process swap', processSwap, (mem.process_swap_bytes || 0) > 0 ? 'warn' : 'muted')}
           ${_stat('Host available', hostAvailable)}

@@ -130,6 +130,8 @@ def _memory_stats() -> dict:
 
     mem_available = None
     mem_total = None
+    anon_bytes = None
+    file_bytes = None
     try:
         with open('/proc/meminfo', 'r', encoding='utf-8') as fp:
             for line in fp:
@@ -140,6 +142,18 @@ def _memory_stats() -> dict:
     except OSError:
         pass
 
+    for stat_path in ('/sys/fs/cgroup/memory.stat', '/sys/fs/cgroup/memory/memory.stat'):
+        try:
+            with open(stat_path, 'r', encoding='utf-8') as fp:
+                for line in fp:
+                    if line.startswith('anon '):
+                        anon_bytes = int(line.split()[1])
+                    elif line.startswith('file '):
+                        file_bytes = int(line.split()[1])
+            break
+        except OSError:
+            continue
+
     percent = None
     if cgroup_current and cgroup_limit and cgroup_limit > 0:
         percent = round((cgroup_current / cgroup_limit) * 100, 1)
@@ -148,6 +162,8 @@ def _memory_stats() -> dict:
         'container_bytes': cgroup_current,
         'container_limit_bytes': cgroup_limit,
         'container_percent': percent,
+        'container_anon_bytes': anon_bytes,
+        'container_file_cache_bytes': file_bytes,
         'process_rss_bytes': rss_bytes,
         'process_vmsize_bytes': vm_size_bytes,
         'process_swap_bytes': swap_bytes,
