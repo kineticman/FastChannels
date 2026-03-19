@@ -20,6 +20,7 @@ import json
 import logging
 import random
 import string
+import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote_plus
@@ -247,6 +248,7 @@ class PlexScraper(BaseScraper):
     def _ensure_auth(self, force: bool = False) -> bool:
         if self._auth_token and not force:
             return True
+        t0 = time.monotonic()
         try:
             self.session.get("https://watch.plex.tv/", timeout=15)
             r = self.session.post(
@@ -258,7 +260,11 @@ class PlexScraper(BaseScraper):
             r.raise_for_status()
             self._auth_token = r.json()["authToken"]
             self._update_config("auth_token", self._auth_token)
-            logger.info("[plex] anonymous auth OK, token=%s…", self._auth_token[:8])
+            logger.info(
+                "[plex] anonymous auth OK in %.1fs, token=%s…",
+                time.monotonic() - t0,
+                self._auth_token[:8],
+            )
             return True
         except Exception as exc:
             logger.error("[plex] auth failed: %s", exc)
@@ -271,6 +277,7 @@ class PlexScraper(BaseScraper):
             return self._rsc_cache
         if not self._ensure_auth():
             return ""
+        t0 = time.monotonic()
         r = self.session.get(
             f"https://watch.plex.tv/live-tv?_rsc={_rand_rsc()}",
             headers={
@@ -285,11 +292,17 @@ class PlexScraper(BaseScraper):
             logger.error("[plex] live-tv RSC returned %d", r.status_code)
             return ""
         self._rsc_cache = r.text
+        logger.info(
+            "[plex] live-tv RSC fetched in %.1fs (%d bytes)",
+            time.monotonic() - t0,
+            len(self._rsc_cache),
+        )
         return self._rsc_cache
 
     # ── fetch_channels ─────────────────────────────────────────────────────────
 
     def fetch_channels(self) -> list[ChannelData]:
+        t0 = time.monotonic()
         text = self._fetch_rsc()
         if not text:
             return []
@@ -330,7 +343,12 @@ class PlexScraper(BaseScraper):
                 )
 
         result = sorted(channels.values(), key=lambda c: (c.name or "").lower())
-        logger.info("[plex] %d channels fetched", len(result))
+        logger.info(
+            "[plex] %d channels fetched from %d RSC objects in %.1fs",
+            len(result),
+            len(rsc_objects),
+            time.monotonic() - t0,
+        )
         return result
 
     # ── fetch_epg ──────────────────────────────────────────────────────────────
@@ -349,6 +367,7 @@ class PlexScraper(BaseScraper):
         known_ids = {ch.source_channel_id for ch in channels}
         programs: list[ProgramData] = []
         seen: set[str] = set()   # deduplicate by media airing id
+        fetch_t0 = time.monotonic()
 
         headers = {
             "Accept":                   "application/json",
@@ -368,9 +387,16 @@ class PlexScraper(BaseScraper):
         n_windows    = 3   # 24 h total
 
         t_start = int(_time.time())
+        logger.info(
+            "[plex] grid fetch starting: channels=%d windows=%d span_hours=%d",
+            len(known_ids),
+            n_windows,
+            window_hours * n_windows,
+        )
         for w in range(n_windows):
             begins_at = t_start + w * window_secs
             ends_at   = begins_at + window_secs
+            window_t0 = time.monotonic()
             try:
                 r = self.session.get(
                     f"{_EPG_HOST}/grid",
@@ -431,9 +457,21 @@ class PlexScraper(BaseScraper):
                         episode_title     = ep_title,
                     ))
 
-            logger.debug("[plex] grid window %d: %d total entries", w + 1, len(entries))
+            logger.info(
+                "[plex] grid window %d/%d fetched in %.1fs: metadata=%d cumulative_programs=%d seen_airings=%d",
+                w + 1,
+                n_windows,
+                time.monotonic() - window_t0,
+                len(entries),
+                len(programs),
+                len(seen),
+            )
 
-        logger.info("[plex] %d EPG entries fetched from grid API", len(programs))
+        logger.info(
+            "[plex] %d EPG entries fetched from grid API in %.1fs",
+            len(programs),
+            time.monotonic() - fetch_t0,
+        )
         return programs
 
     # ── resolve ────────────────────────────────────────────────────────────────
