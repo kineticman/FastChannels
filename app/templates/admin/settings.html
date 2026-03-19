@@ -326,6 +326,31 @@
     </div>
   </div>
 
+  <!-- Backup / Restore card -->
+  <div class="source-card">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">💾</div>
+        <div>
+          <div class="source-name">Backup &amp; Restore</div>
+          <div class="source-meta">Export settings, feeds, and source configuration to a JSON file and restore them later</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="help" style="max-width:640px; line-height:1.5">
+        Exports include global app settings, saved feeds, and source configuration such as credentials and market selections.
+        Runtime data like EPG programs, caches, and scrape history is not included.
+      </div>
+      <input type="file" id="settings-backup-file" accept="application/json,.json" style="display:none">
+      <div class="field-actions" style="justify-content:flex-start">
+        <button class="btn btn-primary" onclick="exportSettingsBackup()">Export Backup</button>
+        <button class="btn btn-ghost" onclick="document.getElementById('settings-backup-file').click()">Import Backup</button>
+        <span class="save-status" id="settings-backup-status" style="text-align:left; min-width:0"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- System Stats card -->
   <div class="stats-card">
     <div class="stats-card-title">📊 System Stats</div>
@@ -363,6 +388,67 @@ function saveDvrSettings() {
     public_base_url: publicBaseUrl || null,
   }, 'dvr-settings-status');
 }
+
+async function exportSettingsBackup() {
+  const status = document.getElementById('settings-backup-status');
+  status.className = 'save-status';
+  status.textContent = 'Exporting…';
+  try {
+    const r = await fetch('/api/settings/export');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const payload = await r.json();
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    a.href = url;
+    a.download = `fastchannels-settings-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    status.className = 'save-status ok';
+    status.textContent = '✓ Backup downloaded';
+    setTimeout(() => { status.textContent = ''; }, 2500);
+  } catch (e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ ' + e.message;
+  }
+}
+
+async function importSettingsBackup(file) {
+  const status = document.getElementById('settings-backup-status');
+  status.className = 'save-status';
+  status.textContent = 'Importing…';
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    const r = await fetch('/api/settings/import', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    const bits = [];
+    if (data.sources_updated != null) bits.push(`${data.sources_updated} sources`);
+    if (data.feeds_created != null || data.feeds_updated != null) bits.push(`${data.feeds_created || 0} feeds created, ${data.feeds_updated || 0} updated`);
+    status.className = 'save-status ok';
+    status.textContent = `✓ Imported${bits.length ? ' · ' + bits.join(' · ') : ''}`;
+    setTimeout(() => { window.location.reload(); }, 1200);
+  } catch (e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ ' + e.message;
+  }
+}
+
+document.getElementById('settings-backup-file').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const ok = window.confirm('Import settings backup and merge it into this FastChannels install? Existing settings and feeds may be updated.');
+  if (ok) await importSettingsBackup(file);
+  e.target.value = '';
+});
 
 // ── System Stats ──────────────────────────────────────────────────────────
 function _fmt_bytes(b) {

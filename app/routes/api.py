@@ -9,7 +9,9 @@ _APP_START = _time.time()
 from urllib.parse import urljoin as _urljoin, urlsplit
 from flask import Blueprint, jsonify, request, current_app
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from app.config_store import persist_source_config_updates
+from app.config import VERSION
 from ..extensions import db
 from ..models import Source, Channel, Program, AppSettings, Feed
 from ..scrapers import registry
@@ -198,6 +200,151 @@ def _normalize_server_url(value: str | None, default_port: int = 5523) -> str | 
         host = f'{host}:{default_port}'
 
     return f'{scheme}://{host}'.rstrip('/')
+
+
+def _settings_backup_payload() -> dict:
+    row = AppSettings.get()
+    sources = Source.query.order_by(Source.name).all()
+    feeds = Feed.query.order_by(Feed.slug).all()
+    return {
+        'format': 'fastchannels-settings-backup',
+        'version': 1,
+        'exported_at': datetime.now(timezone.utc).isoformat(),
+        'app_version': VERSION,
+        'app_settings': {
+            'channels_dvr_url': row.channels_dvr_url,
+            'public_base_url': row.public_base_url,
+        },
+        'sources': [
+            {
+                'name': source.name,
+                'scrape_interval': source.scrape_interval,
+                'is_enabled': source.is_enabled,
+                'config': source.config or {},
+                'chnum_start': source.chnum_start,
+                'epg_only': source.epg_only,
+            }
+            for source in sources
+        ],
+        'feeds': [
+            {
+                'slug': feed.slug,
+                'name': feed.name,
+                'description': feed.description,
+                'filters': feed.filters or {},
+                'chnum_start': feed.chnum_start,
+                'is_enabled': feed.is_enabled,
+            }
+            for feed in feeds
+        ],
+    }
+
+
+def _restore_settings_backup(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError('Backup payload must be a JSON object.')
+    if payload.get('format') != 'fastchannels-settings-backup':
+        raise ValueError('Unsupported backup format.')
+
+    app_settings = payload.get('app_settings') or {}
+    sources_payload = payload.get('sources') or []
+    feeds_payload = payload.get('feeds') or []
+    if not isinstance(sources_payload, list) or not isinstance(feeds_payload, list):
+        raise ValueError('Backup payload has invalid sources/feeds sections.')
+
+    summary = {
+        'sources_updated': 0,
+        'sources_skipped': 0,
+        'feeds_created': 0,
+        'feeds_updated': 0,
+        'feeds_skipped': 0,
+    }
+    skipped_sources: list[str] = []
+
+    row = AppSettings.get()
+    if 'channels_dvr_url' in app_settings:
+        row.channels_dvr_url = _normalize_server_url(app_settings.get('channels_dvr_url'), default_port=8089)
+    if 'public_base_url' in app_settings:
+        row.public_base_url = _normalize_server_url(app_settings.get('public_base_url'), default_port=5523)
+
+    existing_sources = {source.name: source for source in Source.query.all()}
+    for item in sources_payload:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get('name') or '').strip()
+        source = existing_sources.get(name)
+        if not source:
+            summary['sources_skipped'] += 1
+            if name:
+                skipped_sources.append(name)
+            continue
+        if 'scrape_interval' in item:
+            try:
+                source.scrape_interval = int(item['scrape_interval'])
+            except (TypeError, ValueError):
+                pass
+        if 'is_enabled' in item:
+            source.is_enabled = bool(item['is_enabled'])
+        if 'config' in item and isinstance(item.get('config'), dict):
+            source.config = item.get('config') or {}
+        if 'chnum_start' in item:
+            val = item.get('chnum_start')
+            source.chnum_start = int(val) if isinstance(val, int) and val > 0 else None
+        if 'epg_only' in item:
+            source.epg_only = bool(item['epg_only'])
+        summary['sources_updated'] += 1
+
+    existing_feeds = {feed.slug: feed for feed in Feed.query.all()}
+    for item in feeds_payload:
+        if not isinstance(item, dict):
+            continue
+        slug = (item.get('slug') or '').strip()
+        if not slug:
+            summary['feeds_skipped'] += 1
+            continue
+        feed = existing_feeds.get(slug)
+        if feed is None:
+            feed = Feed(slug=slug, name=item.get('name') or slug, description='')
+            db.session.add(feed)
+            existing_feeds[slug] = feed
+            summary['feeds_created'] += 1
+        else:
+            summary['feeds_updated'] += 1
+
+        if feed.slug == 'default':
+            if 'chnum_start' in item:
+                val = item.get('chnum_start')
+                feed.chnum_start = int(val) if isinstance(val, int) and val > 0 else None
+            continue
+
+        if 'name' in item and item.get('name'):
+            feed.name = str(item.get('name')).strip()
+        if 'description' in item:
+            feed.description = str(item.get('description') or '')
+        if 'filters' in item and isinstance(item.get('filters'), dict):
+            from .feeds_api import _clean_filters
+            feed.filters = _clean_filters(item.get('filters') or {})
+        if 'chnum_start' in item:
+            val = item.get('chnum_start')
+            feed.chnum_start = int(val) if isinstance(val, int) and val > 0 else None
+        if 'is_enabled' in item:
+            feed.is_enabled = bool(item['is_enabled'])
+
+    warnings = get_global_chnum_overlaps()
+    if warnings:
+        raise ValueError('Channel number overlaps detected in imported settings.')
+
+    try:
+        db.session.commit()
+    except OperationalError as exc:
+        db.session.rollback()
+        if 'database is locked' in str(exc).lower():
+            raise ValueError('Server is busy (a scrape is in progress). Try again shortly.')
+        raise
+
+    invalidate_xml_cache()
+    summary['skipped_sources'] = skipped_sources
+    return summary
 
 
 @api_bp.route('/sources')
@@ -1088,6 +1235,24 @@ def app_settings():
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.env_public_base_url() is not None else 'unset'),
     })
+
+
+@api_bp.route('/settings/export')
+def export_settings():
+    return jsonify(_settings_backup_payload())
+
+
+@api_bp.route('/settings/import', methods=['POST'])
+def import_settings():
+    payload = request.get_json(force=True, silent=True)
+    if payload is None:
+        return jsonify({'error': 'Expected JSON backup payload.'}), 400
+    try:
+        summary = _restore_settings_backup(payload)
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+    return jsonify({'ok': True, **summary})
 
 
 @api_bp.route('/system-stats')
