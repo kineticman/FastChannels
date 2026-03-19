@@ -4,9 +4,6 @@ from sqlalchemy import select, case
 from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings
 from ..generators.m3u import (
-    _parse_gracenote_id,
-    _build_source_chnum_map,
-    _build_channel_query,
     feed_namespace_start,
 )
 from ..scrapers import registry as _scraper_registry
@@ -15,18 +12,141 @@ from ..url import public_base_url, detected_base_url
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
 
+def _page_duplicate_names(page_items) -> set[str]:
+    names = sorted({(ch.name or '').strip() for ch in page_items if (ch.name or '').strip()})
+    if not names:
+        return set()
+    rows = (
+        db.session.query(Channel.name)
+        .filter(Channel.name.in_(names))
+        .group_by(Channel.name)
+        .having(db.func.count(Channel.id) > 1)
+        .all()
+    )
+    return {row[0] for row in rows}
+
+
+def _page_chnum_map(page_items) -> dict[int, int]:
+    if not page_items:
+        return {}
+
+    source_names = sorted({ch.source.name for ch in page_items if ch.source and ch.source.name})
+    if not source_names:
+        return {}
+
+    count_rows = (
+        db.session.query(
+            Source.name,
+            Source.display_name,
+            Source.chnum_start,
+            db.func.count(Channel.id),
+        )
+        .join(Channel)
+        .filter(Channel.is_active == True)
+        .group_by(Source.name, Source.display_name, Source.chnum_start)
+        .all()
+    )
+
+    source_meta = {
+        name: {
+            'display_name': display_name or name,
+            'chnum_start': chnum_start,
+            'count': count,
+        }
+        for name, display_name, chnum_start, count in count_rows
+    }
+
+    global_start = None
+    try:
+        global_start = AppSettings.get().effective_global_chnum_start()
+    except Exception:
+        pass
+
+    base_map: dict[str, int] = {}
+    if global_start is not None:
+        unconfigured = sorted(
+            (
+                (name, meta)
+                for name, meta in source_meta.items()
+                if not meta['chnum_start']
+            ),
+            key=lambda item: (
+                item[1]['display_name'].lower(),
+                item[0],
+            ),
+        )
+        cursor = global_start
+        for name, meta in unconfigured:
+            base_map[name] = cursor
+            cursor += meta['count']
+
+    order_expr = (
+        case((Channel.number == None, 1), else_=0),
+        db.func.coalesce(Channel.number, 0),
+        db.func.lower(Channel.name),
+        db.func.coalesce(Channel.source_channel_id, ''),
+    )
+
+    ranked = (
+        db.session.query(
+            Channel.id.label('channel_id'),
+            Source.name.label('source_name'),
+            db.func.row_number().over(
+                partition_by=Source.name,
+                order_by=order_expr,
+            ).label('rownum'),
+        )
+        .join(Source)
+        .filter(Channel.is_active == True, Source.name.in_(source_names))
+        .subquery()
+    )
+
+    page_ids = [ch.id for ch in page_items]
+    rank_rows = (
+        db.session.query(ranked.c.channel_id, ranked.c.source_name, ranked.c.rownum)
+        .filter(ranked.c.channel_id.in_(page_ids))
+        .all()
+    )
+
+    chnum_map: dict[int, int] = {}
+    for channel_id, source_name, rownum in rank_rows:
+        meta = source_meta.get(source_name)
+        if not meta:
+            continue
+        if meta['chnum_start']:
+            base = meta['chnum_start']
+        else:
+            base = base_map.get(source_name)
+        if base is None:
+            continue
+        chnum_map[channel_id] = base + rownum - 1
+    return chnum_map
+
+
 @admin_bp.route('/')
 def dashboard():
     sources        = Source.query.order_by(Source.display_name).all()
     total_channels = Channel.query.filter_by(is_active=True, is_enabled=True).count()
     base_url       = public_base_url()
     feeds          = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
-    source_output_meta = {}
-    for source in sources:
-        channels = _build_channel_query({'source': [source.name]}).all()
-        source_output_meta[source.id] = {
-            'channel_count': len(channels),
-        }
+    count_rows = (
+        db.session.query(Source.id, db.func.count(Channel.id))
+        .join(Channel)
+        .filter(
+            Channel.is_active == True,
+            Channel.is_enabled == True,
+            Source.is_enabled == True,
+            Source.epg_only == False,
+            Channel.stream_url != None,
+        )
+        .group_by(Source.id)
+        .all()
+    )
+    count_map = {source_id: count for source_id, count in count_rows}
+    source_output_meta = {
+        source.id: {'channel_count': count_map.get(source.id, 0)}
+        for source in sources
+    }
     return render_template('admin/dashboard.html', sources=sources,
                            total_channels=total_channels, base_url=base_url,
                            feeds=feeds, source_output_meta=source_output_meta,
@@ -124,10 +244,6 @@ def channels():
         )
     sources = sources_q.order_by(Source.display_name).all()
 
-    # Build computed channel number map for display
-    all_active = Channel.query.join(Source).filter(Channel.is_active == True).all()
-    chnum_map, _ = _build_source_chnum_map(all_active)
-
     lang_rows = db.session.query(Channel.language, db.func.count(Channel.id))\
         .filter(Channel.language != None)\
         .group_by(Channel.language)\
@@ -140,11 +256,8 @@ def channels():
         .order_by(Channel.category).all()
     categories = [(cat, count) for cat, count in cat_rows]
 
-    # Compute duplicate name set for visual grouping in template
-    dup_name_rows = db.session.query(Channel.name)\
-        .group_by(Channel.name)\
-        .having(db.func.count(Channel.id) > 1).all()
-    duplicate_names = {row[0] for row in dup_name_rows}
+    duplicate_names = _page_duplicate_names(channels.items)
+    chnum_map = _page_chnum_map(channels.items)
 
     return render_template('admin/channels.html',
                            channels=channels, sources=sources,
