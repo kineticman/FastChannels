@@ -5,6 +5,7 @@ import logging
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 import redis
 import requests as _req
@@ -15,7 +16,7 @@ from sqlalchemy.exc import OperationalError as _SAOperationalError
 from app import create_app
 from app.config_store import persist_source_config_updates
 from app.extensions import db
-from app.models import Source, Channel, Program
+from app.models import Source, Channel, Program, Feed, AppSettings
 import time as _time
 from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
@@ -25,7 +26,7 @@ from app.scrapers.base import (
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
-from app.xml_cache import invalidate_xml_cache
+from app.xml_cache import ensure_xml_artifact, invalidate_xml_cache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -136,6 +137,7 @@ def run_scraper(source_name: str):
                                        source_name, _attempt + 1, _wait)
                         time.sleep(_wait)
                 invalidate_xml_cache()
+                _refresh_xml_artifacts()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] EPG-only run complete — %d channels, %d programs (%.1fs)',
                             source_name, len(db_channels), len(programs), elapsed)
@@ -162,6 +164,7 @@ def run_scraper(source_name: str):
                                        source_name, _attempt + 1, _wait)
                         time.sleep(_wait)
                 invalidate_xml_cache()
+                _refresh_xml_artifacts()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
@@ -517,6 +520,41 @@ def _prewarm_logos(source_name: str, logo_urls: list[str]) -> None:
         prewarm_logo_cache(urls)
     except Exception:
         logger.exception('[%s] logo cache pre-warm failed', source_name)
+
+
+def _refresh_xml_artifacts() -> None:
+    """Refresh master/feed XML artifacts after scrape commits land."""
+    from app.generators.m3u import feed_to_query_filters
+    from app.generators.xmltv import write_xmltv
+
+    base_url = (
+        (AppSettings.get().effective_public_base_url() or '').strip().rstrip('/')
+        or (flask_app.config.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
+        or 'http://localhost:5523'
+    )
+    artifacts: list[tuple[str, Callable]] = [
+        ('master', lambda fp: write_xmltv(fp, {}, base_url=base_url)),
+    ]
+    for feed in Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all():
+        filters = feed_to_query_filters(feed.filters or {})
+        artifacts.append((
+            f'feed-{feed.slug}',
+            lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
+                fp,
+                filters,
+                base_url=base_url,
+                feed_name=feed_name,
+            ),
+        ))
+
+    rebuilt = 0
+    for cache_key, writer in artifacts:
+        try:
+            ensure_xml_artifact(cache_key, writer)
+            rebuilt += 1
+        except Exception:
+            logger.exception('[xml-cache] failed to refresh %s', cache_key)
+    logger.info('[xml-cache] refreshed %d XML artifact(s)', rebuilt)
 
 
 def _fresh_epg_sids(source, horizon_hours: float = 2.0) -> set[str]:

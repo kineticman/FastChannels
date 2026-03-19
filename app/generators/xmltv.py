@@ -16,12 +16,10 @@ from __future__ import annotations
 
 import gzip
 import io
-import re
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from xml.etree.ElementTree import Element, SubElement, tostring
-
-from flask import request as flask_request
 
 from ..extensions import db
 from ..models import Channel, Program, Source
@@ -38,7 +36,7 @@ def _norm_name(name: str) -> str:
     return re.sub(r'\s+', ' ', n).strip()
 
 
-def _build_enrich_index() -> dict:
+def _build_enrich_index(epg_start: datetime, epg_end: datetime) -> dict:
     """
     Load all programs from EPG-only sources into an in-memory enrichment index.
 
@@ -56,19 +54,31 @@ def _build_enrich_index() -> dict:
         return {}
 
     rows = (
-        db.session.query(Program, Channel.name)
+        db.session.query(
+            Program.start_time,
+            Program.end_time,
+            Program.title,
+            Program.description,
+            Program.poster_url,
+            Program.rating,
+            Channel.name,
+        )
         .join(Channel, Program.channel_id == Channel.id)
         .filter(Channel.source_id.in_(epg_only_source_ids))
-        .all()
+        .filter(
+            Program.end_time > epg_start,
+            Program.start_time < epg_end,
+        )
+        .yield_per(500)
     )
 
     index: dict[str, list] = {}
-    for prog, ch_name in rows:
+    for start_time, end_time, title, description, poster_url, rating, ch_name in rows:
         key = _norm_name(ch_name)
         index.setdefault(key, []).append((
-            prog.start_time, prog.end_time,
-            (prog.title or '').lower(),
-            prog.description, prog.poster_url, prog.rating,
+            start_time, end_time,
+            (title or '').lower(),
+            description, poster_url, rating,
         ))
 
     for key in index:
@@ -138,6 +148,12 @@ def generate_xmltv(filters: dict = None, base_url: str = None, feed_name: str = 
     return ''.join(generate_xmltv_stream(filters, base_url, feed_name=feed_name))
 
 
+def write_xmltv(fp, filters: dict = None, base_url: str = None, feed_name: str = None) -> None:
+    """Write XMLTV directly to a text file-like object."""
+    for chunk in generate_xmltv_stream(filters, base_url, feed_name=feed_name):
+        fp.write(chunk)
+
+
 def generate_xmltv_gz(filters: dict = None, base_url: str = None, feed_name: str = None) -> bytes:
     """Return the full XML gzip-compressed as bytes."""
     buf = io.BytesIO()
@@ -178,8 +194,13 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     # channel set so program fetching is bounded to XMLTV-visible channels only.
     channel_id_list = sorted(channel_ids)
 
+    # Rolling 5-day window: include currently-airing programs (up to 2h ago)
+    # through 5 days from now. Naive UTC matches how SQLite stores the values.
+    epg_start = datetime.utcnow() - timedelta(hours=2)
+    epg_end   = datetime.utcnow() + timedelta(days=5)
+
     # Build EPG enrichment index from epg_only sources (e.g. Amazon Prime Free)
-    enrich_index = _build_enrich_index()
+    enrich_index = _build_enrich_index(epg_start, epg_end)
 
     # ── Header ────────────────────────────────────────────────────────────
     yield '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -199,11 +220,6 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     # channel_id_list is already bounded to XMLTV-visible (non-gracenote) channels.
     BATCH   = 500
     last_id = 0
-
-    # Rolling 5-day window: include currently-airing programs (up to 2h ago)
-    # through 5 days from now. Naive UTC matches how SQLite stores the values.
-    epg_start = datetime.utcnow() - timedelta(hours=2)
-    epg_end   = datetime.utcnow() + timedelta(days=5)
 
     while True:
         if not channel_id_list:

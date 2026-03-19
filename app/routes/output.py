@@ -1,4 +1,4 @@
-from flask import Blueprint, request, Response
+from flask import Blueprint, Response, request, send_file, stream_with_context
 from ..generators.m3u import (
     generate_m3u,
     generate_gracenote_m3u,
@@ -7,10 +7,10 @@ from ..generators.m3u import (
     feed_to_query_filters,
     _MASTER_GRACENOTE_START,
 )
-from ..generators.xmltv import generate_xmltv
+from ..generators.xmltv import generate_xmltv_stream, write_xmltv
 from ..models import Feed
 from ..url import public_base_url
-from ..xml_cache import get_or_build_xml, get_or_build
+from ..xml_cache import ensure_xml_artifact, get_or_build
 
 output_bp = Blueprint('output', __name__)
 
@@ -73,11 +73,21 @@ def epg_xml():
     base_url = public_base_url()
     filters = _filters()
     if filters:
-        content = generate_xmltv(filters, base_url=base_url)
-    else:
-        content = get_or_build_xml('master', lambda: generate_xmltv({}, base_url=base_url))
-    return Response(content, mimetype='application/xml',
-                    headers={'Content-Disposition': 'attachment; filename="fastchannels.xml"'})
+        return Response(
+            stream_with_context(generate_xmltv_stream(filters, base_url=base_url)),
+            mimetype='application/xml',
+            headers={'Content-Disposition': 'attachment; filename="fastchannels.xml"'},
+        )
+
+    path = ensure_xml_artifact('master', lambda fp: write_xmltv(fp, {}, base_url=base_url))
+    return send_file(
+        path,
+        mimetype='application/xml',
+        as_attachment=True,
+        download_name='fastchannels.xml',
+        conditional=True,
+        max_age=0,
+    )
 
 
 @output_bp.route('/feeds/<slug>/m3u')
@@ -124,9 +134,20 @@ def feed_m3u_gracenote(slug):
 def feed_epg(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = public_base_url()
-    content  = get_or_build_xml(
+    path = ensure_xml_artifact(
         f'feed-{feed.slug}',
-        lambda: generate_xmltv(feed_to_query_filters(feed.filters or {}), base_url=base_url, feed_name=feed.name),
+        lambda fp: write_xmltv(
+            fp,
+            feed_to_query_filters(feed.filters or {}),
+            base_url=base_url,
+            feed_name=feed.name,
+        ),
     )
-    return Response(content, mimetype='application/xml',
-                    headers={'Content-Disposition': f'attachment; filename="{slug}.xml"'})
+    return send_file(
+        path,
+        mimetype='application/xml',
+        as_attachment=True,
+        download_name=f'{slug}.xml',
+        conditional=True,
+        max_age=0,
+    )
