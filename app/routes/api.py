@@ -16,6 +16,7 @@ from ..extensions import db
 from ..models import Source, Channel, Program, AppSettings, Feed
 from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
+from ..hls import inspect_hls_drm
 from ..url import public_base_url
 from .tasks import (
     trigger_bulk_channel_update,
@@ -757,8 +758,6 @@ def inspect_channel(channel_id):
     Returns: { status, detail, segment_bytes }
       status: 'live' | 'drm' | 'dead' | 'vod' | 'no_data' | 'error'
     """
-    _DRM_METHODS = ('SAMPLE-AES',)
-
     ch     = Channel.query.get_or_404(channel_id)
     source = ch.source
 
@@ -844,9 +843,13 @@ def inspect_channel(channel_id):
         if 'EXT-X-PLAYLIST-TYPE:VOD' in manifest_text:
             return jsonify({'status': 'vod', 'detail': 'VOD stream — not a live channel'})
 
-        drm_method = next((m for m in _DRM_METHODS if f'METHOD={m}' in manifest_text), None)
-        if drm_method:
-            return jsonify({'status': 'drm', 'detail': f'DRM encryption detected ({drm_method})'})
+        drm = inspect_hls_drm(manifest_text)
+        if drm:
+            detail = f"HLS DRM detected ({drm['drm_type']}"
+            if drm.get('keyformat'):
+                detail += f"; KEYFORMAT={drm['keyformat']}"
+            detail += ')'
+            return jsonify({'status': 'drm', 'detail': detail})
 
         # Find the first media segment and try to pull a chunk to confirm data flows
         segment_url = None

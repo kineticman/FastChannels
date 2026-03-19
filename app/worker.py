@@ -21,6 +21,7 @@ from sqlalchemy.exc import OperationalError as _SAOperationalError
 from app import create_app
 from app.config_store import persist_source_config_updates
 from app.extensions import db
+from app.hls import inspect_hls_drm
 from app.models import Source, Channel, Program, Feed, AppSettings
 import time as _time
 from urllib.parse import urljoin as _urljoin
@@ -348,8 +349,6 @@ def run_stream_audit(source_name: str):
     for dead streams, VOD-only content, and SAMPLE-AES DRM encryption.
     Flagged channels are marked is_active=False so they drop out of M3U/EPG output.
     """
-    _DRM_METHODS = ('SAMPLE-AES',)  # AES-128 with key URL is standard HLS, not FairPlay
-
     with flask_app.app_context():
         source = Source.query.filter_by(name=source_name).first()
         if not source:
@@ -531,13 +530,13 @@ def run_stream_audit(source_name: str):
                     logger.info('[audit] VOD (not live): %s', ch.name)
                     continue
 
-                drm = any(f'METHOD={m}' in manifest_text for m in _DRM_METHODS)
+                drm = inspect_hls_drm(manifest_text)
                 if drm:
                     ch.is_active      = False
                     ch.is_enabled     = False
                     ch.disable_reason = 'DRM'
                     flagged += 1
-                    logger.info('[audit] DRM: %s  →  %s', ch.name, manifest_url[:80])
+                    logger.info('[audit] DRM: %s  →  %s (%s)', ch.name, manifest_url[:80], drm['drm_type'])
 
             except Exception as e:
                 if _is_transient_network_error(e):

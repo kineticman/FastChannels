@@ -12,6 +12,7 @@ import threading
 
 from flask import Blueprint, redirect, abort, request
 from app.config_store import persist_source_config_updates
+from ..hls import inspect_hls_drm
 from ..models import Channel, Source
 from ..scrapers import registry
 from .tasks import trigger_channel_auto_disable
@@ -19,10 +20,6 @@ from .tasks import trigger_channel_auto_disable
 logger = logging.getLogger(__name__)
 
 play_bp = Blueprint('play', __name__)
-
-# DRM encryption methods that indicate a channel is unplayable on open clients
-_DRM_METHODS = ('SAMPLE-AES',)  # AES-128 with key URL is standard HLS, not FairPlay
-
 
 def _client_ip() -> str:
     forwarded = (request.headers.get('X-Forwarded-For') or '').strip()
@@ -65,10 +62,10 @@ def _check_manifest(url: str, session) -> str | None:
             logger.info('[play] VOD playlist (not live) in manifest: %s', url[:80])
             return 'Dead'
 
-        for method in _DRM_METHODS:
-            if f'METHOD={method}' in text:
-                logger.info('[play] DRM detected (%s) in manifest: %s', method, url[:80])
-                return 'DRM'
+        drm = inspect_hls_drm(text)
+        if drm:
+            logger.info('[play] DRM detected (%s) in manifest: %s', drm['drm_type'], url[:80])
+            return 'DRM'
     except Exception as e:
         logger.debug('[play] manifest check fetch failed (ignoring): %s', e)
     return None
