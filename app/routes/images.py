@@ -146,6 +146,65 @@ def _image_response(img_path: str, content_type: str, ttl: int) -> Response:
     )
 
 
+def _resolve_poster_url_from_db(key: str) -> str | None:
+    """Best-effort lookup for a Roku poster URL when an old XML artifact references /posters/<hash>.
+
+    XML artifacts can outlive the poster cache itself, so a client may request a
+    stale static poster URL after the cache has been cleared. In that case, walk
+    the currently relevant Roku poster URLs and reconstruct the original URL
+    from the md5 hash.
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+        from app.extensions import db
+        from app.models import Program, Channel, Source
+
+        now = datetime.now(timezone.utc)
+        window_end = now + timedelta(days=5)
+        rows = (
+            db.session.query(Program.poster_url)
+            .join(Channel, Program.channel_id == Channel.id)
+            .join(Source, Channel.source_id == Source.id)
+            .filter(
+                Source.name == 'roku',
+                Program.poster_url.isnot(None),
+                Program.end_time > now - timedelta(hours=2),
+                Program.start_time < window_end,
+            )
+            .distinct()
+            .yield_per(500)
+        )
+        for (url,) in rows:
+            if url and hashlib.md5(url.encode()).hexdigest() == key:
+                return url
+    except Exception:
+        logger.exception('[images] poster URL lookup failed for key=%s', key)
+    return None
+
+
+def _prime_hash_cache_from_lookup(key: str, img_type: str) -> tuple[str | None, str, str]:
+    d = _cache_dir(img_type)
+    img_path = os.path.join(d, key)
+    ct_path = os.path.join(d, key + '.ct')
+    url_path = os.path.join(d, key + '.url')
+    if os.path.exists(url_path):
+        try:
+            return open(url_path).read().strip(), img_path, ct_path
+        except Exception:
+            return None, img_path, ct_path
+    if img_type != 'poster':
+        return None, img_path, ct_path
+    url = _resolve_poster_url_from_db(key)
+    if not url:
+        return None, img_path, ct_path
+    try:
+        with open(url_path, 'w') as f:
+            f.write(url)
+    except Exception:
+        logger.debug('[images] could not write poster sidecar for key=%s', key)
+    return url, img_path, ct_path
+
+
 @images_bp.route('/logos/<filename>')
 def serve_logo_static(filename):
     """Serve a cached channel logo as a static file — no proxy, no fetching."""
@@ -159,6 +218,23 @@ def serve_logo_static(filename):
     content_type = open(ct_path).read().strip() if os.path.exists(ct_path) else 'image/jpeg'
     return send_file(img_path, mimetype=content_type or 'image/jpeg',
                      download_name=filename, max_age=_LOGO_TTL, conditional=True)
+
+
+@images_bp.route('/posters/<filename>')
+def serve_poster_static(filename):
+    """Serve a cached poster image as a static file — no proxy, no fetching."""
+    if '.' not in filename:
+        abort(404)
+    key      = filename.rsplit('.', 1)[0]
+    img_path = os.path.join(_POSTER_DIR, key)
+    ct_path  = os.path.join(_POSTER_DIR, key + '.ct')
+    if not os.path.exists(img_path):
+        url, img_path, ct_path = _prime_hash_cache_from_lookup(key, 'poster')
+        if not url or not _fetch_and_cache(url, img_path, ct_path, 'poster'):
+            abort(404)
+    content_type = open(ct_path).read().strip() if os.path.exists(ct_path) else 'image/jpeg'
+    return send_file(img_path, mimetype=content_type or 'image/jpeg',
+                     download_name=filename, max_age=_POSTER_TTL, conditional=True)
 
 
 @images_bp.route('/images/proxy/<img_type>/<hash_ext>')
@@ -184,9 +260,11 @@ def proxy_image(img_type='logo', hash_ext=''):
         content_type = open(ct_path).read().strip() or 'image/jpeg'
         return _image_response(img_path, content_type, ttl)
 
-    if not os.path.exists(url_path):
-        abort(404)
-    url = open(url_path).read().strip()
+    url = None
+    if os.path.exists(url_path):
+        url = open(url_path).read().strip()
+    else:
+        url, img_path, ct_path = _prime_hash_cache_from_lookup(key, img_type)
     if not url:
         abort(404)
 

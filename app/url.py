@@ -66,6 +66,11 @@ def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> st
     issues.  If not cached yet, return the upstream CDN URL directly so the
     client can still fetch it while the prewarm catches up.
 
+    Posters are different: they are fetched on demand rather than prewarmed, so
+    the generated XML should always point at our proxy route. Otherwise the XML
+    artifact becomes dependent on the poster cache state at build time and can
+    emit stale /posters/... URLs after cache clears.
+
     WebP/SVG cached files fall back to the upstream URL because Channels DVR
     native apps cannot display those formats.
     """
@@ -81,6 +86,9 @@ def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> st
 
     cache_root = _POSTER_CACHE_ROOT if img_type == 'poster' else _LOGO_CACHE_ROOT
     img_path   = os.path.join(cache_root, key)
+
+    if img_type == 'poster':
+        return f"{base_url}/images/proxy/poster/image.{ext}?url={quote(url, safe='')}"
 
     if os.path.exists(img_path):
         # Skip unsupported formats — serve upstream URL instead

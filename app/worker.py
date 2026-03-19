@@ -4,6 +4,7 @@ Background worker — run with: python -m app.worker
 import logging
 import multiprocessing
 import gc
+import signal
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -55,6 +56,10 @@ if __name__ == '__main__':
     logger.info('FastChannels worker v%s starting', _VERSION)
 _NETWORK_OUTAGE_UNTIL = 0.0
 _NETWORK_OUTAGE_REASON = ''
+
+
+class ScrapePhaseTimeoutError(Exception):
+    pass
 
 
 def _enqueue_xml_refresh_job() -> None:
@@ -128,7 +133,34 @@ def run_scraper(source_name: str):
         epg_input = None
         _progress = _make_progress_writer(source_name)
         try:
-            scraper  = scraper_cls(config=source.config or {})
+            phase_timeouts = getattr(scraper_cls, 'phase_timeouts', {}) or {}
+
+            def _phase_timeout(phase_name: str) -> int | None:
+                value = phase_timeouts.get(phase_name)
+                return int(value) if value else None
+
+            def _run_phase(phase_name: str, fn, *args, **kwargs):
+                timeout_seconds = _phase_timeout(phase_name)
+                if not timeout_seconds:
+                    return fn(*args, **kwargs)
+
+                def _alarm_handler(_signum, _frame):
+                    raise ScrapePhaseTimeoutError(
+                        f'[{source_name}] {phase_name} phase timed out after {timeout_seconds}s'
+                    )
+
+                previous = signal.getsignal(signal.SIGALRM)
+                signal.signal(signal.SIGALRM, _alarm_handler)
+                signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+                try:
+                    return fn(*args, **kwargs)
+                finally:
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+                    signal.signal(signal.SIGALRM, previous)
+
+            logger.info('[%s] scraper init starting', source_name)
+            scraper = _run_phase('init', scraper_cls, config=source.config or {})
+            logger.info('[%s] scraper init complete', source_name)
             scraper._progress_cb = _progress
             refresh_hours = getattr(scraper_cls, 'channel_refresh_hours', 0)
 
@@ -145,7 +177,9 @@ def run_scraper(source_name: str):
             # updates (like tokens) immediately — before the long scrape starts —
             # so they survive even if the job times out mid-EPG.
             _progress('bootstrap')
-            scraper.pre_run_setup()
+            logger.info('[%s] bootstrap starting', source_name)
+            _run_phase('bootstrap', scraper.pre_run_setup)
+            logger.info('[%s] bootstrap complete', source_name)
             _apply_scraper_config_updates(source, scraper)
             for _pre_attempt in range(3):
                 try:
@@ -189,9 +223,13 @@ def run_scraper(source_name: str):
                             source_name, len(db_channels), len(programs), elapsed)
             else:
                 _progress('channels')
-                channels = scraper.fetch_channels()
+                logger.info('[%s] channel fetch starting', source_name)
+                channels = _run_phase('channels', scraper.fetch_channels)
+                logger.info('[%s] channel fetch complete', source_name)
                 _progress('epg', 0, len(channels))
-                programs = scraper.fetch_epg(channels, skip_ids=_fresh_epg_sids(source))
+                logger.info('[%s] EPG fetch starting', source_name)
+                programs = _run_phase('epg', scraper.fetch_epg, channels, skip_ids=_fresh_epg_sids(source))
+                logger.info('[%s] EPG fetch complete', source_name)
                 for _attempt in range(3):
                     try:
                         _upsert_channels(source, channels)
@@ -219,6 +257,14 @@ def run_scraper(source_name: str):
         except ScrapeSkipError as e:
             elapsed = time.monotonic() - t0
             logger.warning('[%s] Scrape skipped after %.1fs: %s', source_name, elapsed, e)
+            db.session.rollback()
+            _apply_scraper_config_updates(source, scraper)
+            source.last_error = str(e)
+            db.session.commit()
+            _progress('done')
+        except ScrapePhaseTimeoutError as e:
+            elapsed = time.monotonic() - t0
+            logger.error('[%s] Scrape aborted after %.1fs: %s', source_name, elapsed, e)
             db.session.rollback()
             _apply_scraper_config_updates(source, scraper)
             source.last_error = str(e)

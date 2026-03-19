@@ -8,6 +8,7 @@ from typing import Callable, TextIO
 
 _CACHE_ROOT = Path(os.environ.get('FASTCHANNELS_XML_CACHE_DIR', '/data/cache/xml'))
 _GLOBAL_XML_STALE = _CACHE_ROOT / '.xml-stale'
+_LOCK_STALE_SECONDS = 600
 
 
 def _ensure_cache_dir() -> None:
@@ -25,6 +26,10 @@ def _xml_stale_path(cache_key: str) -> Path:
 
 def _xml_lock_path(cache_key: str) -> Path:
     return _cache_path(cache_key, ext='xml.lock')
+
+
+def _xml_tmp_path(cache_key: str) -> Path:
+    return Path(str(_cache_path(cache_key, ext='xml')) + '.tmp')
 
 
 def _touch(path: Path) -> None:
@@ -147,9 +152,29 @@ def ensure_xml_artifact(cache_key: str, writer: Callable[[TextIO], None], *, wai
 
     lock = _xml_lock_path(cache_key)
     lock_fd = None
+
+    def _clear_stale_lock_if_needed() -> None:
+        if not lock.exists():
+            return
+        try:
+            age = time.time() - lock.stat().st_mtime
+        except OSError:
+            return
+        if age < _LOCK_STALE_SECONDS:
+            return
+        lock.unlink(missing_ok=True)
+        _xml_tmp_path(cache_key).unlink(missing_ok=True)
+
+    _clear_stale_lock_if_needed()
     try:
         lock_fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
+        _clear_stale_lock_if_needed()
+        try:
+            lock_fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            pass
+    if lock_fd is None:
         if path.exists():
             return path
         if not wait_if_locked:

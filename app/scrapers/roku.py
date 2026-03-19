@@ -147,6 +147,12 @@ class RokuScraper(BaseScraper):
     scrape_interval       = 60    # EPG refreshed every hour
     channel_refresh_hours = 6     # refresh channel metadata several times a day to warm Roku caches
     stream_audit_enabled  = True
+    phase_timeouts        = {
+        'init': 30,
+        'bootstrap': 60,
+        'channels': 120,
+        'epg': 900,
+    }
 
     # No config needed — fully anonymous, no credentials
     config_schema = []
