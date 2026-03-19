@@ -84,15 +84,21 @@ wait_for_network
 python -m app.worker &
 echo "✅ Worker started"
 
+GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
+GUNICORN_MAX_REQUESTS="${GUNICORN_MAX_REQUESTS:-1000}"
+GUNICORN_MAX_REQUESTS_JITTER="${GUNICORN_MAX_REQUESTS_JITTER:-100}"
+
 echo "✅ Starting gunicorn on port 5523"
 exec gunicorn \
     --config /app/gunicorn.conf.py \
     --bind 0.0.0.0:5523 \
     --worker-class gevent \
     --worker-connections 1000 \
-    --workers 4 \
+    --workers "$GUNICORN_WORKERS" \
     --timeout 300 \
     --keep-alive 0 \
+    --max-requests "$GUNICORN_MAX_REQUESTS" \
+    --max-requests-jitter "$GUNICORN_MAX_REQUESTS_JITTER" \
     --worker-tmp-dir /dev/shm \
     --access-logfile - \
     --access-logformat '%(h)s "%(r)s" %(s)s %(b)s %(T)ss' \
