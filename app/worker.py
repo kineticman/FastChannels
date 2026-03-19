@@ -48,7 +48,11 @@ logger = logging.getLogger(__name__)
 
 flask_app = create_app()
 from app.config import VERSION as _VERSION
-logger.info('FastChannels worker v%s starting', _VERSION)
+# RQ work-horse job processes import this module to execute queued callables.
+# Keep the app object at module scope, but only log startup for the long-lived
+# `python -m app.worker` process so job imports don't look like worker restarts.
+if __name__ == '__main__':
+    logger.info('FastChannels worker v%s starting', _VERSION)
 _NETWORK_OUTAGE_UNTIL = 0.0
 _NETWORK_OUTAGE_REASON = ''
 
