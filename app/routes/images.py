@@ -33,13 +33,14 @@ _POSTER_DIR   = '/data/logo_cache/posters'
 _LOGO_TTL     = 3 * 24 * 60 * 60   # 3 days
 _POSTER_TTL   = 4 * 24 * 60 * 60   # safety-net; primary expiry is DB-driven
 _PREWARM_WORKERS = 4
+_LOGO_MAX_BYTES = 150 * 1024
 
 # Channels DVR logo constraints (community-confirmed):
 #   - max ~150 KB file size; oversized logos cause silent failures / crashes
 #   - recommended 720x540 (4:3) with padding; 1:1 squares also work
 #   - PNG preferred; WebP/SVG unsupported by native apps
-_LOGO_MAX_PX  = 270   # fit within this box before padding to 4:3
 _LOGO_TARGET  = (360, 270)  # final canvas size (4:3, well under 150 KB)
+_LOGO_SAFE_MAX = (720, 540)
 
 
 def _cache_dir(img_type: str) -> str:
@@ -60,23 +61,38 @@ def _is_fresh(img_path: str, ttl: int) -> bool:
         return False
 
 
-def _normalize_logo(data: bytes) -> tuple[bytes, str]:
+def _normalize_logo(data: bytes, source_content_type: str | None = None) -> tuple[bytes, str]:
     """
     Resize and reformat a logo image for Channels DVR compatibility.
 
-    - Fits the image inside _LOGO_MAX_PX × _LOGO_MAX_PX (preserving aspect ratio)
-    - Pads to _LOGO_TARGET (4:3 canvas) with a transparent background
-    - Strips all metadata (EXIF, C2PA, ICC profiles, etc.)
-    - Saves as PNG (max ~50–150 KB at these dimensions)
+    Strategy:
+    - If the source is already a reasonably sized PNG/JPEG and under the
+      safety byte limit, keep it as-is to avoid shrinking wide logos.
+    - Otherwise fit it inside the 4:3 target box (not a square box), pad to
+      _LOGO_TARGET, strip metadata, and save as PNG.
 
-    Returns (png_bytes, 'image/png').  Falls back to original data/content-type
+    Returns (image_bytes, content_type). Falls back to original data/content-type
     on any error so a bad image never causes a cache miss.
     """
     try:
         img = Image.open(io.BytesIO(data))
-        # Convert to RGBA so transparency padding works for all source modes
+        source_format = (img.format or '').upper()
+        safe_ct = (source_content_type or '').split(';')[0].strip().lower()
+
+        # Leave already-good assets alone. This avoids making some wide logos
+        # visibly smaller just to force them onto a padded 4:3 canvas.
+        if (
+            source_format in {'PNG', 'JPEG', 'JPG'}
+            and safe_ct in {'image/png', 'image/jpeg'}
+            and len(data) <= _LOGO_MAX_BYTES
+            and img.width <= _LOGO_SAFE_MAX[0]
+            and img.height <= _LOGO_SAFE_MAX[1]
+        ):
+            return data, safe_ct or ('image/png' if source_format == 'PNG' else 'image/jpeg')
+
+        # Convert to RGBA so transparency padding works for all source modes.
         img = img.convert('RGBA')
-        img.thumbnail((_LOGO_MAX_PX, _LOGO_MAX_PX), Image.LANCZOS)
+        img.thumbnail(_LOGO_TARGET, Image.LANCZOS)
         canvas = Image.new('RGBA', _LOGO_TARGET, (0, 0, 0, 0))
         x = (_LOGO_TARGET[0] - img.width)  // 2
         y = (_LOGO_TARGET[1] - img.height) // 2
@@ -100,7 +116,7 @@ def _fetch_and_cache(url: str, img_path: str, ct_path: str,
         content_type = (r.headers.get('content-type') or 'image/jpeg').split(';')[0].strip()
         data = r.content
         if img_type == 'logo':
-            data, content_type = _normalize_logo(data)
+            data, content_type = _normalize_logo(data, content_type)
         with open(img_path, 'wb') as f:
             f.write(data)
         with open(ct_path, 'w') as f:
