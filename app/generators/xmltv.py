@@ -17,130 +17,15 @@ from __future__ import annotations
 import gzip
 import io
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 from ..extensions import db
-from ..models import Channel, Program, Source
+from ..models import Program
 from ..url import proxy_logo_url
 from .m3u import _selected_channels, _tvg_id
 
 log = logging.getLogger(__name__)
-
-
-def _norm_name(name: str) -> str:
-    """Normalise a channel name for fuzzy matching against EPG-only sources."""
-    n = (name or '').lower()
-    n = re.sub(r'[^a-z0-9 ]', ' ', n)
-    return re.sub(r'\s+', ' ', n).strip()
-
-
-def _build_enrich_index(epg_start: datetime, epg_end: datetime) -> dict:
-    """
-    Load all programs from EPG-only sources into an in-memory enrichment index.
-
-    Returns:
-        dict mapping normalised channel name →
-            sorted list of (start_time, end_time, title_lower, description, poster_url, rating)
-
-    The index is used to back-fill missing descriptions/posters/ratings for
-    programs in other sources whose channel name matches an EPG-only channel.
-    """
-    epg_only_source_ids = [
-        s.id for s in Source.query.filter_by(epg_only=True, is_enabled=True).all()
-    ]
-    if not epg_only_source_ids:
-        return {}
-
-    rows = (
-        db.session.query(
-            Program.start_time,
-            Program.end_time,
-            Program.title,
-            Program.description,
-            Program.poster_url,
-            Program.rating,
-            Channel.name,
-        )
-        .join(Channel, Program.channel_id == Channel.id)
-        .filter(Channel.source_id.in_(epg_only_source_ids))
-        .filter(
-            Program.end_time > epg_start,
-            Program.start_time < epg_end,
-        )
-        .yield_per(500)
-    )
-
-    index: dict[str, list] = {}
-    for start_time, end_time, title, description, poster_url, rating, ch_name in rows:
-        key = _norm_name(ch_name)
-        index.setdefault(key, []).append((
-            start_time, end_time,
-            (title or '').lower(),
-            description, poster_url, rating,
-        ))
-
-    for key in index:
-        index[key].sort(key=lambda x: x[0])
-
-    log.debug('[xmltv] enrichment index: %d EPG-only channels loaded', len(index))
-    return index
-
-
-def _titles_similar(a: str, b: str) -> bool:
-    """
-    Return True if two programme titles are similar enough to trust enrichment.
-
-    Rules (applied to lowercased, punctuation-stripped, whitespace-normalised):
-      - Exact match
-      - One title is a prefix of the other (handles "Fox 32 News at 5" vs
-        "FOX 32 News at 5 PM" style variations)
-      - Titles share at least 3 non-stopword words in common (handles minor
-        differences while rejecting completely different programmes)
-    """
-    def _clean(s):
-        s = re.sub(r'[^a-z0-9 ]', ' ', s.lower())
-        return re.sub(r'\s+', ' ', s).strip()
-
-    a = _clean(a)
-    b = _clean(b)
-    if a == b:
-        return True
-    if a.startswith(b) or b.startswith(a):
-        return True
-    stop = {'a', 'an', 'the', 'of', 'at', 'in', 'on', 'and', 'or'}
-    shared = (set(a.split()) & set(b.split())) - stop
-    return len(shared) >= 3
-
-
-def _enrich_prog(index: dict, ch_name: str, prog: Program):
-    """
-    Return (description, poster_url, rating) for *prog*, supplemented from
-    the enrichment index where the channel name matches, the EPG-only
-    program's time window covers prog.start_time, AND the titles are
-    similar enough to avoid cross-programme contamination.
-
-    Only fills in fields that are None on the original program.
-    """
-    if prog.description and prog.poster_url and prog.rating:
-        return prog.description, prog.poster_url, prog.rating
-
-    key = _norm_name(ch_name)
-    entries = index.get(key)
-    if not entries:
-        return prog.description, prog.poster_url, prog.rating
-
-    prog_title = (prog.title or '').lower()
-    for (start, end, enrich_title, desc, poster, rating) in entries:
-        if start <= prog.start_time < end and _titles_similar(prog_title, enrich_title):
-            return (
-                prog.description or desc,
-                prog.poster_url  or poster,
-                prog.rating      or rating,
-            )
-
-    return prog.description, prog.poster_url, prog.rating
 
 
 def generate_xmltv(filters: dict = None, base_url: str = None, feed_name: str = None) -> str:
@@ -187,8 +72,6 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     ch_src_map      = {ch.id: ch.source.display_name for ch in channels}
     # Source internal name map — used to decide poster proxy policy per source
     ch_src_name_map = {ch.id: ch.source.name for ch in channels}
-    # Channel name map — used for enrichment lookup
-    ch_name_map  = {ch.id: ch.name for ch in channels}
     channel_ids = set(tvg_map.keys())
     # Pre-sorted list for use in SQL IN() — matches exactly the non-gracenote
     # channel set so program fetching is bounded to XMLTV-visible channels only.
@@ -198,9 +81,6 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     # through 5 days from now. Naive UTC matches how SQLite stores the values.
     epg_start = datetime.utcnow() - timedelta(hours=2)
     epg_end   = datetime.utcnow() + timedelta(days=5)
-
-    # Build EPG enrichment index from epg_only sources (e.g. Amazon Prime Free)
-    enrich_index = _build_enrich_index(epg_start, epg_end)
 
     # ── Header ────────────────────────────────────────────────────────────
     yield '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -244,18 +124,14 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             if not tvg_id:
                 continue
 
-            # Enrich missing fields from EPG-only sources (e.g. Amazon Prime Free)
-            ch_name = ch_name_map.get(prog.channel_id, '')
-            desc, poster, rating = _enrich_prog(enrich_index, ch_name, prog)
-
             el = Element('programme', attrib={
                 'start':   _dt(prog.start_time),
                 'stop':    _dt(prog.end_time),
                 'channel': tvg_id,
             })
             SubElement(el, 'title', lang='en').text = prog.title or ''
-            if desc:
-                SubElement(el, 'desc', lang='en').text = desc
+            if prog.description:
+                SubElement(el, 'desc', lang='en').text = prog.description
             if prog.category or ch_cat_map.get(prog.channel_id):
                 # Use prog.category if set, fall back to channel category.
                 # Split semicolon-joined strings into multiple <category> tags —
@@ -271,19 +147,19 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             # Add feed name as a category when generating a feed-specific EPG
             if feed_name:
                 SubElement(el, 'category', lang='en').text = feed_name
-            if poster:
+            if prog.poster_url:
                 # Only proxy/cache Roku posters (CDN returns 403 to clients).
                 # All other sources serve artwork directly — no caching overhead.
                 if ch_src_name_map.get(prog.channel_id) == 'roku':
-                    poster_src = proxy_logo_url(poster, base_url, 'poster') or poster
+                    poster_src = proxy_logo_url(prog.poster_url, base_url, 'poster') or prog.poster_url
                 else:
-                    poster_src = poster
+                    poster_src = prog.poster_url
                 SubElement(el, 'icon', src=poster_src)
             if prog.original_air_date:
                 SubElement(el, 'date').text = prog.original_air_date.strftime('%Y%m%d')
-            if rating:
+            if prog.rating:
                 r = SubElement(el, 'rating', system='MPAA')
-                SubElement(r, 'value').text = rating
+                SubElement(r, 'value').text = prog.rating
             if prog.episode_title:
                 SubElement(el, 'sub-title', lang='en').text = prog.episode_title
             cats = [c.strip().lower() for c in (prog.category or ch_cat_map.get(prog.channel_id) or '').split(';') if c.strip()]

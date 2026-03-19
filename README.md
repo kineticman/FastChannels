@@ -202,7 +202,7 @@ The **Resolve Duplicates** helper on the Channels page works on enabled channels
 
 ### EPG-only sources
 
-A source can be flagged **EPG Only** on the Sources page. EPG-only sources are excluded from M3U output but their program data enriches EPG for title-matched channels from other sources. Amazon Prime Free is the primary use case.
+A source can be flagged **EPG Only** on the Sources page. EPG-only sources are excluded from M3U output but still scrape and store their guide data. Amazon Prime Free is the primary use case.
 
 ### Channel flags
 
@@ -221,7 +221,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Plex | None | Session cookie auth |
 | Xumo Play | None | Public API |
 | Samsung TV Plus | None | Channel data and EPG via [Matt Huisman's public mirror](https://github.com/matthuisman/samsung-tvplus-for-channels). Region configurable (default: `us`). |
-| Sling Freestream | Optional OAuth creds | Streams are DRM-only for generic IPTV clients; keep enabled for EPG enrichment |
+| Sling Freestream | Optional OAuth creds | Streams are DRM-only for generic IPTV clients |
 | DistroTV | None | Android TV UA required, URL macro substitution |
 | LG Channels | None | Country configurable (default: `US`) |
 | Local Now | None | Public API |
@@ -231,5 +231,5 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 
 - **Roku**: Cloudflare rate-limiting can cause occasional 403 errors during scraping or playback. If this happens, wait a few minutes before retrying — repeated attempts make it worse. Some channels also expose sparse future guide data; short EPG windows are expected on those channels.
 - **Amazon Prime Free**: without a valid cookie header, channel discovery pagination is limited.
-- **Sling Freestream**: streams are DRM-only for generic IPTV clients. Keep it enabled for EPG enrichment if you want guide data for those channels.
+- **Sling Freestream**: streams are DRM-only for generic IPTV clients.
 - **Samsung TV Plus**: EPG covers approximately the current day. All credit for the data to [Matt Huisman](https://github.com/matthuisman/samsung-tvplus-for-channels).

@@ -16,7 +16,7 @@ class Source(db.Model):
     last_error      = db.Column(db.Text)
     config          = db.Column(db.JSON, default=dict)
     chnum_start     = db.Column(db.Integer, nullable=True)   # starting tvg-chno in combined /m3u output
-    epg_only        = db.Column(db.Boolean, default=False)   # if True: excluded from M3U, used only for EPG enrichment
+    epg_only        = db.Column(db.Boolean, default=False)   # if True: excluded from M3U output
 
     channels = db.relationship('Channel', backref='source', lazy='dynamic',
                                 cascade='all, delete-orphan')

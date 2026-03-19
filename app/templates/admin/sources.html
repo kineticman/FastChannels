@@ -291,7 +291,7 @@
           <span id="ch-count-{{ source.id }}">{{ source.to_dict().channel_count }}</span> channels &nbsp;·&nbsp;
           Last scraped: {{ source.last_scraped_at | localtime }}
           {% if source.last_audited_at %}&nbsp;·&nbsp; Last audited: {{ source.last_audited_at | localtime }}{% endif %}
-          {% if source.epg_only %}&nbsp;·&nbsp;<span style="color:#a78bfa">Excluded from M3U · enriches EPG for matching channels</span>{% endif %}
+          {% if source.epg_only %}&nbsp;·&nbsp;<span style="color:#a78bfa">Excluded from M3U output</span>{% endif %}
         </div>
         {% if source.name in ('amazon_prime_free', 'sling') %}
         <div class="config-note" style="color:#f59e0b">⚠ All streams from this source are DRM-protected and will not play. Disabled by default.</div>
@@ -320,7 +320,7 @@
         </div>
 
         <div class="epg-only-wrap">
-          <label id="epg-toggle-{{ source.id }}" title="EPG Only: scrape for guide data only, exclude from M3U output">
+          <label id="epg-toggle-{{ source.id }}" title="EPG Only: exclude this source from M3U output while still scraping guide data">
             <input type="checkbox" {% if source.epg_only %}checked{% endif %}
                    onchange="setEpgOnly({{ source.id }}, this)">
             EPG Only mode
