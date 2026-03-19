@@ -877,6 +877,7 @@ def preview_channel(channel_id):
             'episode_title': p.episode_title,
             'season': p.season,
             'episode': p.episode,
+            'original_air_date': p.original_air_date.isoformat() if p.original_air_date else None,
         }
 
     play_url = None

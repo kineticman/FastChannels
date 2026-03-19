@@ -128,6 +128,16 @@ def ensure_runtime_schema() -> None:
                     "ALTER TABLE channels ADD COLUMN is_duplicate BOOLEAN NOT NULL DEFAULT 0"
                 ))
 
+        if "programs" in tables:
+            program_cols = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(programs)"))
+            }
+            if "original_air_date" not in program_cols:
+                conn.execute(text(
+                    "ALTER TABLE programs ADD COLUMN original_air_date DATE"
+                ))
+
         # Normalize the one hyphenated internal source id to snake_case so
         # source naming stays consistent across code paths and fresh installs.
         # Older installs may have both names present due to alias seeding, so

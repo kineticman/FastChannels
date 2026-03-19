@@ -407,6 +407,17 @@ class PlutoScraper(BaseScraper):
                     return list(labels)
             return [value]
 
+        def parse_original_air_date(value):
+            if not value:
+                return None
+            try:
+                parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00')).date()
+            except Exception:
+                return None
+            if parsed.year <= 1970:
+                return None
+            return parsed
+
         for entry in data:
             channel_id = entry.get('channelId')
             for tl in entry.get('timelines', []):
@@ -417,6 +428,7 @@ class PlutoScraper(BaseScraper):
                     continue
                 ep       = tl.get('episode', {})
                 series   = ep.get('series', {})
+                clip     = ep.get('clip', {}) if isinstance(ep.get('clip'), dict) else {}
                 title    = clean(tl.get('title', ''))
                 ep_title = clean(ep.get('name', ''))
                 categories = []
@@ -442,6 +454,7 @@ class PlutoScraper(BaseScraper):
                     season            = ep.get('season'),
                     episode           = ep.get('number'),
                     episode_title     = ep_title if ep_title.lower() != title.lower() else None,
+                    original_air_date = parse_original_air_date(clip.get('originalReleaseDate')),
                 ))
         return programs
 

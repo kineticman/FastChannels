@@ -1018,6 +1018,7 @@ def _upsert_programs(source, program_data_list):
             'episode_title': pd.episode_title,
             'season':        pd.season,
             'episode':       pd.episode,
+            'original_air_date': pd.original_air_date,
         })
     if rows:
         db.session.execute(Program.__table__.insert(), rows)

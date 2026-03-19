@@ -427,11 +427,22 @@ class PlexScraper(BaseScraper):
                     if not start or not end:
                         continue
 
-                    title = entry.get("title") or "Unknown"
-                    # Use grandparentTitle as the episode_title when it adds context
-                    # (e.g. show name differs from episode title)
+                    raw_title = entry.get("title") or "Unknown"
                     gp_title = entry.get("grandparentTitle") or ""
-                    ep_title = gp_title if gp_title and gp_title.lower() != title.lower() else None
+                    # Plex grid entries for episodic content typically use:
+                    #   title            = episode title
+                    #   grandparentTitle = series title
+                    # XMLTV expects:
+                    #   <title>     = series/program title
+                    #   <sub-title> = episode title
+                    # For movies/specials grandparentTitle is absent, so keep the
+                    # original title and omit episode_title.
+                    if gp_title and gp_title.lower() != raw_title.lower():
+                        title = gp_title
+                        ep_title = raw_title
+                    else:
+                        title = raw_title
+                        ep_title = None
 
                     # Prefer episode thumb; fall back to grandparent art
                     poster = (

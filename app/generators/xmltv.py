@@ -279,14 +279,21 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                 else:
                     poster_src = poster
                 SubElement(el, 'icon', src=poster_src)
+            if prog.original_air_date:
+                SubElement(el, 'date').text = prog.original_air_date.strftime('%Y%m%d')
             if rating:
                 r = SubElement(el, 'rating', system='MPAA')
                 SubElement(r, 'value').text = rating
             if prog.episode_title:
                 SubElement(el, 'sub-title', lang='en').text = prog.episode_title
+            cats = [c.strip().lower() for c in (prog.category or ch_cat_map.get(prog.channel_id) or '').split(';') if c.strip()]
+            is_movie = 'movie' in cats
             if prog.season and prog.episode:
                 SubElement(el, 'episode-num', system='xmltv_ns').text = \
                     f'{prog.season - 1}.{prog.episode - 1}.'
+                if not is_movie and prog.season >= 1 and prog.episode >= 1:
+                    SubElement(el, 'episode-num', system='onscreen').text = \
+                        f'S{prog.season:02d}E{prog.episode:02d}'
             yield tostring(el, encoding='unicode') + '\n'
 
         last_id = programs[-1].id

@@ -124,6 +124,7 @@ class Program(db.Model):
     episode_title = db.Column(db.String(256))
     season        = db.Column(db.Integer)
     episode       = db.Column(db.Integer)
+    original_air_date = db.Column(db.Date, nullable=True)
 
     __table_args__ = (
         db.Index('idx_programs_channel_id', 'channel_id'),
