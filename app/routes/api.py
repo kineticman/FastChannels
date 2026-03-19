@@ -25,9 +25,15 @@ from .tasks import (
     trigger_stream_audit,
     trigger_xml_refresh,
 )
-from ..generators.m3u import get_global_chnum_overlaps
+from ..generators.m3u import (
+    get_global_chnum_overlaps,
+)
 from .. import logfile
-from ..xml_cache import invalidate_xml_cache
+from ..xml_cache import (
+    get_artifact,
+    get_xml_artifact,
+    invalidate_xml_cache,
+)
 
 api_bp = Blueprint('api', __name__)
 
@@ -95,6 +101,30 @@ _CHANNELS_DVR_RECOMMENDED_MAX = 750
 def _invalidate_and_refresh_xml() -> None:
     invalidate_xml_cache()
     trigger_xml_refresh()
+
+
+def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool) -> None:
+    """Wait briefly for feed artifacts to exist before handing URLs to Channels DVR."""
+    def _ready() -> bool:
+        xml_path, _ = get_xml_artifact(f'feed-{feed.slug}')
+        if get_artifact(f'feed-{feed.slug}-m3u', ext='m3u') is None:
+            return False
+        if xml_path is None:
+            return False
+        if has_gracenote and get_artifact(f'feed-{feed.slug}-gracenote-m3u', ext='m3u') is None:
+            return False
+        return True
+
+    if _ready():
+        return
+
+    trigger_xml_refresh()
+    deadline = _time.time() + 20
+    while _time.time() < deadline:
+        if _ready():
+            return
+        _time.sleep(0.2)
+    raise TimeoutError(f'timed out waiting for feed artifacts: {feed.slug}')
 
 
 def _read_int(path: str) -> int | None:
@@ -1138,7 +1168,7 @@ def push_feed_to_dvr(feed_id):
     - Standard source (with our EPG XML): always registered.
     """
     import re as _re
-    from ..generators.m3u import feed_to_query_filters, _build_channel_query, _parse_gracenote_id
+    from ..generators.m3u import _build_channel_query, _parse_gracenote_id, feed_to_query_filters
 
     feed = Feed.query.get_or_404(feed_id)
     settings = AppSettings.get()
@@ -1163,6 +1193,8 @@ def push_feed_to_dvr(feed_id):
             'channel_count': len(feed_channels),
             'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
         }), 409
+
+    _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote)
 
     def _put(name, url, xmltv_url=''):
         safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
