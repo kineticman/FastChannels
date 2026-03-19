@@ -69,6 +69,8 @@ class Channel(db.Model):
     is_duplicate      = db.Column(db.Boolean, default=False)  # set by user — manual duplicate label (does not disable)
     is_active         = db.Column(db.Boolean, default=True)   # set by scraper — channel exists upstream
     is_enabled        = db.Column(db.Boolean, default=True)   # set by user — include in M3U/EPG
+    last_seen_at      = db.Column(db.DateTime(timezone=True), nullable=True)
+    missed_scrapes    = db.Column(db.Integer, default=0, nullable=False)
     created_at        = db.Column(db.DateTime(timezone=True),
                                   default=lambda: datetime.now(timezone.utc))
     updated_at        = db.Column(db.DateTime(timezone=True),
@@ -106,6 +108,8 @@ class Channel(db.Model):
             'disable_reason':   self.disable_reason,
             'is_duplicate':     self.is_duplicate,
             'is_enabled':       self.is_enabled,
+            'last_seen_at':     self.last_seen_at.isoformat() if self.last_seen_at else None,
+            'missed_scrapes':   self.missed_scrapes or 0,
         }
 
 

@@ -1,10 +1,14 @@
 from datetime import datetime, timezone
-from flask import Blueprint, render_template, request
+from flask import Blueprint, jsonify, render_template, request
 from sqlalchemy import select, case
 from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings
 from ..generators.m3u import (
+    _build_feed_chnum_map,
+    _build_source_chnum_map,
+    _selected_channel_stubs,
     feed_namespace_start,
+    feed_to_query_filters,
 )
 from ..scrapers import registry as _scraper_registry
 from ..url import public_base_url, detected_base_url
@@ -26,7 +30,7 @@ def _page_duplicate_names(page_items) -> set[str]:
     return {row[0] for row in rows}
 
 
-def _page_chnum_map(page_items) -> dict[int, int]:
+def _page_source_chnum_map(page_items) -> dict[int, int]:
     if not page_items:
         return {}
 
@@ -123,6 +127,28 @@ def _page_chnum_map(page_items) -> dict[int, int]:
     return chnum_map
 
 
+def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
+    if not page_items:
+        return {}
+
+    default_feed = Feed.query.filter_by(slug='default', is_enabled=True).first()
+    if not default_feed:
+        return _page_source_chnum_map(page_items)
+
+    filters = feed_to_query_filters(default_feed.filters or {})
+    channels = _selected_channel_stubs(filters, gracenote=False)
+    if not channels:
+        return {}
+
+    if default_feed.chnum_start is not None:
+        full_map = _build_feed_chnum_map(channels, default_feed.chnum_start)
+    else:
+        full_map, _ = _build_source_chnum_map(channels)
+
+    page_ids = {ch.id for ch in page_items}
+    return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
+
+
 @admin_bp.route('/')
 def dashboard():
     sources        = Source.query.order_by(Source.display_name).all()
@@ -181,6 +207,7 @@ def channels():
     source_filter    = request.args.get('source', '')
     search           = request.args.get('search', '')
     enabled_filter   = request.args.get('enabled', '')
+    presence_filter  = request.args.get('presence', '')
     drm_filter       = request.args.get('drm', '')
     gracenote_filter = request.args.get('gracenote', '')
     language_filter  = request.args.get('language', '')
@@ -203,6 +230,15 @@ def channels():
         q = q.filter(Channel.is_enabled == True)
     elif enabled_filter == '0':
         q = q.filter(Channel.is_enabled == False)
+
+    if presence_filter == 'inactive':
+        q = q.filter(Channel.is_active == False)
+    elif presence_filter == 'enabled_inactive':
+        q = q.filter(Channel.is_enabled == True, Channel.is_active == False)
+    elif presence_filter == 'missed':
+        q = q.filter(Channel.missed_scrapes >= 1)
+    elif presence_filter == 'active':
+        q = q.filter(Channel.is_active == True)
 
     if gracenote_filter == '1':
         q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
@@ -266,12 +302,13 @@ def channels():
     categories = [(cat, count) for cat, count in cat_rows]
 
     duplicate_names = _page_duplicate_names(channels.items)
-    chnum_map = _page_chnum_map(channels.items)
+    chnum_map = _page_default_feed_chnum_map(channels.items)
 
     return render_template('admin/channels.html',
                            channels=channels, sources=sources,
                            source_filter=source_filter, search=search,
                            enabled_filter=enabled_filter, drm_filter=drm_filter,
+                           presence_filter=presence_filter,
                            gracenote_filter=gracenote_filter,
                            language_filter=language_filter, languages=languages,
                            category_filter=category_filter, categories=categories,
@@ -279,6 +316,32 @@ def channels():
                            duplicate_names=duplicate_names,
                            sort_by=sort_by, sort_dir=sort_dir,
                            chnum_map=chnum_map)
+
+
+@admin_bp.route('/channels/chnum-map')
+def channels_chnum_map():
+    raw_ids = (request.args.get('ids') or '').strip()
+    if not raw_ids:
+        return jsonify({'chnum_map': {}})
+    ids: list[int] = []
+    for part in raw_ids.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.append(int(part))
+        except ValueError:
+            continue
+    if not ids:
+        return jsonify({'chnum_map': {}})
+    page_items = (
+        Channel.query
+        .join(Source)
+        .filter(Channel.id.in_(ids))
+        .all()
+    )
+    chnum_map = _page_default_feed_chnum_map(page_items)
+    return jsonify({'chnum_map': chnum_map})
 
 
 @admin_bp.route('/feeds')

@@ -6,6 +6,9 @@ VERSION = "1.8.2"
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret')
     PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL', '')
+    VERSION_CHECK_ENABLED = (os.environ.get('VERSION_CHECK_ENABLED', '1').strip() != '0')
+    VERSION_CHECK_REPO = os.environ.get('VERSION_CHECK_REPO', 'kineticman/FastChannels').strip() or 'kineticman/FastChannels'
+    VERSION_CHECK_TTL_HOURS = int((os.environ.get('VERSION_CHECK_TTL_HOURS', '12') or '12').strip() or '12')
     SQLALCHEMY_DATABASE_URI = os.environ.get(
         'DATABASE_URL',
         'sqlite:////data/fastchannels.db'

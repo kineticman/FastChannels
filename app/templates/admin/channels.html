@@ -17,10 +17,42 @@
 
     /* Filters */
     .toolbar {
-      display: grid;
-      grid-template-columns: minmax(220px, 1.2fr) repeat(6, minmax(145px, 1fr)) auto;
-      gap: 0.9rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
       margin-bottom: 1rem;
+    }
+    .toolbar-primary {
+      display: grid;
+      grid-template-columns: minmax(340px, 2fr) minmax(220px, 1fr) auto;
+      gap: 0.9rem;
+      align-items: end;
+    }
+    .toolbar-advanced {
+      border: 1px solid #243244;
+      border-radius: 10px;
+      background: #121d2d;
+      padding: 0.8rem 0.9rem;
+    }
+    .toolbar-advanced summary {
+      list-style: none;
+      cursor: pointer;
+      color: #94a3b8;
+      font-size: 0.82rem;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      user-select: none;
+    }
+    .toolbar-advanced summary::-webkit-details-marker { display: none; }
+    .toolbar-advanced summary:hover { color: #e2e8f0; }
+    .toolbar-advanced[open] summary { color: #7dd3fc; }
+    .toolbar-secondary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 0.9rem;
+      margin-top: 0.9rem;
       align-items: end;
     }
     .filter-group {
@@ -97,6 +129,15 @@
       flex-wrap: wrap;
       gap: 0.5rem;
       margin-bottom: 1.5rem;
+      align-items: center;
+    }
+    .filter-summary-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #64748b;
+      font-weight: 700;
+      margin-right: 0.15rem;
     }
     .filter-chip {
       display: inline-flex;
@@ -405,8 +446,8 @@
       nav h1 { width: 100%; }
       nav .version { margin-left: 0; width: 100%; order: 99; }
       .container { padding: 0 1rem; }
-      .toolbar { grid-template-columns: 1fr; }
-      .filter-actions { grid-column: auto; }
+      .toolbar-primary { grid-template-columns: 1fr; }
+      .toolbar-secondary { grid-template-columns: 1fr; }
       .bulk-bar { flex-wrap: wrap; }
       table { min-width: 1120px; }
     }
@@ -423,6 +464,7 @@
       search:     {{ search           | tojson }},
       drm:        {{ drm_filter       | tojson }},
       enabled:    {{ enabled_filter   | tojson }},
+      presence:   {{ presence_filter  | tojson }},
       gracenote:  {{ gracenote_filter | tojson }},
       duplicates: {{ duplicates_filter| tojson }},
     };
@@ -436,98 +478,130 @@
     <a href="/admin/settings">Settings</a>
     <a href="/admin/logs">Logs</a>
     <a href="/admin/help">Help</a>
-    <span class="version">v{{ app_version }}</span>
+    <a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="{% if update_status.update_available %}Update available: {{ update_status.latest_version }}{% else %}View FastChannels on GitHub{% endif %}">v{{ app_version }}{% if update_status.update_available %} <span style="color:#fbbf24;">Update: {{ update_status.latest_version }}</span>{% endif %}</a>
   </nav>
 
   <div class="container">
     <form class="toolbar" method="get">
-      <div class="filter-group">
-        <label class="filter-label" for="channel-search">Search</label>
-        <input id="channel-search" name="search" placeholder="Channel name contains…" value="{{ search }}">
+      <div class="toolbar-primary">
+        <div class="filter-group">
+          <label class="filter-label" for="channel-search">Search</label>
+          <input id="channel-search" name="search" placeholder="Channel name contains…" value="{{ search }}">
+        </div>
+        <div class="filter-group">
+          <label class="filter-label" for="source-filter">Source</label>
+          <select id="source-filter" name="source">
+            <option value="">All Sources</option>
+            {% for s in sources %}
+            <option value="{{ s.name }}" {% if source_filter == s.name %}selected{% endif %}>{{ s.display_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="filter-actions">
+          <button type="submit" class="btn-apply">Apply</button>
+          <a class="clear" href="/admin/channels">Clear</a>
+          <span class="filter-sep"></span>
+          {% if source_filter or search or language_filter or category_filter or drm_filter or enabled_filter or presence_filter or gracenote_filter or duplicates_filter %}
+          <button type="button" class="btn-disable-all" onclick="bulkFilterAction(false)">✕ Disable All</button>
+          <button type="button" class="btn-enable-all"  onclick="bulkFilterAction(true)">✓ Enable All</button>
+          {% endif %}
+          <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
+        </div>
       </div>
-      <div class="filter-group">
-        <label class="filter-label" for="source-filter">Source</label>
-        <select id="source-filter" name="source">
-          <option value="">All Sources</option>
-          {% for s in sources %}
-          <option value="{{ s.name }}" {% if source_filter == s.name %}selected{% endif %}>{{ s.display_name }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="filter-group">
-        <label class="filter-label" for="category-filter">Category</label>
-        <select id="category-filter" name="category">
-          <option value="">All Categories</option>
-          {% for cat, count in categories %}
-          <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }} ({{ count }})</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="filter-group">
-        <label class="filter-label" for="enabled-filter">Channel State</label>
-        <select id="enabled-filter" name="enabled">
-          <option value="">Enabled + Disabled</option>
-          <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
-          <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label class="filter-label" for="drm-filter">Stream Health</label>
-        <select id="drm-filter" name="drm">
-          <option value="">All stream states</option>
-          <option value="1" {% if drm_filter == '1' %}selected{% endif %}>🔒 DRM only</option>
-          <option value="dead" {% if drm_filter == 'dead' %}selected{% endif %}>💀 Dead only</option>
-          <option value="0" {% if drm_filter == '0' %}selected{% endif %}>No DRM / Dead flag</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label class="filter-label" for="language-filter">Language</label>
-        <select id="language-filter" name="language">
-          <option value="">All Languages</option>
-          {% for lang, count in languages %}
-          <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }} ({{ count }})</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="filter-group">
-        <label class="filter-label" for="gracenote-filter">Gracenote</label>
-        <select id="gracenote-filter" name="gracenote">
-          <option value="">Any</option>
-          <option value="1" {% if gracenote_filter == '1' %}selected{% endif %}>Has Gracenote ID</option>
-          <option value="0" {% if gracenote_filter == '0' %}selected{% endif %}>Missing Gracenote ID</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label class="filter-label" for="duplicates-filter">Duplicates</label>
-        <select id="duplicates-filter" name="duplicates">
-          <option value="">Normal list</option>
-          <option value="1" {% if duplicates_filter == '1' %}selected{% endif %}>⚠ Duplicates only</option>
-        </select>
-      </div>
+      <details class="toolbar-advanced" {% if category_filter or enabled_filter or drm_filter or language_filter or gracenote_filter or duplicates_filter %}open{% endif %}>
+        <summary>More filters</summary>
+        <div class="toolbar-secondary">
+          <div class="filter-group">
+            <label class="filter-label" for="category-filter">Category</label>
+            <select id="category-filter" name="category">
+              <option value="">All Categories</option>
+              {% for cat, count in categories %}
+              <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }} ({{ count }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="enabled-filter">Channel State</label>
+            <select id="enabled-filter" name="enabled">
+              <option value="">Enabled + Disabled</option>
+              <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
+              <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="drm-filter">Stream Health</label>
+            <select id="drm-filter" name="drm">
+              <option value="">All stream states</option>
+              <option value="1" {% if drm_filter == '1' %}selected{% endif %}>🔒 DRM only</option>
+              <option value="dead" {% if drm_filter == 'dead' %}selected{% endif %}>💀 Dead only</option>
+              <option value="0" {% if drm_filter == '0' %}selected{% endif %}>No DRM / Dead flag</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="language-filter">Language</label>
+            <select id="language-filter" name="language">
+              <option value="">All Languages</option>
+              {% for lang, count in languages %}
+              <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }} ({{ count }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="gracenote-filter">Gracenote</label>
+            <select id="gracenote-filter" name="gracenote">
+              <option value="">Any</option>
+              <option value="1" {% if gracenote_filter == '1' %}selected{% endif %}>Has Gracenote ID</option>
+              <option value="0" {% if gracenote_filter == '0' %}selected{% endif %}>Missing Gracenote ID</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="duplicates-filter">Duplicates</label>
+            <select id="duplicates-filter" name="duplicates">
+              <option value="">Normal list</option>
+              <option value="1" {% if duplicates_filter == '1' %}selected{% endif %}>⚠ Duplicates only</option>
+            </select>
+          </div>
+        </div>
+      </details>
       <input type="hidden" name="sort" value="{{ sort_by }}">
       <input type="hidden" name="dir" value="{{ sort_dir }}">
-      <div class="filter-actions">
-        <button type="submit" class="btn-apply">Apply</button>
-        <a class="clear" href="/admin/channels">Clear</a>
-        <span class="filter-sep"></span>
-        {% if source_filter or search or language_filter or category_filter or drm_filter or enabled_filter or gracenote_filter or duplicates_filter %}
-        <button type="button" class="btn-disable-all" onclick="bulkFilterAction(false)">✕ Disable All</button>
-        <button type="button" class="btn-enable-all"  onclick="bulkFilterAction(true)">✓ Enable All</button>
-        {% endif %}
-        <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
-      </div>
     </form>
 
     <div class="filter-summary">
-      <span class="filter-chip"><strong>Search</strong>{{ search or 'Any name' }}</span>
-      <span class="filter-chip"><strong>Source</strong>{{ source_filter or 'All sources' }}</span>
-      <span class="filter-chip"><strong>Category</strong>{{ category_filter or 'All categories' }}</span>
-      <span class="filter-chip"><strong>State</strong>{% if enabled_filter == '1' %}Enabled only{% elif enabled_filter == '0' %}Disabled only{% else %}Enabled + Disabled{% endif %}</span>
-      <span class="filter-chip"><strong>Health</strong>{% if drm_filter == '1' %}DRM only{% elif drm_filter == 'dead' %}Dead only{% elif drm_filter == '0' %}No DRM / Dead flag{% else %}All stream states{% endif %}</span>
-      <span class="filter-chip"><strong>Language</strong>{{ language_filter or 'All languages' }}</span>
-      <span class="filter-chip"><strong>Gracenote</strong>{% if gracenote_filter == '1' %}Has Gracenote ID{% elif gracenote_filter == '0' %}Missing Gracenote ID{% else %}Any{% endif %}</span>
-      <span class="filter-chip"><strong>Duplicates</strong>{% if duplicates_filter == '1' %}Duplicates only{% else %}Normal list{% endif %}</span>
+      <span class="filter-summary-label">Active Filters</span>
+      {% if search %}
+      <span class="filter-chip"><strong>Search</strong>{{ search }}</span>
+      {% endif %}
+      {% if source_filter %}
+      <span class="filter-chip"><strong>Source</strong>{{ source_filter }}</span>
+      {% endif %}
+      {% if category_filter %}
+      <span class="filter-chip"><strong>Category</strong>{{ category_filter }}</span>
+      {% endif %}
+      {% if enabled_filter %}
+      <span class="filter-chip"><strong>State</strong>{% if enabled_filter == '1' %}Enabled only{% elif enabled_filter == '0' %}Disabled only{% endif %}</span>
+      {% endif %}
+      {% if presence_filter %}
+      <span class="filter-chip"><strong>Presence</strong>{% if presence_filter == 'active' %}Active only{% elif presence_filter == 'inactive' %}Inactive only{% elif presence_filter == 'enabled_inactive' %}Enabled but inactive{% elif presence_filter == 'missed' %}Missed recently{% else %}{{ presence_filter }}{% endif %}</span>
+      {% endif %}
+      {% if drm_filter %}
+      <span class="filter-chip"><strong>Health</strong>{% if drm_filter == '1' %}DRM only{% elif drm_filter == 'dead' %}Dead only{% elif drm_filter == '0' %}No DRM / Dead flag{% endif %}</span>
+      {% endif %}
+      {% if language_filter %}
+      <span class="filter-chip"><strong>Language</strong>{{ language_filter }}</span>
+      {% endif %}
+      {% if gracenote_filter %}
+      <span class="filter-chip"><strong>Gracenote</strong>{% if gracenote_filter == '1' %}Has Gracenote ID{% elif gracenote_filter == '0' %}Missing Gracenote ID{% endif %}</span>
+      {% endif %}
+      {% if duplicates_filter == '1' %}
+      <span class="filter-chip"><strong>Duplicates</strong>Duplicates only</span>
+      {% endif %}
+      {% if not (search or source_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or gracenote_filter or duplicates_filter == '1') %}
+      <span class="filter-chip"><strong>View</strong>All channels</span>
+      {% endif %}
       <button type="button" class="btn-hide-disabled{% if enabled_filter == '1' %} active{% endif %}" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}◉ Hiding disabled{% else %}○ Hide disabled{% endif %}</button>
+      <button type="button" class="btn-hide-disabled{% if presence_filter == 'enabled_inactive' %} active{% endif %}" onclick="togglePresence('enabled_inactive')">{% if presence_filter == 'enabled_inactive' %}◉ Enabled + inactive{% else %}○ Enabled + inactive{% endif %}</button>
+      <button type="button" class="btn-hide-disabled{% if presence_filter == 'missed' %} active{% endif %}" onclick="togglePresence('missed')">{% if presence_filter == 'missed' %}◉ Missed recently{% else %}○ Missed recently{% endif %}</button>
     </div>
 
     <!-- Bulk action bar (shown when rows selected) -->
@@ -554,7 +628,7 @@
               Category <span class="sort-arrow">{% if sort_by == 'category' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span>
             </th>
             <th>Lang</th>
-            <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')"># <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
+            <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">TVG-CHNO <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
             <th>Stream Flags</th>
             <th>Preview / Inspect</th>
@@ -568,7 +642,7 @@
             {% set ns.group_idx = (ns.group_idx + 1) % 2 %}
             {% set ns.prev_name = ch.name %}
           {% endif %}
-          <tr id="row-{{ ch.id }}" class="{% if not ch.is_enabled %}disabled{% endif %}{% if duplicates_filter == '1' %} dup-group-{{ ns.group_idx }}{% endif %}">
+          <tr id="row-{{ ch.id }}" data-channel-id="{{ ch.id }}" class="{% if not ch.is_enabled %}disabled{% endif %}{% if duplicates_filter == '1' %} dup-group-{{ ns.group_idx }}{% endif %}">
             <td><input type="checkbox" class="row-check" value="{{ ch.id }}" onchange="onRowCheck()"></td>
             <td>
               {% if ch.logo_url %}
@@ -577,11 +651,21 @@
               <div class="logo"></div>
               {% endif %}
             </td>
-            <td><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="This channel name exists in multiple sources">DUP</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup" title="Manually marked as duplicate">DUPL</span>{% endif %}</td>
+            {% set hover_parts = [] %}
+            {% if not ch.is_active %}
+              {% set _ = hover_parts.append('Inactive') %}
+            {% endif %}
+            {% if ch.missed_scrapes %}
+              {% set _ = hover_parts.append('Missed scrapes: ' ~ ch.missed_scrapes) %}
+            {% endif %}
+            {% if ch.last_seen_at %}
+              {% set _ = hover_parts.append('Last seen: ' ~ ch.last_seen_at.strftime('%Y-%m-%d %H:%M UTC')) %}
+            {% endif %}
+            <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="This channel name exists in multiple sources">DUP</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup" title="Manually marked as duplicate">DUPL</span>{% endif %}</td>
             <td style="color:#64748b">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
             <td style="color:#94a3b8">{{ ch.category or '—' }}</td>
             <td style="color:#64748b">{{ ch.language or '—' }}</td>
-            <td style="color:#64748b">{{ chnum_map.get(ch.id) or '—' }}</td>
+            <td style="color:#64748b" data-chnum-cell="1">{{ chnum_map.get(ch.id) or '—' }}</td>
 
             {# ── Gracenote ID cell ── #}
             <td class="gn-cell">
@@ -640,7 +724,7 @@
     </div>
 
     {% if channels.pages > 1 %}
-    {% set qs = 'source=' ~ source_filter ~ '&search=' ~ search ~ '&enabled=' ~ enabled_filter ~ '&drm=' ~ drm_filter ~ '&language=' ~ language_filter ~ '&gracenote=' ~ gracenote_filter ~ '&category=' ~ category_filter ~ '&duplicates=' ~ duplicates_filter ~ '&sort=' ~ sort_by ~ '&dir=' ~ sort_dir %}
+    {% set qs = 'source=' ~ source_filter ~ '&search=' ~ search ~ '&enabled=' ~ enabled_filter ~ '&presence=' ~ presence_filter ~ '&drm=' ~ drm_filter ~ '&language=' ~ language_filter ~ '&gracenote=' ~ gracenote_filter ~ '&category=' ~ category_filter ~ '&duplicates=' ~ duplicates_filter ~ '&sort=' ~ sort_by ~ '&dir=' ~ sort_dir %}
     <div class="pagination">
       {% if channels.has_prev %}
       <a href="?page={{ channels.prev_num }}&{{ qs }}">← Prev</a>
@@ -1028,12 +1112,36 @@
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         row.classList.toggle('disabled', !checkbox.checked);
+        await refreshVisibleChnums();
       } catch (e) {
         checkbox.checked = !checkbox.checked;
         console.error('Toggle failed:', e);
       } finally {
         label.classList.remove('saving');
         checkbox.disabled = false;
+      }
+    }
+
+    async function refreshVisibleChnums() {
+      try {
+        const rows = Array.from(document.querySelectorAll('#channel-tbody tr[data-channel-id]'));
+        const ids = rows
+          .map(row => row.getAttribute('data-channel-id'))
+          .filter(Boolean);
+        if (!ids.length) return;
+        const r = await fetch(`/admin/channels/chnum-map?ids=${ids.join(',')}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        const chnumMap = data.chnum_map || {};
+        for (const row of rows) {
+          const channelId = row.getAttribute('data-channel-id');
+          const cell = row.querySelector('[data-chnum-cell]');
+          if (!cell || !channelId) continue;
+          const value = chnumMap[channelId];
+          cell.textContent = value != null ? String(value) : '—';
+        }
+      } catch (e) {
+        console.error('Chnum refresh failed:', e);
       }
     }
 
@@ -1196,6 +1304,17 @@
         params.delete('enabled');
       } else {
         params.set('enabled', '1');
+      }
+      params.set('page', '1');
+      window.location.search = params.toString();
+    }
+
+    function togglePresence(value) {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('presence') === value) {
+        params.delete('presence');
+      } else {
+        params.set('presence', value);
       }
       params.set('page', '1');
       window.location.search = params.toString();

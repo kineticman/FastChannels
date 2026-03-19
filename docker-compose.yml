@@ -5,6 +5,11 @@ services:
     build: .
     container_name: fastchannels
     restart: unless-stopped
+    environment:
+      FASTCHANNELS_WORKER_TRACE: "1"
+      FASTCHANNELS_WORKER_TRACE_DELTA_MB: "16"
+      FASTCHANNELS_WORKER_TRACE_RSS_MB: "180"
+      FASTCHANNELS_WORKER_TRACE_SLOW_MS: "0"
     ports:
       - "5523:5523"
     volumes:

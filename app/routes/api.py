@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 _APP_START = _time.time()
 from urllib.parse import urljoin as _urljoin, urlsplit
 from flask import Blueprint, jsonify, request, current_app
-from sqlalchemy import select
+from types import SimpleNamespace
+from sqlalchemy import or_, select
 from sqlalchemy.exc import OperationalError
 from app.config_store import persist_source_config_updates
 from app.config import VERSION
@@ -125,6 +126,31 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
             return
         _time.sleep(0.2)
     raise TimeoutError(f'timed out waiting for feed artifacts: {feed.slug}')
+
+
+def _channel_query_summary(query, parse_gracenote) -> tuple[int, bool]:
+    """Return count and whether any channel in the query has a valid Gracenote ID."""
+    base_query = query.order_by(None)
+    count = base_query.count()
+    if count == 0:
+        return 0, False
+
+    candidates = (
+        base_query.with_entities(Channel.gracenote_id, Channel.slug)
+        .filter(
+            or_(
+                (Channel.gracenote_id != None) & (Channel.gracenote_id != ''),
+                Channel.slug.like('%|%'),
+            )
+        )
+        .limit(256)
+        .all()
+    )
+    has_gracenote = any(
+        parse_gracenote(SimpleNamespace(gracenote_id=row.gracenote_id, slug=row.slug))
+        for row in candidates
+    )
+    return count, has_gracenote
 
 
 def _read_int(path: str) -> int | None:
@@ -474,7 +500,7 @@ def list_sources():
 @api_bp.route('/sources/<int:source_id>/run', methods=['POST'])
 def run_source(source_id):
     source = Source.query.get_or_404(source_id)
-    trigger_scrape(source.name)
+    trigger_scrape(source.name, force_full=True)
     return jsonify({'status': 'queued', 'source': source.name})
 
 
@@ -769,6 +795,12 @@ def update_channel(channel_id):
     for field in ('name', 'logo_url', 'category', 'is_active', 'is_enabled', 'number', 'disable_reason', 'is_duplicate'):
         if field in data:
             setattr(ch, field, data[field])
+    if data.get('is_enabled') is True and 'is_active' not in data:
+        ch.is_active = True
+        if ch.disable_reason in ('Dead', 'DRM'):
+            ch.disable_reason = None
+        ch.last_seen_at = datetime.now(timezone.utc)
+        ch.missed_scrapes = 0
     if 'gracenote_id' in data:
         raw = (data['gracenote_id'] or '').strip()
         if raw == '' or _GRACENOTE_RE.match(raw):
@@ -1181,16 +1213,18 @@ def push_feed_to_dvr(feed_id):
 
     # Check if this feed has any channels with Gracenote IDs using the same
     # logic as generate_gracenote_m3u() so we don't register an empty source.
-    feed_channels = _build_channel_query(feed_to_query_filters(feed.filters or {})).all()
-    if not feed_channels:
+    channel_count, has_gracenote = _channel_query_summary(
+        _build_channel_query(feed_to_query_filters(feed.filters or {})),
+        _parse_gracenote_id,
+    )
+    if channel_count == 0:
         return jsonify({'error': 'This feed has no eligible channels to add to Channels DVR.'}), 400
-    has_gracenote = any(_parse_gracenote_id(ch) for ch in feed_channels)
     force = bool((request.get_json(silent=True) or {}).get('force'))
-    if len(feed_channels) > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
+    if channel_count > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
         return jsonify({
-            'error': f'This feed has {len(feed_channels)} channels. Channels DVR usually works best at 750 or fewer.',
+            'error': f'This feed has {channel_count} channels. Channels DVR usually works best at 750 or fewer.',
             'requires_confirm': True,
-            'channel_count': len(feed_channels),
+            'channel_count': channel_count,
             'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
         }), 409
 
@@ -1248,16 +1282,18 @@ def push_source_to_dvr(source_id):
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
 
     base = public_base_url()
-    channels = _build_channel_query({'source': [source.name]}).all()
-    if not channels:
+    channel_count, has_gracenote = _channel_query_summary(
+        _build_channel_query({'source': [source.name]}),
+        _parse_gracenote_id,
+    )
+    if channel_count == 0:
         return jsonify({'error': f'{source.display_name} has no eligible channels to add to Channels DVR.'}), 400
-    has_gracenote = any(_parse_gracenote_id(ch) for ch in channels)
     force = bool((request.get_json(silent=True) or {}).get('force'))
-    if len(channels) > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
+    if channel_count > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
         return jsonify({
-            'error': f'{source.display_name} has {len(channels)} channels. Channels DVR usually works best at 750 or fewer.',
+            'error': f'{source.display_name} has {channel_count} channels. Channels DVR usually works best at 750 or fewer.',
             'requires_confirm': True,
-            'channel_count': len(channels),
+            'channel_count': channel_count,
             'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
         }), 409
 
@@ -1313,16 +1349,18 @@ def push_raw_output_to_dvr():
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
 
     base = public_base_url()
-    channels = _build_channel_query({}).all()
-    if not channels:
+    channel_count, has_gracenote = _channel_query_summary(
+        _build_channel_query({}),
+        _parse_gracenote_id,
+    )
+    if channel_count == 0:
         return jsonify({'error': 'Raw Output has no eligible channels to add to Channels DVR.'}), 400
-    has_gracenote = any(_parse_gracenote_id(ch) for ch in channels)
     force = bool((request.get_json(silent=True) or {}).get('force'))
-    if len(channels) > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
+    if channel_count > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
         return jsonify({
-            'error': f'Raw Output has {len(channels)} channels. Channels DVR usually works best at 750 or fewer.',
+            'error': f'Raw Output has {channel_count} channels. Channels DVR usually works best at 750 or fewer.',
             'requires_confirm': True,
-            'channel_count': len(channels),
+            'channel_count': channel_count,
             'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
         }), 409
 

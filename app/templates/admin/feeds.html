@@ -207,7 +207,7 @@
     <a href="/admin/settings">Settings</a>
     <a href="/admin/logs">Logs</a>
     <a href="/admin/help">Help</a>
-    <span class="version">v{{ app_version }}</span>
+    <a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="{% if update_status.update_available %}Update available: {{ update_status.latest_version }}{% else %}View FastChannels on GitHub{% endif %}">v{{ app_version }}{% if update_status.update_available %} <span style="color:#fbbf24;">Update: {{ update_status.latest_version }}</span>{% endif %}</a>
   </nav>
 
 <div class="container">

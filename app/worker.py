@@ -32,7 +32,7 @@ from app.scrapers.base import (
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
-from app.xml_cache import ensure_xml_artifact, invalidate_xml_cache, write_artifact
+from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,6 +47,7 @@ logging.getLogger('rq.registry').setLevel(logging.WARNING)
 from app.logfile import setup as _setup_logfile
 _setup_logfile()
 logger = logging.getLogger(__name__)
+_CHANNEL_MISS_THRESHOLD = 3
 
 flask_app = create_app()
 from app.config import VERSION as _VERSION
@@ -105,8 +106,9 @@ def _utc_aware(dt: datetime | None) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
-def run_scraper(source_name: str):
+def run_scraper(source_name: str, force_full: bool = False):
     with flask_app.app_context():
+        db.session.remove()
         source = Source.query.filter_by(name=source_name).first()
         if not source:
             logger.error(f'Source not found: {source_name}')
@@ -173,6 +175,8 @@ def run_scraper(source_name: str):
                 last = _utc_aware(source.last_scraped_at)
                 age_hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
                 skip_channels = age_hours < refresh_hours
+            if force_full:
+                skip_channels = False
 
             # Run pre_run_setup (e.g. auth bootstrap) and persist any config
             # updates (like tokens) immediately — before the long scrape starts —
@@ -625,69 +629,77 @@ def _refresh_xml_artifacts() -> None:
     from app.generators.m3u import generate_gracenote_m3u, generate_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app.generators.xmltv import write_xmltv
 
-    base_url = (
-        (AppSettings.get().effective_public_base_url() or '').strip().rstrip('/')
-        or (flask_app.config.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
-        or 'http://localhost:5523'
-    )
-    xml_artifacts: list[tuple[str, Callable]] = [
-        ('master', lambda fp: write_xmltv(fp, {}, base_url=base_url)),
-    ]
-    m3u_artifacts: list[tuple[str, Callable]] = [
-        ('master-m3u', lambda fp: fp.write(generate_m3u({}, base_url=base_url))),
-    ]
-    default_feed = Feed.query.filter_by(slug='default').first()
-    default_gn_start = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
-    m3u_artifacts.append((
-        'master-gracenote-m3u',
-        lambda fp: fp.write(generate_gracenote_m3u({}, base_url=base_url, namespace_start=default_gn_start)),
-    ))
-    for feed in Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all():
-        filters = feed_to_query_filters(feed.filters or {})
-        xml_artifacts.append((
-            f'feed-{feed.slug}',
-            lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
-                fp,
-                filters,
-                base_url=base_url,
-                feed_name=feed_name,
-            ),
-        ))
-        if feed.slug == 'default':
-            std_kw = {}
-        elif feed.chnum_start is not None:
-            std_kw = {'feed_chnum_start': feed.chnum_start}
-        else:
-            std_kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
+    for attempt in range(2):
+        base_url = (
+            (AppSettings.get().effective_public_base_url() or '').strip().rstrip('/')
+            or (flask_app.config.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
+            or 'http://localhost:5523'
+        )
+        xml_artifacts: list[tuple[str, Callable]] = [
+            ('master', lambda fp: write_xmltv(fp, {}, base_url=base_url)),
+        ]
+        m3u_artifacts: list[tuple[str, Callable]] = [
+            ('master-m3u', lambda fp: fp.write(generate_m3u({}, base_url=base_url))),
+        ]
+        default_feed = Feed.query.filter_by(slug='default').first()
+        default_gn_start = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
         m3u_artifacts.append((
-            f'feed-{feed.slug}-m3u',
-            lambda fp, filters=filters, std_kw=std_kw: fp.write(
-                generate_m3u(filters, base_url=base_url, **std_kw)
-            ),
+            'master-gracenote-m3u',
+            lambda fp: fp.write(generate_gracenote_m3u({}, base_url=base_url, namespace_start=default_gn_start)),
         ))
-        gn_kw = {'namespace_start': feed_gracenote_start(feed)}
-        m3u_artifacts.append((
-            f'feed-{feed.slug}-gracenote-m3u',
-            lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
-                generate_gracenote_m3u(filters, base_url=base_url, **gn_kw)
-            ),
-        ))
+        for feed in Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all():
+            filters = feed_to_query_filters(feed.filters or {})
+            xml_artifacts.append((
+                f'feed-{feed.slug}',
+                lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
+                    fp,
+                    filters,
+                    base_url=base_url,
+                    feed_name=feed_name,
+                ),
+            ))
+            if feed.chnum_start is not None:
+                std_kw = {'feed_chnum_start': feed.chnum_start}
+            else:
+                std_kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
+            m3u_artifacts.append((
+                f'feed-{feed.slug}-m3u',
+                lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                    generate_m3u(filters, base_url=base_url, **std_kw)
+                ),
+            ))
+            gn_kw = {'namespace_start': feed_gracenote_start(feed)}
+            m3u_artifacts.append((
+                f'feed-{feed.slug}-gracenote-m3u',
+                lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
+                    generate_gracenote_m3u(filters, base_url=base_url, **gn_kw)
+                ),
+            ))
 
-    rebuilt_xml = 0
-    for cache_key, writer in xml_artifacts:
-        try:
-            ensure_xml_artifact(cache_key, writer)
-            rebuilt_xml += 1
-        except Exception:
-            logger.exception('[xml-cache] failed to refresh %s', cache_key)
-    rebuilt_m3u = 0
-    for cache_key, writer in m3u_artifacts:
-        try:
-            write_artifact(cache_key, writer, ext='m3u')
-            rebuilt_m3u += 1
-        except Exception:
-            logger.exception('[m3u-cache] failed to refresh %s', cache_key)
-    logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s)', rebuilt_xml, rebuilt_m3u)
+        rebuilt_xml = 0
+        for cache_key, writer in xml_artifacts:
+            try:
+                ensure_xml_artifact(cache_key, writer)
+                rebuilt_xml += 1
+            except Exception:
+                logger.exception('[xml-cache] failed to refresh %s', cache_key)
+        rebuilt_m3u = 0
+        for cache_key, writer in m3u_artifacts:
+            try:
+                write_artifact(cache_key, writer, ext='m3u')
+                rebuilt_m3u += 1
+            except Exception:
+                logger.exception('[m3u-cache] failed to refresh %s', cache_key)
+
+        missing_m3u = [cache_key for cache_key, _writer in m3u_artifacts if get_artifact(cache_key, ext='m3u') is None]
+        if missing_m3u and attempt == 0:
+            logger.warning('[artifacts] missing M3U artifact(s) after refresh pass; retrying once: %s', missing_m3u)
+            continue
+
+        logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s)', rebuilt_xml, rebuilt_m3u)
+        if missing_m3u:
+            logger.warning('[artifacts] still missing M3U artifact(s) after retry: %s', missing_m3u)
+        break
 
 
 def _refresh_xml_artifacts_job() -> None:
@@ -769,8 +781,14 @@ def run_bulk_channel_update(filters: dict, enable: bool):
         ids = _channel_ids_for_filters(filters or {})
         updated = 0
         if ids:
+            values = {'is_enabled': enable}
+            if enable:
+                values['is_active'] = True
+                values['disable_reason'] = None
+                values['last_seen_at'] = datetime.now(timezone.utc)
+                values['missed_scrapes'] = 0
             updated = Channel.query.filter(Channel.id.in_(ids)).update(
-                {'is_enabled': enable}, synchronize_session=False
+                values, synchronize_session=False
             )
             db.session.commit()
             _invalidate_and_refresh_xml()
@@ -863,6 +881,7 @@ def _resolved_logo_url(existing_logo: str | None, incoming_logo: str | None, cac
 def _upsert_channels(source, channel_data_list):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
     logo_validation_cache: dict[str, bool] = {}
+    seen_at = datetime.now(timezone.utc)
     for cd in channel_data_list:
         if cd.name:
             try:
@@ -904,6 +923,8 @@ def _upsert_channels(source, channel_data_list):
                 ch.is_active = True
                 if stream_url_changed and ch.disable_reason in ('Dead', 'DRM'):
                     ch.disable_reason = None  # clear flag; let next audit re-check
+            ch.last_seen_at = seen_at
+            ch.missed_scrapes = 0
             # Only overwrite gracenote_id if the scraper has one —
             # preserve any value the user set manually via the admin UI.
             if gracenote_id is not None:
@@ -922,12 +943,49 @@ def _upsert_channels(source, channel_data_list):
                 country           = cd.country,
                 number            = cd.number,
                 gracenote_id      = gracenote_id,
+                last_seen_at      = seen_at,
+                missed_scrapes    = 0,
             ))
 
     seen = {cd.source_channel_id for cd in channel_data_list}
-    for ch_id, ch in existing.items():
-        if ch_id not in seen:
-            ch.is_active = False
+    existing_active_ids = {ch_id for ch_id, ch in existing.items() if ch.is_active}
+    missing_active_ids = existing_active_ids - seen
+
+    # Guard against upstream/parser glitches returning a tiny partial lineup.
+    # If we previously had a substantial active set and the new fetch would
+    # deactivate most of it, keep the old rows active and log loudly instead
+    # of collapsing the source to a handful of channels.
+    if existing_active_ids:
+        missing_ratio = len(missing_active_ids) / max(len(existing_active_ids), 1)
+    else:
+        missing_ratio = 0.0
+    suspicious_collapse = (
+        len(existing_active_ids) >= 50
+        and len(seen) < max(25, int(len(existing_active_ids) * 0.35))
+        and missing_ratio >= 0.6
+    )
+    if suspicious_collapse:
+        logger.warning(
+            '[%s] suspicious channel refresh collapse: existing_active=%d incoming=%d missing_active=%d; preserving prior active rows',
+            source.name,
+            len(existing_active_ids),
+            len(seen),
+            len(missing_active_ids),
+        )
+    else:
+        for ch_id, ch in existing.items():
+            if ch_id not in seen:
+                next_missed = (ch.missed_scrapes or 0) + 1
+                ch.missed_scrapes = next_missed
+                if ch.is_active and next_missed >= _CHANNEL_MISS_THRESHOLD:
+                    ch.is_active = False
+                    logger.info(
+                        '[%s] marking inactive after %d missed channel scrapes: %s (%s)',
+                        source.name,
+                        next_missed,
+                        ch.name,
+                        ch.source_channel_id,
+                    )
     db.session.flush()
 
 

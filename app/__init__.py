@@ -1,10 +1,33 @@
 import os
+import time
+import logging
 from flask import Flask
 from werkzeug.middleware.proxy_fix import ProxyFix
 from .extensions import db
 from .config import Config, VERSION
 from . import logfile
 from .schema import ensure_runtime_schema
+from .version_check import get_version_status
+
+
+_memlog = logging.getLogger('app.worker_mem')
+
+
+def _read_rss_bytes() -> int | None:
+    try:
+        with open('/proc/self/status', 'r', encoding='utf-8') as fp:
+            for line in fp:
+                if line.startswith('VmRSS:'):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        return None
+    return None
+
+
+def _fmt_mb(value: int | None) -> str:
+    if value is None:
+        return '?'
+    return f'{value / (1024 * 1024):.1f}MB'
 
 def _ensure_sqlite_parent_dir(database_uri: str | None) -> None:
     if not database_uri or not database_uri.startswith("sqlite:"):
@@ -33,9 +56,22 @@ def create_app(config_class=Config):
     app.config.from_object(config_class)
     _ensure_sqlite_parent_dir(app.config.get("SQLALCHEMY_DATABASE_URI"))
 
+    mem_trace_enabled = (os.environ.get('FASTCHANNELS_WORKER_TRACE') or '').strip() == '1'
+    mem_trace_delta_mb = int((os.environ.get('FASTCHANNELS_WORKER_TRACE_DELTA_MB') or '16').strip() or '16')
+    mem_trace_rss_mb = int((os.environ.get('FASTCHANNELS_WORKER_TRACE_RSS_MB') or '200').strip() or '200')
+    mem_trace_slow_ms = int((os.environ.get('FASTCHANNELS_WORKER_TRACE_SLOW_MS') or '1500').strip() or '1500')
+
     @app.context_processor
     def inject_version():
-        return {'app_version': VERSION}
+        return {
+            'app_version': VERSION,
+            'update_status': get_version_status(
+                VERSION,
+                enabled=app.config.get('VERSION_CHECK_ENABLED', True),
+                repo=app.config.get('VERSION_CHECK_REPO', 'kineticman/FastChannels'),
+                ttl_hours=app.config.get('VERSION_CHECK_TTL_HOURS', 12),
+            ),
+        }
 
     @app.template_filter('localtime')
     def localtime_filter(dt):
@@ -56,6 +92,57 @@ def create_app(config_class=Config):
                 dbapi_conn.execute("PRAGMA busy_timeout=30000")
 
         ensure_runtime_schema()
+
+    if mem_trace_enabled:
+        from flask import g, request
+
+        @app.before_request
+        def _trace_request_start():
+            g._trace_pid = os.getpid()
+            g._trace_started_at = time.perf_counter()
+            g._trace_rss_before = _read_rss_bytes()
+            _memlog.info(
+                '[worker-trace] pid=%s start %s %s rss=%s',
+                g._trace_pid,
+                request.method,
+                request.full_path if request.query_string else request.path,
+                _fmt_mb(g._trace_rss_before),
+            )
+
+        @app.after_request
+        def _trace_request_end(response):
+            g._trace_status_code = response.status_code
+            return response
+
+        @app.teardown_request
+        def _trace_request_teardown(exc):
+            started_at = getattr(g, '_trace_started_at', None)
+            rss_before = getattr(g, '_trace_rss_before', None)
+            pid = getattr(g, '_trace_pid', os.getpid())
+            rss_after = _read_rss_bytes()
+            elapsed_ms = ((time.perf_counter() - started_at) * 1000) if started_at else 0
+            delta = (rss_after - rss_before) if (rss_before is not None and rss_after is not None) else None
+            status_code = getattr(g, '_trace_status_code', 500 if exc else None)
+            should_log = (
+                mem_trace_slow_ms <= 0
+                or
+                (status_code is not None and status_code >= 500)
+                or elapsed_ms >= mem_trace_slow_ms
+                or (delta is not None and delta >= mem_trace_delta_mb * 1024 * 1024)
+                or (rss_after is not None and rss_after >= mem_trace_rss_mb * 1024 * 1024)
+            )
+            if should_log:
+                _memlog.info(
+                    '[worker-trace] pid=%s done %s %s status=%s dur=%.0fms rss=%s->%s delta=%s',
+                    pid,
+                    request.method,
+                    request.full_path if request.query_string else request.path,
+                    status_code,
+                    elapsed_ms,
+                    _fmt_mb(rss_before),
+                    _fmt_mb(rss_after),
+                    _fmt_mb(delta) if delta is not None else '?',
+                )
 
     from .routes.output import output_bp
     from .routes.api import api_bp

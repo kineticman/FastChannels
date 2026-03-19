@@ -127,6 +127,22 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN is_duplicate BOOLEAN NOT NULL DEFAULT 0"
                 ))
+            if "last_seen_at" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN last_seen_at DATETIME"
+                ))
+            if "missed_scrapes" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN missed_scrapes INTEGER NOT NULL DEFAULT 0"
+                ))
+            conn.execute(text(
+                "UPDATE channels SET missed_scrapes = 0 WHERE missed_scrapes IS NULL"
+            ))
+            conn.execute(text(
+                "UPDATE channels "
+                "SET last_seen_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) "
+                "WHERE is_active = 1 AND last_seen_at IS NULL"
+            ))
 
         if "programs" in tables:
             program_cols = {

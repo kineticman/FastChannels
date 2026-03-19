@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 from flask import current_app
 import redis
@@ -30,20 +32,30 @@ def _job_already_active(q: Queue, job_id: str) -> bool:
     return job.get_status(refresh=False) in {'queued', 'started', 'deferred', 'scheduled'}
 
 
-def trigger_scrape(source_name: str):
+def _bulk_job_id(filters: dict, enable: bool) -> str:
+    payload = {
+        'action': 'enable' if enable else 'disable',
+        'filters': filters or {},
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+    digest = hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]
+    return f'channel-bulk-{digest}'
+
+
+def trigger_scrape(source_name: str, *, force_full: bool = False):
     try:
         q = get_queue()
         job_id = f'scrape-{source_name}'
         if _job_already_active(q, job_id):
             logger.info('Scrape already queued/running for %s', source_name)
             return
-        q.enqueue('app.worker.run_scraper', source_name, job_timeout=3600, job_id=job_id)
-        logger.info(f'Enqueued scrape for {source_name}')
+        q.enqueue('app.worker.run_scraper', source_name, force_full, job_timeout=3600, job_id=job_id)
+        logger.info('Enqueued scrape for %s%s', source_name, ' (force full)' if force_full else '')
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for {source_name}')
         import threading
         from app.worker import run_scraper
-        threading.Thread(target=run_scraper, args=(source_name,), daemon=True).start()
+        threading.Thread(target=run_scraper, args=(source_name, force_full), daemon=True).start()
 
 
 def trigger_stream_audit(source_name: str):
@@ -91,7 +103,21 @@ def trigger_source_channel_purge(source_id: int):
 
 def trigger_bulk_channel_update(filters: dict, enable: bool):
     try:
-        get_queue().enqueue('app.worker.run_bulk_channel_update', filters or {}, enable, job_timeout=1800)
+        q = get_queue()
+        job_id = _bulk_job_id(filters or {}, enable)
+        if _job_already_active(q, job_id):
+            logger.info(
+                'Bulk channel %s already queued/running',
+                'enable' if enable else 'disable',
+            )
+            return
+        q.enqueue(
+            'app.worker.run_bulk_channel_update',
+            filters or {},
+            enable,
+            job_timeout=1800,
+            job_id=job_id,
+        )
         logger.info('Enqueued bulk channel %s', 'enable' if enable else 'disable')
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for bulk channel update')
