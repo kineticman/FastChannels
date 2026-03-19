@@ -75,6 +75,105 @@ _GRACENOTE_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
 _CHANNELS_DVR_RECOMMENDED_MAX = 750
 
 
+def _read_int(path: str) -> int | None:
+    try:
+        with open(path, 'r', encoding='utf-8') as fp:
+            raw = fp.read().strip()
+    except OSError:
+        return None
+    if not raw or raw == 'max':
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _memory_stats() -> dict:
+    # Container/cgroup memory (works for Docker and most modern runtimes).
+    cgroup_current = (
+        _read_int('/sys/fs/cgroup/memory.current')
+        or _read_int('/sys/fs/cgroup/memory/memory.usage_in_bytes')
+    )
+    cgroup_limit = (
+        _read_int('/sys/fs/cgroup/memory.max')
+        or _read_int('/sys/fs/cgroup/memory/memory.limit_in_bytes')
+    )
+
+    rss_bytes = None
+    vm_size_bytes = None
+    swap_bytes = None
+    try:
+        with open('/proc/self/status', 'r', encoding='utf-8') as fp:
+            for line in fp:
+                if line.startswith('VmRSS:'):
+                    rss_bytes = int(line.split()[1]) * 1024
+                elif line.startswith('VmSize:'):
+                    vm_size_bytes = int(line.split()[1]) * 1024
+                elif line.startswith('VmSwap:'):
+                    swap_bytes = int(line.split()[1]) * 1024
+    except OSError:
+        pass
+
+    mem_available = None
+    mem_total = None
+    try:
+        with open('/proc/meminfo', 'r', encoding='utf-8') as fp:
+            for line in fp:
+                if line.startswith('MemAvailable:'):
+                    mem_available = int(line.split()[1]) * 1024
+                elif line.startswith('MemTotal:'):
+                    mem_total = int(line.split()[1]) * 1024
+    except OSError:
+        pass
+
+    percent = None
+    if cgroup_current and cgroup_limit and cgroup_limit > 0:
+        percent = round((cgroup_current / cgroup_limit) * 100, 1)
+
+    return {
+        'container_bytes': cgroup_current,
+        'container_limit_bytes': cgroup_limit,
+        'container_percent': percent,
+        'process_rss_bytes': rss_bytes,
+        'process_vmsize_bytes': vm_size_bytes,
+        'process_swap_bytes': swap_bytes,
+        'host_mem_available_bytes': mem_available,
+        'host_mem_total_bytes': mem_total,
+    }
+
+
+def _cpu_stats() -> dict:
+    loadavg = None
+    try:
+        with open('/proc/loadavg', 'r', encoding='utf-8') as fp:
+            parts = fp.read().strip().split()
+        if len(parts) >= 3:
+            loadavg = [float(parts[0]), float(parts[1]), float(parts[2])]
+    except (OSError, ValueError):
+        pass
+
+    cpu_count = _os.cpu_count()
+
+    proc_cpu_seconds = None
+    try:
+        clk_tck = _os.sysconf(_os.sysconf_names['SC_CLK_TCK'])
+        with open('/proc/self/stat', 'r', encoding='utf-8') as fp:
+            parts = fp.read().split()
+        if len(parts) >= 15:
+            utime = int(parts[13])
+            stime = int(parts[14])
+            proc_cpu_seconds = round((utime + stime) / clk_tck, 2)
+    except (OSError, ValueError, KeyError):
+        pass
+
+    return {
+        'loadavg': loadavg,
+        'cpu_count': cpu_count,
+        'process_cpu_seconds': proc_cpu_seconds,
+    }
+
+
 def _normalize_server_url(value: str | None, default_port: int = 5523) -> str | None:
     raw = (value or '').strip()
     if not raw:
@@ -1043,6 +1142,8 @@ def system_stats():
             'logo_ttl_days':  3,
             'poster_ttl_days': 4,
         },
+        'cpu': _cpu_stats(),
+        'memory': _memory_stats(),
     })
 
 

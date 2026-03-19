@@ -377,6 +377,12 @@ function _fmt_uptime(s) {
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
 }
+function _fmt_seconds(s) {
+  if (s == null) return 'Unavailable';
+  if (s >= 3600) return `${(s / 3600).toFixed(1)} h`;
+  if (s >= 60) return `${(s / 60).toFixed(1)} m`;
+  return `${s.toFixed ? s.toFixed(1) : s} s`;
+}
 function _stat(label, value, cls = '') {
   return `<div class="stat-row"><span class="stat-label">${label}</span><span class="stat-value ${cls}">${value}</span></div>`;
 }
@@ -388,8 +394,14 @@ async function loadSystemStats() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
 
-    const db = d.db, ic = d.image_cache;
+    const db = d.db, ic = d.image_cache, mem = d.memory || {}, cpu = d.cpu || {};
     const totalCacheBytes = ic.logos_bytes + ic.posters_bytes;
+    const containerUsage = mem.container_bytes ? _fmt_bytes(mem.container_bytes) : 'Unavailable';
+    const containerLimit = mem.container_limit_bytes ? _fmt_bytes(mem.container_limit_bytes) : null;
+    const processRss = mem.process_rss_bytes ? _fmt_bytes(mem.process_rss_bytes) : 'Unavailable';
+    const processSwap = mem.process_swap_bytes ? _fmt_bytes(mem.process_swap_bytes) : '0 B';
+    const hostAvailable = mem.host_mem_available_bytes ? _fmt_bytes(mem.host_mem_available_bytes) : 'Unavailable';
+    const loadAvg = Array.isArray(cpu.loadavg) ? cpu.loadavg.map(v => v.toFixed(2)).join(' / ') : 'Unavailable';
 
     body.innerHTML = `
       <div class="stats-sections">
@@ -409,6 +421,20 @@ async function loadSystemStats() {
           ${_stat('Posters', `${ic.posters_count.toLocaleString()} files / ${_fmt_bytes(ic.posters_bytes)}`)}
           ${_stat('Poster TTL', `${ic.poster_ttl_days} days`)}
           ${_stat('Total cache', _fmt_bytes(totalCacheBytes), totalCacheBytes > 2147483648 ? 'warn' : '')}
+        </div>
+        <div>
+          <div class="stats-section-label">Memory</div>
+          ${_stat('Container', containerLimit ? `${containerUsage} / ${containerLimit}` : containerUsage, (mem.container_percent || 0) >= 80 ? 'warn' : '')}
+          ${_stat('Container %', mem.container_percent != null ? `${mem.container_percent}%` : 'Unavailable', (mem.container_percent || 0) >= 80 ? 'warn' : 'muted')}
+          ${_stat('Web process RSS', processRss)}
+          ${_stat('Web process swap', processSwap, (mem.process_swap_bytes || 0) > 0 ? 'warn' : 'muted')}
+          ${_stat('Host available', hostAvailable)}
+        </div>
+        <div>
+          <div class="stats-section-label">CPU</div>
+          ${_stat('Load avg', loadAvg)}
+          ${_stat('CPU cores', cpu.cpu_count != null ? cpu.cpu_count.toLocaleString() : 'Unavailable')}
+          ${_stat('Web CPU time', _fmt_seconds(cpu.process_cpu_seconds))}
         </div>
       </div>
       <div class="stats-uptime">Uptime: ${_fmt_uptime(d.uptime_seconds)}</div>`;
