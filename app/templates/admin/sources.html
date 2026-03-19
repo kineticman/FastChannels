@@ -14,6 +14,17 @@
     nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
     nav a:hover, nav a.active { color: #e2e8f0; }
     .container { max-width: 900px; margin: 2rem auto; padding: 0 2rem; }
+    .page-actions {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+      margin-bottom: 1rem; padding: 1rem 1.25rem; background: #1e293b;
+      border: 1px solid #334155; border-radius: 10px;
+    }
+    .page-actions h2 { font-size: 1rem; font-weight: 700; }
+    .page-actions p { color: #94a3b8; font-size: 0.82rem; line-height: 1.45; margin-top: 0.35rem; }
+    .page-actions .right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.45rem; }
+    .global-status { font-size: 0.78rem; min-height: 1rem; color: #94a3b8; }
+    .global-status.ok { color: #4ade80; }
+    .global-status.error { color: #f87171; }
 
     .card {
       background: #1e293b; border: 1px solid #334155; border-radius: 10px;
@@ -214,6 +225,8 @@
       nav h1 { width: 100%; }
       nav .version { margin-left: 0; width: 100%; order: 99; }
       .container { margin: 1rem auto; padding: 0 1rem; }
+      .page-actions { padding: 1rem; flex-direction: column; align-items: stretch; }
+      .page-actions .right { align-items: stretch; }
       .card { padding: 1rem; flex-direction: column; align-items: stretch; gap: 1rem; }
       .actions { flex-wrap: wrap; }
       .error { white-space: normal; max-width: none; }
@@ -237,6 +250,17 @@
   </nav>
 
   <div class="container">
+    <div class="page-actions">
+      <div>
+        <h2>Source Actions</h2>
+        <p>Force a full channel and guide refresh for every enabled source. This clears saved scrape times so the next run bypasses EPG-only shortcuts.</p>
+      </div>
+      <div class="right">
+        <button class="btn btn-run" id="force-refresh-btn" onclick="forceCompleteRefresh()">Force Complete Refresh</button>
+        <div class="global-status" id="global-status"></div>
+      </div>
+    </div>
+
     {% if chnum_warnings %}
     <div class="overlap-banner" id="overlap-banner">
       <strong>⚠ Channel number overlaps detected across generated M3U outputs</strong>
@@ -321,6 +345,30 @@
     const MASK = '••••••••';
     let _pendingSourceId   = null;
     let _pendingCheckbox   = null;
+
+    async function forceCompleteRefresh() {
+      if (!confirm('Force a complete refresh for all enabled sources? This clears the last scrape time and queues a full channel + guide refresh for each enabled source.')) return;
+      const btn = document.getElementById('force-refresh-btn');
+      const status = document.getElementById('global-status');
+      btn.disabled = true;
+      btn.textContent = 'Queuing…';
+      status.textContent = 'Queuing full refresh for enabled sources…';
+      status.className = 'global-status';
+      try {
+        const r = await fetch('/api/sources/force-refresh', { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok || d.status !== 'queued') throw new Error(`HTTP ${r.status}`);
+        status.textContent = `Queued ${d.count} source${d.count === 1 ? '' : 's'} for a full refresh.`;
+        status.className = 'global-status ok';
+        btn.textContent = 'Force Complete Refresh';
+      } catch (e) {
+        status.textContent = 'Failed to queue full refresh.';
+        status.className = 'global-status error';
+        btn.textContent = 'Force Complete Refresh';
+      } finally {
+        btn.disabled = false;
+      }
+    }
 
     function onSourceToggle(sourceId, sourceName, checkbox) {
       if (!checkbox.checked) {

@@ -439,6 +439,24 @@ def run_source(source_id):
     return jsonify({'status': 'queued', 'source': source.name})
 
 
+@api_bp.route('/sources/force-refresh', methods=['POST'])
+def force_refresh_sources():
+    enabled_sources = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
+    queued = []
+    for source in enabled_sources:
+        source.last_scraped_at = None
+        source.last_error = None
+        queued.append(source.name)
+    db.session.commit()
+    for source_name in queued:
+        trigger_scrape(source_name)
+    return jsonify({
+        'status': 'queued',
+        'count': len(queued),
+        'sources': queued,
+    })
+
+
 @api_bp.route('/sources/<int:source_id>/scrape-status')
 def scrape_status(source_id):
     import redis as _redis
