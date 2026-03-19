@@ -204,9 +204,9 @@ def run_scraper(source_name: str):
                 for _attempt in range(3):
                     try:
                         _upsert_programs(source, programs)
+                        _apply_scraper_config_updates(source, scraper)
                         source.last_scraped_at = datetime.now(timezone.utc)
                         source.last_error      = None
-                        _apply_scraper_config_updates(source, scraper)
                         db.session.commit()
                         break
                     except _SAOperationalError:
@@ -235,9 +235,9 @@ def run_scraper(source_name: str):
                     try:
                         _upsert_channels(source, channels)
                         _upsert_programs(source, programs)
+                        _apply_scraper_config_updates(source, scraper)
                         source.last_scraped_at = datetime.now(timezone.utc)
                         source.last_error      = None
-                        _apply_scraper_config_updates(source, scraper)
                         db.session.commit()
                         break
                     except _SAOperationalError as _dbe:
@@ -1116,7 +1116,6 @@ def _schedule_due_scrapes():
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
-        default_epg_only_sources = {'amazon_prime_free', 'sling'}
         default_disabled_sources = {'amazon_prime_free', 'sling'}
         seeded_names = set()
         for name, cls in scrapers.items():
@@ -1130,9 +1129,12 @@ def seed_sources():
                     display_name    = cls.display_name or canonical_name.title(),
                     scrape_interval = cls.scrape_interval,
                     config          = {},
-                    epg_only        = canonical_name in default_epg_only_sources,
+                    epg_only        = False,
                     is_enabled      = canonical_name not in default_disabled_sources,
                 ))
+        # Reset legacy flags so upgrading users do not get stuck with sources
+        # silently excluded from M3U output after the UI toggle is removed.
+        Source.query.filter_by(epg_only=True).update({'epg_only': False}, synchronize_session=False)
         db.session.commit()
         logger.info(f'Seeded {len(seeded_names)} sources')
 

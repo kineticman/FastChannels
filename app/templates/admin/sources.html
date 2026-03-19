@@ -283,7 +283,6 @@
       <div class="card-info">
         <h3>
           {{ source.display_name }}
-          {% if source.epg_only %}<span class="badge-epg-only">EPG Only</span>{% endif %}
           <span class="config-badge" id="config-badge-{{ source.id }}">Loading…</span>
         </h3>
         <div class="meta">
@@ -291,7 +290,6 @@
           <span id="ch-count-{{ source.id }}">{{ source.to_dict().channel_count }}</span> channels &nbsp;·&nbsp;
           Last scraped: {{ source.last_scraped_at | localtime }}
           {% if source.last_audited_at %}&nbsp;·&nbsp; Last audited: {{ source.last_audited_at | localtime }}{% endif %}
-          {% if source.epg_only %}&nbsp;·&nbsp;<span style="color:#a78bfa">Excluded from M3U output</span>{% endif %}
         </div>
         {% if source.name in ('amazon_prime_free', 'sling') %}
         <div class="config-note" style="color:#f59e0b">⚠ All streams from this source are DRM-protected and will not play. Disabled by default.</div>
@@ -317,14 +315,6 @@
                   onclick="saveScrapeInterval({{ source.id }})"
                   {% if not source.is_enabled %}disabled{% endif %}>Save</button>
           <div class="help">Recommended {{ interval_meta.recommended }} min · allowed {{ interval_meta.min }}-{{ interval_meta.max }} min.</div>
-        </div>
-
-        <div class="epg-only-wrap">
-          <label id="epg-toggle-{{ source.id }}" title="EPG Only: exclude this source from M3U output while still scraping guide data">
-            <input type="checkbox" {% if source.epg_only %}checked{% endif %}
-                   onchange="setEpgOnly({{ source.id }}, this)">
-            EPG Only mode
-          </label>
         </div>
         <div class="source-config hidden" id="source-config-{{ source.id }}"></div>
       </div>
@@ -531,25 +521,6 @@
         setTimeout(() => { btn.textContent = '📋 Stream Audit'; btn.disabled = false; }, 3000);
       }
     }
-
-    async function setEpgOnly(sourceId, checkbox) {
-      checkbox.disabled = true;
-      try {
-        const r = await fetch(`/api/sources/${sourceId}`, {
-          method:  'PATCH',
-          headers: {'Content-Type': 'application/json'},
-          body:    JSON.stringify({epg_only: checkbox.checked}),
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        location.reload();
-      } catch (e) {
-        checkbox.checked = !checkbox.checked;
-        console.error('Failed to set epg_only:', e);
-      } finally {
-        checkbox.disabled = false;
-      }
-    }
-
 
     // ── Scrape progress polling ───────────────────────────────────────────
     const _pollTimers  = {};
