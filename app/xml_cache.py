@@ -99,6 +99,20 @@ def write_xml_artifact(cache_key: str, writer: Callable[[TextIO], None]) -> Path
     return path
 
 
+def delete_xml_artifact(cache_key: str) -> int:
+    removed = 0
+    for path in (
+        _cache_path(cache_key, ext='xml'),
+        _cache_path(cache_key, ext='m3u'),
+        _xml_stale_path(cache_key),
+        _xml_lock_path(cache_key),
+    ):
+        if path.exists():
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
 def ensure_xml_artifact(cache_key: str, writer: Callable[[TextIO], None], *, wait_if_locked: bool = True) -> Path:
     """Return the XML artifact path, rebuilding if missing or stale.
 

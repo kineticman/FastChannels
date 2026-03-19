@@ -9,10 +9,16 @@ from ..extensions import db
 from ..generators.m3u import get_global_chnum_overlaps, _selected_channels, feed_to_query_filters
 from ..models import Feed
 from ..url import public_base_url
-from ..xml_cache import invalidate_xml_cache
+from ..xml_cache import delete_xml_artifact, invalidate_xml_cache
+from .tasks import trigger_xml_refresh
 
 feeds_api_bp = Blueprint('feeds_api', __name__)
 SYSTEM_FEED_SLUGS = {'default'}
+
+
+def _invalidate_and_refresh_xml() -> None:
+    invalidate_xml_cache()
+    trigger_xml_refresh()
 
 
 def _safe_commit():
@@ -109,7 +115,7 @@ def create_feed():
     err = _safe_commit()
     if err:
         return err
-    invalidate_xml_cache()
+    _invalidate_and_refresh_xml()
     return jsonify(feed.to_dict(public_base_url())), 201
 
 
@@ -150,7 +156,7 @@ def update_feed(feed_id):
     err = _safe_commit()
     if err:
         return err
-    invalidate_xml_cache()
+    _invalidate_and_refresh_xml()
     return jsonify(feed.to_dict(public_base_url()))
 
 
@@ -159,12 +165,14 @@ def delete_feed(feed_id):
     feed = Feed.query.get_or_404(feed_id)
     if feed.slug in SYSTEM_FEED_SLUGS:
         return jsonify({'error': 'Built-in feeds cannot be deleted.'}), 403
+    slug = feed.slug
     db.session.delete(feed)
     err = _safe_commit()
     if err:
         return err
-    invalidate_xml_cache()
-    return jsonify({'status': 'deleted', 'slug': feed.slug})
+    delete_xml_artifact(f'feed-{slug}')
+    _invalidate_and_refresh_xml()
+    return jsonify({'status': 'deleted', 'slug': slug})
 
 
 def _parse_chnum_start(val) -> int | None:

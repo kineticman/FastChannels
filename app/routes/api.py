@@ -17,7 +17,13 @@ from ..models import Source, Channel, Program, AppSettings, Feed
 from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
 from ..url import public_base_url
-from .tasks import trigger_scrape, trigger_stream_audit
+from .tasks import (
+    trigger_bulk_channel_update,
+    trigger_scrape,
+    trigger_source_channel_purge,
+    trigger_stream_audit,
+    trigger_xml_refresh,
+)
 from ..generators.m3u import get_global_chnum_overlaps
 from .. import logfile
 from ..xml_cache import invalidate_xml_cache
@@ -75,6 +81,11 @@ def _parse_hls_variants(master_text: str) -> list[dict]:
 
 _GRACENOTE_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
 _CHANNELS_DVR_RECOMMENDED_MAX = 750
+
+
+def _invalidate_and_refresh_xml() -> None:
+    invalidate_xml_cache()
+    trigger_xml_refresh()
 
 
 def _read_int(path: str) -> int | None:
@@ -206,6 +217,13 @@ def _settings_backup_payload() -> dict:
     row = AppSettings.get()
     sources = Source.query.order_by(Source.name).all()
     feeds = Feed.query.order_by(Feed.slug).all()
+    channel_overrides = (
+        db.session.query(Channel, Source.name)
+        .join(Source, Channel.source_id == Source.id)
+        .filter(Channel.source_channel_id != None)
+        .order_by(Source.name, Channel.id)
+        .all()
+    )
     return {
         'format': 'fastchannels-settings-backup',
         'version': 1,
@@ -237,6 +255,20 @@ def _settings_backup_payload() -> dict:
             }
             for feed in feeds
         ],
+        'channel_overrides': [
+            {
+                'source_name': source_name,
+                'source_channel_id': channel.source_channel_id,
+                'name': channel.name,
+                'logo_url': channel.logo_url,
+                'category': channel.category,
+                'number': channel.number,
+                'is_enabled': channel.is_enabled,
+                'is_duplicate': channel.is_duplicate,
+                'gracenote_id': channel.gracenote_id,
+            }
+            for channel, source_name in channel_overrides
+        ],
     }
 
 
@@ -249,7 +281,8 @@ def _restore_settings_backup(payload: dict) -> dict:
     app_settings = payload.get('app_settings') or {}
     sources_payload = payload.get('sources') or []
     feeds_payload = payload.get('feeds') or []
-    if not isinstance(sources_payload, list) or not isinstance(feeds_payload, list):
+    channel_overrides_payload = payload.get('channel_overrides') or []
+    if not isinstance(sources_payload, list) or not isinstance(feeds_payload, list) or not isinstance(channel_overrides_payload, list):
         raise ValueError('Backup payload has invalid sources/feeds sections.')
 
     summary = {
@@ -258,6 +291,8 @@ def _restore_settings_backup(payload: dict) -> dict:
         'feeds_created': 0,
         'feeds_updated': 0,
         'feeds_skipped': 0,
+        'channel_overrides_applied': 0,
+        'channel_overrides_skipped': 0,
     }
     skipped_sources: list[str] = []
 
@@ -334,6 +369,35 @@ def _restore_settings_backup(payload: dict) -> dict:
     if warnings:
         raise ValueError('Channel number overlaps detected in imported settings.')
 
+    channels_by_key = {
+        (source_name, source_channel_id): channel
+        for channel, source_name, source_channel_id in (
+            db.session.query(Channel, Source.name, Channel.source_channel_id)
+            .join(Source, Channel.source_id == Source.id)
+            .filter(Channel.source_channel_id != None)
+            .all()
+        )
+    }
+    for item in channel_overrides_payload:
+        if not isinstance(item, dict):
+            continue
+        source_name = (item.get('source_name') or '').strip()
+        source_channel_id = (item.get('source_channel_id') or '').strip()
+        if not source_name or not source_channel_id:
+            summary['channel_overrides_skipped'] += 1
+            continue
+        channel = channels_by_key.get((source_name, source_channel_id))
+        if channel is None:
+            summary['channel_overrides_skipped'] += 1
+            continue
+        for field in ('name', 'logo_url', 'category', 'number', 'is_enabled', 'is_duplicate'):
+            if field in item:
+                setattr(channel, field, item.get(field))
+        if 'gracenote_id' in item:
+            raw = (item.get('gracenote_id') or '').strip()
+            channel.gracenote_id = raw or None
+        summary['channel_overrides_applied'] += 1
+
     try:
         db.session.commit()
     except OperationalError as exc:
@@ -342,7 +406,7 @@ def _restore_settings_backup(payload: dict) -> dict:
             raise ValueError('Server is busy (a scrape is in progress). Try again shortly.')
         raise
 
-    invalidate_xml_cache()
+    _invalidate_and_refresh_xml()
     summary['skipped_sources'] = skipped_sources
     return summary
 
@@ -464,15 +528,11 @@ def update_source(source_id):
     changed = False
     if 'is_enabled' in data:
         new_enabled = bool(data['is_enabled'])
-        if not new_enabled and source.is_enabled:
-            # Purge all channels and programs for this source so the Channels
-            # page stays clean. Re-enabling will repopulate on next scrape.
-            ch_ids = [r[0] for r in source.channels.with_entities(Channel.id).all()]
-            if ch_ids:
-                Program.query.filter(Program.channel_id.in_(ch_ids)).delete(synchronize_session=False)
-                source.channels.delete(synchronize_session=False)
+        should_purge = not new_enabled and source.is_enabled
         source.is_enabled = new_enabled
         changed = True
+    else:
+        should_purge = False
     if 'scrape_interval' in data:
         source.scrape_interval = int(data['scrape_interval'])
     if 'chnum_start' in data:
@@ -496,7 +556,9 @@ def update_source(source_id):
             db.session.rollback()
             return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
     db.session.commit()
-    invalidate_xml_cache()
+    _invalidate_and_refresh_xml()
+    if should_purge:
+        trigger_source_channel_purge(source.id)
     return jsonify(source.to_dict())
 
 
@@ -504,10 +566,9 @@ def update_source(source_id):
 def delete_source_channels(source_id):
     """Delete all channels (and their programs via cascade) for a source."""
     source = Source.query.get_or_404(source_id)
-    deleted = source.channels.delete()
-    db.session.commit()
-    invalidate_xml_cache()
-    return jsonify({'status': 'deleted', 'source': source.name, 'deleted': deleted})
+    matched = source.channels.count()
+    trigger_source_channel_purge(source.id)
+    return jsonify({'status': 'queued', 'source': source.name, 'matched': matched})
 
 
 @api_bp.route('/sources/<int:source_id>/config', methods=['GET'])
@@ -610,14 +671,10 @@ def bulk_update_channels():
         elif ef == '0':
             q = q.filter(Channel.is_enabled == False)
 
-    ids = [ch.id for ch in q.with_entities(Channel.id).all()]
-    if ids:
-        Channel.query.filter(Channel.id.in_(ids)).update(
-            {'is_enabled': enable}, synchronize_session=False
-        )
-        db.session.commit()
-        invalidate_xml_cache()
-    return jsonify({'updated': len(ids)})
+    matched = q.count()
+    if matched:
+        trigger_bulk_channel_update(filters, enable)
+    return jsonify({'status': 'queued' if matched else 'idle', 'updated': matched})
 
 
 @api_bp.route('/channels/<int:channel_id>', methods=['PATCH'])
@@ -634,7 +691,7 @@ def update_channel(channel_id):
         else:
             return jsonify({'error': 'Invalid Gracenote ID — must be numeric (e.g. 122912) or start with EP/SH/MV/SP/TR (e.g. EP012345678)'}), 422
     db.session.commit()
-    invalidate_xml_cache()
+    _invalidate_and_refresh_xml()
     return jsonify(ch.to_dict())
 
 
@@ -1227,7 +1284,7 @@ def app_settings():
         if 'public_base_url' in data:
             row.public_base_url = _normalize_server_url(data['public_base_url'], default_port=5523)
         db.session.commit()
-        invalidate_xml_cache()
+        _invalidate_and_refresh_xml()
         row = AppSettings.get()
     return jsonify({
         'channels_dvr_url':  row.effective_channels_dvr_url(),

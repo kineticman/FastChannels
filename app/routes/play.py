@@ -10,11 +10,11 @@ disabled and manually re-enable if desired.
 import logging
 import threading
 
-from flask import Blueprint, redirect, abort, current_app, request
+from flask import Blueprint, redirect, abort, request
 from app.config_store import persist_source_config_updates
 from ..models import Channel, Source
-from ..extensions import db
 from ..scrapers import registry
+from .tasks import trigger_channel_auto_disable
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +124,6 @@ def play(source_name: str, channel_id: str):
     # blocking the redirect. The check runs in a background thread so Channels
     # DVR gets the 302 immediately, avoiding 504s on slow upstream sources.
     if channel.is_active and resolved_url and resolved_url.startswith('http'):
-        app = current_app._get_current_object()
-        ch_id = channel.id
         check_session = scraper.session if scraper_cls else None
 
         def _bg_check():
@@ -134,21 +132,7 @@ def play(source_name: str, channel_id: str):
             reason = _check_manifest(resolved_url, s)
             if not reason:
                 return
-            with app.app_context():
-                try:
-                    ch = Channel.query.get(ch_id)
-                    if ch and ch.is_active:
-                        ch.is_active      = False
-                        ch.is_enabled     = False
-                        ch.disable_reason = reason
-                        db.session.commit()
-                        logger.warning(
-                            '[play] %s detected — auto-disabled channel %s (%s/%s)',
-                            reason, ch.name, source_name, channel_id,
-                        )
-                except Exception as e:
-                    logger.error('[play] failed to persist disable flag for %s: %s', ch_id, e)
-                    db.session.rollback()
+            trigger_channel_auto_disable(channel.id, reason)
 
         threading.Thread(target=_bg_check, daemon=True).start()
 

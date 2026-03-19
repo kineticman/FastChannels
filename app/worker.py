@@ -575,6 +575,102 @@ def _refresh_xml_artifacts_subprocess(timeout_seconds: int = 1800) -> None:
         logger.error('[xml-cache] refresh subprocess exited with code %s', proc.exitcode)
 
 
+def run_xml_refresh():
+    with flask_app.app_context():
+        _refresh_xml_artifacts_subprocess()
+
+
+def _invalidate_and_refresh_xml() -> None:
+    invalidate_xml_cache()
+    _refresh_xml_artifacts_subprocess()
+
+
+def _channel_ids_for_filters(filters: dict) -> list[int]:
+    q = Channel.query.join(Source)
+    if src := filters.get('source'):
+        q = q.filter(Source.name == src)
+    if cat := filters.get('category'):
+        q = q.filter(Channel.category == cat)
+    if lang := filters.get('language'):
+        q = q.filter(Channel.language == lang)
+    if search := filters.get('search'):
+        q = q.filter(Channel.name.ilike(f'%{search}%'))
+    if drm := filters.get('drm'):
+        if drm == '1':
+            q = q.filter(Channel.disable_reason == 'DRM')
+        elif drm == 'dead':
+            q = q.filter(Channel.disable_reason == 'Dead')
+        elif drm == '0':
+            q = q.filter(Channel.disable_reason == None)
+    if ef := filters.get('enabled'):
+        if ef == '1':
+            q = q.filter(Channel.is_enabled == True)
+        elif ef == '0':
+            q = q.filter(Channel.is_enabled == False)
+    return [row[0] for row in q.with_entities(Channel.id).all()]
+
+
+def run_source_channel_purge(source_id: int):
+    with flask_app.app_context():
+        source = Source.query.get(source_id)
+        if not source:
+            logger.warning('[source-purge] source_id=%s not found', source_id)
+            return
+        ch_ids = [row[0] for row in source.channels.with_entities(Channel.id).all()]
+        deleted_programs = 0
+        deleted_channels = 0
+        if ch_ids:
+            deleted_programs = Program.query.filter(
+                Program.channel_id.in_(ch_ids)
+            ).delete(synchronize_session=False)
+            deleted_channels = source.channels.delete(synchronize_session=False)
+        db.session.commit()
+        _invalidate_and_refresh_xml()
+        logger.info(
+            '[source-purge] source=%s deleted %d channels and %d programs',
+            source.name, deleted_channels or 0, deleted_programs or 0,
+        )
+
+
+def run_bulk_channel_update(filters: dict, enable: bool):
+    with flask_app.app_context():
+        ids = _channel_ids_for_filters(filters or {})
+        updated = 0
+        if ids:
+            updated = Channel.query.filter(Channel.id.in_(ids)).update(
+                {'is_enabled': enable}, synchronize_session=False
+            )
+            db.session.commit()
+            _invalidate_and_refresh_xml()
+        logger.info(
+            '[channel-bulk] %s %d channel(s)',
+            'enabled' if enable else 'disabled',
+            updated,
+        )
+
+
+def run_channel_auto_disable(channel_id: int, reason: str):
+    with flask_app.app_context():
+        ch = Channel.query.get(channel_id)
+        if not ch:
+            logger.warning('[play] auto-disable skipped; channel_id=%s not found', channel_id)
+            return
+        if not ch.is_active and not ch.is_enabled and ch.disable_reason == reason:
+            return
+        ch.is_active = False
+        ch.is_enabled = False
+        ch.disable_reason = reason
+        db.session.commit()
+        _invalidate_and_refresh_xml()
+        logger.warning(
+            '[play] %s detected — auto-disabled channel %s (%s/%s)',
+            reason,
+            ch.name,
+            ch.source.name if ch.source else '?',
+            ch.source_channel_id,
+        )
+
+
 def _fresh_epg_sids(source, horizon_hours: float = 2.0) -> set[str]:
     """Return source_channel_ids whose programs already cover the next horizon_hours.
 
