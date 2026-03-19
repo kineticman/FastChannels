@@ -1,6 +1,8 @@
 import logging
 import re
+from dataclasses import dataclass
 from sqlalchemy.orm import contains_eager
+from ..extensions import db
 from ..models import Channel, Source, Feed, AppSettings
 from ..url import proxy_logo_url
 
@@ -12,6 +14,24 @@ _FEED_NAMESPACE_BASE = 200000
 
 # Gracenote ID prefixes recognised by Channels DVR
 _GRACENOTE_PREFIX_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
+
+
+@dataclass(slots=True)
+class _MiniSource:
+    name: str
+    display_name: str | None
+    chnum_start: int | None
+
+
+@dataclass(slots=True)
+class _MiniChannel:
+    id: int
+    name: str | None
+    number: int | None
+    source_channel_id: str | None
+    gracenote_id: str | None
+    slug: str | None
+    source: _MiniSource
 
 
 def _parse_gracenote_id(ch) -> str | None:
@@ -69,6 +89,81 @@ def _build_channel_query(filters: dict):
         if excluded_ids := filters.get('excluded_channel_ids'):
             query = query.filter(Channel.id.notin_(excluded_ids))
     return query.order_by(Channel.number.asc().nullslast(), Channel.name.asc())
+
+
+def _build_channel_stub_query(filters: dict):
+    """Lightweight variant of _build_channel_query for validation-only paths."""
+    query = db.session.query(
+        Channel.id,
+        Channel.name,
+        Channel.number,
+        Channel.source_channel_id,
+        Channel.gracenote_id,
+        Channel.slug,
+        Source.name.label('source_name'),
+        Source.display_name.label('source_display_name'),
+        Source.chnum_start.label('source_chnum_start'),
+    ).join(Source).filter(
+        Channel.is_active == True,
+        Channel.is_enabled == True,
+        Source.is_enabled == True,
+        Source.epg_only == False,
+        Channel.stream_url != None,
+    )
+    if channel_ids := filters.get('channel_ids'):
+        query = query.filter(Channel.id.in_(channel_ids))
+    else:
+        if sources := filters.get('source'):
+            query = query.filter(Source.name.in_(sources))
+        if categories := filters.get('category'):
+            query = query.filter(Channel.category.in_(categories))
+        if languages := filters.get('languages'):
+            query = query.filter(Channel.language.in_(languages))
+        elif language := filters.get('language'):
+            query = query.filter(Channel.language == language)
+        if gracenote := filters.get('gracenote'):
+            if gracenote == 'has':
+                query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+            elif gracenote == 'missing':
+                query = query.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+        if search := filters.get('search'):
+            query = query.filter(Channel.name.ilike(f'%{search}%'))
+        if excluded_ids := filters.get('excluded_channel_ids'):
+            query = query.filter(Channel.id.notin_(excluded_ids))
+    return query.order_by(Channel.number.asc().nullslast(), Channel.name.asc())
+
+
+def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | None = False):
+    """Return lightweight channel rows for overlap validation paths."""
+    filters = filters or {}
+    rows = _build_channel_stub_query(filters).all()
+    channels = [
+        _MiniChannel(
+            id=row.id,
+            name=row.name,
+            number=row.number,
+            source_channel_id=row.source_channel_id,
+            gracenote_id=row.gracenote_id,
+            slug=row.slug,
+            source=_MiniSource(
+                name=row.source_name,
+                display_name=row.source_display_name,
+                chnum_start=row.source_chnum_start,
+            ),
+        )
+        for row in rows
+    ]
+
+    if gracenote is True:
+        channels = [ch for ch in channels if _parse_gracenote_id(ch)]
+    elif gracenote is False:
+        channels = [ch for ch in channels if not _parse_gracenote_id(ch)]
+
+    max_ch = filters.get('max_channels')
+    if max_ch:
+        channels = channels[:int(max_ch)]
+
+    return channels
 
 
 def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = False):
@@ -273,7 +368,7 @@ def get_chnum_overlaps() -> list[str]:
     Return a list of overlap warning strings for the current source configuration.
     Used by the admin UI to surface misconfiguration.
     """
-    channels = _build_channel_query({}).all()
+    channels = _selected_channel_stubs({}, gracenote=None)
     _, warnings = _build_source_chnum_map(channels)
     return warnings
 
@@ -290,11 +385,11 @@ def get_global_chnum_overlaps() -> list[str]:
     master_outputs: list[tuple[str, list, dict[int, int]]] = []
     feed_outputs:   list[tuple[str, list, dict[int, int]]] = []
 
-    master_standard = _selected_channels({}, gracenote=False)
+    master_standard = _selected_channel_stubs({}, gracenote=False)
     master_standard_map, _ = _resolve_chnum_map(master_standard)
     master_outputs.append(('master /m3u', master_standard, master_standard_map))
 
-    master_gracenote = _selected_channels({}, gracenote=True)
+    master_gracenote = _selected_channel_stubs({}, gracenote=True)
     master_gracenote_map, _ = _resolve_chnum_map(
         master_gracenote,
         namespace_start=_MASTER_GRACENOTE_START,
@@ -305,7 +400,7 @@ def get_global_chnum_overlaps() -> list[str]:
     for feed in feeds:
         filters = feed_to_query_filters(feed.filters or {})
 
-        std_channels = _selected_channels(filters, gracenote=False)
+        std_channels = _selected_channel_stubs(filters, gracenote=False)
         std_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=False)
         std_map, _ = _resolve_chnum_map(
             std_channels,
@@ -314,7 +409,7 @@ def get_global_chnum_overlaps() -> list[str]:
         )
         feed_outputs.append((f'feed {feed.slug} /m3u', std_channels, std_map))
 
-        gn_channels = _selected_channels(filters, gracenote=True)
+        gn_channels = _selected_channel_stubs(filters, gracenote=True)
         gn_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=True)
         gn_map, _ = _resolve_chnum_map(
             gn_channels,

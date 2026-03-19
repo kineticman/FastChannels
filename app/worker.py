@@ -2,6 +2,7 @@
 Background worker — run with: python -m app.worker
 """
 import logging
+import multiprocessing
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -137,7 +138,7 @@ def run_scraper(source_name: str):
                                        source_name, _attempt + 1, _wait)
                         time.sleep(_wait)
                 invalidate_xml_cache()
-                _refresh_xml_artifacts()
+                _refresh_xml_artifacts_subprocess()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] EPG-only run complete — %d channels, %d programs (%.1fs)',
                             source_name, len(db_channels), len(programs), elapsed)
@@ -164,7 +165,7 @@ def run_scraper(source_name: str):
                                        source_name, _attempt + 1, _wait)
                         time.sleep(_wait)
                 invalidate_xml_cache()
-                _refresh_xml_artifacts()
+                _refresh_xml_artifacts_subprocess()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
@@ -555,6 +556,23 @@ def _refresh_xml_artifacts() -> None:
         except Exception:
             logger.exception('[xml-cache] failed to refresh %s', cache_key)
     logger.info('[xml-cache] refreshed %d XML artifact(s)', rebuilt)
+
+
+def _refresh_xml_artifacts_job() -> None:
+    with flask_app.app_context():
+        _refresh_xml_artifacts()
+
+
+def _refresh_xml_artifacts_subprocess(timeout_seconds: int = 1800) -> None:
+    proc = multiprocessing.Process(target=_refresh_xml_artifacts_job, name='xml-refresh')
+    proc.start()
+    proc.join(timeout_seconds)
+    if proc.is_alive():
+        logger.error('[xml-cache] refresh subprocess exceeded %ss; terminating', timeout_seconds)
+        proc.terminate()
+        proc.join(10)
+    elif proc.exitcode not in (0, None):
+        logger.error('[xml-cache] refresh subprocess exited with code %s', proc.exitcode)
 
 
 def _fresh_epg_sids(source, horizon_hours: float = 2.0) -> set[str]:
@@ -989,7 +1007,7 @@ if __name__ == '__main__':
             enabled_feeds,
         )
         try:
-            _refresh_xml_artifacts()
+            _refresh_xml_artifacts_subprocess()
         except Exception:
             logger.exception('[xml-cache] startup refresh failed')
 
