@@ -67,6 +67,19 @@ def _clear_xml_stale(cache_key: str) -> None:
     _xml_stale_path(cache_key).unlink(missing_ok=True)
 
 
+def xml_artifact_path(cache_key: str) -> Path:
+    return _cache_path(cache_key, ext='xml')
+
+
+def get_xml_artifact(cache_key: str) -> tuple[Path | None, bool]:
+    """Return `(path, stale)` for the current XML artifact without rebuilding it."""
+    _ensure_cache_dir()
+    path = xml_artifact_path(cache_key)
+    if not path.exists():
+        return None, True
+    return path, _xml_is_stale(cache_key, path)
+
+
 def mark_xml_stale(cache_key: str | None = None) -> None:
     _ensure_cache_dir()
     if cache_key is None:

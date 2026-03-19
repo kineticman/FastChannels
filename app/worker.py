@@ -988,6 +988,10 @@ if __name__ == '__main__':
             total_sources,
             enabled_feeds,
         )
+        try:
+            _refresh_xml_artifacts()
+        except Exception:
+            logger.exception('[xml-cache] startup refresh failed')
 
     r = redis.from_url(flask_app.config['REDIS_URL'])
     with Connection(r):

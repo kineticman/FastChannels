@@ -7,10 +7,10 @@ from ..generators.m3u import (
     feed_to_query_filters,
     _MASTER_GRACENOTE_START,
 )
-from ..generators.xmltv import generate_xmltv_stream, write_xmltv
+from ..generators.xmltv import generate_xmltv_stream
 from ..models import Feed
 from ..url import public_base_url
-from ..xml_cache import ensure_xml_artifact, get_or_build
+from ..xml_cache import get_or_build, get_xml_artifact
 
 output_bp = Blueprint('output', __name__)
 
@@ -79,7 +79,14 @@ def epg_xml():
             headers={'Content-Disposition': 'attachment; filename="fastchannels.xml"'},
         )
 
-    path = ensure_xml_artifact('master', lambda fp: write_xmltv(fp, {}, base_url=base_url))
+    path, stale = get_xml_artifact('master')
+    if path is None:
+        return Response(
+            'EPG artifact is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
     return send_file(
         path,
         mimetype='application/xml',
@@ -87,6 +94,7 @@ def epg_xml():
         download_name='fastchannels.xml',
         conditional=True,
         max_age=0,
+        etag=not stale,
     )
 
 
@@ -133,16 +141,14 @@ def feed_m3u_gracenote(slug):
 @output_bp.route('/feeds/<slug>/epg.xml')
 def feed_epg(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    base_url = public_base_url()
-    path = ensure_xml_artifact(
-        f'feed-{feed.slug}',
-        lambda fp: write_xmltv(
-            fp,
-            feed_to_query_filters(feed.filters or {}),
-            base_url=base_url,
-            feed_name=feed.name,
-        ),
-    )
+    path, stale = get_xml_artifact(f'feed-{feed.slug}')
+    if path is None:
+        return Response(
+            f'Feed XML artifact for {feed.slug} is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
     return send_file(
         path,
         mimetype='application/xml',
@@ -150,4 +156,5 @@ def feed_epg(slug):
         download_name=f'{slug}.xml',
         conditional=True,
         max_age=0,
+        etag=not stale,
     )
