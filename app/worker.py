@@ -30,7 +30,7 @@ from app.scrapers.base import (
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
-from app.xml_cache import ensure_xml_artifact, invalidate_xml_cache
+from app.xml_cache import ensure_xml_artifact, invalidate_xml_cache, write_artifact
 
 logging.basicConfig(
     level=logging.INFO,
@@ -572,8 +572,8 @@ def _prewarm_logos(source_name: str, logo_urls: list[str]) -> None:
 
 
 def _refresh_xml_artifacts() -> None:
-    """Refresh master/feed XML artifacts after scrape commits land."""
-    from app.generators.m3u import feed_to_query_filters
+    """Refresh master/feed XML and M3U artifacts after scrape commits land."""
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app.generators.xmltv import write_xmltv
 
     base_url = (
@@ -581,12 +581,21 @@ def _refresh_xml_artifacts() -> None:
         or (flask_app.config.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
         or 'http://localhost:5523'
     )
-    artifacts: list[tuple[str, Callable]] = [
+    xml_artifacts: list[tuple[str, Callable]] = [
         ('master', lambda fp: write_xmltv(fp, {}, base_url=base_url)),
     ]
+    m3u_artifacts: list[tuple[str, Callable]] = [
+        ('master-m3u', lambda fp: fp.write(generate_m3u({}, base_url=base_url))),
+    ]
+    default_feed = Feed.query.filter_by(slug='default').first()
+    default_gn_start = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
+    m3u_artifacts.append((
+        'master-gracenote-m3u',
+        lambda fp: fp.write(generate_gracenote_m3u({}, base_url=base_url, namespace_start=default_gn_start)),
+    ))
     for feed in Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all():
         filters = feed_to_query_filters(feed.filters or {})
-        artifacts.append((
+        xml_artifacts.append((
             f'feed-{feed.slug}',
             lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
                 fp,
@@ -595,15 +604,41 @@ def _refresh_xml_artifacts() -> None:
                 feed_name=feed_name,
             ),
         ))
+        if feed.slug == 'default':
+            std_kw = {}
+        elif feed.chnum_start is not None:
+            std_kw = {'feed_chnum_start': feed.chnum_start}
+        else:
+            std_kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
+        m3u_artifacts.append((
+            f'feed-{feed.slug}-m3u',
+            lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                generate_m3u(filters, base_url=base_url, **std_kw)
+            ),
+        ))
+        gn_kw = {'namespace_start': feed_gracenote_start(feed)}
+        m3u_artifacts.append((
+            f'feed-{feed.slug}-gracenote-m3u',
+            lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
+                generate_gracenote_m3u(filters, base_url=base_url, **gn_kw)
+            ),
+        ))
 
-    rebuilt = 0
-    for cache_key, writer in artifacts:
+    rebuilt_xml = 0
+    for cache_key, writer in xml_artifacts:
         try:
             ensure_xml_artifact(cache_key, writer)
-            rebuilt += 1
+            rebuilt_xml += 1
         except Exception:
             logger.exception('[xml-cache] failed to refresh %s', cache_key)
-    logger.info('[xml-cache] refreshed %d XML artifact(s)', rebuilt)
+    rebuilt_m3u = 0
+    for cache_key, writer in m3u_artifacts:
+        try:
+            write_artifact(cache_key, writer, ext='m3u')
+            rebuilt_m3u += 1
+        except Exception:
+            logger.exception('[m3u-cache] failed to refresh %s', cache_key)
+    logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s)', rebuilt_xml, rebuilt_m3u)
 
 
 def _refresh_xml_artifacts_job() -> None:

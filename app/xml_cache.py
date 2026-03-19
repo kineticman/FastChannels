@@ -71,6 +71,10 @@ def xml_artifact_path(cache_key: str) -> Path:
     return _cache_path(cache_key, ext='xml')
 
 
+def artifact_path(cache_key: str, *, ext: str) -> Path:
+    return _cache_path(cache_key, ext=ext)
+
+
 def get_xml_artifact(cache_key: str) -> tuple[Path | None, bool]:
     """Return `(path, stale)` for the current XML artifact without rebuilding it."""
     _ensure_cache_dir()
@@ -78,6 +82,14 @@ def get_xml_artifact(cache_key: str) -> tuple[Path | None, bool]:
     if not path.exists():
         return None, True
     return path, _xml_is_stale(cache_key, path)
+
+
+def get_artifact(cache_key: str, *, ext: str) -> Path | None:
+    _ensure_cache_dir()
+    path = artifact_path(cache_key, ext=ext)
+    if not path.exists():
+        return None
+    return path
 
 
 def mark_xml_stale(cache_key: str | None = None) -> None:
@@ -96,6 +108,16 @@ def write_xml_artifact(cache_key: str, writer: Callable[[TextIO], None]) -> Path
         writer(fp)
     tmp.replace(path)
     _clear_xml_stale(cache_key)
+    return path
+
+
+def write_artifact(cache_key: str, writer: Callable[[TextIO], None], *, ext: str) -> Path:
+    _ensure_cache_dir()
+    path = _cache_path(cache_key, ext=ext)
+    tmp = Path(str(path) + '.tmp')
+    with tmp.open('w', encoding='utf-8') as fp:
+        writer(fp)
+    tmp.replace(path)
     return path
 
 
