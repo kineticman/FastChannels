@@ -16,6 +16,7 @@ import pytz
 import requests
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
+from ..gracenote_map import resolve_gracenote
 
 import logging
 logger = logging.getLogger(__name__)
@@ -302,6 +303,7 @@ class PlutoScraper(BaseScraper):
                 language          = infer_language_from_metadata(name, cat_map.get(ch_id)),
                 country           = country_code,
                 number            = number,
+                gracenote_id      = resolve_gracenote('pluto', upstream_id=elem.get('tmsid'), lookup_key=ch_id),
             ))
 
         logger.info("[pluto] %s: %d channels", country_code, len(channels))
