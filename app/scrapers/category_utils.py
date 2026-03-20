@@ -478,6 +478,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     "jojo's bizarre adventure":             'Anime',
     'sailor moon':                          'Anime',
     'yu-gi-oh!':                            'Anime',
+    'anime x hidive':                       'Anime',
 
     # ── Automotive ───────────────────────────────────────────────────────────
     'bbc top gear':                         'Automotive',
@@ -498,6 +499,10 @@ _NAME_OVERRIDES: dict[str, str] = {
     'discovery turbo tv':                   'Automotive',
     'powernation':                          'Automotive',
     'power nation':                         'Automotive',
+    'car chase':                            'Automotive',
+    'in the garage':                        'Automotive',
+    'racer select':                         'Automotive',
+    'torque presented by history':          'Automotive',
 
     # ── Classic TV ───────────────────────────────────────────────────────────
     'shout! tv':                            'Classic TV',
@@ -505,6 +510,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'a-z classic flix':                     'Classic TV',
     'filmrise classic tv':                  'Classic TV',
     "non-stop '90s":                        'Classic TV',
+    'lassie':                               'Classic TV',
+    'little house on the prairie':          'Classic TV',
 
     # ── Comedy ───────────────────────────────────────────────────────────────
     'the conners':                          'Comedy',
@@ -515,6 +522,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'mystery science theater 3000':        'Comedy',
     'mystery science theater 3000 (mst3k)':'Comedy',
     'mst3k':                                'Comedy',
+    'are we there yet':                     'Comedy',
+    'the carol burnett show':               'Comedy',
 
     # ── Documentary ──────────────────────────────────────────────────────────
     'documentary+':                         'Documentary',
@@ -569,6 +578,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'k-stories by cj enm':                 'Drama',
     'kocowa k-drama':                       'Drama',
     'genie k-drama':                        'Drama',
+    'baywatch':                             'Drama',
 
     # ── Faith ────────────────────────────────────────────────────────────────
     'daystar tv':                           'Faith',
@@ -582,12 +592,19 @@ _NAME_OVERRIDES: dict[str, str] = {
     'right now tv':                         'Faith',
     't.d. jakes':                           'Faith',
     'joel osteen network':                  'Faith',
+    'dove':                                 'Faith',
 
     # ── Food ─────────────────────────────────────────────────────────────────
+    "america's test kitchen":               'Food',
+    'bbc food':                             'Food',
     'bizarre foods with andrew zimmern':    'Food',
     "cook's country":                       'Food',
     'come dine with me':                    'Food',
     'great british menu':                   'Food',
+    "cook's country channel":               'Food',
+    'pbs food':                             'Food',
+    'the emeril lagasse channel':           'Food',
+    'the jamie oliver channel':             'Food',
 
     # ── Game Shows ───────────────────────────────────────────────────────────
     'deal or no deal':                      'Game Shows',
@@ -630,6 +647,9 @@ _NAME_OVERRIDES: dict[str, str] = {
     'my first place':                       'Home & DIY',
     'nbc lx home':                          'Home & DIY',
     'tastemade home':                       'Home & DIY',
+    '5-minute crafts':                      'Home & DIY',
+    'home.made.nation':                     'Home & DIY',
+    'homeful':                              'Home & DIY',
 
     # ── Horror ───────────────────────────────────────────────────────────────
     'ghost dimension':                      'Horror',
@@ -662,10 +682,14 @@ _NAME_OVERRIDES: dict[str, str] = {
     # ── Lifestyle ────────────────────────────────────────────────────────────
     'growthday network':                    'Lifestyle',
     'tony robbins network':                 'Lifestyle',
+    'backstage':                            'Lifestyle',
     'antiques road trip':                   'Lifestyle',
     'pbs antiques roadshow':                'Lifestyle',
     'omstars tv':                           'Lifestyle',
     'more u':                               'Lifestyle',
+    'antiques roadshow':                    'Lifestyle',
+    'the bob ross channel':                 'Lifestyle',
+    'the martha stewart channel':           'Lifestyle',
 
     # ── Local News ───────────────────────────────────────────────────────────
     # Stations that don't match the call-sign or network patterns above
@@ -715,8 +739,11 @@ _NAME_OVERRIDES: dict[str, str] = {
     'news 22 abc dayton oh':                'Local News',
 
     # ── Movies ───────────────────────────────────────────────────────────────
+    'encore+':                              'Movies',
+    'free movies plus':                     'Movies',
     'outflix movies':                       'Movies',
     'lifetime movie favorites':             'Movies',
+    'new kmovies':                          'Movies',
 
     # ── Music ────────────────────────────────────────────────────────────────
     'smooth jazz':                          'Music',
@@ -751,12 +778,17 @@ _NAME_OVERRIDES: dict[str, str] = {
     'usa today':                            'News',
     'cheddar news':                         'News',
     'american stories network':             'News',
+    'thegrio':                              'News',
 
     # ── Outdoors ─────────────────────────────────────────────────────────────
     'wild tv':                              'Outdoors',
     'rvtv':                                 'Outdoors',
     'the boat show':                        'Outdoors',
     'yachting tv':                          'Outdoors',
+    'game & fish tv':                       'Outdoors',
+    'hunt fish tv':                         'Outdoors',
+    'pursuit up':                           'Outdoors',
+    'pursuitup':                            'Outdoors',
 
     # ── Reality TV ───────────────────────────────────────────────────────────
     "america's got talent":                 'Reality TV',
@@ -777,6 +809,12 @@ _NAME_OVERRIDES: dict[str, str] = {
     'best of dr. phil':                     'Reality TV',
     'judge nosey':                          'Reality TV',
     'nosey':                                'Reality TV',
+    'divorce court':                        'Reality TV',
+    'dr. phil':                             'Reality TV',
+    'judge faith':                          'Reality TV',
+    'paternity court':                      'Reality TV',
+    'the doctors':                          'Reality TV',
+    'bravo vault':                          'Reality TV',
 
     # ── Sci-Fi ───────────────────────────────────────────────────────────────
     'bbc sci-fi':                           'Sci-Fi',
@@ -858,12 +896,22 @@ _NAME_OVERRIDES: dict[str, str] = {
     'floracing 24/7':                       'Sports',
     'msg national':                         'Sports',
     'msgsn national':                       'Sports',
+    'for the fans':                         'Sports',
+    'gopro tv':                             'Sports',
+    'hi-yah!':                              'Sports',
+    'lacrosse tv':                          'Sports',
+    'uefa champions league':                'Sports',
 
     # ── Travel ───────────────────────────────────────────────────────────────
+    'journy':                               'Travel',
     'travel + adventure':                   'Travel',
     'tastemade travel':                     'Travel',
+    'gotraveler':                           'Travel',
+    'intravel':                             'Travel',
 
     # ── True Crime ───────────────────────────────────────────────────────────
+    'court tv':                             'True Crime',
+    'law & crime':                          'True Crime',
     'crime beat tv':                        'True Crime',
     'crime thrillher':                      'True Crime',
     'ion mystery':                          'True Crime',
@@ -889,6 +937,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'the young riders':                     'Westerns',
     'life and legend of wyatt earp':        'Westerns',
     'cowboy movie channel':                 'Westerns',
+    'grit xtra':                            'Westerns',
+    'old west tv':                          'Westerns',
 }
 
 
