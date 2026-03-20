@@ -185,8 +185,23 @@
     }
     .btn-enable  { background: #15803d; color: #fff; }
     .btn-enable:hover  { background: #16a34a; }
+    .btn-open-external { background: #1d4ed8; color: #fff; border: none !important; text-decoration: none; display: inline-flex; align-items: center; }
+    .btn-open-external:hover { background: #2563eb; color: #fff; text-decoration: none; }
     .btn-disable { background: #7f1d1d; color: #fff; }
     .btn-disable:hover { background: #991b1b; }
+    .preview-action-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 36px; padding: 0.5rem 0.9rem; border-radius: 6px;
+      border: 1px solid #334155; font-size: 0.82rem; font-weight: 600; line-height: 1;
+      cursor: pointer; text-decoration: none; transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .preview-action-btn:hover { text-decoration: none; color: #fff; }
+    .preview-action-btn.primary { background: #166534; border-color: #166534; color: #f0fdf4; }
+    .preview-action-btn.primary:hover { background: #15803d; border-color: #15803d; }
+    .preview-action-btn.secondary { background: #1d4ed8; border-color: #1d4ed8; color: #eff6ff; }
+    .preview-action-btn.secondary:hover { background: #2563eb; border-color: #2563eb; }
+    .preview-action-btn.neutral { background: #1e293b; border-color: #334155; color: #cbd5e1; }
+    .preview-action-btn.neutral:hover { background: #273449; border-color: #475569; }
     .btn-reenable {
       font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 4px; border: none;
       background: #1e3a5f; color: #7dd3fc; cursor: pointer; margin-left: 0.4rem;
@@ -970,10 +985,13 @@
             ${renderProgramCard('Now Playing', data.current_program)}
             ${renderProgramCard('Up Next', data.next_program)}
           </div>
+          <div class="preview-note" style="margin-top: -0.25rem; margin-bottom: 0.9rem;">
+            Guide details shown here come from the FastChannels scraper for this source, not from Gracenote.
+          </div>
           <div class="preview-actions">
-            ${playUrl ? `<button class="btn-enable" onclick="loadPreviewPlayer('${escapeHtml(playUrl)}')">Play Preview</button>` : ''}
-            ${playUrl ? `<a class="btn-cancel-modal" style="text-decoration:none; display:inline-flex; align-items:center;" href="${escapeHtml(playUrl)}" target="_blank">Open Stream URL</a>` : ''}
-            <button class="btn-cancel-modal" onclick="closePreviewModal()">Close</button>
+            ${playUrl ? `<button class="preview-action-btn primary" onclick="loadPreviewPlayer('${escapeHtml(playUrl)}')">Play Here</button>` : ''}
+            ${playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open Externally</a>` : ''}
+            <button class="preview-action-btn neutral" onclick="closePreviewModal()">Close</button>
           </div>
           <div class="preview-player-wrap" id="preview-player-wrap">
             <video id="preview-player" controls playsinline preload="none"></video>
@@ -1125,7 +1143,7 @@
           if (status) {
             const details = data?.details || '';
             if (details.includes('manifestLoad') || details.includes('manifestParse')) {
-              status.textContent = 'Browser preview unavailable for this source (CORS restriction on stream CDN). Use "Open Stream URL" to play externally.';
+              status.textContent = 'Browser preview unavailable for this source (CORS restriction on stream CDN). Use "Open Externally" to play outside the browser preview.';
             } else {
               const fatal = data?.fatal ? 'Fatal — ' : '';
               status.textContent = `Preview error: ${fatal}${details || 'Unknown hls.js error'}`;
