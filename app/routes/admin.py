@@ -1,13 +1,16 @@
 from collections import defaultdict
 from datetime import datetime, timezone
 import re
+from types import SimpleNamespace
 import unicodedata
 from flask import Blueprint, jsonify, render_template, request
 from sqlalchemy import select, case
 from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings
 from ..generators.m3u import (
+    _build_channel_query,
     _build_feed_chnum_map,
+    _parse_gracenote_id,
     _build_source_chnum_map,
     _selected_channel_stubs,
     feed_namespace_start,
@@ -182,6 +185,33 @@ def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
 
     page_ids = {ch.id for ch in page_items}
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
+
+
+def _feed_split_counts(feed: Feed) -> dict[str, int]:
+    filters = feed_to_query_filters(feed.filters or {})
+    query = _build_channel_query(filters).order_by(None)
+    total = query.count()
+    if total == 0:
+        return {'standard_count': 0, 'gracenote_count': 0, 'total_count': 0}
+
+    gn_rows = (
+        query.with_entities(Channel.gracenote_id, Channel.slug)
+        .filter(
+            ((Channel.gracenote_id != None) & (Channel.gracenote_id != ''))
+            | Channel.slug.like('%|%')
+        )
+        .all()
+    )
+    gn_count = sum(
+        1
+        for row in gn_rows
+        if _parse_gracenote_id(SimpleNamespace(gracenote_id=row.gracenote_id, slug=row.slug))
+    )
+    return {
+        'standard_count': max(total - gn_count, 0),
+        'gracenote_count': gn_count,
+        'total_count': total,
+    }
 
 
 @admin_bp.route('/')
@@ -403,10 +433,15 @@ def feeds():
     for feed in feeds:
         if feed.chnum_start is None and feed.slug != 'default':
             feed_chnum_placeholder[feed.id] = feed_namespace_start(feed, gracenote=False)
+    feed_split_counts = {
+        feed.id: _feed_split_counts(feed)
+        for feed in feeds
+    }
     return render_template('admin/feeds.html',
                            feeds=feeds, sources=sources,
                            categories=categories, languages=languages,
                            base_url=base_url,
+                           feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
                            default_chnum_from_env=default_feed and default_feed.chnum_start is None and app_settings.env_global_chnum_start() is not None)
 

@@ -321,8 +321,9 @@
       {% endif %}
 
       <div class="feed-urls">
+        {% set split = feed_split_counts.get(feed.id, {}) %}
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">
-          <span style="color:#94a3b8;font-family:sans-serif;font-size:0.7rem;flex-shrink:0">M3U</span>
+          <span style="color:#94a3b8;font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Standard{% if split %} ({{ split.get('standard_count', 0) }}){% endif %}</span>
           <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u</span>
           <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u" target="_blank" onclick="event.stopPropagation()" style="color:#64748b;font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">Copy</button>
@@ -334,7 +335,7 @@
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
         </div>
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote')">
-          <span style="color:#94a3b8;font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Gracenote</span>
+          <span style="color:#94a3b8;font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Gracenote{% if split %} ({{ split.get('gracenote_count', 0) }}){% endif %}</span>
           <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote</span>
           <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote" target="_blank" onclick="event.stopPropagation()" style="color:#64748b;font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote')">Copy</button>
@@ -459,14 +460,13 @@ async function ensureChannelsLoaded() {
 }
 
 function renderChannelList() {
-  const search = document.getElementById('ch-search').value.toLowerCase();
   const container = document.getElementById('channel-list');
   container.innerHTML = '';
 
+  const visibleChannels = getVisibleChannels();
   const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
   const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
   const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
-  const gracenoteMode = document.getElementById('f-gracenote').value;
 
   // Three modes:
   //   explicit — manual channel_ids list (selectedChannelIds > 0)
@@ -480,13 +480,7 @@ function renderChannelList() {
   document.getElementById('ch-btn-selectall').style.display = excludeMode ? 'none' : '';
 
   const groups = {};
-  for (const ch of _allChannels) {
-    if (search && !ch.name.toLowerCase().includes(search)) continue;
-    if (activeSources.size && !activeSources.has(ch.source_name)) continue;
-    if (activeCats.size   && !activeCats.has(ch.category))        continue;
-    if (activeLangs.size  && !activeLangs.has(ch.language))       continue;
-    if (gracenoteMode === 'has' && !ch.gracenote_id) continue;
-    if (gracenoteMode === 'missing' && ch.gracenote_id) continue;
+  for (const ch of visibleChannels) {
     if (!groups[ch.source_name]) groups[ch.source_name] = [];
     groups[ch.source_name].push(ch);
   }
@@ -526,6 +520,24 @@ function renderChannelList() {
   updateChCount();
 }
 
+function getVisibleChannels() {
+  const search = document.getElementById('ch-search').value.toLowerCase();
+  const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
+  const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
+  const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
+  const gracenoteMode = document.getElementById('f-gracenote').value;
+
+  return _allChannels.filter(ch => {
+    if (search && !ch.name.toLowerCase().includes(search)) return false;
+    if (activeSources.size && !activeSources.has(ch.source_name)) return false;
+    if (activeCats.size && !activeCats.has(ch.category)) return false;
+    if (activeLangs.size && !activeLangs.has(ch.language)) return false;
+    if (gracenoteMode === 'has' && !ch.gracenote_id) return false;
+    if (gracenoteMode === 'missing' && ch.gracenote_id) return false;
+    return true;
+  });
+}
+
 function updateChCount() {
   const n = _selectedChannelIds.size;
   const x = _excludedChannelIds.size;
@@ -541,8 +553,7 @@ function updateChCount() {
 }
 
 function selectAllChannels() {
-  const search = document.getElementById('ch-search').value.toLowerCase();
-  const visible = _allChannels.filter(ch => !search || ch.name.toLowerCase().includes(search));
+  const visible = getVisibleChannels();
   visible.forEach(ch => _selectedChannelIds.add(ch.id));
   renderChannelList();
   schedulePreview();
