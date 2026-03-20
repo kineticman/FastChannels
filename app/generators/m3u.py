@@ -11,6 +11,7 @@ log = logging.getLogger(__name__)
 _CHNUM_NAMESPACE_BLOCK = 100000
 _MASTER_GRACENOTE_START = 100000
 _FEED_NAMESPACE_BASE = 200000
+_REGION_LABEL_SOURCES = {"pluto", "samsung"}
 
 # Gracenote ID prefixes recognised by Channels DVR
 _GRACENOTE_PREFIX_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
@@ -57,6 +58,43 @@ def _parse_gracenote_id(ch) -> str | None:
             return candidate
 
     return None
+
+
+def _format_region_label(country: str | None) -> str:
+    raw = (country or '').strip()
+    if not raw:
+        return ''
+    parts = [p for p in re.split(r'[-_\s]+', raw) if p]
+    if not parts:
+        return raw
+    return ' '.join(p.upper() if len(p) <= 3 else p.capitalize() for p in parts)
+
+
+def _source_multi_country_map(channels) -> dict[str, set[str]]:
+    by_source: dict[str, set[str]] = {}
+    for ch in channels:
+        source_name = getattr(ch.source, 'name', None)
+        country = (getattr(ch, 'country', None) or '').strip()
+        if not source_name or source_name not in _REGION_LABEL_SOURCES or not country:
+            continue
+        by_source.setdefault(source_name, set()).add(country)
+    return {
+        source_name: countries
+        for source_name, countries in by_source.items()
+        if len(countries) > 1
+    }
+
+
+def _channel_display_name(ch, multi_country_map: dict[str, set[str]] | None = None) -> str:
+    name = ch.name or ''
+    multi_country_map = multi_country_map or {}
+    source_name = getattr(ch.source, 'name', None)
+    country = (getattr(ch, 'country', None) or '').strip()
+    if source_name and country and source_name in multi_country_map:
+        region = _format_region_label(country)
+        if region:
+            return f'{name} ({region})'
+    return name
 
 
 def _build_channel_query(filters: dict):
@@ -471,13 +509,15 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         for w in warnings:
             log.warning('chnum overlap: %s', w)
 
+    multi_country_map = _source_multi_country_map(channels)
     lines = ['#EXTM3U']
     for ch in channels:
         tvg_id = _tvg_id(ch)
+        display_name = _channel_display_name(ch, multi_country_map)
         attrs = [
             f'channel-id="{tvg_id}"',
             f'tvg-id="{tvg_id}"',
-            f'tvg-name="{_esc(ch.name)}"',
+            f'tvg-name="{_esc(display_name)}"',
             f'group-title="{_esc(ch.category or ch.source.display_name)}"',
         ]
         if ch.logo_url:
@@ -485,7 +525,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         chnum = chnum_map.get(ch.id)
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')
-        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{ch.name}')
+        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{display_name}')
         lines.append(f'{base_url}/play/{ch.source.name}/{ch.source_channel_id}.m3u8')
 
     return '\n'.join(lines)
@@ -517,13 +557,15 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
         for w in warnings:
             log.warning('chnum overlap (gracenote): %s', w)
 
+    multi_country_map = _source_multi_country_map(channels)
     lines = ['#EXTM3U']
     for ch in channels:
         gracenote_id = _parse_gracenote_id(ch)
+        display_name = _channel_display_name(ch, multi_country_map)
         attrs = [
             f'channel-id="{gracenote_id}"',
             f'tvc-guide-stationid="{gracenote_id}"',
-            f'tvg-name="{_esc(ch.name)}"',
+            f'tvg-name="{_esc(display_name)}"',
             f'group-title="{_esc(ch.category or ch.source.display_name)}"',
         ]
         if ch.logo_url:
@@ -531,7 +573,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
         chnum = chnum_map.get(ch.id)
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')
-        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{ch.name}')
+        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{display_name}')
         lines.append(f'{base_url}/play/{ch.source.name}/{ch.source_channel_id}.m3u8')
 
     return '\n'.join(lines)

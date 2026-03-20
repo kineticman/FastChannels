@@ -661,7 +661,7 @@
             {% if ch.last_seen_at %}
               {% set _ = hover_parts.append('Last seen: ' ~ (ch.last_seen_at | localtime)) %}
             {% endif %}
-            <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="This channel name exists in multiple sources">DUP</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup" title="Manually marked as duplicate">DUPL</span>{% endif %}</td>
+            <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="This exact channel name exists in multiple sources">DUP</span>{% elif ch.name in possible_duplicate_names %} <span class="dup-badge" title="Possible duplicate: a very similar channel name exists in another source">DUP?</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup" title="Manually marked as duplicate">DUPL</span>{% endif %}</td>
             <td style="color:#64748b">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
             <td style="color:#94a3b8">{{ ch.category or '—' }}</td>
             <td style="color:#64748b">{{ ch.language or '—' }}</td>
@@ -1351,7 +1351,7 @@
   <div class="modal-overlay" id="resolve-modal" onclick="closeResolveDupesModal(event)">
     <div class="modal-box">
       <h2>⚡ Resolve Duplicates</h2>
-      <p class="modal-sub">Drag to set source priority. The top source wins each duplicate — all others will be disabled.</p>
+      <p class="modal-sub">Drag to set source priority. The top source wins each exact-name duplicate group and the others will be disabled. Possible duplicates marked <strong>DUP?</strong> are not auto-resolved here.</p>
       <div id="resolve-modal-body" class="modal-loading">Loading…</div>
     </div>
   </div>

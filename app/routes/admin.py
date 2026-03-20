@@ -1,4 +1,7 @@
+from collections import defaultdict
 from datetime import datetime, timezone
+import re
+import unicodedata
 from flask import Blueprint, jsonify, render_template, request
 from sqlalchemy import select, case
 from ..extensions import db
@@ -17,18 +20,49 @@ from ..url import public_base_url, detected_base_url
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
 
-def _page_duplicate_names(page_items) -> set[str]:
-    names = sorted({(ch.name or '').strip() for ch in page_items if (ch.name or '').strip()})
-    if not names:
-        return set()
-    rows = (
+def _canonical_duplicate_name(name: str) -> str:
+    s = unicodedata.normalize('NFKD', name or '')
+    s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.casefold()
+    s = s.replace('&', ' and ')
+    s = s.replace('’', "'")
+    s = re.sub(r'[^a-z0-9]+', ' ', s)
+    s = re.sub(r'\b(channel|tv|network)\s*$', '', s).strip()
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def _duplicate_name_sets() -> tuple[set[str], set[str]]:
+    exact_rows = (
         db.session.query(Channel.name)
-        .filter(Channel.name.in_(names))
+        .filter(Channel.name != None, Channel.name != '')
         .group_by(Channel.name)
         .having(db.func.count(Channel.id) > 1)
         .all()
     )
-    return {row[0] for row in rows}
+    exact_names = {row[0] for row in exact_rows if row[0]}
+
+    distinct_rows = (
+        db.session.query(Channel.name)
+        .filter(Channel.name != None, Channel.name != '')
+        .distinct()
+        .all()
+    )
+    by_key: dict[str, set[str]] = defaultdict(set)
+    for (name,) in distinct_rows:
+        clean = (name or '').strip()
+        if not clean:
+            continue
+        key = _canonical_duplicate_name(clean)
+        if key:
+            by_key[key].add(clean)
+
+    possible_names: set[str] = set()
+    for names in by_key.values():
+        if len(names) > 1:
+            possible_names.update(names)
+    possible_names.difference_update(exact_names)
+    return exact_names, possible_names
 
 
 def _page_source_chnum_map(page_items) -> dict[int, int]:
@@ -217,6 +251,9 @@ def channels():
     sort_by          = request.args.get('sort', 'name')
     sort_dir         = request.args.get('dir', 'asc')
 
+    exact_duplicate_names, possible_duplicate_names = _duplicate_name_sets()
+    all_duplicate_names = exact_duplicate_names | possible_duplicate_names
+
     q = Channel.query.join(Source)
 
     # Status filter — admin always shows all channels regardless of is_active
@@ -256,10 +293,7 @@ def channels():
         q = q.filter(Channel.name.ilike(f'%{search}%'))
 
     if duplicates_filter == '1':
-        dup_names_sq = select(Channel.name)\
-            .group_by(Channel.name)\
-            .having(db.func.count(Channel.id) > 1)
-        q = q.filter(db.or_(Channel.name.in_(dup_names_sq), Channel.is_duplicate == True))
+        q = q.filter(db.or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.is_duplicate == True))
 
     sort_name = case(
         (db.func.lower(Channel.name).like('the %'), db.func.lower(db.func.substr(Channel.name, 5))),
@@ -302,7 +336,9 @@ def channels():
         .order_by(Channel.category).all()
     categories = [(cat, count) for cat, count in cat_rows]
 
-    duplicate_names = _page_duplicate_names(channels.items)
+    page_names = {(ch.name or '').strip() for ch in channels.items if (ch.name or '').strip()}
+    duplicate_names = exact_duplicate_names & page_names
+    possible_duplicate_names = possible_duplicate_names & page_names
     chnum_map = _page_default_feed_chnum_map(channels.items)
 
     return render_template('admin/channels.html',
@@ -315,6 +351,7 @@ def channels():
                            category_filter=category_filter, categories=categories,
                            duplicates_filter=duplicates_filter,
                            duplicate_names=duplicate_names,
+                           possible_duplicate_names=possible_duplicate_names,
                            sort_by=sort_by, sort_dir=sort_dir,
                            chnum_map=chnum_map)
 

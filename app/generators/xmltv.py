@@ -23,7 +23,7 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from ..extensions import db
 from ..models import Program
 from ..url import proxy_logo_url
-from .m3u import _selected_channels, _tvg_id
+from .m3u import _selected_channels, _tvg_id, _channel_display_name, _source_multi_country_map
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     # XMLTV-backed M3U; otherwise clients that join on tvg-id see orphaned or
     # shifted channels. Gracenote-backed channels are intentionally excluded.
     channels = _selected_channels(filters, gracenote=False)
+    multi_country_map = _source_multi_country_map(channels)
 
     tvg_map      = {ch.id: _tvg_id(ch) for ch in channels}
     # Channel category map — used as fallback when prog.category is None
@@ -89,7 +90,10 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     # ── Channel elements ──────────────────────────────────────────────────
     for ch in channels:
         el = Element('channel', id=tvg_map[ch.id])
-        SubElement(el, 'display-name').text = ch.name
+        display_name = _channel_display_name(ch, multi_country_map)
+        SubElement(el, 'display-name').text = display_name
+        if display_name != (ch.name or ''):
+            SubElement(el, 'display-name').text = ch.name
         if ch.logo_url:
             SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url) or ch.logo_url)
         yield tostring(el, encoding='unicode') + '\n'
