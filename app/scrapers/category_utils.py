@@ -593,6 +593,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     't.d. jakes':                           'Faith',
     'joel osteen network':                  'Faith',
     'dove':                                 'Faith',
+    'daystar español':                      'Faith',
 
     # ── Food ─────────────────────────────────────────────────────────────────
     "america's test kitchen":               'Food',
@@ -691,6 +692,13 @@ _NAME_OVERRIDES: dict[str, str] = {
     'the bob ross channel':                 'Lifestyle',
     'the martha stewart channel':           'Lifestyle',
 
+    # ── Latino ───────────────────────────────────────────────────────────────
+    'box cinema':                           'Latino',
+    'el rey rebel':                         'Latino',
+    'latino vibes':                         'Latino',
+    'maverick black cinema':                'Latino',
+    'todo cine':                            'Latino',
+
     # ── Local News ───────────────────────────────────────────────────────────
     # Stations that don't match the call-sign or network patterns above
     '9&10 news northern michigan':          'Local News',
@@ -779,6 +787,10 @@ _NAME_OVERRIDES: dict[str, str] = {
     'cheddar news':                         'News',
     'american stories network':             'News',
     'thegrio':                              'News',
+    'noticias telemundo ahora':             'News',
+    'telemundo al día':                     'News',
+    'telemundo al dia':                     'News',
+    'rcn noticias':                         'News',
 
     # ── Outdoors ─────────────────────────────────────────────────────────────
     'wild tv':                              'Outdoors',
