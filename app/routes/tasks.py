@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+from datetime import datetime, timezone
 from flask import current_app
 import redis
 from rq import Queue
@@ -8,6 +9,7 @@ from rq.job import Job
 from rq.registry import StartedJobRegistry
 
 logger = logging.getLogger(__name__)
+_STALE_STARTED_JOB_GRACE_SECONDS = 300
 
 
 def get_queue():
@@ -15,9 +17,61 @@ def get_queue():
     return Queue('scraper', connection=r)
 
 
+def _utc_aware(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _cleanup_stale_started_job(q: Queue, job_id: str) -> bool:
+    registry = StartedJobRegistry(q.name, connection=q.connection)
+    if job_id not in registry:
+        return False
+    try:
+        job = Job.fetch(job_id, connection=q.connection)
+    except Exception:
+        registry.remove(job_id)
+        logger.warning('Removed stale started-job marker for missing job %s', job_id)
+        return True
+
+    if job.get_status(refresh=False) != 'started':
+        registry.remove(job)
+        logger.warning('Removed stale started-job marker for non-started job %s', job_id)
+        return True
+
+    now = datetime.now(timezone.utc)
+    started_at = _utc_aware(getattr(job, 'started_at', None))
+    last_heartbeat = _utc_aware(getattr(job, 'last_heartbeat', None))
+    heartbeat_age = (now - last_heartbeat).total_seconds() if last_heartbeat else None
+    started_age = (now - started_at).total_seconds() if started_at else None
+
+    if heartbeat_age is not None and heartbeat_age > _STALE_STARTED_JOB_GRACE_SECONDS:
+        registry.remove(job)
+        logger.warning(
+            'Removed stale started job %s after %.0fs without heartbeat',
+            job_id,
+            heartbeat_age,
+        )
+        return True
+
+    if last_heartbeat is None and started_age is not None and started_age > _STALE_STARTED_JOB_GRACE_SECONDS:
+        registry.remove(job)
+        logger.warning(
+            'Removed stale started job %s after %.0fs without heartbeat metadata',
+            job_id,
+            started_age,
+        )
+        return True
+
+    return False
+
+
 def _job_already_active(q: Queue, job_id: str) -> bool:
     if not job_id:
         return False
+    _cleanup_stale_started_job(q, job_id)
     registries = (
         q.get_job_ids(),
         StartedJobRegistry(q.name, connection=q.connection).get_job_ids(),
