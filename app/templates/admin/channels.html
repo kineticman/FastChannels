@@ -414,6 +414,68 @@
     .preview-program-time { color: #94a3b8; font-size: 0.8rem; margin-bottom: 0.45rem; }
     .preview-program-desc { color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; }
     .preview-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
+    .preview-conf {
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 999px; padding: 0.18rem 0.45rem; font-size: 0.66rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.06em; border: 1px solid transparent;
+    }
+    .preview-conf.high { background: #153b28; border-color: #14532d; color: #86efac; }
+    .preview-conf.medium { background: #3b2f16; border-color: #713f12; color: #fcd34d; }
+    .preview-conf.low { background: #1e293b; border-color: #334155; color: #cbd5e1; }
+    .preview-conf.weak { background: #2a1a1a; border-color: #7f1d1d; color: #fca5a5; }
+    .btn-apply-gn {
+      background: #0f766e; color: #ecfeff; border: 1px solid #115e59;
+      padding: 0.28rem 0.6rem; border-radius: 5px; cursor: pointer; font-size: 0.75rem; font-weight: 600;
+    }
+    .btn-apply-gn:hover { background: #0d9488; }
+    .btn-apply-gn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .gs-open-btn {
+      background: none; border: 1px solid #334155; color: #7dd3fc;
+      padding: 0.2rem 0.45rem; border-radius: 4px; cursor: pointer;
+      font-size: 0.72rem; line-height: 1; transition: border-color 0.15s, color 0.15s, background 0.15s;
+      white-space: nowrap;
+    }
+    .gs-open-btn:hover { border-color: #7dd3fc; background: #1e3a5f; color: #fff; }
+    .gs-open-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .gs-modal { width: 720px; max-width: 95vw; }
+    .gs-header { margin-bottom: 1rem; }
+    .gs-title { color: #f1f5f9; font-size: 1.05rem; font-weight: 700; margin: 0 0 0.2rem; }
+    .gs-meta { color: #94a3b8; font-size: 0.82rem; line-height: 1.45; }
+    .gs-current {
+      color: #cbd5e1; font-size: 0.78rem; margin: 0.75rem 0 0;
+    }
+    .gs-suggest-meta {
+      color: #94a3b8; font-size: 0.8rem; margin-bottom: 0.7rem; line-height: 1.45;
+    }
+    .gs-suggest-list {
+      display: flex; flex-direction: column; gap: 0.7rem;
+    }
+    .gs-suggest-item {
+      display: grid; grid-template-columns: 1fr auto; gap: 0.8rem;
+      background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 0.8rem 0.9rem;
+      align-items: start;
+    }
+    .gs-suggest-main { min-width: 0; }
+    .gs-suggest-title {
+      color: #e2e8f0; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.2rem;
+    }
+    .gs-suggest-station {
+      color: #7dd3fc; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;
+    }
+    .gs-suggest-detail {
+      color: #94a3b8; font-size: 0.77rem; line-height: 1.45;
+    }
+    .gs-suggest-reasons {
+      color: #64748b; font-size: 0.75rem; line-height: 1.4; margin-top: 0.35rem;
+    }
+    .gs-suggest-actions {
+      display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem;
+    }
+    .gs-suggest-empty, .gs-suggest-error {
+      background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 0.8rem 0.9rem;
+      color: #94a3b8; font-size: 0.82rem; line-height: 1.45;
+    }
+    .gs-suggest-error { color: #fca5a5; border-color: #7f1d1d; }
     .preview-player-wrap {
       display: none; background: #0b1220; border: 1px solid #1e3a5f; border-radius: 8px;
       padding: 0.85rem; margin-top: 0.75rem;
@@ -683,6 +745,7 @@
                   autocomplete="off"
                   title="Gracenote station ID (e.g. EP012345678). Saved automatically on leaving the field."
                 >
+                <button class="gs-open-btn" type="button" onclick="openGracenoteSuggest({{ ch.id }})" title="Search and rank Gracenote suggestions">Find</button>
                 <span class="gn-status" id="gn-status-{{ ch.id }}"></span>
               </div>
             </td>
@@ -749,6 +812,14 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="gracenote-modal" onclick="closeGracenoteModal(event)">
+    <div class="modal-box gs-modal">
+      <div id="gracenote-modal-content">
+        <div class="modal-loading">Loading suggestions…</div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
   <script>
     let _previewHls = null;
@@ -804,6 +875,64 @@
       `;
     }
 
+    function renderGracenoteSuggestions(channel, payload) {
+      const results = Array.isArray(payload?.results) ? payload.results : [];
+      const currentId = String(channel?.gracenote_id || '').trim();
+      const currentLine = currentId
+        ? `<div class="gs-current">Current Gracenote ID: <strong>${escapeHtml(currentId)}</strong></div>`
+        : '';
+
+      if (!results.length) {
+        return `
+          <div class="gs-subsection">
+            ${currentLine}
+            <div class="gs-suggest-empty">No candidates came back from Channels DVR for this channel name.</div>
+          </div>
+        `;
+      }
+
+      const items = results.map(item => {
+        const reasons = Array.isArray(item.reasons) && item.reasons.length
+          ? `<div class="gs-suggest-reasons">${escapeHtml(item.reasons.join(' · '))}</div>`
+          : '';
+        const bits = [
+          item.affiliate || '',
+          item.type || '',
+          item.video || '',
+          item.primary_language || '',
+          item.call_sign || '',
+        ].filter(Boolean);
+        const stationId = String(item.station_id || '');
+        const alreadySet = currentId && currentId === stationId;
+        return `
+          <div class="gs-suggest-item">
+            <div class="gs-suggest-main">
+              <div class="gs-suggest-title">${escapeHtml(item.name || 'Unknown')}</div>
+              <div class="gs-suggest-station">${escapeHtml(stationId)}</div>
+              <div class="gs-suggest-detail">${escapeHtml(bits.join(' · ') || 'No extra station details')}</div>
+              ${reasons}
+            </div>
+            <div class="gs-suggest-actions">
+              <span class="preview-conf ${escapeHtml(item.confidence || 'weak')}">${escapeHtml(item.confidence || 'weak')}</span>
+              <button
+                class="btn-apply-gn"
+                onclick="applyGracenoteSuggestion(${Number(channel.id)}, '${escapeHtml(stationId)}', this)"
+                ${alreadySet ? 'disabled' : ''}
+              >${alreadySet ? 'Applied' : 'Apply'}</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="gs-subsection">
+          ${currentLine}
+          <div class="gs-suggest-meta">Results come from your Channels DVR station search and are ranked locally, so the top row should usually be the useful one.</div>
+          <div class="gs-suggest-list">${items}</div>
+        </div>
+      `;
+    }
+
     async function openPreview(channelId) {
       const modal = document.getElementById('preview-modal');
       const content = document.getElementById('preview-content');
@@ -823,7 +952,6 @@
         const playbackNote = !playUrl
           ? `<div class="modal-preview">Browser preview is not available for this source or channel. You can still use the program details here for quick guide verification.</div>`
           : '';
-
         content.innerHTML = `
           <div class="preview-header">
             ${ch.logo_url ? `<img class="preview-logo" src="${escapeHtml(ch.logo_url)}" alt="">` : '<div class="preview-logo"></div>'}
@@ -865,6 +993,106 @@
           </div>
         `;
       }
+    }
+
+    async function openGracenoteSuggest(channelId) {
+      const modal = document.getElementById('gracenote-modal');
+      const content = document.getElementById('gracenote-modal-content');
+      content.innerHTML = '<div class="modal-loading">Loading suggestions…</div>';
+      modal.classList.add('open');
+
+      try {
+        const r = await fetch(`/api/channels/${channelId}/gracenote-suggestions?limit=5`);
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        const ch = data.channel || {};
+        content.innerHTML = `
+          <div class="gs-header">
+            <div class="gs-title">Gracenote Suggestions</div>
+            <div class="gs-meta">
+              ${escapeHtml(ch.name || 'Channel')}
+              ${ch.source_name ? ` · ${escapeHtml(ch.source_name)}` : ''}
+              ${ch.category ? ` · ${escapeHtml(ch.category)}` : ''}
+              ${ch.language ? ` · ${escapeHtml(ch.language)}` : ''}
+            </div>
+          </div>
+          ${renderGracenoteSuggestions(ch, data)}
+          <div class="preview-actions" style="margin-top: 1rem; margin-bottom: 0;">
+            <button class="btn-cancel-modal" onclick="closeGracenoteModal()">Close</button>
+          </div>
+        `;
+      } catch (err) {
+        content.innerHTML = `
+          <h2>Gracenote Suggestions</h2>
+          <p class="modal-sub">Could not load suggestions.</p>
+          <div class="gs-suggest-error">${escapeHtml(String(err.message || err))}</div>
+          <div class="preview-actions" style="margin-top: 1rem; margin-bottom: 0;">
+            <button class="btn-cancel-modal" onclick="closeGracenoteModal()">Close</button>
+          </div>
+        `;
+      }
+    }
+
+    async function applyGracenoteSuggestion(channelId, stationId, btn) {
+      if (!stationId) return;
+      const originalText = btn ? btn.textContent : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+      }
+
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ gracenote_id: stationId }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+        const input = document.getElementById(`gn-${channelId}`);
+        if (input) {
+          input.value = stationId;
+          input.dataset.original = stationId;
+          input.classList.add('gn-set');
+          input.classList.remove('gn-err');
+          gnSetStatus(input, 'ok', '✓');
+          setTimeout(() => gnClearStatus(input), 2500);
+        }
+
+        const gsContent = document.getElementById('gracenote-modal-content');
+        const current = gsContent ? gsContent.querySelector('.gs-current') : null;
+        if (current) {
+          current.innerHTML = `Current Gracenote ID: <strong>${escapeHtml(stationId)}</strong>`;
+        }
+        if (gsContent) {
+          gsContent.querySelectorAll('.btn-apply-gn').forEach(el => {
+            if (!(el instanceof HTMLButtonElement)) return;
+            const onclick = el.getAttribute('onclick') || '';
+            if (onclick.includes(`'${stationId}'`)) {
+              el.textContent = 'Applied';
+              el.disabled = true;
+            }
+          });
+        }
+
+        if (btn) {
+          btn.textContent = 'Applied';
+          btn.disabled = true;
+        }
+      } catch (err) {
+        if (btn) {
+          btn.textContent = originalText || 'Apply';
+          btn.disabled = false;
+        }
+        alert(`Could not save Gracenote ID: ${err.message || err}`);
+      }
+    }
+
+    function closeGracenoteModal(event) {
+      if (event && event.target !== event.currentTarget) return;
+      const modal = document.getElementById('gracenote-modal');
+      modal.classList.remove('open');
     }
 
     function loadPreviewPlayer(playUrl) {

@@ -17,6 +17,7 @@ from ..extensions import db
 from ..models import Source, Channel, Program, AppSettings, Feed
 from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
+from ..gracenote_suggest import SuggestionChannel, suggest_gracenote_matches
 from ..hls import inspect_hls_drm
 from ..url import public_base_url
 from .tasks import (
@@ -1045,6 +1046,55 @@ def preview_channel(channel_id):
         'next_program': _program_dict(next_program),
         'play_url': play_url,
     })
+
+
+@api_bp.route('/channels/<int:channel_id>/gracenote-suggestions', methods=['GET'])
+def channel_gracenote_suggestions(channel_id):
+    ch = Channel.query.get_or_404(channel_id)
+    settings = AppSettings.get()
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured.'}), 400
+
+    limit = max(1, min(request.args.get('limit', 10, type=int) or 10, 25))
+    data = suggest_gracenote_matches(
+        dvr_url,
+        channel=SuggestionChannel(
+            id=ch.id,
+            name=ch.name,
+            source_name=ch.source.name if ch.source else None,
+            country=ch.country,
+            language=ch.language,
+            category=ch.category,
+            gracenote_id=ch.gracenote_id,
+        ),
+        limit=limit,
+    )
+    data['channel'] = {
+        'id': ch.id,
+        'name': ch.name,
+        'source_name': ch.source.name if ch.source else None,
+        'country': ch.country,
+        'language': ch.language,
+        'category': ch.category,
+        'gracenote_id': ch.gracenote_id,
+    }
+    return jsonify(data)
+
+
+@api_bp.route('/gracenote-search', methods=['GET'])
+def gracenote_search():
+    query = (request.args.get('q') or '').strip()
+    if not query:
+        return jsonify({'error': 'Missing q parameter.'}), 400
+
+    settings = AppSettings.get()
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured.'}), 400
+
+    limit = max(1, min(request.args.get('limit', 10, type=int) or 10, 25))
+    return jsonify(suggest_gracenote_matches(dvr_url, query=query, limit=limit))
 
 
 @api_bp.route('/logs')
