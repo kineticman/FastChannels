@@ -11,6 +11,7 @@ from ..generators.m3u import (
     feed_to_query_filters,
 )
 from ..scrapers import registry as _scraper_registry
+from ..timezone_utils import timezone_choices
 from ..url import public_base_url, detected_base_url
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
@@ -380,6 +381,9 @@ def settings():
     return render_template('admin/settings.html',
                            channels_dvr_url=app_settings.effective_channels_dvr_url() or '',
                            public_base_url=app_settings.effective_public_base_url() or '',
+                           timezone_name=app_settings.effective_timezone_name(),
+                           timezone_name_from_db=(app_settings.timezone_name or '').strip(),
+                           timezone_choices=timezone_choices(),
                            channels_dvr_url_from_env=(not (app_settings.channels_dvr_url or '').strip()) and app_settings.env_channels_dvr_url() is not None,
                            public_base_url_from_env=(not (app_settings.public_base_url or '').strip()) and app_settings.env_public_base_url() is not None,
                            request_base_url=request_base_url,

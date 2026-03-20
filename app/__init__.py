@@ -5,6 +5,8 @@ from .extensions import db
 from .config import Config, VERSION
 from . import logfile
 from .schema import ensure_runtime_schema
+from .models import AppSettings
+from .timezone_utils import format_datetime, write_timezone_cache
 from .version_check import get_version_status
 
 def _ensure_sqlite_parent_dir(database_uri: str | None) -> None:
@@ -36,8 +38,10 @@ def create_app(config_class=Config):
 
     @app.context_processor
     def inject_version():
+        settings = AppSettings.get()
         return {
             'app_version': VERSION,
+            'app_timezone_name': settings.effective_timezone_name(),
             'update_status': get_version_status(
                 VERSION,
                 enabled=app.config.get('VERSION_CHECK_ENABLED', True),
@@ -48,10 +52,9 @@ def create_app(config_class=Config):
 
     @app.template_filter('localtime')
     def localtime_filter(dt):
-        """Format a UTC datetime as local time (respects TZ env var)."""
-        if dt is None:
-            return 'Never'
-        return dt.astimezone().strftime('%Y-%m-%d %H:%M %Z')
+        """Format a UTC datetime in the user-selected timezone."""
+        settings = AppSettings.get()
+        return format_datetime(dt, timezone_name=settings.effective_timezone_name())
 
     db.init_app(app)
     with app.app_context():
@@ -65,6 +68,7 @@ def create_app(config_class=Config):
                 dbapi_conn.execute("PRAGMA busy_timeout=30000")
 
         ensure_runtime_schema()
+        write_timezone_cache(AppSettings.get().timezone_name)
 
     from .routes.output import output_bp
     from .routes.api import api_bp

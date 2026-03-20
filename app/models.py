@@ -200,6 +200,7 @@ class AppSettings(db.Model):
     global_chnum_start = db.Column(db.Integer, nullable=True)  # master tvg-chno start for ungrouped sources
     channels_dvr_url   = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
     public_base_url    = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
+    timezone_name      = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
 
     @staticmethod
     def _env_int(name: str) -> int | None:
@@ -245,6 +246,10 @@ class AppSettings(db.Model):
     def effective_channels_dvr_url(self) -> str | None:
         value = (self.channels_dvr_url or '').strip().rstrip('/')
         return value or self.env_channels_dvr_url()
+
+    def effective_timezone_name(self) -> str:
+        from .timezone_utils import current_timezone_name
+        return current_timezone_name(self.timezone_name)
 
     @classmethod
     def get(cls):

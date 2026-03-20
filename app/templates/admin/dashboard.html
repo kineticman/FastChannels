@@ -154,10 +154,26 @@
   </div>
 
   <script>
+    const APP_TIME_ZONE = {{ app_timezone_name|tojson }};
     const _pollTimers  = {};
     const _scrapeBtn   = {};
     const _scrapeStart = {};  // sourceId → ms timestamp when scrape was triggered
     const _phaseLabel  = { bootstrap:'Authenticating…', channels:'Fetching channels…', starting:'Starting…' };
+
+    function _formatAppTime(value) {
+      if (!value) return '';
+      const d = new Date(value);
+      return d.toLocaleString([], {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: APP_TIME_ZONE,
+        timeZoneName: 'short',
+      }).replace(',', '').replace(/^(\d{2})\/(\d{2})\/(\d{4})/, '$3-$1-$2');
+    }
 
     function _statusText(data) {
       if (data.status === 'queued') return { cls:'status-queued', text:'Queued' };
@@ -184,15 +200,8 @@
       const btn = _scrapeBtn[sourceId];
       if (btn) { btn.textContent = 'Scrape Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
       if (lastScrapedMs) {
-        const d = new Date(lastScrapedMs);
-        const tz = d.toLocaleTimeString(undefined, {timeZoneName:'short'}).split(' ').pop();
-        const ts = d.getFullYear() + '-' +
-          String(d.getMonth()+1).padStart(2,'0') + '-' +
-          String(d.getDate()).padStart(2,'0') + ' ' +
-          String(d.getHours()).padStart(2,'0') + ':' +
-          String(d.getMinutes()).padStart(2,'0') + ' ' + tz;
         const cell = document.getElementById(`last-scraped-${sourceId}`);
-        if (cell) cell.textContent = ts;
+        if (cell) cell.textContent = _formatAppTime(lastScrapedMs);
       }
       const el = document.getElementById(`scrape-status-${sourceId}`);
       if (!el) return;

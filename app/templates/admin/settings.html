@@ -279,7 +279,7 @@
 
 <div class="page">
   <h1>Settings</h1>
-  <p class="subtitle">Configure Channels DVR connectivity and server URLs. Source-specific credentials and advanced options now live on the Sources page.</p>
+  <p class="subtitle">Configure server URLs and the display timezone used across the UI and app logs. Source-specific credentials and advanced options now live on the Sources page.</p>
 
   <!-- Channels DVR card -->
   <div class="source-card">
@@ -318,6 +318,20 @@
           <div class="help">Currently coming from environment variable <code>CHANNELS_DVR_SERVER_URL</code>. Saving here will override it in the database.</div>
           {% endif %}
         </div>
+        <div class="field field-full">
+          <label for="timezone-name">Time Zone</label>
+          <input type="text" id="timezone-name" list="timezone-options"
+                 placeholder="America/New_York" value="{{ timezone_name }}">
+          <datalist id="timezone-options">
+            {% for tz in timezone_choices %}
+            <option value="{{ tz }}"></option>
+            {% endfor %}
+          </datalist>
+          <div class="help">Type an IANA timezone like <code>America/New_York</code> or <code>Europe/London</code>. This controls admin timestamps and FastChannels app log timestamps.</div>
+          {% if not timezone_name_from_db %}
+          <div class="help">Currently using the system timezone because no explicit timezone has been saved yet.</div>
+          {% endif %}
+        </div>
       </div>
       <div class="field-actions">
         <span class="save-status" id="dvr-settings-status"></span>
@@ -345,7 +359,9 @@ async function saveSettings(body, statusId) {
       headers: {'Content-Type': 'application/json'},
       body:    JSON.stringify(body),
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    let payload = null;
+    try { payload = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error(payload?.error || `HTTP ${r.status}`);
     status.className = 'save-status ok';
     status.textContent = '✓ Saved';
     setTimeout(() => { status.textContent = ''; }, 2500);
@@ -358,9 +374,11 @@ async function saveSettings(body, statusId) {
 function saveDvrSettings() {
   const dvrUrl = document.getElementById('channels-dvr-url').value.trim();
   const publicBaseUrl = document.getElementById('public-base-url').value.trim();
+  const timezoneName = document.getElementById('timezone-name').value.trim();
   saveSettings({
     channels_dvr_url: dvrUrl || null,
     public_base_url: publicBaseUrl || null,
+    timezone_name: timezoneName || null,
   }, 'dvr-settings-status');
 }
 

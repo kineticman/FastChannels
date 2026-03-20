@@ -30,6 +30,7 @@ from ..generators.m3u import (
     get_global_chnum_overlaps,
 )
 from .. import logfile
+from ..timezone_utils import normalize_timezone_name, write_timezone_cache
 from ..xml_cache import (
     get_artifact,
     get_xml_artifact,
@@ -102,6 +103,16 @@ _CHANNELS_DVR_RECOMMENDED_MAX = 750
 def _invalidate_and_refresh_xml() -> None:
     invalidate_xml_cache()
     trigger_xml_refresh()
+
+
+def _isoformat_utc(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat()
 
 
 def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool) -> None:
@@ -313,6 +324,7 @@ def _settings_backup_payload() -> dict:
         'app_settings': {
             'channels_dvr_url': row.channels_dvr_url,
             'public_base_url': row.public_base_url,
+            'timezone_name': row.timezone_name,
         },
         'sources': [
             {
@@ -382,6 +394,12 @@ def _restore_settings_backup(payload: dict) -> dict:
         row.channels_dvr_url = _normalize_server_url(app_settings.get('channels_dvr_url'), default_port=8089)
     if 'public_base_url' in app_settings:
         row.public_base_url = _normalize_server_url(app_settings.get('public_base_url'), default_port=5523)
+    if 'timezone_name' in app_settings:
+        tz_name = normalize_timezone_name(app_settings.get('timezone_name'))
+        if app_settings.get('timezone_name') and tz_name is None:
+            raise ValueError(f"Invalid timezone: {app_settings.get('timezone_name')}")
+        row.timezone_name = tz_name
+        write_timezone_cache(tz_name)
 
     existing_sources = {source.name: source for source in Source.query.all()}
     for item in sources_payload:
@@ -990,8 +1008,8 @@ def preview_channel(channel_id):
         return {
             'title': p.title,
             'description': p.description,
-            'start_time': p.start_time.isoformat() if p.start_time else None,
-            'end_time': p.end_time.isoformat() if p.end_time else None,
+            'start_time': _isoformat_utc(p.start_time),
+            'end_time': _isoformat_utc(p.end_time),
             'category': p.category,
             'episode_title': p.episode_title,
             'season': p.season,
@@ -1411,14 +1429,22 @@ def app_settings():
             row.channels_dvr_url = _normalize_server_url(data['channels_dvr_url'], default_port=8089)
         if 'public_base_url' in data:
             row.public_base_url = _normalize_server_url(data['public_base_url'], default_port=5523)
+        if 'timezone_name' in data:
+            tz_name = normalize_timezone_name(data.get('timezone_name'))
+            if data.get('timezone_name') and tz_name is None:
+                return jsonify({'error': f"Invalid timezone: {data.get('timezone_name')}"}), 422
+            row.timezone_name = tz_name
         db.session.commit()
+        write_timezone_cache(row.timezone_name)
         _invalidate_and_refresh_xml()
         row = AppSettings.get()
     return jsonify({
         'channels_dvr_url':  row.effective_channels_dvr_url(),
         'public_base_url':   row.effective_public_base_url(),
+        'timezone_name':     row.effective_timezone_name(),
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.env_public_base_url() is not None else 'unset'),
+        'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
     })
 
 

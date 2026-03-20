@@ -107,6 +107,8 @@ def ensure_runtime_schema() -> None:
             }
             if "public_base_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN public_base_url TEXT"))
+            if "timezone_name" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN timezone_name TEXT"))
 
         if "sources" in tables:
             src_cols = {

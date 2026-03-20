@@ -80,6 +80,7 @@
   <div id="log-container"></div>
 
   <script>
+    const APP_TIME_ZONE = {{ app_timezone_name|tojson }};
     let _timer = null;
     let _lines = [];
 
@@ -99,7 +100,7 @@
         const data = await r.json();
         _lines = data.lines;
         applyFilter();
-        status.textContent = `${_lines.length} lines · ${new Date().toLocaleTimeString()}`;
+        status.textContent = `${_lines.length} lines · ${new Date().toLocaleTimeString([], { timeZone: APP_TIME_ZONE, timeZoneName: 'short' })}`;
       } catch(e) {
         status.textContent = 'Error: ' + e.message;
       }
