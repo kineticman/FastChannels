@@ -79,7 +79,7 @@
   </nav>
   <div class="container">
     <div class="stats">
-      <div class="stat-card"><div class="value">{{ total_channels }}</div><div class="label">Active Channels</div></div>
+      <div class="stat-card"><div class="value">{{ total_channels }}</div><div class="label">Output Channels</div></div>
       <div class="stat-card"><div class="value">{{ sources|length }}</div><div class="label">Sources</div></div>
       <div class="stat-card"><div class="value">{{ feeds|length }}</div><div class="label">Output Feeds</div></div>
     </div>
@@ -128,7 +128,7 @@
       </div>
       <div class="table-wrap">
       <table>
-        <thead><tr><th>Source</th><th>Status</th><th>Channels</th><th>Last Scraped</th><th>Next Scrape</th><th>Action</th></tr></thead>
+        <thead><tr><th>Source</th><th>Status</th><th title="Channels currently eligible for output (active, enabled, source enabled, and streamable)">Output Channels</th><th>Last Scraped</th><th>Next Scrape</th><th>Action</th></tr></thead>
         <tbody>
           {% for source in sources %}
           <tr>
