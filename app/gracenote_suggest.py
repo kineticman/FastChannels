@@ -4,6 +4,7 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
+import json
 from typing import Any
 from urllib.parse import quote
 
@@ -41,6 +42,36 @@ def _token_set(value: str | None, *, strip_generic_words: bool = False) -> set[s
     return {part for part in normalized.split() if part}
 
 
+def _search_variants(term: str) -> list[str]:
+    raw = (term or "").strip()
+    if not raw:
+        return []
+    variants: list[str] = []
+    seen: set[str] = set()
+    for candidate in (
+        raw,
+        re.sub(r"\s*&\s*", " and ", raw),
+        _normalize_name(raw),
+        _normalize_name(raw, strip_generic_words=True),
+    ):
+        candidate = (candidate or "").strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        variants.append(candidate)
+    return variants
+
+
+def _fetch_station_candidates_once(base: str, term: str, *, timeout: float) -> list[dict[str, Any]]:
+    url = f"{base}/tms/stations/{quote(term, safe='')}"
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
 @dataclass(slots=True)
 class SuggestionChannel:
     id: int | None
@@ -60,13 +91,29 @@ def fetch_tms_station_candidates(dvr_url: str, query: str, *, timeout: float = 8
     if not term:
         return []
 
-    url = f"{base}/tms/stations/{quote(term, safe='')}"
-    response = requests.get(url, timeout=timeout)
-    response.raise_for_status()
-    payload = response.json()
-    if isinstance(payload, list):
-        return payload
-    return []
+    last_error: Exception | None = None
+    for variant in _search_variants(term):
+        try:
+            return _fetch_station_candidates_once(base, variant, timeout=timeout)
+        except requests.HTTPError as exc:
+            last_error = exc
+            status = exc.response.status_code if exc.response is not None else "error"
+            if status == 503:
+                continue
+            raise ValueError(f"Channels DVR Gracenote search failed ({status}).") from exc
+        except requests.RequestException as exc:
+            last_error = exc
+            raise ValueError(f"Channels DVR Gracenote search failed: {exc}") from exc
+        except (ValueError, json.JSONDecodeError) as exc:
+            last_error = exc
+            continue
+
+    if isinstance(last_error, requests.HTTPError):
+        status = last_error.response.status_code if last_error.response is not None else "error"
+        raise ValueError(f"Channels DVR Gracenote search failed ({status}).") from last_error
+    if isinstance(last_error, requests.RequestException):
+        raise ValueError(f"Channels DVR Gracenote search failed: {last_error}") from last_error
+    raise ValueError("Channels DVR Gracenote search returned invalid data.")
 
 
 def _score_candidate(channel: SuggestionChannel, candidate: dict[str, Any]) -> tuple[int, list[str]]:

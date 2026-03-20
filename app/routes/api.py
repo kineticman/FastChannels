@@ -1089,19 +1089,22 @@ def channel_gracenote_suggestions(channel_id):
         return jsonify({'error': 'Channels DVR URL is not configured.'}), 400
 
     limit = max(1, min(request.args.get('limit', 10, type=int) or 10, 25))
-    data = suggest_gracenote_matches(
-        dvr_url,
-        channel=SuggestionChannel(
-            id=ch.id,
-            name=ch.name,
-            source_name=ch.source.name if ch.source else None,
-            country=ch.country,
-            language=ch.language,
-            category=ch.category,
-            gracenote_id=ch.gracenote_id,
-        ),
-        limit=limit,
-    )
+    try:
+        data = suggest_gracenote_matches(
+            dvr_url,
+            channel=SuggestionChannel(
+                id=ch.id,
+                name=ch.name,
+                source_name=ch.source.name if ch.source else None,
+                country=ch.country,
+                language=ch.language,
+                category=ch.category,
+                gracenote_id=ch.gracenote_id,
+            ),
+            limit=limit,
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 502
     data['channel'] = {
         'id': ch.id,
         'name': ch.name,
@@ -1126,7 +1129,10 @@ def gracenote_search():
         return jsonify({'error': 'Channels DVR URL is not configured.'}), 400
 
     limit = max(1, min(request.args.get('limit', 10, type=int) or 10, 25))
-    return jsonify(suggest_gracenote_matches(dvr_url, query=query, limit=limit))
+    try:
+        return jsonify(suggest_gracenote_matches(dvr_url, query=query, limit=limit))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 502
 
 
 @api_bp.route('/logs')
