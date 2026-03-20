@@ -65,6 +65,8 @@ class Channel(db.Model):
     country           = db.Column(db.String(8), default='US')
     number            = db.Column(db.Integer)
     gracenote_id      = db.Column(db.String(32), nullable=True)   # e.g. EP012345678; set by scraper or user
+    gracenote_locked  = db.Column(db.Boolean, default=False, nullable=False)  # True when user manually sets/locks Gracenote ID
+    gracenote_mode    = db.Column(db.String(16), default='auto', nullable=False)  # auto | manual | off
     guide_key         = db.Column(db.String(256), nullable=True)  # provider-specific guide lookup key (e.g. Plex gridKey)
     disable_reason    = db.Column(db.String(64), nullable=True)  # e.g. 'DRM'; set by play proxy
     is_duplicate      = db.Column(db.Boolean, default=False)  # set by user — manual duplicate label (does not disable)
@@ -105,6 +107,8 @@ class Channel(db.Model):
             'country':          self.country,
             'number':           self.number,
             'gracenote_id':     self.gracenote_id,
+            'gracenote_locked': self.gracenote_locked,
+            'gracenote_mode':   self.gracenote_mode or 'auto',
             'guide_key':        self.guide_key,
             'is_active':        self.is_active,
             'disable_reason':   self.disable_reason,

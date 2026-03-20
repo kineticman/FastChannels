@@ -954,9 +954,10 @@ def _upsert_channels(source, channel_data_list):
                     ch.disable_reason = None  # clear flag; let next audit re-check
             ch.last_seen_at = seen_at
             ch.missed_scrapes = 0
-            # Only overwrite gracenote_id if the scraper has one —
-            # preserve any value the user set manually via the admin UI.
-            if gracenote_id is not None:
+            mode = (getattr(ch, 'gracenote_mode', None) or ('manual' if getattr(ch, 'gracenote_locked', False) else 'auto')).strip().lower()
+            # Manual/Off modes are authoritative until the user switches back
+            # to Auto, so scraper/helper data only fills gaps on auto rows.
+            if mode == 'auto' and gracenote_id is not None:
                 ch.gracenote_id = gracenote_id
         else:
             db.session.add(Channel(
@@ -972,6 +973,8 @@ def _upsert_channels(source, channel_data_list):
                 country           = cd.country,
                 number            = cd.number,
                 gracenote_id      = gracenote_id,
+                gracenote_locked  = False,
+                gracenote_mode    = 'auto',
                 guide_key         = getattr(cd, 'guide_key', None),
                 last_seen_at      = seen_at,
                 missed_scrapes    = 0,

@@ -42,6 +42,38 @@ api_bp = Blueprint('api', __name__)
 
 # Simple in-process cache so repeated city searches don't re-bootstrap every time.
 _localnow_city_scraper: dict = {}  # {'scraper': LocalNowScraper, 'expires': float}
+_GRACENOTE_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$', re.I)
+_GRACENOTE_MODES = {'auto', 'manual', 'off'}
+
+
+def _apply_gracenote_update(channel: Channel, raw_value, raw_mode=None) -> str | None:
+    mode = (raw_mode if raw_mode is not None else getattr(channel, 'gracenote_mode', None) or ('manual' if getattr(channel, 'gracenote_locked', False) else 'auto'))
+    mode = str(mode).strip().lower()
+    if mode not in _GRACENOTE_MODES:
+        raise ValueError('Invalid Gracenote mode.')
+
+    raw = (raw_value or '').strip()
+    if raw and not _GRACENOTE_RE.match(raw):
+        raise ValueError('Invalid Gracenote ID — must be numeric (e.g. 122912) or start with EP/SH/MV/SP/TR (e.g. EP012345678)')
+
+    if mode == 'off':
+        channel.gracenote_id = None
+        channel.gracenote_mode = 'off'
+        channel.gracenote_locked = False
+        return None
+
+    if mode == 'manual':
+        if not raw:
+            raise ValueError('Manual Gracenote mode requires an ID.')
+        channel.gracenote_id = raw
+        channel.gracenote_mode = 'manual'
+        channel.gracenote_locked = True
+        return raw
+
+    channel.gracenote_id = raw or None
+    channel.gracenote_mode = 'auto'
+    channel.gracenote_locked = False
+    return channel.gracenote_id
 
 
 def _scrape_interval_limits(source_name: str) -> tuple[int, int, int]:
@@ -97,7 +129,6 @@ def _parse_hls_variants(master_text: str) -> list[dict]:
     variants.sort(key=lambda v: v.get('bandwidth', 0), reverse=True)
     return variants
 
-_GRACENOTE_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
 _CHANNELS_DVR_RECOMMENDED_MAX = 750
 
 
@@ -493,9 +524,11 @@ def _restore_settings_backup(payload: dict) -> dict:
         for field in ('name', 'logo_url', 'category', 'number', 'is_enabled', 'is_duplicate'):
             if field in item:
                 setattr(channel, field, item.get(field))
-        if 'gracenote_id' in item:
-            raw = (item.get('gracenote_id') or '').strip()
-            channel.gracenote_id = raw or None
+        if 'gracenote_id' in item or 'gracenote_mode' in item:
+            try:
+                _apply_gracenote_update(channel, item.get('gracenote_id'), item.get('gracenote_mode'))
+            except ValueError as exc:
+                raise ValueError(f"Invalid channel override for {source_name}/{source_channel_id}: {exc}")
         summary['channel_overrides_applied'] += 1
 
     try:
@@ -820,12 +853,11 @@ def update_channel(channel_id):
             ch.disable_reason = None
         ch.last_seen_at = datetime.now(timezone.utc)
         ch.missed_scrapes = 0
-    if 'gracenote_id' in data:
-        raw = (data['gracenote_id'] or '').strip()
-        if raw == '' or _GRACENOTE_RE.match(raw):
-            ch.gracenote_id = raw or None
-        else:
-            return jsonify({'error': 'Invalid Gracenote ID — must be numeric (e.g. 122912) or start with EP/SH/MV/SP/TR (e.g. EP012345678)'}), 422
+    if 'gracenote_id' in data or 'gracenote_mode' in data:
+        try:
+            _apply_gracenote_update(ch, data.get('gracenote_id'), data.get('gracenote_mode'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 422
     db.session.commit()
     _invalidate_and_refresh_xml()
     return jsonify(ch.to_dict())

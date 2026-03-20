@@ -141,8 +141,32 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN guide_key TEXT"
                 ))
+            if "gracenote_locked" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN gracenote_locked BOOLEAN NOT NULL DEFAULT 0"
+                ))
+            if "gracenote_mode" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN gracenote_mode TEXT NOT NULL DEFAULT 'auto'"
+                ))
             conn.execute(text(
                 "UPDATE channels SET missed_scrapes = 0 WHERE missed_scrapes IS NULL"
+            ))
+            conn.execute(text(
+                "UPDATE channels SET gracenote_locked = 0 WHERE gracenote_locked IS NULL"
+            ))
+            conn.execute(text(
+                "UPDATE channels SET gracenote_mode = 'manual' "
+                "WHERE gracenote_locked = 1 AND gracenote_id IS NOT NULL AND TRIM(gracenote_id) != ''"
+            ))
+            conn.execute(text(
+                "UPDATE channels SET gracenote_mode = 'off' "
+                "WHERE (gracenote_id IS NULL OR TRIM(gracenote_id) = '') "
+                "AND gracenote_mode IS NULL"
+            ))
+            conn.execute(text(
+                "UPDATE channels SET gracenote_mode = 'auto' "
+                "WHERE gracenote_mode IS NULL OR TRIM(gracenote_mode) = ''"
             ))
             conn.execute(text(
                 "UPDATE channels "

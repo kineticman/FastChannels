@@ -340,6 +340,18 @@
       position: relative;
     }
 
+    .gn-mode {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 5px;
+      color: #cbd5e1;
+      font-size: 0.72rem;
+      padding: 0.28rem 0.35rem;
+      outline: none;
+    }
+    .gn-mode.gn-mode-manual { border-color: #15803d; color: #bbf7d0; }
+    .gn-mode.gn-mode-off { border-color: #64748b; color: #94a3b8; }
+
     .gn-input {
       width: 140px;
       background: #0f172a;
@@ -357,6 +369,7 @@
     .gn-input.gn-set  { border-color: #15803d; color: #4ade80; }
     .gn-input.gn-err  { border-color: #b91c1c; color: #f87171; }
     .gn-input.gn-saving { opacity: 0.5; pointer-events: none; }
+    .gn-input.gn-disabled { opacity: 0.55; color: #94a3b8; border-color: #475569; }
 
     /* tiny status dot */
     .gn-status {
@@ -746,19 +759,34 @@
 
             {# ── Gracenote ID cell ── #}
             <td class="gn-cell">
+              {% set gn_mode = ch.gracenote_mode or ('manual' if ch.gracenote_locked and ch.gracenote_id else 'auto') %}
               <div class="gn-wrap">
+                <select
+                  class="gn-mode {% if gn_mode == 'manual' %}gn-mode-manual{% elif gn_mode == 'off' %}gn-mode-off{% endif %}"
+                  id="gn-mode-{{ ch.id }}"
+                  data-channel-id="{{ ch.id }}"
+                  data-original-mode="{{ gn_mode }}"
+                  onchange="gnModeChanged(this)"
+                  title="Auto = scraper-managed, Manual = lock this ID, Off = never use Gracenote for this channel."
+                >
+                  <option value="auto" {% if gn_mode == 'auto' %}selected{% endif %}>Auto</option>
+                  <option value="manual" {% if gn_mode == 'manual' %}selected{% endif %}>Manual</option>
+                  <option value="off" {% if gn_mode == 'off' %}selected{% endif %}>Off</option>
+                </select>
                 <input
                   type="text"
-                  class="gn-input {% if ch.gracenote_id %}gn-set{% endif %}"
+                  class="gn-input {% if ch.gracenote_id %}gn-set{% endif %}{% if gn_mode == 'off' %} gn-disabled{% endif %}"
                   id="gn-{{ ch.id }}"
                   data-channel-id="{{ ch.id }}"
                   data-original="{{ ch.gracenote_id or '' }}"
+                  data-original-mode="{{ gn_mode }}"
                   value="{{ ch.gracenote_id or '' }}"
                   placeholder="EP…"
                   maxlength="32"
                   spellcheck="false"
                   autocomplete="off"
-                  title="Gracenote station ID (e.g. EP012345678). Saved automatically on leaving the field."
+                  title="Gracenote station ID. Auto = scraper-managed, Manual = locked, Off = disabled for this channel."
+                  {% if gn_mode == 'off' %}disabled{% endif %}
                 >
                 <button class="gs-open-btn" type="button" onclick="openGracenoteSuggest({{ ch.id }})" title="Search and rank Gracenote suggestions">Find</button>
                 <span class="gn-status" id="gn-status-{{ ch.id }}"></span>
@@ -1063,19 +1091,26 @@
         const r = await fetch(`/api/channels/${channelId}`, {
           method: 'PATCH',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ gracenote_id: stationId }),
+          body: JSON.stringify({ gracenote_id: stationId, gracenote_mode: 'manual' }),
         });
         const data = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
 
         const input = document.getElementById(`gn-${channelId}`);
+        const sel = document.getElementById(`gn-mode-${channelId}`);
         if (input) {
           input.value = stationId;
           input.dataset.original = stationId;
+          input.dataset.originalMode = 'manual';
           input.classList.add('gn-set');
           input.classList.remove('gn-err');
           gnSetStatus(input, 'ok', '✓');
           setTimeout(() => gnClearStatus(input), 2500);
+        }
+        if (sel) {
+          sel.value = 'manual';
+          sel.dataset.originalMode = 'manual';
+          gnSyncModeUI(sel);
         }
 
         const gsContent = document.getElementById('gracenote-modal-content');
@@ -1271,19 +1306,73 @@
     // ── Gracenote ID — inline edit, save on blur ───────────────────────────
     const GN_RE = /^(\d+|(EP|SH|MV|SP|TR)\d+)$/;
 
+    document.querySelectorAll('.gn-mode').forEach(sel => gnSyncModeUI(sel));
+
     document.querySelectorAll('.gn-input').forEach(inp => {
       inp.addEventListener('blur',  () => gnSave(inp));
       inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
-      inp.addEventListener('input',   () => gnClearStatus(inp));
+      inp.addEventListener('input',   () => {
+        const sel = document.getElementById(`gn-mode-${inp.dataset.channelId}`);
+        if (sel && sel.value === 'auto' && inp.value.trim()) {
+          sel.value = 'manual';
+          gnSyncModeUI(sel);
+        }
+        gnClearStatus(inp);
+      });
     });
 
-    async function gnSave(inp) {
+    function gnSyncModeUI(sel) {
+      sel.classList.toggle('gn-mode-manual', sel.value === 'manual');
+      sel.classList.toggle('gn-mode-off', sel.value === 'off');
+      const inp = document.getElementById(`gn-${sel.dataset.channelId}`);
+      if (!inp) return;
+      const isOff = sel.value === 'off';
+      inp.disabled = isOff;
+      inp.classList.toggle('gn-disabled', isOff);
+      if (isOff) {
+        inp.classList.remove('gn-set', 'gn-err');
+      } else if (inp.value.trim()) {
+        inp.classList.add('gn-set');
+      }
+    }
+
+    function gnModeChanged(sel) {
+      const inp = document.getElementById(`gn-${sel.dataset.channelId}`);
+      gnSyncModeUI(sel);
+      if (!inp) return;
+      if (sel.value === 'off') {
+        inp.value = '';
+        gnSave(inp, { force: true });
+        return;
+      }
+      if (sel.value === 'manual' && !inp.value.trim()) {
+        gnSetStatus(inp, 'err', 'ID');
+        inp.classList.add('gn-err');
+        inp.title = 'Manual mode requires a Gracenote ID.';
+        inp.focus();
+        return;
+      }
+      gnSave(inp, { force: true });
+    }
+
+    async function gnSave(inp, opts = {}) {
       const channelId = inp.dataset.channelId;
       const raw       = inp.value.trim();
       const original  = inp.dataset.original;
+      const sel       = document.getElementById(`gn-mode-${channelId}`);
+      const mode      = sel ? sel.value : (inp.dataset.originalMode || 'auto');
+      const originalMode = inp.dataset.originalMode || 'auto';
 
       // Nothing changed — skip the round-trip
-      if (raw === original) return;
+      if (!opts.force && raw === original && mode === originalMode) return;
+
+      if (mode === 'manual' && raw === '') {
+        gnSetStatus(inp, 'err', 'ID');
+        inp.classList.add('gn-err');
+        inp.classList.remove('gn-set');
+        inp.title = 'Manual mode requires a Gracenote ID.';
+        return;
+      }
 
       // Client-side format check (empty = clear, otherwise must match pattern)
       if (raw !== '' && !GN_RE.test(raw)) {
@@ -1301,18 +1390,28 @@
         const r = await fetch(`/api/channels/${channelId}`, {
           method:  'PATCH',
           headers: {'Content-Type': 'application/json'},
-          body:    JSON.stringify({ gracenote_id: raw || null }),
+          body:    JSON.stringify({ gracenote_id: raw || null, gracenote_mode: mode }),
         });
         if (!r.ok) {
           const body = await r.json().catch(() => ({}));
           throw new Error(body.error || `HTTP ${r.status}`);
         }
+        const body = await r.json().catch(() => ({}));
         // Commit the new value as the new baseline
-        inp.dataset.original = raw;
+        const savedRaw = String(body.gracenote_id || '').trim();
+        const savedMode = String(body.gracenote_mode || mode || 'auto').trim();
+        inp.dataset.original = savedRaw;
+        inp.dataset.originalMode = savedMode;
+        if (sel) {
+          sel.value = savedMode;
+          sel.dataset.originalMode = savedMode;
+          gnSyncModeUI(sel);
+        }
+        inp.value = savedRaw;
         inp.classList.remove('gn-err');
-        inp.title = 'Gracenote station ID (e.g. EP012345678). Saved automatically on leaving the field.';
+        inp.title = 'Gracenote station ID. Auto = scraper-managed, Manual = locked, Off = disabled for this channel.';
 
-        if (raw) {
+        if (savedRaw) {
           inp.classList.add('gn-set');
           gnSetStatus(inp, 'ok', '✓');
           setTimeout(() => gnClearStatus(inp), 2500);
@@ -1327,6 +1426,10 @@
         inp.title = e.message;
         // Revert to last known-good value
         inp.value = original;
+        if (sel) {
+          sel.value = originalMode;
+          gnSyncModeUI(sel);
+        }
       } finally {
         inp.classList.remove('gn-saving');
       }
