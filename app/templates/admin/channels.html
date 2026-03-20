@@ -787,8 +787,10 @@
       }
 
       const episodeBits = [];
-      if (program.episode_title) episodeBits.push(program.episode_title);
-      if (program.season && program.episode) episodeBits.push(`S${program.season} E${program.episode}`);
+      const categories = String(program.category || '').split(';').map(v => v.trim().toLowerCase()).filter(Boolean);
+      const isMovie = categories.includes('movie') || String(program.category || '').toLowerCase() === 'movies';
+      if (!isMovie && program.episode_title) episodeBits.push(program.episode_title);
+      if (!isMovie && program.season && program.episode) episodeBits.push(`S${program.season} E${program.episode}`);
       const episodeLine = episodeBits.length ? `<div class="preview-program-time">${episodeBits.join(' · ')}</div>` : '';
 
       return `
