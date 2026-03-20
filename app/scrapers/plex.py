@@ -31,6 +31,7 @@ from uuid import uuid4
 import requests
 
 from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, infer_language_from_metadata
+from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
 
@@ -433,6 +434,7 @@ class PlexScraper(BaseScraper):
                     language          = lang,
                     country           = "US",
                     stream_type       = "hls",
+                    gracenote_id      = resolve_gracenote("plex", lookup_key=channel_id),
                     guide_key         = grid_keys.get(channel_id),
                 )
 

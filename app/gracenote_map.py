@@ -55,6 +55,14 @@ def _load_map() -> dict[tuple[str, str], dict[str, str]]:
             if notes:
                 payload["notes"] = notes
             mapping[(provider, key)] = payload
+            # Plex channel IDs can carry a volatile left-hand prefix while the
+            # right-hand segment stays stable across environments. Seed a
+            # secondary lookup by suffix so curated external mappings remain
+            # useful even when Plex rotates the leading token.
+            if provider == "plex" and "-" in key:
+                _, suffix = key.split("-", 1)
+                if suffix:
+                    mapping.setdefault((provider, suffix), payload)
     return mapping
 
 
@@ -67,7 +75,15 @@ def lookup_gracenote(provider: str, key: str | None) -> dict[str, str] | None:
     key_name = (key or "").strip()
     if not provider_name or not key_name:
         return None
-    return _load_map().get((provider_name, key_name))
+    mapping = _load_map()
+    match = mapping.get((provider_name, key_name))
+    if match:
+        return match
+    if provider_name == "plex" and "-" in key_name:
+        _, suffix = key_name.split("-", 1)
+        if suffix:
+            return mapping.get((provider_name, suffix))
+    return None
 
 
 def resolve_gracenote(provider: str, *, upstream_id=None, lookup_key: str | None = None) -> str | None:

@@ -582,6 +582,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'baywatch':                             'Drama',
 
     # ── Faith ────────────────────────────────────────────────────────────────
+    'byu tv':                               'Faith',
+    'byutv':                                'Faith',
     'daystar tv':                           'Faith',
     'daystar tv - espanol':                 'Faith',
     'elevation church':                     'Faith',
