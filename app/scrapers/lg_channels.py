@@ -26,7 +26,7 @@ class LGChannelsScraper(BaseScraper):
 
     source_name = "lg-channels"
     display_name = "LG Channels"
-    scrape_interval = 720  # lineup looks fairly stable
+    scrape_interval = 180  # schedulelist horizon is fairly short; refresh guide more often
     stream_audit_enabled = True
 
     config_schema = []
@@ -251,4 +251,3 @@ class LGChannelsScraper(BaseScraper):
             return int(str(value).strip())
         except (TypeError, ValueError):
             return None
-
