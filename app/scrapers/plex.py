@@ -223,7 +223,7 @@ class PlexScraper(BaseScraper):
 
     source_name           = "plex"
     display_name          = "Plex"
-    scrape_interval       = 60   # EPG refreshed every hour
+    scrape_interval       = 180  # Multi-day guide horizon; 3h cadence is sufficient
     channel_refresh_hours = 24   # channel list once a day
     stream_audit_enabled  = True
 
