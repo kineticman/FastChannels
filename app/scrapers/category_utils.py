@@ -503,6 +503,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'in the garage':                        'Automotive',
     'racer select':                         'Automotive',
     'torque presented by history':          'Automotive',
+    'xtreme outdoor by history':            'Outdoors',
 
     # ── Classic TV ───────────────────────────────────────────────────────────
     'shout! tv':                            'Classic TV',
@@ -691,6 +692,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'antiques roadshow':                    'Lifestyle',
     'the bob ross channel':                 'Lifestyle',
     'the martha stewart channel':           'Lifestyle',
+    'zenlife by stingray':                  'Lifestyle',
 
     # ── Latino ───────────────────────────────────────────────────────────────
     'box cinema':                           'Latino',

@@ -137,6 +137,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN missed_scrapes INTEGER NOT NULL DEFAULT 0"
                 ))
+            if "guide_key" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN guide_key TEXT"
+                ))
             conn.execute(text(
                 "UPDATE channels SET missed_scrapes = 0 WHERE missed_scrapes IS NULL"
             ))

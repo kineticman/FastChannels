@@ -21,10 +21,14 @@ import logging
 import random
 import string
 import time
-from datetime import datetime, timezone
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote_plus
 from uuid import uuid4
+
+import requests
 
 from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, infer_language_from_metadata
 
@@ -36,6 +40,8 @@ _UA = (
 )
 _PRODUCT  = "Plex Mediaverse"
 _EPG_HOST = "https://epg.provider.plex.tv"
+_PLEX_EXTRA_DAYS = 2
+_PLEX_GUIDE_WORKERS = 6
 
 # Encoded Next.js router state expected by watch.plex.tv RSC endpoint
 _NEXT_ROUTER_STATE_TREE = (
@@ -147,8 +153,27 @@ def _parse_ts(value) -> datetime | None:
     try:
         if isinstance(value, (int, float)):
             return datetime.fromtimestamp(value, tz=timezone.utc)
-        return datetime.strptime(str(value), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        raw = str(value).strip()
+        if raw.isdigit():
+            return datetime.fromtimestamp(int(raw), tz=timezone.utc)
+        if raw.replace(".", "", 1).isdigit() and raw.count(".") <= 1:
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+        return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
+        return None
+
+
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        if "T" in raw:
+            raw = raw.split("T", 1)[0]
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError:
         return None
 
 
@@ -299,6 +324,73 @@ class PlexScraper(BaseScraper):
         )
         return self._rsc_cache
 
+    def _provider_headers(self, *, accept: str = "application/json", provider_version: str | None = None) -> dict[str, str]:
+        headers = {
+            "Accept":                   accept,
+            "X-Plex-Token":             self._auth_token,
+            "X-Plex-Client-Identifier": self._client_id,
+            "X-Plex-Product":           _PRODUCT,
+            "X-Plex-Platform":          "Chrome",
+            "X-Plex-Platform-Version":  "145.0.0.0",
+        }
+        if provider_version:
+            headers["X-Plex-Provider-Version"] = provider_version
+            headers["X-Plex-Version"] = "4.145.1"
+        return headers
+
+    def _fetch_lineup_grid_keys(self) -> dict[str, str]:
+        if not self._ensure_auth():
+            return {}
+
+        try:
+            root = self.session.get(
+                f"{_EPG_HOST}/",
+                params={"X-Plex-Token": self._auth_token},
+                headers=self._provider_headers(),
+                timeout=30,
+            )
+            root.raise_for_status()
+        except Exception as exc:
+            logger.warning("[plex] lineup root fetch failed: %s", exc)
+            return {}
+
+        genre_slugs: list[str] = []
+        for elem in root.json().get("MediaProvider", {}).get("Feature", []):
+            if "GridChannelFilter" in elem:
+                genre_slugs = [
+                    g.get("identifier")
+                    for g in elem.get("GridChannelFilter") or []
+                    if g.get("identifier")
+                ]
+                break
+
+        if not genre_slugs:
+            return {}
+
+        grid_keys: dict[str, str] = {}
+        headers = self._provider_headers()
+        for genre_slug in genre_slugs:
+            try:
+                r = self.session.get(
+                    f"{_EPG_HOST}/lineups/plex/channels",
+                    params={"genre": genre_slug, "X-Plex-Token": self._auth_token},
+                    headers=headers,
+                    timeout=30,
+                )
+                r.raise_for_status()
+            except Exception as exc:
+                logger.warning("[plex] lineup fetch failed for genre=%s: %s", genre_slug, exc)
+                continue
+
+            for channel in r.json().get("MediaContainer", {}).get("Channel", []):
+                channel_id = channel.get("id")
+                grid_key = channel.get("gridKey")
+                if channel_id and grid_key and channel_id not in grid_keys:
+                    grid_keys[channel_id] = grid_key
+
+        logger.info("[plex] lineup gridKey map built for %d channels", len(grid_keys))
+        return grid_keys
+
     # ── fetch_channels ─────────────────────────────────────────────────────────
 
     def fetch_channels(self) -> list[ChannelData]:
@@ -309,6 +401,7 @@ class PlexScraper(BaseScraper):
 
         rsc_objects = _extract_rsc_objects(text)
         cat_map, spanish_ids = _build_category_map(rsc_objects)
+        grid_keys = self._fetch_lineup_grid_keys()
 
         channels: dict[str, ChannelData] = {}
         for obj in rsc_objects:
@@ -340,6 +433,7 @@ class PlexScraper(BaseScraper):
                     language          = lang,
                     country           = "US",
                     stream_type       = "hls",
+                    guide_key         = grid_keys.get(channel_id),
                 )
 
         result = sorted(channels.values(), key=lambda c: (c.name or "").lower())
@@ -350,6 +444,131 @@ class PlexScraper(BaseScraper):
             time.monotonic() - t0,
         )
         return result
+
+    def _parse_grid_xml_programs(
+        self,
+        source_channel_id: str,
+        xml_text: str,
+        seen: set[str] | None = None,
+    ) -> list[ProgramData]:
+        programs: list[ProgramData] = []
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return programs
+
+        for video in root.findall(".//Video"):
+            media = video.find("Media")
+            if media is None:
+                continue
+
+            airing_id = media.attrib.get("id")
+            if airing_id and seen is not None and airing_id in seen:
+                continue
+            if airing_id and seen is not None:
+                seen.add(airing_id)
+
+            start = _parse_ts(media.attrib.get("beginsAt"))
+            end = _parse_ts(media.attrib.get("endsAt"))
+            if not start or not end:
+                continue
+
+            raw_title = video.attrib.get("title") or "Unknown"
+            gp_title = video.attrib.get("grandparentTitle") or ""
+            if gp_title and gp_title.lower() != raw_title.lower():
+                title = gp_title
+                ep_title = raw_title
+            else:
+                title = raw_title
+                ep_title = None
+
+            poster = (
+                video.attrib.get("thumb")
+                or video.attrib.get("grandparentThumb")
+                or next(
+                    (img.attrib.get("url") for img in video.findall("Image")
+                     if img.attrib.get("type") == "coverArt"),
+                    None,
+                )
+            )
+            category = next(
+                (genre.attrib.get("tag") for genre in video.findall("Genre") if genre.attrib.get("tag")),
+                None,
+            )
+
+            programs.append(ProgramData(
+                source_channel_id = source_channel_id,
+                title             = title,
+                description       = video.attrib.get("summary") or None,
+                start_time        = start,
+                end_time          = end,
+                poster_url        = poster,
+                rating            = video.attrib.get("contentRating") or None,
+                category          = category,
+                season            = int(video.attrib["parentIndex"]) if video.attrib.get("parentIndex", "").isdigit() else None,
+                episode           = int(video.attrib["index"]) if video.attrib.get("index", "").isdigit() else None,
+                episode_title     = ep_title,
+                original_air_date = _parse_date(video.attrib.get("originalAvailableAt")),
+            ))
+
+        return programs
+
+    def _fetch_extra_day_programs(self, channels: list[ChannelData], enabled_ids: set[str] | None) -> list[ProgramData]:
+        if not channels or not enabled_ids:
+            return []
+
+        guide_channels = [
+            ch for ch in channels
+            if ch.source_channel_id in enabled_ids and getattr(ch, "guide_key", None)
+        ]
+        if not guide_channels:
+            return []
+
+        headers = self._provider_headers(accept="application/xml", provider_version="7.2")
+        today = datetime.now(timezone.utc).date()
+        results: list[ProgramData] = []
+        logger.info(
+            "[plex] targeted extra-day fetch starting: channels=%d days=%d workers=%d",
+            len(guide_channels),
+            _PLEX_EXTRA_DAYS,
+            _PLEX_GUIDE_WORKERS,
+        )
+
+        def _fetch_one(ch: ChannelData, day_offset: int) -> list[ProgramData]:
+            target_date = (today + timedelta(days=day_offset)).strftime("%Y-%m-%d")
+            try:
+                r = requests.get(
+                    f"{_EPG_HOST}/grid",
+                    params={"channelGridKey": ch.guide_key, "date": target_date},
+                    headers=headers,
+                    timeout=10,
+                )
+                r.raise_for_status()
+            except Exception as exc:
+                logger.debug("[plex] targeted grid fetch failed for %s day+%d: %s", ch.name, day_offset, exc)
+                return []
+            return self._parse_grid_xml_programs(ch.source_channel_id, r.text)
+
+        start_t = time.monotonic()
+        futures = []
+        with ThreadPoolExecutor(max_workers=_PLEX_GUIDE_WORKERS) as pool:
+            for day_offset in range(1, _PLEX_EXTRA_DAYS + 1):
+                for ch in guide_channels:
+                    futures.append(pool.submit(_fetch_one, ch, day_offset))
+            for future in as_completed(futures):
+                try:
+                    results.extend(future.result())
+                except Exception:
+                    logger.debug("[plex] targeted guide future failed", exc_info=True)
+
+        logger.info(
+            "[plex] targeted extra-day fetch complete: channels=%d days=%d programs=%d in %.1fs",
+            len(guide_channels),
+            _PLEX_EXTRA_DAYS,
+            len(results),
+            time.monotonic() - start_t,
+        )
+        return results
 
     # ── fetch_epg ──────────────────────────────────────────────────────────────
 
@@ -365,6 +584,7 @@ class PlexScraper(BaseScraper):
             return []
 
         known_ids = {ch.source_channel_id for ch in channels}
+        enabled_ids = set(kwargs.get("enabled_ids") or [])
         programs: list[ProgramData] = []
         seen: set[str] = set()   # deduplicate by media airing id
         fetch_t0 = time.monotonic()
@@ -483,6 +703,10 @@ class PlexScraper(BaseScraper):
             len(programs),
             time.monotonic() - fetch_t0,
         )
+        extra_programs = self._fetch_extra_day_programs(channels, enabled_ids)
+        if extra_programs:
+            programs.extend(extra_programs)
+            logger.info("[plex] %d total EPG entries after targeted extension", len(programs))
         return programs
 
     # ── resolve ────────────────────────────────────────────────────────────────

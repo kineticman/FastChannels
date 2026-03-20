@@ -202,9 +202,19 @@ def run_scraper(source_name: str, force_full: bool = False):
                 epg_input   = [_CD(source_channel_id=ch.source_channel_id,
                                    name=ch.name,
                                    stream_url=ch.stream_url or '',
-                                   slug=ch.slug or '') for ch in db_channels]
+                                   slug=ch.slug or '',
+                                   guide_key=ch.guide_key) for ch in db_channels]
+                enabled_ids = {
+                    ch.source_channel_id
+                    for ch in db_channels
+                    if ch.is_enabled and ch.source_channel_id
+                }
                 _progress('epg', 0, len(epg_input))
-                programs = scraper.fetch_epg(epg_input, skip_ids=_fresh_epg_sids(source))
+                programs = scraper.fetch_epg(
+                    epg_input,
+                    skip_ids=_fresh_epg_sids(source),
+                    enabled_ids=enabled_ids,
+                )
                 for _attempt in range(3):
                     try:
                         _upsert_programs(source, programs)
@@ -233,7 +243,24 @@ def run_scraper(source_name: str, force_full: bool = False):
                 logger.info('[%s] channel fetch complete', source_name)
                 _progress('epg', 0, len(channels))
                 logger.info('[%s] EPG fetch starting', source_name)
-                programs = _run_phase('epg', scraper.fetch_epg, channels, skip_ids=_fresh_epg_sids(source))
+                enabled_ids = {
+                    sid for (sid,) in (
+                        db.session.query(Channel.source_channel_id)
+                        .filter(
+                            Channel.source_id == source.id,
+                            Channel.is_enabled == True,
+                            Channel.source_channel_id != None,
+                        )
+                        .all()
+                    )
+                }
+                programs = _run_phase(
+                    'epg',
+                    scraper.fetch_epg,
+                    channels,
+                    skip_ids=_fresh_epg_sids(source),
+                    enabled_ids=enabled_ids,
+                )
                 logger.info('[%s] EPG fetch complete', source_name)
                 for _attempt in range(3):
                     try:
@@ -914,6 +941,8 @@ def _upsert_channels(source, channel_data_list):
             ch.language      = cd.language
             ch.country       = cd.country
             ch.number        = cd.number
+            if getattr(cd, 'guide_key', None):
+                ch.guide_key = cd.guide_key
             # Don't resurrect channels the stream audit flagged as Dead or DRM
             # unless the stream URL changed (source may have fixed the channel).
             if ch.disable_reason in ('Dead', 'DRM') and not stream_url_changed:
@@ -943,6 +972,7 @@ def _upsert_channels(source, channel_data_list):
                 country           = cd.country,
                 number            = cd.number,
                 gracenote_id      = gracenote_id,
+                guide_key         = getattr(cd, 'guide_key', None),
                 last_seen_at      = seen_at,
                 missed_scrapes    = 0,
             ))
