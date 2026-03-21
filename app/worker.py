@@ -29,6 +29,7 @@ from app.scrapers import registry
 from app.scrapers.base import (
     StreamDeadError,
     ScrapeSkipError,
+    is_ssl_handshake_failure,
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
@@ -393,6 +394,10 @@ def _is_transient_network_error(exc: Exception) -> bool:
     return is_transient_network_error(exc)
 
 
+def _is_ssl_handshake_failure(exc: Exception) -> bool:
+    return is_ssl_handshake_failure(exc)
+
+
 def _network_error_summary(exc: Exception) -> str:
     for err in _iter_exception_chain(exc):
         text = str(err).strip()
@@ -516,6 +521,14 @@ def run_stream_audit(source_name: str):
                 try:
                     r = sess.get(resolved_url, timeout=15, allow_redirects=True)
                 except Exception as req_exc:
+                    if _is_ssl_handshake_failure(req_exc):
+                        ch.is_active      = False
+                        ch.is_enabled     = False
+                        ch.disable_reason = 'Dead'
+                        dead += 1
+                        consecutive_errors = 0
+                        logger.info('[audit] dead stream: %s  (SSL handshake rejected by server)', ch.name)
+                        continue
                     if _is_transient_network_error(req_exc):
                         logger.warning('[audit] transient manifest fetch failure for %s: %s', ch.name, req_exc)
                         errors += 1

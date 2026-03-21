@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Callable, TextIO
@@ -28,8 +29,10 @@ def _xml_lock_path(cache_key: str) -> Path:
     return _cache_path(cache_key, ext='xml.lock')
 
 
-def _xml_tmp_path(cache_key: str) -> Path:
-    return Path(str(_cache_path(cache_key, ext='xml')) + '.tmp')
+def _xml_tmp_glob(cache_key: str) -> list[Path]:
+    """Return all orphaned temp files for this cache key."""
+    path = _cache_path(cache_key, ext='xml')
+    return list(path.parent.glob(path.name + '.*.tmp'))
 
 
 def _touch(path: Path) -> None:
@@ -48,9 +51,15 @@ def get_or_build(cache_key: str, builder: Callable[[], str], ext: str = 'xml') -
     if path.exists():
         return path.read_text(encoding='utf-8')
     content = builder()
-    tmp = Path(str(path) + '.tmp')
-    tmp.write_text(content, encoding='utf-8')
-    tmp.replace(path)
+    fd, tmp_str = tempfile.mkstemp(dir=path.parent, prefix=path.name + '.', suffix='.tmp')
+    tmp = Path(tmp_str)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as fp:
+            fp.write(content)
+        tmp.replace(path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     return content
 
 
@@ -108,10 +117,15 @@ def mark_xml_stale(cache_key: str | None = None) -> None:
 def write_xml_artifact(cache_key: str, writer: Callable[[TextIO], None]) -> Path:
     _ensure_cache_dir()
     path = _cache_path(cache_key, ext='xml')
-    tmp = Path(str(path) + '.tmp')
-    with tmp.open('w', encoding='utf-8') as fp:
-        writer(fp)
-    tmp.replace(path)
+    fd, tmp_str = tempfile.mkstemp(dir=path.parent, prefix=path.name + '.', suffix='.tmp')
+    tmp = Path(tmp_str)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as fp:
+            writer(fp)
+        tmp.replace(path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     _clear_xml_stale(cache_key)
     return path
 
@@ -119,10 +133,15 @@ def write_xml_artifact(cache_key: str, writer: Callable[[TextIO], None]) -> Path
 def write_artifact(cache_key: str, writer: Callable[[TextIO], None], *, ext: str) -> Path:
     _ensure_cache_dir()
     path = _cache_path(cache_key, ext=ext)
-    tmp = Path(str(path) + '.tmp')
-    with tmp.open('w', encoding='utf-8') as fp:
-        writer(fp)
-    tmp.replace(path)
+    fd, tmp_str = tempfile.mkstemp(dir=path.parent, prefix=path.name + '.', suffix='.tmp')
+    tmp = Path(tmp_str)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as fp:
+            writer(fp)
+        tmp.replace(path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
 
 
@@ -163,7 +182,8 @@ def ensure_xml_artifact(cache_key: str, writer: Callable[[TextIO], None], *, wai
         if age < _LOCK_STALE_SECONDS:
             return
         lock.unlink(missing_ok=True)
-        _xml_tmp_path(cache_key).unlink(missing_ok=True)
+        for _stale_tmp in _xml_tmp_glob(cache_key):
+            _stale_tmp.unlink(missing_ok=True)
 
     _clear_stale_lock_if_needed()
     try:

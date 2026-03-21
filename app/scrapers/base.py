@@ -70,6 +70,33 @@ def infer_language_from_metadata(*values: str | None, default: str = 'en') -> st
     return default
 
 
+_SSL_HANDSHAKE_MARKERS = (
+    'handshake failure',
+    'handshake_failure',
+    'sslv3 alert',
+    'ssl alert',
+    'tlsv1 alert',
+)
+
+
+def is_ssl_handshake_failure(exc: Exception) -> bool:
+    """Return True when the exception chain contains an SSL handshake rejection.
+
+    Unlike DNS failures or connection timeouts, an SSL handshake alert is
+    sent by the server and indicates a persistent protocol mismatch — not a
+    transient network blip.  The audit uses this to mark channels as dead
+    rather than silently skipping them.
+    """
+    seen = set()
+    current = exc
+    while current and id(current) not in seen:
+        seen.add(id(current))
+        if any(marker in str(current).lower() for marker in _SSL_HANDSHAKE_MARKERS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def is_transient_network_error(exc: Exception) -> bool:
     network_types = (
         requests.exceptions.ConnectionError,
