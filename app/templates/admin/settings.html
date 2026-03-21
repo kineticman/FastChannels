@@ -490,7 +490,7 @@ async function loadSystemStats() {
         <div>
           <div class="stats-section-label">Image Cache</div>
           ${_stat('Logos', `${ic.logos_count.toLocaleString()} files / ${_fmt_bytes(ic.logos_bytes)}`)}
-          ${_stat('Logo TTL', `${ic.logo_ttl_days} days`)}
+          ${_stat('Logo expiry', ic.logo_expiry || 'url-change')}
           ${_stat('Posters', `${ic.posters_count.toLocaleString()} files / ${_fmt_bytes(ic.posters_bytes)}`)}
           ${_stat('Poster TTL', `${ic.poster_ttl_days} days`)}
           ${_stat('Total cache', _fmt_bytes(totalCacheBytes), totalCacheBytes > 2147483648 ? 'warn' : '')}

@@ -1627,7 +1627,7 @@ def system_stats():
     def _dir_stats(d):
         if not _os.path.exists(d):
             return 0, 0
-        files = [f for f in _os.listdir(d) if not f.endswith('.ct')]
+        files = [f for f in _os.listdir(d) if not f.endswith('.ct') and not f.endswith('.url')]
         size  = sum(_os.path.getsize(_os.path.join(d, f)) for f in files)
         return len(files), size
 
@@ -1654,7 +1654,7 @@ def system_stats():
             'logos_bytes':    logo_bytes,
             'posters_count':  poster_count,
             'posters_bytes':  poster_bytes,
-            'logo_ttl_days':  3,
+            'logo_expiry':    'url-change',
             'poster_ttl_days': 4,
         },
         'processes': _process_stats(),
