@@ -281,14 +281,14 @@
   <h1>Settings</h1>
   <p class="subtitle">Configure server URLs and the display timezone used across the UI and app logs. Source-specific credentials and advanced options now live on the Sources page.</p>
 
-  <!-- Channels DVR card -->
+  <!-- FastChannels Server card -->
   <div class="source-card">
     <div class="source-header" style="cursor:default">
       <div class="source-title">
-        <div class="source-icon">📺</div>
+        <div class="source-icon">🌐</div>
         <div>
-          <div class="source-name">Channels DVR</div>
-          <div class="source-meta">Register feeds as custom M3U sources in your DVR with one click</div>
+          <div class="source-name">FastChannels Server URL</div>
+          <div class="source-meta">Set the address players and other devices should use to reach this server</div>
         </div>
       </div>
     </div>
@@ -310,6 +310,27 @@
             If FastChannels is running in Docker and you opened the UI with <code>localhost</code>, auto-detect is usually not what other devices need, so set this field manually.
           </div>
         </div>
+      </div>
+      <div class="field-actions">
+        <span class="save-status" id="public-base-url-status"></span>
+        <button class="btn btn-primary" onclick="savePublicBaseUrlSettings()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Channels DVR card -->
+  <div class="source-card">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">📺</div>
+        <div>
+          <div class="source-name">Channels DVR</div>
+          <div class="source-meta">Register feeds as custom M3U sources in your DVR with one click</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="fields-grid" style="max-width:480px">
         <div class="field field-full">
           <label for="channels-dvr-url">Channels DVR Server URL</label>
           <input type="url" id="channels-dvr-url"
@@ -319,6 +340,27 @@
           <div class="help">Currently coming from environment variable <code>CHANNELS_DVR_SERVER_URL</code>. Saving here will override it in the database.</div>
           {% endif %}
         </div>
+      </div>
+      <div class="field-actions">
+        <span class="save-status" id="dvr-settings-status"></span>
+        <button class="btn btn-primary" onclick="saveDvrSettings()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Time Zone card -->
+  <div class="source-card">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">🕒</div>
+        <div>
+          <div class="source-name">Time Zone</div>
+          <div class="source-meta">Control how timestamps display across the admin UI and FastChannels logs</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="fields-grid" style="max-width:480px">
         <div class="field field-full">
           <label for="timezone-name">Time Zone</label>
           <input type="text" id="timezone-name" list="timezone-options"
@@ -335,8 +377,8 @@
         </div>
       </div>
       <div class="field-actions">
-        <span class="save-status" id="dvr-settings-status"></span>
-        <button class="btn btn-primary" onclick="saveDvrSettings()">Save</button>
+        <span class="save-status" id="timezone-settings-status"></span>
+        <button class="btn btn-primary" onclick="saveTimezoneSettings()">Save</button>
       </div>
     </div>
   </div>
@@ -372,15 +414,25 @@ async function saveSettings(body, statusId) {
   }
 }
 
+function savePublicBaseUrlSettings() {
+  const publicBaseUrl = document.getElementById('public-base-url').value.trim();
+  saveSettings({
+    public_base_url: publicBaseUrl || null,
+  }, 'public-base-url-status');
+}
+
 function saveDvrSettings() {
   const dvrUrl = document.getElementById('channels-dvr-url').value.trim();
-  const publicBaseUrl = document.getElementById('public-base-url').value.trim();
-  const timezoneName = document.getElementById('timezone-name').value.trim();
   saveSettings({
     channels_dvr_url: dvrUrl || null,
-    public_base_url: publicBaseUrl || null,
-    timezone_name: timezoneName || null,
   }, 'dvr-settings-status');
+}
+
+function saveTimezoneSettings() {
+  const timezoneName = document.getElementById('timezone-name').value.trim();
+  saveSettings({
+    timezone_name: timezoneName || null,
+  }, 'timezone-settings-status');
 }
 
 // ── System Stats ──────────────────────────────────────────────────────────

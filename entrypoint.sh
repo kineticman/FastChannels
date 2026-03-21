@@ -87,6 +87,7 @@ echo "✅ Worker started"
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 GUNICORN_MAX_REQUESTS="${GUNICORN_MAX_REQUESTS:-1000}"
 GUNICORN_MAX_REQUESTS_JITTER="${GUNICORN_MAX_REQUESTS_JITTER:-100}"
+GUNICORN_PRELOAD="${GUNICORN_PRELOAD:-1}"
 
 echo "✅ Starting gunicorn on port 5523"
 exec gunicorn \
@@ -102,4 +103,5 @@ exec gunicorn \
     --worker-tmp-dir /dev/shm \
     --access-logfile - \
     --access-logformat '%(h)s "%(r)s" %(s)s %(b)s %(T)ss' \
+    $( [ "$GUNICORN_PRELOAD" = "1" ] && printf '%s' "--preload" ) \
     "app:create_app()"
