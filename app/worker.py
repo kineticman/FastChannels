@@ -35,6 +35,7 @@ from app.scrapers.base import (
 )
 from app.scrapers.category_utils import category_for_channel
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
+from app.routes.images import delete_cached_logo
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1005,7 +1006,6 @@ def _upsert_channels(source, channel_data_list):
                             source.name, cd.name)
             ch.logo_url      = next_logo
             if old_logo_url and old_logo_url != (next_logo or ''):
-                from app.routes.images import delete_cached_logo
                 delete_cached_logo(old_logo_url)
                 logger.debug('[%s] evicted cached logo for %s (URL changed)', source.name, cd.name)
             ch.slug          = cd.slug
