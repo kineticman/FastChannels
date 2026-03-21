@@ -1,8 +1,6 @@
 # Development overrides — mounts local app/ so code changes take effect without rebuild.
 # Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
-version: '3.9'
-
 services:
   fastchannels:
     volumes:
