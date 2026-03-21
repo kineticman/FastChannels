@@ -1418,11 +1418,20 @@ if __name__ == '__main__':
         except Exception:
             logger.exception('[xml-cache] startup refresh failed')
 
+    class _FastWorker(_SimpleWorker):
+        """SimpleWorker variant safe for a non-main thread.
+
+        SimpleWorker runs jobs in-process (no forking), but its base class
+        work() still installs SIGINT/SIGTERM handlers via signal.signal(),
+        which Python only permits in the main thread.  We skip that step —
+        the daemon thread dies automatically when the main process exits.
+        """
+        def _install_signal_handlers(self):
+            pass
+
     def _run_fast_worker():
         r_fast = redis.from_url(flask_app.config['REDIS_URL'])
-        # SimpleWorker runs jobs in-process without forking, so it needs no
-        # signal handlers and is safe to run in a non-main thread.
-        w = _SimpleWorker(queues=[Queue('fast', connection=r_fast)], connection=r_fast)
+        w = _FastWorker(queues=[Queue('fast', connection=r_fast)], connection=r_fast)
         logger.info('Fast worker listening on queue: fast')
         w.work(logging_level=logging.WARNING)
 
