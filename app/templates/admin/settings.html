@@ -465,7 +465,7 @@ async function loadSystemStats() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
 
-    const db = d.db, ic = d.image_cache, mem = d.memory || {}, cpu = d.cpu || {};
+    const db = d.db, ic = d.image_cache, mem = d.memory || {}, cpu = d.cpu || {}, proc = d.processes || {};
     const totalCacheBytes = ic.logos_bytes + ic.posters_bytes;
     const containerUsage = mem.container_bytes ? _fmt_bytes(mem.container_bytes) : 'Unavailable';
     const containerLimit = mem.container_limit_bytes ? _fmt_bytes(mem.container_limit_bytes) : null;
@@ -510,6 +510,13 @@ async function loadSystemStats() {
           ${_stat('Load avg', loadAvg)}
           ${_stat('CPU cores', cpu.cpu_count != null ? cpu.cpu_count.toLocaleString() : 'Unavailable')}
           ${_stat('Web CPU time', _fmt_seconds(cpu.process_cpu_seconds))}
+        </div>
+        <div>
+          <div class="stats-section-label">Processes</div>
+          ${_stat('Web workers', proc.web_worker_count != null ? proc.web_worker_count.toLocaleString() : 'Unavailable')}
+          ${_stat('Web RSS avg', proc.web_worker_rss_avg_bytes ? _fmt_bytes(proc.web_worker_rss_avg_bytes) : 'Unavailable')}
+          ${_stat('Background workers', proc.background_worker_count != null ? proc.background_worker_count.toLocaleString() : 'Unavailable')}
+          ${_stat('Background RSS avg', proc.background_worker_rss_avg_bytes ? _fmt_bytes(proc.background_worker_rss_avg_bytes) : 'Unavailable')}
         </div>
       </div>
       <div class="stats-uptime">Uptime: ${_fmt_uptime(d.uptime_seconds)}</div>`;

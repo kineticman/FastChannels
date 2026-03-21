@@ -311,6 +311,57 @@ def _cpu_stats() -> dict:
     }
 
 
+def _process_stats() -> dict:
+    def _proc_fields(pid: int) -> dict | None:
+        status_path = f'/proc/{pid}/status'
+        try:
+            fields = {}
+            with open(status_path, 'r', encoding='utf-8') as fp:
+                for line in fp:
+                    if line.startswith('PPid:'):
+                        fields['ppid'] = int(line.split()[1])
+                    elif line.startswith('VmRSS:'):
+                        fields['rss_bytes'] = int(line.split()[1]) * 1024
+            return fields
+        except (OSError, ValueError):
+            return None
+
+    master_pid = _os.getppid()
+    web_worker_rss = []
+    bg_worker_rss = []
+
+    for entry in _os.listdir('/proc'):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            with open(f'/proc/{pid}/cmdline', 'rb') as fp:
+                cmdline = fp.read().replace(b'\x00', b' ').decode('utf-8', errors='ignore').strip()
+        except OSError:
+            continue
+        if not cmdline:
+            continue
+
+        fields = _proc_fields(pid)
+        if not fields or fields.get('rss_bytes') is None:
+            continue
+
+        if 'gunicorn' in cmdline and 'app:create_app()' in cmdline and fields.get('ppid') == master_pid:
+            web_worker_rss.append(fields['rss_bytes'])
+        elif 'python -m app.worker' in cmdline:
+            bg_worker_rss.append(fields['rss_bytes'])
+
+    web_avg = int(sum(web_worker_rss) / len(web_worker_rss)) if web_worker_rss else None
+    bg_avg = int(sum(bg_worker_rss) / len(bg_worker_rss)) if bg_worker_rss else None
+
+    return {
+        'web_worker_count': len(web_worker_rss),
+        'web_worker_rss_avg_bytes': web_avg,
+        'background_worker_count': len(bg_worker_rss),
+        'background_worker_rss_avg_bytes': bg_avg,
+    }
+
+
 def _normalize_server_url(value: str | None, default_port: int = 5523) -> str | None:
     raw = (value or '').strip()
     if not raw:
@@ -1606,6 +1657,7 @@ def system_stats():
             'logo_ttl_days':  3,
             'poster_ttl_days': 4,
         },
+        'processes': _process_stats(),
         'cpu': _cpu_stats(),
         'memory': _memory_stats(),
     })
