@@ -16,6 +16,7 @@ import requests as _req
 from rq.job import Job
 from rq import Worker, Queue, Connection
 from rq.worker import SimpleWorker as _SimpleWorker
+from rq.timeouts import BaseDeathPenalty as _BaseDeathPenalty
 from rq.registry import StartedJobRegistry
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import text
@@ -1418,14 +1419,29 @@ if __name__ == '__main__':
         except Exception:
             logger.exception('[xml-cache] startup refresh failed')
 
+    class _NoopDeathPenalty(_BaseDeathPenalty):
+        """Job timeout enforcer that does nothing — safe for non-main threads.
+
+        UnixSignalDeathPenalty (the RQ default) uses SIGALRM which is only
+        available in the main thread.  Fast-queue jobs are short-lived so we
+        simply let them run to completion without a signal-based timeout.
+        """
+        def setup_death_penalty(self):
+            pass
+
+        def cancel_death_penalty(self):
+            pass
+
     class _FastWorker(_SimpleWorker):
         """SimpleWorker variant safe for a non-main thread.
 
         SimpleWorker runs jobs in-process (no forking), but its base class
-        work() still installs SIGINT/SIGTERM handlers via signal.signal(),
-        which Python only permits in the main thread.  We skip that step —
-        the daemon thread dies automatically when the main process exits.
+        work() still installs SIGINT/SIGTERM/SIGALRM handlers via signal.signal(),
+        which Python only permits in the main thread.  We skip both — the daemon
+        thread dies automatically when the main process exits.
         """
+        death_penalty_class = _NoopDeathPenalty
+
         def _install_signal_handlers(self):
             pass
 
