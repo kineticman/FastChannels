@@ -387,9 +387,19 @@
     @keyframes spin { to { transform: rotate(360deg); } }
 
     /* Pagination */
-    .pagination { display: flex; gap: 0.5rem; margin-top: 1rem; justify-content: center; align-items: center; }
+    .pagination { display: flex; gap: 0.5rem; margin-top: 1rem; justify-content: center; align-items: center; flex-wrap: wrap; }
     .pagination a { color: #38bdf8; text-decoration: none; padding: 0.4rem 0.8rem; border: 1px solid #334155; border-radius: 4px; font-size: 0.8rem; }
     .pagination a:hover { background: #1e293b; }
+    .page-jump { display: inline-flex; align-items: center; gap: 0.4rem; color: #94a3b8; font-size: 0.8rem; }
+    .page-jump input {
+      width: 4.5rem; background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+      border-radius: 4px; padding: 0.35rem 0.45rem; font-size: 0.8rem;
+    }
+    .page-jump button {
+      padding: 0.35rem 0.7rem; border-radius: 4px; border: 1px solid #334155;
+      background: #1e293b; color: #cbd5e1; cursor: pointer; font-size: 0.8rem;
+    }
+    .page-jump button:hover { background: #334155; }
     .page-info { color: #64748b; font-size: 0.8rem; }
 
     /* Channel inspector */
@@ -540,6 +550,24 @@
       .toolbar-secondary { grid-template-columns: 1fr; }
       .bulk-bar { flex-wrap: wrap; }
       table { min-width: 1120px; }
+      .pagination {
+        justify-content: center;
+        gap: 0.6rem;
+      }
+      .pagination .page-info {
+        width: 100%;
+        text-align: center;
+      }
+      .page-jump {
+        width: 100%;
+        justify-content: center;
+      }
+      .page-jump label {
+        display: none;
+      }
+      .page-jump input {
+        width: 5.5rem;
+      }
     }
   </style>
 </head>
@@ -836,6 +864,11 @@
       <a href="?page={{ channels.prev_num }}&{{ qs }}">← Prev</a>
       {% endif %}
       <span class="page-info">Page {{ channels.page }} of {{ channels.pages }} ({{ channels.total }} channels)</span>
+      <form class="page-jump" onsubmit="jumpToPage(event, {{ channels.pages }}, '{{ qs|e }}')">
+        <label for="page-jump-input">Page</label>
+        <input id="page-jump-input" type="number" min="1" max="{{ channels.pages }}" value="{{ channels.page }}">
+        <button type="submit">Go</button>
+      </form>
       {% if channels.has_next %}
       <a href="?page={{ channels.next_num }}&{{ qs }}">Next →</a>
       {% endif %}
@@ -868,6 +901,14 @@
     let _previewHls = null;
     const APP_TIME_ZONE = {{ app_timezone_name|tojson }};
 
+    function jumpToPage(event, totalPages, qs) {
+      event.preventDefault();
+      const input = document.getElementById('page-jump-input');
+      if (!input) return;
+      const page = Math.max(1, Math.min(totalPages, parseInt(input.value, 10) || 1));
+      window.location.href = `?page=${page}&${qs}`;
+    }
+
     function formatPreviewTime(iso) {
       if (!iso) return 'Unknown time';
       const d = new Date(iso);
@@ -890,7 +931,7 @@
         .replaceAll("'", '&#39;');
     }
 
-    function renderProgramCard(title, program) {
+    function renderProgramCard(title, program, channelCategory) {
       if (!program) {
         return `
           <div class="preview-card">
@@ -901,8 +942,11 @@
       }
 
       const episodeBits = [];
-      const categories = String(program.category || '').split(';').map(v => v.trim().toLowerCase()).filter(Boolean);
-      const isMovie = categories.includes('movie') || String(program.category || '').toLowerCase() === 'movies';
+      const categories = `${program.category || ''};${channelCategory || ''}`
+        .split(';')
+        .map(v => v.trim().toLowerCase())
+        .filter(Boolean);
+      const isMovie = categories.includes('movie') || categories.includes('movies');
       if (!isMovie && program.episode_title) episodeBits.push(program.episode_title);
       if (!isMovie && program.season && program.episode) episodeBits.push(`S${program.season} E${program.episode}`);
       const episodeLine = episodeBits.length ? `<div class="preview-program-time">${episodeBits.join(' · ')}</div>` : '';
@@ -1010,8 +1054,8 @@
           ${warning}
           ${playbackNote}
           <div class="preview-grid">
-            ${renderProgramCard('Now Playing', data.current_program)}
-            ${renderProgramCard('Up Next', data.next_program)}
+            ${renderProgramCard('Now Playing', data.current_program, ch.category)}
+            ${renderProgramCard('Up Next', data.next_program, ch.category)}
           </div>
           <div class="preview-note" style="margin-top: -0.25rem; margin-bottom: 0.9rem;">
             Guide details shown here come from the FastChannels scraper for this source, not from Gracenote.

@@ -136,14 +136,20 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             SubElement(el, 'title', lang='en').text = prog.title or ''
             if prog.description:
                 SubElement(el, 'desc', lang='en').text = prog.description
-            if prog.category or ch_cat_map.get(prog.channel_id):
+            channel_cat = ch_cat_map.get(prog.channel_id) or ''
+            program_cat = prog.category or ''
+            combined_cats = [c.strip() for c in f'{program_cat};{channel_cat}'.split(';') if c.strip()]
+            if combined_cats:
                 # Use prog.category if set, fall back to channel category.
                 # Split semicolon-joined strings into multiple <category> tags —
                 # XMLTV allows multiple per programme and clients filter by them.
-                for cat in (prog.category or ch_cat_map.get(prog.channel_id) or '').split(';'):
-                    cat = cat.strip()
-                    if cat:
-                        SubElement(el, 'category', lang='en').text = cat
+                seen_categories: set[str] = set()
+                for cat in combined_cats:
+                    key = cat.casefold()
+                    if key in seen_categories:
+                        continue
+                    seen_categories.add(key)
+                    SubElement(el, 'category', lang='en').text = cat
             # Always add source name as a category so clients can filter by provider
             src_name = ch_src_map.get(prog.channel_id)
             if src_name:
@@ -164,14 +170,14 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             if prog.rating:
                 r = SubElement(el, 'rating', system='MPAA')
                 SubElement(r, 'value').text = prog.rating
-            if prog.episode_title:
+            cats = [c.casefold() for c in combined_cats]
+            is_movie = 'movie' in cats or 'movies' in cats
+            if prog.episode_title and not is_movie:
                 SubElement(el, 'sub-title', lang='en').text = prog.episode_title
-            cats = [c.strip().lower() for c in (prog.category or ch_cat_map.get(prog.channel_id) or '').split(';') if c.strip()]
-            is_movie = 'movie' in cats
-            if prog.season and prog.episode:
+            if prog.season and prog.episode and not is_movie:
                 SubElement(el, 'episode-num', system='xmltv_ns').text = \
                     f'{prog.season - 1}.{prog.episode - 1}.'
-                if not is_movie and prog.season >= 1 and prog.episode >= 1:
+                if prog.season >= 1 and prog.episode >= 1:
                     SubElement(el, 'episode-num', system='onscreen').text = \
                         f'S{prog.season:02d}E{prog.episode:02d}'
             yield tostring(el, encoding='unicode') + '\n'
