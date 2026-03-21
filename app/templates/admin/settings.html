@@ -298,15 +298,16 @@
           <label for="public-base-url">FastChannels Server URL</label>
           <input type="text" id="public-base-url"
                  placeholder="192.168.1.50 or 192.168.1.50:5523" value="{{ public_base_url }}">
-          <div class="help">Address other devices should use to reach this FastChannels server. You can enter just the IP or hostname and FastChannels will fill in <code>http://</code> and port <code>5523</code> automatically.</div>
+          <div class="help">Address other devices should use to reach this FastChannels server for generated M3U, XML, logo, poster, and playback URLs. You can enter just the IP or hostname and FastChannels will fill in <code>http://</code> and port <code>5523</code> automatically.</div>
           {% if public_base_url_from_env %}
           <div class="help">Currently coming from environment variable <code>FASTCHANNELS_SERVER_URL</code>. Saving here will override it in the database.</div>
           {% endif %}
           <div class="hint-box">
             Browser address: <code>{{ request_base_url }}</code><br>
             Detected server address: <code>{{ detected_base_url }}</code><br>
-            Recommended: enter the LAN IP or hostname of the FastChannels server, for example <code>http://192.168.1.50:5523</code>.<br>
-            If FastChannels is running in Docker and you opened the UI with <code>localhost</code>, auto-detect is not reliable, so set this field manually.
+            Recommended: enter the address clients should actually use to reach FastChannels, for example <code>http://192.168.1.50:5523</code>.<br>
+            If this field is set, generated feed URLs will use it exactly, even if you open the admin UI from a different host or port.<br>
+            If FastChannels is running in Docker and you opened the UI with <code>localhost</code>, auto-detect is usually not what other devices need, so set this field manually.
           </div>
         </div>
         <div class="field field-full">
