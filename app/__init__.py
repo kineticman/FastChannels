@@ -67,6 +67,9 @@ def create_app(config_class=Config):
                 dbapi_conn.execute("PRAGMA journal_mode=WAL")
                 dbapi_conn.execute("PRAGMA busy_timeout=30000")
 
+        # Fresh installs need the base tables before any startup path queries
+        # AppSettings (for timezone cache, template globals, etc.).
+        db.create_all()
         ensure_runtime_schema()
         write_timezone_cache(AppSettings.get().timezone_name)
 

@@ -97,6 +97,12 @@ def ensure_runtime_schema() -> None:
             row[0]
             for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
         }
+        if "app_settings" not in tables or "feeds" not in tables:
+            db.create_all()
+            tables = {
+                row[0]
+                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            }
         if "feeds" not in tables:
             return
 
