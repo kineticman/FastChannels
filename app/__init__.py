@@ -70,7 +70,12 @@ def create_app(config_class=Config):
         # Fresh installs need the base tables before any startup path queries
         # AppSettings (for timezone cache, template globals, etc.).
         db.create_all()
-        ensure_runtime_schema()
+        # Skip schema migration if the entrypoint already ran it (FC_SCHEMA_READY=1).
+        # This prevents write-write lock contention when the worker and gunicorn
+        # both call create_app() simultaneously at container startup.
+        import os as _os
+        if not _os.environ.get('FC_SCHEMA_READY'):
+            ensure_runtime_schema()
         write_timezone_cache(AppSettings.get().timezone_name)
 
     from .routes.output import output_bp

@@ -24,9 +24,12 @@ done
 # Ensure the default SQLite data directory exists before app startup.
 mkdir -p /data
 
-# Create DB tables directly from models
+# Create DB tables and run schema migrations (once, before worker/gunicorn start).
+# Setting FC_SCHEMA_READY=1 tells create_app() to skip ensure_runtime_schema()
+# so the worker and gunicorn don't race each other for the SQLite write lock.
 cd /app
-python -c "from app import create_app; from app.extensions import db; app = create_app(); app.app_context().push(); db.create_all()"
+python -c "from app import create_app; app = create_app()"
+export FC_SCHEMA_READY=1
 echo "✅ DB ready"
 
 # Seed sources
