@@ -6,6 +6,7 @@ import multiprocessing
 import gc
 import signal
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -69,7 +70,7 @@ class ScrapePhaseTimeoutError(Exception):
 def _enqueue_xml_refresh_job() -> None:
     try:
         r = redis.from_url(flask_app.config['REDIS_URL'])
-        q = Queue('scraper', connection=r)
+        q = Queue('fast', connection=r)
         job_id = 'xml-refresh'
         active_ids = set(q.get_job_ids()) | set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
         if job_id in active_ids:
@@ -895,7 +896,15 @@ def run_channel_auto_disable(channel_id: int, reason: str):
         ch.is_active = False
         ch.is_enabled = False
         ch.disable_reason = reason
-        db.session.commit()
+        for _attempt in range(3):
+            try:
+                db.session.commit()
+                break
+            except _SAOperationalError:
+                db.session.rollback()
+                if _attempt == 2:
+                    raise
+                time.sleep(3 * (_attempt + 1))
         _invalidate_and_refresh_xml()
         logger.warning(
             '[play] %s detected — auto-disabled channel %s (%s/%s)',
@@ -1408,8 +1417,18 @@ if __name__ == '__main__':
         except Exception:
             logger.exception('[xml-cache] startup refresh failed')
 
+    def _run_fast_worker():
+        r_fast = redis.from_url(flask_app.config['REDIS_URL'])
+        w = Worker(queues=[Queue('fast', connection=r_fast)], connection=r_fast)
+        logger.info('Fast worker listening on queue: fast')
+        w.work(logging_level=logging.WARNING)
+
+    fast_thread = threading.Thread(target=_run_fast_worker, daemon=True, name='fast-worker')
+    fast_thread.start()
+    logger.info('Fast worker thread started')
+
     r = redis.from_url(flask_app.config['REDIS_URL'])
     with Connection(r):
         worker = Worker(queues=[Queue('scraper', connection=r)])
-        logger.info('Worker listening on queue: scraper')
+        logger.info('Scraper worker listening on queue: scraper')
         worker.work(logging_level=logging.WARNING)

@@ -17,6 +17,11 @@ def get_queue():
     return Queue('scraper', connection=r)
 
 
+def get_fast_queue():
+    r = redis.from_url(current_app.config['REDIS_URL'])
+    return Queue('fast', connection=r)
+
+
 def _utc_aware(dt):
     if dt is None:
         return None
@@ -125,7 +130,7 @@ def trigger_stream_audit(source_name: str):
 
 def trigger_xml_refresh():
     try:
-        q = get_queue()
+        q = get_fast_queue()
         job_id = 'xml-refresh'
         if _job_already_active(q, job_id):
             logger.info('XML artifact refresh already queued/running')
@@ -182,7 +187,7 @@ def trigger_bulk_channel_update(filters: dict, enable: bool):
 
 def trigger_channel_auto_disable(channel_id: int, reason: str):
     try:
-        q = get_queue()
+        q = get_fast_queue()
         job_id = f'channel-auto-disable-{channel_id}'
         if _job_already_active(q, job_id):
             logger.info('Channel auto-disable already queued/running for channel_id=%s', channel_id)
