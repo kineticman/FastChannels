@@ -17,6 +17,7 @@ import hashlib
 import io
 import logging
 import os
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -61,7 +62,7 @@ def _is_fresh(img_path: str, ttl: int) -> bool:
         return False
 
 
-def _normalize_logo(data: bytes, source_content_type: str | None = None) -> tuple[bytes, str]:
+def _normalize_logo(data: bytes, source_content_type: str | None = None) -> tuple[bytes, str] | None:
     """
     Resize and reformat a logo image for Channels DVR compatibility.
 
@@ -71,10 +72,14 @@ def _normalize_logo(data: bytes, source_content_type: str | None = None) -> tupl
     - Otherwise fit it inside the 4:3 target box (not a square box), pad to
       _LOGO_TARGET, strip metadata, and save as PNG.
 
-    Returns (image_bytes, content_type). Falls back to original data/content-type
-    on any error so a bad image never causes a cache miss.
+    Returns (image_bytes, content_type), or None if the data is not a valid
+    decodable image (e.g. HTML error page, corrupt file, unsupported format).
+    Returning None prevents bad content from being written to the cache.
     """
     try:
+        img = Image.open(io.BytesIO(data))
+        img.verify()  # catches truncated / corrupt files
+        # Re-open after verify() — verify() leaves the file pointer in an unusable state.
         img = Image.open(io.BytesIO(data))
         source_format = (img.format or '').upper()
         safe_ct = (source_content_type or '').split(';')[0].strip().lower()
@@ -101,8 +106,8 @@ def _normalize_logo(data: bytes, source_content_type: str | None = None) -> tupl
         canvas.save(buf, format='PNG', optimize=True, compress_level=9)
         return buf.getvalue(), 'image/png'
     except Exception as exc:
-        logger.debug('[images] logo normalize failed: %s', exc)
-        return data, 'image/jpeg'
+        logger.debug('[images] logo normalize failed (invalid image data): %s', exc)
+        return None
 
 
 def _fetch_and_cache(url: str, img_path: str, ct_path: str,
@@ -116,9 +121,23 @@ def _fetch_and_cache(url: str, img_path: str, ct_path: str,
         content_type = (r.headers.get('content-type') or 'image/jpeg').split(';')[0].strip()
         data = r.content
         if img_type == 'logo':
-            data, content_type = _normalize_logo(data, content_type)
-        with open(img_path, 'wb') as f:
-            f.write(data)
+            result = _normalize_logo(data, content_type)
+            if result is None:
+                logger.debug('[images] skipping cache — invalid image data from %s', url)
+                return False
+            data, content_type = result
+        cache_dir = os.path.dirname(img_path)
+        fd, tmp_path = tempfile.mkstemp(dir=cache_dir)
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(data)
+            os.replace(tmp_path, img_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
         with open(ct_path, 'w') as f:
             f.write(content_type)
         url_path = img_path + '.url'
