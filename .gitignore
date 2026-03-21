@@ -42,3 +42,4 @@ Thumbs.db
 # Internal docs / research (never push)
 dev/
 Dev/
+stress_test.py
