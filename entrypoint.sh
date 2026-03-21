@@ -104,4 +104,4 @@ exec gunicorn \
     --access-logfile - \
     --access-logformat '%(h)s "%(r)s" %(s)s %(b)s %(T)ss' \
     $( [ "$GUNICORN_PRELOAD" = "1" ] && printf '%s' "--preload" ) \
-    "app:create_app()"
+    "wsgi:app"
