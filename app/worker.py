@@ -15,6 +15,7 @@ import redis
 import requests as _req
 from rq.job import Job
 from rq import Worker, Queue, Connection
+from rq.worker import SimpleWorker as _SimpleWorker
 from rq.registry import StartedJobRegistry
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import text
@@ -1417,20 +1418,11 @@ if __name__ == '__main__':
         except Exception:
             logger.exception('[xml-cache] startup refresh failed')
 
-    class _ThreadSafeWorker(Worker):
-        """RQ Worker subclass safe to run in a non-main thread.
-
-        Worker.work() normally installs SIGINT/SIGTERM handlers, which Python
-        only allows in the main thread.  Since the fast worker runs as a daemon
-        thread we skip that step — the thread dies automatically when the main
-        thread exits.
-        """
-        def _install_signal_handlers(self):
-            pass
-
     def _run_fast_worker():
         r_fast = redis.from_url(flask_app.config['REDIS_URL'])
-        w = _ThreadSafeWorker(queues=[Queue('fast', connection=r_fast)], connection=r_fast)
+        # SimpleWorker runs jobs in-process without forking, so it needs no
+        # signal handlers and is safe to run in a non-main thread.
+        w = _SimpleWorker(queues=[Queue('fast', connection=r_fast)], connection=r_fast)
         logger.info('Fast worker listening on queue: fast')
         w.work(logging_level=logging.WARNING)
 
