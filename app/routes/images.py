@@ -316,17 +316,61 @@ def proxy_image_legacy(img_type='logo', ext='jpg'):
     abort(404)
 
 
+def delete_cached_logo(url: str) -> None:
+    """Delete all cached files (image, content-type, url sidecar) for a logo URL."""
+    if not url:
+        return
+    img_path, ct_path = _cache_paths(url, 'logo')
+    for path in (img_path, ct_path, img_path + '.url'):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def sweep_orphaned_logos(active_urls: list[str]) -> int:
+    """Delete cached logo files whose URL is no longer present in the DB.
+
+    active_urls: every distinct logo_url currently stored on Channel rows.
+    Returns count of files removed (counting each sidecar separately).
+    """
+    if not os.path.exists(_LOGO_DIR):
+        return 0
+    active_keys = {hashlib.md5(u.encode()).hexdigest() for u in active_urls if u}
+    removed = 0
+    try:
+        for fname in os.listdir(_LOGO_DIR):
+            if fname.endswith(('.ct', '.url')):
+                continue  # sidecars — handled together with their parent
+            if fname not in active_keys:
+                for suffix in ('', '.ct', '.url'):
+                    fpath = os.path.join(_LOGO_DIR, fname + suffix)
+                    try:
+                        os.unlink(fpath)
+                        removed += 1
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+    return removed
+
+
 def cache_logo(url: str, img_type: str = 'logo') -> bool:
     """
     Fetch *url* and store it in the cache.  Returns True on success.
-    Skips URLs that are already cached and fresh.
+    For logos: skips if the file already exists (URL-driven expiry — the file
+    is only removed when the channel's logo URL changes or the channel is gone).
+    For posters: uses TTL-based freshness.
     """
     if not url:
         return False
-    ttl = _POSTER_TTL if img_type == 'poster' else _LOGO_TTL
     img_path, ct_path = _cache_paths(url, img_type)
-    if _is_fresh(img_path, ttl):
-        return True
+    if img_type == 'logo':
+        if os.path.exists(img_path):
+            return True
+    else:
+        if _is_fresh(img_path, _POSTER_TTL):
+            return True
     return _fetch_and_cache(url, img_path, ct_path, img_type)
 
 
@@ -344,7 +388,7 @@ def prewarm_logo_cache(urls: list[str]) -> tuple[int, int]:
     stale, skipped = [], 0
     for u in urls:
         img_path, _ = _cache_paths(u, 'logo')
-        if _is_fresh(img_path, _LOGO_TTL):
+        if os.path.exists(img_path):
             skipped += 1
         else:
             stale.append(u)
@@ -386,8 +430,8 @@ def _cleanup_dir(directory: str, ttl: int) -> int:
 
 
 def cleanup_logo_cache() -> int:
-    """Delete logo cache files older than _LOGO_TTL. Returns count removed."""
-    return _cleanup_dir(_LOGO_DIR, _LOGO_TTL)
+    """Replaced by sweep_orphaned_logos — logos are now expired by URL change, not TTL."""
+    return 0
 
 
 def cleanup_poster_cache(expired_urls: list[str]) -> int:

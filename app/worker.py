@@ -989,11 +989,16 @@ def _upsert_channels(source, channel_data_list):
             ch.name          = cd.name
             ch.stream_url    = cd.stream_url
             ch.stream_type   = cd.stream_type
+            old_logo_url = ch.logo_url
             next_logo = _resolved_logo_url(ch.logo_url, cd.logo_url, logo_validation_cache)
             if next_logo != (ch.logo_url or None) and next_logo != (cd.logo_url or '').strip():
                 logger.info('[%s] keeping existing logo for %s after invalid replacement URL from scrape',
                             source.name, cd.name)
             ch.logo_url      = next_logo
+            if old_logo_url and old_logo_url != (next_logo or ''):
+                from app.routes.images import delete_cached_logo
+                delete_cached_logo(old_logo_url)
+                logger.debug('[%s] evicted cached logo for %s (URL changed)', source.name, cd.name)
             ch.slug          = cd.slug
             ch.category      = category_for_channel(cd.name, cd.category)
             ch.language      = cd.language
@@ -1324,13 +1329,21 @@ if __name__ == '__main__':
     def _scheduled_logo_cache_cleanup():
         import os as _os
         from app.routes.images import (
-            cleanup_logo_cache, cleanup_poster_cache,
+            sweep_orphaned_logos, cleanup_poster_cache,
             _LOGO_DIR, _POSTER_DIR,
         )
 
-        removed = cleanup_logo_cache()
+        with flask_app.app_context():
+            active_urls = [
+                row[0] for row in
+                db.session.query(Channel.logo_url)
+                .filter(Channel.logo_url.isnot(None))
+                .distinct()
+                .all()
+            ]
+        removed = sweep_orphaned_logos(active_urls)
         if removed:
-            logger.info('[logo_cache] removed %d expired logo files', removed)
+            logger.info('[logo_cache] removed %d orphaned logo files', removed)
 
         # Delete cached posters for programs that ended more than 2 hours ago
         with flask_app.app_context():
