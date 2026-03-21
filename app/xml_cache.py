@@ -217,22 +217,13 @@ def ensure_xml_artifact(cache_key: str, writer: Callable[[TextIO], None], *, wai
 
 
 def invalidate_xml_cache(cache_key: str | None = None) -> int:
+    # M3U files are intentionally NOT deleted here.  Deleting them causes a
+    # gap between invalidation and the async refresh job completing, during
+    # which every request returns a 503 "warming up".  Instead the old M3U
+    # stays on disk and keeps being served until the refresh job atomically
+    # overwrites it — the same stale-but-available behaviour XML uses.
     if cache_key is not None:
         mark_xml_stale(cache_key)
-        removed = 0
-        path = _cache_path(cache_key, 'm3u')
-        if path.exists():
-            path.unlink()
-            removed += 1
-        return removed
-
-    mark_xml_stale()
-    if not _CACHE_ROOT.exists():
-        return 0
-
-    removed = 0
-    for path in _CACHE_ROOT.glob('*.m3u'):
-        if path.is_file():
-            path.unlink(missing_ok=True)
-            removed += 1
-    return removed
+    else:
+        mark_xml_stale()
+    return 0
