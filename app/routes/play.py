@@ -37,10 +37,13 @@ def _check_manifest(url: str, session) -> str | None:
     Fetch the HLS manifest at url and return a disable reason string if the
     stream is unplayable, or None if it looks fine.
     Returns None on any fetch error (fail open — don't disable on network hiccups).
+    Returns 'Unauthorized' on 401 so callers can handle expired session tokens.
     """
     try:
         from urllib.parse import urljoin
         r = session.get(url, timeout=8)
+        if r.status_code == 401:
+            return 'Unauthorized'
         if r.status_code != 200:
             return None
         text = r.text
@@ -133,12 +136,24 @@ def play(source_name: str, channel_id: str):
         _app = current_app._get_current_object()
         check_session = scraper.session if scraper_cls else None
         _channel_id = channel.id
+        _source_name = source_name
+        _source_id = channel.source_id
 
         def _bg_check():
             import requests
             s = check_session or requests.Session()
             reason = _check_manifest(resolved_url, s)
             if not reason:
+                return
+            if reason == 'Unauthorized' and _source_name == 'roku':
+                # Synthetic OSM token has expired — clear it so the next resolve
+                # falls through to the playback API and fetches a fresh token.
+                logger.warning('[play] Roku synthetic URL returned 401 — clearing osm_session for refresh')
+                with _app.app_context():
+                    try:
+                        persist_source_config_updates(_source_id, {'osm_session': None})
+                    except Exception as e:
+                        logger.warning('[play] failed to clear osm_session: %s', e)
                 return
             with _app.app_context():
                 trigger_channel_auto_disable(_channel_id, reason)
