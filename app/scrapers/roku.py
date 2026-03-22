@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, ScrapeSkipError, infer_language_from_metadata, is_transient_network_error
 from .category_utils import infer_category_from_name
+from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
 
@@ -949,7 +950,7 @@ class RokuScraper(BaseScraper):
             country           = "US",
             stream_type       = "hls",
             number            = number,
-            slug              = f"|",  # playId resolved on demand; no gracenoteId from EPG
+            slug              = f"|{resolve_gracenote('roku', lookup_key=station_id) or ''}",
         ))
 
     def _add_channel_from_content(
@@ -984,10 +985,12 @@ class RokuScraper(BaseScraper):
         self._cache_play_id(station_id, play_id)
         self._cache_selector_url(station_id, selector_url)
 
-        # Gracenote station ID (numeric stationId in the EPG schedule)
+        # Gracenote station ID — prefer upstream field, fall back to CSV map
         gracenote_id = item.get("gracenoteStationId") or item.get("stationId") or ""
         if gracenote_id and not str(gracenote_id).isdigit():
             gracenote_id = ""
+        if not gracenote_id:
+            gracenote_id = resolve_gracenote("roku", lookup_key=station_id) or ""
 
         channels.append(ChannelData(
             source_channel_id = station_id,
