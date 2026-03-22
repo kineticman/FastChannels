@@ -15,6 +15,7 @@ from app.config_store import persist_source_config_updates
 from ..hls import inspect_hls_drm
 from ..models import Channel, Source
 from ..scrapers import registry
+from ..scrapers.base import StreamDeadError
 from .tasks import trigger_channel_auto_disable
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,13 @@ def play(source_name: str, channel_id: str):
         scraper = scraper_cls(config=channel.source.config or {})
         try:
             resolved_url = scraper.resolve(channel.stream_url)
+        except StreamDeadError as e:
+            logger.error(
+                '[play] channel confirmed dead ip=%s source=%s channel_id=%s channel_name=%s: %s',
+                client_ip, source_name, channel_id, channel.name, e,
+            )
+            trigger_channel_auto_disable(channel.id, 'Dead')
+            resolved_url = None
         except Exception as e:
             logger.error(
                 '[play] resolve failed ip=%s source=%s channel_id=%s channel_name=%s: %s',

@@ -1282,8 +1282,10 @@ class RokuScraper(BaseScraper):
                     selector_url = self._extract_selector_url(view_opts)
                     self._cache_selector_url(station_id, selector_url)
 
-            if not play_id:
-                # Try regex fallback from raw response
+            if not play_id and content_data is not None:
+                # Try regex fallback — only when content API returned data but no playId.
+                # Skip if content_data is None (404/403): making a second request risks
+                # triggering another 403 cooldown for a channel that won't resolve anyway.
                 content_url = _CONTENT_TPL.format(sid=station_id)
                 proxy_url   = _PROXY_BASE + quote(content_url, safe="")
                 try:
@@ -1360,6 +1362,16 @@ class RokuScraper(BaseScraper):
                 self._invalidate_selector_url(station_id)
                 self._invalidate_stream_url(station_id)
             raise RuntimeError(f"[roku] playback returned {r2.status_code} for {station_id}")
+        except StreamDeadError:
+            logger.warning(
+                "[roku] resolve %s failed stage=%s play_id_cache=%s selector_cache=%s content_lookup=%s",
+                station_id,
+                failure_stage,
+                had_play_id,
+                had_selector_url,
+                need_content_details,
+            )
+            raise
         except RuntimeError:
             logger.warning(
                 "[roku] resolve %s failed stage=%s play_id_cache=%s selector_cache=%s content_lookup=%s",
