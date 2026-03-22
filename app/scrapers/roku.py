@@ -390,7 +390,9 @@ class RokuScraper(BaseScraper):
         # Persist the extracted session token if it wasn't already saved (e.g. first
         # run after the feature was added, or after a cache flush).  Use the original
         # stream-URL timestamp so we don't falsely extend the token's apparent age.
-        if self._osm_session and not self.config.get("osm_session") and best_cached_at:
+        # Skip if osm_session key is explicitly present (even as None) — that means it
+        # was deliberately cleared (expired token) and should not be re-populated here.
+        if self._osm_session and "osm_session" not in self.config and best_cached_at:
             session_token, trace_id = self._osm_session
             self._update_config("osm_session", {
                 "session_token": session_token,
@@ -1348,27 +1350,7 @@ class RokuScraper(BaseScraper):
             except Exception:
                 media_format = "m3u"
 
-            # Step 2: try synthesizing from a cached OSM session token (no API call).
-            # Return the synthetic URL directly without pre-validating via HTTP — if the
-            # token is stale the player handles a CDN 403 gracefully, which is far better
-            # than falling through to the playback API and triggering a 403 cooldown that
-            # blocks every Roku channel for 300s.
-            if media_format == "m3u" and selector_url:
-                osm_session = self._cached_osm_session()
-                if osm_session:
-                    session_token, _ = osm_session
-                    synthetic = self._synthetic_osm_url(selector_url, session_token, str(uuid.uuid4()))
-                    if synthetic:
-                        self._cache_play_id(station_id, play_id)
-                        self._cache_selector_url(station_id, selector_url)
-                        self._cache_stream_url(station_id, synthetic)
-                        logger.info(
-                            "[roku] resolve %s via synthetic_osm play_id_cache=%s selector_cache=%s content_lookup=%s",
-                            station_id, had_play_id, had_selector_url, need_content_details,
-                        )
-                        return synthetic
-
-            # Step 3: call /api/v3/playback
+            # Step 2: call /api/v3/playback
             failure_stage = "playback"
             session_id = self.session.cookies.get("_usn", "roku-scraper")
             body = {

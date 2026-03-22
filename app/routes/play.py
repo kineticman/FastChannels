@@ -146,12 +146,17 @@ def play(source_name: str, channel_id: str):
             if not reason:
                 return
             if reason == 'Unauthorized' and _source_name == 'roku':
-                # Synthetic OSM token has expired — clear it so the next resolve
-                # falls through to the playback API and fetches a fresh token.
-                logger.warning('[play] Roku synthetic URL returned 401 — clearing osm_session for refresh')
+                # OSM session token has expired. Clear both osm_session AND
+                # stream_url_cache — all cached OSM URLs embed the same stale
+                # token, and _load_stream_url_cache() would otherwise extract it
+                # and rebuild _osm_session from the cache, defeating the clear.
+                logger.warning('[play] Roku OSM token expired (401) — clearing osm_session and stream_url_cache')
                 with _app.app_context():
                     try:
-                        persist_source_config_updates(_source_id, {'osm_session': None})
+                        persist_source_config_updates(_source_id, {
+                            'osm_session': None,
+                            'stream_url_cache': None,  # None replaces; {} would merge (no-op)
+                        })
                     except Exception as e:
                         logger.warning('[play] failed to clear osm_session: %s', e)
                 return
