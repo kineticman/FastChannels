@@ -129,7 +129,10 @@ def play(source_name: str, channel_id: str):
     # blocking the redirect. The check runs in a background thread so Channels
     # DVR gets the 302 immediately, avoiding 504s on slow upstream sources.
     if channel.is_active and resolved_url and resolved_url.startswith('http'):
+        from flask import current_app
+        _app = current_app._get_current_object()
         check_session = scraper.session if scraper_cls else None
+        _channel_id = channel.id
 
         def _bg_check():
             import requests
@@ -137,7 +140,8 @@ def play(source_name: str, channel_id: str):
             reason = _check_manifest(resolved_url, s)
             if not reason:
                 return
-            trigger_channel_auto_disable(channel.id, reason)
+            with _app.app_context():
+                trigger_channel_auto_disable(_channel_id, reason)
 
         threading.Thread(target=_bg_check, daemon=True).start()
 
