@@ -179,6 +179,7 @@ class RokuScraper(BaseScraper):
         self._load_cached_session()
         self._load_play_id_cache()
         self._load_selector_url_cache()
+        self._load_osm_session()
         self._load_stream_url_cache()
         self._load_403_cooldown()
         self._load_description_cache()
@@ -385,6 +386,16 @@ class RokuScraper(BaseScraper):
                 self._try_update_osm_session(str(stream_url))
                 if self._osm_session:
                     best_cached_at = float(cached_at)
+        # Persist the extracted session token if it wasn't already saved (e.g. first
+        # run after the feature was added, or after a cache flush).  Use the original
+        # stream-URL timestamp so we don't falsely extend the token's apparent age.
+        if self._osm_session and not self.config.get("osm_session") and best_cached_at:
+            session_token, trace_id = self._osm_session
+            self._update_config("osm_session", {
+                "session_token": session_token,
+                "trace_id": trace_id,
+                "cached_at": best_cached_at,
+            })
 
     def _persist_stream_url_cache(self) -> None:
         self._update_config("stream_url_cache", self._stream_url_cache)
@@ -396,6 +407,32 @@ class RokuScraper(BaseScraper):
             trace = (parse_qs(urlparse(stream_url).query).get("traceId") or [""])[0]
             self._osm_session = (m.group(2), trace)
 
+    def _load_osm_session(self) -> None:
+        """Load a previously persisted OSM session token from sources.config."""
+        raw = self.config.get("osm_session") or {}
+        if not isinstance(raw, dict):
+            return
+        session_token = raw.get("session_token")
+        trace_id = raw.get("trace_id", "")
+        cached_at = raw.get("cached_at")
+        if not session_token or not isinstance(cached_at, (int, float)):
+            return
+        if (time.time() - float(cached_at)) >= _STREAM_URL_TTL:
+            return
+        self._osm_session = (str(session_token), str(trace_id))
+        logger.debug("[roku] loaded persisted osm_session (age=%.0fs)", time.time() - float(cached_at))
+
+    def _persist_osm_session(self) -> None:
+        """Save the current OSM session token to sources.config so it survives restarts."""
+        if not self._osm_session:
+            return
+        session_token, trace_id = self._osm_session
+        self._update_config("osm_session", {
+            "session_token": session_token,
+            "trace_id": trace_id,
+            "cached_at": time.time(),
+        })
+
     def _cache_stream_url(self, station_id: str, stream_url: str | None) -> None:
         if not station_id or not stream_url:
             return
@@ -405,6 +442,7 @@ class RokuScraper(BaseScraper):
         }
         self._persist_stream_url_cache()
         self._try_update_osm_session(stream_url)
+        self._persist_osm_session()
 
     def _cached_stream_url(self, station_id: str) -> str | None:
         entry = self._stream_url_cache.get(station_id)

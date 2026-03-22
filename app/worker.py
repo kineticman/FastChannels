@@ -514,6 +514,18 @@ def run_stream_audit(source_name: str):
                         logger.warning('[audit] transient resolve failure for %s: %s', ch.name, re_exc)
                         errors += 1
                         continue
+                    # If the scraper entered a rate-limit cooldown, wait it out rather
+                    # than burning through the consecutive-error budget on channels that
+                    # will all fail until the cooldown expires.
+                    _cooldown_active = getattr(scraper, '_cooldown_active', None)
+                    _cooldown_remaining = getattr(scraper, '_cooldown_remaining', None)
+                    if callable(_cooldown_active) and _cooldown_active():
+                        wait = int((_cooldown_remaining() if callable(_cooldown_remaining) else 60) + 2)
+                        logger.warning('[audit] %s: rate-limit cooldown active — waiting %ds',
+                                       source_name, wait)
+                        _time.sleep(wait)
+                        errors += 1
+                        continue
                     logger.warning('[audit] resolve failed for %s: %s', ch.name, re_exc)
                     errors += 1
                     consecutive_errors += 1
