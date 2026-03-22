@@ -1348,13 +1348,17 @@ class RokuScraper(BaseScraper):
             except Exception:
                 media_format = "m3u"
 
-            # Step 2: try synthesizing from a cached OSM session token (no API call)
+            # Step 2: try synthesizing from a cached OSM session token (no API call).
+            # Return the synthetic URL directly without pre-validating via HTTP — if the
+            # token is stale the player handles a CDN 403 gracefully, which is far better
+            # than falling through to the playback API and triggering a 403 cooldown that
+            # blocks every Roku channel for 300s.
             if media_format == "m3u" and selector_url:
                 osm_session = self._cached_osm_session()
                 if osm_session:
                     session_token, _ = osm_session
                     synthetic = self._synthetic_osm_url(selector_url, session_token, str(uuid.uuid4()))
-                    if synthetic and self._validate_stream_url(synthetic):
+                    if synthetic:
                         self._cache_play_id(station_id, play_id)
                         self._cache_selector_url(station_id, selector_url)
                         self._cache_stream_url(station_id, synthetic)
