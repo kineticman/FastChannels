@@ -1269,13 +1269,20 @@ def gracenote_community_map():
 
 @api_bp.route('/gracenote/remote-map/status', methods=['GET'])
 def gracenote_remote_map_status():
-    return jsonify(remote_map_status())
+    settings = AppSettings.get()
+    status = remote_map_status()
+    status['url'] = settings.effective_gracenote_map_url()
+    status['url_is_default'] = not (settings.gracenote_map_url or '').strip()
+    return jsonify(status)
 
 
 @api_bp.route('/gracenote/remote-map/refresh', methods=['POST'])
 def gracenote_remote_map_refresh():
-    success, message = fetch_remote_gracenote_map()
+    settings = AppSettings.get()
+    url = settings.effective_gracenote_map_url()
+    success, message = fetch_remote_gracenote_map(url)
     status = remote_map_status()
+    status['url'] = url
     return jsonify({'ok': success, 'message': message, **status}), (200 if success else 502)
 
 
@@ -1668,6 +1675,8 @@ def app_settings():
             row.timezone_name = tz_name
         if 'gracenote_auto_fill' in data:
             row.gracenote_auto_fill = bool(data['gracenote_auto_fill'])
+        if 'gracenote_map_url' in data:
+            row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         db.session.commit()
         write_timezone_cache(row.timezone_name)
         _invalidate_and_refresh_xml()
@@ -1677,6 +1686,7 @@ def app_settings():
         'public_base_url':   row.effective_public_base_url(),
         'timezone_name':     row.effective_timezone_name(),
         'gracenote_auto_fill': row.gracenote_auto_fill if row.gracenote_auto_fill is not None else True,
+        'gracenote_map_url': row.gracenote_map_url or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.env_public_base_url() is not None else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',

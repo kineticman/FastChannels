@@ -474,12 +474,17 @@
           <span class="save-status" id="gracenote-auto-fill-status"></span>
         </div>
       </div>
-      <div class="toggle-row" id="gn-remote-row" style="display:none">
+      <div class="toggle-row" id="gn-remote-row">
         <div class="toggle-row-text">
-          <div class="toggle-row-label">Community Map</div>
-          <div class="toggle-row-help" id="gn-remote-meta">Loading…</div>
+          <div class="toggle-row-label">Community Map URL</div>
+          <div class="toggle-row-help">Remote CSV fetched on startup and refreshed daily. Leave blank to use the default FastChannels community Gist.</div>
+          <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+            <input type="url" id="gn-map-url" style="flex:1;min-width:260px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.82rem;padding:0.35rem 0.6rem" placeholder="Default Gist URL">
+            <button class="btn btn-secondary" onclick="saveGracenoteMapUrl()">Save URL</button>
+          </div>
+          <div id="gn-remote-meta" style="margin-top:0.4rem;color:#64748b;font-size:0.8rem"></div>
         </div>
-        <div class="toggle-row-control">
+        <div class="toggle-row-control" style="flex-shrink:0">
           <button class="btn btn-audit" id="gn-remote-refresh-btn" onclick="refreshRemoteGracenoteMap()">Refresh Now</button>
           <span class="save-status" id="gn-remote-status"></span>
         </div>
@@ -693,17 +698,36 @@ async function loadRemoteGracenoteStatus() {
   try {
     const r = await fetch('/api/gracenote/remote-map/status');
     const d = await r.json();
-    if (!d.url) return; // env var not set — hide the row entirely
-    const row = document.getElementById('gn-remote-row');
+    const urlInput = document.getElementById('gn-map-url');
     const meta = document.getElementById('gn-remote-meta');
-    if (row) row.style.display = '';
+    if (urlInput) urlInput.value = d.url_is_default ? '' : (d.url || '');
+    if (urlInput) urlInput.placeholder = d.url || 'Default Gist URL';
     if (meta) {
       const ts = d.fetched_at ? new Date(d.fetched_at * 1000).toLocaleString() : null;
-      const count = d.row_count ? ` · ${d.row_count.toLocaleString()} rows` : '';
-      const last = ts ? ` · Last fetched ${ts}` : (d.cached ? ' · Cached on disk' : ' · Not yet fetched');
-      meta.textContent = `Remote CSV from GitHub${count}${last}`;
+      const count = d.row_count ? `${d.row_count.toLocaleString()} rows` : 'not yet fetched';
+      const last = ts ? ` · Last fetched ${ts}` : '';
+      meta.textContent = `${count}${last}`;
     }
   } catch(e) { /* silently ignore */ }
+}
+
+async function saveGracenoteMapUrl() {
+  const url = (document.getElementById('gn-map-url')?.value || '').trim();
+  const status = document.getElementById('gn-remote-status');
+  status.className = 'save-status'; status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ gracenote_map_url: url }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    status.className = 'save-status ok'; status.textContent = '✓ Saved';
+    setTimeout(() => { status.textContent = ''; }, 3000);
+    loadRemoteGracenoteStatus();
+  } catch(e) {
+    status.className = 'save-status error'; status.textContent = '✕ ' + e.message;
+  }
 }
 
 async function refreshRemoteGracenoteMap() {

@@ -208,6 +208,7 @@ class AppSettings(db.Model):
     public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True)  # scrapers auto-assign Gracenote IDs
+    gracenote_map_url    = db.Column(db.Text, nullable=True)  # remote community CSV URL (defaults to built-in Gist)
 
     @staticmethod
     def _env_int(name: str) -> int | None:
@@ -253,6 +254,14 @@ class AppSettings(db.Model):
     def effective_channels_dvr_url(self) -> str | None:
         value = (self.channels_dvr_url or '').strip().rstrip('/')
         return value or self.env_channels_dvr_url()
+
+    _DEFAULT_GRACENOTE_MAP_URL = (
+        'https://gist.githubusercontent.com/kineticman/'
+        '87765d469610233f894c9c225cb4f2ca/raw/gistfile1.txt'
+    )
+
+    def effective_gracenote_map_url(self) -> str:
+        return (self.gracenote_map_url or '').strip() or self._DEFAULT_GRACENOTE_MAP_URL
 
     def effective_timezone_name(self) -> str:
         from .timezone_utils import current_timezone_name

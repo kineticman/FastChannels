@@ -120,6 +120,8 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN gracenote_auto_fill BOOLEAN NOT NULL DEFAULT 1"
                 ))
+            if "gracenote_map_url" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN gracenote_map_url TEXT"))
 
         if "sources" in tables:
             src_cols = {

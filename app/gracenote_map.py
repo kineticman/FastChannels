@@ -12,7 +12,6 @@ log = logging.getLogger(__name__)
 _BUILTIN_PATH = Path(__file__).resolve().parent / "data" / "gracenote_map.csv"
 _OVERRIDE_PATH = Path(os.environ.get("FASTCHANNELS_GRACENOTE_MAP_PATH") or "/data/gracenote_map_overrides.csv")
 _REMOTE_CACHE_PATH = Path("/data/gracenote_map_remote.csv")
-_REMOTE_URL = (os.environ.get("FASTCHANNELS_GRACENOTE_MAP_URL") or "").strip()
 
 # Timestamp of the last successful remote fetch (epoch seconds, 0 = never).
 _remote_fetched_at: float = 0.0
@@ -77,16 +76,15 @@ def reload_gracenote_map() -> None:
     _load_map.cache_clear()
 
 
-def fetch_remote_gracenote_map() -> tuple[bool, str]:
+def fetch_remote_gracenote_map(url: str) -> tuple[bool, str]:
     """Download the remote community map CSV and cache it to disk.
 
     Returns (success, message).  Clears the in-memory cache on success so the
     next lookup picks up the new data.
     """
     global _remote_fetched_at
-    url = _REMOTE_URL
     if not url:
-        return False, "FASTCHANNELS_GRACENOTE_MAP_URL is not configured."
+        return False, "No remote URL configured."
 
     import requests
     try:
@@ -119,7 +117,6 @@ def fetch_remote_gracenote_map() -> tuple[bool, str]:
 def remote_map_status() -> dict:
     """Return metadata about the remote map for display in the UI."""
     return {
-        "url": _REMOTE_URL or None,
         "cached": _REMOTE_CACHE_PATH.exists(),
         "fetched_at": _remote_fetched_at or None,
         "cache_path": str(_REMOTE_CACHE_PATH),

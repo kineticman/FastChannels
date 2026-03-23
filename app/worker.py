@@ -1553,10 +1553,11 @@ if __name__ == '__main__':
                       max_instances=1, coalesce=True)
 
     def _scheduled_remote_gracenote_refresh():
-        from app.gracenote_map import fetch_remote_gracenote_map, _REMOTE_URL
-        if not _REMOTE_URL:
-            return
-        ok, msg = fetch_remote_gracenote_map()
+        from app.gracenote_map import fetch_remote_gracenote_map
+        with flask_app.app_context():
+            from app.models import AppSettings
+            url = AppSettings.get().effective_gracenote_map_url()
+        ok, msg = fetch_remote_gracenote_map(url)
         if not ok:
             logger.warning('[gracenote-map] scheduled remote refresh failed: %s', msg)
 
@@ -1582,17 +1583,17 @@ if __name__ == '__main__':
         except Exception:
             logger.exception('[xml-cache] startup refresh failed')
 
-        # Fetch remote community Gracenote map on startup if URL is configured
-        from app.gracenote_map import fetch_remote_gracenote_map, _REMOTE_URL
-        if _REMOTE_URL:
-            try:
-                ok, msg = fetch_remote_gracenote_map()
-                if ok:
-                    logger.info('[gracenote-map] startup remote fetch: %s', msg)
-                else:
-                    logger.warning('[gracenote-map] startup remote fetch failed: %s', msg)
-            except Exception:
-                logger.exception('[gracenote-map] startup remote fetch error')
+        # Fetch remote community Gracenote map on startup
+        try:
+            from app.gracenote_map import fetch_remote_gracenote_map
+            url = AppSettings.get().effective_gracenote_map_url()
+            ok, msg = fetch_remote_gracenote_map(url)
+            if ok:
+                logger.info('[gracenote-map] startup remote fetch: %s', msg)
+            else:
+                logger.warning('[gracenote-map] startup remote fetch failed: %s', msg)
+        except Exception:
+            logger.exception('[gracenote-map] startup remote fetch error')
 
     class _NoopDeathPenalty(_BaseDeathPenalty):
         """Job timeout enforcer that does nothing — safe for non-main threads.
