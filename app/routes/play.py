@@ -134,14 +134,15 @@ def play(source_name: str, channel_id: str):
     if channel.is_active and resolved_url and resolved_url.startswith('http'):
         from flask import current_app
         _app = current_app._get_current_object()
-        check_session = scraper.session if scraper_cls else None
         _channel_id = channel.id
         _source_name = source_name
         _source_id = channel.source_id
 
         def _bg_check():
             import requests
-            s = check_session or requests.Session()
+            # Use a plain session without retry adapters — this is a one-shot
+            # health probe; retries just add latency in the background thread.
+            s = requests.Session()
             reason = _check_manifest(resolved_url, s)
             if not reason:
                 return
