@@ -179,6 +179,21 @@ def ensure_runtime_schema() -> None:
                 "SET last_seen_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) "
                 "WHERE is_active = 1 AND last_seen_at IS NULL"
             ))
+            # Migration 011: channels that had no gracenote_id of their own but shared a
+            # name with a channel that did were silently routed to the Gracenote M3U by
+            # the cross-source name-matching feature (commit f6d5cd4, reverted).  Set
+            # gracenote_mode='off' on those channels so they stay out of Gracenote
+            # routing even if name matching is re-introduced.
+            conn.execute(text(
+                "UPDATE channels "
+                "SET gracenote_mode = 'off' "
+                "WHERE (gracenote_id IS NULL OR gracenote_id = '') "
+                "AND gracenote_mode NOT IN ('off', 'manual') "
+                "AND LOWER(name) IN ("
+                "    SELECT LOWER(name) FROM channels "
+                "    WHERE gracenote_id IS NOT NULL AND gracenote_id != ''"
+                ")"
+            ))
 
         if "programs" in tables:
             program_cols = {
