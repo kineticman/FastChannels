@@ -195,6 +195,29 @@ def ensure_runtime_schema() -> None:
                 ")"
             ))
 
+        # Migration 012: clear gracenote_ids that came from the community CSV rather
+        # than the native scraper API.  Channels with gracenote_mode='manual' are left
+        # untouched (user explicitly set them).  Cleared channels get gracenote_mode='off'
+        # so the scraper won't re-populate them from the CSV on the next scrape, and users
+        # can re-assign via the Gracenote helper popup if desired.
+        if "channels" in tables and "sources" in tables:
+            from .gracenote_map import lookup_gracenote
+            rows = conn.execute(text(
+                "SELECT c.id, c.gracenote_id, s.name, c.source_channel_id "
+                "FROM channels c JOIN sources s ON c.source_id = s.id "
+                "WHERE c.gracenote_id IS NOT NULL AND c.gracenote_id != '' "
+                "AND (c.gracenote_mode IS NULL OR c.gracenote_mode NOT IN ('manual', 'off'))"
+            )).fetchall()
+            to_clear = [
+                row[0] for row in rows
+                if (m := lookup_gracenote(row[2], row[3])) and m.get('tmsid') == row[1]
+            ]
+            if to_clear:
+                conn.execute(
+                    text("UPDATE channels SET gracenote_id = NULL, gracenote_mode = 'off' WHERE id = :id"),
+                    [{'id': rid} for rid in to_clear],
+                )
+
         if "programs" in tables:
             program_cols = {
                 row[1]

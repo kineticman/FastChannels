@@ -45,6 +45,10 @@ def _parse_gracenote_id(ch) -> str | None:
                                   slug before the dedicated column existed; still honoured
                                   so existing data keeps working without a re-scrape.
     """
+    # Respect gracenote_mode — 'off' means never route to Gracenote M3U
+    if getattr(ch, 'gracenote_mode', None) == 'off':
+        return None
+
     # 1. Dedicated column (preferred)
     gid = (ch.gracenote_id or '').strip()
     if gid and _GRACENOTE_PREFIX_RE.match(gid):

@@ -40,7 +40,7 @@ def inspect_hls_drm(manifest_text: str) -> dict | None:
 
         drm_type = None
         keyformat_lower = keyformat.lower()
-        if keyformat:
+        if keyformat and keyformat_lower != 'identity':
             if 'widevine' in keyformat_lower or 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed' in keyformat_lower:
                 drm_type = 'Widevine'
             elif 'fairplay' in keyformat_lower or 'apple' in keyformat_lower or 'com.apple.streamingkeydelivery' in keyformat_lower:
