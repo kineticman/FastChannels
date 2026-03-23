@@ -344,7 +344,7 @@
 
       tbody.innerHTML = rows.map(row => {
         const s = cmStatusInfo(row);
-        const canApply = s.key === 'available' || s.key === 'native';
+        const alreadyApplied = s.key === 'applied';
         return `
           <tr id="cm-row-${row.channel_id}">
             <td>${escHtml(row.channel_name)}</td>
@@ -355,8 +355,8 @@
             <td>
               <button class="btn-cm-apply" id="cm-btn-${row.channel_id}"
                 onclick="applyCommunityId(${row.channel_id}, '${escHtml(row.community_tmsid)}', this)"
-                ${canApply ? '' : 'disabled'}
-              >${canApply ? 'Apply' : '—'}</button>
+                ${alreadyApplied ? 'disabled' : ''}
+              >${alreadyApplied ? 'Applied' : 'Apply'}</button>
             </td>
           </tr>
         `;
