@@ -199,6 +199,47 @@
     }
     .advanced-chevron.open { transform: rotate(180deg); }
 
+    /* ── Toggle row (checkbox settings) ── */
+    .toggle-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1.5rem;
+      padding: 0.75rem 0 0.25rem;
+    }
+    .toggle-row-text { flex: 1; }
+    .toggle-row-label {
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: #e2e8f0;
+      margin-bottom: 0.3rem;
+    }
+    .toggle-row-help { font-size: 0.78rem; color: #64748b; line-height: 1.45; }
+    .toggle-row-control {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.4rem;
+      flex-shrink: 0;
+    }
+    .toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; cursor: pointer; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; inset: 0;
+      background: #334155; border-radius: 24px;
+      transition: background 0.2s;
+    }
+    .toggle-slider::before {
+      content: ''; position: absolute;
+      width: 18px; height: 18px; left: 3px; top: 3px;
+      background: #94a3b8; border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle-switch input:checked + .toggle-slider { background: #4f46e5; }
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(20px); background: #fff;
+    }
+
     .modal-overlay {
       display: none; position: fixed; inset: 0;
       background: rgba(0,0,0,0.65); z-index: 1000;
@@ -418,20 +459,20 @@
       </div>
     </div>
     <div class="source-body open">
-      <div class="fields-grid" style="max-width:480px">
-        <div class="field field-full">
-          <label for="gracenote-auto-fill-toggle">Automatic Gracenote ID Assignment</label>
-          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;margin-top:0.25rem">
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Auto-assign Gracenote IDs</div>
+          <div class="toggle-row-help">When enabled, scrapers populate Gracenote guide IDs for channels that support it. Channels with manually assigned IDs are never affected. Disabling will prompt you to optionally clear all auto-assigned IDs.</div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
             <input type="checkbox" id="gracenote-auto-fill-toggle"
                    {% if gracenote_auto_fill %}checked{% endif %}
                    onchange="onGracenoteAutoFillChange(this)">
-            Enable automatic Gracenote IDs during scraping
+            <span class="toggle-slider"></span>
           </label>
-          <div class="help">When enabled, scrapers populate Gracenote guide IDs for channels that support it. Channels with manually assigned IDs are never affected. Disabling will prompt you to optionally clear all auto-assigned IDs.</div>
+          <span class="save-status" id="gracenote-auto-fill-status"></span>
         </div>
-      </div>
-      <div class="field-actions">
-        <span class="save-status" id="gracenote-auto-fill-status"></span>
       </div>
     </div>
   </div>
