@@ -389,24 +389,27 @@
   <div class="source-card">
     <div class="source-header" style="cursor:default">
       <div class="source-title">
-        <div class="source-icon">📺</div>
+        <div class="source-icon">🎬</div>
         <div>
           <div class="source-name">Gracenote Guide Data</div>
-          <div class="source-subtitle">Controls automatic guide ID assignment during scraping</div>
+          <div class="source-meta">Control automatic guide ID assignment during scraping</div>
         </div>
       </div>
     </div>
-    <div class="source-body">
-      <div class="settings-row">
-        <div class="settings-field">
-          <label style="display:flex;align-items:center;gap:0.6rem;cursor:pointer">
+    <div class="source-body open">
+      <div class="fields-grid" style="max-width:480px">
+        <div class="field field-full">
+          <label for="gracenote-auto-fill-toggle">Automatic Gracenote ID Assignment</label>
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;margin-top:0.25rem">
             <input type="checkbox" id="gracenote-auto-fill-toggle"
                    {% if gracenote_auto_fill %}checked{% endif %}
                    onchange="onGracenoteAutoFillChange(this)">
-            Automatically assign Gracenote IDs during scraping
+            Enable automatic Gracenote IDs during scraping
           </label>
-          <div class="help">When enabled, scrapers populate Gracenote guide IDs for channels that support it. Channels with manually assigned IDs are never affected. Disabling will optionally clear all auto-assigned IDs.</div>
+          <div class="help">When enabled, scrapers populate Gracenote guide IDs for channels that support it. Channels with manually assigned IDs are never affected. Disabling will prompt you to optionally clear all auto-assigned IDs.</div>
         </div>
+      </div>
+      <div class="field-actions">
         <span class="save-status" id="gracenote-auto-fill-status"></span>
       </div>
     </div>
