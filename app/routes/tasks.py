@@ -119,7 +119,12 @@ def trigger_scrape(source_name: str, *, force_full: bool = False):
 
 def trigger_stream_audit(source_name: str):
     try:
-        get_queue().enqueue('app.worker.run_stream_audit', source_name, job_timeout=1800)
+        q = get_queue()
+        job_id = f'audit-{source_name}'
+        if _job_already_active(q, job_id):
+            logger.info('Stream audit already queued/running for %s', source_name)
+            return
+        q.enqueue('app.worker.run_stream_audit', source_name, job_timeout=1800, job_id=job_id)
         logger.info(f'Enqueued stream audit for {source_name}')
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for {source_name}')
@@ -130,7 +135,12 @@ def trigger_stream_audit(source_name: str):
 
 def trigger_stream_audit_recheck(source_name: str, channel_ids: list):
     try:
-        get_queue().enqueue('app.worker.run_stream_audit_recheck', source_name, channel_ids, job_timeout=600)
+        q = get_queue()
+        job_id = f'audit-recheck-{source_name}'
+        if _job_already_active(q, job_id):
+            logger.info('Stream audit recheck already queued/running for %s', source_name)
+            return
+        q.enqueue('app.worker.run_stream_audit_recheck', source_name, channel_ids, job_timeout=600, job_id=job_id)
         logger.info(f'Enqueued stream audit recheck for {source_name} ({len(channel_ids)} channels)')
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for {source_name}')
