@@ -238,6 +238,14 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE programs ADD COLUMN original_air_date DATE"
                 ))
+            existing_indexes = {
+                row[1]
+                for row in conn.execute(text("PRAGMA index_list(programs)"))
+            }
+            if "idx_programs_end_time" not in existing_indexes:
+                conn.execute(text(
+                    "CREATE INDEX idx_programs_end_time ON programs (end_time)"
+                ))
 
         # Normalize the one hyphenated internal source id to snake_case so
         # source naming stays consistent across code paths and fresh installs.
