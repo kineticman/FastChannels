@@ -115,6 +115,11 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN public_base_url TEXT"))
             if "timezone_name" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN timezone_name TEXT"))
+            if "gracenote_auto_fill" not in cols:
+                # Existing installs default ON — preserve current auto-fill behaviour.
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN gracenote_auto_fill BOOLEAN NOT NULL DEFAULT 1"
+                ))
 
         if "sources" in tables:
             src_cols = {

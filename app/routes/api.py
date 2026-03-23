@@ -1619,6 +1619,8 @@ def app_settings():
             if data.get('timezone_name') and tz_name is None:
                 return jsonify({'error': f"Invalid timezone: {data.get('timezone_name')}"}), 422
             row.timezone_name = tz_name
+        if 'gracenote_auto_fill' in data:
+            row.gracenote_auto_fill = bool(data['gracenote_auto_fill'])
         db.session.commit()
         write_timezone_cache(row.timezone_name)
         _invalidate_and_refresh_xml()
@@ -1627,10 +1629,22 @@ def app_settings():
         'channels_dvr_url':  row.effective_channels_dvr_url(),
         'public_base_url':   row.effective_public_base_url(),
         'timezone_name':     row.effective_timezone_name(),
+        'gracenote_auto_fill': row.gracenote_auto_fill if row.gracenote_auto_fill is not None else True,
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.env_public_base_url() is not None else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
     })
+
+
+@api_bp.route('/settings/gracenote-auto-clear', methods=['POST'])
+def gracenote_auto_clear():
+    """Disable auto-fill and clear all auto-assigned Gracenote IDs."""
+    from .tasks import trigger_gracenote_auto_clear
+    row = AppSettings.get()
+    row.gracenote_auto_fill = False
+    db.session.commit()
+    trigger_gracenote_auto_clear()
+    return jsonify({'status': 'queued'})
 
 
 @api_bp.route('/settings/export')

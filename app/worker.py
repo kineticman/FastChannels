@@ -155,6 +155,9 @@ def _utc_aware(dt: datetime | None) -> datetime | None:
 def run_scraper(source_name: str, force_full: bool = False):
     with flask_app.app_context():
         db.session.remove()
+        from .models import AppSettings
+        _app_settings = AppSettings.get()
+        _gracenote_auto_fill = getattr(_app_settings, 'gracenote_auto_fill', True)
         source = Source.query.filter_by(name=source_name).first()
         if not source:
             logger.error(f'Source not found: {source_name}')
@@ -1034,6 +1037,20 @@ def _channel_ids_for_filters(filters: dict) -> list[int]:
     return [row[0] for row in q.with_entities(Channel.id).all()]
 
 
+def run_gracenote_auto_clear():
+    """Clear gracenote_id from all channels with gracenote_mode='auto'.
+    Called when the user disables global auto-fill and confirms the clear."""
+    with flask_app.app_context():
+        rows = Channel.query.filter_by(gracenote_mode='auto').all()
+        cleared = 0
+        for ch in rows:
+            if ch.gracenote_id:
+                ch.gracenote_id = None
+                cleared += 1
+        db.session.commit()
+        logger.info('[gracenote-clear] cleared gracenote_id from %d auto-mode channels', cleared)
+
+
 def run_source_channel_purge(source_id: int):
     with flask_app.app_context():
         source = Source.query.get(source_id)
@@ -1222,7 +1239,7 @@ def _upsert_channels(source, channel_data_list):
             mode = (getattr(ch, 'gracenote_mode', None) or ('manual' if getattr(ch, 'gracenote_locked', False) else 'auto')).strip().lower()
             # Manual/Off modes are authoritative until the user switches back
             # to Auto, so scraper/helper data only fills gaps on auto rows.
-            if mode == 'auto' and gracenote_id is not None:
+            if mode == 'auto' and gracenote_id is not None and _gracenote_auto_fill:
                 ch.gracenote_id = gracenote_id
         else:
             db.session.add(Channel(
@@ -1237,7 +1254,7 @@ def _upsert_channels(source, channel_data_list):
                 language          = cd.language,
                 country           = cd.country,
                 number            = cd.number,
-                gracenote_id      = gracenote_id,
+                gracenote_id      = gracenote_id if _gracenote_auto_fill else None,
                 gracenote_locked  = False,
                 gracenote_mode    = 'auto',
                 guide_key         = getattr(cd, 'guide_key', None),

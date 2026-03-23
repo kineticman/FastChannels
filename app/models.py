@@ -202,11 +202,12 @@ class AppSettings(db.Model):
     """Single-row global settings table (always id=1)."""
     __tablename__ = 'app_settings'
 
-    id                 = db.Column(db.Integer, primary_key=True)
-    global_chnum_start = db.Column(db.Integer, nullable=True)  # master tvg-chno start for ungrouped sources
-    channels_dvr_url   = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
-    public_base_url    = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
-    timezone_name      = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
+    id                   = db.Column(db.Integer, primary_key=True)
+    global_chnum_start   = db.Column(db.Integer, nullable=True)  # master tvg-chno start for ungrouped sources
+    channels_dvr_url     = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
+    public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
+    timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
+    gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True)  # scrapers auto-assign Gracenote IDs
 
     @staticmethod
     def _env_int(name: str) -> int | None:

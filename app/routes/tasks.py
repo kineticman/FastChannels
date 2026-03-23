@@ -196,6 +196,22 @@ def trigger_bulk_channel_update(filters: dict, enable: bool):
         threading.Thread(target=run_bulk_channel_update, args=(filters or {}, enable), daemon=True).start()
 
 
+def trigger_gracenote_auto_clear():
+    try:
+        q = get_queue()
+        job_id = 'gracenote-auto-clear'
+        if _job_already_active(q, job_id):
+            logger.info('Gracenote auto-clear already queued/running')
+            return
+        q.enqueue('app.worker.run_gracenote_auto_clear', job_timeout=300, job_id=job_id)
+        logger.info('Enqueued gracenote auto-clear')
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for gracenote auto-clear')
+        import threading
+        from app.worker import run_gracenote_auto_clear
+        threading.Thread(target=run_gracenote_auto_clear, daemon=True).start()
+
+
 def trigger_channel_auto_disable(channel_id: int, reason: str):
     try:
         q = get_fast_queue()

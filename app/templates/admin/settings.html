@@ -209,6 +209,8 @@
       transition: opacity 0.15s, background 0.15s;
     }
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-danger { background: #7f1d1d; color: #fca5a5; }
+    .btn-danger:hover { background: #991b1b; }
     .btn-primary { background: #6366f1; color: #fff; }
     .btn-primary:hover:not(:disabled) { background: #818cf8; }
     .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #334155; }
@@ -383,6 +385,49 @@
     </div>
   </div>
 
+  <!-- Gracenote card -->
+  <div class="source-card">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">📺</div>
+        <div>
+          <div class="source-name">Gracenote Guide Data</div>
+          <div class="source-subtitle">Controls automatic guide ID assignment during scraping</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body">
+      <div class="settings-row">
+        <div class="settings-field">
+          <label style="display:flex;align-items:center;gap:0.6rem;cursor:pointer">
+            <input type="checkbox" id="gracenote-auto-fill-toggle"
+                   {% if gracenote_auto_fill %}checked{% endif %}
+                   onchange="onGracenoteAutoFillChange(this)">
+            Automatically assign Gracenote IDs during scraping
+          </label>
+          <div class="help">When enabled, scrapers populate Gracenote guide IDs for channels that support it. Channels with manually assigned IDs are never affected. Disabling will optionally clear all auto-assigned IDs.</div>
+        </div>
+        <span class="save-status" id="gracenote-auto-fill-status"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gracenote clear confirmation modal -->
+  <div class="modal-overlay" id="gracenote-clear-modal" onclick="if(event.target===this)cancelGracenoteClear()">
+    <div class="modal-box" style="max-width:420px">
+      <h3 style="margin:0 0 0.75rem">Disable Automatic Gracenote?</h3>
+      <p style="color:#cbd5e1;margin:0 0 1.25rem;line-height:1.5">
+        Do you also want to <strong>clear all automatically assigned Gracenote IDs</strong>?
+        Channels with manually assigned IDs will not be affected.
+      </p>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <button class="btn btn-danger" onclick="disableAndClearGracenote()">Clear &amp; Disable</button>
+        <button class="btn btn-audit" onclick="disableOnlyGracenote()">Disable Only</button>
+        <button class="btn-cancel-modal" onclick="cancelGracenoteClear()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- System Stats card -->
   <div class="stats-card">
     <div class="stats-card-title">📊 System Stats</div>
@@ -433,6 +478,47 @@ function saveTimezoneSettings() {
   saveSettings({
     timezone_name: timezoneName || null,
   }, 'timezone-settings-status');
+}
+
+// ── Gracenote auto-fill toggle ─────────────────────────────────────────────
+function onGracenoteAutoFillChange(checkbox) {
+  if (checkbox.checked) {
+    // Turning ON — just save immediately
+    saveSettings({ gracenote_auto_fill: true }, 'gracenote-auto-fill-status');
+  } else {
+    // Turning OFF — show confirmation before doing anything
+    checkbox.checked = true; // revert visually until user confirms
+    document.getElementById('gracenote-clear-modal').classList.add('open');
+  }
+}
+
+async function disableAndClearGracenote() {
+  document.getElementById('gracenote-clear-modal').classList.remove('open');
+  const status = document.getElementById('gracenote-auto-fill-status');
+  status.className = 'save-status';
+  status.textContent = 'Clearing…';
+  try {
+    const r = await fetch('/api/settings/gracenote-auto-clear', { method: 'POST' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    document.getElementById('gracenote-auto-fill-toggle').checked = false;
+    status.className = 'save-status ok';
+    status.textContent = '✓ Disabled — IDs being cleared in background';
+    setTimeout(() => { status.textContent = ''; }, 4000);
+  } catch (e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ ' + e.message;
+  }
+}
+
+async function disableOnlyGracenote() {
+  document.getElementById('gracenote-clear-modal').classList.remove('open');
+  document.getElementById('gracenote-auto-fill-toggle').checked = false;
+  saveSettings({ gracenote_auto_fill: false }, 'gracenote-auto-fill-status');
+}
+
+function cancelGracenoteClear() {
+  document.getElementById('gracenote-clear-modal').classList.remove('open');
+  // checkbox was already reverted to checked in onGracenoteAutoFillChange
 }
 
 // ── System Stats ──────────────────────────────────────────────────────────

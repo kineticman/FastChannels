@@ -459,7 +459,8 @@ def settings():
                            channels_dvr_url_from_env=(not (app_settings.channels_dvr_url or '').strip()) and app_settings.env_channels_dvr_url() is not None,
                            public_base_url_from_env=(not (app_settings.public_base_url or '').strip()) and app_settings.env_public_base_url() is not None,
                            request_base_url=request_base_url,
-                           detected_base_url=detected_base_url())
+                           detected_base_url=detected_base_url(),
+                           gracenote_auto_fill=app_settings.gracenote_auto_fill if app_settings.gracenote_auto_fill is not None else True)
 
 
 @admin_bp.route('/logs')
