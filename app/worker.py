@@ -1154,78 +1154,21 @@ def _upsert_programs(source, program_data_list):
             continue
         incoming_by_channel_id.setdefault(ch.id, []).append(pd)
 
-    # Collect DB channel IDs that have incoming programs, then delete their
-    # existing future programs before inserting fresh data.  This prevents
-    # duplicates caused by the same channel appearing in multiple country
-    # feeds or by repeated scrape runs appending to the same window.
-    incoming_channel_ids = set(incoming_by_channel_id)
-    if incoming_channel_ids:
-        existing_rows = db.session.query(
-            Program.id,
-            Program.channel_id,
-            Program.start_time,
-            Program.end_time,
-        ).filter(
-            Program.channel_id.in_(incoming_channel_ids),
-            Program.end_time >= cutoff,
-        ).all()
-
-        existing_by_channel_id: dict[int, list[tuple[int, datetime, datetime]]] = {}
-        for row_id, channel_id, start_time, end_time in existing_rows:
-            existing_by_channel_id.setdefault(channel_id, []).append((row_id, start_time, end_time))
-
-        preserve_ids: set[int] = set()
-        preserved_channel_ids: list[int] = []
-        preserved_row_count = 0
-        for channel_id, incoming_rows in incoming_by_channel_id.items():
-            future_rows = [row for row in incoming_rows if _utc_aware(row.end_time) > now]
-            has_now_coverage = any(
-                _utc_aware(row.start_time) <= now < _utc_aware(row.end_time)
-                for row in future_rows
-            )
-            if has_now_coverage:
-                continue
-
-            earliest_incoming_start = min(
-                (_utc_aware(row.start_time) for row in future_rows),
-                default=None,
-            )
-            rows_to_preserve = []
-            for existing_id, existing_start_raw, existing_end_raw in existing_by_channel_id.get(channel_id, []):
-                existing_start = _utc_aware(existing_start_raw)
-                existing_end = _utc_aware(existing_end_raw)
-                if existing_end <= now:
-                    continue
-                if earliest_incoming_start is None:
-                    rows_to_preserve.append(existing_id)
-                    continue
-                if existing_start < earliest_incoming_start and existing_end <= earliest_incoming_start:
-                    rows_to_preserve.append(existing_id)
-
-            if rows_to_preserve:
-                preserve_ids.update(rows_to_preserve)
-                preserved_channel_ids.append(channel_id)
-                preserved_row_count += len(rows_to_preserve)
-
-        if preserved_channel_ids:
-            sample = ",".join(str(channel_id) for channel_id in preserved_channel_ids[:10])
-            extra = "" if len(preserved_channel_ids) <= 10 else ",..."
-            logger.info(
-                '[%s] preserved %d existing EPG rows across %d channels with no now coverage (sample channel_ids=%s%s)',
-                source.name,
-                preserved_row_count,
-                len(preserved_channel_ids),
-                sample,
-                extra,
-            )
-
-        delete_query = Program.query.filter(
-            Program.channel_id.in_(incoming_channel_ids),
-            Program.end_time >= cutoff,
-        )
-        if preserve_ids:
-            delete_query = delete_query.filter(~Program.id.in_(preserve_ids))
-        delete_query.delete(synchronize_session=False)
+    # Delete only the time window covered by the incoming batch, so programs
+    # beyond that window (fetched in earlier runs) are preserved.  This lets
+    # sources like Roku — which return a short lookahead per request — build
+    # up a rolling horizon across repeated fetches.
+    for channel_id, incoming_rows in incoming_by_channel_id.items():
+        active_rows = [row for row in incoming_rows if _utc_aware(row.end_time) > cutoff]
+        if not active_rows:
+            continue
+        win_start = min(_utc_aware(row.start_time) for row in active_rows)
+        win_end   = max(_utc_aware(row.end_time)   for row in active_rows)
+        Program.query.filter(
+            Program.channel_id == channel_id,
+            Program.end_time   >  win_start,
+            Program.start_time <  win_end,
+        ).delete(synchronize_session=False)
 
     rows = []
     for pd in program_data_list:
