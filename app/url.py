@@ -88,7 +88,17 @@ def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> st
     img_path   = os.path.join(cache_root, key)
 
     if img_type == 'poster':
-        return f"{base_url}/images/proxy/poster/image.{ext}?url={quote(url, safe='')}"
+        # Write the .url sidecar now so the hash-based proxy route can resolve
+        # the original URL without a query string in the XML output.
+        url_path = os.path.join(cache_root, key + '.url')
+        if not os.path.exists(url_path):
+            try:
+                os.makedirs(cache_root, exist_ok=True)
+                with open(url_path, 'w') as _f:
+                    _f.write(url)
+            except OSError:
+                pass
+        return f"{base_url}/images/proxy/poster/{key}.{ext}"
 
     if os.path.exists(img_path):
         # Skip unsupported formats — serve upstream URL instead
