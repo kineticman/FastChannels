@@ -566,7 +566,7 @@ def run_stream_audit(source_name: str):
                     _time.sleep(min(wait, 120))
                     r = sess.get(resolved_url, timeout=15, allow_redirects=True)
 
-                if r.status_code in (400, 404, 410):
+                if r.status_code in (400, 404, 410, 422):
                     ch.is_active      = False
                     ch.is_enabled     = False
                     ch.disable_reason = 'Dead'
@@ -785,7 +785,7 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                     _time.sleep(30)
                     r = sess.get(resolved_url, timeout=15, allow_redirects=True)
 
-                if r.status_code in (400, 404, 410):
+                if r.status_code in (400, 404, 410, 422):
                     ch.is_active = False
                     ch.is_enabled = False
                     ch.disable_reason = 'Dead'
