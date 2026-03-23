@@ -1232,6 +1232,41 @@ def gracenote_search():
         return jsonify({'error': str(exc)}), 502
 
 
+@api_bp.route('/gracenote/community-map', methods=['GET'])
+def gracenote_community_map():
+    """Return all channels that have a community CSV mapping, with their current Gracenote state."""
+    from ..models import Source
+    rows = (
+        Channel.query
+        .join(Source)
+        .filter(Channel.is_active == True)
+        .order_by(Source.name, Channel.name)
+        .all()
+    )
+    results = []
+    for ch in rows:
+        source_name = ch.source.name if ch.source else ''
+        match = lookup_gracenote(source_name, ch.source_channel_id)
+        if not match or not match.get('tmsid'):
+            continue
+        community_tmsid = match['tmsid']
+        current_id = ch.gracenote_id or ''
+        mode = ch.gracenote_mode or 'auto'
+        already_applied = current_id == community_tmsid
+        results.append({
+            'channel_id':       ch.id,
+            'channel_name':     ch.name,
+            'source_name':      source_name,
+            'community_tmsid':  community_tmsid,
+            'notes':            match.get('notes') or '',
+            'current_id':       current_id,
+            'gracenote_mode':   mode,
+            'already_applied':  already_applied,
+            'is_enabled':       ch.is_enabled,
+        })
+    return jsonify({'results': results, 'total': len(results)})
+
+
 @api_bp.route('/logs')
 def get_logs():
     n = request.args.get('n', 2500, type=int)
