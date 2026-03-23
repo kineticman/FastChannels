@@ -317,7 +317,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                 logger.info('[%s] EPG fetch complete', source_name)
                 for _attempt in range(3):
                     try:
-                        _upsert_channels(source, channels)
+                        _upsert_channels(source, channels, _gracenote_auto_fill)
                         _upsert_programs(source, programs)
                         _apply_scraper_config_updates(source, scraper)
                         source.last_scraped_at = datetime.now(timezone.utc)
@@ -1183,7 +1183,7 @@ def _resolved_logo_url(existing_logo: str | None, incoming_logo: str | None, cac
     return current
 
 
-def _upsert_channels(source, channel_data_list):
+def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
     logo_validation_cache: dict[str, bool] = {}
     seen_at = datetime.now(timezone.utc)
@@ -1239,7 +1239,7 @@ def _upsert_channels(source, channel_data_list):
             mode = (getattr(ch, 'gracenote_mode', None) or ('manual' if getattr(ch, 'gracenote_locked', False) else 'auto')).strip().lower()
             # Manual/Off modes are authoritative until the user switches back
             # to Auto, so scraper/helper data only fills gaps on auto rows.
-            if mode == 'auto' and gracenote_id is not None and _gracenote_auto_fill:
+            if mode == 'auto' and gracenote_id is not None and gracenote_auto_fill:
                 ch.gracenote_id = gracenote_id
         else:
             db.session.add(Channel(
@@ -1254,7 +1254,7 @@ def _upsert_channels(source, channel_data_list):
                 language          = cd.language,
                 country           = cd.country,
                 number            = cd.number,
-                gracenote_id      = gracenote_id if _gracenote_auto_fill else None,
+                gracenote_id      = gracenote_id if gracenote_auto_fill else None,
                 gracenote_locked  = False,
                 gracenote_mode    = 'auto',
                 guide_key         = getattr(cd, 'guide_key', None),
