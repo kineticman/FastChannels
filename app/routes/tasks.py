@@ -128,6 +128,17 @@ def trigger_stream_audit(source_name: str):
         threading.Thread(target=run_stream_audit, args=(source_name,), daemon=True).start()
 
 
+def trigger_stream_audit_recheck(source_name: str, channel_ids: list):
+    try:
+        get_queue().enqueue('app.worker.run_stream_audit_recheck', source_name, channel_ids, job_timeout=600)
+        logger.info(f'Enqueued stream audit recheck for {source_name} ({len(channel_ids)} channels)')
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for {source_name}')
+        import threading
+        from app.worker import run_stream_audit_recheck
+        threading.Thread(target=run_stream_audit_recheck, args=(source_name, channel_ids), daemon=True).start()
+
+
 def trigger_xml_refresh():
     try:
         q = get_fast_queue()

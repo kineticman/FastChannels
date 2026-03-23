@@ -26,6 +26,7 @@ from .tasks import (
     trigger_scrape,
     trigger_source_channel_purge,
     trigger_stream_audit,
+    trigger_stream_audit_recheck,
     trigger_xml_refresh,
 )
 from ..generators.m3u import (
@@ -674,6 +675,17 @@ def stream_audit_source(source_id):
     return jsonify({'status': 'queued', 'source': source.name})
 
 
+@api_bp.route('/sources/<int:source_id>/stream-audit-recheck', methods=['POST'])
+def stream_audit_recheck(source_id):
+    source = Source.query.get_or_404(source_id)
+    data = request.get_json() or {}
+    channel_ids = [int(i) for i in (data.get('channel_ids') or []) if str(i).isdigit()]
+    if not channel_ids:
+        return jsonify({'error': 'No channel_ids provided'}), 400
+    trigger_stream_audit_recheck(source.name, channel_ids)
+    return jsonify({'status': 'queued', 'count': len(channel_ids)})
+
+
 @api_bp.route('/sources/<int:source_id>/audit-status')
 def audit_status(source_id):
     import time as _time
@@ -716,7 +728,8 @@ def audit_status(source_id):
     except Exception:
         pass
     last_result = (source.config or {}).get('last_audit_result')
-    return jsonify({'status': 'idle', 'last_result': last_result})
+    last_report = (source.config or {}).get('last_audit_report')
+    return jsonify({'status': 'idle', 'last_result': last_result, 'last_report': last_report})
 
 
 @api_bp.route('/sources/chnum-overlaps')
