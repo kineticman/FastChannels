@@ -615,7 +615,7 @@
         }
         // Keep card summary fresh
         if (d.last_result) _renderLastAuditResult(_auditModalSourceId, d.last_result);
-      } catch (e) { /* silently ignore */ }
+      } catch (e) { /* silently ignore network errors */ }
     }
 
     function _renderAuditModalContent(sourceId, sourceName, data) {
@@ -635,12 +635,13 @@
         if (data.dead)        bits.push(`<span class="aud-dead">${data.dead} dead</span>`);
         if (data.flagged)     bits.push(`<span class="aud-drm">${data.flagged} DRM</span>`);
         if (data.skipped_403) bits.push(`<span class="aud-403">${data.skipped_403} rate-limited</span>`);
-        const statusText = data.status === 'queued' ? 'Queued…' : ('● Running… ' + (bits.join(' · ') || ''));
+        const phaseLabel = data.phase === 'recheck' ? 'Rechecking…' : 'Running…';
+        const statusText = data.status === 'queued' ? 'Queued…' : ('● ' + phaseLabel + (bits.length ? ' ' + bits.join(' · ') : ''));
         html += `
           <div class="audit-running-section">
             <div class="audit-running-status">${statusText}</div>
             ${total ? `<div class="audit-progress-bar"><div class="audit-progress-fill" style="width:${pct}%"></div></div>` : ''}
-            <div class="audit-running-note">Results will appear when the audit completes.</div>
+            <div class="audit-running-note">${data.phase === 'recheck' ? 'Rate-limited channels are retried after a 30s backoff.' : 'Results will appear when the audit completes.'}</div>
           </div>`;
       }
 

@@ -704,13 +704,17 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
     Re-audit a specific subset of channels (e.g. rate-limited ones from last run).
     Merges results back into last_audit_report and last_audit_result in-place.
     """
+    logger.info('[audit-recheck] %s: starting recheck of %d channel(s): %s',
+                source_name, len(channel_ids), channel_ids)
     with flask_app.app_context():
         source = Source.query.filter_by(name=source_name).first()
         if not source:
+            logger.warning('[audit-recheck] %s: source not found', source_name)
             return
 
         scraper_cls = registry.get(source_name)
         if not scraper_cls:
+            logger.warning('[audit-recheck] %s: no scraper registered', source_name)
             return
 
         scraper = scraper_cls(config=source.config or {})
@@ -751,7 +755,6 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
         recheck_results = {}  # channel_id → {'status', 'reason'} or None if ok
 
         for i, ch in enumerate(channels, 1):
-            new_status = None
             try:
                 _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
                 try:
@@ -761,15 +764,18 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                     ch.is_enabled = False
                     ch.disable_reason = 'Dead'
                     recheck_results[ch.id] = {'status': 'dead', 'reason': 'Resolve error'}
+                    _rc_progress(i, total)
                     continue
                 except Exception:
                     recheck_results[ch.id] = {'status': 'rate-limited', 'reason': 'Resolve failed'}
+                    _rc_progress(i, total)
                     continue
 
                 try:
                     r = sess.get(resolved_url, timeout=15, allow_redirects=True)
                 except Exception:
                     recheck_results[ch.id] = {'status': 'rate-limited', 'reason': 'Network error'}
+                    _rc_progress(i, total)
                     continue
 
                 if r.status_code in (403, 429, 503):
@@ -781,14 +787,17 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                     ch.is_enabled = False
                     ch.disable_reason = 'Dead'
                     recheck_results[ch.id] = {'status': 'dead', 'reason': f'HTTP {r.status_code}'}
+                    _rc_progress(i, total)
                     continue
 
                 if r.status_code in (403, 429, 503):
                     recheck_results[ch.id] = {'status': 'rate-limited', 'reason': f'HTTP {r.status_code}'}
+                    _rc_progress(i, total)
                     continue
 
                 if r.status_code != 200:
                     recheck_results[ch.id] = {'status': 'rate-limited', 'reason': f'HTTP {r.status_code}'}
+                    _rc_progress(i, total)
                     continue
 
                 # Live — re-enable if it was previously flagged
@@ -798,6 +807,7 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                 recheck_results[ch.id] = None  # ok
 
             except Exception as e:
+                logger.warning('[audit-recheck] unexpected error for %s: %s', ch.name, e)
                 recheck_results[ch.id] = {'status': 'rate-limited', 'reason': 'Error'}
 
             _rc_progress(i, total)

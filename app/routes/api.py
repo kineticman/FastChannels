@@ -700,8 +700,7 @@ def audit_status(source_id):
         raw = r.get(key)
         if raw:
             data = json.loads(raw)
-            # Stale check — progress is written every ~25 channels (~20s); treat
-            # as dead if no heartbeat for 90s (catches mid-job container restarts).
+            # Stale check — treat as dead if no heartbeat for 90s
             if _time.time() - data.get('ts', 0) > 90:
                 r.delete(key)
             else:
