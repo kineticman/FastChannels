@@ -18,6 +18,7 @@ from ..models import Source, Channel, Program, AppSettings, Feed
 from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
 from ..gracenote_suggest import SuggestionChannel, suggest_gracenote_matches
+from ..gracenote_map import lookup_gracenote
 from ..hls import inspect_hls_drm
 from ..url import public_base_url
 from .tasks import (
@@ -1132,31 +1133,61 @@ def preview_channel(channel_id):
     })
 
 
+def _gracenote_source_for(ch) -> str | None:
+    """Return the provenance of ch.gracenote_id: 'manual', 'csv', 'native', or None."""
+    if not ch.gracenote_id:
+        return None
+    mode = getattr(ch, 'gracenote_mode', None)
+    locked = getattr(ch, 'gracenote_locked', False)
+    if mode == 'manual' or locked:
+        return 'manual'
+    source_name = ch.source.name if ch.source else ''
+    csv_match = lookup_gracenote(source_name, ch.source_channel_id)
+    if csv_match and csv_match.get('tmsid') == ch.gracenote_id:
+        return 'csv'
+    return 'native'
+
+
+def _csv_suggestion_for(ch) -> dict | None:
+    """Return the CSV mapping entry for this channel, if one exists."""
+    source_name = ch.source.name if ch.source else ''
+    match = lookup_gracenote(source_name, ch.source_channel_id)
+    if not match:
+        return None
+    return {
+        'tmsid': match.get('tmsid'),
+        'notes': match.get('notes') or '',
+    }
+
+
 @api_bp.route('/channels/<int:channel_id>/gracenote-suggestions', methods=['GET'])
 def channel_gracenote_suggestions(channel_id):
     ch = Channel.query.get_or_404(channel_id)
     settings = AppSettings.get()
     dvr_url = (settings.effective_channels_dvr_url() or '').strip()
-    if not dvr_url:
-        return jsonify({'error': 'Channels DVR URL is not configured.'}), 400
 
     limit = max(1, min(request.args.get('limit', 10, type=int) or 10, 25))
-    try:
-        data = suggest_gracenote_matches(
-            dvr_url,
-            channel=SuggestionChannel(
-                id=ch.id,
-                name=ch.name,
-                source_name=ch.source.name if ch.source else None,
-                country=ch.country,
-                language=ch.language,
-                category=ch.category,
-                gracenote_id=ch.gracenote_id,
-            ),
-            limit=limit,
-        )
-    except ValueError as exc:
-        return jsonify({'error': str(exc)}), 502
+
+    if dvr_url:
+        try:
+            data = suggest_gracenote_matches(
+                dvr_url,
+                channel=SuggestionChannel(
+                    id=ch.id,
+                    name=ch.name,
+                    source_name=ch.source.name if ch.source else None,
+                    country=ch.country,
+                    language=ch.language,
+                    category=ch.category,
+                    gracenote_id=ch.gracenote_id,
+                ),
+                limit=limit,
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 502
+    else:
+        data = {'results': [], 'dvr_missing': True}
+
     data['channel'] = {
         'id': ch.id,
         'name': ch.name,
@@ -1165,6 +1196,8 @@ def channel_gracenote_suggestions(channel_id):
         'language': ch.language,
         'category': ch.category,
         'gracenote_id': ch.gracenote_id,
+        'gracenote_source': _gracenote_source_for(ch),
+        'csv_suggestion': _csv_suggestion_for(ch),
     }
     return jsonify(data)
 
