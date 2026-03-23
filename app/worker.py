@@ -451,7 +451,7 @@ def run_stream_audit(source_name: str):
         except Exception as _pre_exc:
             logger.debug('[audit] pre_run_setup failed (non-fatal): %s', _pre_exc)
 
-        channels = source.channels.filter_by(is_active=True).all()
+        channels = source.channels.all()
         total    = len(channels)
         checked  = 0
         flagged  = 0
@@ -459,6 +459,7 @@ def run_stream_audit(source_name: str):
         errors   = 0
         skipped_403 = 0
         consecutive_errors = 0
+        report_channels = []
 
         logger.info('[audit] %s: checking %d channels…', source_name, total)
 
@@ -509,6 +510,7 @@ def run_stream_audit(source_name: str):
                     ch.disable_reason = 'Dead'
                     dead += 1
                     consecutive_errors = 0
+                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'dead', 'reason': 'Resolve error'})
                     logger.info('[audit] dead stream: %s  (confirmed by scraper)', ch.name)
                     continue
                 except Exception as re_exc:
@@ -545,6 +547,7 @@ def run_stream_audit(source_name: str):
                         ch.disable_reason = 'Dead'
                         dead += 1
                         consecutive_errors = 0
+                        report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'dead', 'reason': 'SSL'})
                         logger.info('[audit] dead stream: %s  (SSL handshake rejected by server)', ch.name)
                         continue
                     if _is_transient_network_error(req_exc):
@@ -566,6 +569,7 @@ def run_stream_audit(source_name: str):
                     ch.disable_reason = 'Dead'
                     dead += 1
                     consecutive_errors = 0
+                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'dead', 'reason': f'HTTP {r.status_code}'})
                     logger.info('[audit] dead stream: %s  (HTTP %d)', ch.name, r.status_code)
                     continue
 
@@ -575,6 +579,7 @@ def run_stream_audit(source_name: str):
                     # real stream errors, so they should not abort the audit.
                     skipped_403 += 1
                     consecutive_errors = 0
+                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'rate-limited', 'reason': f'HTTP {r.status_code}'})
                     logger.info('[audit] %s still rate-limited (%d) after backoff, skipping',
                                 ch.name, r.status_code)
                     continue
@@ -602,6 +607,7 @@ def run_stream_audit(source_name: str):
                         ch.is_enabled     = False
                         ch.disable_reason = 'Dead'
                         dead += 1
+                        report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'dead', 'reason': 'VOD'})
                         logger.info('[audit] DASH VOD (not live): %s', ch.name)
                         continue
                     _widevine  = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
@@ -611,6 +617,7 @@ def run_stream_audit(source_name: str):
                         ch.is_enabled     = False
                         ch.disable_reason = 'DRM'
                         flagged += 1
+                        report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': 'DRM'})
                         logger.info('[audit] DASH DRM: %s  →  %s', ch.name, manifest_url[:80])
                     continue   # DASH — skip HLS checks below
 
@@ -644,6 +651,7 @@ def run_stream_audit(source_name: str):
                     ch.is_enabled     = False
                     ch.disable_reason = 'Dead'
                     dead += 1
+                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'dead', 'reason': 'VOD'})
                     logger.info('[audit] VOD (not live): %s', ch.name)
                     continue
 
@@ -653,6 +661,7 @@ def run_stream_audit(source_name: str):
                     ch.is_enabled     = False
                     ch.disable_reason = 'DRM'
                     flagged += 1
+                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': drm.get('drm_type', 'DRM')})
                     logger.info('[audit] DRM: %s  →  %s (%s)', ch.name, manifest_url[:80], drm['drm_type'])
 
             except Exception as e:
@@ -679,11 +688,152 @@ def run_stream_audit(source_name: str):
             'dead': dead, 'errors': errors, 'skipped_403': skipped_403,
             'ts': datetime.now(timezone.utc).isoformat(),
         }
+        cfg['last_audit_report'] = {
+            'channels': report_channels,
+            'ts': datetime.now(timezone.utc).isoformat(),
+        }
         source.config = cfg
         db.session.commit()
         _audit_progress(0, 0, phase='done')
         logger.info('[audit] %s: done — total=%d checked=%d flagged=%d dead=%d errors=%d skipped_403=%d',
                     source_name, total, checked, flagged, dead, errors, skipped_403)
+
+
+def run_stream_audit_recheck(source_name: str, channel_ids: list):
+    """
+    Re-audit a specific subset of channels (e.g. rate-limited ones from last run).
+    Merges results back into last_audit_report and last_audit_result in-place.
+    """
+    with flask_app.app_context():
+        source = Source.query.filter_by(name=source_name).first()
+        if not source:
+            return
+
+        scraper_cls = registry.get(source_name)
+        if not scraper_cls:
+            return
+
+        scraper = scraper_cls(config=source.config or {})
+        try:
+            scraper.pre_run_setup()
+        except Exception:
+            pass
+
+        channels = Channel.query.filter(Channel.id.in_(channel_ids)).all()
+        total = len(channels)
+        if not total:
+            return
+
+        _audit_key = f'audit:progress:{source_name}'
+        try:
+            _redis_rc = redis.from_url(flask_app.config['REDIS_URL'])
+            _redis_rc.ping()
+        except Exception:
+            _redis_rc = None
+
+        import json as _json_rc
+        def _rc_progress(done, total_, phase='checking'):
+            if not _redis_rc:
+                return
+            try:
+                if phase == 'done':
+                    _redis_rc.delete(_audit_key)
+                else:
+                    _redis_rc.setex(_audit_key, 600, _json_rc.dumps({
+                        'phase': 'recheck', 'done': done, 'total': total_,
+                        'ts': _time.time(),
+                    }))
+            except Exception:
+                pass
+
+        _rc_progress(0, total)
+        sess = scraper.session
+        recheck_results = {}  # channel_id → {'status', 'reason'} or None if ok
+
+        for i, ch in enumerate(channels, 1):
+            new_status = None
+            try:
+                _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
+                try:
+                    resolved_url = _resolve(ch.stream_url)
+                except StreamDeadError:
+                    ch.is_active = False
+                    ch.is_enabled = False
+                    ch.disable_reason = 'Dead'
+                    recheck_results[ch.id] = {'status': 'dead', 'reason': 'Resolve error'}
+                    continue
+                except Exception:
+                    recheck_results[ch.id] = {'status': 'rate-limited', 'reason': 'Resolve failed'}
+                    continue
+
+                try:
+                    r = sess.get(resolved_url, timeout=15, allow_redirects=True)
+                except Exception:
+                    recheck_results[ch.id] = {'status': 'rate-limited', 'reason': 'Network error'}
+                    continue
+
+                if r.status_code in (403, 429, 503):
+                    _time.sleep(30)
+                    r = sess.get(resolved_url, timeout=15, allow_redirects=True)
+
+                if r.status_code in (400, 404, 410):
+                    ch.is_active = False
+                    ch.is_enabled = False
+                    ch.disable_reason = 'Dead'
+                    recheck_results[ch.id] = {'status': 'dead', 'reason': f'HTTP {r.status_code}'}
+                    continue
+
+                if r.status_code in (403, 429, 503):
+                    recheck_results[ch.id] = {'status': 'rate-limited', 'reason': f'HTTP {r.status_code}'}
+                    continue
+
+                if r.status_code != 200:
+                    recheck_results[ch.id] = {'status': 'rate-limited', 'reason': f'HTTP {r.status_code}'}
+                    continue
+
+                # Live — re-enable if it was previously flagged
+                if not ch.is_active:
+                    ch.is_active = True
+                    ch.disable_reason = None
+                recheck_results[ch.id] = None  # ok
+
+            except Exception as e:
+                recheck_results[ch.id] = {'status': 'rate-limited', 'reason': 'Error'}
+
+            _rc_progress(i, total)
+            _time.sleep(0.3)
+
+        db.session.commit()
+
+        # Merge recheck results back into the saved report
+        cfg = dict(source.config or {})
+        report = dict(cfg.get('last_audit_report') or {})
+        existing = {c['id']: c for c in (report.get('channels') or []) if c.get('id')}
+        for ch_id, result in recheck_results.items():
+            if result is None:
+                # Now passing — remove from report
+                existing.pop(ch_id, None)
+            else:
+                # Still failing — update reason in report
+                ch = next((c for c in channels if c.id == ch_id), None)
+                existing[ch_id] = {'id': ch_id, 'name': ch.name if ch else str(ch_id), **result}
+
+        report['channels'] = list(existing.values())
+        report['ts'] = datetime.now(timezone.utc).isoformat()
+        cfg['last_audit_report'] = report
+
+        # Update result summary skipped_403 count
+        result_summary = dict(cfg.get('last_audit_result') or {})
+        still_limited = sum(1 for r in recheck_results.values() if r and r['status'] == 'rate-limited')
+        result_summary['skipped_403'] = still_limited
+        result_summary['ts'] = datetime.now(timezone.utc).isoformat()
+        cfg['last_audit_result'] = result_summary
+
+        source.config = cfg
+        db.session.commit()
+        _rc_progress(0, 0, phase='done')
+        logger.info('[audit-recheck] %s: done — rechecked=%d still_limited=%d',
+                    source_name, total, still_limited)
 
 
 def _make_progress_writer(source_name: str):

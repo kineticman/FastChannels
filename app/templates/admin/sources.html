@@ -117,6 +117,60 @@
     .audit-last-result .aud-drm     { color: #fb923c; }
     .audit-last-result .aud-403     { color: #fbbf24; }
     .audit-last-result .aud-ok      { color: #6ee7b7; }
+    /* Audit modal */
+    .modal-box {
+      background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+      padding: 1.5rem 1.75rem; overflow: hidden; display: flex; flex-direction: column;
+    }
+    .audit-modal-box {
+      width: 700px; max-width: 95vw; max-height: 88vh;
+    }
+    .audit-modal-header { margin-bottom: 0.75rem; flex-shrink: 0; }
+    .audit-modal-title { color: #f1f5f9; font-size: 1.05rem; font-weight: 700; }
+    .audit-summary {
+      background: #0f172a; border: 1px solid #334155; border-radius: 8px;
+      padding: 0.7rem 1rem; margin: 0.5rem 0; flex-shrink: 0;
+    }
+    .audit-summary-counts { font-size: 0.85rem; color: #cbd5e1; }
+    .audit-summary-ts { font-size: 0.75rem; color: #64748b; margin-top: 0.2rem; }
+    .audit-running-section {
+      background: #0f172a; border: 1px solid #334155; border-radius: 8px;
+      padding: 0.7rem 1rem; margin: 0.5rem 0; flex-shrink: 0;
+    }
+    .audit-running-status { font-size: 0.85rem; color: #fdba74; margin-bottom: 0.45rem; }
+    .audit-running-note { font-size: 0.78rem; color: #64748b; margin-top: 0.45rem; }
+    .audit-progress-bar {
+      background: #1e293b; border-radius: 4px; height: 5px; overflow: hidden; margin: 0.35rem 0;
+    }
+    .audit-progress-fill {
+      height: 100%; background: #fb923c; border-radius: 4px; transition: width 0.5s ease;
+    }
+    .audit-report { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 0.65rem; }
+    .audit-report-group-title {
+      font-size: 0.73rem; font-weight: 700; color: #94a3b8;
+      text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.35rem;
+    }
+    .audit-report-row {
+      display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 0.6rem;
+      padding: 0.45rem 0.75rem; background: #0f172a; border: 1px solid #1e293b;
+      border-radius: 6px; margin-bottom: 0.25rem;
+    }
+    .audit-row-name { font-size: 0.84rem; color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .audit-row-reason { font-size: 0.74rem; font-weight: 600; white-space: nowrap; }
+    .audit-row-reason.dead         { color: #f87171; }
+    .audit-row-reason.drm          { color: #fb923c; }
+    .audit-row-reason.rate-limited { color: #fbbf24; }
+    .btn-audit-reenable {
+      background: #1e3a5f; color: #7dd3fc; border: none; border-radius: 4px;
+      padding: 0.18rem 0.5rem; font-size: 0.72rem; cursor: pointer; white-space: nowrap;
+    }
+    .btn-audit-reenable:hover:not(:disabled) { background: #1e4976; }
+    .btn-audit-reenable:disabled { opacity: 0.5; cursor: not-allowed; }
+    .audit-no-results { color: #64748b; font-size: 0.85rem; text-align: center; padding: 2rem 0; flex-shrink: 0; }
+    .audit-modal-actions {
+      display: flex; gap: 0.75rem; justify-content: flex-end;
+      margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #1e293b; flex-shrink: 0;
+    }
 
     /* EPG-only toggle */
     .epg-only-wrap { margin-top: 0.5rem; }
@@ -340,13 +394,22 @@
         <button class="btn btn-run" onclick="run({{ source.id }}, this)"
                 {% if not source.is_enabled %}disabled{% endif %}>Scrape Now</button>
         {% if audit_enabled.get(source.name) %}
-        <button class="btn btn-audit" onclick="streamAudit({{ source.id }}, this)"
+        <button class="btn btn-audit" onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
                 {% if not source.is_enabled %}disabled{% endif %}
-                title="Audit all channels — checks for dead streams, VOD, and DRM encryption">📋 Stream Audit</button>
+                title="View stream audit report and run new audits">📋 Stream Audit</button>
         {% endif %}
       </div>
     </div>
     {% endfor %}
+  </div>
+
+  <!-- Stream Audit modal -->
+  <div class="modal-overlay" id="audit-modal" onclick="closeAuditModal(event)">
+    <div class="modal-box audit-modal-box">
+      <div id="audit-modal-content" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+        <div class="modal-loading">Loading…</div>
+      </div>
+    </div>
   </div>
 
   <!-- Confirm disable modal -->
@@ -508,24 +571,193 @@
       }
     }
 
-    async function streamAudit(id, btn) {
-      if (!confirm('Run Stream Audit? This checks every channel manifest for dead streams, VOD, and DRM — may take several minutes.')) return;
-      btn.disabled = true;
-      btn.textContent = '📋 Queuing…';
+    // ── Audit modal ───────────────────────────────────────────────────────
+    let _auditModalSourceId   = null;
+    let _auditModalSourceName = '';
+    let _auditModalPollTimer  = null;
+    let _auditModalGrace      = 0;   // keep polling until this timestamp even if status is idle
+    const _lastRecheckIds     = {};
+
+    function openAuditModal(sourceId, sourceName) {
+      _auditModalSourceId   = sourceId;
+      _auditModalSourceName = sourceName;
+      if (_auditModalPollTimer) { clearTimeout(_auditModalPollTimer); _auditModalPollTimer = null; }
+      const modal   = document.getElementById('audit-modal');
+      const content = document.getElementById('audit-modal-content');
+      content.innerHTML = '<div class="modal-loading">Loading…</div>';
+      modal.classList.add('open');
+      _pollAuditModal();
+    }
+
+    function closeAuditModal(event) {
+      if (event && event.target !== document.getElementById('audit-modal')) return;
+      _closeAuditModal();
+    }
+
+    function _closeAuditModal() {
+      document.getElementById('audit-modal').classList.remove('open');
+      if (_auditModalPollTimer) { clearTimeout(_auditModalPollTimer); _auditModalPollTimer = null; }
+      _auditModalSourceId = null;
+    }
+
+    async function _pollAuditModal() {
+      if (!_auditModalSourceId) return;
       try {
-        const r = await fetch(`/api/sources/${id}/stream-audit`, {method: 'POST'});
+        const r = await fetch(`/api/sources/${_auditModalSourceId}/audit-status`);
+        const d = await r.json();
+        const content = document.getElementById('audit-modal-content');
+        if (!content || !_auditModalSourceId) return;
+        content.innerHTML = _renderAuditModalContent(_auditModalSourceId, _auditModalSourceName, d);
+        if (d.status === 'running' || d.status === 'queued') {
+          _auditModalPollTimer = setTimeout(_pollAuditModal, 2000);
+        } else if (Date.now() < _auditModalGrace) {
+          _auditModalPollTimer = setTimeout(_pollAuditModal, 1000);
+        }
+        // Keep card summary fresh
+        if (d.last_result) _renderLastAuditResult(_auditModalSourceId, d.last_result);
+      } catch (e) { /* silently ignore */ }
+    }
+
+    function _renderAuditModalContent(sourceId, sourceName, data) {
+      const isRunning = data.status === 'running' || data.status === 'queued';
+      const result    = data.last_result;
+      const report    = data.last_report;
+
+      let html = `<div class="audit-modal-header"><div class="audit-modal-title">Stream Audit — ${escapeHtml(sourceName)}</div></div>`;
+
+      // Running / queued state
+      if (isRunning) {
+        const done  = data.done  || 0;
+        const total = data.total || 0;
+        const pct   = total ? Math.round(done / total * 100) : 0;
+        const bits  = [];
+        if (total) bits.push(`${done}/${total} checked`);
+        if (data.dead)        bits.push(`<span class="aud-dead">${data.dead} dead</span>`);
+        if (data.flagged)     bits.push(`<span class="aud-drm">${data.flagged} DRM</span>`);
+        if (data.skipped_403) bits.push(`<span class="aud-403">${data.skipped_403} rate-limited</span>`);
+        const statusText = data.status === 'queued' ? 'Queued…' : ('● Running… ' + (bits.join(' · ') || ''));
+        html += `
+          <div class="audit-running-section">
+            <div class="audit-running-status">${statusText}</div>
+            ${total ? `<div class="audit-progress-bar"><div class="audit-progress-fill" style="width:${pct}%"></div></div>` : ''}
+            <div class="audit-running-note">Results will appear when the audit completes.</div>
+          </div>`;
+      }
+
+      // Last result summary (idle only)
+      if (result && !isRunning) {
+        const ts  = result.ts ? new Date(result.ts).toLocaleString() : '';
+        const ok  = Math.max(0, (result.checked || 0) - (result.dead || 0) - (result.flagged || 0));
+        const bits = [
+          `<span class="aud-ok">${ok} ok</span>`,
+          result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`          : null,
+          result.flagged     ? `<span class="aud-drm">${result.flagged} DRM</span>`         : null,
+          result.skipped_403 ? `<span class="aud-403">${result.skipped_403} rate-limited</span>` : null,
+          result.errors      ? `${result.errors} errors`                                    : null,
+        ].filter(Boolean);
+        html += `
+          <div class="audit-summary">
+            <div class="audit-summary-counts">${bits.join(' · ')}</div>
+            ${ts ? `<div class="audit-summary-ts">${escapeHtml(ts)}</div>` : ''}
+          </div>`;
+      }
+
+      // Per-channel report
+      if (!isRunning) {
+        if (report && report.channels && report.channels.length) {
+          const dead    = report.channels.filter(c => c.status === 'dead');
+          const drm     = report.channels.filter(c => c.status === 'drm');
+          const limited = report.channels.filter(c => c.status === 'rate-limited');
+
+          const renderGroup = (title, chans, showReEnable) => {
+            if (!chans.length) return '';
+            const rows = chans.map(c => `
+              <div class="audit-report-row">
+                <div class="audit-row-name" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</div>
+                <div class="audit-row-reason ${escapeHtml(c.status)}">${escapeHtml(c.reason || '')}</div>
+                ${showReEnable ? `<button class="btn-audit-reenable" onclick="auditReEnableChannel(${Number(c.id)}, this)">Re-enable</button>` : '<div></div>'}
+              </div>`).join('');
+            return `<div class="audit-report-group"><div class="audit-report-group-title">${escapeHtml(title)} (${chans.length})</div>${rows}</div>`;
+          };
+
+          html += `<div class="audit-report">`;
+          html += renderGroup('Dead', dead, true);
+          html += renderGroup('DRM', drm, false);
+          html += renderGroup('Rate-limited', limited, false);
+          html += `</div>`;
+          _lastRecheckIds[sourceId] = limited.map(c => c.id).filter(Boolean);
+        } else if (!result) {
+          html += `<div class="audit-no-results">No audit has been run yet. Run an audit to check all channels for dead streams, DRM, and VOD-only content.</div>`;
+        }
+      }
+
+      // Actions
+      const recheckIds = _lastRecheckIds[sourceId] || [];
+      html += `
+        <div class="audit-modal-actions">
+          ${!isRunning && recheckIds.length ? `<button class="btn btn-audit" style="background:#1e3a5f;color:#7dd3fc" onclick="recheckRateLimited(${Number(sourceId)})">Recheck Rate-limited (${recheckIds.length})</button>` : ''}
+          ${!isRunning ? `<button class="btn btn-audit" onclick="runAuditFromModal(${Number(sourceId)})">Run Audit</button>` : ''}
+          <button class="btn-cancel-modal" onclick="_closeAuditModal()">Close</button>
+        </div>`;
+
+      return html;
+    }
+
+    async function runAuditFromModal(sourceId) {
+      const content = document.getElementById('audit-modal-content');
+      if (!content) return;
+      content.innerHTML = _renderAuditModalContent(sourceId, _auditModalSourceName,
+        {status: 'queued', last_result: null, last_report: null});
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/stream-audit`, {method: 'POST'});
         const d = await r.json();
         if (d.status === 'queued') {
-          btn.textContent = '📋 Running…';
-          _auditGrace[id] = Date.now() + 12000;   // 12s grace for worker startup
-          _startAuditPolling(id, btn);
+          _auditGrace[sourceId] = Date.now() + 12000;
+          _auditModalGrace = Date.now() + 15000;
+          _startAuditPolling(sourceId, null);
+          _auditModalPollTimer = setTimeout(_pollAuditModal, 1500);
         } else {
-          btn.textContent = 'Error';
-          setTimeout(() => { btn.textContent = '📋 Stream Audit'; btn.disabled = false; }, 3000);
+          _pollAuditModal();
         }
+      } catch (e) { _pollAuditModal(); }
+    }
+
+    async function recheckRateLimited(sourceId) {
+      const ids = _lastRecheckIds[sourceId] || [];
+      if (!ids.length) return;
+      const content = document.getElementById('audit-modal-content');
+      if (!content) return;
+      content.innerHTML = _renderAuditModalContent(sourceId, _auditModalSourceName,
+        {status: 'queued', phase: 'recheck', last_result: null, last_report: null});
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/stream-audit-recheck`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({channel_ids: ids}),
+        });
+        const d = await r.json();
+        if (d.status === 'queued') {
+          _auditModalGrace = Date.now() + 15000;
+          _auditModalPollTimer = setTimeout(_pollAuditModal, 1500);
+        } else {
+          _pollAuditModal();
+        }
+      } catch (e) { _pollAuditModal(); }
+    }
+
+    async function auditReEnableChannel(channelId, btn) {
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({is_enabled: true}),
+        });
+        btn.textContent = r.ok ? 'Re-enabled ✓' : 'Error';
       } catch (e) {
         btn.textContent = 'Error';
-        setTimeout(() => { btn.textContent = '📋 Stream Audit'; btn.disabled = false; }, 3000);
+        btn.disabled = false;
       }
     }
 
