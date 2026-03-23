@@ -111,6 +111,12 @@
     .audit-status-queued  .status-dot { background: #fbbf24; }
     .audit-status-running .status-text { color: #fdba74; }
     .audit-status-queued  .status-text { color: #fcd34d; }
+    .audit-last-result { font-size: 0.75rem; color: #9ca3af; margin-top: 0.15rem; }
+    .audit-last-result:empty { display: none; }
+    .audit-last-result .aud-dead    { color: #f87171; }
+    .audit-last-result .aud-drm     { color: #fb923c; }
+    .audit-last-result .aud-403     { color: #fbbf24; }
+    .audit-last-result .aud-ok      { color: #6ee7b7; }
 
     /* EPG-only toggle */
     .epg-only-wrap { margin-top: 0.5rem; }
@@ -299,6 +305,7 @@
         {% endif %}
         <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
         <div class="audit-status" id="audit-status-{{ source.id }}"></div>
+        <div class="audit-last-result" id="audit-last-result-{{ source.id }}"></div>
         {% set interval_meta = source_interval_meta.get(source.name, {'recommended': source.scrape_interval, 'min': 30, 'max': 10080}) %}
         <div class="interval-control">
           <label for="scrape-interval-{{ source.id }}">Scrape every</label>
@@ -628,13 +635,28 @@
         if (data.total > 0) {
           const pct  = Math.round(data.done / data.total * 100);
           const bits = [`${data.done} / ${data.total} (${pct}%)`];
-          if (data.flagged) bits.push(`${data.flagged} DRM`);
-          if (data.dead)    bits.push(`${data.dead} dead`);
+          if (data.flagged)      bits.push(`${data.flagged} DRM`);
+          if (data.dead)         bits.push(`${data.dead} dead`);
+          if (data.skipped_403)  bits.push(`${data.skipped_403} rate-limited`);
           return { cls: 'audit-status-running', text: '📋 ' + bits.join(' · ') };
         }
         return { cls: 'audit-status-running', text: 'Stream Audit running…' };
       }
       return null;
+    }
+
+    function _renderLastAuditResult(sourceId, r) {
+      const el = document.getElementById(`audit-last-result-${sourceId}`);
+      if (!el || !r) return;
+      const ok    = r.checked - (r.flagged || 0) - (r.dead || 0);
+      const ts    = r.ts ? new Date(r.ts).toLocaleString() : '';
+      const bits  = [];
+      if (r.checked != null) bits.push(`<span class="aud-ok">${r.checked} ok</span>`);
+      if (r.dead)             bits.push(`<span class="aud-dead">${r.dead} dead</span>`);
+      if (r.flagged)          bits.push(`<span class="aud-drm">${r.flagged} DRM</span>`);
+      if (r.skipped_403)      bits.push(`<span class="aud-403">${r.skipped_403} rate-limited</span>`);
+      if (r.errors)           bits.push(`${r.errors} errors`);
+      el.innerHTML = `Last audit: ${bits.join(' · ')}${ts ? ' <span style="opacity:.5">· ' + ts + '</span>' : ''}`;
     }
 
     function _renderAuditStatus(sourceId, data) {
@@ -663,6 +685,7 @@
             delete _auditPollTimers[sourceId];
             const b = _auditRunBtns[sourceId];
             if (b) { b.textContent = '📋 Stream Audit'; b.disabled = false; delete _auditRunBtns[sourceId]; }
+            if (d.last_result) _renderLastAuditResult(sourceId, d.last_result);
           }
         } catch (e) {
           delete _auditPollTimers[sourceId];
@@ -670,6 +693,17 @@
       }
       poll();
     }
+
+    // Load persisted audit results on page load for all audit-enabled sources
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('[id^="audit-last-result-"]').forEach(el => {
+        const sourceId = el.id.replace('audit-last-result-', '');
+        fetch(`/api/sources/${sourceId}/audit-status`)
+          .then(r => r.json())
+          .then(d => { if (d.last_result) _renderLastAuditResult(sourceId, d.last_result); })
+          .catch(() => {});
+      });
+    });
 
     // ── Local Now city search ─────────────────────────────────────────
     const _citySearchTimers = {};

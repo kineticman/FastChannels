@@ -457,6 +457,7 @@ def run_stream_audit(source_name: str):
         flagged  = 0
         dead     = 0
         errors   = 0
+        skipped_403 = 0
         consecutive_errors = 0
 
         logger.info('[audit] %s: checking %d channels…', source_name, total)
@@ -470,7 +471,7 @@ def run_stream_audit(source_name: str):
             _redis_audit = None
 
         import json as _json_audit
-        def _audit_progress(done, total_, flagged_=0, dead_=0, errors_=0, phase='checking'):
+        def _audit_progress(done, total_, flagged_=0, dead_=0, errors_=0, skipped_403_=0, phase='checking'):
             if not _redis_audit:
                 return
             try:
@@ -480,6 +481,7 @@ def run_stream_audit(source_name: str):
                     _redis_audit.setex(_audit_key, 600, _json_audit.dumps({
                         'phase': phase, 'done': done, 'total': total_,
                         'flagged': flagged_, 'dead': dead_, 'errors': errors_,
+                        'skipped_403': skipped_403_,
                         'ts': _time.time(),
                     }))
             except Exception:
@@ -552,10 +554,10 @@ def run_stream_audit(source_name: str):
                     raise
 
                 if r.status_code in (403, 429, 503):
-                    wait = 30
+                    wait = 30 + skipped_403 * 5  # escalate backoff with repeated 403s
                     logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
                                    source_name, r.status_code, wait)
-                    _time.sleep(wait)
+                    _time.sleep(min(wait, 120))
                     r = sess.get(resolved_url, timeout=15, allow_redirects=True)
 
                 if r.status_code in (400, 404, 410):
@@ -565,6 +567,16 @@ def run_stream_audit(source_name: str):
                     dead += 1
                     consecutive_errors = 0
                     logger.info('[audit] dead stream: %s  (HTTP %d)', ch.name, r.status_code)
+                    continue
+
+                if r.status_code in (403, 429, 503):
+                    # Still rate-limited after backoff — skip without penalising the
+                    # consecutive-error budget.  These are CDN/auth throttles, not
+                    # real stream errors, so they should not abort the audit.
+                    skipped_403 += 1
+                    consecutive_errors = 0
+                    logger.info('[audit] %s still rate-limited (%d) after backoff, skipping',
+                                ch.name, r.status_code)
                     continue
 
                 if r.status_code != 200:
@@ -654,17 +666,24 @@ def run_stream_audit(source_name: str):
 
             if i % 25 == 0:
                 db.session.commit()
-                _audit_progress(i, total, flagged, dead, errors)
-                logger.info('[audit] %s: %d/%d — checked=%d flagged=%d dead=%d errors=%d',
-                            source_name, i, total, checked, flagged, dead, errors)
+                _audit_progress(i, total, flagged, dead, errors, skipped_403)
+                logger.info('[audit] %s: %d/%d — checked=%d flagged=%d dead=%d errors=%d skipped_403=%d',
+                            source_name, i, total, checked, flagged, dead, errors, skipped_403)
 
             _time.sleep(0.3)
 
         source.last_audited_at = datetime.now(timezone.utc)
+        cfg = dict(source.config or {})
+        cfg['last_audit_result'] = {
+            'total': total, 'checked': checked, 'flagged': flagged,
+            'dead': dead, 'errors': errors, 'skipped_403': skipped_403,
+            'ts': datetime.now(timezone.utc).isoformat(),
+        }
+        source.config = cfg
         db.session.commit()
         _audit_progress(0, 0, phase='done')
-        logger.info('[audit] %s: done — total=%d checked=%d flagged=%d dead=%d errors=%d',
-                    source_name, total, checked, flagged, dead, errors)
+        logger.info('[audit] %s: done — total=%d checked=%d flagged=%d dead=%d errors=%d skipped_403=%d',
+                    source_name, total, checked, flagged, dead, errors, skipped_403)
 
 
 def _make_progress_writer(source_name: str):

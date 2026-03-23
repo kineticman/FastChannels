@@ -714,7 +714,8 @@ def audit_status(source_id):
                 pass
     except Exception:
         pass
-    return jsonify({'status': 'idle'})
+    last_result = (source.config or {}).get('last_audit_result')
+    return jsonify({'status': 'idle', 'last_result': last_result})
 
 
 @api_bp.route('/sources/chnum-overlaps')
