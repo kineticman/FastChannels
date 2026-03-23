@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     ports:
       - "5523:5523"
+    environment:
+      - FASTCHANNELS_GRACENOTE_MAP_URL=https://gist.githubusercontent.com/kineticman/87765d469610233f894c9c225cb4f2ca/raw/gistfile1.txt
     volumes:
       - db_data:/data
 
