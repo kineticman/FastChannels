@@ -35,7 +35,7 @@ class _MiniChannel:
     source: _MiniSource
 
 
-def _parse_gracenote_id(ch, name_map: dict[str, str] | None = None) -> str | None:
+def _parse_gracenote_id(ch) -> str | None:
     """
     Returns the Gracenote station ID for a channel, or None.
 
@@ -44,9 +44,6 @@ def _parse_gracenote_id(ch, name_map: dict[str, str] | None = None) -> str | Non
       2. slug fallback          — Roku scrapers encode "{play_id}|{gracenote_id}" in the
                                   slug before the dedicated column existed; still honoured
                                   so existing data keeps working without a re-scrape.
-      3. name_map fallback      — cross-source name match; any channel whose name matches
-                                  a channel with a known GN ID gets routed consistently
-                                  regardless of install, source, or stored ID.
     """
     # 1. Dedicated column (preferred)
     gid = (ch.gracenote_id or '').strip()
@@ -60,43 +57,7 @@ def _parse_gracenote_id(ch, name_map: dict[str, str] | None = None) -> str | Non
         if candidate and _GRACENOTE_PREFIX_RE.match(candidate):
             return candidate
 
-    # 3. Cross-source name match
-    if name_map is not None:
-        ch_name = (ch.name or '').strip().lower()
-        if ch_name:
-            return name_map.get(ch_name)
-
     return None
-
-
-def _build_name_gn_map() -> dict[str, str]:
-    """
-    Build {normalized_name: gracenote_id} from all active channels with a known GN ID.
-
-    Used as a cross-source, cross-install fallback: if *any* source has a GN ID
-    for a channel name, every channel with that name lands in the Gracenote M3U.
-    setdefault keeps the first match so explicit DB values win over slug-encoded ones.
-    """
-    rows = (
-        db.session.query(Channel.name, Channel.gracenote_id, Channel.slug)
-        .filter(Channel.is_active == True)
-        .all()
-    )
-    name_map: dict[str, str] = {}
-    for row in rows:
-        ch_name = (row.name or '').strip().lower()
-        if not ch_name:
-            continue
-        gid = (row.gracenote_id or '').strip()
-        if gid and _GRACENOTE_PREFIX_RE.match(gid):
-            name_map.setdefault(ch_name, gid)
-            continue
-        slug = row.slug or ''
-        if '|' in slug:
-            candidate = slug.split('|', 1)[1].strip()
-            if candidate and _GRACENOTE_PREFIX_RE.match(candidate):
-                name_map.setdefault(ch_name, candidate)
-    return name_map
 
 
 def _format_region_label(country: str | None) -> str:
@@ -210,8 +171,7 @@ def _build_channel_stub_query(filters: dict):
     return query.order_by(Channel.number.asc().nullslast(), Channel.name.asc())
 
 
-def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | None = False,
-                             name_map: dict[str, str] | None = None):
+def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | None = False):
     """Return lightweight channel rows for overlap validation paths."""
     filters = filters or {}
     rows = _build_channel_stub_query(filters).all()
@@ -233,9 +193,9 @@ def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | No
     ]
 
     if gracenote is True:
-        channels = [ch for ch in channels if _parse_gracenote_id(ch, name_map)]
+        channels = [ch for ch in channels if _parse_gracenote_id(ch)]
     elif gracenote is False:
-        channels = [ch for ch in channels if not _parse_gracenote_id(ch, name_map)]
+        channels = [ch for ch in channels if not _parse_gracenote_id(ch)]
 
     max_ch = filters.get('max_channels')
     if max_ch:
@@ -244,8 +204,7 @@ def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | No
     return channels
 
 
-def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = False,
-                        name_map: dict[str, str] | None = None):
+def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = False):
     """
     Return the concrete channel list for playlist/XMLTV generation.
 
@@ -257,9 +216,9 @@ def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = 
     channels = _build_channel_query(filters).all()
 
     if gracenote is True:
-        channels = [ch for ch in channels if _parse_gracenote_id(ch, name_map)]
+        channels = [ch for ch in channels if _parse_gracenote_id(ch)]
     elif gracenote is False:
-        channels = [ch for ch in channels if not _parse_gracenote_id(ch, name_map)]
+        channels = [ch for ch in channels if not _parse_gracenote_id(ch)]
 
     max_ch = filters.get('max_channels')
     if max_ch:
@@ -464,13 +423,11 @@ def get_global_chnum_overlaps() -> list[str]:
     master_outputs: list[tuple[str, list, dict[int, int]]] = []
     feed_outputs:   list[tuple[str, list, dict[int, int]]] = []
 
-    name_map = _build_name_gn_map()
-
-    master_standard = _selected_channel_stubs({}, gracenote=False, name_map=name_map)
+    master_standard = _selected_channel_stubs({}, gracenote=False)
     master_standard_map, _ = _resolve_chnum_map(master_standard)
     master_outputs.append(('master /m3u', master_standard, master_standard_map))
 
-    master_gracenote = _selected_channel_stubs({}, gracenote=True, name_map=name_map)
+    master_gracenote = _selected_channel_stubs({}, gracenote=True)
     master_gracenote_map, _ = _resolve_chnum_map(
         master_gracenote,
         namespace_start=_MASTER_GRACENOTE_START,
@@ -481,7 +438,7 @@ def get_global_chnum_overlaps() -> list[str]:
     for feed in feeds:
         filters = feed_to_query_filters(feed.filters or {})
 
-        std_channels = _selected_channel_stubs(filters, gracenote=False, name_map=name_map)
+        std_channels = _selected_channel_stubs(filters, gracenote=False)
         std_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=False)
         std_map, _ = _resolve_chnum_map(
             std_channels,
@@ -490,7 +447,7 @@ def get_global_chnum_overlaps() -> list[str]:
         )
         feed_outputs.append((f'feed {feed.slug} /m3u', std_channels, std_map))
 
-        gn_channels = _selected_channel_stubs(filters, gracenote=True, name_map=name_map)
+        gn_channels = _selected_channel_stubs(filters, gracenote=True)
         gn_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=True)
         gn_map, _ = _resolve_chnum_map(
             gn_channels,
@@ -541,8 +498,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
 
-    name_map = _build_name_gn_map()
-    channels = _selected_channels(filters, gracenote=False, name_map=name_map)
+    channels = _selected_channels(filters, gracenote=False)
 
     chnum_map, warnings = _resolve_chnum_map(
         channels,
@@ -590,8 +546,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
 
-    name_map = _build_name_gn_map()
-    channels = _selected_channels(filters, gracenote=True, name_map=name_map)
+    channels = _selected_channels(filters, gracenote=True)
 
     chnum_map, warnings = _resolve_chnum_map(
         channels,
@@ -605,7 +560,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
     multi_country_map = _source_multi_country_map(channels)
     lines = ['#EXTM3U']
     for ch in channels:
-        gracenote_id = _parse_gracenote_id(ch, name_map)
+        gracenote_id = _parse_gracenote_id(ch)
         display_name = _channel_display_name(ch, multi_country_map)
         attrs = [
             f'channel-id="{gracenote_id}"',
