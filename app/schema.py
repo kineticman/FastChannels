@@ -189,16 +189,22 @@ def ensure_runtime_schema() -> None:
             # the cross-source name-matching feature (commit f6d5cd4, reverted).  Set
             # gracenote_mode='off' on those channels so they stay out of Gracenote
             # routing even if name matching is re-introduced.
-            conn.execute(text(
-                "UPDATE channels "
-                "SET gracenote_mode = 'off' "
-                "WHERE (gracenote_id IS NULL OR gracenote_id = '') "
-                "AND gracenote_mode NOT IN ('off', 'manual') "
-                "AND LOWER(name) IN ("
-                "    SELECT LOWER(name) FROM channels "
-                "    WHERE gracenote_id IS NOT NULL AND gracenote_id != ''"
-                ")"
-            ))
+            # Guard: only run if any gracenote_ids exist — when auto-fill is OFF this
+            # is a no-op and avoids incorrectly setting channels to 'off' on restart.
+            _has_gn = conn.execute(text(
+                "SELECT 1 FROM channels WHERE gracenote_id IS NOT NULL AND gracenote_id != '' LIMIT 1"
+            )).fetchone()
+            if _has_gn:
+                conn.execute(text(
+                    "UPDATE channels "
+                    "SET gracenote_mode = 'off' "
+                    "WHERE (gracenote_id IS NULL OR gracenote_id = '') "
+                    "AND gracenote_mode NOT IN ('off', 'manual') "
+                    "AND LOWER(name) IN ("
+                    "    SELECT LOWER(name) FROM channels "
+                    "    WHERE gracenote_id IS NOT NULL AND gracenote_id != ''"
+                    ")"
+                ))
 
         # Migration 012: clear gracenote_ids that came from the community CSV rather
         # than the native scraper API.  Channels with gracenote_mode='manual' are left
