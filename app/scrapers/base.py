@@ -223,6 +223,17 @@ class BaseScraper(ABC):
     stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
 
+    # Per-phase wall-clock limits (seconds). Overriding in a subclass replaces
+    # the entire dict — set all keys you need, not just the ones you're changing.
+    # Plex EPG is the heaviest legitimate case at ~65s; 300s gives a 4.5x buffer.
+    # Roku overrides epg=900 for its deep content-proxy fetch.
+    phase_timeouts: dict = {
+        'init':      30,
+        'bootstrap': 60,
+        'channels':  120,
+        'epg':       300,
+    }
+
     # Declare config fields your scraper needs.
     # The admin UI auto-renders these — no template changes needed for new scrapers.
     # Example:
