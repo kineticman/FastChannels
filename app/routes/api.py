@@ -18,7 +18,7 @@ from ..models import Source, Channel, Program, AppSettings, Feed
 from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
 from ..gracenote_suggest import SuggestionChannel, suggest_gracenote_matches
-from ..gracenote_map import lookup_gracenote
+from ..gracenote_map import lookup_gracenote, fetch_remote_gracenote_map, remote_map_status
 from ..hls import inspect_hls_drm
 from ..url import public_base_url
 from .tasks import (
@@ -1265,6 +1265,18 @@ def gracenote_community_map():
             'is_enabled':       ch.is_enabled,
         })
     return jsonify({'results': results, 'total': len(results)})
+
+
+@api_bp.route('/gracenote/remote-map/status', methods=['GET'])
+def gracenote_remote_map_status():
+    return jsonify(remote_map_status())
+
+
+@api_bp.route('/gracenote/remote-map/refresh', methods=['POST'])
+def gracenote_remote_map_refresh():
+    success, message = fetch_remote_gracenote_map()
+    status = remote_map_status()
+    return jsonify({'ok': success, 'message': message, **status}), (200 if success else 502)
 
 
 @api_bp.route('/logs')

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import logging
 import os
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -10,6 +11,11 @@ log = logging.getLogger(__name__)
 
 _BUILTIN_PATH = Path(__file__).resolve().parent / "data" / "gracenote_map.csv"
 _OVERRIDE_PATH = Path(os.environ.get("FASTCHANNELS_GRACENOTE_MAP_PATH") or "/data/gracenote_map_overrides.csv")
+_REMOTE_CACHE_PATH = Path("/data/gracenote_map_remote.csv")
+_REMOTE_URL = (os.environ.get("FASTCHANNELS_GRACENOTE_MAP_URL") or "").strip()
+
+# Timestamp of the last successful remote fetch (epoch seconds, 0 = never).
+_remote_fetched_at: float = 0.0
 
 
 def _normalize_station_id(value) -> str | None:
@@ -39,8 +45,9 @@ def _iter_rows(path: Path):
 
 @lru_cache(maxsize=1)
 def _load_map() -> dict[tuple[str, str], dict[str, str]]:
+    # Priority: builtin < remote cache < local overrides
     mapping: dict[tuple[str, str], dict[str, str]] = {}
-    for path in (_BUILTIN_PATH, _OVERRIDE_PATH):
+    for path in (_BUILTIN_PATH, _REMOTE_CACHE_PATH, _OVERRIDE_PATH):
         for row in _iter_rows(path) or ():
             provider = (row.get("provider") or "").strip().lower()
             key = (row.get("key") or "").strip()
@@ -68,6 +75,56 @@ def _load_map() -> dict[tuple[str, str], dict[str, str]]:
 
 def reload_gracenote_map() -> None:
     _load_map.cache_clear()
+
+
+def fetch_remote_gracenote_map() -> tuple[bool, str]:
+    """Download the remote community map CSV and cache it to disk.
+
+    Returns (success, message).  Clears the in-memory cache on success so the
+    next lookup picks up the new data.
+    """
+    global _remote_fetched_at
+    url = _REMOTE_URL
+    if not url:
+        return False, "FASTCHANNELS_GRACENOTE_MAP_URL is not configured."
+
+    import requests
+    try:
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        content = r.text
+    except Exception as exc:
+        log.warning("[gracenote-map] remote fetch failed: %s", exc)
+        return False, f"Fetch failed: {exc}"
+
+    # Basic sanity check — must look like a CSV with a header row
+    lines = content.strip().splitlines()
+    if not lines or "provider" not in lines[0].lower():
+        return False, "Remote file does not look like a valid gracenote_map CSV (missing 'provider' header)."
+
+    try:
+        _REMOTE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _REMOTE_CACHE_PATH.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        log.warning("[gracenote-map] could not write remote cache: %s", exc)
+        return False, f"Could not write cache file: {exc}"
+
+    _remote_fetched_at = time.time()
+    reload_gracenote_map()
+    row_count = sum(1 for ln in lines[1:] if ln.strip())
+    log.info("[gracenote-map] remote map refreshed — %d rows from %s", row_count, url)
+    return True, f"OK — {row_count} rows loaded."
+
+
+def remote_map_status() -> dict:
+    """Return metadata about the remote map for display in the UI."""
+    return {
+        "url": _REMOTE_URL or None,
+        "cached": _REMOTE_CACHE_PATH.exists(),
+        "fetched_at": _remote_fetched_at or None,
+        "cache_path": str(_REMOTE_CACHE_PATH),
+        "row_count": sum(1 for _ in _iter_rows(_REMOTE_CACHE_PATH)) if _REMOTE_CACHE_PATH.exists() else 0,
+    }
 
 
 def lookup_gracenote(provider: str, key: str | None) -> dict[str, str] | None:

@@ -1551,6 +1551,18 @@ if __name__ == '__main__':
                       max_instances=1, coalesce=True)
     scheduler.add_job(_scheduled_logo_cache_cleanup, 'interval', hours=6, id='logo_cache_cleanup',
                       max_instances=1, coalesce=True)
+
+    def _scheduled_remote_gracenote_refresh():
+        from app.gracenote_map import fetch_remote_gracenote_map, _REMOTE_URL
+        if not _REMOTE_URL:
+            return
+        ok, msg = fetch_remote_gracenote_map()
+        if not ok:
+            logger.warning('[gracenote-map] scheduled remote refresh failed: %s', msg)
+
+    scheduler.add_job(_scheduled_remote_gracenote_refresh, 'interval', hours=24,
+                      id='gracenote_remote_refresh', max_instances=1, coalesce=True)
+
     scheduler.start()
     logger.info('Scheduler started — checking sources every 60s')
     with flask_app.app_context():
@@ -1569,6 +1581,18 @@ if __name__ == '__main__':
             _enqueue_xml_refresh_job()
         except Exception:
             logger.exception('[xml-cache] startup refresh failed')
+
+        # Fetch remote community Gracenote map on startup if URL is configured
+        from app.gracenote_map import fetch_remote_gracenote_map, _REMOTE_URL
+        if _REMOTE_URL:
+            try:
+                ok, msg = fetch_remote_gracenote_map()
+                if ok:
+                    logger.info('[gracenote-map] startup remote fetch: %s', msg)
+                else:
+                    logger.warning('[gracenote-map] startup remote fetch failed: %s', msg)
+            except Exception:
+                logger.exception('[gracenote-map] startup remote fetch error')
 
     class _NoopDeathPenalty(_BaseDeathPenalty):
         """Job timeout enforcer that does nothing — safe for non-main threads.

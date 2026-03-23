@@ -474,6 +474,16 @@
           <span class="save-status" id="gracenote-auto-fill-status"></span>
         </div>
       </div>
+      <div class="toggle-row" id="gn-remote-row" style="display:none">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Community Map</div>
+          <div class="toggle-row-help" id="gn-remote-meta">Loading…</div>
+        </div>
+        <div class="toggle-row-control">
+          <button class="btn btn-audit" id="gn-remote-refresh-btn" onclick="refreshRemoteGracenoteMap()">Refresh Now</button>
+          <span class="save-status" id="gn-remote-status"></span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -677,6 +687,48 @@ async function loadSystemStats() {
 }
 
 loadSystemStats();
+
+// ── Community Gracenote map remote status ───────────────────────────────────
+async function loadRemoteGracenoteStatus() {
+  try {
+    const r = await fetch('/api/gracenote/remote-map/status');
+    const d = await r.json();
+    if (!d.url) return; // env var not set — hide the row entirely
+    const row = document.getElementById('gn-remote-row');
+    const meta = document.getElementById('gn-remote-meta');
+    if (row) row.style.display = '';
+    if (meta) {
+      const ts = d.fetched_at ? new Date(d.fetched_at * 1000).toLocaleString() : null;
+      const count = d.row_count ? ` · ${d.row_count.toLocaleString()} rows` : '';
+      const last = ts ? ` · Last fetched ${ts}` : (d.cached ? ' · Cached on disk' : ' · Not yet fetched');
+      meta.textContent = `Remote CSV from GitHub${count}${last}`;
+    }
+  } catch(e) { /* silently ignore */ }
+}
+
+async function refreshRemoteGracenoteMap() {
+  const btn = document.getElementById('gn-remote-refresh-btn');
+  const status = document.getElementById('gn-remote-status');
+  if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
+  status.className = 'save-status';
+  status.textContent = '';
+  try {
+    const r = await fetch('/api/gracenote/remote-map/refresh', { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.message || `HTTP ${r.status}`);
+    status.className = 'save-status ok';
+    status.textContent = '✓ ' + d.message;
+    loadRemoteGracenoteStatus();
+  } catch(e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ ' + e.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Refresh Now'; }
+    setTimeout(() => { status.textContent = ''; }, 5000);
+  }
+}
+
+loadRemoteGracenoteStatus();
 </script>
 </body>
 </html>
