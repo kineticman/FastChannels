@@ -443,7 +443,7 @@
             <td><span class="cm-badge ${escHtml(s.cls)}">${escHtml(s.label)}</span></td>
             <td>
               <button class="btn-cm-apply" id="cm-btn-${row.channel_id}"
-                onclick="openGsSuggest(${row.channel_id}, ${JSON.stringify(row.channel_name)})"
+                onclick="openGsSuggest(${row.channel_id})"
                 ${alreadyApplied ? 'disabled' : ''}
               >${alreadyApplied ? 'Applied' : 'Apply'}</button>
             </td>
@@ -479,7 +479,8 @@
       document.getElementById('cm-overlay').classList.remove('open');
     }
 
-    async function openGsSuggest(channelId, channelName) {
+    async function openGsSuggest(channelId) {
+      const channelName = _cmData.find(r => r.channel_id === channelId)?.channel_name || '';
       const modal = document.getElementById('gs-modal');
       const content = document.getElementById('gs-modal-content');
       content.innerHTML = '<div class="modal-loading">Loading suggestions…</div>';
