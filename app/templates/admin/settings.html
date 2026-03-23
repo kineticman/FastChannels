@@ -199,6 +199,27 @@
     }
     .advanced-chevron.open { transform: rotate(180deg); }
 
+    .modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.65); z-index: 1000;
+      align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+      background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+      padding: 1.5rem; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+    .btn-cancel-modal {
+      background: none; border: 1px solid #475569; color: #94a3b8;
+      padding: 0.45rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.875rem;
+    }
+    .btn-cancel-modal:hover { border-color: #64748b; color: #cbd5e1; }
+    .btn-audit {
+      background: #1e3a5f; color: #7dd3fc; border: none;
+      padding: 0.45rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.875rem;
+    }
+    .btn-audit:hover { background: #1d4ed8; }
+
     .btn {
       padding: 0.5rem 1.2rem;
       border-radius: 6px;
