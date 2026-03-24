@@ -128,6 +128,77 @@
       border-radius: 6px; padding: 0.4rem 1rem; font-size: 0.85rem; cursor: pointer;
     }
     .btn-browse-cm:hover { background: #0f766e; }
+    /* Gracenote Suggestions sub-modal */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+      z-index: 1100; align-items: flex-start; justify-content: center;
+      padding: 2rem 1rem; overflow-y: auto;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+      background: #1e293b; border: 1px solid #334155; border-radius: 14px;
+      width: 100%; max-width: 720px; padding: 1.5rem; position: relative; margin: auto;
+    }
+    .modal-loading { color: #64748b; font-size: 0.9rem; padding: 1rem 0; }
+    .gs-header { margin-bottom: 1rem; }
+    .gs-title { color: #f1f5f9; font-size: 1.05rem; font-weight: 700; margin: 0 0 0.2rem; }
+    .gs-meta  { color: #94a3b8; font-size: 0.82rem; line-height: 1.45; }
+    .gs-current { color: #cbd5e1; font-size: 0.78rem; margin: 0.75rem 0 0; }
+    .gs-subsection { display: flex; flex-direction: column; gap: 0; }
+    .gs-suggest-meta { color: #94a3b8; font-size: 0.8rem; margin-bottom: 0.7rem; line-height: 1.45; }
+    .gs-suggest-list { display: flex; flex-direction: column; gap: 0.7rem; }
+    .gs-suggest-item {
+      display: grid; grid-template-columns: 1fr auto; gap: 0.8rem;
+      background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 0.8rem 0.9rem; align-items: start;
+    }
+    .gs-suggest-main { min-width: 0; }
+    .gs-suggest-title  { color: #e2e8f0; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.2rem; }
+    .gs-suggest-station { color: #7dd3fc; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem; }
+    .gs-suggest-detail  { color: #94a3b8; font-size: 0.77rem; line-height: 1.45; }
+    .gs-suggest-reasons { color: #64748b; font-size: 0.75rem; line-height: 1.4; margin-top: 0.35rem; }
+    .gs-suggest-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem; }
+    .gs-suggest-empty, .gs-suggest-error {
+      background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 0.8rem 0.9rem;
+      color: #94a3b8; font-size: 0.82rem;
+    }
+    .gs-suggest-error { color: #fca5a5; border-color: #7f1d1d; }
+    .gs-source-badge {
+      display: inline-block; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.03em;
+      padding: 0.1rem 0.45rem; border-radius: 4px; vertical-align: middle; margin-left: 0.4rem;
+    }
+    .gs-source-badge.manual { background: #1e3a5f; color: #7dd3fc; }
+    .gs-source-badge.native { background: #14532d; color: #86efac; }
+    .gs-source-badge.csv    { background: #3b2c0e; color: #fcd34d; }
+    .gs-community-section { margin-top: 1rem; }
+    .gs-community-label {
+      color: #94a3b8; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em; margin-bottom: 0.45rem;
+    }
+    .gs-community-item {
+      background: #1c1205; border: 1px solid #78350f; border-radius: 8px; padding: 0.8rem 0.9rem;
+      display: grid; grid-template-columns: 1fr auto; gap: 0.8rem; align-items: start;
+    }
+    .gs-dvr-label {
+      color: #94a3b8; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em; margin: 1rem 0 0.45rem;
+    }
+    .gs-no-dvr {
+      background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 0.6rem 0.9rem;
+      color: #64748b; font-size: 0.8rem;
+    }
+    .btn-apply-gn {
+      background: #0f766e; color: #ecfeff; border: 1px solid #115e59;
+      padding: 0.28rem 0.6rem; border-radius: 5px; cursor: pointer; font-size: 0.75rem; font-weight: 600;
+    }
+    .btn-apply-gn:hover:not(:disabled) { background: #0d9488; }
+    .btn-apply-gn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .preview-conf { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 0.1rem 0.45rem; border-radius: 4px; }
+    .preview-conf.strong { background: #14532d; color: #86efac; }
+    .preview-conf.medium { background: #1e3a5f; color: #7dd3fc; }
+    .preview-conf.weak   { background: #1e293b; color: #475569; border: 1px solid #334155; }
+    .preview-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+    .preview-action-btn { padding: 0.4rem 1rem; border-radius: 6px; border: none; cursor: pointer; font-size: 0.85rem; font-weight: 600; }
+    .preview-action-btn.neutral { background: #334155; color: #cbd5e1; }
   </style>
 </head>
 <body>
@@ -263,6 +334,15 @@
     </div>
   </div>
 
+  <!-- Gracenote Suggestions sub-modal -->
+  <div class="modal-overlay" id="gs-modal" onclick="closeGsModal(event)">
+    <div class="modal-box">
+      <div id="gs-modal-content">
+        <div class="modal-loading">Loading suggestions…</div>
+      </div>
+    </div>
+  </div>
+
   <script>
     let _cmData = [];
 
@@ -301,9 +381,9 @@
             <td><code style="font-size:0.8rem">${escCm(row.community_tmsid)}</code></td>
             <td style="color:#64748b;font-size:0.8rem">${escCm(row.notes)}</td>
             <td><span class="cm-badge ${escCm(s.cls)}">${escCm(s.label)}</span></td>
-            <td><button class="btn-cm-apply" onclick="applyCmEntry(${row.channel_id}, '${escCm(row.community_tmsid)}', this)"
+            <td><button class="btn-cm-apply" onclick="openGsSuggest(${row.channel_id})"
               ${alreadyApplied ? 'disabled' : ''}
-            >${alreadyApplied ? 'Applied' : 'Apply'}</button></td>
+            >${alreadyApplied ? 'Applied' : 'Review &amp; Apply'}</button></td>
           </tr>`;
       }).join('');
     }
@@ -328,22 +408,118 @@
       document.getElementById('cm-overlay').classList.remove('open');
     }
 
-    async function applyCmEntry(channelId, tmsid, btn) {
-      if (!tmsid) return;
+    async function openGsSuggest(channelId) {
+      const modal = document.getElementById('gs-modal');
+      const content = document.getElementById('gs-modal-content');
+      content.innerHTML = '<div class="modal-loading">Loading suggestions…</div>';
+      modal.classList.add('open');
+      try {
+        const r = await fetch(`/api/channels/${channelId}/gracenote-suggestions?limit=5`);
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        const ch = data.channel || {};
+        content.innerHTML = `
+          <div class="gs-header">
+            <div class="gs-title">Gracenote Suggestions</div>
+            <div class="gs-meta">${escCm(ch.name || '')}${ch.source_name ? ` · ${escCm(ch.source_name)}` : ''}${ch.category ? ` · ${escCm(ch.category)}` : ''}</div>
+          </div>
+          ${renderGsSuggestions(ch, data)}
+          <div class="preview-actions">
+            <button class="preview-action-btn neutral" onclick="closeGsModal()">Close</button>
+          </div>`;
+      } catch(err) {
+        content.innerHTML = `<div class="gs-header"><div class="gs-title">Gracenote Suggestions</div></div>
+          <div class="gs-suggest-error">${escCm(String(err.message || err))}</div>
+          <div class="preview-actions"><button class="preview-action-btn neutral" onclick="closeGsModal()">Close</button></div>`;
+      }
+    }
+
+    function renderGsSuggestions(ch, payload) {
+      const results = Array.isArray(payload?.results) ? payload.results : [];
+      const dvrMissing = !!payload?.dvr_missing;
+      const currentId = String(ch?.gracenote_id || '').trim();
+      const gnSource = ch?.gracenote_source || null;
+      const csvSuggestion = ch?.csv_suggestion || null;
+
+      let currentLine = '';
+      if (currentId) {
+        const badgeMap = { manual:['manual','manual'], native:['native','source-verified'], csv:['csv','community map'] };
+        const [cls, label] = badgeMap[gnSource] || [];
+        const badge = cls ? `<span class="gs-source-badge ${escCm(cls)}">${escCm(label)}</span>` : '';
+        currentLine = `<div class="gs-current">Current ID: <strong>${escCm(currentId)}</strong>${badge}</div>`;
+      }
+
+      let communitySection = '';
+      if (csvSuggestion?.tmsid) {
+        const csvId = String(csvSuggestion.tmsid);
+        const csvNotes = csvSuggestion.notes ? ` · ${escCm(csvSuggestion.notes)}` : '';
+        const alreadySet = currentId === csvId;
+        communitySection = `
+          <div class="gs-community-section">
+            <div class="gs-community-label">Community Map</div>
+            <div class="gs-community-item">
+              <div class="gs-suggest-main">
+                <div class="gs-suggest-station">${escCm(csvId)}</div>
+                <div class="gs-suggest-detail">Mapped in gracenote_map.csv${csvNotes}</div>
+                <div class="gs-suggest-reasons">Not independently verified — confirm against Channels DVR or spot-check the schedule.</div>
+              </div>
+              <div class="gs-suggest-actions">
+                <span class="gs-source-badge csv">community map</span>
+                <button class="btn-apply-gn" onclick="applyGsSuggestion(${Number(ch.id)}, '${escCm(csvId)}', this)" ${alreadySet ? 'disabled' : ''}>${alreadySet ? 'Applied' : 'Apply'}</button>
+              </div>
+            </div>
+          </div>`;
+      }
+
+      let dvrSection = '';
+      if (dvrMissing) {
+        dvrSection = `<div class="gs-dvr-label">Channels DVR</div><div class="gs-no-dvr">Channels DVR URL is not configured — set it in Settings to enable ranked suggestions.</div>`;
+      } else if (!results.length) {
+        dvrSection = `<div class="gs-dvr-label">Channels DVR</div><div class="gs-suggest-empty">No candidates came back from Channels DVR for this channel name.</div>`;
+      } else {
+        const items = results.map(item => {
+          const reasons = Array.isArray(item.reasons) && item.reasons.length
+            ? `<div class="gs-suggest-reasons">${escCm(item.reasons.join(' · '))}</div>` : '';
+          const bits = [item.affiliate||'',item.type||'',item.video||'',item.primary_language||'',item.call_sign||''].filter(Boolean);
+          const stationId = String(item.station_id || '');
+          const alreadySet = currentId && currentId === stationId;
+          return `
+            <div class="gs-suggest-item">
+              <div class="gs-suggest-main">
+                <div class="gs-suggest-title">${escCm(item.name||'Unknown')}</div>
+                <div class="gs-suggest-station">${escCm(stationId)}</div>
+                <div class="gs-suggest-detail">${escCm(bits.join(' · ')||'No extra station details')}</div>
+                ${reasons}
+              </div>
+              <div class="gs-suggest-actions">
+                <span class="preview-conf ${escCm(item.confidence||'weak')}">${escCm(item.confidence||'weak')}</span>
+                <button class="btn-apply-gn" onclick="applyGsSuggestion(${Number(ch.id)}, '${escCm(stationId)}', this)" ${alreadySet ? 'disabled' : ''}>${alreadySet ? 'Applied' : 'Apply'}</button>
+              </div>
+            </div>`;
+        }).join('');
+        dvrSection = `
+          <div class="gs-dvr-label">Channels DVR</div>
+          <div class="gs-suggest-meta">Results come from your Channels DVR station search and are ranked locally.</div>
+          <div class="gs-suggest-list">${items}</div>`;
+      }
+
+      return `<div class="gs-subsection">${currentLine}${communitySection}${dvrSection}</div>`;
+    }
+
+    async function applyGsSuggestion(channelId, stationId, btn) {
       btn.disabled = true;
       btn.textContent = 'Saving…';
       try {
         const r = await fetch(`/api/channels/${channelId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ gracenote_id: tmsid, gracenote_mode: 'manual' }),
+          body: JSON.stringify({ gracenote_id: stationId, gracenote_mode: 'manual' }),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         btn.textContent = 'Applied';
-        // Update local data so status badge reflects change
+        // Mark applied in community map data so status reflects change
         const row = _cmData.find(r => r.channel_id === channelId);
-        if (row) { row.already_applied = true; row.current_id = tmsid; }
-        renderCmTable();
+        if (row) { row.already_applied = true; row.current_id = stationId; }
       } catch(e) {
         btn.disabled = false;
         btn.textContent = 'Apply';
@@ -351,7 +527,17 @@
       }
     }
 
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCommunityMap(); });
+    function closeGsModal(event) {
+      if (event && event.target !== document.getElementById('gs-modal')) return;
+      document.getElementById('gs-modal').classList.remove('open');
+    }
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        document.getElementById('gs-modal').classList.remove('open');
+        closeCommunityMap();
+      }
+    });
   </script>
 </body>
 </html>

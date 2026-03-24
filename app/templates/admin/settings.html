@@ -898,7 +898,7 @@ function renderCmTable() {
         <td><button class="btn-cm-apply" id="cm-btn-${row.channel_id}"
           onclick="openGsSuggest(${row.channel_id})"
           ${alreadyApplied ? 'disabled' : ''}
-        >${alreadyApplied ? 'Applied' : 'Apply'}</button></td>
+        >${alreadyApplied ? 'Applied' : 'Review &amp; Apply'}</button></td>
       </tr>`;
   }).join('');
 }
