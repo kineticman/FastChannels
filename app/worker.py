@@ -1629,10 +1629,12 @@ if __name__ == '__main__':
     # in case the overnight run failed.
     scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
                       hour=3, minute=0,
-                      id='tvtv_cache_refresh_night', max_instances=1, coalesce=True)
+                      id='tvtv_cache_refresh_night', max_instances=1, coalesce=True,
+                      misfire_grace_time=3600)
     scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
                       hour=15, minute=0,
-                      id='tvtv_cache_refresh_day', max_instances=1, coalesce=True)
+                      id='tvtv_cache_refresh_day', max_instances=1, coalesce=True,
+                      misfire_grace_time=3600)
 
     scheduler.start()
     logger.info('Scheduler started — checking sources every 60s')
@@ -1653,15 +1655,27 @@ if __name__ == '__main__':
         except Exception:
             logger.exception('[xml-cache] startup refresh failed')
 
-        # Seed tvtv cache on first startup (table empty) so upgrading users don't
-        # wait up to 12 hours for the first scheduled run at 03:00/15:00 UTC.
+        # Trigger tvtv cache refresh at startup if the cache is empty or stale
+        # (last fetch older than 13 hours).  13h is just over half the gap between
+        # the two daily cron runs (03:00 / 15:00 UTC = 12h apart), so a container
+        # that restarts and misses a cron window will self-heal on the next boot.
         try:
             from app.models import TvtvProgramCache
-            if TvtvProgramCache.query.count() == 0:
+            from sqlalchemy import func as sa_func
+            from datetime import timezone as _tz
+            newest = db.session.query(sa_func.max(TvtvProgramCache.fetched_at)).scalar()
+            if newest is None:
+                stale = True
+            else:
+                if newest.tzinfo is None:
+                    newest = newest.replace(tzinfo=_tz.utc)
+                age_hours = (datetime.now(_tz.utc) - newest).total_seconds() / 3600
+                stale = age_hours > 13
+            if stale:
                 _scheduled_tvtv_cache_refresh()
-                logger.info('[tvtv-cache] cache empty at startup — triggered initial refresh')
+                logger.info('[tvtv-cache] stale/empty at startup (newest=%s) — triggered refresh', newest)
         except Exception:
-            logger.exception('[tvtv-cache] startup seed check failed')
+            logger.exception('[tvtv-cache] startup staleness check failed')
 
         # Fetch remote community Gracenote map on startup
         try:
