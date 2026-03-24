@@ -697,11 +697,6 @@
         <div class="filter-actions">
           <button type="submit" class="btn-apply">Apply</button>
           <a class="clear" href="/admin/channels">Clear</a>
-          <span class="filter-sep"></span>
-          {% if source_filter or search or language_filter or category_filter or drm_filter or enabled_filter or presence_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter %}
-          <button type="button" class="btn-disable-all" onclick="bulkFilterAction(false)">✕ Disable All</button>
-          <button type="button" class="btn-enable-all"  onclick="bulkFilterAction(true)">✓ Enable All</button>
-          {% endif %}
           <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
         </div>
       </div>
@@ -823,9 +818,11 @@
       </span>
       <button class="btn-enable"  onclick="bulkToggle(true)">Enable Selected</button>
       <button class="btn-disable" onclick="bulkToggle(false)">Disable Selected</button>
+      {% if gracenote_filter or gracenote_mode_filter %}
       <button class="btn-open-external" onclick="bulkGracenoteAction('set_auto')">Set Auto</button>
       <button class="btn-open-external" onclick="bulkGracenoteAction('set_off')">Set Off</button>
       <button class="btn-cancel" onclick="bulkGracenoteAction('clear_ids')">Clear IDs</button>
+      {% endif %}
       <button class="btn-cancel"  onclick="clearSelection()">Cancel</button>
     </div>
 
@@ -1947,29 +1944,6 @@
       t.textContent = msg;
       t.classList.add('show');
       setTimeout(() => t.classList.remove('show'), ms);
-    }
-
-    async function bulkFilterAction(enable) {
-      const total = {{ channels.total }};
-      const label = enable ? 'enable' : 'disable';
-      if (!confirm(`${label.charAt(0).toUpperCase() + label.slice(1)} all ${total} matching channels?`)) return;
-
-      try {
-        const r = await fetch('/api/channels/bulk', {
-          method:  'POST',
-          headers: {'Content-Type': 'application/json'},
-          body:    JSON.stringify({action: label, filters: _pageFilters}),
-        });
-        if (r.ok) {
-          const data = await r.json();
-          showToast(`✓ ${label.charAt(0).toUpperCase() + label.slice(1)}d ${data.updated} channel${data.updated !== 1 ? 's' : ''}`);
-          setTimeout(() => window.location.reload(), 800);
-        } else {
-          showToast('⚠ Request failed — check the console');
-        }
-      } catch (e) {
-        showToast('⚠ Network error — ' + e.message);
-      }
     }
 
     function toggleHideDisabled() {
