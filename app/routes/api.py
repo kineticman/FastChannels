@@ -986,7 +986,7 @@ def bulk_update_channel_gracenote():
 def update_channel(channel_id):
     ch   = Channel.query.get_or_404(channel_id)
     data = request.get_json()
-    for field in ('name', 'logo_url', 'category', 'is_active', 'is_enabled', 'number', 'disable_reason', 'is_duplicate'):
+    for field in ('name', 'logo_url', 'category', 'category_override', 'is_active', 'is_enabled', 'number', 'disable_reason', 'is_duplicate'):
         if field in data:
             setattr(ch, field, data[field])
     if data.get('is_enabled') is True and 'is_active' not in data:
@@ -1007,13 +1007,24 @@ def update_channel(channel_id):
 
 @api_bp.route('/channels/<int:channel_id>/category-explain', methods=['GET'])
 def channel_category_explain(channel_id):
-    from ..scrapers.category_utils import explain_category
+    from ..scrapers.category_utils import explain_category, CANONICAL_CATEGORIES, category_for_channel
     ch = Channel.query.get_or_404(channel_id)
-    explanation = explain_category(ch.name, ch.category)
+    if ch.category_override:
+        explanation = {
+            'source': 'user_override',
+            'rule': 'user_override',
+            'detail': f'Manually set to "{ch.category_override}" by a user — overrides all automatic logic.',
+        }
+    else:
+        # explain_category works on the auto-resolved category (before override)
+        auto_cat = category_for_channel(ch.name, ch.category)
+        explanation = explain_category(ch.name, auto_cat)
     return jsonify({
         'channel_id': ch.id,
         'channel_name': ch.name,
         'category': ch.category,
+        'category_override': ch.category_override,
+        'canonical_categories': list(CANONICAL_CATEGORIES),
         **explanation,
     })
 

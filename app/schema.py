@@ -138,6 +138,10 @@ def ensure_runtime_schema() -> None:
                 row[1]
                 for row in conn.execute(text("PRAGMA table_info(channels)"))
             }
+            if "category_override" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN category_override VARCHAR(128)"
+                ))
             if "is_duplicate" not in ch_cols:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN is_duplicate BOOLEAN NOT NULL DEFAULT 0"

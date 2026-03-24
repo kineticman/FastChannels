@@ -236,29 +236,28 @@
     .btn-cancel:hover  { color: #e2e8f0; }
 
     /* Duplicate detection */
-    /* Category explain popover */
-    .cat-cell { position: relative; }
+    /* Category explain modal */
     .cat-label {
-      cursor: help; border-bottom: 1px dotted #475569;
+      cursor: pointer; border-bottom: 1px dotted #475569;
       display: inline; white-space: nowrap;
     }
-    .cat-popover {
-      display: none; position: absolute; left: 0; top: calc(100% + 4px);
-      z-index: 500; background: #1e293b; border: 1px solid #334155;
-      border-radius: 8px; padding: 0.65rem 0.8rem; width: 280px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.4); font-size: 0.78rem; line-height: 1.5;
+    .cat-label.has-override { border-bottom-color: #f59e0b; color: #f59e0b !important; }
+    #catModal .source-badge {
+      display: inline-block; font-size: 0.68rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 0.15rem 0.45rem; border-radius: 4px; margin-bottom: 0.6rem;
     }
-    .cat-popover.open { display: block; }
-    .cat-popover-source {
-      font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.06em; margin-bottom: 0.3rem;
+    #catModal .source-badge.user_override { background:#78350f; color:#f59e0b; }
+    #catModal .source-badge.override     { background:#312e81; color:#a5b4fc; }
+    #catModal .source-badge.name_pattern { background:#0c4a6e; color:#7dd3fc; }
+    #catModal .source-badge.scraper      { background:#14532d; color:#86efac; }
+    #catModal .source-badge.unknown      { background:#1e293b; color:#94a3b8; }
+    .btn-sm {
+      padding: 0.35rem 0.8rem; border-radius: 6px; border: none;
+      font-size: 0.82rem; cursor: pointer; font-weight: 500;
     }
-    .cat-popover-source.override      { color: #f59e0b; }
-    .cat-popover-source.name_pattern  { color: #7dd3fc; }
-    .cat-popover-source.scraper       { color: #86efac; }
-    .cat-popover-source.unknown       { color: #94a3b8; }
-    .cat-popover-detail { color: #cbd5e1; }
-    .cat-popover-loading { color: #64748b; font-style: italic; }
+    .btn-secondary { background: #334155; color: #e2e8f0; }
+    .btn-secondary:hover { background: #475569; }
     .dup-badge {
       display: inline-block; font-size: 0.6rem; font-weight: 700; padding: 0.1rem 0.35rem;
       border-radius: 3px; background: #78350f; color: #fbbf24; margin-left: 0.4rem;
@@ -902,12 +901,11 @@
             {% endif %}
             <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="This exact channel name exists in multiple sources">DUP</span>{% elif ch.name in possible_duplicate_names %} <span class="dup-badge" title="Possible duplicate: a very similar channel name exists in another source">DUP?</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup" title="Manually marked as duplicate">DUPL</span>{% endif %}</td>
             <td style="color:#64748b">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
-            <td class="cat-cell" data-channel-id="{{ ch.id }}">
+            <td data-channel-id="{{ ch.id }}">
               {% if ch.category %}
-                <span class="cat-label" style="color:#94a3b8">{{ ch.category }}</span>
-                <div class="cat-popover" id="cat-pop-{{ ch.id }}">
-                  <div class="cat-popover-loading">Loading…</div>
-                </div>
+                <span class="cat-label{% if ch.category_override %} has-override{% endif %}"
+                      style="color:#94a3b8"
+                      onclick="openCatModal({{ ch.id }})">{{ ch.category }}</span>
               {% else %}
                 <span style="color:#475569">—</span>
               {% endif %}
@@ -1008,6 +1006,15 @@
       <span class="page-info">{{ channels.total }} channels</span>
     </div>
     {% endif %}
+  </div>
+
+  <!-- Category explain / override modal -->
+  <div class="modal-overlay" id="catModal" onclick="if(event.target===this)closeCatModal()">
+    <div class="modal-box" style="max-width:440px">
+      <div id="catModal-content">
+        <div class="modal-loading">Loading…</div>
+      </div>
+    </div>
   </div>
 
   <div class="modal-overlay" id="preview-modal" onclick="closePreviewModal(event)">
@@ -1905,64 +1912,122 @@
         .then(d => { renderModalBody({ ...d, sources: _dupSources }); });
     }
 
-    // ── Category explain popover ─────────────────────────────────────────────
+    // ── Category explain / override modal ────────────────────────────────────
     const _catCache = {};
-    let _openCatPop = null;
+    let _catModalChId = null;
 
-    const SOURCE_LABELS = {
-      override:     'Hard Override',
-      name_pattern: 'Name Pattern',
-      scraper:      'Scraper',
-      unknown:      'Unknown',
+    const CAT_SOURCE_LABELS = {
+      user_override: 'User Override',
+      override:      'Built-in Rule',
+      name_pattern:  'Name Pattern',
+      scraper:       'Scraper',
+      unknown:       'Unknown',
     };
 
-    function closeCatPopovers() {
-      if (_openCatPop) { _openCatPop.classList.remove('open'); _openCatPop = null; }
+    function closeCatModal() {
+      document.getElementById('catModal').classList.remove('open');
+      _catModalChId = null;
     }
 
-    document.addEventListener('click', e => {
-      if (!e.target.closest('.cat-cell')) closeCatPopovers();
-    });
+    async function openCatModal(chId) {
+      _catModalChId = chId;
+      const modal = document.getElementById('catModal');
+      const content = document.getElementById('catModal-content');
+      content.innerHTML = '<div class="modal-loading">Loading…</div>';
+      modal.classList.add('open');
 
-    document.querySelectorAll('.cat-cell').forEach(cell => {
-      const label = cell.querySelector('.cat-label');
-      const pop   = cell.querySelector('.cat-popover');
-      if (!label || !pop) return;
-      const chId = parseInt(cell.dataset.channelId, 10);
-
-      label.addEventListener('mouseenter', async () => {
-        if (_openCatPop && _openCatPop !== pop) closeCatPopovers();
-        pop.classList.add('open');
-        _openCatPop = pop;
-
-        if (_catCache[chId]) { renderCatPop(pop, _catCache[chId]); return; }
-
+      let d;
+      if (_catCache[chId]) {
+        d = _catCache[chId];
+      } else {
         try {
           const r = await fetch(`/api/channels/${chId}/category-explain`);
-          const d = await r.json();
+          d = await r.json();
           _catCache[chId] = d;
-          renderCatPop(pop, d);
         } catch(e) {
-          pop.innerHTML = `<div class="cat-popover-detail" style="color:#f87171">Failed to load.</div>`;
+          content.innerHTML = `<p style="color:#f87171">Failed to load category info.</p>`;
+          return;
         }
-      });
+      }
+      renderCatModal(content, d);
+    }
 
-      label.addEventListener('mouseleave', e => {
-        // keep open if moving into the popover itself
-        if (!e.relatedTarget || !pop.contains(e.relatedTarget)) {
-          setTimeout(() => { if (!pop.matches(':hover')) closeCatPopovers(); }, 120);
-        }
-      });
-      pop.addEventListener('mouseleave', () => closeCatPopovers());
-    });
-
-    function renderCatPop(pop, d) {
+    function renderCatModal(content, d) {
       const src = d.source || 'unknown';
-      const srcLabel = SOURCE_LABELS[src] || src;
-      pop.innerHTML = `
-        <div class="cat-popover-source ${escapeHtml(src)}">${escapeHtml(srcLabel)}</div>
-        <div class="cat-popover-detail">${escapeHtml(d.detail || '—')}</div>
+      const srcLabel = CAT_SOURCE_LABELS[src] || src;
+      const cats = (d.canonical_categories || []);
+      const currentOverride = d.category_override || '';
+
+      const opts = cats.map(c =>
+        `<option value="${escapeHtml(c)}"${c === (currentOverride || d.category) ? ' selected' : ''}>${escapeHtml(c)}</option>`
+      ).join('');
+
+      content.innerHTML = `
+        <h3 style="margin-bottom:0.75rem;font-size:1rem">${escapeHtml(d.channel_name)}</h3>
+        <div style="margin-bottom:0.9rem">
+          <div style="font-size:0.75rem;color:#64748b;margin-bottom:0.3rem">How this category was determined:</div>
+          <span class="source-badge ${escapeHtml(src)}">${escapeHtml(srcLabel)}</span>
+          <div style="font-size:0.85rem;color:#cbd5e1">${escapeHtml(d.detail || '—')}</div>
+          ${currentOverride ? `<div style="margin-top:0.4rem;font-size:0.78rem;color:#f59e0b">Override active: <strong>${escapeHtml(currentOverride)}</strong></div>` : ''}
+        </div>
+        <div style="margin-bottom:1rem">
+          <label style="font-size:0.8rem;color:#94a3b8;display:block;margin-bottom:0.3rem">Set category override:</label>
+          <select id="catOverrideSel" style="width:100%;padding:0.45rem 0.6rem;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.9rem">
+            ${opts}
+          </select>
+        </div>
+        <div style="display:flex;gap:0.6rem;justify-content:flex-end">
+          ${currentOverride ? `<button class="btn-sm btn-secondary" onclick="clearCatOverride(${d.channel_id})">Clear Override</button>` : ''}
+          <button class="btn-sm btn-secondary" onclick="closeCatModal()">Cancel</button>
+          <button class="btn-sm" onclick="saveCatOverride(${d.channel_id})" style="background:#3b82f6;color:#fff">Save Override</button>
+        </div>
       `;
+    }
+
+    async function saveCatOverride(chId) {
+      const sel = document.getElementById('catOverrideSel');
+      if (!sel) return;
+      const val = sel.value;
+      const r = await fetch(`/api/channels/${chId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category_override: val, category: val }),
+      });
+      if (!r.ok) { alert('Save failed'); return; }
+      const updated = await r.json();
+      // Update cache
+      if (_catCache[chId]) {
+        _catCache[chId].category_override = val;
+        _catCache[chId].category = val;
+      }
+      // Update label in table
+      const cell = document.querySelector(`td[data-channel-id="${chId}"]`);
+      if (cell) {
+        const lbl = cell.querySelector('.cat-label');
+        if (lbl) { lbl.textContent = val; lbl.classList.add('has-override'); }
+      }
+      closeCatModal();
+    }
+
+    async function clearCatOverride(chId) {
+      const r = await fetch(`/api/channels/${chId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category_override: null }),
+      });
+      if (!r.ok) { alert('Clear failed'); return; }
+      const updated = await r.json();
+      if (_catCache[chId]) {
+        _catCache[chId].category_override = null;
+        _catCache[chId].category = updated.category;
+      }
+      // Update label in table
+      const cell = document.querySelector(`td[data-channel-id="${chId}"]`);
+      if (cell) {
+        const lbl = cell.querySelector('.cat-label');
+        if (lbl) { lbl.textContent = updated.category || '—'; lbl.classList.remove('has-override'); }
+      }
+      closeCatModal();
     }
   </script>
 </body>

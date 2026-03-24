@@ -61,6 +61,7 @@ class Channel(db.Model):
     stream_url        = db.Column(db.Text)
     stream_type       = db.Column(db.String(16), default='hls')
     category          = db.Column(db.String(128))
+    category_override = db.Column(db.String(128), nullable=True)  # set by user; beats all auto logic
     language          = db.Column(db.String(16), default='en')
     country           = db.Column(db.String(8), default='US')
     number            = db.Column(db.Integer)
@@ -102,7 +103,8 @@ class Channel(db.Model):
             'logo_url':         self.logo_url,
             'stream_url':       self.stream_url,
             'stream_type':      self.stream_type,
-            'category':         self.category,
+            'category':          self.category,
+            'category_override': self.category_override,
             'language':         self.language,
             'country':          self.country,
             'number':           self.number,
