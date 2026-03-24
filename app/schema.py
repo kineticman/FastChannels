@@ -231,6 +231,16 @@ def ensure_runtime_schema() -> None:
                     [{'id': rid} for rid in to_clear],
                 )
 
+        if "tvtv_program_cache" in tables:
+            tvtv_cols = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(tvtv_program_cache)"))
+            }
+            if "subtitle" not in tvtv_cols:
+                conn.execute(text(
+                    "ALTER TABLE tvtv_program_cache ADD COLUMN subtitle VARCHAR(512)"
+                ))
+
         if "programs" in tables:
             program_cols = {
                 row[1]
