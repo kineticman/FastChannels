@@ -1007,6 +1007,14 @@ def run_xml_refresh():
         _refresh_xml_artifacts_subprocess()
 
 
+def run_tvtv_cache_refresh():
+    """Fetch 3 days of tvtv guide data for all indexed FAST stations and store in DB."""
+    with flask_app.app_context():
+        from app.tvtv_cache import refresh_tvtv_cache
+        summary = refresh_tvtv_cache(days=3)
+        logger.info('[tvtv-cache] refresh complete: %s', summary)
+
+
 def _invalidate_and_refresh_xml() -> None:
     invalidate_xml_cache()
     _refresh_xml_artifacts_subprocess()
@@ -1599,6 +1607,32 @@ if __name__ == '__main__':
 
     scheduler.add_job(_scheduled_remote_gracenote_refresh, 'interval', hours=24,
                       id='gracenote_remote_refresh', max_instances=1, coalesce=True)
+
+    def _scheduled_tvtv_cache_refresh():
+        try:
+            r = redis.from_url(flask_app.config['REDIS_URL'])
+            q = Queue('scraper', connection=r)
+            job_id = 'tvtv-cache-refresh'
+            active_ids = set(q.get_job_ids()) | set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
+            if job_id in active_ids:
+                logger.info('[tvtv-cache] refresh already queued/running, skipping')
+                return
+            q.enqueue('app.worker.run_tvtv_cache_refresh', job_timeout=1800, job_id=job_id)
+            logger.info('[tvtv-cache] enqueued refresh job')
+        except Exception as exc:
+            logger.warning('[tvtv-cache] could not enqueue via RQ (%s), falling back to thread', exc)
+            import threading
+            threading.Thread(target=run_tvtv_cache_refresh, daemon=True).start()
+
+    # 03:00 UTC (pre-dawn US) — well after the tvtv grid window resets at 04:00 UTC,
+    # so today + 2 days of data are all fresh.  15:00 UTC is a midday safety net
+    # in case the overnight run failed.
+    scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
+                      hour=3, minute=0,
+                      id='tvtv_cache_refresh_night', max_instances=1, coalesce=True)
+    scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
+                      hour=15, minute=0,
+                      id='tvtv_cache_refresh_day', max_instances=1, coalesce=True)
 
     scheduler.start()
     logger.info('Scheduler started — checking sources every 60s')

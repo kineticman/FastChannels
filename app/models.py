@@ -276,3 +276,29 @@ class AppSettings(db.Model):
             db.session.add(row)
             db.session.commit()
         return row
+
+
+class TvtvProgramCache(db.Model):
+    """
+    Rolling 3-day cache of tvtv.us guide data for all indexed FAST stations.
+    Refreshed nightly via the background worker.  Used by the Gracenote
+    Suggestions helper and available for future EPG enrichment.
+    """
+    __tablename__ = 'tvtv_program_cache'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    station_id  = db.Column(db.String(32),  nullable=False)
+    lineup      = db.Column(db.String(64),  nullable=False)
+    program_id  = db.Column(db.String(32),  nullable=True)
+    title       = db.Column(db.String(512), nullable=False)
+    subtitle    = db.Column(db.String(512), nullable=True)
+    start_time  = db.Column(db.DateTime(timezone=True), nullable=False)
+    end_time    = db.Column(db.DateTime(timezone=True), nullable=False)
+    fetched_at  = db.Column(db.DateTime(timezone=True), nullable=False,
+                            default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.UniqueConstraint('station_id', 'start_time', name='uq_tvtv_station_start'),
+        db.Index('idx_tvtv_station_start', 'station_id', 'start_time'),
+        db.Index('idx_tvtv_end_time',      'end_time'),
+    )

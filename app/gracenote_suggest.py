@@ -152,7 +152,6 @@ def _score_candidate(channel: SuggestionChannel, candidate: dict[str, Any]) -> t
                 reasons.append(f"token overlap {len(shared)}/{max(len(q_tokens), len(c_tokens))}")
         elif q_norm and c_norm:
             score -= 20
-            reasons.append("no shared core tokens")
 
     if cand_type.casefold() == "streaming":
         score += 8

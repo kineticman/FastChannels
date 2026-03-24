@@ -574,6 +574,7 @@
     .gs-channel-now-label.next { color: #94a3b8; }
     .gs-channel-now-title { color: #e2e8f0; font-size: 0.82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .gs-channel-now-title.dim { color: #94a3b8; }
+    .gs-channel-now-sub   { color: #94a3b8; font-size: 0.75rem; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 0.1rem; }
     .gs-channel-now-time  { color: #64748b; font-size: 0.73rem; margin-top: 0.1rem; }
     .gs-now-playing {
       margin-top: 0.45rem; padding-top: 0.45rem; border-top: 1px solid #1e293b;
@@ -585,9 +586,10 @@
       letter-spacing: 0.05em; margin-bottom: 0.18rem;
     }
     .gs-now-label.now { color: #7dd3fc; }
-    .gs-now-title  { color: #cbd5e1; font-size: 0.78rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .gs-now-title    { color: #cbd5e1; font-size: 0.78rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .gs-now-title.dim { color: #64748b; font-weight: 400; }
-    .gs-now-time   { color: #64748b; font-size: 0.71rem; margin-top: 0.05rem; }
+    .gs-now-subtitle { color: #7dd3fc; font-size: 0.72rem; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 0.1rem; }
+    .gs-now-time     { color: #64748b; font-size: 0.71rem; margin-top: 0.05rem; }
     .gs-now-loading { color: #475569; font-size: 0.77rem; font-style: italic; }
     .gs-now-missing { color: #475569; font-size: 0.77rem; }
     .preview-player-wrap {
@@ -1080,16 +1082,27 @@
         const curTime = (cur?.start_time && cur?.end_time)
           ? `${fmtTime(cur.start_time)} – ${fmtTime(cur.end_time)}` : '';
         const nxtTime = nxt?.start_time ? `Starts ${fmtTime(nxt.start_time)}` : '';
+
+        function fmtEpisode(p) {
+          const parts = [];
+          if (p?.episode_title) parts.push(escapeHtml(p.episode_title));
+          if (p?.season && p?.episode) parts.push(`S${String(p.season).padStart(2,'0')}E${String(p.episode).padStart(2,'0')}`);
+          else if (p?.season) parts.push(`Season ${p.season}`);
+          return parts.length ? `<div class="gs-channel-now-sub">${parts.join(' · ')}</div>` : '';
+        }
+
         channelNowHtml = `
           <div class="gs-channel-now">
             <div class="gs-channel-now-slot">
               <div class="gs-channel-now-label">Now Playing</div>
               <div class="gs-channel-now-title${cur?.title ? '' : ' dim'}">${escapeHtml(cur?.title || '—')}</div>
+              ${fmtEpisode(cur)}
               <div class="gs-channel-now-time">${escapeHtml(curTime)}</div>
             </div>
             <div class="gs-channel-now-slot">
               <div class="gs-channel-now-label next">Up Next</div>
               <div class="gs-channel-now-title dim">${escapeHtml(nxt?.title || '—')}</div>
+              ${fmtEpisode(nxt)}
               <div class="gs-channel-now-time">${escapeHtml(nxtTime)}</div>
             </div>
           </div>`;
@@ -1218,15 +1231,19 @@
       const nowTime = (data.now?.start && data.now?.end)
         ? `${fmtTime(data.now.start)} – ${fmtTime(data.now.end)}` : '';
       const nextTime = data.next?.start ? `Starts ${fmtTime(data.next.start)}` : '';
+      const nowSub  = data.now?.subtitle  ? `<div class="gs-now-subtitle">${escapeHtml(data.now.subtitle)}</div>`  : '';
+      const nextSub = data.next?.subtitle ? `<div class="gs-now-subtitle">${escapeHtml(data.next.subtitle)}</div>` : '';
       el.innerHTML = `
         <div class="gs-now-slot">
           <div class="gs-now-label now">Now</div>
           <div class="gs-now-title${data.now?.title ? '' : ' dim'}">${escapeHtml(data.now?.title || '—')}</div>
+          ${nowSub}
           <div class="gs-now-time">${escapeHtml(nowTime)}</div>
         </div>
         <div class="gs-now-slot">
           <div class="gs-now-label">Next</div>
           <div class="gs-now-title dim">${escapeHtml(data.next?.title || '—')}</div>
+          ${nextSub}
           <div class="gs-now-time">${escapeHtml(nextTime)}</div>
         </div>
       `;

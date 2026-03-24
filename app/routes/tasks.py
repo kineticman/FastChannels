@@ -236,3 +236,19 @@ def trigger_channel_auto_disable(channel_id: int, reason: str):
         import threading
         from app.worker import run_channel_auto_disable
         threading.Thread(target=run_channel_auto_disable, args=(channel_id, reason), daemon=True).start()
+
+
+def trigger_tvtv_cache_refresh():
+    try:
+        q = get_queue()
+        job_id = 'tvtv-cache-refresh'
+        if _job_already_active(q, job_id):
+            logger.info('tvtv cache refresh already queued/running')
+            return
+        q.enqueue('app.worker.run_tvtv_cache_refresh', job_timeout=1800, job_id=job_id)
+        logger.info('Enqueued tvtv cache refresh')
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for tvtv cache refresh')
+        import threading
+        from app.worker import run_tvtv_cache_refresh
+        threading.Thread(target=run_tvtv_cache_refresh, daemon=True).start()
