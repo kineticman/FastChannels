@@ -72,6 +72,62 @@
       nav .version { margin-left: 0; width: 100%; order: 99; }
       .page { padding: 1.25rem 1rem 2rem; }
     }
+
+    /* Community map modal */
+    .cm-modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+      z-index: 1000; align-items: flex-start; justify-content: center;
+      padding: 2rem 1rem; overflow-y: auto;
+    }
+    .cm-modal-overlay.open { display: flex; }
+    .cm-modal {
+      background: #1e293b; border: 1px solid #334155; border-radius: 14px;
+      width: 100%; max-width: 860px; padding: 1.5rem; position: relative;
+    }
+    .cm-modal h2 { font-size: 1.1rem; color: #7dd3fc; margin-bottom: 0.25rem; }
+    .cm-modal .cm-subtitle { color: #64748b; font-size: 0.82rem; margin-bottom: 1.1rem; }
+    .cm-close {
+      position: absolute; top: 1rem; right: 1rem;
+      background: none; border: none; color: #64748b; font-size: 1.4rem; cursor: pointer; line-height: 1;
+    }
+    .cm-close:hover { color: #e2e8f0; }
+    .cm-filters { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
+    .cm-filters input, .cm-filters select {
+      background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+      color: #e2e8f0; font-size: 0.85rem; padding: 0.35rem 0.6rem;
+    }
+    .cm-filters input { flex: 1; min-width: 160px; }
+    .cm-table-wrap { overflow-x: auto; }
+    table.cm-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .cm-table th {
+      color: #94a3b8; font-weight: 600; text-align: left;
+      padding: 0.45rem 0.6rem; border-bottom: 1px solid #334155; white-space: nowrap;
+    }
+    .cm-table td { padding: 0.4rem 0.6rem; border-bottom: 1px solid #1e3a5f22; color: #cbd5e1; vertical-align: middle; }
+    .cm-table tr:hover td { background: #ffffff08; }
+    .cm-badge {
+      display: inline-block; padding: 0.1rem 0.45rem;
+      border-radius: 999px; font-size: 0.72rem; font-weight: 600; white-space: nowrap;
+    }
+    .cm-badge.applied { background: #14532d; color: #86efac; border: 1px solid #166534; }
+    .cm-badge.manual  { background: #14532d; color: #86efac; border: 1px solid #166534; }
+    .cm-badge.off     { background: #3b0764; color: #d8b4fe; border: 1px solid #6b21a8; }
+    .cm-badge.native  { background: #1e3a5f; color: #7dd3fc; border: 1px solid #1d4ed8; }
+    .cm-badge.none    { background: #1e293b; color: #475569; border: 1px solid #334155; }
+    .btn-cm-apply {
+      background: #0d9488; color: #fff; border: none;
+      border-radius: 6px; padding: 0.28rem 0.7rem; font-size: 0.8rem; cursor: pointer; white-space: nowrap;
+    }
+    .btn-cm-apply:hover { background: #0f766e; }
+    .btn-cm-apply:disabled { opacity: 0.45; cursor: not-allowed; }
+    .cm-empty { color: #475569; font-size: 0.9rem; padding: 1.5rem 0; text-align: center; }
+    .cm-count { color: #64748b; font-size: 0.8rem; margin-bottom: 0.6rem; }
+    .btn-browse-cm {
+      margin-top: 0.75rem;
+      background: #0d9488; color: #fff; border: none;
+      border-radius: 6px; padding: 0.4rem 1rem; font-size: 0.85rem; cursor: pointer;
+    }
+    .btn-browse-cm:hover { background: #0f766e; }
   </style>
 </head>
 <body>
@@ -156,9 +212,10 @@
           <li>Gracenote IDs link channels to Channels DVR's guide database for rich EPG matching.</li>
           <li><strong>Auto</strong>: scrapers fill IDs automatically when available (e.g. Pluto's native station IDs). Controlled by the toggle in Settings.</li>
           <li><strong>Manual</strong>: you set the ID — it is never overwritten by a scrape. Use the Gracenote Helper popup on any channel row in Channels.</li>
-          <li><strong>Community Map</strong>: curated CSV mappings for sources that don't expose native IDs. Browse and apply from <a href="/admin/settings">Settings → Gracenote</a>.</li>
+          <li><strong>Community Map</strong>: curated CSV mappings for sources that don't expose native IDs.</li>
           <li>Set mode to <strong>Off</strong> on a channel to exclude it from Gracenote routing entirely.</li>
         </ul>
+        <button class="btn-browse-cm" onclick="openCommunityMap()">Browse Community Map</button>
       </section>
 
       <section class="card">
@@ -173,5 +230,128 @@
       </section>
     </div>
   </div>
+  <!-- Community Map Modal -->
+  <div class="cm-modal-overlay" id="cm-overlay" onclick="if(event.target===this)closeCommunityMap()">
+    <div class="cm-modal">
+      <button class="cm-close" onclick="closeCommunityMap()">&#x2715;</button>
+      <h2>Community Gracenote Map</h2>
+      <p class="cm-subtitle">Channels with curated community IDs. Applying sets the channel to Manual mode — it won't be overwritten by future scrapes.</p>
+      <div class="cm-filters">
+        <input type="search" id="cm-search" placeholder="Filter by channel or source…" oninput="renderCmTable()">
+        <select id="cm-filter-status" onchange="renderCmTable()">
+          <option value="">All statuses</option>
+          <option value="available">Available</option>
+          <option value="applied">Already applied</option>
+          <option value="manual">Manual (different ID)</option>
+          <option value="off">Off</option>
+        </select>
+        <select id="cm-filter-source" onchange="renderCmTable()">
+          <option value="">All sources</option>
+        </select>
+      </div>
+      <div class="cm-count" id="cm-count"></div>
+      <div class="cm-table-wrap">
+        <table class="cm-table">
+          <thead>
+            <tr><th>Channel</th><th>Source</th><th>Community ID</th><th>Notes</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody id="cm-tbody">
+            <tr><td colspan="6" class="cm-empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let _cmData = [];
+
+    function escCm(s) {
+      return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function cmStatusInfo(row) {
+      if (row.gracenote_mode === 'off')  return { label: 'Off',            cls: 'off',     key: 'off' };
+      if (row.already_applied)           return { label: 'Applied',        cls: 'applied', key: 'applied' };
+      if (row.gracenote_mode === 'manual') return { label: 'Manual',       cls: 'manual',  key: 'manual' };
+      if (row.current_id && !row.already_applied) return { label: 'Has native ID', cls: 'native', key: 'native' };
+      return { label: 'Available', cls: 'none', key: 'available' };
+    }
+
+    function renderCmTable() {
+      const search = (document.getElementById('cm-search').value || '').toLowerCase();
+      const filterStatus = document.getElementById('cm-filter-status').value;
+      const filterSource = document.getElementById('cm-filter-source').value;
+      const rows = _cmData.filter(row => {
+        if (search && !row.channel_name.toLowerCase().includes(search) && !row.source_name.toLowerCase().includes(search)) return false;
+        if (filterSource && row.source_name !== filterSource) return false;
+        if (filterStatus && cmStatusInfo(row).key !== filterStatus) return false;
+        return true;
+      });
+      document.getElementById('cm-count').textContent = `${rows.length} channel${rows.length !== 1 ? 's' : ''}`;
+      const tbody = document.getElementById('cm-tbody');
+      if (!rows.length) { tbody.innerHTML = '<tr><td colspan="6" class="cm-empty">No matches.</td></tr>'; return; }
+      tbody.innerHTML = rows.map(row => {
+        const s = cmStatusInfo(row);
+        const alreadyApplied = s.key === 'applied';
+        return `
+          <tr>
+            <td>${escCm(row.channel_name)}</td>
+            <td>${escCm(row.source_name)}</td>
+            <td><code style="font-size:0.8rem">${escCm(row.community_tmsid)}</code></td>
+            <td style="color:#64748b;font-size:0.8rem">${escCm(row.notes)}</td>
+            <td><span class="cm-badge ${escCm(s.cls)}">${escCm(s.label)}</span></td>
+            <td><button class="btn-cm-apply" onclick="applyCmEntry(${row.channel_id}, '${escCm(row.community_tmsid)}', this)"
+              ${alreadyApplied ? 'disabled' : ''}
+            >${alreadyApplied ? 'Applied' : 'Apply'}</button></td>
+          </tr>`;
+      }).join('');
+    }
+
+    async function openCommunityMap() {
+      document.getElementById('cm-overlay').classList.add('open');
+      if (_cmData.length) return;
+      try {
+        const r = await fetch('/api/gracenote/community-map');
+        const data = await r.json();
+        _cmData = data.results || [];
+        const sources = [...new Set(_cmData.map(r => r.source_name))].sort();
+        const sel = document.getElementById('cm-filter-source');
+        sources.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s; sel.appendChild(o); });
+        renderCmTable();
+      } catch(e) {
+        document.getElementById('cm-tbody').innerHTML = `<tr><td colspan="6" class="cm-empty">Failed to load: ${escCm(String(e))}</td></tr>`;
+      }
+    }
+
+    function closeCommunityMap() {
+      document.getElementById('cm-overlay').classList.remove('open');
+    }
+
+    async function applyCmEntry(channelId, tmsid, btn) {
+      if (!tmsid) return;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gracenote_id: tmsid, gracenote_mode: 'manual' }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        btn.textContent = 'Applied';
+        // Update local data so status badge reflects change
+        const row = _cmData.find(r => r.channel_id === channelId);
+        if (row) { row.already_applied = true; row.current_id = tmsid; }
+        renderCmTable();
+      } catch(e) {
+        btn.disabled = false;
+        btn.textContent = 'Apply';
+        alert(`Failed to apply: ${e.message}`);
+      }
+    }
+
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCommunityMap(); });
+  </script>
 </body>
 </html>
