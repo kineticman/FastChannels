@@ -1005,6 +1005,19 @@ def update_channel(channel_id):
     return jsonify(ch.to_dict())
 
 
+@api_bp.route('/channels/<int:channel_id>/category-explain', methods=['GET'])
+def channel_category_explain(channel_id):
+    from ..scrapers.category_utils import explain_category
+    ch = Channel.query.get_or_404(channel_id)
+    explanation = explain_category(ch.name, ch.category)
+    return jsonify({
+        'channel_id': ch.id,
+        'channel_name': ch.name,
+        'category': ch.category,
+        **explanation,
+    })
+
+
 @api_bp.route('/channels/<int:channel_id>/inspect', methods=['POST'])
 def inspect_channel(channel_id):
     """

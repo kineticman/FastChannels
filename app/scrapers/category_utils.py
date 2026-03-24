@@ -1021,6 +1021,75 @@ def category_for_channel(name: str, raw_category: str | None) -> str | None:
     return normalize_category(raw_category)
 
 
+def explain_category(name: str, raw_category: str | None) -> dict:
+    """Return a human-readable explanation of how a channel's category was resolved.
+
+    Returns a dict with:
+      source   – 'override' | 'name_pattern' | 'scraper' | 'name_inference' | 'unknown'
+      rule     – short machine label for the rule that fired
+      detail   – human-readable sentence suitable for a tooltip
+    """
+    name_lower = (name or '').strip().lower()
+
+    # 1. Exact override
+    if name_lower in _NAME_OVERRIDES:
+        return {
+            'source': 'override',
+            'rule': 'name_override',
+            'detail': 'Matched a hard-coded name override — takes priority over all scraper data.',
+        }
+
+    # 2. High-confidence name patterns
+    if name_lower.startswith('xite '):
+        return {'source': 'name_pattern', 'rule': 'xite_prefix', 'detail': 'Name starts with "XITE" → Music.'}
+    if 'k-drama' in name_lower or 'kdrama' in name_lower:
+        return {'source': 'name_pattern', 'rule': 'kdrama', 'detail': 'Name contains "K-Drama" or "KDrama" → Drama.'}
+    if (name_lower.endswith(' westerns') or name_lower.endswith(' western')
+            or name_lower.startswith('western ') or ' western ' in name_lower):
+        return {'source': 'name_pattern', 'rule': 'western', 'detail': 'Name contains "Western" → Westerns.'}
+    if name_lower.startswith('very ') and ' by ' in name_lower:
+        return {'source': 'name_pattern', 'rule': 'very_local', 'detail': 'Hearst "Very Local by …" station → Local News.'}
+    if 'fox local' in name_lower:
+        return {'source': 'name_pattern', 'rule': 'fox_local', 'detail': 'FOX Local city stream → Local News.'}
+    if name_lower.startswith('cbs news ') and not any(x in name_lower for x in ('24/7', ' now', '24x7')):
+        return {'source': 'name_pattern', 'rule': 'cbs_news_city', 'detail': 'CBS News [City] local stream → Local News.'}
+    if name_lower.startswith('cbs ') and name_lower[4:5].isdigit():
+        return {'source': 'name_pattern', 'rule': 'cbs_numbered', 'detail': 'CBS [N] affiliate pattern → Local News.'}
+    if name_lower.startswith('nbc ') and name_lower[4:5].isdigit():
+        return {'source': 'name_pattern', 'rule': 'nbc_numbered', 'detail': 'NBC [N] city stream pattern → Local News.'}
+    if name_lower.startswith('abc ') and name_lower[4:5].isdigit():
+        return {'source': 'name_pattern', 'rule': 'abc_numbered', 'detail': 'ABC [N] local affiliate pattern → Local News.'}
+    if name_lower.startswith('abc news ') and name_lower[9:10].isdigit():
+        return {'source': 'name_pattern', 'rule': 'abc_news_numbered', 'detail': 'ABC News [N] local stream → Local News.'}
+    if len(name_lower) >= 3 and name_lower[0] in ('k', 'w') and name_lower[1:4].isalpha():
+        if not name_lower[4:5] or not name_lower[4:5].isalpha():
+            return {'source': 'name_pattern', 'rule': 'call_sign', 'detail': f'Broadcast call sign ({name[:4].upper()}) → Local News.'}
+    if name_lower.startswith(('news 12', 'news10', 'news channel', 'newsday')):
+        return {'source': 'name_pattern', 'rule': 'numbered_local', 'detail': 'Numbered local news affiliate pattern → Local News.'}
+
+    # 3. Scraper-provided category
+    normalized = normalize_category(raw_category)
+    if normalized:
+        raw_display = raw_category or '(empty)'
+        if normalized == raw_category:
+            return {
+                'source': 'scraper',
+                'rule': 'scraper_passthrough',
+                'detail': f'Passed through directly from the scraper as "{raw_display}".',
+            }
+        return {
+            'source': 'scraper',
+            'rule': 'scraper_normalized',
+            'detail': f'Scraper provided "{raw_display}", normalized to "{normalized}".',
+        }
+
+    return {
+        'source': 'unknown',
+        'rule': 'no_match',
+        'detail': 'No override, pattern, or scraper value matched — category may be unset.',
+    }
+
+
 def infer_category_from_name(title: str) -> str | None:
     """Infer a canonical category label from a channel name via keyword matching.
 
