@@ -178,9 +178,7 @@
               <div class="gs-suggest-station">${escHtml(stationId)}</div>
               <div class="gs-suggest-detail">${escHtml(bits.join(' · ') || 'No extra station details')}</div>
               ${reasons}
-              <div class="gs-now-playing" id="gs-now-${escHtml(stationId)}">
-                <div class="gs-now-loading">Loading guide data…</div>
-              </div>
+              ${stationId ? `<div class="gs-now-playing" id="gs-now-${escHtml(stationId)}"><div class="gs-now-loading">Loading guide data…</div></div>` : ''}
             </div>
             <div class="gs-suggest-actions">
               <span class="preview-conf ${escHtml(item.confidence || 'weak')}">${escHtml(item.confidence || 'weak')}</span>
