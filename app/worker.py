@@ -1653,6 +1653,16 @@ if __name__ == '__main__':
         except Exception:
             logger.exception('[xml-cache] startup refresh failed')
 
+        # Seed tvtv cache on first startup (table empty) so upgrading users don't
+        # wait up to 12 hours for the first scheduled run at 03:00/15:00 UTC.
+        try:
+            from app.models import TvtvProgramCache
+            if TvtvProgramCache.query.count() == 0:
+                _scheduled_tvtv_cache_refresh()
+                logger.info('[tvtv-cache] cache empty at startup — triggered initial refresh')
+        except Exception:
+            logger.exception('[tvtv-cache] startup seed check failed')
+
         # Fetch remote community Gracenote map on startup
         try:
             from app.gracenote_map import fetch_remote_gracenote_map
