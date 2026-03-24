@@ -9,7 +9,7 @@ _APP_START = _time.time()
 from urllib.parse import urljoin as _urljoin, urlsplit
 from flask import Blueprint, jsonify, request, current_app
 from types import SimpleNamespace
-from sqlalchemy import or_, select
+from sqlalchemy import and_, not_, or_, select
 from sqlalchemy.exc import OperationalError
 from app.config_store import persist_source_config_updates
 from app.config import VERSION
@@ -39,6 +39,7 @@ from ..xml_cache import (
     get_xml_artifact,
     invalidate_xml_cache,
 )
+from .admin import _duplicate_name_sets
 
 api_bp = Blueprint('api', __name__)
 
@@ -76,6 +77,71 @@ def _apply_gracenote_update(channel: Channel, raw_value, raw_mode=None) -> str |
     channel.gracenote_mode = 'auto'
     channel.gracenote_locked = False
     return channel.gracenote_id
+
+
+def _manual_gracenote_clause():
+    return or_(
+        Channel.gracenote_mode == 'manual',
+        and_(
+            Channel.gracenote_mode == None,
+            Channel.gracenote_locked == True,
+            Channel.gracenote_id != None,
+            Channel.gracenote_id != '',
+        ),
+    )
+
+
+def _apply_channel_filters(q, filters: dict | None = None):
+    filters = filters or {}
+
+    if src := filters.get('source'):
+        q = q.filter(Source.name == src)
+    if cat := filters.get('category'):
+        q = q.filter(Channel.category == cat)
+    if lang := filters.get('language'):
+        q = q.filter(Channel.language == lang)
+    if search := filters.get('search'):
+        q = q.filter(Channel.name.ilike(f'%{search}%'))
+    if drm := filters.get('drm'):
+        if drm == '1':
+            q = q.filter(Channel.disable_reason == 'DRM')
+        elif drm == 'dead':
+            q = q.filter(Channel.disable_reason == 'Dead')
+        elif drm == '0':
+            q = q.filter(Channel.disable_reason == None)
+    if ef := filters.get('enabled'):
+        if ef in ('1', 'enabled'):
+            q = q.filter(Channel.is_enabled == True)
+        elif ef in ('0', 'disabled'):
+            q = q.filter(Channel.is_enabled == False)
+    if pf := filters.get('presence'):
+        if pf == 'inactive':
+            q = q.filter(Channel.is_active == False)
+        elif pf == 'enabled_inactive':
+            q = q.filter(Channel.is_enabled == True, Channel.is_active == False)
+        elif pf == 'missed':
+            q = q.filter(Channel.missed_scrapes >= 1)
+        elif pf == 'active':
+            q = q.filter(Channel.is_active == True)
+    if gf := filters.get('gracenote'):
+        if gf in ('1', 'has_id'):
+            q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+        elif gf in ('0', 'missing_id'):
+            q = q.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+    if gm := filters.get('gracenote_mode'):
+        manual_mode = _manual_gracenote_clause()
+        off_mode = Channel.gracenote_mode == 'off'
+        if gm == 'manual':
+            q = q.filter(manual_mode)
+        elif gm == 'off':
+            q = q.filter(off_mode)
+        elif gm == 'auto':
+            q = q.filter(not_(or_(manual_mode, off_mode)))
+    if filters.get('duplicates') == '1':
+        exact_duplicate_names, possible_duplicate_names = _duplicate_name_sets()
+        all_duplicate_names = exact_duplicate_names | possible_duplicate_names
+        q = q.filter(or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.is_duplicate == True))
+    return q
 
 
 def _scrape_interval_limits(source_name: str) -> tuple[int, int, int]:
@@ -876,33 +942,44 @@ def bulk_update_channels():
         return jsonify({'error': 'action must be enable or disable'}), 400
 
     enable = action == 'enable'
-    q = Channel.query.join(Source)
-
-    if src := filters.get('source'):
-        q = q.filter(Source.name == src)
-    if cat := filters.get('category'):
-        q = q.filter(Channel.category == cat)
-    if lang := filters.get('language'):
-        q = q.filter(Channel.language == lang)
-    if search := filters.get('search'):
-        q = q.filter(Channel.name.ilike(f'%{search}%'))
-    if drm := filters.get('drm'):
-        if drm == '1':
-            q = q.filter(Channel.disable_reason == 'DRM')
-        elif drm == 'dead':
-            q = q.filter(Channel.disable_reason == 'Dead')
-        elif drm == '0':
-            q = q.filter(Channel.disable_reason == None)
-    if ef := filters.get('enabled'):
-        if ef == '1':
-            q = q.filter(Channel.is_enabled == True)
-        elif ef == '0':
-            q = q.filter(Channel.is_enabled == False)
+    q = _apply_channel_filters(Channel.query.join(Source), filters)
 
     matched = q.count()
     if matched:
         trigger_bulk_channel_update(filters, enable)
     return jsonify({'status': 'queued' if matched else 'idle', 'updated': matched})
+
+
+@api_bp.route('/channels/gracenote-bulk', methods=['POST'])
+def bulk_update_channel_gracenote():
+    data = request.get_json(force=True) or {}
+    action = (data.get('action') or '').strip()
+    ids = [int(v) for v in (data.get('ids') or []) if str(v).isdigit()]
+    filters = data.get('filters') or {}
+
+    if action not in ('set_auto', 'set_off', 'clear_ids'):
+        return jsonify({'error': 'Invalid action.'}), 400
+
+    if ids:
+        channels = Channel.query.filter(Channel.id.in_(ids)).all()
+    else:
+        channels = _apply_channel_filters(Channel.query.join(Source), filters).all()
+    if not channels:
+        return jsonify({'updated': 0})
+
+    for ch in channels:
+        current_id = (ch.gracenote_id or '').strip() or None
+        current_mode = getattr(ch, 'gracenote_mode', None) or ('manual' if getattr(ch, 'gracenote_locked', False) and current_id else 'auto')
+        if action == 'set_auto':
+            _apply_gracenote_update(ch, current_id, 'auto')
+        elif action == 'set_off':
+            _apply_gracenote_update(ch, None, 'off')
+        elif action == 'clear_ids':
+            _apply_gracenote_update(ch, None, 'off' if current_mode == 'off' else 'auto')
+
+    db.session.commit()
+    _invalidate_and_refresh_xml()
+    return jsonify({'updated': len(channels)})
 
 
 @api_bp.route('/channels/<int:channel_id>', methods=['PATCH'])
@@ -1230,6 +1307,20 @@ def gracenote_search():
         return jsonify(suggest_gracenote_matches(dvr_url, query=query, limit=limit))
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 502
+
+
+@api_bp.route('/stations/<station_id>/now-playing', methods=['GET'])
+def station_now_playing(station_id):
+    """
+    Return now/next program for a Gracenote/TMS stationId via tvtv.us.
+    Used by the Gracenote Suggestions helper to let users verify that a
+    suggested stationId actually matches what their channel is broadcasting.
+    """
+    from ..tvtv_lookup import lookup_now_playing
+    result = lookup_now_playing(str(station_id).strip())
+    if not result.get('found') and result.get('error') == 'not_in_index':
+        return jsonify(result), 404
+    return jsonify(result)
 
 
 @api_bp.route('/gracenote/community-map', methods=['GET'])

@@ -275,6 +275,8 @@
     .btn-danger:hover { background: #991b1b; }
     .btn-primary { background: #6366f1; color: #fff; }
     .btn-primary:hover:not(:disabled) { background: #818cf8; }
+    .btn-secondary { background: #334155; color: #e2e8f0; }
+    .btn-secondary:hover:not(:disabled) { background: #475569; }
     .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #334155; }
     .btn-ghost:hover:not(:disabled) { color: #fff; border-color: #475569; }
 
@@ -763,6 +765,7 @@ function cancelGracenoteClear() {
   document.getElementById('gracenote-clear-modal').classList.remove('open');
   // checkbox was already reverted to checked in onGracenoteAutoFillChange
 }
+
 
 // ── System Stats ──────────────────────────────────────────────────────────
 function _fmt_bytes(b) {

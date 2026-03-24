@@ -19,7 +19,7 @@ from rq.worker import SimpleWorker as _SimpleWorker
 from rq.timeouts import BaseDeathPenalty as _BaseDeathPenalty
 from rq.registry import StartedJobRegistry
 from apscheduler.schedulers.background import BackgroundScheduler
-from sqlalchemy import text
+from sqlalchemy import and_, not_, or_, text
 from sqlalchemy.exc import OperationalError as _SAOperationalError
 from app import create_app
 from app.config_store import persist_source_config_updates
@@ -1034,6 +1034,42 @@ def _channel_ids_for_filters(filters: dict) -> list[int]:
             q = q.filter(Channel.is_enabled == True)
         elif ef == '0':
             q = q.filter(Channel.is_enabled == False)
+    if pf := filters.get('presence'):
+        if pf == 'inactive':
+            q = q.filter(Channel.is_active == False)
+        elif pf == 'enabled_inactive':
+            q = q.filter(Channel.is_enabled == True, Channel.is_active == False)
+        elif pf == 'missed':
+            q = q.filter(Channel.missed_scrapes >= 1)
+        elif pf == 'active':
+            q = q.filter(Channel.is_active == True)
+    if gf := filters.get('gracenote'):
+        if gf == '1':
+            q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+        elif gf == '0':
+            q = q.filter(or_(Channel.gracenote_id == None, Channel.gracenote_id == ''))
+    if gm := filters.get('gracenote_mode'):
+        manual_mode = or_(
+            Channel.gracenote_mode == 'manual',
+            and_(
+                Channel.gracenote_mode == None,
+                Channel.gracenote_locked == True,
+                Channel.gracenote_id != None,
+                Channel.gracenote_id != '',
+            ),
+        )
+        off_mode = Channel.gracenote_mode == 'off'
+        if gm == 'manual':
+            q = q.filter(manual_mode)
+        elif gm == 'off':
+            q = q.filter(off_mode)
+        elif gm == 'auto':
+            q = q.filter(not_(or_(manual_mode, off_mode)))
+    if filters.get('duplicates') == '1':
+        from app.routes.admin import _duplicate_name_sets
+        exact_duplicate_names, possible_duplicate_names = _duplicate_name_sets()
+        all_duplicate_names = exact_duplicate_names | possible_duplicate_names
+        q = q.filter(or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.is_duplicate == True))
     return [row[0] for row in q.with_entities(Channel.id).all()]
 
 

@@ -275,6 +275,7 @@ def channels():
     presence_filter  = request.args.get('presence', '')
     drm_filter       = request.args.get('drm', '')
     gracenote_filter = request.args.get('gracenote', '')
+    gracenote_mode_filter = request.args.get('gracenote_mode', '')
     language_filter  = request.args.get('language', '')
     category_filter  = request.args.get('category', '')
     duplicates_filter = request.args.get('duplicates', '')
@@ -312,6 +313,29 @@ def channels():
         q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
     elif gracenote_filter == '0':
         q = q.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+    if gracenote_mode_filter == 'manual':
+        q = q.filter(db.or_(
+            Channel.gracenote_mode == 'manual',
+            db.and_(
+                Channel.gracenote_mode == None,
+                Channel.gracenote_locked == True,
+                Channel.gracenote_id != None,
+                Channel.gracenote_id != '',
+            ),
+        ))
+    elif gracenote_mode_filter == 'off':
+        q = q.filter(Channel.gracenote_mode == 'off')
+    elif gracenote_mode_filter == 'auto':
+        q = q.filter(db.not_(db.or_(
+            Channel.gracenote_mode == 'off',
+            Channel.gracenote_mode == 'manual',
+            db.and_(
+                Channel.gracenote_mode == None,
+                Channel.gracenote_locked == True,
+                Channel.gracenote_id != None,
+                Channel.gracenote_id != '',
+            ),
+        )))
 
     if source_filter:
         q = q.filter(Source.name == source_filter)
@@ -377,6 +401,7 @@ def channels():
                            enabled_filter=enabled_filter, drm_filter=drm_filter,
                            presence_filter=presence_filter,
                            gracenote_filter=gracenote_filter,
+                           gracenote_mode_filter=gracenote_mode_filter,
                            language_filter=language_filter, languages=languages,
                            category_filter=category_filter, categories=categories,
                            duplicates_filter=duplicates_filter,
