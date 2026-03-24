@@ -674,9 +674,9 @@
   </div>
 
   <!-- Gracenote Suggestions sub-modal -->
-  <div class="modal-overlay" id="gs-modal" onclick="closeGsModal(event)">
+  <div class="modal-overlay" id="gs-suggest-modal" onclick="if(event.target===this)closeGracenoteSuggestModal()">
     <div class="modal-box gs-modal">
-      <div id="gs-modal-content">
+      <div id="gs-suggest-modal-content">
         <div class="modal-loading">Loading suggestions…</div>
       </div>
     </div>
@@ -706,6 +706,7 @@
 
 </div>
 
+<script src="{{ url_for('static', filename='js/gracenote_suggest.js') }}"></script>
 <script>
 async function saveSettings(body, statusId) {
   const status = document.getElementById(statusId);
@@ -921,7 +922,7 @@ function renderCmTable() {
         <td style="color:#64748b;font-size:0.8rem">${escCm(row.notes)}</td>
         <td><span class="cm-badge ${escCm(s.cls)}">${escCm(s.label)}</span></td>
         <td><button class="btn-cm-apply" id="cm-btn-${row.channel_id}"
-          onclick="openGsSuggest(${row.channel_id})"
+          onclick="openGracenoteSuggestModal(${row.channel_id}, {onApplied: settingsGnOnApplied})"
           ${alreadyApplied ? 'disabled' : ''}
         >${alreadyApplied ? 'Applied' : 'Review &amp; Apply'}</button></td>
       </tr>`;
@@ -948,215 +949,15 @@ function closeCommunityMap() {
   document.getElementById('cm-overlay').classList.remove('open');
 }
 
-function fmtTime(iso) {
-  if (!iso) return '';
-  try { return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch { return ''; }
-}
-
-async function openGsSuggest(channelId) {
-  const modal = document.getElementById('gs-modal');
-  const content = document.getElementById('gs-modal-content');
-  content.innerHTML = '<div class="modal-loading">Loading suggestions…</div>';
-  modal.classList.add('open');
-  try {
-    const [suggestResp, previewResp] = await Promise.all([
-      fetch(`/api/channels/${channelId}/gracenote-suggestions?limit=5`),
-      fetch(`/api/channels/${channelId}/preview`),
-    ]);
-    const data = await suggestResp.json();
-    if (!suggestResp.ok) throw new Error(data.error || `HTTP ${suggestResp.status}`);
-    const previewData = previewResp.ok ? await previewResp.json() : null;
-    const ch = data.channel || {};
-    content.innerHTML = `
-      <div class="gs-header">
-        <div class="gs-title">Gracenote Suggestions</div>
-        <div class="gs-meta">${escCm(ch.name || '')}${ch.source_name ? ` · ${escCm(ch.source_name)}` : ''}${ch.category ? ` · ${escCm(ch.category)}` : ''}</div>
-      </div>
-      ${renderGsSuggestions(ch, data, previewData)}
-      <div class="preview-actions">
-        <button class="preview-action-btn neutral" onclick="closeGsModal()">Close</button>
-      </div>`;
-    // Fire tvtv now-playing for each suggestion
-    const stationIds = [
-      ...(data.channel?.csv_suggestion?.tmsid ? [data.channel.csv_suggestion.tmsid] : []),
-      ...(Array.isArray(data.results) ? data.results.map(r => String(r.station_id || '')).filter(Boolean) : []),
-    ];
-    stationIds.forEach(async (sid) => {
-      try {
-        const r = await fetch(`/api/stations/${encodeURIComponent(sid)}/now-playing`);
-        const d = await r.json();
-        renderNowPlaying(sid, d);
-      } catch {
-        const el = document.getElementById(`gs-now-${sid}`);
-        if (el) el.innerHTML = '<div class="gs-now-missing">Guide lookup failed</div>';
-      }
-    });
-  } catch(err) {
-    content.innerHTML = `<div class="gs-header"><div class="gs-title">Gracenote Suggestions</div></div>
-      <div class="gs-suggest-error">${escCm(String(err.message || err))}</div>
-      <div class="preview-actions"><button class="preview-action-btn neutral" onclick="closeGsModal()">Close</button></div>`;
-  }
-}
-
-function renderNowPlaying(stationId, data) {
-  const el = document.getElementById(`gs-now-${stationId}`);
-  if (!el) return;
-  if (!data.found || data.error === 'not_in_index') { el.innerHTML = '<div class="gs-now-missing">Not in FAST guide index</div>'; return; }
-  if (!data.now && !data.next) { el.innerHTML = '<div class="gs-now-missing">No guide data available</div>'; return; }
-  const nowTime = (data.now?.start && data.now?.end) ? `${fmtTime(data.now.start)} – ${fmtTime(data.now.end)}` : '';
-  const nextTime = data.next?.start ? `Starts ${fmtTime(data.next.start)}` : '';
-  const nowSub  = data.now?.subtitle  ? `<div class="gs-now-subtitle">${escCm(data.now.subtitle)}</div>`  : '';
-  const nextSub = data.next?.subtitle ? `<div class="gs-now-subtitle">${escCm(data.next.subtitle)}</div>` : '';
-  el.innerHTML = `
-    <div class="gs-now-slot">
-      <div class="gs-now-label now">Now</div>
-      <div class="gs-now-title${data.now?.title ? '' : ' dim'}">${escCm(data.now?.title || '—')}</div>
-      ${nowSub}
-      <div class="gs-now-time">${escCm(nowTime)}</div>
-    </div>
-    <div class="gs-now-slot">
-      <div class="gs-now-label">Next</div>
-      <div class="gs-now-title dim">${escCm(data.next?.title || '—')}</div>
-      ${nextSub}
-      <div class="gs-now-time">${escCm(nextTime)}</div>
-    </div>`;
-}
-
-function renderGsSuggestions(ch, payload, previewData) {
-  const results = Array.isArray(payload?.results) ? payload.results : [];
-  const dvrMissing = !!payload?.dvr_missing;
-  const currentId = String(ch?.gracenote_id || '').trim();
-  const gnSource = ch?.gracenote_source || null;
-  const csvSuggestion = ch?.csv_suggestion || null;
-
-  // Channel's own now/next from scraper
-  let channelNowHtml = '';
-  const cur = previewData?.current_program;
-  const nxt = previewData?.next_program;
-  if (cur?.title || nxt?.title) {
-    const curTime = (cur?.start_time && cur?.end_time) ? `${fmtTime(cur.start_time)} – ${fmtTime(cur.end_time)}` : '';
-    const nxtTime = nxt?.start_time ? `Starts ${fmtTime(nxt.start_time)}` : '';
-    function fmtEp(p) {
-      const parts = [];
-      if (p?.episode_title) parts.push(escCm(p.episode_title));
-      if (p?.season && p?.episode) parts.push(`S${String(p.season).padStart(2,'0')}E${String(p.episode).padStart(2,'0')}`);
-      else if (p?.season) parts.push(`Season ${p.season}`);
-      return parts.length ? `<div class="gs-channel-now-sub">${parts.join(' · ')}</div>` : '';
-    }
-    channelNowHtml = `
-      <div class="gs-channel-now">
-        <div class="gs-channel-now-slot">
-          <div class="gs-channel-now-label">Now Playing</div>
-          <div class="gs-channel-now-title${cur?.title ? '' : ' dim'}">${escCm(cur?.title || '—')}</div>
-          ${fmtEp(cur)}
-          <div class="gs-channel-now-time">${escCm(curTime)}</div>
-        </div>
-        <div class="gs-channel-now-slot">
-          <div class="gs-channel-now-label next">Up Next</div>
-          <div class="gs-channel-now-title dim">${escCm(nxt?.title || '—')}</div>
-          ${fmtEp(nxt)}
-          <div class="gs-channel-now-time">${escCm(nxtTime)}</div>
-        </div>
-      </div>`;
-  }
-
-  let currentLine = '';
-  if (currentId) {
-    const badgeMap = { manual:['manual','manual'], native:['native','source-verified'], csv:['csv','community map'] };
-    const [cls, label] = badgeMap[gnSource] || [];
-    const badge = cls ? `<span class="gs-source-badge ${escCm(cls)}">${escCm(label)}</span>` : '';
-    currentLine = `<div class="gs-current">Current ID: <strong>${escCm(currentId)}</strong>${badge}</div>`;
-  }
-
-  let communitySection = '';
-  if (csvSuggestion?.tmsid) {
-    const csvId = String(csvSuggestion.tmsid);
-    const csvNotes = csvSuggestion.notes ? ` · ${escCm(csvSuggestion.notes)}` : '';
-    const alreadySet = currentId === csvId;
-    communitySection = `
-      <div class="gs-community-section"><div class="gs-community-label">Community Map</div>
-        <div class="gs-community-item">
-          <div class="gs-suggest-main">
-            <div class="gs-suggest-station">${escCm(csvId)}</div>
-            <div class="gs-suggest-detail">Mapped in gracenote_map.csv${csvNotes}</div>
-            <div class="gs-suggest-reasons">Not independently verified — confirm against Channels DVR or spot-check the schedule.</div>
-            <div class="gs-now-playing" id="gs-now-${escCm(csvId)}"><div class="gs-now-loading">Loading guide data…</div></div>
-          </div>
-          <div class="gs-suggest-actions">
-            <span class="gs-source-badge csv">community map</span>
-            <button class="btn-apply-gn" onclick="applyGsSuggestion(${Number(ch.id)}, '${escCm(csvId)}', this)" ${alreadySet ? 'disabled' : ''}>${alreadySet ? 'Applied' : 'Apply'}</button>
-          </div>
-        </div>
-      </div>`;
-  }
-
-  let dvrSection = '';
-  if (dvrMissing) {
-    dvrSection = `<div class="gs-dvr-label">Channels DVR</div><div class="gs-no-dvr">Channels DVR URL is not configured — set it in Settings to enable ranked suggestions.</div>`;
-  } else if (!results.length) {
-    dvrSection = `<div class="gs-dvr-label">Channels DVR</div><div class="gs-suggest-empty">No candidates came back from Channels DVR for this channel name.</div>`;
-  } else {
-    const items = results.map(item => {
-      const reasons = Array.isArray(item.reasons) && item.reasons.length ? `<div class="gs-suggest-reasons">${escCm(item.reasons.join(' · '))}</div>` : '';
-      const bits = [item.affiliate||'',item.type||'',item.video||'',item.primary_language||'',item.call_sign||''].filter(Boolean);
-      const stationId = String(item.station_id || '');
-      const alreadySet = currentId && currentId === stationId;
-      return `
-        <div class="gs-suggest-item">
-          <div class="gs-suggest-main">
-            <div class="gs-suggest-title">${escCm(item.name||'Unknown')}</div>
-            <div class="gs-suggest-station">${escCm(stationId)}</div>
-            <div class="gs-suggest-detail">${escCm(bits.join(' · ')||'No extra station details')}</div>
-            ${reasons}
-            <div class="gs-now-playing" id="gs-now-${escCm(stationId)}"><div class="gs-now-loading">Loading guide data…</div></div>
-          </div>
-          <div class="gs-suggest-actions">
-            <span class="preview-conf ${escCm(item.confidence||'weak')}">${escCm(item.confidence||'weak')}</span>
-            <button class="btn-apply-gn" onclick="applyGsSuggestion(${Number(ch.id)}, '${escCm(stationId)}', this)" ${alreadySet ? 'disabled' : ''}>${alreadySet ? 'Applied' : 'Apply'}</button>
-          </div>
-        </div>`;
-    }).join('');
-    dvrSection = `<div class="gs-dvr-label">Channels DVR</div>
-      <div class="gs-suggest-meta">Results from your Channels DVR station search, ranked locally.</div>
-      <div class="gs-suggest-list">${items}</div>`;
-  }
-
-  return `<div class="gs-subsection">${channelNowHtml}${currentLine}${communitySection}${dvrSection}</div>`;
-}
-
-async function applyGsSuggestion(channelId, stationId, btn) {
-  if (!stationId) return;
-  const orig = btn?.textContent;
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-  try {
-    const r = await fetch(`/api/channels/${channelId}`, {
-      method: 'PATCH', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ gracenote_id: stationId, gracenote_mode: 'manual' }),
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    if (btn) { btn.textContent = 'Applied'; btn.disabled = true; }
-    const gsContent = document.getElementById('gs-modal-content');
-    const current = gsContent?.querySelector('.gs-current');
-    if (current) current.innerHTML = `Current ID: <strong>${escCm(stationId)}</strong><span class="gs-source-badge manual">manual</span>`;
-    gsContent?.querySelectorAll('.btn-apply-gn').forEach(el => { if (el !== btn) { el.textContent = 'Apply'; el.disabled = false; } });
-    const cmRow = _cmData.find(r => r.channel_id === channelId);
-    if (cmRow) { cmRow.current_id = stationId; cmRow.gracenote_mode = 'manual'; cmRow.already_applied = cmRow.community_tmsid === stationId; }
-    const cmBtn = document.getElementById(`cm-btn-${channelId}`);
-    const cmBadge = cmBtn?.closest('tr')?.querySelector('.cm-badge');
-    if (cmBtn && cmRow?.already_applied) {
-      cmBtn.textContent = 'Applied'; cmBtn.disabled = true;
-      if (cmBadge) { cmBadge.className = 'cm-badge applied'; cmBadge.textContent = 'Applied'; }
-    } else if (cmBadge) { cmBadge.className = 'cm-badge manual'; cmBadge.textContent = 'Manual'; }
-  } catch(err) {
-    if (btn) { btn.disabled = false; btn.textContent = orig || 'Apply'; }
-    alert('Could not save Gracenote ID: ' + (err.message || err));
-  }
-}
-
-function closeGsModal(event) {
-  if (event && event.target !== event.currentTarget) return;
-  document.getElementById('gs-modal').classList.remove('open');
+function settingsGnOnApplied(channelId, stationId) {
+  const cmRow = _cmData.find(r => r.channel_id === channelId);
+  if (cmRow) { cmRow.current_id = stationId; cmRow.gracenote_mode = 'manual'; cmRow.already_applied = cmRow.community_tmsid === stationId; }
+  const cmBtn = document.getElementById(`cm-btn-${channelId}`);
+  const cmBadge = cmBtn?.closest('tr')?.querySelector('.cm-badge');
+  if (cmBtn && cmRow?.already_applied) {
+    cmBtn.textContent = 'Applied'; cmBtn.disabled = true;
+    if (cmBadge) { cmBadge.className = 'cm-badge applied'; cmBadge.textContent = 'Applied'; }
+  } else if (cmBadge) { cmBadge.className = 'cm-badge manual'; cmBadge.textContent = 'Manual'; }
 }
 
 loadSystemStats();
