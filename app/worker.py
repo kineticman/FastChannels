@@ -1617,7 +1617,7 @@ if __name__ == '__main__':
             if job_id in active_ids:
                 logger.info('[tvtv-cache] refresh already queued/running, skipping')
                 return
-            q.enqueue('app.worker.run_tvtv_cache_refresh', job_timeout=1800, job_id=job_id)
+            q.enqueue('app.worker.run_tvtv_cache_refresh', job_timeout=3600, job_id=job_id)
             logger.info('[tvtv-cache] enqueued refresh job')
         except Exception as exc:
             logger.warning('[tvtv-cache] could not enqueue via RQ (%s), falling back to thread', exc)
