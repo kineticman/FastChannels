@@ -973,7 +973,7 @@ async function openCommunityMap() {
     categories.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; catSel.appendChild(o); });
     renderCmTable();
   } catch(e) {
-    document.getElementById('cm-tbody').innerHTML = `<tr><td colspan="6" class="cm-empty">Failed to load: ${escCm(String(e))}</td></tr>`;
+    document.getElementById('cm-tbody').innerHTML = `<tr><td colspan="7" class="cm-empty">Failed to load: ${escCm(String(e))}</td></tr>`;
   }
 }
 
