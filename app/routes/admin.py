@@ -162,6 +162,12 @@ def _page_source_chnum_map(page_items) -> dict[int, int]:
         if base is None:
             continue
         chnum_map[channel_id] = base + rownum - 1
+
+    # Pinned channels override the rank-based assignment.
+    for ch in page_items:
+        if ch.number_pinned and ch.number is not None:
+            chnum_map[ch.id] = ch.number
+
     return chnum_map
 
 
@@ -395,6 +401,21 @@ def channels():
     possible_duplicate_names = possible_duplicate_names & page_names
     chnum_map = _page_default_feed_chnum_map(channels.items)
 
+    # Pinned-number conflict detection for the current page.
+    from sqlalchemy import func as _func
+    _conflict_numbers = {
+        row[0]
+        for row in db.session.query(Channel.number)
+        .filter(Channel.number_pinned == True, Channel.number.isnot(None))
+        .group_by(Channel.number)
+        .having(_func.count(Channel.id) > 1)
+        .all()
+    }
+    chnum_conflicts = {
+        ch.id for ch in channels.items
+        if ch.number_pinned and ch.number in _conflict_numbers
+    }
+
     return render_template('admin/channels.html',
                            channels=channels, sources=sources,
                            source_filter=source_filter, search=search,
@@ -408,7 +429,8 @@ def channels():
                            duplicate_names=duplicate_names,
                            possible_duplicate_names=possible_duplicate_names,
                            sort_by=sort_by, sort_dir=sort_dir,
-                           chnum_map=chnum_map)
+                           chnum_map=chnum_map,
+                           chnum_conflicts=chnum_conflicts)
 
 
 @admin_bp.route('/channels/chnum-map')
@@ -434,7 +456,30 @@ def channels_chnum_map():
         .all()
     )
     chnum_map = _page_default_feed_chnum_map(page_items)
-    return jsonify({'chnum_map': chnum_map})
+
+    # Pin state for each requested channel.
+    pinned = {ch.id: bool(ch.number_pinned) for ch in page_items}
+
+    # Conflict detection: find pinned numbers used by more than one channel.
+    from sqlalchemy import func as _func
+    conflict_numbers = {
+        row[0]
+        for row in db.session.query(Channel.number)
+        .filter(Channel.number_pinned == True, Channel.number.isnot(None))
+        .group_by(Channel.number)
+        .having(_func.count(Channel.id) > 1)
+        .all()
+    }
+    conflict_ids = {
+        ch.id for ch in page_items
+        if ch.number_pinned and ch.number in conflict_numbers
+    }
+
+    return jsonify({
+        'chnum_map':    chnum_map,
+        'pinned':       pinned,
+        'conflict_ids': list(conflict_ids),
+    })
 
 
 @admin_bp.route('/feeds')

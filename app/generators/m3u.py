@@ -29,6 +29,7 @@ class _MiniChannel:
     id: int
     name: str | None
     number: int | None
+    number_pinned: bool
     source_channel_id: str | None
     gracenote_id: str | None
     slug: str | None
@@ -139,6 +140,7 @@ def _build_channel_stub_query(filters: dict):
         Channel.id,
         Channel.name,
         Channel.number,
+        Channel.number_pinned,
         Channel.source_channel_id,
         Channel.gracenote_id,
         Channel.slug,
@@ -184,6 +186,7 @@ def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | No
             id=row.id,
             name=row.name,
             number=row.number,
+            number_pinned=bool(row.number_pinned),
             source_channel_id=row.source_channel_id,
             gracenote_id=row.gracenote_id,
             slug=row.slug,
@@ -362,6 +365,13 @@ def _build_source_chnum_map(channels):
     except Exception:
         pass
 
+    # Collect all pinned numbers up front so sequential assignment can skip them.
+    pinned_numbers: set[int] = set()
+    for src_chs in by_source.values():
+        for ch in src_chs:
+            if getattr(ch, 'number_pinned', False) and ch.number is not None:
+                pinned_numbers.add(ch.number)
+
     # Assign numbers
     chnum_map: dict[int, int] = {}
     global_cursor = global_start  # tracks next number for ungrouped sources
@@ -379,22 +389,49 @@ def _build_source_chnum_map(channels):
         chs = by_source[src]
         if src in source_starts:
             start = source_starts[src]
-            for idx, ch in enumerate(chs):
-                chnum_map[ch.id] = start + idx
+            cursor = start
+            for ch in chs:
+                if getattr(ch, 'number_pinned', False) and ch.number is not None:
+                    chnum_map[ch.id] = ch.number
+                else:
+                    while cursor in pinned_numbers:
+                        cursor += 1
+                    chnum_map[ch.id] = cursor
+                    cursor += 1
         elif global_cursor is not None:
-            for idx, ch in enumerate(chs):
-                chnum_map[ch.id] = global_cursor + idx
-            global_cursor += len(chs)
+            for ch in chs:
+                if getattr(ch, 'number_pinned', False) and ch.number is not None:
+                    chnum_map[ch.id] = ch.number
+                else:
+                    while global_cursor in pinned_numbers:
+                        global_cursor += 1
+                    chnum_map[ch.id] = global_cursor
+                    global_cursor += 1
 
     return chnum_map, warnings
 
 
 def _build_feed_chnum_map(channels, feed_chnum_start: int):
     """
-    Simple sequential numbering for a feed-level chnum_start.
-    All channels in the feed are numbered start, start+1, start+2, …
+    Sequential numbering for a feed-level chnum_start.
+    Pinned channels keep their stored number; others fill in sequentially,
+    skipping any numbers reserved by pins.
     """
-    return {ch.id: feed_chnum_start + idx for idx, ch in enumerate(channels)}
+    pinned_numbers = {
+        ch.number for ch in channels
+        if getattr(ch, 'number_pinned', False) and ch.number is not None
+    }
+    result: dict[int, int] = {}
+    cursor = feed_chnum_start
+    for ch in channels:
+        if getattr(ch, 'number_pinned', False) and ch.number is not None:
+            result[ch.id] = ch.number
+        else:
+            while cursor in pinned_numbers:
+                cursor += 1
+            result[ch.id] = cursor
+            cursor += 1
+    return result
 
 
 def _resolve_chnum_map(channels, *, feed_chnum_start: int = None, namespace_start: int = None):

@@ -376,6 +376,16 @@
       width: 15px; height: 15px; cursor: pointer; accent-color: #38bdf8;
     }
 
+    /* ── Channel number pin ─────────────────────────────────────────────── */
+    .chnum-cell { white-space: nowrap; }
+    .chnum-cell .chnum-display { cursor: pointer; color: #64748b; }
+    .chnum-cell .chnum-display:hover { color: #e2e8f0; text-decoration: underline dotted; }
+    .chnum-pinned .chnum-display { color: #86efac; }
+    .chnum-conflict .chnum-display { color: #fca5a5; }
+    .chnum-pin-btn { background: none; border: none; cursor: pointer; padding: 0 0 0 3px; font-size: .8em; opacity: .7; vertical-align: middle; }
+    .chnum-pin-btn:hover { opacity: 1; }
+    .chnum-input { width: 54px; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 4px; padding: 1px 4px; font-size: inherit; }
+
     /* ── Gracenote ID input ─────────────────────────────────────────────── */
     .gn-cell { min-width: 160px; }
 
@@ -942,7 +952,13 @@
               {% endif %}
             </td>
             <td style="color:#64748b">{{ ch.language or '—' }}</td>
-            <td style="color:#64748b" data-chnum-cell="1">{{ chnum_map.get(ch.id) or '—' }}</td>
+            <td class="chnum-cell{% if ch.number_pinned %} chnum-pinned{% endif %}{% if ch.id in chnum_conflicts %} chnum-conflict{% endif %}"
+                data-chnum-cell="1"
+                data-channel-id="{{ ch.id }}"
+                data-pinned="{{ 'true' if ch.number_pinned else 'false' }}">
+              <span class="chnum-display">{{ chnum_map.get(ch.id) or '—' }}</span>
+              {% if ch.number_pinned %}<button class="chnum-pin-btn" onclick="chnumUnpin(event,{{ ch.id }})" title="Unpin — let feed assign this number">🔒</button>{% endif %}
+            </td>
 
             {# ── Gracenote ID cell ── #}
             <td class="gn-cell">
@@ -1546,23 +1562,113 @@
     async function refreshVisibleChnums() {
       try {
         const rows = Array.from(document.querySelectorAll('#channel-tbody tr[data-channel-id]'));
-        const ids = rows
-          .map(row => row.getAttribute('data-channel-id'))
-          .filter(Boolean);
+        const ids = rows.map(row => row.getAttribute('data-channel-id')).filter(Boolean);
         if (!ids.length) return;
         const r = await fetch(`/admin/channels/chnum-map?ids=${ids.join(',')}`);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
-        const chnumMap = data.chnum_map || {};
+        const chnumMap    = data.chnum_map    || {};
+        const pinnedMap   = data.pinned       || {};
+        const conflictSet = new Set((data.conflict_ids || []).map(String));
         for (const row of rows) {
-          const channelId = row.getAttribute('data-channel-id');
+          const cid  = row.getAttribute('data-channel-id');
           const cell = row.querySelector('[data-chnum-cell]');
-          if (!cell || !channelId) continue;
-          const value = chnumMap[channelId];
-          cell.textContent = value != null ? String(value) : '—';
+          if (!cell || !cid) continue;
+          const value  = chnumMap[cid];
+          const pinned = !!pinnedMap[cid];
+          _chnumRenderCell(cell, cid, value != null ? String(value) : '—', pinned, conflictSet.has(cid));
         }
       } catch (e) {
         console.error('Chnum refresh failed:', e);
+      }
+    }
+
+    function _chnumRenderCell(cell, cid, displayVal, pinned, conflict) {
+      cell.dataset.pinned = pinned ? 'true' : 'false';
+      cell.classList.toggle('chnum-pinned',   pinned);
+      cell.classList.toggle('chnum-conflict', conflict);
+      const span = cell.querySelector('.chnum-display') || (() => {
+        const s = document.createElement('span');
+        s.className = 'chnum-display';
+        cell.innerHTML = '';
+        cell.appendChild(s);
+        return s;
+      })();
+      span.textContent = displayVal;
+      // Pin button
+      let btn = cell.querySelector('.chnum-pin-btn');
+      if (pinned && !btn) {
+        btn = document.createElement('button');
+        btn.className = 'chnum-pin-btn';
+        btn.title = 'Unpin — let feed assign this number';
+        btn.textContent = '🔒';
+        btn.onclick = (e) => chnumUnpin(e, parseInt(cid));
+        cell.appendChild(btn);
+      } else if (!pinned && btn) {
+        btn.remove();
+      }
+    }
+
+    // Click on number span to edit
+    document.addEventListener('click', function(e) {
+      const span = e.target.closest('.chnum-display');
+      if (!span) return;
+      const cell = span.closest('[data-chnum-cell]');
+      if (!cell) return;
+      const cid = cell.dataset.channelId;
+      if (!cid) return;
+      if (cell.querySelector('.chnum-input')) return; // already editing
+      const current = span.textContent.trim();
+      const inp = document.createElement('input');
+      inp.type = 'number';
+      inp.className = 'chnum-input';
+      inp.value = (current === '—' || current === '') ? '' : current;
+      inp.min = 1;
+      span.replaceWith(inp);
+      inp.focus();
+      inp.select();
+      inp.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); chnumSave(cell, cid, inp.value); }
+        if (ev.key === 'Escape') { inp.replaceWith(span); }
+      });
+      inp.addEventListener('blur', function() {
+        if (document.contains(inp)) chnumSave(cell, cid, inp.value);
+      });
+    });
+
+    async function chnumSave(cell, cid, rawVal) {
+      const val = parseInt(rawVal);
+      if (!rawVal || isNaN(val) || val < 1) {
+        // Revert
+        await refreshVisibleChnums();
+        return;
+      }
+      try {
+        const r = await fetch(`/api/channels/${cid}`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({number: val, number_pinned: true}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        await refreshVisibleChnums();
+      } catch (e) {
+        console.error('Chnum save failed:', e);
+        await refreshVisibleChnums();
+      }
+    }
+
+    async function chnumUnpin(e, cid) {
+      e.stopPropagation();
+      try {
+        const r = await fetch(`/api/channels/${cid}`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({number_pinned: false}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        await refreshVisibleChnums();
+      } catch (e) {
+        console.error('Chnum unpin failed:', e);
       }
     }
 
