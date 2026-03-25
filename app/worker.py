@@ -39,12 +39,21 @@ from app.scrapers.category_utils import category_for_channel
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
 from app.routes.images import delete_cached_logo
 
-logging.Formatter.converter = time.gmtime  # force UTC timestamps in all log output
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
-    stream=sys.stdout,
-)
+class _TZFormatter(logging.Formatter):
+    """Log formatter that stamps times in the user-configured timezone."""
+    def formatTime(self, record, datefmt=None):
+        from app.timezone_utils import current_zoneinfo
+        from datetime import datetime, timezone as _tz
+        dt = datetime.fromtimestamp(record.created, tz=_tz.utc).astimezone(current_zoneinfo())
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.strftime('%Y-%m-%d %H:%M:%S') + f',{int(record.msecs):03d}'
+
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(_TZFormatter('%(asctime)s %(levelname)-8s %(name)s: %(message)s'))
+logging.root.setLevel(logging.INFO)
+logging.root.addHandler(_handler)
+
 # APScheduler logs every job execution at INFO — suppress to WARNING
 logging.getLogger('apscheduler').setLevel(logging.WARNING)
 logging.getLogger('rq.worker').setLevel(logging.WARNING)
