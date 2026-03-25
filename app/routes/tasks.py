@@ -153,6 +153,12 @@ def trigger_xml_refresh():
     try:
         q = get_fast_queue()
         job_id = 'xml-refresh'
+        # Atomic debounce: SET NX with 10s TTL prevents the check-then-enqueue
+        # race when many feed requests arrive simultaneously (e.g. DVR polling).
+        acquired = q.connection.set(f'lock:{job_id}', '1', nx=True, ex=10)
+        if not acquired:
+            logger.info('XML artifact refresh already queued/running')
+            return
         if _job_already_active(q, job_id):
             logger.info('XML artifact refresh already queued/running')
             return
