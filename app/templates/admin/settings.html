@@ -330,7 +330,8 @@
     @media (max-width: 600px) {
       .modal-overlay { align-items: flex-start; padding: 1rem 0.75rem 1rem; }
       .modal-box { width: 100%; max-width: 100%; max-height: calc(100dvh - 2rem); border-radius: 8px; padding: 1.1rem; }
-      .gs-modal { width: 100%; }
+      .gs-modal { width: 100%; max-height: none; overflow-y: visible; }
+      #gs-suggest-modal { padding: 1rem 0.75rem; }
       .gs-suggest-item,
       .gs-community-item { grid-template-columns: 1fr; }
       .gs-suggest-actions { flex-direction: row; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin-top: 0.4rem; }
@@ -392,8 +393,14 @@
     .btn-cm-apply:disabled { opacity: 0.45; cursor: not-allowed; }
     .cm-empty { color: #475569; font-size: 0.9rem; padding: 1.5rem 0; text-align: center; }
     .cm-count { color: #64748b; font-size: 0.8rem; margin-bottom: 0.6rem; }
-    /* GS sub-modal (reuses .modal-overlay / .modal-box already defined above) */
-    .gs-modal { width: 720px; }
+    /* GS sub-modal: scroll on the overlay, not the inner box — reliable on iOS */
+    #gs-suggest-modal {
+      overflow-y: auto; align-items: flex-start;
+      padding: 1.5rem 1rem;
+      overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+    }
+    #gs-suggest-modal.gs-open { overflow: hidden; }
+    .gs-modal { width: 720px; max-height: none; overflow-y: visible; }
     .gs-header { margin-bottom: 1rem; }
     .gs-title { color: #f1f5f9; font-size: 1.05rem; font-weight: 700; margin: 0 0 0.2rem; }
     .gs-meta { color: #94a3b8; font-size: 0.82rem; line-height: 1.45; }

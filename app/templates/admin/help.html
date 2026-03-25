@@ -74,7 +74,7 @@
     }
     @media (max-width: 600px) {
       .modal-overlay { align-items: flex-start; padding: 1rem 0.75rem 1rem; }
-      .modal-box { width: 100%; max-width: 100%; max-height: calc(100dvh - 2rem); border-radius: 8px; padding: 1.1rem; }
+      .modal-box { width: 100%; max-width: 100%; max-height: none; border-radius: 8px; padding: 1.1rem; }
       .gs-modal { width: 100%; }
       .gs-suggest-item,
       .gs-community-item { grid-template-columns: 1fr; }
@@ -149,7 +149,9 @@
       display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65);
       z-index: 1100; align-items: flex-start; justify-content: center;
       padding: 2rem 1rem; overflow-y: auto;
+      overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
     }
+    .modal-overlay.gs-open { overflow: hidden; }
     .modal-overlay.open { display: flex; }
     .modal-box {
       background: #1e293b; border: 1px solid #334155; border-radius: 14px;
