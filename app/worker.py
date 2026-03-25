@@ -988,6 +988,13 @@ def _refresh_xml_artifacts() -> None:
 
 
 def _refresh_xml_artifacts_job() -> None:
+    # Forked child inherits the parent's root logger handlers.  Reset to a
+    # single clean StreamHandler so the child never double-logs.
+    logging.root.handlers = []
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(make_tz_formatter('%(asctime)s %(levelname)-8s %(name)s: %(message)s'))
+    logging.root.setLevel(logging.INFO)
+    logging.root.addHandler(_h)
     with flask_app.app_context():
         _refresh_xml_artifacts()
 
