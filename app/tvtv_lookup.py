@@ -119,7 +119,8 @@ def _fetch_items_cached(lineup: str, station_id: str, session) -> list:
         grid = r.json()
     except Exception as exc:
         log.warning("[tvtv] grid fetch failed for %s/%s: %s", lineup, station_id, exc)
-        if "429" in str(exc):
+        # curl_cffi HTTPError inherits from OSError (no .response attr), so check the message.
+        if "429" in str(exc) or getattr(getattr(exc, 'response', None), 'status_code', None) == 429:
             return None  # Distinguish rate-limit from empty schedule
         return []
 
