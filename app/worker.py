@@ -855,7 +855,7 @@ def _make_progress_writer(source_name: str):
     import json as _json
     key = f'scrape:progress:{source_name}'
     try:
-        r = redis.from_url(flask_app.config['REDIS_URL'])
+        r = redis.from_url(flask_app.config['REDIS_URL'], socket_timeout=3, socket_connect_timeout=3)
         r.ping()
     except Exception:
         return lambda *a, **kw: None

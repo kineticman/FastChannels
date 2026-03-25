@@ -83,9 +83,13 @@ PY
 
 wait_for_network
 
-# Start background worker
-python -m app.worker &
-echo "✅ Worker started"
+# Start background worker with watchdog — restarts automatically on crash or kill
+(while true; do
+    python -m app.worker
+    echo "⚠ Worker exited (code $?) — restarting in 5s"
+    sleep 5
+done) &
+echo "✅ Worker started (with watchdog)"
 
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 GUNICORN_MAX_REQUESTS="${GUNICORN_MAX_REQUESTS:-1000}"
