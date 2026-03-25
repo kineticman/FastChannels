@@ -109,6 +109,6 @@ exec gunicorn \
     --max-requests-jitter "$GUNICORN_MAX_REQUESTS_JITTER" \
     --worker-tmp-dir /dev/shm \
     --access-logfile - \
-    --access-logformat '%(t)s %(h)s "%(r)s" %(s)s %(b)s %(T)ss' \
+    --access-logformat '%(h)s "%(r)s" %(s)s %(b)s %(T)ss' \
     $( [ "$GUNICORN_PRELOAD" = "1" ] && printf '%s' "--preload" ) \
     "wsgi:app"

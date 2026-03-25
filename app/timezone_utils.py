@@ -74,6 +74,19 @@ def current_zoneinfo(value: str | None = None):
         return datetime.now().astimezone().tzinfo or timezone.utc
 
 
+def make_tz_formatter(fmt: str) -> 'logging.Formatter':
+    """Return a logging.Formatter whose timestamps use the configured timezone."""
+    import logging
+    class _TZFormatter(logging.Formatter):
+        def formatTime(self, record, datefmt=None):
+            from datetime import datetime, timezone as _utc
+            dt = datetime.fromtimestamp(record.created, tz=_utc.utc).astimezone(current_zoneinfo())
+            if datefmt:
+                return dt.strftime(datefmt)
+            return dt.strftime('%Y-%m-%d %H:%M:%S') + f',{int(record.msecs):03d}'
+    return _TZFormatter(fmt)
+
+
 def format_datetime(dt, *, timezone_name: str | None = None, fallback: str = 'Never') -> str:
     if dt is None:
         return fallback

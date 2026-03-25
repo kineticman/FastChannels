@@ -44,5 +44,12 @@ class _TLSHandshakeFilter(logging.Filter):
 
 
 def on_starting(server):
+    from app.timezone_utils import make_tz_formatter
+    _fmt = make_tz_formatter('%(asctime)s %(levelname)-8s %(name)s: %(message)s')
+    for name in ('gunicorn.error', 'gunicorn.access'):
+        lg = logging.getLogger(name)
+        for h in lg.handlers:
+            h.setFormatter(_fmt)
+
     logging.getLogger('gunicorn.access').addFilter(_AccessFilter())
     logging.getLogger('gunicorn.error').addFilter(_TLSHandshakeFilter())
