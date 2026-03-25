@@ -50,6 +50,7 @@ def on_starting(server):
         lg = logging.getLogger(name)
         for h in lg.handlers:
             h.setFormatter(_fmt)
+        lg.propagate = False  # prevent double-logging via root handler
 
     logging.getLogger('gunicorn.access').addFilter(_AccessFilter())
     logging.getLogger('gunicorn.error').addFilter(_TLSHandshakeFilter())
