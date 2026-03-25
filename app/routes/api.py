@@ -1372,6 +1372,7 @@ def gracenote_community_map():
             'channel_id':       ch.id,
             'channel_name':     ch.name,
             'source_name':      source_name,
+            'category':         ch.category or '',
             'community_tmsid':  community_tmsid,
             'notes':            match.get('notes') or '',
             'current_id':       current_id,

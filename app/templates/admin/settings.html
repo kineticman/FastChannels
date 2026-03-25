@@ -679,17 +679,20 @@
         <select id="cm-filter-source" onchange="renderCmTable()">
           <option value="">All sources</option>
         </select>
+        <select id="cm-filter-category" onchange="renderCmTable()">
+          <option value="">All categories</option>
+        </select>
       </div>
       <div class="cm-count" id="cm-count"></div>
       <div class="cm-table-wrap">
         <table class="cm-table">
           <thead>
             <tr>
-              <th>Channel</th><th>Source</th><th>Community ID</th><th>Notes</th><th>Status</th><th></th>
+              <th>Channel</th><th>Source</th><th>Category</th><th>Community ID</th><th>Notes</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody id="cm-tbody">
-            <tr><td colspan="6" class="cm-empty">Loading…</td></tr>
+            <tr><td colspan="7" class="cm-empty">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -925,15 +928,17 @@ function renderCmTable() {
   const search = (document.getElementById('cm-search').value || '').toLowerCase();
   const filterStatus = document.getElementById('cm-filter-status').value;
   const filterSource = document.getElementById('cm-filter-source').value;
+  const filterCategory = document.getElementById('cm-filter-category').value;
   let rows = _cmData.filter(row => {
     if (search && !row.channel_name.toLowerCase().includes(search) && !row.source_name.toLowerCase().includes(search)) return false;
     if (filterSource && row.source_name !== filterSource) return false;
+    if (filterCategory && row.category !== filterCategory) return false;
     if (filterStatus && cmStatusInfo(row).key !== filterStatus) return false;
     return true;
   });
   document.getElementById('cm-count').textContent = `${rows.length} channel${rows.length !== 1 ? 's' : ''}`;
   const tbody = document.getElementById('cm-tbody');
-  if (!rows.length) { tbody.innerHTML = '<tr><td colspan="6" class="cm-empty">No matches.</td></tr>'; return; }
+  if (!rows.length) { tbody.innerHTML = '<tr><td colspan="7" class="cm-empty">No matches.</td></tr>'; return; }
   tbody.innerHTML = rows.map(row => {
     const s = cmStatusInfo(row);
     const alreadyApplied = s.key === 'applied';
@@ -941,6 +946,7 @@ function renderCmTable() {
       <tr id="cm-row-${row.channel_id}">
         <td>${escCm(row.channel_name)}</td>
         <td>${escCm(row.source_name)}</td>
+        <td style="color:#94a3b8;font-size:0.8rem">${escCm(row.category || '—')}</td>
         <td><code style="font-size:0.8rem">${escCm(row.community_tmsid)}</code></td>
         <td style="color:#64748b;font-size:0.8rem">${escCm(row.notes)}</td>
         <td><span class="cm-badge ${escCm(s.cls)}">${escCm(s.label)}</span></td>
@@ -962,6 +968,9 @@ async function openCommunityMap() {
     const sources = [...new Set(_cmData.map(r => r.source_name))].sort();
     const sel = document.getElementById('cm-filter-source');
     sources.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s; sel.appendChild(o); });
+    const categories = [...new Set(_cmData.map(r => r.category).filter(Boolean))].sort();
+    const catSel = document.getElementById('cm-filter-category');
+    categories.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; catSel.appendChild(o); });
     renderCmTable();
   } catch(e) {
     document.getElementById('cm-tbody').innerHTML = `<tr><td colspan="6" class="cm-empty">Failed to load: ${escCm(String(e))}</td></tr>`;
