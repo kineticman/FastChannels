@@ -210,6 +210,9 @@
     const content = document.getElementById('gs-suggest-modal-content');
     content.innerHTML = '<div class="modal-loading">Loading suggestions…</div>';
     modal.classList.add('open');
+    // Freeze any underlying scroll container (e.g. community map overlay) so
+    // touch scroll doesn't bleed through on mobile.
+    document.getElementById('cm-overlay')?.classList.add('gs-open');
 
     try {
       const [suggestResp, previewResp] = await Promise.all([
@@ -274,6 +277,7 @@
 
   function closeGracenoteSuggestModal() {
     document.getElementById('gs-suggest-modal')?.classList.remove('open');
+    document.getElementById('cm-overlay')?.classList.remove('gs-open');
     global._gsOnApplied = null;
   }
 

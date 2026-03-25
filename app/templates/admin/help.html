@@ -92,8 +92,10 @@
       display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65);
       z-index: 1000; align-items: flex-start; justify-content: center;
       padding: 2rem 1rem; overflow-y: auto;
+      overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
     }
     .cm-modal-overlay.open { display: flex; }
+    .cm-modal-overlay.gs-open { overflow: hidden; }
     .cm-modal {
       background: #1e293b; border: 1px solid #334155; border-radius: 14px;
       width: 100%; max-width: 860px; padding: 1.5rem; position: relative;
