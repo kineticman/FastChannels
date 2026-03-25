@@ -1601,7 +1601,10 @@ def push_feed_to_dvr(feed_id):
             'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
         }), 409
 
-    _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote)
+    try:
+        _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote)
+    except TimeoutError:
+        return jsonify({'error': 'Timed out waiting for feed artifacts to build. Try again in a moment.'}), 503
 
     def _put(name, url, xmltv_url=''):
         safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
