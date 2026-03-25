@@ -669,6 +669,28 @@
         width: 5.5rem;
       }
     }
+
+    @media (max-width: 600px) {
+      /* Modal overlay: anchor to top so tall content scrolls naturally */
+      .modal-overlay { align-items: flex-start; padding: 1rem 0.75rem 1rem; }
+      .modal-box { width: 100%; max-width: 100%; max-height: calc(100dvh - 2rem); border-radius: 8px; padding: 1.1rem; }
+      /* GS modal full-width, scrollable */
+      .gs-modal { width: 100%; }
+      /* Suggestion cards: stack actions below content */
+      .gs-suggest-item,
+      .gs-community-item { grid-template-columns: 1fr; }
+      .gs-suggest-actions { flex-direction: row; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin-top: 0.4rem; }
+      /* Now-playing grids: single column */
+      .gs-channel-now,
+      .gs-now-playing { grid-template-columns: 1fr; gap: 0.4rem; }
+      /* Allow titles to wrap instead of truncating */
+      .gs-channel-now-title,
+      .gs-channel-now-sub,
+      .gs-now-title,
+      .gs-now-subtitle { white-space: normal; }
+      /* Cat override modal full width */
+      #catModal .modal-box { max-width: 100%; }
+    }
   </style>
 </head>
 <body>

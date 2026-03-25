@@ -327,6 +327,20 @@
       .field-actions { flex-wrap: wrap; justify-content: flex-start; }
       .save-status { min-width: 0; text-align: left; }
     }
+    @media (max-width: 600px) {
+      .modal-overlay { align-items: flex-start; padding: 1rem 0.75rem 1rem; }
+      .modal-box { width: 100%; max-width: 100%; max-height: calc(100dvh - 2rem); border-radius: 8px; padding: 1.1rem; }
+      .gs-modal { width: 100%; }
+      .gs-suggest-item,
+      .gs-community-item { grid-template-columns: 1fr; }
+      .gs-suggest-actions { flex-direction: row; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin-top: 0.4rem; }
+      .gs-channel-now,
+      .gs-now-playing { grid-template-columns: 1fr; gap: 0.4rem; }
+      .gs-channel-now-title,
+      .gs-channel-now-sub,
+      .gs-now-title,
+      .gs-now-subtitle { white-space: normal; }
+    }
     /* Community map modal */
     .cm-modal-overlay {
       display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65);
