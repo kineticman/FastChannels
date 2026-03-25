@@ -1011,7 +1011,29 @@ def run_tvtv_cache_refresh():
     """Fetch 3 days of tvtv guide data for all indexed FAST stations and store in DB."""
     with flask_app.app_context():
         from app.tvtv_cache import refresh_tvtv_cache
-        summary = refresh_tvtv_cache(days=3)
+        from app.tvtv_lookup import get_station_entry
+        import sqlalchemy as sa
+
+        # Applied channel IDs.
+        applied = set(
+            str(r) for r in db.session.execute(
+                sa.select(sa.func.distinct(Channel.gracenote_id))
+                .where(Channel.gracenote_id.isnot(None))
+            ).scalars().all() if r
+        )
+
+        # Community map suggestion IDs — pre-cache so the suggestions modal can
+        # show guide previews even before an ID has been applied to a channel.
+        from app.gracenote_map import get_all_tmsids
+        community = set(str(t) for t in (get_all_tmsids() or []) if t)
+
+        # Only include IDs that are actually in the station index.
+        station_ids = [sid for sid in (applied | community) if get_station_entry(sid)]
+        logger.info('[tvtv-cache] fetching %d station IDs (%d applied + %d community-only)',
+                    len(station_ids), len(applied & set(station_ids)),
+                    len(community & set(station_ids) - applied))
+
+        summary = refresh_tvtv_cache(days=3, station_ids=station_ids)
         logger.info('[tvtv-cache] refresh complete: %s', summary)
 
 

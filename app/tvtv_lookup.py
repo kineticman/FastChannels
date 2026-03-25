@@ -119,6 +119,8 @@ def _fetch_items_cached(lineup: str, station_id: str, session) -> list:
         grid = r.json()
     except Exception as exc:
         log.warning("[tvtv] grid fetch failed for %s/%s: %s", lineup, station_id, exc)
+        if "429" in str(exc):
+            return None  # Distinguish rate-limit from empty schedule
         return []
 
     items = grid[0] if isinstance(grid, list) and grid and isinstance(grid[0], list) else []
@@ -256,7 +258,7 @@ def lookup_now_playing(station_id: str) -> dict[str, Any]:
     session = _make_session()
     items = _fetch_items_cached(lineup, station_id, session)
     if items is None:
-        result["error"] = "grid_fetch_failed"
+        result["error"] = "rate_limited"
         return result
 
     now_utc = datetime.now(timezone.utc)

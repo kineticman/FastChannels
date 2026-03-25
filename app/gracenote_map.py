@@ -140,6 +140,19 @@ def lookup_gracenote(provider: str, key: str | None) -> dict[str, str] | None:
     return None
 
 
+def get_all_tmsids() -> list[str]:
+    """Return all unique tmsid values in the loaded community map."""
+    mapping = _load_map()
+    seen: set[str] = set()
+    result: list[str] = []
+    for payload in mapping.values():
+        tmsid = payload.get("tmsid")
+        if tmsid and tmsid not in seen:
+            seen.add(tmsid)
+            result.append(tmsid)
+    return result
+
+
 def resolve_gracenote(provider: str, *, upstream_id=None, lookup_key: str | None = None) -> str | None:
     direct = normalize_gracenote_id(upstream_id)
     if direct:

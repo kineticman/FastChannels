@@ -47,6 +47,10 @@
       el.innerHTML = '<div class="gs-now-missing">Not in FAST guide index</div>';
       return;
     }
+    if (data.error === 'rate_limited') {
+      el.innerHTML = '<div class="gs-now-missing">Guide preview unavailable (rate limited)</div>';
+      return;
+    }
     if (!data.now && !data.next) {
       el.innerHTML = '<div class="gs-now-missing">No guide data available</div>';
       return;
