@@ -40,10 +40,11 @@ from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cach
 from app.routes.images import delete_cached_logo
 
 from app.timezone_utils import make_tz_formatter
-_handler = logging.StreamHandler(sys.stdout)
-_handler.setFormatter(make_tz_formatter('%(asctime)s %(levelname)-8s %(name)s: %(message)s'))
-logging.root.setLevel(logging.INFO)
-logging.root.addHandler(_handler)
+if not logging.root.handlers:
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setFormatter(make_tz_formatter('%(asctime)s %(levelname)-8s %(name)s: %(message)s'))
+    logging.root.setLevel(logging.INFO)
+    logging.root.addHandler(_handler)
 
 # APScheduler logs every job execution at INFO — suppress to WARNING
 logging.getLogger('apscheduler').setLevel(logging.WARNING)
