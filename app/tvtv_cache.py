@@ -172,7 +172,7 @@ def _fetch_batch(session, lineup: str, station_ids: list[str],
         r.raise_for_status()
         grid = r.json()
     except Exception as exc:
-        log.warning("[tvtv-cache] batch failed %s %s...: %s", lineup, station_ids[:3], exc)
+        log.debug("[tvtv-cache] batch failed %s %s...: %s", lineup, station_ids[:3], exc)
         return {}
 
     result: dict[str, list[dict]] = {}
@@ -273,6 +273,7 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
             log.info("[tvtv-cache] %s day+%d: %d stations in %d batches",
                      lineup, day_offset, len(station_ids), len(batches))
 
+            day_errors = 0
             for batch in batches:
                 if dry_run:
                     total_batches += 1
@@ -281,6 +282,7 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
                 results = _fetch_batch(session, lineup, batch, start, end)
                 if not results:
                     total_errors += 1
+                    day_errors   += 1
                     time.sleep(_BATCH_DELAY)
                     continue
 
@@ -306,6 +308,10 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
                 total_rows    += _upsert_rows(rows)
                 total_batches += 1
                 time.sleep(_BATCH_DELAY)
+
+            if day_errors:
+                log.warning("[tvtv-cache] %s day+%d: %d/%d batches rate-limited (429)",
+                            lineup, day_offset, day_errors, len(batches))
 
             time.sleep(_DAY_DELAY)
 
