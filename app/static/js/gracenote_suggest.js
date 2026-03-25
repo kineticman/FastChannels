@@ -41,8 +41,7 @@
 
   // ── Render now-playing slot into a gs-now-playing placeholder ───────────────
 
-  function renderNowPlaying(stationId, data) {
-    const el = document.getElementById(`gs-now-${stationId}`);
+  function renderNowPlayingInto(el, data) {
     if (!el) return;
     if (!data.found || data.error === 'not_in_index') {
       el.innerHTML = '<div class="gs-now-missing">Not in FAST guide index</div>';
@@ -136,7 +135,7 @@
               <div class="gs-suggest-station">${escHtml(csvId)}</div>
               <div class="gs-suggest-detail">Mapped in gracenote_map.csv${csvNotes}</div>
               <div class="gs-suggest-reasons">Not independently verified — confirm against Channels DVR or spot-check the schedule.</div>
-              <div class="gs-now-playing" id="gs-now-${escHtml(csvId)}">
+              <div class="gs-now-playing" id="gs-now-csv-${escHtml(csvId)}">
                 <div class="gs-now-loading">Loading guide data…</div>
               </div>
             </div>
@@ -162,7 +161,7 @@
         <div class="gs-dvr-label">Channels DVR</div>
         <div class="gs-suggest-empty">No candidates came back from Channels DVR for this channel name.</div>`;
     } else {
-      const items = results.map(item => {
+      const items = results.map((item, idx) => {
         const reasons = Array.isArray(item.reasons) && item.reasons.length
           ? `<div class="gs-suggest-reasons">${escHtml(item.reasons.join(' · '))}</div>` : '';
         const bits = [
@@ -178,7 +177,7 @@
               <div class="gs-suggest-station">${escHtml(stationId)}</div>
               <div class="gs-suggest-detail">${escHtml(bits.join(' · ') || 'No extra station details')}</div>
               ${reasons}
-              ${stationId ? `<div class="gs-now-playing" id="gs-now-${escHtml(stationId)}"><div class="gs-now-loading">Loading guide data…</div></div>` : ''}
+              ${stationId ? `<div class="gs-now-playing" id="gs-now-dvr-${idx}-${escHtml(stationId)}"><div class="gs-now-loading">Loading guide data…</div></div>` : ''}
             </div>
             <div class="gs-suggest-actions">
               <span class="preview-conf ${escHtml(item.confidence || 'weak')}">${escHtml(item.confidence || 'weak')}</span>
@@ -237,19 +236,26 @@
           <button class="btn-cancel-modal" onclick="closeGracenoteSuggestModal()">Close</button>
         </div>`;
 
-      // Fire tvtv now-playing lookups for all suggestion station IDs
-      const stationIds = [
+      // Fire tvtv now-playing lookups — use unique element IDs to avoid duplicate-ID conflicts
+      // when the same station appears in both the community map and DVR results.
+      const lookups = [
         ...(data.channel?.csv_suggestion?.tmsid
-          ? [String(data.channel.csv_suggestion.tmsid)] : []),
+          ? [{ sid: String(data.channel.csv_suggestion.tmsid), eid: `gs-now-csv-${data.channel.csv_suggestion.tmsid}` }]
+          : []),
         ...(Array.isArray(data.results)
-          ? data.results.map(r => String(r.station_id || '')).filter(Boolean) : []),
+          ? data.results
+              .map((r, i) => ({ sid: String(r.station_id || ''), eid: `gs-now-dvr-${i}-${r.station_id}` }))
+              .filter(x => x.sid)
+          : []),
       ];
-      stationIds.forEach(async (sid) => {
+      lookups.forEach(async ({ sid, eid }) => {
         try {
           const r = await fetch(`/api/stations/${encodeURIComponent(sid)}/now-playing`);
-          renderNowPlaying(sid, await r.json());
+          const d = await r.json();
+          const el = document.getElementById(eid);
+          if (el) renderNowPlayingInto(el, d);
         } catch {
-          const el = document.getElementById(`gs-now-${sid}`);
+          const el = document.getElementById(eid);
           if (el) el.innerHTML = '<div class="gs-now-missing">Guide lookup failed</div>';
         }
       });
@@ -309,6 +315,6 @@
   global.openGracenoteSuggestModal  = openGracenoteSuggestModal;
   global.closeGracenoteSuggestModal = closeGracenoteSuggestModal;
   global.gsApplySuggestion          = gsApplySuggestion;
-  global.renderNowPlaying           = renderNowPlaying; // used by channels.html inline fetch loop
+  global.renderNowPlayingInto       = renderNowPlayingInto; // used by channels.html inline fetch loop
 
 })(window);
