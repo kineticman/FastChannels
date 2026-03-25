@@ -39,6 +39,7 @@ from app.scrapers.category_utils import category_for_channel
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
 from app.routes.images import delete_cached_logo
 
+logging.Formatter.converter = time.gmtime  # force UTC timestamps in all log output
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(name)s: %(message)s',
