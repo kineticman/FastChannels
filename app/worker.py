@@ -1386,17 +1386,42 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     db.session.flush()
 
 
-def _prune_old_programs():
+def _prune_old_programs(batch_size: int = 2000):
     """Delete programs that ended more than 2 hours ago.
 
     Use timezone-aware UTC to match the rest of the worker's program handling
     and avoid Python 3.12's utcnow() deprecation warning.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
-    deleted = Program.query.filter(Program.end_time < cutoff).delete()
-    db.session.commit()
-    if deleted:
-        logger.info('[worker] pruned %d expired EPG entries', deleted)
+    total_deleted = 0
+
+    while True:
+        ids = [
+            row[0] for row in (
+                Program.query
+                .filter(Program.end_time < cutoff)
+                .order_by(Program.end_time.asc())
+                .with_entities(Program.id)
+                .limit(batch_size)
+                .all()
+            )
+        ]
+        if not ids:
+            break
+
+        deleted = (
+            Program.query
+            .filter(Program.id.in_(ids))
+            .delete(synchronize_session=False)
+        ) or 0
+        db.session.commit()
+        total_deleted += deleted
+
+        if deleted < batch_size:
+            break
+
+    if total_deleted:
+        logger.info('[worker] pruned %d expired EPG entries', total_deleted)
 
 
 def _cleanup_orphans():

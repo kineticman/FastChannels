@@ -142,6 +142,7 @@ class Program(db.Model):
 
     __table_args__ = (
         db.Index('idx_programs_channel_id', 'channel_id'),
+        db.Index('idx_programs_end_time', 'end_time'),
         db.Index('idx_programs_start_time', 'start_time'),
     )
 
