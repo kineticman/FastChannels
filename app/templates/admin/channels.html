@@ -214,8 +214,8 @@
     .btn-disable:hover { background: #991b1b; }
     .preview-action-btn {
       display: inline-flex; align-items: center; justify-content: center;
-      min-height: 36px; padding: 0.5rem 0.9rem; border-radius: 6px;
-      border: 1px solid #334155; font-size: 0.82rem; font-weight: 600; line-height: 1;
+      min-height: 34px; padding: 0.45rem 0.8rem; border-radius: 6px;
+      border: 1px solid #334155; font-size: 0.8rem; font-weight: 600; line-height: 1.1;
       cursor: pointer; text-decoration: none; transition: background 0.15s, border-color 0.15s, color 0.15s;
     }
     .preview-action-btn:hover { text-decoration: none; color: #fff; }
@@ -401,8 +401,9 @@
       border: 1px solid #334155;
       border-radius: 5px;
       color: #cbd5e1;
-      font-size: 0.72rem;
-      padding: 0.28rem 0.35rem;
+      font-size: 0.68rem;
+      padding: 0.22rem 0.25rem;
+      max-width: 64px;
       outline: none;
     }
     .gn-mode.gn-mode-manual { border-color: #15803d; color: #bbf7d0; }
@@ -486,8 +487,8 @@
       font-size: 0.75rem; line-height: 1; transition: border-color 0.15s, color 0.15s, background 0.15s;
     }
     .btn-preview:hover { border-color: #7dd3fc; background: #1e3a5f; color: #fff; }
-    .preview-modal { width: 760px; max-width: 95vw; }
-    .preview-header { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 1rem; }
+    .preview-modal { width: 940px; max-width: min(97vw, 940px); }
+    .preview-header { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
     .preview-logo {
       width: 54px; height: 54px; border-radius: 8px; background: #0f172a;
       object-fit: contain; flex-shrink: 0;
@@ -507,7 +508,13 @@
     .preview-program-title { font-size: 0.95rem; font-weight: 600; color: #e2e8f0; margin-bottom: 0.35rem; }
     .preview-program-time { color: #94a3b8; font-size: 0.8rem; margin-bottom: 0.45rem; }
     .preview-program-desc { color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; }
-    .preview-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
+    .preview-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.55rem;
+      margin-bottom: 1rem;
+    }
+    .preview-actions .preview-action-btn { width: 100%; min-width: 0; }
     .preview-conf {
       display: inline-flex; align-items: center; justify-content: center;
       border-radius: 999px; padding: 0.18rem 0.45rem; font-size: 0.66rem; font-weight: 700;
@@ -692,6 +699,7 @@
       /* Modal overlay: anchor to top so tall content scrolls naturally */
       .modal-overlay { align-items: flex-start; padding: 1rem 0.75rem 1rem; }
       .modal-box { width: 100%; max-width: 100%; max-height: calc(100dvh - 2rem); border-radius: 8px; padding: 1.1rem; }
+      .preview-actions { grid-template-columns: 1fr; }
       /* GS modal: overlay scrolls, inner box has no height cap */
       .gs-modal { width: 100%; max-height: none; overflow-y: visible; }
       #gs-suggest-modal { padding: 1rem 0.75rem; }
