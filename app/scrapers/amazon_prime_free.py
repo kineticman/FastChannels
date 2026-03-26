@@ -5,6 +5,8 @@ import html as _html
 import json
 import logging
 import re
+import time
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,24 +18,19 @@ logger = logging.getLogger(__name__)
 
 class AmazonPrimeFreeScraper(BaseScraper):
     """
-    First-pass FastChannels scraper for Amazon Prime Video free linear channels.
+    FastChannels scraper for Amazon Prime Video free linear (FAST) channels.
 
-    What it does well:
     - Scrapes channel metadata from the Live TV page and paginated collection API.
     - Builds near-term EPG from the station.schedule arrays embedded in those responses.
-    - Uses stable upstream station IDs as source_channel_id.
-
-    Current limitation:
-    - Playback is intentionally not implemented. The analyzed web flow returned
-      encrypted DASH manifests with Widevine license calls, not clear HLS.
-      stream_url is stored as an opaque internal URI so the source can still be
-      scraped, inspected, and exported while playback work continues.
+    - Uses Playwright to resolve live DASH stream URLs at scrape time (cached ~1.5 h).
+    - Streams are CENC-encrypted DASH (Widevine + PlayReady).  Clients with DRM
+      support (e.g. Kodi + inputstream.adaptive) can play them; others will not.
     """
 
     source_name = "amazon_prime_free"
     source_aliases = ("amazon-prime-free",)
     display_name = "Amazon Prime Free Channels"
-    scrape_interval = 360
+    scrape_interval = 100  # minutes — keep well under the 2-hour DASH URL TTL
 
     config_schema = [
         ConfigField(
@@ -129,25 +126,56 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
     _STATION_NEEDLE = '"station":{'
 
+    # Playwright-based stream URL resolution
+    _PW_ROUTE_PATTERN = "**/*.amazon.com/**"
+    _DESIRED_RESOURCES = "PlaybackUrls,PlaybackSettings"
+    _STREAM_URL_TTL = 5400  # 1.5 hours — well under Amazon's 2-hour TTL
+    _PW_INIT_SCRIPT = """
+    let _sdk = null;
+    Object.defineProperty(window, 'ATVWebPlayerSDK', {
+        get() { return _sdk; },
+        set(val) {
+            if (typeof val === 'function') {
+                const Orig = val;
+                function Patched(config) {
+                    const inst = new Orig(config);
+                    window.__sdkInst = inst;
+                    return inst;
+                }
+                Patched.prototype = Orig.prototype;
+                _sdk = Patched;
+            } else { _sdk = val; }
+        },
+        configurable: true,
+    });
+    """
+
     def __init__(self, config: dict | None = None):
         super().__init__(config)
 
         self._cookie_header = (self.config.get("cookie_header") or "").strip()
         self._marketplace_id = (self.config.get("marketplace_id") or "ATVPDKIKX0DER").strip()
         self._ux_locale = (self.config.get("ux_locale") or "en_US").strip()
-        user_agent = (
+        self._user_agent = (
             self.config.get("user_agent")
             or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-               "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+               "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
         )
 
         self.session.headers.update(self.DEFAULT_HEADERS)
-        self.session.headers.update({"User-Agent": user_agent})
+        self.session.headers.update({"User-Agent": self._user_agent})
         if self._cookie_header:
             self.session.headers["Cookie"] = self._cookie_header
 
         # fetch_channels() populates this; fetch_epg() reads from it.
         self._station_cache: dict[str, dict[str, Any]] = {}
+
+        # Stream URL cache: {station_id: {"url": str, "expires_at": float}}
+        # Persisted in source.config["stream_url_cache"] across scrapes.
+        raw_cache = self.config.get("stream_url_cache") or {}
+        self._stream_url_cache: dict[str, dict[str, Any]] = (
+            raw_cache if isinstance(raw_cache, dict) else {}
+        )
 
     def fetch_channels(self) -> list[ChannelData]:
         self._station_cache = {}
@@ -179,6 +207,20 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
         channels.sort(key=lambda c: c.name.lower())
         logger.info("[%s] %d channels", self.source_name, len(channels))
+
+        # Resolve live DASH stream URLs for all channels via Playwright.
+        if self._cookie_header and channels:
+            station_ids = [ch.source_channel_id for ch in channels]
+            url_map = self._playwright_resolve_channels(station_ids)
+            if url_map:
+                expires_at = time.time() + self._STREAM_URL_TTL
+                for gip, url in url_map.items():
+                    self._stream_url_cache[gip] = {"url": url, "expires_at": expires_at}
+                self._pending_config_updates["stream_url_cache"] = dict(self._stream_url_cache)
+                logger.info("[%s] cached %d/%d stream URLs (TTL ~%.0f min)",
+                            self.source_name, len(url_map), len(station_ids),
+                            self._STREAM_URL_TTL / 60)
+
         return channels
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -214,13 +256,217 @@ class AmazonPrimeFreeScraper(BaseScraper):
         if not raw_url.startswith("primefree://"):
             return raw_url
 
-        # Playback not yet implemented — streams appear DRM-gated (DASH/Widevine).
-        # Return the opaque URI so the play proxy fails gracefully rather than raising.
-        logger.warning(
-            "[%s] resolve() called for %s — playback not implemented (likely DRM)",
-            self.source_name, raw_url,
-        )
+        station_id = raw_url[len("primefree://"):]
+        cached = self._stream_url_cache.get(station_id)
+        if cached and cached.get("expires_at", 0) > time.time():
+            logger.debug("[%s] resolve cache hit for %s", self.source_name, station_id[:40])
+            return cached["url"]
+
+        # Cache miss or expired — run single-channel Playwright resolution.
+        if not self._cookie_header:
+            logger.warning("[%s] no cookie_header — cannot resolve stream URL for %s",
+                           self.source_name, station_id[:40])
+            return raw_url
+
+        logger.info("[%s] cache miss — resolving stream URL for %s", self.source_name, station_id[:40])
+        url_map = self._playwright_resolve_channels([station_id])
+        if url_map.get(station_id):
+            url = url_map[station_id]
+            self._stream_url_cache[station_id] = {
+                "url": url,
+                "expires_at": time.time() + self._STREAM_URL_TTL,
+            }
+            updated = dict(self.config.get("stream_url_cache") or {})
+            updated[station_id] = self._stream_url_cache[station_id]
+            self._pending_config_updates["stream_url_cache"] = updated
+            return url
+
+        logger.warning("[%s] could not resolve stream URL for %s", self.source_name, station_id[:40])
         return raw_url
+
+    # ------------------------------------------------------------------
+    # Playwright-based live stream URL resolution
+    # ------------------------------------------------------------------
+
+    def _extract_cookie(self, name: str) -> str | None:
+        m = re.search(rf'(?:^|;\s*){re.escape(name)}=([^;]+)', self._cookie_header)
+        return m.group(1).strip() if m else None
+
+    def _cookie_header_to_list(self) -> list[dict]:
+        cookies = []
+        for part in self._cookie_header.split(";"):
+            part = part.strip()
+            if "=" not in part:
+                continue
+            name, _, value = part.partition("=")
+            cookies.append({"name": name.strip(), "value": value.strip(),
+                             "domain": ".amazon.com", "path": "/"})
+        return cookies
+
+    def _playwright_resolve_channels(self, station_ids: list[str]) -> dict[str, str]:
+        """
+        Launches a Playwright browser, loads amazon.com/gp/video/livetv, and calls
+        ATVWebPlayerSDK.requestResources() for each station GIP.  The route
+        intercept forces desiredResources=PlaybackUrls,PlaybackSettings so we get
+        DASH manifest URLs in the response.
+
+        Returns {station_id: dash_url} for all successfully resolved channels.
+        Streams are CENC-encrypted (Widevine + PlayReady); DRM-capable clients only.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("[%s] playwright not installed — stream URL resolution unavailable",
+                           self.source_name)
+            return {}
+
+        at_main = self._extract_cookie("at-main")
+        if not at_main:
+            logger.warning("[%s] at-main cookie not found — cannot authenticate SDK",
+                           self.source_name)
+            return {}
+
+        auth_ctx = {
+            "headers": {
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "Authorization": f"Bearer {at_main}",
+            }
+        }
+        results: dict[str, str] = {}
+
+        def _on_response(response):
+            url = response.url
+            if "GetPlaybackResources" not in url or response.status != 200:
+                return
+            try:
+                body = response.json()
+                pu = body.get("playbackUrls", {})
+                if not pu:
+                    return
+                url_sets = pu.get("urlSets", {})
+                default_id = pu.get("defaultUrlSetId", "")
+                manifest_url = (
+                    url_sets.get(default_id, {})
+                    .get("urls", {})
+                    .get("manifest", {})
+                    .get("url", "")
+                )
+                if not manifest_url:
+                    # Prefer Qwilt CDN (no obfuscating auth token in URL path)
+                    for sdata in url_sets.values():
+                        m = sdata.get("urls", {}).get("manifest", {})
+                        if m.get("cdn") == "Qwilt" and m.get("url"):
+                            manifest_url = m["url"]
+                            break
+                if not manifest_url:
+                    for sdata in url_sets.values():
+                        manifest_url = sdata.get("urls", {}).get("manifest", {}).get("url", "")
+                        if manifest_url:
+                            break
+                if manifest_url:
+                    params = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+                    station_id = params.get("asin", "")
+                    if station_id:
+                        results[station_id] = manifest_url
+            except Exception as exc:
+                logger.debug("[%s] PRS response parse error: %s", self.source_name, exc)
+
+        def _handle_route(route):
+            url = route.request.url
+            if "GetPlaybackResources" in url and "videoMaterialType=LiveStreaming" in url:
+                parsed = urllib.parse.urlparse(url)
+                params = dict(urllib.parse.parse_qsl(parsed.query))
+                params["desiredResources"] = self._DESIRED_RESOURCES
+                new_url = parsed._replace(query=urllib.parse.urlencode(params)).geturl()
+                route.continue_(url=new_url)
+            else:
+                route.continue_()
+
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-setuid-sandbox",
+                          "--disable-dev-shm-usage", "--disable-gpu"],
+                )
+                ctx = browser.new_context(
+                    user_agent=self._user_agent,
+                    viewport={"width": 1920, "height": 1080},
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                    extra_http_headers={
+                        "sec-ch-ua": '"Chromium";v="146", "Google Chrome";v="146", "Not-A.Brand";v="24"',
+                        "sec-ch-ua-mobile": "?0",
+                        "sec-ch-ua-platform": '"Windows"',
+                    },
+                )
+                ctx.add_cookies(self._cookie_header_to_list())
+
+                page = ctx.new_page()
+                page.on("response", _on_response)
+                page.route(self._PW_ROUTE_PATTERN, _handle_route)
+                page.add_init_script(self._PW_INIT_SCRIPT)
+
+                logger.info("[%s] loading livetv page (Playwright)...", self.source_name)
+                page.goto("https://www.amazon.com/gp/video/livetv",
+                          wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(4000)
+                for _ in range(8):
+                    page.evaluate("window.scrollBy(0, 500)")
+                    page.wait_for_timeout(200)
+                page.wait_for_timeout(2000)
+
+                try:
+                    page.wait_for_function("!!window.__sdkInst", timeout=15000)
+                except Exception:
+                    logger.warning("[%s] ATVWebPlayerSDK not found on livetv page", self.source_name)
+                    browser.close()
+                    return {}
+
+                page.evaluate(
+                    "(ctx) => { const i = window.__sdkInst; if (i) i.setAuthContext(ctx); }",
+                    auth_ctx,
+                )
+                page.wait_for_timeout(500)
+
+                # Fire requestResources for all channels.
+                # We don't wait for each response; collect them asynchronously.
+                batch_size = 15
+                logger.info("[%s] firing requestResources for %d channels...",
+                            self.source_name, len(station_ids))
+                for i, gip in enumerate(station_ids):
+                    page.evaluate(
+                        """(gip) => {
+                            const inst = window.__sdkInst;
+                            const cp = inst && inst.constructedPlayers;
+                            const p = cp && (cp[0] || Object.values(cp)[0]);
+                            if (p && p.player) {
+                                p.player.requestResources({
+                                    titleId: gip,
+                                    videoMaterialType: "LiveStreaming",
+                                });
+                            }
+                        }""",
+                        gip,
+                    )
+                    page.wait_for_timeout(350)
+
+                    # Every batch_size channels, pause to let responses accumulate
+                    if (i + 1) % batch_size == 0:
+                        page.wait_for_timeout(5000)
+                        logger.debug("[%s] resolved %d/%d so far",
+                                     self.source_name, len(results), len(station_ids))
+
+                # Final wait for stragglers
+                page.wait_for_timeout(12000)
+                browser.close()
+
+        except Exception as exc:
+            logger.error("[%s] Playwright resolution failed: %s", self.source_name, exc)
+
+        logger.info("[%s] Playwright resolved %d/%d stream URLs",
+                    self.source_name, len(results), len(station_ids))
+        return results
 
     # ------------------------------------------------------------------
     # HTML / JSON extraction helpers
