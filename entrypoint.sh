@@ -87,8 +87,9 @@ wait_for_network
 # Start isolated worker roles with watchdogs.
 # Conservative design:
 # - scheduler process only enqueues work and runs periodic maintenance
-# - scraper process handles the scraper queue (single concurrency)
+# - scraper process handles scrapes + stream audits (single concurrency)
 # - fast process handles immediate short-lived jobs
+# - maintenance process handles heavier non-urgent background jobs
 (while true; do
     FC_WORKER_ROLE=scheduler python -m app.worker
     echo "⚠ Scheduler worker exited (code $?) — restarting in 5s"
@@ -104,7 +105,12 @@ done) &
     echo "⚠ Fast worker exited (code $?) — restarting in 5s"
     sleep 5
 done) &
-echo "✅ Worker roles started (scheduler, scraper, fast)"
+(while true; do
+    FC_WORKER_ROLE=maintenance python -m app.worker
+    echo "⚠ Maintenance worker exited (code $?) — restarting in 5s"
+    sleep 5
+done) &
+echo "✅ Worker roles started (scheduler, scraper, fast, maintenance)"
 
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 GUNICORN_MAX_REQUESTS="${GUNICORN_MAX_REQUESTS:-1000}"

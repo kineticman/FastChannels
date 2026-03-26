@@ -22,6 +22,11 @@ def get_fast_queue():
     return Queue('fast', connection=r)
 
 
+def get_maintenance_queue():
+    r = redis.from_url(current_app.config['REDIS_URL'])
+    return Queue('maintenance', connection=r)
+
+
 def _utc_aware(dt):
     if dt is None:
         return None
@@ -173,7 +178,7 @@ def trigger_xml_refresh():
 
 def trigger_source_channel_purge(source_id: int):
     try:
-        q = get_queue()
+        q = get_maintenance_queue()
         job_id = f'source-purge-{source_id}'
         if _job_already_active(q, job_id):
             logger.info('Source channel purge already queued/running for source_id=%s', source_id)
@@ -189,7 +194,7 @@ def trigger_source_channel_purge(source_id: int):
 
 def trigger_bulk_channel_update(filters: dict, enable: bool):
     try:
-        q = get_queue()
+        q = get_maintenance_queue()
         job_id = _bulk_job_id(filters or {}, enable)
         if _job_already_active(q, job_id):
             logger.info(
@@ -214,7 +219,7 @@ def trigger_bulk_channel_update(filters: dict, enable: bool):
 
 def trigger_gracenote_auto_clear():
     try:
-        q = get_queue()
+        q = get_maintenance_queue()
         job_id = 'gracenote-auto-clear'
         if _job_already_active(q, job_id):
             logger.info('Gracenote auto-clear already queued/running')
@@ -246,7 +251,7 @@ def trigger_channel_auto_disable(channel_id: int, reason: str):
 
 def trigger_tvtv_cache_refresh():
     try:
-        q = get_queue()
+        q = get_maintenance_queue()
         job_id = 'tvtv-cache-refresh'
         if _job_already_active(q, job_id):
             logger.info('tvtv cache refresh already queued/running')

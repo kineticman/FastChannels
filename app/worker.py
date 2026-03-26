@@ -1614,7 +1614,7 @@ if __name__ == '__main__':
     def _scheduled_prune():
         try:
             _r = redis.from_url(flask_app.config['REDIS_URL'])
-            _q = Queue('scraper', connection=_r)
+            _q = Queue('maintenance', connection=_r)
             _q.enqueue('app.worker._rq_prune', job_timeout=300)
             logger.info('[scheduler] enqueued _rq_prune job')
         except Exception as e:
@@ -1623,7 +1623,7 @@ if __name__ == '__main__':
     def _scheduled_integrity_cleanup():
         try:
             _r = redis.from_url(flask_app.config['REDIS_URL'])
-            _q = Queue('scraper', connection=_r)
+            _q = Queue('maintenance', connection=_r)
             _q.enqueue('app.worker._rq_integrity_cleanup', job_timeout=300)
             logger.info('[scheduler] enqueued _rq_integrity_cleanup job')
         except Exception as e:
@@ -1709,7 +1709,7 @@ if __name__ == '__main__':
         def _scheduled_tvtv_cache_refresh():
             try:
                 r = redis.from_url(flask_app.config['REDIS_URL'])
-                q = Queue('scraper', connection=r)
+                q = Queue('maintenance', connection=r)
                 job_id = 'tvtv-cache-refresh'
                 active_ids = set(q.get_job_ids()) | set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
                 if job_id in active_ids:
@@ -1816,6 +1816,13 @@ if __name__ == '__main__':
         logger.info('Fast worker listening on queue: fast')
         w.work(logging_level=logging.WARNING)
 
+    def _run_maintenance_worker():
+        r_maintenance = redis.from_url(flask_app.config['REDIS_URL'])
+        with Connection(r_maintenance):
+            worker = Worker(queues=[Queue('maintenance', connection=r_maintenance)])
+            logger.info('Maintenance worker listening on queue: maintenance')
+            worker.work(logging_level=logging.WARNING)
+
     def _run_scraper_worker():
         r = redis.from_url(flask_app.config['REDIS_URL'])
         with Connection(r):
@@ -1827,6 +1834,8 @@ if __name__ == '__main__':
         _run_scheduler()
     elif role == 'fast':
         _run_fast_worker()
+    elif role == 'maintenance':
+        _run_maintenance_worker()
     elif role == 'scraper':
         _run_scraper_worker()
     else:
