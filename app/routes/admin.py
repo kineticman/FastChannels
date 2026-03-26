@@ -100,6 +100,30 @@ def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
 
 
+def _apply_admin_feed_membership_filters(query, feed: Feed):
+    """Apply a feed's membership rules without forcing enabled/active output constraints."""
+    filters = feed_to_query_filters(feed.filters or {})
+    if channel_ids := filters.get('channel_ids'):
+        query = query.filter(Channel.id.in_(channel_ids))
+        return query
+    if sources := filters.get('source'):
+        query = query.filter(Source.name.in_(sources))
+    if categories := filters.get('category'):
+        query = query.filter(Channel.category.in_(categories))
+    if languages := filters.get('languages'):
+        query = query.filter(Channel.language.in_(languages))
+    elif language := filters.get('language'):
+        query = query.filter(Channel.language == language)
+    if gracenote := filters.get('gracenote'):
+        if gracenote == 'has':
+            query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+        elif gracenote == 'missing':
+            query = query.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+    if excluded_ids := filters.get('excluded_channel_ids'):
+        query = query.filter(Channel.id.notin_(excluded_ids))
+    return query
+
+
 def _feed_split_counts(feed: Feed) -> dict[str, int]:
     filters = feed_to_query_filters(feed.filters or {})
     query = _build_channel_query(filters).order_by(None)
@@ -182,6 +206,7 @@ def sources():
 @admin_bp.route('/channels')
 def channels():
     page             = request.args.get('page', 1, type=int)
+    feed_filter      = request.args.get('feed', '')
     source_filter    = request.args.get('source', '')
     search           = request.args.get('search', '')
     enabled_filter   = request.args.get('enabled', '')
@@ -199,6 +224,12 @@ def channels():
     all_duplicate_names = exact_duplicate_names | possible_duplicate_names
 
     q = Channel.query.join(Source)
+
+    selected_feed = None
+    if feed_filter:
+        selected_feed = Feed.query.filter_by(slug=feed_filter).first()
+        if selected_feed:
+            q = _apply_admin_feed_membership_filters(q, selected_feed)
 
     # Status filter — admin always shows all channels regardless of is_active
     if drm_filter == '1':
@@ -284,6 +315,10 @@ def channels():
         _order = [c.asc() for c in _cols]
 
     channels = q.order_by(*_order).paginate(page=page, per_page=50, error_out=False)
+    feeds_q = Feed.query.filter(Feed.is_enabled == True)
+    if feed_filter:
+        feeds_q = feeds_q.union(Feed.query.filter(Feed.slug == feed_filter))
+    feeds = feeds_q.order_by(Feed.name).all()
     sources_q = Source.query.filter(Source.is_enabled == True)
     if source_filter:
         sources_q = sources_q.union(
@@ -324,7 +359,8 @@ def channels():
     }
 
     return render_template('admin/channels.html',
-                           channels=channels, sources=sources,
+                           channels=channels, sources=sources, feeds=feeds,
+                           feed_filter=feed_filter, selected_feed=selected_feed,
                            source_filter=source_filter, search=search,
                            enabled_filter=enabled_filter, drm_filter=drm_filter,
                            presence_filter=presence_filter,

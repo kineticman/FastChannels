@@ -30,6 +30,7 @@ from .tasks import (
     trigger_xml_refresh,
 )
 from ..generators.m3u import (
+    feed_to_query_filters,
     get_global_chnum_overlaps,
 )
 from .. import logfile
@@ -94,6 +95,28 @@ def _manual_gracenote_clause():
 def _apply_channel_filters(q, filters: dict | None = None):
     filters = filters or {}
 
+    if feed_slug := filters.get('feed'):
+        feed = Feed.query.filter_by(slug=feed_slug).first()
+        if feed:
+            feed_filters = feed_to_query_filters(feed.filters or {})
+            if channel_ids := feed_filters.get('channel_ids'):
+                q = q.filter(Channel.id.in_(channel_ids))
+            else:
+                if sources := feed_filters.get('source'):
+                    q = q.filter(Source.name.in_(sources))
+                if categories := feed_filters.get('category'):
+                    q = q.filter(Channel.category.in_(categories))
+                if languages := feed_filters.get('languages'):
+                    q = q.filter(Channel.language.in_(languages))
+                elif language := feed_filters.get('language'):
+                    q = q.filter(Channel.language == language)
+                if gracenote := feed_filters.get('gracenote'):
+                    if gracenote == 'has':
+                        q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+                    elif gracenote == 'missing':
+                        q = q.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+                if excluded_ids := feed_filters.get('excluded_channel_ids'):
+                    q = q.filter(Channel.id.notin_(excluded_ids))
     if src := filters.get('source'):
         q = q.filter(Source.name == src)
     if cat := filters.get('category'):
