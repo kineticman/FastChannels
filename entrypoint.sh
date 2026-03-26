@@ -84,13 +84,27 @@ PY
 
 wait_for_network
 
-# Start background worker with watchdog — restarts automatically on crash or kill
+# Start isolated worker roles with watchdogs.
+# Conservative design:
+# - scheduler process only enqueues work and runs periodic maintenance
+# - scraper process handles the scraper queue (single concurrency)
+# - fast process handles immediate short-lived jobs
 (while true; do
-    python -m app.worker
-    echo "⚠ Worker exited (code $?) — restarting in 5s"
+    FC_WORKER_ROLE=scheduler python -m app.worker
+    echo "⚠ Scheduler worker exited (code $?) — restarting in 5s"
     sleep 5
 done) &
-echo "✅ Worker started (with watchdog)"
+(while true; do
+    FC_WORKER_ROLE=scraper python -m app.worker
+    echo "⚠ Scraper worker exited (code $?) — restarting in 5s"
+    sleep 5
+done) &
+(while true; do
+    FC_WORKER_ROLE=fast python -m app.worker
+    echo "⚠ Fast worker exited (code $?) — restarting in 5s"
+    sleep 5
+done) &
+echo "✅ Worker roles started (scheduler, scraper, fast)"
 
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 GUNICORN_MAX_REQUESTS="${GUNICORN_MAX_REQUESTS:-1000}"

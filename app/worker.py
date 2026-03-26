@@ -1607,7 +1607,9 @@ def _rq_integrity_cleanup():
 
 
 if __name__ == '__main__':
-    seed_sources()
+    import os
+
+    role = (os.environ.get('FC_WORKER_ROLE') or 'all').strip().lower()
 
     def _scheduled_prune():
         try:
@@ -1681,108 +1683,106 @@ if __name__ == '__main__':
             (logo_b + poster_b) / 1024 / 1024,
         )
 
-    scheduler = BackgroundScheduler(daemon=True)
-    scheduler.add_job(_schedule_due_scrapes, 'interval', minutes=1, id='auto_scrape',
-                      max_instances=1, coalesce=True)
-    scheduler.add_job(_scheduled_prune, 'interval', hours=1, id='epg_prune',
-                      max_instances=1, coalesce=True)
-    scheduler.add_job(_scheduled_integrity_cleanup, 'interval', days=1, id='integrity_cleanup',
-                      max_instances=1, coalesce=True)
-    scheduler.add_job(_scheduled_logo_cache_cleanup, 'interval', hours=6, id='logo_cache_cleanup',
-                      max_instances=1, coalesce=True)
+    def _run_scheduler():
+        scheduler = BackgroundScheduler(daemon=True)
+        scheduler.add_job(_schedule_due_scrapes, 'interval', minutes=1, id='auto_scrape',
+                          max_instances=1, coalesce=True)
+        scheduler.add_job(_scheduled_prune, 'interval', hours=1, id='epg_prune',
+                          max_instances=1, coalesce=True)
+        scheduler.add_job(_scheduled_integrity_cleanup, 'interval', days=1, id='integrity_cleanup',
+                          max_instances=1, coalesce=True)
+        scheduler.add_job(_scheduled_logo_cache_cleanup, 'interval', hours=6, id='logo_cache_cleanup',
+                          max_instances=1, coalesce=True)
 
-    def _scheduled_remote_gracenote_refresh():
-        from app.gracenote_map import fetch_remote_gracenote_map
-        with flask_app.app_context():
-            from app.models import AppSettings
-            url = AppSettings.get().effective_gracenote_map_url()
-        ok, msg = fetch_remote_gracenote_map(url)
-        if not ok:
-            logger.warning('[gracenote-map] scheduled remote refresh failed: %s', msg)
-
-    scheduler.add_job(_scheduled_remote_gracenote_refresh, 'interval', hours=24,
-                      id='gracenote_remote_refresh', max_instances=1, coalesce=True)
-
-    def _scheduled_tvtv_cache_refresh():
-        try:
-            r = redis.from_url(flask_app.config['REDIS_URL'])
-            q = Queue('scraper', connection=r)
-            job_id = 'tvtv-cache-refresh'
-            active_ids = set(q.get_job_ids()) | set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
-            if job_id in active_ids:
-                logger.info('[tvtv-cache] refresh already queued/running, skipping')
-                return
-            q.enqueue('app.worker.run_tvtv_cache_refresh', job_timeout=600, job_id=job_id)
-            logger.info('[tvtv-cache] enqueued refresh job')
-        except Exception as exc:
-            logger.warning('[tvtv-cache] could not enqueue via RQ (%s), falling back to thread', exc)
-            import threading
-            threading.Thread(target=run_tvtv_cache_refresh, daemon=True).start()
-
-    # 03:00 UTC (pre-dawn US) — well after the tvtv grid window resets at 04:00 UTC,
-    # so today + 2 days of data are all fresh.  15:00 UTC is a midday safety net
-    # in case the overnight run failed.
-    scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
-                      hour=3, minute=0,
-                      id='tvtv_cache_refresh_night', max_instances=1, coalesce=True,
-                      misfire_grace_time=3600)
-    scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
-                      hour=15, minute=0,
-                      id='tvtv_cache_refresh_day', max_instances=1, coalesce=True,
-                      misfire_grace_time=3600)
-
-    scheduler.start()
-    logger.info('Scheduler started — checking sources every 60s')
-    with flask_app.app_context():
-        _cleanup_orphans()
-        enabled_sources = Source.query.filter_by(is_enabled=True).count()
-        total_sources = Source.query.count()
-        from app.models import Feed
-        enabled_feeds = Feed.query.filter_by(is_enabled=True).count()
-        logger.info(
-            'Startup summary — enabled_sources=%d total_sources=%d enabled_feeds=%d',
-            enabled_sources,
-            total_sources,
-            enabled_feeds,
-        )
-        try:
-            _enqueue_xml_refresh_job()
-        except Exception:
-            logger.exception('[xml-cache] startup refresh failed')
-
-        # Trigger tvtv cache refresh at startup if the cache is empty or stale
-        # (last fetch older than 13 hours).  13h is just over half the gap between
-        # the two daily cron runs (03:00 / 15:00 UTC = 12h apart), so a container
-        # that restarts and misses a cron window will self-heal on the next boot.
-        try:
-            from app.models import TvtvProgramCache
-            from sqlalchemy import func as sa_func
-            from datetime import timezone as _tz
-            newest = db.session.query(sa_func.max(TvtvProgramCache.fetched_at)).scalar()
-            if newest is None:
-                stale = True
-            else:
-                if newest.tzinfo is None:
-                    newest = newest.replace(tzinfo=_tz.utc)
-                age_hours = (datetime.now(_tz.utc) - newest).total_seconds() / 3600
-                stale = age_hours > 13
-            if stale:
-                _scheduled_tvtv_cache_refresh()
-                logger.info('[tvtv-cache] stale/empty at startup (newest=%s) — triggered refresh', newest)
-        except Exception:
-            logger.exception('[tvtv-cache] startup staleness check failed')
-
-        # Fetch remote community Gracenote map on startup
-        try:
+        def _scheduled_remote_gracenote_refresh():
             from app.gracenote_map import fetch_remote_gracenote_map
-            url = AppSettings.get().effective_gracenote_map_url()
+            with flask_app.app_context():
+                from app.models import AppSettings
+                url = AppSettings.get().effective_gracenote_map_url()
             ok, msg = fetch_remote_gracenote_map(url)
-            if ok:
-                logger.info('[gracenote-map] startup remote fetch: %s', msg)
-            else:
-                logger.warning('[gracenote-map] startup remote fetch failed: %s', msg)
-        except Exception:
-            logger.exception('[gracenote-map] startup remote fetch error')
+            if not ok:
+                logger.warning('[gracenote-map] scheduled remote refresh failed: %s', msg)
+
+        scheduler.add_job(_scheduled_remote_gracenote_refresh, 'interval', hours=24,
+                          id='gracenote_remote_refresh', max_instances=1, coalesce=True)
+
+        def _scheduled_tvtv_cache_refresh():
+            try:
+                r = redis.from_url(flask_app.config['REDIS_URL'])
+                q = Queue('scraper', connection=r)
+                job_id = 'tvtv-cache-refresh'
+                active_ids = set(q.get_job_ids()) | set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
+                if job_id in active_ids:
+                    logger.info('[tvtv-cache] refresh already queued/running, skipping')
+                    return
+                q.enqueue('app.worker.run_tvtv_cache_refresh', job_timeout=600, job_id=job_id)
+                logger.info('[tvtv-cache] enqueued refresh job')
+            except Exception as exc:
+                logger.warning('[tvtv-cache] could not enqueue via RQ: %s', exc)
+
+        # 03:00 UTC (pre-dawn US) — well after the tvtv grid window resets at 04:00 UTC,
+        # so today + 2 days of data are all fresh.  15:00 UTC is a midday safety net
+        # in case the overnight run failed.
+        scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
+                          hour=3, minute=0,
+                          id='tvtv_cache_refresh_night', max_instances=1, coalesce=True,
+                          misfire_grace_time=3600)
+        scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
+                          hour=15, minute=0,
+                          id='tvtv_cache_refresh_day', max_instances=1, coalesce=True,
+                          misfire_grace_time=3600)
+
+        scheduler.start()
+        logger.info('Scheduler started — checking sources every 60s')
+        with flask_app.app_context():
+            _cleanup_orphans()
+            enabled_sources = Source.query.filter_by(is_enabled=True).count()
+            total_sources = Source.query.count()
+            from app.models import Feed
+            enabled_feeds = Feed.query.filter_by(is_enabled=True).count()
+            logger.info(
+                'Startup summary — enabled_sources=%d total_sources=%d enabled_feeds=%d',
+                enabled_sources,
+                total_sources,
+                enabled_feeds,
+            )
+            try:
+                _enqueue_xml_refresh_job()
+            except Exception:
+                logger.exception('[xml-cache] startup refresh failed')
+
+            # Trigger tvtv cache refresh at startup if the cache is empty or stale.
+            try:
+                from app.models import TvtvProgramCache
+                from sqlalchemy import func as sa_func
+                from datetime import timezone as _tz
+                newest = db.session.query(sa_func.max(TvtvProgramCache.fetched_at)).scalar()
+                if newest is None:
+                    stale = True
+                else:
+                    if newest.tzinfo is None:
+                        newest = newest.replace(tzinfo=_tz.utc)
+                    age_hours = (datetime.now(_tz.utc) - newest).total_seconds() / 3600
+                    stale = age_hours > 13
+                if stale:
+                    _scheduled_tvtv_cache_refresh()
+                    logger.info('[tvtv-cache] stale/empty at startup (newest=%s) — triggered refresh', newest)
+            except Exception:
+                logger.exception('[tvtv-cache] startup staleness check failed')
+
+            try:
+                from app.gracenote_map import fetch_remote_gracenote_map
+                url = AppSettings.get().effective_gracenote_map_url()
+                ok, msg = fetch_remote_gracenote_map(url)
+                if ok:
+                    logger.info('[gracenote-map] startup remote fetch: %s', msg)
+                else:
+                    logger.warning('[gracenote-map] startup remote fetch failed: %s', msg)
+            except Exception:
+                logger.exception('[gracenote-map] startup remote fetch error')
+
+        while True:
+            time.sleep(3600)
 
     class _NoopDeathPenalty(_BaseDeathPenalty):
         """Job timeout enforcer that does nothing — safe for non-main threads.
@@ -1816,15 +1816,19 @@ if __name__ == '__main__':
         logger.info('Fast worker listening on queue: fast')
         w.work(logging_level=logging.WARNING)
 
-    # Run the fast queue in a separate child process. Forking scraper work-horses
-    # from a process that already owns a live Python thread can deadlock on
-    # inherited locks; keeping the scraper worker single-threaded avoids that.
-    fast_process = multiprocessing.Process(target=_run_fast_worker, name='fast-worker')
-    fast_process.start()
-    logger.info('Fast worker process started (pid=%s)', fast_process.pid)
+    def _run_scraper_worker():
+        r = redis.from_url(flask_app.config['REDIS_URL'])
+        with Connection(r):
+            worker = Worker(queues=[Queue('scraper', connection=r)])
+            logger.info('Scraper worker listening on queue: scraper')
+            worker.work(logging_level=logging.WARNING)
 
-    r = redis.from_url(flask_app.config['REDIS_URL'])
-    with Connection(r):
-        worker = Worker(queues=[Queue('scraper', connection=r)])
-        logger.info('Scraper worker listening on queue: scraper')
-        worker.work(logging_level=logging.WARNING)
+    if role == 'scheduler':
+        _run_scheduler()
+    elif role == 'fast':
+        _run_fast_worker()
+    elif role == 'scraper':
+        _run_scraper_worker()
+    else:
+        logger.error('Unknown FC_WORKER_ROLE=%r', role)
+        sys.exit(2)
