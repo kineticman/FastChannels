@@ -203,14 +203,20 @@ def run_scraper(source_name: str, force_full: bool = False):
                         f'[{source_name}] {phase_name} phase timed out after {timeout_seconds}s'
                     )
 
-                previous = signal.getsignal(signal.SIGALRM)
+                previous_handler = signal.getsignal(signal.SIGALRM)
+                parent_remaining, _ = signal.getitimer(signal.ITIMER_REAL)
                 signal.signal(signal.SIGALRM, _alarm_handler)
                 signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+                phase_start = _time.monotonic()
                 try:
                     return fn(*args, **kwargs)
                 finally:
+                    phase_elapsed = _time.monotonic() - phase_start
                     signal.setitimer(signal.ITIMER_REAL, 0)
-                    signal.signal(signal.SIGALRM, previous)
+                    signal.signal(signal.SIGALRM, previous_handler)
+                    if parent_remaining > 0:
+                        new_remaining = max(1, parent_remaining - phase_elapsed)
+                        signal.setitimer(signal.ITIMER_REAL, new_remaining)
 
             logger.info('[%s] scraper init starting', source_name)
             scraper = _run_phase('init', scraper_cls, config=source.config or {})
@@ -1496,7 +1502,7 @@ def _schedule_due_scrapes():
                         logger.info('[scheduler] %s already queued/running; skipping duplicate enqueue', source.name)
                         _last_enqueued[source.name] = now
                         continue
-                    q.enqueue('app.worker.run_scraper', source.name, job_timeout=3600, job_id=f'scrape-{source.name}')
+                    q.enqueue('app.worker.run_scraper', source.name, job_timeout=600, job_id=f'scrape-{source.name}')
                     _last_enqueued[source.name] = now
                     logger.info('[scheduler] Enqueued %s (interval=%dm, age=%s)',
                                 source.name, source.scrape_interval,
