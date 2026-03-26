@@ -29,6 +29,7 @@ mkdir -p /data
 # so the worker and gunicorn don't race each other for the SQLite write lock.
 cd /app
 python -c "from app import create_app; app = create_app()"
+python /app/run_migrations.py
 export FC_SCHEMA_READY=1
 echo "✅ DB ready"
 
