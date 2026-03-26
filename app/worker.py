@@ -1784,9 +1784,12 @@ if __name__ == '__main__':
         logger.info('Fast worker listening on queue: fast')
         w.work(logging_level=logging.WARNING)
 
-    fast_thread = threading.Thread(target=_run_fast_worker, daemon=True, name='fast-worker')
-    fast_thread.start()
-    logger.info('Fast worker thread started')
+    # Run the fast queue in a separate child process. Forking scraper work-horses
+    # from a process that already owns a live Python thread can deadlock on
+    # inherited locks; keeping the scraper worker single-threaded avoids that.
+    fast_process = multiprocessing.Process(target=_run_fast_worker, daemon=True, name='fast-worker')
+    fast_process.start()
+    logger.info('Fast worker process started (pid=%s)', fast_process.pid)
 
     r = redis.from_url(flask_app.config['REDIS_URL'])
     with Connection(r):
