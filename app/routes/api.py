@@ -40,7 +40,7 @@ from ..xml_cache import (
     get_xml_artifact,
     invalidate_xml_cache,
 )
-from .admin import _duplicate_name_sets
+from .admin import _apply_admin_feed_membership_filters, _duplicate_name_sets
 
 api_bp = Blueprint('api', __name__)
 
@@ -98,25 +98,7 @@ def _apply_channel_filters(q, filters: dict | None = None):
     if feed_slug := filters.get('feed'):
         feed = Feed.query.filter_by(slug=feed_slug).first()
         if feed:
-            feed_filters = feed_to_query_filters(feed.filters or {})
-            if channel_ids := feed_filters.get('channel_ids'):
-                q = q.filter(Channel.id.in_(channel_ids))
-            else:
-                if sources := feed_filters.get('source'):
-                    q = q.filter(Source.name.in_(sources))
-                if categories := feed_filters.get('category'):
-                    q = q.filter(Channel.category.in_(categories))
-                if languages := feed_filters.get('languages'):
-                    q = q.filter(Channel.language.in_(languages))
-                elif language := feed_filters.get('language'):
-                    q = q.filter(Channel.language == language)
-                if gracenote := feed_filters.get('gracenote'):
-                    if gracenote == 'has':
-                        q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
-                    elif gracenote == 'missing':
-                        q = q.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
-                if excluded_ids := feed_filters.get('excluded_channel_ids'):
-                    q = q.filter(Channel.id.notin_(excluded_ids))
+            q = _apply_admin_feed_membership_filters(q, feed)
     if src := filters.get('source'):
         q = q.filter(Source.name == src)
     if cat := filters.get('category'):
