@@ -71,104 +71,11 @@ def _duplicate_name_sets() -> tuple[set[str], set[str]]:
 def _page_source_chnum_map(page_items) -> dict[int, int]:
     if not page_items:
         return {}
-
-    source_names = sorted({ch.source.name for ch in page_items if ch.source and ch.source.name})
-    if not source_names:
-        return {}
-
-    count_rows = (
-        db.session.query(
-            Source.name,
-            Source.display_name,
-            Source.chnum_start,
-            db.func.count(Channel.id),
-        )
-        .join(Channel)
-        .filter(Channel.is_active == True)
-        .group_by(Source.name, Source.display_name, Source.chnum_start)
-        .all()
+    full_map, _warnings = _build_source_chnum_map(
+        _selected_channel_stubs({}, gracenote=False)
     )
-
-    source_meta = {
-        name: {
-            'display_name': display_name or name,
-            'chnum_start': chnum_start,
-            'count': count,
-        }
-        for name, display_name, chnum_start, count in count_rows
-    }
-
-    global_start = None
-    try:
-        global_start = AppSettings.get().effective_global_chnum_start()
-    except Exception:
-        pass
-
-    base_map: dict[str, int] = {}
-    if global_start is not None:
-        unconfigured = sorted(
-            (
-                (name, meta)
-                for name, meta in source_meta.items()
-                if not meta['chnum_start']
-            ),
-            key=lambda item: (
-                item[1]['display_name'].lower(),
-                item[0],
-            ),
-        )
-        cursor = global_start
-        for name, meta in unconfigured:
-            base_map[name] = cursor
-            cursor += meta['count']
-
-    order_expr = (
-        case((Channel.number == None, 1), else_=0),
-        db.func.coalesce(Channel.number, 0),
-        db.func.lower(Channel.name),
-        db.func.coalesce(Channel.source_channel_id, ''),
-    )
-
-    ranked = (
-        db.session.query(
-            Channel.id.label('channel_id'),
-            Source.name.label('source_name'),
-            db.func.row_number().over(
-                partition_by=Source.name,
-                order_by=order_expr,
-            ).label('rownum'),
-        )
-        .join(Source)
-        .filter(Channel.is_active == True, Source.name.in_(source_names))
-        .subquery()
-    )
-
-    page_ids = [ch.id for ch in page_items]
-    rank_rows = (
-        db.session.query(ranked.c.channel_id, ranked.c.source_name, ranked.c.rownum)
-        .filter(ranked.c.channel_id.in_(page_ids))
-        .all()
-    )
-
-    chnum_map: dict[int, int] = {}
-    for channel_id, source_name, rownum in rank_rows:
-        meta = source_meta.get(source_name)
-        if not meta:
-            continue
-        if meta['chnum_start']:
-            base = meta['chnum_start']
-        else:
-            base = base_map.get(source_name)
-        if base is None:
-            continue
-        chnum_map[channel_id] = base + rownum - 1
-
-    # Pinned channels override the rank-based assignment.
-    for ch in page_items:
-        if ch.number_pinned and ch.number is not None:
-            chnum_map[ch.id] = ch.number
-
-    return chnum_map
+    page_ids = {ch.id for ch in page_items}
+    return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
 
 
 def _page_default_feed_chnum_map(page_items) -> dict[int, int]:

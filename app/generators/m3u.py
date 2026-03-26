@@ -318,6 +318,13 @@ def _build_source_chnum_map(channels):
             ch.source_channel_id or '',
         )
 
+    def _is_usable_number(ch, candidate: int | None, *, min_value: int | None) -> bool:
+        if candidate is None:
+            return False
+        if min_value is not None and candidate < min_value:
+            return False
+        return True
+
     # Group channels by source, then sort each source's channels independently.
     # This keeps the global tvg-chno blocks stable even when the mixed query
     # order shifts as scrapers add/remove channels in other sources.
@@ -365,15 +372,18 @@ def _build_source_chnum_map(channels):
     except Exception:
         pass
 
-    # Collect all pinned numbers up front so sequential assignment can skip them.
+    # Collect all pinned numbers up front so assignment can never displace them.
     pinned_numbers: set[int] = set()
     for src_chs in by_source.values():
         for ch in src_chs:
             if getattr(ch, 'number_pinned', False) and ch.number is not None:
                 pinned_numbers.add(ch.number)
 
-    # Assign numbers
+    # Assign numbers. Existing non-pinned Channel.number values are treated as
+    # sticky auto numbers: keep them when still valid and free, only allocate
+    # fresh values for channels that are new, missing a number, or now conflict.
     chnum_map: dict[int, int] = {}
+    used_numbers: set[int] = set(pinned_numbers)
     global_cursor = global_start  # tracks next number for ungrouped sources
     ordered_sources = sorted(
         by_source,
@@ -390,23 +400,41 @@ def _build_source_chnum_map(channels):
         if src in source_starts:
             start = source_starts[src]
             cursor = start
+            unassigned = []
             for ch in chs:
                 if getattr(ch, 'number_pinned', False) and ch.number is not None:
                     chnum_map[ch.id] = ch.number
+                    used_numbers.add(ch.number)
+                    continue
+                if _is_usable_number(ch, ch.number, min_value=start) and ch.number not in used_numbers:
+                    chnum_map[ch.id] = ch.number
+                    used_numbers.add(ch.number)
                 else:
-                    while cursor in pinned_numbers:
+                    unassigned.append(ch)
+            for ch in unassigned:
+                while cursor in used_numbers:
                         cursor += 1
-                    chnum_map[ch.id] = cursor
-                    cursor += 1
+                chnum_map[ch.id] = cursor
+                used_numbers.add(cursor)
+                cursor += 1
         elif global_cursor is not None:
+            unassigned = []
             for ch in chs:
                 if getattr(ch, 'number_pinned', False) and ch.number is not None:
                     chnum_map[ch.id] = ch.number
+                    used_numbers.add(ch.number)
+                    continue
+                if _is_usable_number(ch, ch.number, min_value=global_start) and ch.number not in used_numbers:
+                    chnum_map[ch.id] = ch.number
+                    used_numbers.add(ch.number)
                 else:
-                    while global_cursor in pinned_numbers:
+                    unassigned.append(ch)
+            for ch in unassigned:
+                while global_cursor in used_numbers:
                         global_cursor += 1
-                    chnum_map[ch.id] = global_cursor
-                    global_cursor += 1
+                chnum_map[ch.id] = global_cursor
+                used_numbers.add(global_cursor)
+                global_cursor += 1
 
     return chnum_map, warnings
 

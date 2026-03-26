@@ -1264,6 +1264,39 @@ def _resolved_logo_url(existing_logo: str | None, incoming_logo: str | None, cac
     return current
 
 
+def _refresh_auto_channel_numbers() -> None:
+    """Assign stable automatic numbers to non-pinned active channels.
+
+    Channel.number is system-managed unless the user pins it. Scraper-supplied
+    numbers are ignored; this allocator preserves existing non-pinned numbers
+    where possible and only fills gaps for channels that are new or invalid.
+    """
+    from app.generators.m3u import _build_source_chnum_map
+
+    channels = (
+        Channel.query
+        .join(Source)
+        .filter(
+            Channel.is_active == True,
+            Channel.is_enabled == True,
+            Source.is_enabled == True,
+            Source.epg_only == False,
+            Channel.stream_url != None,
+        )
+        .all()
+    )
+    if not channels:
+        return
+
+    chnum_map, _warnings = _build_source_chnum_map(channels)
+    for ch in channels:
+        if ch.number_pinned:
+            continue
+        next_number = chnum_map.get(ch.id)
+        if ch.number != next_number:
+            ch.number = next_number
+
+
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
     logo_validation_cache: dict[str, bool] = {}
@@ -1303,8 +1336,6 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             ch.category      = ch.category_override or category_for_channel(cd.name, cd.category)
             ch.language      = cd.language
             ch.country       = cd.country
-            if not ch.number_pinned:
-                ch.number    = cd.number
             if getattr(cd, 'guide_key', None):
                 ch.guide_key = cd.guide_key
             # Don't resurrect channels the stream audit flagged as Dead or DRM
@@ -1335,7 +1366,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 category          = category_for_channel(cd.name, cd.category),
                 language          = cd.language,
                 country           = cd.country,
-                number            = cd.number,
+                number            = None,
                 gracenote_id      = gracenote_id if gracenote_auto_fill else None,
                 gracenote_locked  = False,
                 gracenote_mode    = 'auto',
@@ -1383,6 +1414,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                         ch.name,
                         ch.source_channel_id,
                     )
+    _refresh_auto_channel_numbers()
     db.session.flush()
 
 
