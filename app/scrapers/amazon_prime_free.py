@@ -22,15 +22,22 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
     - Scrapes channel metadata from the Live TV page and paginated collection API.
     - Builds near-term EPG from the station.schedule arrays embedded in those responses.
-    - Uses Playwright to resolve live DASH stream URLs at scrape time (cached ~1.5 h).
-    - Streams are CENC-encrypted DASH (Widevine + PlayReady).  Clients with DRM
-      support (e.g. Kodi + inputstream.adaptive) can play them; others will not.
+    - Stream URLs are CENC-encrypted DASH (Widevine + PlayReady); resolved lazily on
+      first play via resolve() using Playwright (cached ~1.5 h in source.config).
+      DRM-capable clients only (e.g. Kodi + inputstream.adaptive).
     """
 
     source_name = "amazon_prime_free"
     source_aliases = ("amazon-prime-free",)
     display_name = "Amazon Prime Free Channels"
     scrape_interval = 100  # minutes — keep well under the 2-hour DASH URL TTL
+
+    phase_timeouts = {
+        "init":      30,
+        "bootstrap": 60,
+        "channels":  120,
+        "epg":       300,
+    }
 
     config_schema = [
         ConfigField(
@@ -208,18 +215,22 @@ class AmazonPrimeFreeScraper(BaseScraper):
         channels.sort(key=lambda c: c.name.lower())
         logger.info("[%s] %d channels", self.source_name, len(channels))
 
-        # Resolve live DASH stream URLs for all channels via Playwright.
-        if self._cookie_header and channels:
-            station_ids = [ch.source_channel_id for ch in channels]
-            url_map = self._playwright_resolve_channels(station_ids)
-            if url_map:
-                expires_at = time.time() + self._STREAM_URL_TTL
-                for gip, url in url_map.items():
-                    self._stream_url_cache[gip] = {"url": url, "expires_at": expires_at}
-                self._pending_config_updates["stream_url_cache"] = dict(self._stream_url_cache)
-                logger.info("[%s] cached %d/%d stream URLs (TTL ~%.0f min)",
-                            self.source_name, len(url_map), len(station_ids),
-                            self._STREAM_URL_TTL / 60)
+        # Prune expired stream URL cache entries so the stored config doesn't grow unbounded.
+        # Active (non-expired) entries are kept — they will be served by resolve() as-is.
+        # New URLs are resolved lazily on first play via resolve(), not pre-cached here.
+        # (Bulk pre-resolution is infeasible: the SDK serializes requests at ~13 s/channel,
+        #  so 800+ channels would take ~3 hours — far beyond any scrape phase timeout.)
+        now = time.time()
+        valid_cache = {
+            gip: entry for gip, entry in self._stream_url_cache.items()
+            if entry.get("expires_at", 0) > now
+        }
+        if len(valid_cache) != len(self._stream_url_cache):
+            pruned = len(self._stream_url_cache) - len(valid_cache)
+            logger.info("[%s] pruned %d expired stream URL cache entries (%d still valid)",
+                        self.source_name, pruned, len(valid_cache))
+            self._stream_url_cache = valid_cache
+            self._pending_config_updates["stream_url_cache"] = dict(valid_cache)
 
         return channels
 
@@ -430,8 +441,8 @@ class AmazonPrimeFreeScraper(BaseScraper):
                 page.wait_for_timeout(500)
 
                 # Fire requestResources for all channels.
-                # We don't wait for each response; collect them asynchronously.
-                batch_size = 15
+                # The SDK dispatches each call as an independent async HTTP request,
+                # so we fire rapidly and then wait for all responses to arrive.
                 logger.info("[%s] firing requestResources for %d channels...",
                             self.source_name, len(station_ids))
                 for i, gip in enumerate(station_ids):
@@ -449,16 +460,23 @@ class AmazonPrimeFreeScraper(BaseScraper):
                         }""",
                         gip,
                     )
-                    page.wait_for_timeout(350)
+                    page.wait_for_timeout(80)
 
-                    # Every batch_size channels, pause to let responses accumulate
-                    if (i + 1) % batch_size == 0:
-                        page.wait_for_timeout(5000)
-                        logger.debug("[%s] resolved %d/%d so far",
-                                     self.source_name, len(results), len(station_ids))
+                    if (i + 1) % 100 == 0:
+                        logger.debug("[%s] fired %d/%d requests, %d resolved so far",
+                                     self.source_name, i + 1, len(station_ids), len(results))
 
-                # Final wait for stragglers
-                page.wait_for_timeout(12000)
+                # Wait for in-flight PRS responses to arrive
+                logger.info("[%s] all %d requests fired, waiting for responses...",
+                            self.source_name, len(station_ids))
+                deadline = time.time() + 120  # up to 2 min for responses to drain
+                while len(results) < len(station_ids) and time.time() < deadline:
+                    page.wait_for_timeout(2000)
+                    logger.debug("[%s] %d/%d resolved",
+                                 self.source_name, len(results), len(station_ids))
+
+                page.close()
+                ctx.close()
                 browser.close()
 
         except Exception as exc:
