@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Channel Changes Report — FastChannels</title>
+  <style>
+    html { font-size: 17px; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+    nav {
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      min-height: 56px;
+      flex-wrap: wrap;
+    }
+    nav .version { margin-left: auto; color: #475569; font-size: 0.75rem; }
+    nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
+    nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
+    nav a:hover, nav a.active { color: #e2e8f0; }
+    .page { max-width: 1220px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+    .hero {
+      display: flex;
+      justify-content: space-between;
+      gap: 1.25rem;
+      align-items: flex-start;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .hero h1 { font-size: 1.75rem; margin-bottom: 0.4rem; }
+    .subtitle { color: #94a3b8; line-height: 1.55; max-width: 760px; }
+    .timestamp { color: #64748b; font-size: 0.85rem; }
+    .banner {
+      background: linear-gradient(135deg, #1e293b 0%, #172554 100%);
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 1rem 1.1rem;
+      margin-bottom: 1.25rem;
+    }
+    .banner strong { color: #f8fafc; }
+    .banner p { color: #cbd5e1; line-height: 1.5; font-size: 0.92rem; }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.25rem;
+    }
+    .toolbar-label { color: #94a3b8; font-size: 0.82rem; margin-right: 0.1rem; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 3.2rem;
+      padding: 0.38rem 0.75rem;
+      border-radius: 999px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #cbd5e1;
+      text-decoration: none;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .chip:hover, .chip.active {
+      color: #f8fafc;
+      border-color: #0ea5e9;
+      background: #082f49;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 0.9rem;
+      margin-bottom: 1.5rem;
+    }
+    .stat {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 1rem;
+    }
+    .stat-label {
+      color: #94a3b8;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.35rem;
+    }
+    .stat-value { font-size: 1.6rem; font-weight: 700; color: #f8fafc; }
+    .stat-sub { color: #64748b; font-size: 0.8rem; margin-top: 0.2rem; line-height: 1.45; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 1rem 1.05rem;
+    }
+    .card h2 {
+      font-size: 1rem;
+      color: #7dd3fc;
+      margin-bottom: 0.25rem;
+    }
+    .card .section-subtitle {
+      color: #94a3b8;
+      font-size: 0.84rem;
+      line-height: 1.45;
+      margin-bottom: 0.85rem;
+    }
+    .source-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      margin-bottom: 0.85rem;
+    }
+    .badge {
+      display: inline-flex;
+      gap: 0.4rem;
+      align-items: center;
+      padding: 0.28rem 0.55rem;
+      border-radius: 999px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #cbd5e1;
+      font-size: 0.78rem;
+    }
+    .badge strong { color: #f8fafc; }
+    .mini-heading {
+      color: #64748b;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.45rem;
+    }
+    .rows { display: grid; gap: 0.55rem; }
+    .row {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 0.75rem 0.85rem;
+    }
+    .row-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      align-items: baseline;
+      flex-wrap: wrap;
+      margin-bottom: 0.18rem;
+    }
+    .row-title { color: #f8fafc; font-weight: 600; }
+    .row-source { color: #7dd3fc; font-size: 0.8rem; }
+    .row-meta { color: #94a3b8; font-size: 0.78rem; line-height: 1.45; }
+    .row-meta code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #7dd3fc;
+      background: #020617;
+      padding: 0.08rem 0.28rem;
+      border-radius: 4px;
+    }
+    .row-note {
+      color: #fbbf24;
+      font-size: 0.75rem;
+      margin-top: 0.35rem;
+    }
+    .empty {
+      border: 1px dashed #334155;
+      border-radius: 10px;
+      padding: 1rem;
+      color: #64748b;
+      font-size: 0.86rem;
+      text-align: center;
+    }
+    .footer-note {
+      margin-top: 1rem;
+      color: #94a3b8;
+      font-size: 0.84rem;
+      line-height: 1.55;
+    }
+    @media (max-width: 760px) {
+      html { font-size: 16px; }
+      nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
+      nav h1 { width: 100%; }
+      nav .version { margin-left: 0; width: 100%; order: 99; }
+      .page { padding: 1.25rem 1rem 2rem; }
+      .stats { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <h1>⚡ FastChannels</h1>
+    <a href="/admin/">Dashboard</a>
+    <a href="/admin/sources">Sources</a>
+    <a href="/admin/channels">Channels</a>
+    <a href="/admin/feeds">Feeds</a>
+    <a href="/admin/settings">Settings</a>
+    <a href="/admin/logs">Logs</a>
+    <a href="/admin/help">Help</a>
+    <a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="{% if update_status.update_available %}Update available: {{ update_status.latest_version }}{% else %}View FastChannels on GitHub{% endif %}">v{{ app_version }}{% if update_status.update_available %} <span style="color:#fbbf24;">Update: {{ update_status.latest_version }}</span>{% endif %}</a>
+  </nav>
+
+  <div class="page">
+    <div class="hero">
+      <div>
+        <h1>Channel Changes Report</h1>
+        <p class="subtitle">
+          Prototype change report built from the data FastChannels already stores today.
+          “New” is based on <code>created_at</code>. “Now inactive” is inferred from <code>is_active = false</code>
+          rows updated within the selected window, so it is operationally useful but not a precise historical loss log.
+        </p>
+      </div>
+      <div class="timestamp">
+        Generated {{ now|localtime }}
+      </div>
+    </div>
+
+    <div class="banner">
+      <p><strong>Prototype caveat:</strong> this page deliberately uses cautious wording. It shows what the current schema can support without adding event history or changing the database.</p>
+    </div>
+
+    <div class="toolbar">
+      <span class="toolbar-label">Window</span>
+      {% for key, days in window_options.items() %}
+      <a class="chip {% if key == selected_window %}active{% endif %}" href="/admin/reports/channel-changes?window={{ key }}">
+        {% if key == '1d' %}Today{% else %}{{ days }} Days{% endif %}
+      </a>
+      {% endfor %}
+    </div>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">New{% if window_days == 1 %} Today{% else %} in Window{% endif %}</div>
+        <div class="stat-value">{{ new_rows|length }}</div>
+        <div class="stat-sub">Channels first inserted since {{ window_start|localtime }}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Now Inactive{% if window_days == 1 %} Today{% else %} in Window{% endif %}</div>
+        <div class="stat-value">{{ inferred_lost_rows|length }}</div>
+        <div class="stat-sub">Inactive rows updated since {{ window_start|localtime }}, not guaranteed exact loss time</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">At Risk</div>
+        <div class="stat-value">{{ at_risk_rows|length }}</div>
+        <div class="stat-sub">Active rows with <code>missed_scrapes &gt; 0</code></div>
+      </div>
+      {% if lg_summary %}
+      <div class="stat">
+        <div class="stat-label">{{ lg_summary.display_name }}</div>
+        <div class="stat-value">{{ lg_summary.program_count }}</div>
+        <div class="stat-sub">{{ lg_summary.active_channels }} active channels, {{ lg_summary.active_missing_epg }} active channels missing EPG</div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <h2>New{% if window_days == 1 %} Today{% else %} in Last {{ window_days }} Days{% endif %}</h2>
+        <div class="section-subtitle">Best current signal for lineup additions. Good candidate for a user-facing digest.</div>
+        {% if new_daily_counts %}
+        <div class="mini-heading">Daily Buckets</div>
+        <div class="source-list">
+          {% for day, count in new_daily_counts %}
+          <span class="badge"><strong>{{ count }}</strong> {{ day }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+        <div class="mini-heading">By Source</div>
+        <div class="source-list">
+          {% for source, count in new_counts %}
+          <span class="badge"><strong>{{ count }}</strong> {{ source }}</span>
+          {% endfor %}
+          {% if not new_counts %}
+          <span class="badge">No new rows in window</span>
+          {% endif %}
+        </div>
+        <div class="rows">
+          {% for channel, source in new_rows[:12] %}
+          <div class="row">
+            <div class="row-top">
+              <div class="row-title">{{ channel.name }}</div>
+              <div class="row-source">{{ source.display_name }}</div>
+            </div>
+            <div class="row-meta">
+              Inserted {{ channel.created_at|localtime }} ·
+              Channel ID <code>{{ channel.source_channel_id }}</code>
+            </div>
+          </div>
+          {% else %}
+          <div class="empty">No new channels have been inserted in this window.</div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Now Inactive{% if window_days == 1 %} Today{% else %} in Last {{ window_days }} Days{% endif %}</h2>
+        <div class="section-subtitle">Useful for operations, but these are inferred losses. Some rows may be long-stale channels that only flipped or were touched within the window.</div>
+        {% if inferred_lost_daily_counts %}
+        <div class="mini-heading">Daily Buckets</div>
+        <div class="source-list">
+          {% for day, count in inferred_lost_daily_counts %}
+          <span class="badge"><strong>{{ count }}</strong> {{ day }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+        <div class="mini-heading">By Source</div>
+        <div class="source-list">
+          {% for source, count in inferred_lost_counts %}
+          <span class="badge"><strong>{{ count }}</strong> {{ source }}</span>
+          {% endfor %}
+          {% if not inferred_lost_counts %}
+          <span class="badge">No inactive updates in window</span>
+          {% endif %}
+        </div>
+        <div class="rows">
+          {% for channel, source in inferred_lost_rows[:12] %}
+          <div class="row">
+            <div class="row-top">
+              <div class="row-title">{{ channel.name }}</div>
+              <div class="row-source">{{ source.display_name }}</div>
+            </div>
+            <div class="row-meta">
+              Updated {{ channel.updated_at|localtime }} ·
+              Last seen {% if channel.last_seen_at %}{{ channel.last_seen_at|localtime }}{% else %}unknown{% endif %} ·
+              Missed scrapes {{ channel.missed_scrapes or 0 }}
+            </div>
+            {% if not channel.last_seen_at or (channel.missed_scrapes or 0) >= 3 %}
+            <div class="row-note">This may be a stale historical row rather than a clean same-day loss event.</div>
+            {% endif %}
+          </div>
+          {% else %}
+          <div class="empty">No inactive channel rows were updated in this window.</div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>At Risk</h2>
+        <div class="section-subtitle">Channels still active, but already missing from one or more recent scrapes. Best early-warning section.</div>
+        <div class="source-list">
+          {% for source, count in at_risk_counts %}
+          <span class="badge"><strong>{{ count }}</strong> {{ source }}</span>
+          {% endfor %}
+          {% if not at_risk_counts %}
+          <span class="badge">No at-risk rows</span>
+          {% endif %}
+        </div>
+        <div class="rows">
+          {% for channel, source in at_risk_rows[:12] %}
+          <div class="row">
+            <div class="row-top">
+              <div class="row-title">{{ channel.name }}</div>
+              <div class="row-source">{{ source.display_name }}</div>
+            </div>
+            <div class="row-meta">
+              Missed scrapes {{ channel.missed_scrapes or 0 }} ·
+              Last seen {% if channel.last_seen_at %}{{ channel.last_seen_at|localtime }}{% else %}unknown{% endif %} ·
+              Channel ID <code>{{ channel.source_channel_id }}</code>
+            </div>
+          </div>
+          {% else %}
+          <div class="empty">No active channels are currently flagged as at risk.</div>
+          {% endfor %}
+        </div>
+      </section>
+
+      {% if lg_summary %}
+      <section class="card">
+        <h2>{{ lg_summary.display_name }} Snapshot</h2>
+        <div class="section-subtitle">Current scrape-health view for the provider we just validated.</div>
+        <div class="rows">
+          <div class="row">
+            <div class="row-top">
+              <div class="row-title">Current state</div>
+            </div>
+            <div class="row-meta">
+              Last scraped {{ lg_summary.last_scraped_at|localtime if lg_summary.last_scraped_at else 'never' }} ·
+              Interval {{ lg_summary.scrape_interval }} minutes
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-top">
+              <div class="row-title">{{ lg_summary.active_channels }} active channels</div>
+            </div>
+            <div class="row-meta">
+              {{ lg_summary.program_count }} stored program rows ·
+              {{ lg_summary.active_missing_epg }} active channels currently missing guide data
+            </div>
+          </div>
+        </div>
+      </section>
+      {% endif %}
+    </div>
+
+    <p class="footer-note">
+      If this prototype becomes a real feature, the next step is explicit transition tracking:
+      <code>first_seen_at</code>, <code>lost_at</code>, or a dedicated channel events table. That would let this page graduate from “inferred operational report” to a precise change history.
+    </p>
+  </div>
+</body>
+</html>

@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 from types import SimpleNamespace
 import unicodedata
@@ -479,6 +479,122 @@ def settings():
 @admin_bp.route('/logs')
 def logs():
     return render_template('admin/logs.html')
+
+
+@admin_bp.route('/reports/channel-changes')
+def channel_changes_report():
+    now = datetime.now(timezone.utc)
+    window_options = {
+        '1d': 1,
+        '3d': 3,
+        '7d': 7,
+        '30d': 30,
+    }
+    selected_window = (request.args.get('window') or '1d').strip().lower()
+    if selected_window not in window_options:
+        selected_window = '1d'
+    window_days = window_options[selected_window]
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    window_start = today_start - timedelta(days=window_days - 1)
+
+    new_rows = (
+        db.session.query(Channel, Source)
+        .join(Source, Source.id == Channel.source_id)
+        .filter(Channel.created_at >= window_start)
+        .order_by(Channel.created_at.desc(), Source.display_name.asc(), Channel.name.asc())
+        .all()
+    )
+
+    inferred_lost_rows = (
+        db.session.query(Channel, Source)
+        .join(Source, Source.id == Channel.source_id)
+        .filter(
+            Channel.is_active == False,
+            Channel.updated_at >= window_start,
+        )
+        .order_by(Channel.updated_at.desc(), Source.display_name.asc(), Channel.name.asc())
+        .all()
+    )
+
+    at_risk_rows = (
+        db.session.query(Channel, Source)
+        .join(Source, Source.id == Channel.source_id)
+        .filter(
+            Channel.is_active == True,
+            Channel.missed_scrapes > 0,
+        )
+        .order_by(Channel.missed_scrapes.desc(), Channel.last_seen_at.asc(), Source.display_name.asc(), Channel.name.asc())
+        .all()
+    )
+
+    def _group_counts(rows):
+        counts: dict[str, int] = defaultdict(int)
+        for _channel, source in rows:
+            counts[source.display_name] += 1
+        return sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold()))
+
+    def _daily_counts(rows, attr_name: str):
+        counts: dict[str, int] = defaultdict(int)
+        for channel, _source in rows:
+            dt = getattr(channel, attr_name, None)
+            if not dt:
+                continue
+            counts[dt.date().isoformat()] += 1
+        return sorted(counts.items(), key=lambda item: item[0], reverse=True)
+
+    active_missing_epg = (
+        db.session.query(db.func.count(Channel.id))
+        .join(Source, Source.id == Channel.source_id)
+        .filter(
+            Source.name == 'lg-channels',
+            Channel.is_active == True,
+            Channel.is_enabled == True,
+            ~Channel.programs.any(),
+        )
+        .scalar()
+        or 0
+    )
+
+    lg_source = Source.query.filter_by(name='lg-channels').first()
+    lg_summary = None
+    if lg_source:
+        lg_channels = Channel.query.filter_by(source_id=lg_source.id, is_active=True).count()
+        lg_programs = (
+            db.session.query(db.func.count())
+            .select_from(Channel)
+            .join(Source, Source.id == Channel.source_id)
+            .join(Channel.programs)
+            .filter(Source.name == 'lg-channels')
+            .scalar()
+            or 0
+        )
+        lg_summary = {
+            'display_name': lg_source.display_name,
+            'last_scraped_at': lg_source.last_scraped_at,
+            'scrape_interval': lg_source.scrape_interval,
+            'active_channels': lg_channels,
+            'program_count': lg_programs,
+            'active_missing_epg': active_missing_epg,
+        }
+
+    return render_template(
+        'admin/channel_changes_report.html',
+        now=now,
+        today_start=today_start,
+        window_start=window_start,
+        selected_window=selected_window,
+        window_days=window_days,
+        window_options=window_options,
+        new_rows=new_rows,
+        new_counts=_group_counts(new_rows),
+        new_daily_counts=_daily_counts(new_rows, 'created_at'),
+        inferred_lost_rows=inferred_lost_rows,
+        inferred_lost_counts=_group_counts(inferred_lost_rows),
+        inferred_lost_daily_counts=_daily_counts(inferred_lost_rows, 'updated_at'),
+        at_risk_rows=at_risk_rows,
+        at_risk_counts=_group_counts(at_risk_rows),
+        lg_summary=lg_summary,
+    )
 
 
 @admin_bp.route('/help')
