@@ -849,11 +849,12 @@ def update_source(source_id):
         source.epg_only = bool(data['epg_only'])
         changed = True
     if changed:
-        with db.session.no_autoflush:
-            warnings = get_global_chnum_overlaps()
-        if warnings:
+        baseline_warnings = set(get_global_chnum_overlaps())
+        db.session.flush()
+        new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
+        if new_warnings:
             db.session.rollback()
-            return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
+            return jsonify({'error': 'Channel number overlaps detected', 'warnings': new_warnings}), 409
     db.session.commit()
     _invalidate_and_refresh_xml()
     if should_purge:
