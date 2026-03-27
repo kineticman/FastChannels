@@ -266,11 +266,25 @@ Release focus: Amazon Prime Free FAST channel stream resolution, worker process 
 - **Channels preview modal** (`0f20e11`): wider (760→940px), action buttons now in a CSS grid layout instead of flex-wrap, Gracenote mode selector made more compact.
 - **Code**: deduplicated feed membership filter logic — `api.py`'s `_apply_channel_filters` now calls `_apply_admin_feed_membership_filters` from `admin.py` instead of duplicating 18 lines.
 
+### Local Now — EPG Coverage Fix
+
+- **Root cause identified**: The Local Now `/live/epg/US/website` API always returns exactly 5 programs per channel regardless of the `program_size` parameter (API ignores it). Short-duration-show channels (e.g. Euronews English, 30-min news segments) yield only ~1 hour of future EPG coverage per scrape. With the old 360-minute scrape interval, those channels had zero guide data for ~5 hours between runs.
+- **Fix**: `scrape_interval` reduced from 360 to 60 minutes. A single scrape fetches all ~433 channels in one bulk API call, so the additional frequency adds negligible load. The rolling EPG upsert logic (added in 2.1.3) handles the rest — each hourly scrape fills the next window forward.
+- **Migration 015**: resets `scrape_interval` to 60 for any localnow source still at the old 360 default. Custom values are not touched.
+- `program_size` config option is still accepted but its help text now correctly states the API ignores it.
+
+**Coverage characteristics (observed, March 2026):**
+- API always returns exactly 5 programs/channel — no pagination, no time-window params.
+- Worst channel: Euronews English, ~1.02h future coverage per scrape.
+- 10th percentile: ~2h. Median: ~4h. Best: 26h (NatureStream.TV, long-format nature content).
+- 112/433 channels under 3h per scrape; hourly refresh ensures continuous coverage for all of them.
+
 ### Upgrade / Migration Notes
 
-- Migrations 013 and 014 run automatically on container startup via `run_migrations.py`.
+- Migrations 013, 014, and 015 run automatically on container startup via `run_migrations.py`.
 - 013 adds a DB index — fast, safe to run on any DB size.
-- 014 seeds `Channel.number` for active non-pinned channels — this is a one-time write that preserves the numbering users currently see.
+- 014 seeds `Channel.number` for active non-pinned channels — one-time write, preserves existing numbering.
+- 015 updates Local Now scrape interval from 360 to 60 minutes (only if still at the old default).
 - `prs_device_id` is generated and saved to `source.config` on first amazon_prime_free scrape — no manual action needed.
 - Playwright is no longer used or imported by the amazon_prime_free scraper. It can be removed from the container image in a future cleanup if no other scraper uses it.
 

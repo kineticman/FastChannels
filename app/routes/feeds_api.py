@@ -98,6 +98,10 @@ def create_feed():
     if Feed.query.filter_by(slug=slug).first():
         return jsonify({'error': f'slug "{slug}" already exists'}), 409
 
+    # Capture baseline overlaps among existing feeds BEFORE adding the new feed,
+    # so we can block only on overlaps that the new feed itself introduces.
+    baseline_warnings = set(get_global_chnum_overlaps())
+
     feed = Feed(
         slug        = slug,
         name        = name,
@@ -107,11 +111,11 @@ def create_feed():
         is_enabled  = data.get('is_enabled', True),
     )
     db.session.add(feed)
-    with db.session.no_autoflush:
-        warnings = get_global_chnum_overlaps()
-    if warnings:
+    db.session.flush()  # make new feed visible to overlap check
+    new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
+    if new_warnings:
         db.session.rollback()
-        return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
+        return jsonify({'error': 'Channel number overlaps detected', 'warnings': new_warnings}), 409
     err = _safe_commit()
     if err:
         return err
@@ -129,6 +133,10 @@ def get_feed(feed_id):
 def update_feed(feed_id):
     feed = Feed.query.get_or_404(feed_id)
     data = request.get_json() or {}
+
+    # Snapshot baseline overlaps before applying changes so we only block on
+    # overlaps that this edit introduces, not pre-existing ones.
+    baseline_warnings = set(get_global_chnum_overlaps())
 
     if feed.slug in SYSTEM_FEED_SLUGS:
         # System feeds only allow chnum_start to be changed.
@@ -148,11 +156,11 @@ def update_feed(feed_id):
     if 'chnum_start' in data:
         feed.chnum_start = _parse_chnum_start(data['chnum_start'])
 
-    with db.session.no_autoflush:
-        warnings = get_global_chnum_overlaps()
-    if warnings:
+    db.session.flush()  # make changes visible to overlap check
+    new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
+    if new_warnings:
         db.session.rollback()
-        return jsonify({'error': 'Channel number overlaps detected', 'warnings': warnings}), 409
+        return jsonify({'error': 'Channel number overlaps detected', 'warnings': new_warnings}), 409
     err = _safe_commit()
     if err:
         return err

@@ -31,7 +31,7 @@ class LocalNowScraper(BaseScraper):
 
     source_name = "localnow"
     display_name = "Local Now"
-    scrape_interval = 360
+    scrape_interval = 60  # API returns exactly 5 programs per channel; worst channels cover ~1h, so scrape hourly for continuous EPG
     stream_audit_enabled = True
 
     config_schema = [
@@ -56,7 +56,7 @@ class LocalNowScraper(BaseScraper):
             "Program Size",
             field_type="number",
             required=False,
-            help_text="How many programme rows Local Now returns per channel in the live EPG response.",
+            help_text="Requested programme rows per channel sent to the Local Now API. The API currently ignores this and always returns exactly 5 programs per channel regardless of this value.",
             default=10,
         ),
         ConfigField(
