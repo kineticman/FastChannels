@@ -126,7 +126,10 @@ def _build_channel_query(filters: dict):
             if gracenote == 'has':
                 query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
             elif gracenote == 'missing':
-                query = query.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+                query = query.filter(
+                    (Channel.gracenote_id == None) | (Channel.gracenote_id == ''),
+                    ~Channel.slug.like('%|%'),
+                )
         if search := filters.get('search'):
             query = query.filter(Channel.name.ilike(f'%{search}%'))
         if excluded_ids := filters.get('excluded_channel_ids'):
@@ -169,7 +172,10 @@ def _build_channel_stub_query(filters: dict):
             if gracenote == 'has':
                 query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
             elif gracenote == 'missing':
-                query = query.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+                query = query.filter(
+                    (Channel.gracenote_id == None) | (Channel.gracenote_id == ''),
+                    ~Channel.slug.like('%|%'),
+                )
         if search := filters.get('search'):
             query = query.filter(Channel.name.ilike(f'%{search}%'))
         if excluded_ids := filters.get('excluded_channel_ids'):
