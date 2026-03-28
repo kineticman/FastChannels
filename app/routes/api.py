@@ -1392,6 +1392,46 @@ def gracenote_community_map():
     return jsonify({'results': results, 'total': len(results)})
 
 
+@api_bp.route('/gracenote/community-export', methods=['GET'])
+def gracenote_community_export():
+    """
+    Export all active channels as a JSON file for community Gracenote ID contribution.
+
+    Each record contains the provider (source name), key (source_channel_id), channel name,
+    and the current tmsid (blank if not yet mapped). Community members fill in missing tmsids
+    and share the file back for merging into the master community map.
+    """
+    rows = (
+        Channel.query
+        .join(Source)
+        .filter(Channel.is_active == True)
+        .order_by(Source.name, Channel.name)
+        .all()
+    )
+    channels = []
+    for ch in rows:
+        source_name = ch.source.name if ch.source else ''
+        match = lookup_gracenote(source_name, ch.source_channel_id)
+        community_tmsid = (match.get('tmsid') or '') if match else ''
+        channels.append({
+            'provider':      source_name,
+            'key':           ch.source_channel_id or '',
+            'channel_name':  ch.name or '',
+            'tmsid':         community_tmsid,
+        })
+    payload = {
+        'schema_version': 1,
+        'exported_at':    datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'channel_count':  len(channels),
+        'channels':       channels,
+    }
+    return current_app.response_class(
+        json.dumps(payload, indent=2),
+        mimetype='application/json',
+        headers={'Content-Disposition': 'attachment; filename="gracenote_community_export.json"'},
+    )
+
+
 @api_bp.route('/gracenote/remote-map/status', methods=['GET'])
 def gracenote_remote_map_status():
     settings = AppSettings.get()

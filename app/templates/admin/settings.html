@@ -655,8 +655,9 @@
           <span class="save-status" id="gn-remote-status"></span>
         </div>
       </div>
-      <div style="padding: 0.75rem 0 0.25rem">
+      <div style="padding: 0.75rem 0 0.25rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center">
         <button class="btn btn-audit" onclick="openCommunityMap()">Browse Community Map</button>
+        <a class="btn btn-audit" href="/api/gracenote/community-export" download>Export for Community</a>
       </div>
     </div>
   </div>
@@ -667,12 +668,23 @@
       <button class="cm-close" onclick="closeCommunityMap()">&#x2715;</button>
       <h2>Community Gracenote Map</h2>
       <p class="cm-subtitle">Channels with curated community IDs. Applying sets the channel to Manual mode — it won't be overwritten by future scrapes.</p>
+      <details style="margin-bottom:0.75rem">
+        <summary style="cursor:pointer;color:#64748b;font-size:0.8rem;user-select:none">Status legend</summary>
+        <table style="margin-top:0.5rem;width:100%;border-collapse:collapse;font-size:0.8rem">
+          <tr><td style="padding:0.3rem 0.6rem;white-space:nowrap"><span class="cm-badge applied">Applied</span></td><td style="padding:0.3rem 0.6rem;color:#cbd5e1">Community tmsid is already the active ID on this channel</td></tr>
+          <tr><td style="padding:0.3rem 0.6rem;white-space:nowrap"><span class="cm-badge none">Available</span></td><td style="padding:0.3rem 0.6rem;color:#cbd5e1">No Gracenote ID set, in auto mode — community tmsid can be applied</td></tr>
+          <tr><td style="padding:0.3rem 0.6rem;white-space:nowrap"><span class="cm-badge native">Has native ID</span></td><td style="padding:0.3rem 0.6rem;color:#cbd5e1">Channel is in auto mode with a scraped ID that doesn't match the community tmsid</td></tr>
+          <tr><td style="padding:0.3rem 0.6rem;white-space:nowrap"><span class="cm-badge manual">Manual</span></td><td style="padding:0.3rem 0.6rem;color:#cbd5e1">Channel is in manual mode with a different tmsid than the community one</td></tr>
+          <tr><td style="padding:0.3rem 0.6rem;white-space:nowrap"><span class="cm-badge off">Off</span></td><td style="padding:0.3rem 0.6rem;color:#cbd5e1">Gracenote is disabled for this channel entirely</td></tr>
+        </table>
+      </details>
       <div class="cm-filters">
         <input type="search" id="cm-search" placeholder="Filter by channel or source…" oninput="renderCmTable()">
         <select id="cm-filter-status" onchange="renderCmTable()">
           <option value="">All statuses</option>
           <option value="available">Available</option>
           <option value="applied">Already applied</option>
+          <option value="native">Has native ID</option>
           <option value="manual">Manual (different ID)</option>
           <option value="off">Off</option>
         </select>
