@@ -33,6 +33,18 @@ def _safe_commit():
         raise
 
 
+def _safe_flush():
+    """Flush session, returning a 503 response tuple if SQLite is locked."""
+    try:
+        db.session.flush()
+        return None
+    except OperationalError as exc:
+        if 'database is locked' in str(exc).lower():
+            db.session.rollback()
+            return jsonify({'error': 'Server is busy (a scrape is in progress). Please try again in a moment.'}), 503
+        raise
+
+
 def _slugify(text: str) -> str:
     s = text.lower().strip()
     s = re.sub(r'[^a-z0-9]+', '-', s)
@@ -111,7 +123,9 @@ def create_feed():
         is_enabled  = data.get('is_enabled', True),
     )
     db.session.add(feed)
-    db.session.flush()  # make new feed visible to overlap check
+    err = _safe_flush()  # make new feed visible to overlap check
+    if err:
+        return err
     new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
     if new_warnings:
         db.session.rollback()
@@ -156,7 +170,9 @@ def update_feed(feed_id):
     if 'chnum_start' in data:
         feed.chnum_start = _parse_chnum_start(data['chnum_start'])
 
-    db.session.flush()  # make changes visible to overlap check
+    err = _safe_flush()  # make changes visible to overlap check
+    if err:
+        return err
     new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
     if new_warnings:
         db.session.rollback()

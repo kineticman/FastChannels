@@ -528,21 +528,24 @@ def get_global_chnum_overlaps() -> list[str]:
     warnings: list[str] = []
 
     def _check(outputs):
-        seen: dict[int, tuple[str, str]] = {}
+        # seen maps chnum -> (output_name, ch.name, ch.id)
+        # Same channel ID appearing in multiple feeds with the same pinned number
+        # is not a real conflict — it's the same channel, just in multiple feeds.
+        # Only warn when a genuinely different channel claims the same number.
+        seen: dict[int, tuple[str, str, int]] = {}
         for output_name, channels, chnum_map in outputs:
             for ch in channels:
                 chnum = chnum_map.get(ch.id)
                 if not chnum:
                     continue
-                current = (output_name, ch.name)
                 previous = seen.get(chnum)
-                if previous and previous != current:
+                if previous and previous[2] != ch.id:
                     warnings.append(
                         f"ch {chnum} is duplicated: {previous[1]} in {previous[0]} and "
                         f"{ch.name} in {output_name}"
                     )
-                else:
-                    seen[chnum] = current
+                elif not previous:
+                    seen[chnum] = (output_name, ch.name, ch.id)
 
     _check(master_outputs)
     # Check std feeds against each other, gracenote feeds against each other.
