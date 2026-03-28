@@ -73,7 +73,8 @@ _BASE_HEADERS = {
 class TubiScraper(BaseScraper):
     source_name     = 'tubi'
     display_name    = 'Tubi TV'
-    stream_audit_enabled = True
+    stream_audit_enabled  = True
+    scrape_before_audit   = True   # fetch_channels() warms _url_cache + session cookies before audit
     scrape_interval = 360
 
     config_schema = [

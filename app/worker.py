@@ -462,6 +462,17 @@ def run_stream_audit(source_name: str):
         except Exception as _pre_exc:
             logger.debug('[audit] pre_run_setup failed (non-fatal): %s', _pre_exc)
 
+        # Some scrapers (e.g. Tubi) need a full channel fetch before auditing
+        # to warm their URL cache and establish the correct session cookies.
+        # Without this, per-channel resolve() calls lack session context and
+        # CDN requests return 422.
+        if getattr(scraper_cls, 'scrape_before_audit', False):
+            logger.info('[audit] %s: pre-audit channel refresh to warm URL cache…', source_name)
+            try:
+                scraper.fetch_channels()
+            except Exception as _refresh_exc:
+                logger.warning('[audit] %s: pre-audit refresh failed (non-fatal): %s', source_name, _refresh_exc)
+
         channels = source.channels.all()
         total    = len(channels)
         checked  = 0
