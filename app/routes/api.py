@@ -1672,7 +1672,7 @@ def push_feed_to_dvr(feed_id):
         if xmltv_url:
             payload['xmltv_url']     = xmltv_url
             payload['xmltv_refresh'] = '3600'
-        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=8)
+        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=30)
 
     gn_name  = f"FastChannels {feed.name} Gracenote"
     epg_name = f"FastChannels {feed.name}"
@@ -1740,7 +1740,7 @@ def push_source_to_dvr(source_id):
         if xmltv_url:
             payload['xmltv_url'] = xmltv_url
             payload['xmltv_refresh'] = '3600'
-        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=8)
+        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=30)
 
     query_param = f"?source={source.name}"
     std_name = f"FastChannels {source.display_name}"
