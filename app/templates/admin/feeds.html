@@ -272,8 +272,11 @@
           <button class="btn btn-ghost" style="font-size:0.78rem;padding:0.3rem 0.7rem"
                   onclick='openModal({{ feed.to_dict(base_url)|tojson }})'>Edit</button>
           {% endif %}
+          {% set split = feed_split_counts.get(feed.id, {}) %}
+          {% set std_count = split.get('standard_count', feed.channel_count()) %}
           <button class="btn btn-dvr" title="Register this feed as a custom M3U source in Channels DVR"
-                  onclick="pushToDvr({{ feed.id }}, '{{ feed.name|e }}', {{ feed.channel_count() }}, this)">📺 Add to Channels DVR</button>
+                  onclick="pushToDvr({{ feed.id }}, '{{ feed.name|e }}', {{ feed.channel_count() }}, {{ std_count }}, this)"
+                  {% if feed.channel_count() == 0 %}disabled title="No channels in this feed"{% endif %}>📺 Add to Channels DVR</button>
           {% if feed.slug != 'default' %}
           <button class="btn btn-danger" onclick="deleteFeed({{ feed.id }}, '{{ feed.name|e }}', this)">Delete</button>
           {% endif %}
@@ -322,8 +325,11 @@
 
       <div class="feed-urls">
         {% set split = feed_split_counts.get(feed.id, {}) %}
+        {% set std_count = split.get('standard_count', 1) %}
+        {% set gn_count  = split.get('gracenote_count', 0) %}
+        {% if std_count > 0 %}
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">
-          <span style="color:#94a3b8;font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Standard{% if split %} ({{ split.get('standard_count', 0) }}){% endif %}</span>
+          <span style="color:#94a3b8;font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Standard ({{ std_count }})</span>
           <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u</span>
           <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u" target="_blank" onclick="event.stopPropagation()" style="color:#64748b;font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">Copy</button>
@@ -334,12 +340,15 @@
           <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" style="color:#64748b;font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
         </div>
+        {% endif %}
+        {% if gn_count > 0 %}
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote')">
-          <span style="color:#94a3b8;font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Gracenote{% if split %} ({{ split.get('gracenote_count', 0) }}){% endif %}</span>
+          <span style="color:#94a3b8;font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Gracenote ({{ gn_count }})</span>
           <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote</span>
           <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote" target="_blank" onclick="event.stopPropagation()" style="color:#64748b;font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote')">Copy</button>
         </div>
+        {% endif %}
       </div>
     </div>
     {% endfor %}
@@ -844,8 +853,10 @@ async function saveFeed() {
 
 
 // ── Push to Channels DVR ──────────────────────────────────────────────────
-async function pushToDvr(id, name, count, btn, force = false) {
-  if (count > 750 && !force) {
+async function pushToDvr(id, name, count, standardCount, btn, force = false) {
+  // Warn if the standard M3U (non-gracenote) exceeds the DVR recommended limit.
+  // If standardCount is 0 the standard M3U won't be registered, so skip the warning.
+  if (standardCount > 750 && !force) {
     const ok = confirm(
       `${name} has ${count} channels.\n\nChannels DVR usually works best at 750 or fewer.\n\nAdd it anyway?`
     );
@@ -867,7 +878,7 @@ async function pushToDvr(id, name, count, btn, force = false) {
       } else if (r.status === 409 && data.requires_confirm && !force) {
         btn.disabled = false;
         btn.textContent = orig;
-        return pushToDvr(id, name, count, btn, true);
+        return pushToDvr(id, name, count, standardCount, btn, true);
       } else {
         alert('Failed: ' + (data.error || `HTTP ${r.status}`));
       }

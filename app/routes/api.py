@@ -40,7 +40,7 @@ from ..xml_cache import (
     get_xml_artifact,
     invalidate_xml_cache,
 )
-from .admin import _apply_admin_feed_membership_filters, _duplicate_name_sets
+from .admin import _apply_admin_feed_membership_filters, _duplicate_name_sets, _feed_split_counts
 
 api_bp = Blueprint('api', __name__)
 
@@ -1641,6 +1641,11 @@ def push_feed_to_dvr(feed_id):
     )
     if channel_count == 0:
         return jsonify({'error': 'This feed has no eligible channels to add to Channels DVR.'}), 400
+
+    # standard_count = channels that go into the regular M3U (non-gracenote channels)
+    split = _feed_split_counts(feed)
+    standard_count = split['standard_count']
+
     force = bool((request.get_json(silent=True) or {}).get('force'))
     if channel_count > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
         return jsonify({
@@ -1679,9 +1684,10 @@ def push_feed_to_dvr(feed_id):
             r1.raise_for_status()
             sources_added.append(gn_name)
 
-        r2 = _put(epg_name, f"{base}/feeds/{feed.slug}/m3u", f"{base}/feeds/{feed.slug}/epg.xml")
-        r2.raise_for_status()
-        sources_added.append(epg_name)
+        if standard_count > 0:
+            r2 = _put(epg_name, f"{base}/feeds/{feed.slug}/m3u", f"{base}/feeds/{feed.slug}/epg.xml")
+            r2.raise_for_status()
+            sources_added.append(epg_name)
     except _req.exceptions.ConnectionError:
         return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
     except _req.exceptions.Timeout:
