@@ -63,6 +63,7 @@ class Channel(db.Model):
     category          = db.Column(db.String(128))
     category_override = db.Column(db.String(128), nullable=True)  # set by user; beats all auto logic
     language          = db.Column(db.String(16), default='en')
+    language_override = db.Column(db.String(16), nullable=True)   # set by user; beats scraper value
     country           = db.Column(db.String(8), default='US')
     number            = db.Column(db.Integer)
     number_pinned     = db.Column(db.Boolean, default=False, nullable=False)  # True when user has manually set/locked this channel number
@@ -106,7 +107,8 @@ class Channel(db.Model):
             'stream_type':      self.stream_type,
             'category':          self.category,
             'category_override': self.category_override,
-            'language':         self.language,
+            'language':          self.language,
+            'language_override': self.language_override,
             'country':          self.country,
             'number':           self.number,
             'number_pinned':    bool(self.number_pinned),

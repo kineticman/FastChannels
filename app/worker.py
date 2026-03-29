@@ -1345,7 +1345,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 logger.debug('[%s] evicted cached logo for %s (URL changed)', source.name, cd.name)
             ch.slug          = cd.slug
             ch.category      = ch.category_override or category_for_channel(cd.name, cd.category)
-            ch.language      = cd.language
+            ch.language      = ch.language_override or cd.language
             ch.country       = cd.country
             if getattr(cd, 'guide_key', None):
                 ch.guide_key = cd.guide_key

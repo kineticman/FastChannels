@@ -242,6 +242,11 @@
       display: inline; white-space: nowrap;
     }
     .cat-label.has-override { border-bottom-color: #f59e0b; color: #f59e0b !important; }
+    .lang-label {
+      cursor: pointer; border-bottom: 1px dotted #475569;
+      display: inline; white-space: nowrap; color: #64748b;
+    }
+    .lang-label.has-override { border-bottom-color: #f59e0b; color: #f59e0b !important; }
     #catModal .source-badge {
       display: inline-block; font-size: 0.68rem; font-weight: 700;
       text-transform: uppercase; letter-spacing: 0.06em;
@@ -972,7 +977,10 @@
                 <span style="color:#475569">—</span>
               {% endif %}
             </td>
-            <td style="color:#64748b">{{ ch.language or '—' }}</td>
+            <td data-lang-channel-id="{{ ch.id }}">
+              <span class="lang-label{% if ch.language_override %} has-override{% endif %}"
+                    onclick="openLangModal({{ ch.id }})">{{ ch.language_override or ch.language or '—' }}</span>
+            </td>
             <td class="chnum-cell{% if ch.number_pinned %} chnum-pinned{% endif %}{% if ch.id in chnum_conflicts %} chnum-conflict{% endif %}"
                 data-chnum-cell="1"
                 data-channel-id="{{ ch.id }}"
@@ -1080,6 +1088,15 @@
   <div class="modal-overlay" id="catModal" onclick="if(event.target===this)closeCatModal()">
     <div class="modal-box" style="max-width:440px">
       <div id="catModal-content">
+        <div class="modal-loading">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Language override modal -->
+  <div class="modal-overlay" id="langModal" onclick="if(event.target===this)closeLangModal()">
+    <div class="modal-box" style="max-width:400px">
+      <div id="langModal-content">
         <div class="modal-loading">Loading…</div>
       </div>
     </div>
@@ -2068,6 +2085,112 @@
       fetch('/api/channels/duplicate-summary')
         .then(r => r.json())
         .then(d => { renderModalBody({ ...d, sources: _dupSources }); });
+    }
+
+    // ── Language override modal ───────────────────────────────────────────────
+    const _langCache = {};
+
+    function closeLangModal() {
+      document.getElementById('langModal').classList.remove('open');
+    }
+
+    async function openLangModal(chId) {
+      const modal = document.getElementById('langModal');
+      const content = document.getElementById('langModal-content');
+      content.innerHTML = '<div class="modal-loading">Loading…</div>';
+      modal.classList.add('open');
+
+      let d;
+      if (_langCache[chId]) {
+        d = _langCache[chId];
+      } else {
+        try {
+          const r = await fetch(`/api/channels/${chId}/language-explain`);
+          d = await r.json();
+          _langCache[chId] = d;
+        } catch(e) {
+          content.innerHTML = `<p style="color:#f87171">Failed to load language info.</p>`;
+          return;
+        }
+      }
+      renderLangModal(content, d);
+    }
+
+    function renderLangModal(content, d) {
+      const currentOverride = d.language_override || '';
+      const langs = d.common_languages || [];
+      const effective = currentOverride || d.language || 'en';
+      const opts = langs.map(([code, label]) =>
+        `<option value="${escapeHtml(code)}"${code === effective ? ' selected' : ''}>${escapeHtml(code)} — ${escapeHtml(label)}</option>`
+      ).join('');
+      // Add current value if not in the list
+      const inList = langs.some(([code]) => code === effective);
+      const otherOpt = !inList ? `<option value="${escapeHtml(effective)}" selected>${escapeHtml(effective)}</option>` : '';
+
+      content.innerHTML = `
+        <h3 style="margin-bottom:0.75rem;font-size:1rem">${escapeHtml(d.channel_name)}</h3>
+        <div style="margin-bottom:0.9rem;font-size:0.85rem;color:#94a3b8">
+          Scraper-assigned: <strong style="color:#cbd5e1">${escapeHtml(d.language || 'en')}</strong>
+          ${currentOverride ? `&nbsp;·&nbsp;<span style="color:#f59e0b">Override active: <strong>${escapeHtml(currentOverride)}</strong></span>` : ''}
+        </div>
+        <div style="margin-bottom:1rem">
+          <label style="font-size:0.8rem;color:#94a3b8;display:block;margin-bottom:0.3rem">Set language override:</label>
+          <select id="langOverrideSel" style="width:100%;padding:0.45rem 0.6rem;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.9rem">
+            ${otherOpt}${opts}
+          </select>
+          <input id="langOverrideCustom" type="text" placeholder="Or type a code (e.g. pt-BR)"
+            style="width:100%;margin-top:0.4rem;padding:0.4rem 0.6rem;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.85rem;box-sizing:border-box"
+            oninput="if(this.value)document.getElementById('langOverrideSel').value=''">
+        </div>
+        <div style="display:flex;gap:0.6rem;justify-content:flex-end">
+          ${currentOverride ? `<button class="btn-sm btn-secondary" onclick="clearLangOverride(${d.channel_id})">Clear Override</button>` : ''}
+          <button class="btn-sm btn-secondary" onclick="closeLangModal()">Cancel</button>
+          <button class="btn-sm" onclick="saveLangOverride(${d.channel_id})" style="background:#3b82f6;color:#fff">Save Override</button>
+        </div>
+      `;
+    }
+
+    async function saveLangOverride(chId) {
+      const custom = document.getElementById('langOverrideCustom').value.trim();
+      const sel = document.getElementById('langOverrideSel');
+      const val = custom || (sel ? sel.value : '');
+      if (!val) return;
+      const r = await fetch(`/api/channels/${chId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language_override: val, language: val }),
+      });
+      if (!r.ok) { alert('Save failed'); return; }
+      if (_langCache[chId]) {
+        _langCache[chId].language_override = val;
+        _langCache[chId].language = val;
+      }
+      const cell = document.querySelector(`td[data-lang-channel-id="${chId}"]`);
+      if (cell) {
+        const lbl = cell.querySelector('.lang-label');
+        if (lbl) { lbl.textContent = val; lbl.classList.add('has-override'); }
+      }
+      closeLangModal();
+    }
+
+    async function clearLangOverride(chId) {
+      const r = await fetch(`/api/channels/${chId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language_override: null }),
+      });
+      if (!r.ok) { alert('Clear failed'); return; }
+      const updated = await r.json();
+      if (_langCache[chId]) {
+        _langCache[chId].language_override = null;
+        _langCache[chId].language = updated.language;
+      }
+      const cell = document.querySelector(`td[data-lang-channel-id="${chId}"]`);
+      if (cell) {
+        const lbl = cell.querySelector('.lang-label');
+        if (lbl) { lbl.textContent = updated.language || '—'; lbl.classList.remove('has-override'); }
+      }
+      closeLangModal();
     }
 
     // ── Category explain / override modal ────────────────────────────────────

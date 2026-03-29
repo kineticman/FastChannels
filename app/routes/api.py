@@ -787,7 +787,7 @@ def bulk_update_channel_gracenote():
 def update_channel(channel_id):
     ch   = Channel.query.get_or_404(channel_id)
     data = request.get_json()
-    for field in ('name', 'logo_url', 'category', 'category_override', 'is_active', 'is_enabled', 'number', 'number_pinned', 'disable_reason', 'is_duplicate'):
+    for field in ('name', 'logo_url', 'category', 'category_override', 'language', 'language_override', 'is_active', 'is_enabled', 'number', 'number_pinned', 'disable_reason', 'is_duplicate'):
         if field in data:
             setattr(ch, field, data[field])
     # Setting a number without explicitly managing the pin auto-pins it.
@@ -830,6 +830,24 @@ def channel_category_explain(channel_id):
         'category_override': ch.category_override,
         'canonical_categories': list(CANONICAL_CATEGORIES),
         **explanation,
+    })
+
+
+@api_bp.route('/channels/<int:channel_id>/language-explain', methods=['GET'])
+def channel_language_explain(channel_id):
+    ch = Channel.query.get_or_404(channel_id)
+    common_languages = [
+        ('en', 'English'), ('es', 'Spanish'), ('fr', 'French'), ('de', 'German'),
+        ('pt', 'Portuguese'), ('it', 'Italian'), ('zh', 'Chinese'), ('ja', 'Japanese'),
+        ('ko', 'Korean'), ('ar', 'Arabic'), ('hi', 'Hindi'), ('ru', 'Russian'),
+        ('pl', 'Polish'), ('nl', 'Dutch'), ('sv', 'Swedish'), ('tr', 'Turkish'),
+    ]
+    return jsonify({
+        'channel_id': ch.id,
+        'channel_name': ch.name,
+        'language': ch.language or 'en',
+        'language_override': ch.language_override,
+        'common_languages': common_languages,
     })
 
 
