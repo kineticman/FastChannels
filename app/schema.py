@@ -122,6 +122,10 @@ def ensure_runtime_schema() -> None:
                 ))
             if "gracenote_map_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN gracenote_map_url TEXT"))
+            if "migration_012_done" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN migration_012_done BOOLEAN NOT NULL DEFAULT 0"
+                ))
 
         if "sources" in tables:
             src_cols = {
@@ -229,23 +233,30 @@ def ensure_runtime_schema() -> None:
         # untouched (user explicitly set them).  Cleared channels get gracenote_mode='off'
         # so the scraper won't re-populate them from the CSV on the next scrape, and users
         # can re-assign via the Gracenote helper popup if desired.
-        if "channels" in tables and "sources" in tables:
-            from .gracenote_map import lookup_gracenote
-            rows = conn.execute(text(
-                "SELECT c.id, c.gracenote_id, s.name, c.source_channel_id "
-                "FROM channels c JOIN sources s ON c.source_id = s.id "
-                "WHERE c.gracenote_id IS NOT NULL AND c.gracenote_id != '' "
-                "AND (c.gracenote_mode IS NULL OR c.gracenote_mode NOT IN ('manual', 'off'))"
-            )).fetchall()
-            to_clear = [
-                row[0] for row in rows
-                if (m := lookup_gracenote(row[2], row[3])) and m.get('tmsid') == row[1]
-            ]
-            if to_clear:
-                conn.execute(
-                    text("UPDATE channels SET gracenote_id = NULL, gracenote_mode = 'off' WHERE id = :id"),
-                    [{'id': rid} for rid in to_clear],
-                )
+        # This migration is one-time: once applied it is marked done so that community CSV
+        # updates (including the bundled baseline) don't keep clearing scraped IDs on restart.
+        if "channels" in tables and "sources" in tables and "app_settings" in tables:
+            _m012_done = conn.execute(
+                text("SELECT migration_012_done FROM app_settings WHERE id = 1")
+            ).fetchone()
+            if not _m012_done or not _m012_done[0]:
+                from .gracenote_map import lookup_gracenote
+                rows = conn.execute(text(
+                    "SELECT c.id, c.gracenote_id, s.name, c.source_channel_id "
+                    "FROM channels c JOIN sources s ON c.source_id = s.id "
+                    "WHERE c.gracenote_id IS NOT NULL AND c.gracenote_id != '' "
+                    "AND (c.gracenote_mode IS NULL OR c.gracenote_mode NOT IN ('manual', 'off'))"
+                )).fetchall()
+                to_clear = [
+                    row[0] for row in rows
+                    if (m := lookup_gracenote(row[2], row[3])) and m.get('tmsid') == row[1]
+                ]
+                if to_clear:
+                    conn.execute(
+                        text("UPDATE channels SET gracenote_id = NULL, gracenote_mode = 'off' WHERE id = :id"),
+                        [{'id': rid} for rid in to_clear],
+                    )
+                conn.execute(text("UPDATE app_settings SET migration_012_done = 1 WHERE id = 1"))
 
         if "tvtv_program_cache" in tables:
             tvtv_cols = {
