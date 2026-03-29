@@ -1196,6 +1196,7 @@
           <div class="preview-program-time">${formatPreviewTime(program.start_time)} – ${formatPreviewTime(program.end_time)}</div>
           ${episodeLine}
           ${program.description ? `<div class="preview-program-desc">${escapeHtml(program.description)}</div>` : ''}
+          ${program.category ? `<div style="margin-top:0.5rem;font-size:0.75rem;color:#475569">${program.category.split(';').map(c => escapeHtml(c.trim())).join(' · ')}</div>` : ''}
         </div>
       `;
     }

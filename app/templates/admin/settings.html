@@ -686,7 +686,10 @@
   <div class="cm-modal-overlay" id="cm-overlay" onclick="if(event.target===this)closeCommunityMap()">
     <div class="cm-modal">
       <button class="cm-close" onclick="closeCommunityMap()">&#x2715;</button>
-      <h2>Community Gracenote Map</h2>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.25rem">
+        <h2 style="margin:0">Community Gracenote Map</h2>
+        <button class="btn-cm-apply" onclick="openApplyAllConfirm()" style="font-size:0.8rem;padding:0.3rem 0.75rem;flex-shrink:0">Apply All</button>
+      </div>
       <p class="cm-subtitle">Channels with curated community IDs. Applying sets the channel to Manual mode — it won't be overwritten by future scrapes.</p>
       <details style="margin-bottom:0.75rem">
         <summary style="cursor:pointer;color:#64748b;font-size:0.8rem;user-select:none">Status legend</summary>
@@ -727,6 +730,15 @@
             <tr><td colspan="7" class="cm-empty">Loading…</td></tr>
           </tbody>
         </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Apply All confirmation modal -->
+  <div class="modal-overlay" id="cm-apply-all-modal" onclick="if(event.target===this)closeApplyAllConfirm()">
+    <div class="modal-box" style="max-width:500px">
+      <div id="cm-apply-all-content">
+        <div class="modal-loading">Checking…</div>
       </div>
     </div>
   </div>
@@ -1011,6 +1023,95 @@ async function openCommunityMap() {
 
 function closeCommunityMap() {
   document.getElementById('cm-overlay').classList.remove('open');
+}
+
+function closeApplyAllConfirm() {
+  document.getElementById('cm-apply-all-modal').classList.remove('open');
+}
+
+async function openApplyAllConfirm() {
+  const modal = document.getElementById('cm-apply-all-modal');
+  const content = document.getElementById('cm-apply-all-content');
+  content.innerHTML = '<div class="modal-loading">Checking…</div>';
+  modal.classList.add('open');
+
+  try {
+    const r = await fetch('/api/gracenote/community-apply-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: true }),
+    });
+    const d = await r.json();
+
+    const cleanCount  = d.applied.length;
+    const overCount   = d.overwritten.length;
+    const doneCount   = d.already_done;
+
+    const overList = d.overwritten.length
+      ? `<div style="margin-top:0.75rem;max-height:160px;overflow-y:auto;border:1px solid #334155;border-radius:6px;padding:0.4rem 0.6rem">
+          ${d.overwritten.map(r =>
+            `<div style="font-size:0.8rem;padding:0.2rem 0;border-bottom:1px solid #1e293b;color:#f87171">
+              <strong>${escCm(r.channel_name)}</strong>
+              <span style="color:#64748b"> · ${escCm(r.source_name)} · current: ${escCm(r.current_id || '—')} (${escCm(r.mode)})</span>
+            </div>`
+          ).join('')}
+        </div>` : '';
+
+    content.innerHTML = `
+      <h3 style="margin-bottom:0.75rem;font-size:1rem">Apply All Community IDs</h3>
+      <div style="font-size:0.875rem;color:#cbd5e1;line-height:1.6;margin-bottom:0.75rem">
+        <div>✅ <strong>${cleanCount}</strong> channel${cleanCount !== 1 ? 's' : ''} will get the community ID applied</div>
+        ${overCount ? `<div style="color:#f87171">⚠️ <strong>${overCount}</strong> channel${overCount !== 1 ? 's' : ''} with a Manual or Off override will be overwritten</div>` : ''}
+        <div style="color:#475569">${doneCount} already applied — will be skipped</div>
+      </div>
+      ${overCount ? `<div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.3rem">Channels that will be overwritten:</div>${overList}` : ''}
+      ${cleanCount + overCount === 0
+        ? `<div style="color:#64748b;font-size:0.875rem">Nothing to apply — all community IDs are already set.</div>
+           <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+             <button class="btn-sm btn-secondary" onclick="closeApplyAllConfirm()">Close</button>
+           </div>`
+        : `<div style="display:flex;gap:0.6rem;justify-content:flex-end;margin-top:1rem">
+             <button class="btn-sm btn-secondary" onclick="closeApplyAllConfirm()">Cancel</button>
+             <button class="btn-sm" onclick="runApplyAll()" style="background:#0f766e;color:#fff">Apply ${cleanCount + overCount}</button>
+           </div>`
+      }
+    `;
+  } catch(e) {
+    content.innerHTML = `<p style="color:#f87171">Failed to check: ${escCm(String(e))}</p>
+      <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+        <button class="btn-sm btn-secondary" onclick="closeApplyAllConfirm()">Close</button>
+      </div>`;
+  }
+}
+
+async function runApplyAll() {
+  const content = document.getElementById('cm-apply-all-content');
+  content.innerHTML = '<div class="modal-loading">Applying…</div>';
+  try {
+    const r = await fetch('/api/gracenote/community-apply-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: false }),
+    });
+    const d = await r.json();
+    const total = d.total_changed;
+    content.innerHTML = `
+      <h3 style="margin-bottom:0.75rem;font-size:1rem">Done</h3>
+      <div style="font-size:0.875rem;color:#cbd5e1;line-height:1.8">
+        <div>✅ ${d.applied.length} community IDs applied</div>
+        ${d.overwritten.length ? `<div>⚠️ ${d.overwritten.length} manual/off overrides replaced</div>` : ''}
+        <div style="color:#475569">${d.already_done} already applied — skipped</div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+        <button class="btn-sm btn-secondary" onclick="closeApplyAllConfirm();_cmData=[];openCommunityMap()">Refresh Map</button>
+      </div>
+    `;
+  } catch(e) {
+    content.innerHTML = `<p style="color:#f87171">Apply failed: ${escCm(String(e))}</p>
+      <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+        <button class="btn-sm btn-secondary" onclick="closeApplyAllConfirm()">Close</button>
+      </div>`;
+  }
 }
 
 function settingsGnOnApplied(channelId, stationId) {

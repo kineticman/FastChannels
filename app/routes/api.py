@@ -1207,6 +1207,66 @@ def gracenote_community_map():
     return jsonify({'results': results, 'total': len(results)})
 
 
+@api_bp.route('/gracenote/community-apply-all', methods=['POST'])
+def gracenote_community_apply_all():
+    """
+    Bulk-apply community Gracenote IDs to all matching channels.
+    Skips channels already correctly applied.
+    Overwrites manual/off channels when confirmed (dry_run=false).
+    """
+    dry_run = request.get_json(silent=True, force=True) or {}
+    dry_run = dry_run.get('dry_run', True)
+
+    rows = (
+        Channel.query
+        .join(Source)
+        .filter(Channel.is_active == True)
+        .order_by(Source.name, Channel.name)
+        .all()
+    )
+
+    applied = []
+    overwritten = []
+    already_done = 0
+
+    for ch in rows:
+        source_name = ch.source.name if ch.source else ''
+        match = lookup_gracenote(source_name, ch.source_channel_id)
+        if not match or not match.get('tmsid'):
+            continue
+        community_tmsid = match['tmsid']
+        current_id = ch.gracenote_id or ''
+        mode = ch.gracenote_mode or 'auto'
+
+        if current_id == community_tmsid:
+            already_done += 1
+            continue
+
+        is_override = mode in ('manual', 'off')
+        entry = {'channel_id': ch.id, 'channel_name': ch.name, 'source_name': source_name,
+                 'current_id': current_id, 'community_tmsid': community_tmsid, 'mode': mode}
+
+        if is_override:
+            overwritten.append(entry)
+        else:
+            applied.append(entry)
+
+        if not dry_run:
+            _apply_gracenote_update(ch, community_tmsid, 'manual')
+
+    if not dry_run:
+        db.session.commit()
+        _invalidate_and_refresh_xml()
+
+    return jsonify({
+        'dry_run':      dry_run,
+        'applied':      applied,
+        'overwritten':  overwritten,
+        'already_done': already_done,
+        'total_changed': len(applied) + len(overwritten),
+    })
+
+
 @api_bp.route('/gracenote/community-export', methods=['GET'])
 def gracenote_community_export():
     """
