@@ -461,211 +461,6 @@ def _normalize_server_url(value: str | None, default_port: int = 5523) -> str | 
     return f'{scheme}://{host}'.rstrip('/')
 
 
-def _settings_backup_payload() -> dict:
-    row = AppSettings.get()
-    sources = Source.query.order_by(Source.name).all()
-    feeds = Feed.query.order_by(Feed.slug).all()
-    channel_overrides = (
-        db.session.query(Channel, Source.name)
-        .join(Source, Channel.source_id == Source.id)
-        .filter(Channel.source_channel_id != None)
-        .order_by(Source.name, Channel.id)
-        .all()
-    )
-    return {
-        'format': 'fastchannels-settings-backup',
-        'version': 1,
-        'exported_at': datetime.now(timezone.utc).isoformat(),
-        'app_version': VERSION,
-        'app_settings': {
-            'channels_dvr_url': row.channels_dvr_url,
-            'public_base_url': row.public_base_url,
-            'timezone_name': row.timezone_name,
-        },
-        'sources': [
-            {
-                'name': source.name,
-                'scrape_interval': source.scrape_interval,
-                'is_enabled': source.is_enabled,
-                'config': source.config or {},
-                'chnum_start': source.chnum_start,
-                'epg_only': source.epg_only,
-            }
-            for source in sources
-        ],
-        'feeds': [
-            {
-                'slug': feed.slug,
-                'name': feed.name,
-                'description': feed.description,
-                'filters': feed.filters or {},
-                'chnum_start': feed.chnum_start,
-                'is_enabled': feed.is_enabled,
-            }
-            for feed in feeds
-        ],
-        'channel_overrides': [
-            {
-                'source_name': source_name,
-                'source_channel_id': channel.source_channel_id,
-                'name': channel.name,
-                'logo_url': channel.logo_url,
-                'category': channel.category,
-                'number': channel.number,
-                'is_enabled': channel.is_enabled,
-                'is_duplicate': channel.is_duplicate,
-                'gracenote_id': channel.gracenote_id,
-            }
-            for channel, source_name in channel_overrides
-        ],
-    }
-
-
-def _restore_settings_backup(payload: dict) -> dict:
-    if not isinstance(payload, dict):
-        raise ValueError('Backup payload must be a JSON object.')
-    if payload.get('format') != 'fastchannels-settings-backup':
-        raise ValueError('Unsupported backup format.')
-
-    app_settings = payload.get('app_settings') or {}
-    sources_payload = payload.get('sources') or []
-    feeds_payload = payload.get('feeds') or []
-    channel_overrides_payload = payload.get('channel_overrides') or []
-    if not isinstance(sources_payload, list) or not isinstance(feeds_payload, list) or not isinstance(channel_overrides_payload, list):
-        raise ValueError('Backup payload has invalid sources/feeds sections.')
-
-    summary = {
-        'sources_updated': 0,
-        'sources_skipped': 0,
-        'feeds_created': 0,
-        'feeds_updated': 0,
-        'feeds_skipped': 0,
-        'channel_overrides_applied': 0,
-        'channel_overrides_skipped': 0,
-    }
-    skipped_sources: list[str] = []
-
-    row = AppSettings.get()
-    if 'channels_dvr_url' in app_settings:
-        row.channels_dvr_url = _normalize_server_url(app_settings.get('channels_dvr_url'), default_port=8089)
-    if 'public_base_url' in app_settings:
-        row.public_base_url = _normalize_server_url(app_settings.get('public_base_url'), default_port=5523)
-    if 'timezone_name' in app_settings:
-        tz_name = normalize_timezone_name(app_settings.get('timezone_name'))
-        if app_settings.get('timezone_name') and tz_name is None:
-            raise ValueError(f"Invalid timezone: {app_settings.get('timezone_name')}")
-        row.timezone_name = tz_name
-        write_timezone_cache(tz_name)
-
-    existing_sources = {source.name: source for source in Source.query.all()}
-    for item in sources_payload:
-        if not isinstance(item, dict):
-            continue
-        name = (item.get('name') or '').strip()
-        source = existing_sources.get(name)
-        if not source:
-            summary['sources_skipped'] += 1
-            if name:
-                skipped_sources.append(name)
-            continue
-        if 'scrape_interval' in item:
-            try:
-                source.scrape_interval = int(item['scrape_interval'])
-            except (TypeError, ValueError):
-                pass
-        if 'is_enabled' in item:
-            source.is_enabled = bool(item['is_enabled'])
-        if 'config' in item and isinstance(item.get('config'), dict):
-            source.config = item.get('config') or {}
-        if 'chnum_start' in item:
-            val = item.get('chnum_start')
-            source.chnum_start = int(val) if isinstance(val, int) and val > 0 else None
-        if 'epg_only' in item:
-            source.epg_only = bool(item['epg_only'])
-        summary['sources_updated'] += 1
-
-    existing_feeds = {feed.slug: feed for feed in Feed.query.all()}
-    for item in feeds_payload:
-        if not isinstance(item, dict):
-            continue
-        slug = (item.get('slug') or '').strip()
-        if not slug:
-            summary['feeds_skipped'] += 1
-            continue
-        feed = existing_feeds.get(slug)
-        if feed is None:
-            feed = Feed(slug=slug, name=item.get('name') or slug, description='')
-            db.session.add(feed)
-            existing_feeds[slug] = feed
-            summary['feeds_created'] += 1
-        else:
-            summary['feeds_updated'] += 1
-
-        if feed.slug == 'default':
-            if 'chnum_start' in item:
-                val = item.get('chnum_start')
-                feed.chnum_start = int(val) if isinstance(val, int) and val > 0 else None
-            continue
-
-        if 'name' in item and item.get('name'):
-            feed.name = str(item.get('name')).strip()
-        if 'description' in item:
-            feed.description = str(item.get('description') or '')
-        if 'filters' in item and isinstance(item.get('filters'), dict):
-            from .feeds_api import _clean_filters
-            feed.filters = _clean_filters(item.get('filters') or {})
-        if 'chnum_start' in item:
-            val = item.get('chnum_start')
-            feed.chnum_start = int(val) if isinstance(val, int) and val > 0 else None
-        if 'is_enabled' in item:
-            feed.is_enabled = bool(item['is_enabled'])
-
-    warnings = get_global_chnum_overlaps()
-    if warnings:
-        raise ValueError('Channel number overlaps detected in imported settings.')
-
-    channels_by_key = {
-        (source_name, source_channel_id): channel
-        for channel, source_name, source_channel_id in (
-            db.session.query(Channel, Source.name, Channel.source_channel_id)
-            .join(Source, Channel.source_id == Source.id)
-            .filter(Channel.source_channel_id != None)
-            .all()
-        )
-    }
-    for item in channel_overrides_payload:
-        if not isinstance(item, dict):
-            continue
-        source_name = (item.get('source_name') or '').strip()
-        source_channel_id = (item.get('source_channel_id') or '').strip()
-        if not source_name or not source_channel_id:
-            summary['channel_overrides_skipped'] += 1
-            continue
-        channel = channels_by_key.get((source_name, source_channel_id))
-        if channel is None:
-            summary['channel_overrides_skipped'] += 1
-            continue
-        for field in ('name', 'logo_url', 'category', 'number', 'is_enabled', 'is_duplicate'):
-            if field in item:
-                setattr(channel, field, item.get(field))
-        if 'gracenote_id' in item or 'gracenote_mode' in item:
-            try:
-                _apply_gracenote_update(channel, item.get('gracenote_id'), item.get('gracenote_mode'))
-            except ValueError as exc:
-                raise ValueError(f"Invalid channel override for {source_name}/{source_channel_id}: {exc}")
-        summary['channel_overrides_applied'] += 1
-
-    try:
-        db.session.commit()
-    except OperationalError as exc:
-        db.session.rollback()
-        if 'database is locked' in str(exc).lower():
-            raise ValueError('Server is busy (a scrape is in progress). Try again shortly.')
-        raise
-
-    _invalidate_and_refresh_xml()
-    summary['skipped_sources'] = skipped_sources
-    return summary
 
 
 @api_bp.route('/sources')
@@ -1878,22 +1673,35 @@ def gracenote_auto_clear():
     return jsonify({'status': 'queued'})
 
 
-@api_bp.route('/settings/export')
-def export_settings():
-    return jsonify(_settings_backup_payload())
-
-
-@api_bp.route('/settings/import', methods=['POST'])
-def import_settings():
-    payload = request.get_json(force=True, silent=True)
-    if payload is None:
-        return jsonify({'error': 'Expected JSON backup payload.'}), 400
+@api_bp.route('/settings/backup-db')
+def backup_db():
+    """Download a gzip-compressed copy of the live SQLite database."""
+    import gzip, tempfile, os as _os, sqlite3 as _sqlite3
+    db_path = '/data/fastchannels.db'
+    if not _os.path.exists(db_path):
+        return jsonify({'error': 'Database file not found.'}), 404
+    tmp_db  = tempfile.NamedTemporaryFile(suffix='.db',    delete=False)
+    tmp_gz  = tempfile.NamedTemporaryFile(suffix='.db.gz', delete=False)
+    tmp_db.close(); tmp_gz.close()
     try:
-        summary = _restore_settings_backup(payload)
-    except ValueError as exc:
-        db.session.rollback()
-        return jsonify({'error': str(exc)}), 400
-    return jsonify({'ok': True, **summary})
+        # SQLite online backup — safe while DB is live
+        src = _sqlite3.connect(db_path)
+        dst = _sqlite3.connect(tmp_db.name)
+        src.backup(dst)
+        src.close(); dst.close()
+        # Compress
+        with open(tmp_db.name, 'rb') as f_in, gzip.open(tmp_gz.name, 'wb', compresslevel=6) as f_out:
+            f_out.write(f_in.read())
+        ts = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+        filename = f'fastchannels_backup_{ts}.db.gz'
+        return current_app.response_class(
+            open(tmp_gz.name, 'rb').read(),
+            mimetype='application/gzip',
+            headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+        )
+    finally:
+        _os.unlink(tmp_db.name)
+        _os.unlink(tmp_gz.name)
 
 
 @api_bp.route('/system-stats')

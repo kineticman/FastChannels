@@ -613,6 +613,26 @@
     </div>
   </div>
 
+  <!-- Backup card -->
+  <div class="source-card">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">💾</div>
+        <div>
+          <div class="source-name">Database Backup</div>
+          <div class="source-meta">Download a snapshot of your FastChannels database</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="toggle-row-help" style="max-width:640px;margin-top:0.75rem;margin-bottom:0.75rem">
+        Downloads a gzip-compressed copy of <code style="color:#7dd3fc;font-family:ui-monospace,monospace">fastchannels.db</code> — includes all channels, sources, feeds, settings, and Gracenote assignments.
+        Store it somewhere safe. To restore, decompress the file and replace <code style="color:#7dd3fc;font-family:ui-monospace,monospace">/data/fastchannels.db</code> with it, then restart the container.
+      </div>
+      <a class="btn btn-audit" href="/api/settings/backup-db" download>Download DB Backup</a>
+    </div>
+  </div>
+
   <!-- Gracenote card -->
   <div class="source-card">
     <div class="source-header" style="cursor:default">
