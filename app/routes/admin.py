@@ -215,6 +215,7 @@ def channels():
     gracenote_filter = request.args.get('gracenote', '')
     gracenote_mode_filter = request.args.get('gracenote_mode', '')
     language_filter  = request.args.get('language', '')
+    country_filter   = request.args.get('country', '')
     category_filter  = request.args.get('category', '')
     duplicates_filter = request.args.get('duplicates', '')
     sort_by          = request.args.get('sort', 'name')
@@ -285,6 +286,8 @@ def channels():
         q = q.filter(Source.name == source_filter)
     if language_filter:
         q = q.filter(Channel.language == language_filter)
+    if country_filter:
+        q = q.filter(Channel.country == country_filter)
     if category_filter:
         q = q.filter(Channel.category == category_filter)
     if search:
@@ -338,6 +341,12 @@ def channels():
         .order_by(Channel.category).all()
     categories = [(cat, count) for cat, count in cat_rows]
 
+    country_rows = db.session.query(Channel.country, db.func.count(Channel.id))\
+        .filter(Channel.country != None, Channel.country != '')\
+        .group_by(Channel.country)\
+        .order_by(Channel.country).all()
+    countries = [(c, cnt) for c, cnt in country_rows]
+
     page_names = {(ch.name or '').strip() for ch in channels.items if (ch.name or '').strip()}
     duplicate_names = exact_duplicate_names & page_names
     possible_duplicate_names = possible_duplicate_names & page_names
@@ -367,6 +376,7 @@ def channels():
                            gracenote_filter=gracenote_filter,
                            gracenote_mode_filter=gracenote_mode_filter,
                            language_filter=language_filter, languages=languages,
+                           country_filter=country_filter, countries=countries,
                            category_filter=category_filter, categories=categories,
                            duplicates_filter=duplicates_filter,
                            duplicate_names=duplicate_names,
@@ -438,6 +448,10 @@ def feeds():
         .filter(Channel.is_active == True, Channel.language != None)\
         .distinct().order_by(Channel.language).all()
     languages  = [{'code': r[0], 'label': r[0]} for r in langs]
+    country_rows = db.session.query(Channel.country)\
+        .filter(Channel.is_active == True, Channel.country != None, Channel.country != '')\
+        .distinct().order_by(Channel.country).all()
+    countries = [r[0] for r in country_rows]
     base_url   = public_base_url()
     default_feed = next((f for f in feeds if f.slug == 'default'), None)
     # chnum_start is now the single source of truth for all feeds including default.
@@ -452,7 +466,7 @@ def feeds():
     }
     return render_template('admin/feeds.html',
                            feeds=feeds, sources=sources,
-                           categories=categories, languages=languages,
+                           categories=categories, languages=languages, countries=countries,
                            base_url=base_url,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,

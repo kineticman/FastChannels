@@ -734,6 +734,7 @@
       source:     {{ source_filter    | tojson }},
       category:   {{ category_filter  | tojson }},
       language:   {{ language_filter  | tojson }},
+      country:    {{ country_filter   | tojson }},
       search:     {{ search           | tojson }},
       drm:        {{ drm_filter       | tojson }},
       enabled:    {{ enabled_filter   | tojson }},
@@ -779,7 +780,7 @@
           <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
         </div>
       </div>
-      <details class="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or drm_filter or language_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter %}open{% endif %}>
+      <details class="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter %}open{% endif %}>
         <summary>More filters</summary>
         <div class="toolbar-secondary">
           <div class="filter-group">
@@ -826,6 +827,17 @@
               {% endfor %}
             </select>
           </div>
+          {% if countries %}
+          <div class="filter-group">
+            <label class="filter-label" for="country-filter">Region</label>
+            <select id="country-filter" name="country">
+              <option value="">All Regions</option>
+              {% for c, count in countries %}
+              <option value="{{ c }}" {% if country_filter == c %}selected{% endif %}>{{ c }} ({{ count }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
           <div class="filter-group">
             <label class="filter-label" for="gracenote-filter">Gracenote ID</label>
             <select id="gracenote-filter" name="gracenote">
@@ -882,6 +894,9 @@
       {% if language_filter %}
       <span class="filter-chip"><strong>Language</strong>{{ language_filter }}</span>
       {% endif %}
+      {% if country_filter %}
+      <span class="filter-chip"><strong>Region</strong>{{ country_filter }}</span>
+      {% endif %}
       {% if gracenote_filter %}
       <span class="filter-chip"><strong>Gracenote ID</strong>{% if gracenote_filter == '1' %}Has Gracenote ID{% elif gracenote_filter == '0' %}Missing Gracenote ID{% endif %}</span>
       {% endif %}
@@ -891,7 +906,7 @@
       {% if duplicates_filter == '1' %}
       <span class="filter-chip"><strong>Duplicates</strong>Duplicates only</span>
       {% endif %}
-      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter == '1') %}
+      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter == '1') %}
       <span class="filter-chip"><strong>View</strong>All channels</span>
       {% endif %}
       <button type="button" class="btn-hide-disabled{% if enabled_filter == '1' %} active{% endif %}" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}◉ Hiding disabled{% else %}○ Hide disabled{% endif %}</button>
@@ -1062,7 +1077,7 @@
     </div>
 
     {% if channels.pages > 1 %}
-    {% set qs = 'feed=' ~ feed_filter ~ '&source=' ~ source_filter ~ '&search=' ~ search ~ '&enabled=' ~ enabled_filter ~ '&presence=' ~ presence_filter ~ '&drm=' ~ drm_filter ~ '&language=' ~ language_filter ~ '&gracenote=' ~ gracenote_filter ~ '&gracenote_mode=' ~ gracenote_mode_filter ~ '&category=' ~ category_filter ~ '&duplicates=' ~ duplicates_filter ~ '&sort=' ~ sort_by ~ '&dir=' ~ sort_dir %}
+    {% set qs = 'feed=' ~ feed_filter ~ '&source=' ~ source_filter ~ '&search=' ~ search ~ '&enabled=' ~ enabled_filter ~ '&presence=' ~ presence_filter ~ '&drm=' ~ drm_filter ~ '&language=' ~ language_filter ~ '&country=' ~ country_filter ~ '&gracenote=' ~ gracenote_filter ~ '&gracenote_mode=' ~ gracenote_mode_filter ~ '&category=' ~ category_filter ~ '&duplicates=' ~ duplicates_filter ~ '&sort=' ~ sort_by ~ '&dir=' ~ sort_dir %}
     <div class="pagination">
       {% if channels.has_prev %}
       <a href="?page={{ channels.prev_num }}&{{ qs }}">← Prev</a>

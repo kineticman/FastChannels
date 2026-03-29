@@ -1284,6 +1284,8 @@ def stats():
         q = q.filter(Channel.category.in_(categories))
     if languages := request.args.getlist('language'):
         q = q.filter(Channel.language.in_(languages))
+    if countries := request.args.getlist('country'):
+        q = q.filter(Channel.country.in_(countries))
     if gracenote := request.args.get('gracenote'):
         if gracenote == 'has':
             q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')

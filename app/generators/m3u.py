@@ -122,6 +122,8 @@ def _build_channel_query(filters: dict):
             query = query.filter(Channel.language.in_(languages))
         elif language := filters.get('language'):
             query = query.filter(Channel.language == language)
+        if countries := filters.get('countries'):
+            query = query.filter(Channel.country.in_(countries))
         if gracenote := filters.get('gracenote'):
             if gracenote == 'has':
                 query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
@@ -168,6 +170,8 @@ def _build_channel_stub_query(filters: dict):
             query = query.filter(Channel.language.in_(languages))
         elif language := filters.get('language'):
             query = query.filter(Channel.language == language)
+        if countries := filters.get('countries'):
+            query = query.filter(Channel.country.in_(countries))
         if gracenote := filters.get('gracenote'):
             if gracenote == 'has':
                 query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
