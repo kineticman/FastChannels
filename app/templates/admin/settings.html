@@ -913,10 +913,10 @@ async function loadSystemStats() {
         </div>
         <div>
           <div class="stats-section-label">Memory</div>
-          ${_stat('Container total', containerLimit ? `${containerUsage} / ${containerLimit}` : containerUsage, (mem.container_percent || 0) >= 80 ? 'warn' : '')}
+          ${_stat('Container total (incl. cache)', containerLimit ? `${containerUsage} / ${containerLimit}` : containerUsage, (mem.container_percent || 0) >= 80 ? 'warn' : '')}
+          ${_stat('Process memory', anonBytes)}
+          ${_stat('File cache (reclaimable)', fileCacheBytes, 'muted')}
           ${_stat('Container %', mem.container_percent != null ? `${mem.container_percent}%` : 'Unavailable', (mem.container_percent || 0) >= 80 ? 'warn' : 'muted')}
-          ${_stat('Process/anon', anonBytes)}
-          ${_stat('File cache', fileCacheBytes)}
           ${_stat('Web process RSS', processRss)}
           ${_stat('Web process swap', processSwap, (mem.process_swap_bytes || 0) > 0 ? 'warn' : 'muted')}
           ${_stat('Host available', hostAvailable)}
