@@ -1,11 +1,30 @@
 provider,key,tmsid,time_shift,notes
+freelivesports,6721235c3d39e9e0c717997d,124806,,ACC Digital Network
 freelivesports,66f5a9a408f2c39175aab916,142414,,Action Plus
+freelivesports,6721226853bb4ab784918230,163942,,Big 12 Network
+freelivesports,690bd93eb99006859752b2ac,200290,,Bowling TV
+freelivesports,698298987b62c73309c5256b,167590,,Cirque du Soleil
+freelivesports,6675b85a7620a64769e3a926,125196,,Cornhole TV
+freelivesports,675c767406563ac6560ae104,132889,,SPEEDVISION
+freelivesports,6675b7bda139017a32428e74,119117,,SportsGrid
+freelivesports,6675bc4b1de4405de4d48637,113991,,Stadium
+freelivesports,6675be6a0485604f67e34186,150219,,Strongman Champions League
+freelivesports,66631a6b68357e70058f62ca,152976,,Surf Cinema
+freelivesports,66fc2e0b6278931878517b89,122436,,Swerve Combat
+freelivesports,695d764ad33a113e45a09c0c,121424,,Waypoint TV
+freelivesports,66fafe92ae9285e6ac7449d7,164602,,Willow Sports
+lg-channels,50centaction_action_US,178243,,50 Cent Action
 lg-channels,us-amc_anime_x_hidive_1,132816,,ANIME x HIDIVE
+lg-channels,FREQ888,112881,,Alien Nation by DUST
+lg-channels,us-amc_allblk_gems_1,124177,,AllBlk Gems
+lg-channels,amg01420c1eng_amg01420c1eng_US,115365,,America's Test Kitchen
 lg-channels,Stingray232ADS,191509,,Stingray 2000s
 localnow,00DE3395-C989-4527-9A3F-31C2B76DF232,154547,,Conflict
 localnow,11F7EC73-20B1-4BF8-BDB1-FAA2B48AC5DF,152977,,Popular Science
+plex,5e20b730f2f8d5003d739db7-66f6b947515e742745f5ca34,165784,,21 Jump Street
 plex,5e20b730f2f8d5003d739db7-6745dca72832b870acf53220,169857,,365BLK [FAST]
 plex,5e20b730f2f8d5003d739db7-64149a3c238e21f260e7844c,126373,,4UV
+plex,5e20b730f2f8d5003d739db7-6827b9579beea89c38b6df55,178243,,50 Cent Action
 plex,5e20b730f2f8d5003d739db7-6674b595f04cf4bb9233c914,163839,,A Touch of Frost
 plex,5e20b730f2f8d5003d739db7-5f74cf7effbe690040689f41,113780,,A&E Crime 360
 plex,5e20b730f2f8d5003d739db7-5f8ee3727c75fa002d9e47c1,124806,,ACCDN
@@ -290,7 +309,61 @@ plex,5e20b730f2f8d5003d739db7-6617f52f0049fcb8e2b0d5b8,155772,,Yu-Gi-Oh!
 plex,5e20b730f2f8d5003d739db7-60a53634126de9002e694bc4,120375,,beIN SPORTS XTRA
 plex,5e20b730f2f8d5003d739db7-64a8903d273b89c4e7396553,119661,,beIN Sports Xtra en Español
 plex,5e20b730f2f8d5003d739db7-5f91c4ea96a391002df9a661,118464,,pocket.watch Game-On
+pluto,656535fc2c46f30008870fae,135387,,BBC Earth
+pluto,666b265722acab000885c6aa,159706,,BET x Tyler Perry Comedy
+pluto,666b38a5efa2a10008b15b3a,159707,,BET x Tyler Perry Drama
+pluto,6176fd25e83a5f0007a464c9,120372,,Bounce XL
+pluto,6549310a53fc97000838fcc9,138400,,Bravo Vault
+pluto,60f5d389985a0c0007357304,135385,,BritBox Mysteries
+pluto,5a6b92f6e22a617379789618,104846,,CBS News 24/7
+pluto,60f75919718aed0007250d7a,123127,,CBS News Baltimore
+pluto,5dc0c78281eddb0009a02d5e,110291,,ET
+pluto,65c69ee3d77d450008c80438,152131,,F1 Channel
+pluto,554158e864526b29254ff105,133321,,FailArmy
+pluto,5bb1af6a268cae539bcedb0a,113363,,Forensic Files
+pluto,65493029ab052400089e9d2f,114142,,GolfPass
+pluto,5f8a02476b72230007e62b7d,138142,,HSN
+pluto,628e685ba3811100070551a8,119396,,Hallmark Movies & More
+pluto,65453f30085df200085883d8,122912,,ION
+pluto,63335b193583440007c859fb,121308,,Lifetime Movie Favorites
+pluto,63d025db4e83e700086eaa96,119219,,LiveNOW from FOX
+pluto,5e66968a70f34c0007d050be,135239,,MLB
+pluto,6887a86be3703b7d42b3eca3,129047,,Matched Married Meet by Lifetime
+pluto,65775d29dfed030008cb3db2,123433,,Modern Marvels by HISTORY
+pluto,645e7828e1979c00087b75b4,158131,,MovieSphere by Lionsgate
+pluto,5df97894467dfa00091c873c,114174,,NBC News NOW
+pluto,6549306c83595c000815a696,114140,,NBC Sports NOW
+pluto,5ced7d5df64be98e07ed47b6,121705,,NFL Channel
+pluto,5812bd9f249444e05d09cc4e,130248,,Naturescape
+pluto,668c5d3bfd9eb2000882bb50,153524,,ONE Championship TV
+pluto,654930a8346f420008d3b0b8,138585,,Oxygen True Crime Archives
+pluto,640a64bd73e013000893d4e0,128391,,PBS Nature
+pluto,6334a574605f140007e233c4,127399,,PFL MMA
+pluto,5de94dacb394a300099fa22a,176119,,PGA TOUR
+pluto,5459795fc9f133a519bc0bef,120010,,Scripps News
+pluto,696689d13b9ce349c9be3a18,189264,,Stingray DJAZZ
 pluto,5d81607ab737153ea3c1c80e,131887,,The Addams Family
+pluto,67d07b7b798df95b8e9484b5,168777,,The Emeril Lagasse Channel
+pluto,64dab9df3d48f40008868091,124329,,The Jamie Oliver Channel
+pluto,6792c30abc03978b9b8bb832,196933,,The NBA Channel
+pluto,62fa8176b9884200074ef5ae,115540,,The Walking Dead Universe
+pluto,5f32f26bcd8aea00071240e5,121122,,Vevo '70s
+pluto,5fd7b8bf927e090007685853,121123,,Vevo '80s
+pluto,5fd7bb1f86d94a000796e2c2,121124,,Vevo '90s
+pluto,5fd7bca3e0a4ee0007a38e8c,121125,,Vevo 2K
+pluto,5da0d75e84830900098a1ea0,120902,,Vevo Country
+pluto,5d93b635b43dd1a399b39eee,115694,,Vevo Pop
+pluto,5da0d83f66c9700009b96d0e,120901,,Vevo R&B
+pluto,64dab5fe35425100080e2991,126633,,Vevo Regional Mexicano
+pluto,61d4b38226b8a50007fe03a6,122261,,Vevo Rock
+pluto,61d4c2817a823d00070ba53e,122262,,Vevo True School Hip-Hop
+pluto,6532e8342cf13100083b404c,170353,,Warner Bros. TV Say Yes to the Dress
+pluto,6532e7fa045c3d0008514ca7,169611,,Warner Bros. TV Sweet Escapes
+pluto,628c20c0097ef20007607938,124980,,WeatherNation Charlotte
+pluto,623b92a2ccefed0007b1db48,124050,,XITE Classic Country
+pluto,623b93628e6ded0007337d4d,124051,,XITE Gospel
+pluto,623a1b5188ecdc0007c9ef5a,124052,,XITE Rock x Metal
+pluto,696998dfa2b623e8b20125a3,146460,,ZenLIFE by Stingray
 roku,f95c40a17cfe5b9fb1970192e378fb0c,120551,,AccuWeather NOW
 roku,aa16704e1ee052dea67cee1f79618754,112881,,Alien Nation by DUST
 roku,a96f9c338b3e5ab29ec3b436c01c84da,115365,,America's Test Kitchen
@@ -411,36 +484,129 @@ samsung,USBD3500038R6,149883,,Stingray Holidayscapes
 samsung,USBD3300021KV,119114,,Stingray Hot Country
 samsung,USBD3300022QK,67566,,Stingray Remember the 80s
 samsung,US1400014N9,183985,,Storm Vibes
+tubi,400000096,113780,,A&E Crime 360
+tubi,618762,113380,,ABC News Live
 tubi,400000012,124806,,ACCDN
+tubi,692057,112881,,Alien Nation by DUST
 tubi,653208,205028,,Always Funny
 tubi,715950,170368,,At the Movies
 tubi,571664,123870,,Bloomberg Originals
 tubi,555130,124721,,CBC News
 tubi,555126,107241,,Cheddar
+tubi,400000069,180081,,Classic Cinema
 tubi,715949,169318,,Crime Scenes
+tubi,400000090,123427,,Crime ThrillHer
+tubi,400000024,144738,,DAZN Ringside
+tubi,400000086,126369,,Dance Moms
+tubi,711410,113957,,Dateline 24/7
 tubi,400000088,150981,,Dog the Bounty Hunter
 tubi,400000056,146144,,Ebony TV by Lionsgate
+tubi,555382,119212,,FOX SOUL
 tubi,628893,121307,,FOX Weather
 tubi,715948,169317,,Family Unscripted
+tubi,557344,106100,,Fubo Sports Network
+tubi,673411,116474,,Game Show Central
 tubi,400000070,169320,,Generation Drama
 tubi,715951,169310,,Ghosts are Real
+tubi,684170,124040,,Grit Xtra
+tubi,700406,127985,,HauntTV
 tubi,715952,169315,,How To
+tubi,682634,122912,,ION
+tubi,684167,123651,,ION Mystery
+tubi,684165,117518,,ION Plus
 tubi,400000073,169605,,In the Garage
 tubi,400000033,169820,,Kartoon Channel!
+tubi,400000251,119388,,Law&Crime
+tubi,555127,119219,,LiveNOW from FOX
+tubi,400000067,170382,,Living with Evil
+tubi,618763,118952,,Localish
 tubi,715947,169311,,Love & Marriage
+tubi,613765,206416,,MLB
+tubi,692262,121534,,Maverick Black Cinema
+tubi,700415,122437,,Midsomer Murders
 tubi,400000048,146284,,MrBeast
 tubi,715946,169313,,Mysterious Worlds
+tubi,613761,121705,,NFL Channel
+tubi,400000008,133288,,NHL
 tubi,629323,129130,,NHRA TV
 tubi,400000105,158128,,Nash Bridges
+tubi,400000006,135167,,OuterSphere
+tubi,400000046,176119,,PGA TOUR
+tubi,641290,121781,,REELZ Famous & Infamous
+tubi,613762,121197,,Real Madrid
 tubi,578086,120010,,Scripps News
+tubi,400000064,141825,,Silent Witness and New Tricks
+tubi,613763,113991,,Stadium
 tubi,715938,169611,,Sweet Escapes
 tubi,702891,132922,,The Jack Hanna Channel
 tubi,400000116,171941,,The NBA Channel
+tubi,724210,134959,,The Rifleman
 tubi,700412,131220,,Total Crime
+tubi,400000094,123431,,UnXplained Zone
 tubi,715942,169646,,Unique Lives
+tubi,400000000,121424,,Waypoint TV
 tubi,715945,169645,,Welcome Home
+tubi,692073,124636,,Women's Sports Network
 xumo,99951377,115678,,AMC Thrillers
 xumo,9995110,127883,,Action News Jax
 xumo,99951256,138568,,Alfred Hitchcock Presents
+xumo,99951124,113452,,BUZZR
+xumo,99951467,138399,,Bad Girls Club
+xumo,99951409,129521,,Bark TV
+xumo,99951242,138400,,Bravo Vault
+xumo,99951213,135385,,BritBox Mysteries
+xumo,99951367,129780,,Canela.TV Clasicos
 xumo,99991399,122969,,CineLife
+xumo,99991131,116338,,Circle Country
+xumo,99951358,123667,,Curiosity Now
+xumo,99951458,130514,,Declassified
+xumo,99951265,138277,,DraftKings Network
+xumo,99951378,175889,,EarthXtra
+xumo,99951293,146144,,Ebony TV by Lionsgate
+xumo,99951536,124328,,El Rey Rebel
+xumo,99991378,138244,,ElectricNOW
+xumo,99951432,177500,,Extreme Jobs
+xumo,99991349,116715,,It's Showtime at the Apollo
+xumo,99991348,117847,,KOCOWA K-Drama
+xumo,99951232,137609,,Laff More
+xumo,99951410,170347,,Lawless by Lionsgate
+xumo,99991635,119219,,LiveNOW from FOX
+xumo,99991282,99988,,Local Now
+xumo,99951168,124125,,NBC 10 Boston News
+xumo,99951166,124030,,NBC 10 Philadelphia News
+xumo,99951164,124031,,NBC 4 Los Angeles News
+xumo,99951163,124034,,NBC 4 New York News
+xumo,99951181,124033,,NBC 4 Washington News
+xumo,99951165,124036,,NBC 5 Chicago News
+xumo,99951182,124035,,NBC 5 Dallas-Fort Worth News
+xumo,99951167,124048,,NBC 6 South Florida News
+xumo,99951185,135977,,NBC 7 San Diego News
+xumo,99951162,135978,,NBC Bay Area News
+xumo,99951244,138448,,NBC Comedy Vault
+xumo,99951183,124032,,NBC Connecticut News
+xumo,99991651,126864,,NBC LX Home
+xumo,99951253,114140,,NBC Sports NOW
+xumo,99991738,121705,,NFL Channel
+xumo,99951229,138773,,Ninja Kidz TV
+xumo,99951404,117261,,OAN Plus
+xumo,99951530,153524,,ONE Championship
+xumo,99951288,135510,,OUTflix Movies
+xumo,99951250,135167,,OuterSphere by Lionsgate
+xumo,99951466,138585,,Oxygen True Crime Archives
+xumo,99951203,127399,,PFL MMA
+xumo,99951350,125151,,Places & Spaces
+xumo,99991148,120010,,Scripps News
+xumo,99951538,204956,,Scripps Sports Network
+xumo,99991119,117880,,Stingray Classic Rock
+xumo,99991120,117881,,Stingray Greatest Hits
 xumo,99991117,67555,,Stingray Hit List
+xumo,99991118,117990,,Stingray Hot Country
+xumo,99991252,130248,,Stingray Naturescape
+xumo,99991742,67566,,Stingray Remember the 80s
+xumo,99991121,117992,,Stingray Soul Storm
+xumo,99951385,169611,,Sweet Escapes
+xumo,99991696,122436,,Swerve Combat
+xumo,99951491,132922,,The Jack Hanna Channel
+xumo,99951153,124329,,The Jamie Oliver Channel
+xumo,99951383,196933,,The NBA Channel
+xumo,99951255,138445,,Universal Westerns
