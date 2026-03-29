@@ -1057,6 +1057,8 @@ def preview_channel(channel_id):
             'source_channel_id': ch.source_channel_id,
             'category': ch.category,
             'language': ch.language,
+            'country': ch.country,
+            'tags': [t for t in (ch.tags or '').split(',') if t] if ch.tags else [],
             'logo_url': ch.logo_url,
             'disable_reason': ch.disable_reason,
             'is_active': ch.is_active,

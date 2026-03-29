@@ -1347,6 +1347,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             ch.category      = ch.category_override or category_for_channel(cd.name, cd.category)
             ch.language      = ch.language_override or cd.language
             ch.country       = cd.country
+            ch.tags          = ','.join(cd.tags) if getattr(cd, 'tags', None) else None
             if getattr(cd, 'guide_key', None):
                 ch.guide_key = cd.guide_key
             # Don't resurrect channels the stream audit flagged as Dead or DRM
@@ -1377,6 +1378,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 category          = category_for_channel(cd.name, cd.category),
                 language          = cd.language,
                 country           = cd.country,
+                tags              = ','.join(cd.tags) if getattr(cd, 'tags', None) else None,
                 number            = None,
                 gracenote_id      = gracenote_id if gracenote_auto_fill else None,
                 gracenote_locked  = False,

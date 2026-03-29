@@ -65,6 +65,7 @@ class Channel(db.Model):
     language          = db.Column(db.String(16), default='en')
     language_override = db.Column(db.String(16), nullable=True)   # set by user; beats scraper value
     country           = db.Column(db.String(8), default='US')
+    tags              = db.Column(db.Text, nullable=True)          # comma-separated raw tags/groups from source
     number            = db.Column(db.Integer)
     number_pinned     = db.Column(db.Boolean, default=False, nullable=False)  # True when user has manually set/locked this channel number
     gracenote_id      = db.Column(db.String(32), nullable=True)   # e.g. EP012345678; set by scraper or user

@@ -182,15 +182,17 @@ def _rand_rsc() -> str:
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
 
 
-def _build_category_map(rsc_objects: list[dict]) -> tuple[dict[str, str], set[str]]:
+def _build_category_map(rsc_objects: list[dict]) -> tuple[dict[str, str], set[str], dict[str, list[str]]]:
     """
     Parse the categories list from RSC objects.
     Returns:
-      cat_map   — channel_id → category label
+      cat_map   — channel_id → primary category label
       spanish   — set of channel_ids in the en-espanol category (language hint)
+      tags_map  — channel_id → list of all category labels (for display)
     """
     cat_map: dict[str, str] = {}
     spanish: set[str] = set()
+    tags_map: dict[str, list[str]] = {}
 
     for obj in rsc_objects:
         cats = obj.get("categories")
@@ -204,17 +206,19 @@ def _build_category_map(rsc_objects: list[dict]) -> tuple[dict[str, str], set[st
                     continue
                 if slug == "en-espanol":
                     spanish.add(cid)
+                    label = "En Español"
                     if cid not in cat_map:
-                        cat_map[cid] = "En Español"
+                        cat_map[cid] = label
                 elif slug != "featured":
-                    # Only set if not already assigned (first non-featured wins)
-                    if cid not in cat_map:
-                        label = _PLEX_CATEGORY_MAP.get(slug)
-                        if label:
+                    label = _PLEX_CATEGORY_MAP.get(slug)
+                    if label:
+                        if cid not in cat_map:
                             cat_map[cid] = label
+                        if label not in tags_map.get(cid, []):
+                            tags_map.setdefault(cid, []).append(label)
         break  # categories list only appears once
 
-    return cat_map, spanish
+    return cat_map, spanish, tags_map
 
 
 # ── Scraper ────────────────────────────────────────────────────────────────────
@@ -401,7 +405,7 @@ class PlexScraper(BaseScraper):
             return []
 
         rsc_objects = _extract_rsc_objects(text)
-        cat_map, spanish_ids = _build_category_map(rsc_objects)
+        cat_map, spanish_ids, tags_map = _build_category_map(rsc_objects)
         grid_keys = self._fetch_lineup_grid_keys()
 
         channels: dict[str, ChannelData] = {}
@@ -436,6 +440,7 @@ class PlexScraper(BaseScraper):
                     stream_type       = "hls",
                     gracenote_id      = resolve_gracenote("plex", lookup_key=channel_id),
                     guide_key         = grid_keys.get(channel_id),
+                    tags              = tags_map.get(channel_id, []),
                 )
 
         result = sorted(channels.values(), key=lambda c: (c.name or "").lower())

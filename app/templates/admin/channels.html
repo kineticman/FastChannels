@@ -1245,9 +1245,11 @@
               <div class="preview-title">${escapeHtml(ch.name || 'Channel')}</div>
               <div class="preview-meta">
                 ${escapeHtml(ch.source_display_name || 'Unknown source')}
+                ${ch.country ? ` · ${escapeHtml(ch.country)}` : ''}
                 ${ch.category ? ` · ${escapeHtml(ch.category)}` : ''}
                 ${ch.language ? ` · ${escapeHtml(ch.language)}` : ''}
               </div>
+              ${(ch.tags && ch.tags.length > 1) ? `<div style="margin-top:0.3rem;font-size:0.78rem;color:#475569">${ch.tags.map(t => escapeHtml(t)).join(' · ')}</div>` : ''}
             </div>
           </div>
           ${warning}

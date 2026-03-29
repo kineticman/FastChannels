@@ -146,6 +146,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN language_override VARCHAR(16)"
                 ))
+            if "tags" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN tags TEXT"
+                ))
             if "is_duplicate" not in ch_cols:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN is_duplicate BOOLEAN NOT NULL DEFAULT 0"

@@ -232,6 +232,7 @@ class TubiScraper(BaseScraper):
                 country           = 'US',
                 stream_type       = 'hls',
                 gracenote_id      = gracenote_id,
+                tags              = group_list,
             ))
 
         logger.info('[tubi] %d channels (anonymous)', len(channels))
@@ -388,6 +389,7 @@ class TubiScraper(BaseScraper):
                 country           = 'US',
                 stream_type       = 'hls',
                 gracenote_id      = gracenote_id,
+                tags              = group_list,
             ))
 
         logger.info('[tubi] %d channels (authenticated)', len(channels))
