@@ -1077,7 +1077,7 @@
     </div>
 
     {% if channels.pages > 1 %}
-    {% set qs = 'feed=' ~ feed_filter ~ '&source=' ~ source_filter ~ '&search=' ~ search ~ '&enabled=' ~ enabled_filter ~ '&presence=' ~ presence_filter ~ '&drm=' ~ drm_filter ~ '&language=' ~ language_filter ~ '&country=' ~ country_filter ~ '&gracenote=' ~ gracenote_filter ~ '&gracenote_mode=' ~ gracenote_mode_filter ~ '&category=' ~ category_filter ~ '&duplicates=' ~ duplicates_filter ~ '&sort=' ~ sort_by ~ '&dir=' ~ sort_dir %}
+    {% set qs = filter_qs %}
     <div class="pagination">
       {% if channels.has_prev %}
       <a href="?page={{ channels.prev_num }}&{{ qs }}">← Prev</a>

@@ -367,6 +367,16 @@ def channels():
         if ch.number_pinned and ch.number in _conflict_numbers
     }
 
+    from urllib.parse import urlencode
+    filter_qs = urlencode({k: v for k, v in {
+        'feed': feed_filter, 'source': source_filter, 'search': search,
+        'enabled': enabled_filter, 'presence': presence_filter, 'drm': drm_filter,
+        'language': language_filter, 'country': country_filter,
+        'gracenote': gracenote_filter, 'gracenote_mode': gracenote_mode_filter,
+        'category': category_filter, 'duplicates': duplicates_filter,
+        'sort': sort_by, 'dir': sort_dir,
+    }.items() if v})
+
     return render_template('admin/channels.html',
                            channels=channels, sources=sources, feeds=feeds,
                            feed_filter=feed_filter, selected_feed=selected_feed,
@@ -383,7 +393,8 @@ def channels():
                            possible_duplicate_names=possible_duplicate_names,
                            sort_by=sort_by, sort_dir=sort_dir,
                            chnum_map=chnum_map,
-                           chnum_conflicts=chnum_conflicts)
+                           chnum_conflicts=chnum_conflicts,
+                           filter_qs=filter_qs)
 
 
 @admin_bp.route('/channels/chnum-map')
