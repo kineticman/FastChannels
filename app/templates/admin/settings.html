@@ -678,7 +678,7 @@
       <div class="toggle-row" id="gn-contribution-row">
         <div class="toggle-row-text">
           <div class="toggle-row-label">Contribution Webhook URL</div>
-          <div class="toggle-row-help">When set, the "Contribute" button in the Community Map will POST your new mappings here (e.g. a Zapier/Make/n8n webhook that feeds a review spreadsheet). Leave blank to disable contributions.</div>
+          <div class="toggle-row-help">Where user contributions are sent when they click Contribute in the Community Map. Defaults to the FastChannels community webhook — leave blank to use the default.</div>
           <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
             <input type="url" id="gn-contribution-url" style="flex:1;min-width:260px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.82rem;padding:0.35rem 0.6rem" placeholder="Default Make.com webhook (leave blank to use default)" value="{{ gracenote_contribution_url }}">
             <button class="btn btn-secondary" onclick="saveContributionUrl()">Save URL</button>
