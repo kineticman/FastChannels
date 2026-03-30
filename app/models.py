@@ -268,9 +268,15 @@ class AppSettings(db.Model):
         'https://gist.githubusercontent.com/kineticman/'
         '87765d469610233f894c9c225cb4f2ca/raw/gistfile1.txt'
     )
+    _DEFAULT_CONTRIBUTION_URL = (
+        'https://hook.us2.make.com/op063u88o0mx9noggvv9wgx4gass96iv'
+    )
 
     def effective_gracenote_map_url(self) -> str:
         return (self.gracenote_map_url or '').strip() or self._DEFAULT_GRACENOTE_MAP_URL
+
+    def effective_gracenote_contribution_url(self) -> str:
+        return (self.gracenote_contribution_url or '').strip() or self._DEFAULT_CONTRIBUTION_URL
 
     def effective_timezone_name(self) -> str:
         from .timezone_utils import current_timezone_name

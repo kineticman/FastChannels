@@ -1310,7 +1310,7 @@ def gracenote_my_contributions():
 def gracenote_submit_contributions():
     """POST selected channel mappings to the configured contribution webhook URL."""
     settings = AppSettings.get()
-    webhook_url = (settings.gracenote_contribution_url or '').strip()
+    webhook_url = settings.effective_gracenote_contribution_url()
     if not webhook_url:
         return jsonify({'ok': False, 'message': 'No contribution webhook URL configured in Settings.'}), 400
 

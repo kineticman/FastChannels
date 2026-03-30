@@ -680,7 +680,7 @@
           <div class="toggle-row-label">Contribution Webhook URL</div>
           <div class="toggle-row-help">When set, the "Contribute" button in the Community Map will POST your new mappings here (e.g. a Zapier/Make/n8n webhook that feeds a review spreadsheet). Leave blank to disable contributions.</div>
           <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
-            <input type="url" id="gn-contribution-url" style="flex:1;min-width:260px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.82rem;padding:0.35rem 0.6rem" placeholder="https://hooks.zapier.com/…" value="{{ gracenote_contribution_url }}">
+            <input type="url" id="gn-contribution-url" style="flex:1;min-width:260px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.82rem;padding:0.35rem 0.6rem" placeholder="Default Make.com webhook (leave blank to use default)" value="{{ gracenote_contribution_url }}">
             <button class="btn btn-secondary" onclick="saveContributionUrl()">Save URL</button>
           </div>
           <span class="save-status" id="gn-contribution-status"></span>
@@ -1189,8 +1189,13 @@ function renderContributeModal() {
   if (!rows.length) {
     content.innerHTML = `
       <h3 style="margin-bottom:0.5rem;font-size:1rem">Contribute to Community Map</h3>
-      <p style="color:#64748b;font-size:0.875rem">All your Gracenote mappings are already in the community map. Nothing new to contribute — nice work!</p>
-      <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+      <p style="color:#64748b;font-size:0.875rem;margin-bottom:0.75rem">All your mapped channels are already in the community map — nothing new to contribute yet.</p>
+      <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:0.9rem;margin-bottom:1rem">
+        <div style="color:#e2e8f0;font-size:0.875rem;margin-bottom:0.4rem">Want to help fill in the gaps?</div>
+        <div style="color:#94a3b8;font-size:0.82rem;margin-bottom:0.75rem">Browse channels that don't have a Gracenote ID yet, assign some, then come back here to submit your new mappings to the community.</div>
+        <a href="/admin/channels?gracenote=missing" onclick="closeContributeModal()" class="btn-sm" style="background:#1d4ed8;color:#fff;text-decoration:none;display:inline-block">Browse Unmapped Channels →</a>
+      </div>
+      <div style="display:flex;justify-content:flex-end">
         <button class="btn-sm btn-secondary" onclick="closeContributeModal()">Close</button>
       </div>`;
     return;
