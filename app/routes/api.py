@@ -1333,30 +1333,28 @@ def gracenote_submit_contributions():
     from datetime import datetime, timezone as _tz
     from ..config import VERSION
     import requests as _req
-    mappings = [
-        {
+    submitted_at = datetime.now(_tz.utc).isoformat()
+    errors = []
+    for ch in channels:
+        row = {
+            'submitted_at': submitted_at,
+            'app_version':  VERSION,
             'provider':     ch.source.name if ch.source else '',
             'key':          ch.source_channel_id or '',
             'tmsid':        ch.gracenote_id,
             'channel_name': ch.name,
             'category':     ch.category or '',
         }
-        for ch in channels
-    ]
-    payload = {
-        'submitted_at': datetime.now(_tz.utc).isoformat(),
-        'app_version':  VERSION,
-        'count':        len(mappings),
-        'mappings':     mappings,
-    }
+        try:
+            r = _req.post(webhook_url, json=row, timeout=15)
+            r.raise_for_status()
+        except Exception as exc:
+            errors.append(str(exc))
 
-    try:
-        r = _req.post(webhook_url, json=payload, timeout=15)
-        r.raise_for_status()
-    except Exception as exc:
-        return jsonify({'ok': False, 'message': f'Webhook delivery failed: {exc}'}), 502
+    if errors:
+        return jsonify({'ok': False, 'message': f'Some deliveries failed: {errors[0]}'}), 502
 
-    return jsonify({'ok': True, 'message': f'{len(mappings)} mapping(s) submitted — thank you!'})
+    return jsonify({'ok': True, 'message': f'{len(channels)} mapping(s) submitted — thank you!'})
 
 
 @api_bp.route('/gracenote/community-export', methods=['GET'])
