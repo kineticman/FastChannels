@@ -958,6 +958,7 @@
               Category <span class="sort-arrow">{% if sort_by == 'category' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span>
             </th>
             <th>Lang</th>
+            <th>Region</th>
             <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">TVG-CHNO <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
             <th>Stream Flags</th>
@@ -1006,6 +1007,7 @@
               <span class="lang-label{% if ch.language_override %} has-override{% endif %}"
                     onclick="openLangModal({{ ch.id }})">{{ ch.language_override or ch.language or '—' }}</span>
             </td>
+            <td style="color:#64748b;font-size:0.8rem">{{ ch.country or '—' }}</td>
             <td class="chnum-cell{% if ch.number_pinned %} chnum-pinned{% endif %}{% if ch.id in chnum_conflicts %} chnum-conflict{% endif %}"
                 data-chnum-cell="1"
                 data-channel-id="{{ ch.id }}"

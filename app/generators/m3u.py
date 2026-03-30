@@ -299,6 +299,8 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
         f['category'] = categories
     if languages := feed_filters.get('languages'):
         f['languages'] = languages
+    if countries := feed_filters.get('countries'):
+        f['countries'] = countries
     if gracenote := feed_filters.get('gracenote'):
         f['gracenote'] = gracenote
     if excluded_ids := feed_filters.get('excluded_channel_ids'):

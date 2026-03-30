@@ -234,6 +234,8 @@ def _clean_filters(raw: dict) -> dict:
     elif language := raw.get('language'):
         # backward compat with old single-language saves
         out['languages'] = [str(language)]
+    if countries := raw.get('countries'):
+        out['countries'] = [str(c) for c in countries if c]
     if gracenote := raw.get('gracenote'):
         if gracenote in ('has', 'missing'):
             out['gracenote'] = gracenote
