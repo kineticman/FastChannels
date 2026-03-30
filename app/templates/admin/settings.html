@@ -1248,6 +1248,7 @@ function renderContributeModal() {
       <button class="btn-sm" id="contrib-submit-btn" onclick="submitContributions()" style="background:#1d4ed8;color:#fff">Submit Selected</button>
     </div>`;
   _updateContribCount();
+  _applyContribCooldown();
 }
 
 function _contributeSelectAll(checked) {
@@ -1263,7 +1264,42 @@ function _updateContribCount() {
   if (btn) btn.disabled = n === 0;
 }
 
+const _CONTRIB_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
+const _CONTRIB_LS_KEY = 'fc_contrib_last_at';
+
+function _contribCooldownRemaining() {
+  const last = parseInt(localStorage.getItem(_CONTRIB_LS_KEY) || '0', 10);
+  if (!last) return 0;
+  return Math.max(0, last + _CONTRIB_COOLDOWN_MS - Date.now());
+}
+
+function _contribCooldownLabel(ms) {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.ceil((ms % 3600000) / 60000);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function _applyContribCooldown() {
+  const remaining = _contribCooldownRemaining();
+  const btn = document.getElementById('contrib-submit-btn');
+  const result = document.getElementById('contrib-result');
+  if (!btn) return;
+  if (remaining > 0) {
+    btn.disabled = true;
+    btn.textContent = 'Submit Selected';
+    btn.title = `Cooldown active — resubmit available in ${_contribCooldownLabel(remaining)}`;
+    if (result) result.innerHTML = `<div style="color:#94a3b8;font-size:0.82rem;margin-bottom:0.5rem">⏳ You already submitted recently. Next submission available in <strong>${_contribCooldownLabel(remaining)}</strong>.</div>`;
+  }
+}
+
 async function submitContributions() {
+  const remaining = _contribCooldownRemaining();
+  if (remaining > 0) {
+    const result = document.getElementById('contrib-result');
+    if (result) result.innerHTML = `<div style="color:#fbbf24;font-size:0.875rem;margin-bottom:0.5rem">⏳ Please wait ${_contribCooldownLabel(remaining)} before submitting again.</div>`;
+    return;
+  }
   const ids = [...document.querySelectorAll('.contrib-cb:checked')].map(cb => parseInt(cb.dataset.id));
   if (!ids.length) return;
   const btn = document.getElementById('contrib-submit-btn');
@@ -1277,6 +1313,7 @@ async function submitContributions() {
     });
     const d = await r.json();
     if (d.ok) {
+      localStorage.setItem(_CONTRIB_LS_KEY, String(Date.now()));
       result.innerHTML = `<div style="color:#86efac;font-size:0.875rem;margin-bottom:0.5rem">✅ ${escCm(d.message)}</div>`;
       btn.textContent = 'Done'; btn.style.background = '#166534';
     } else {

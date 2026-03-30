@@ -780,7 +780,7 @@
           <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
         </div>
       </div>
-      <details class="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter %}open{% endif %}>
+      <details class="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter %}open{% endif %}>
         <summary>More filters</summary>
         <div class="toolbar-secondary">
           <div class="filter-group">
@@ -807,6 +807,16 @@
               <option value="">Enabled + Disabled</option>
               <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
               <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="presence-filter">Scraper Presence</label>
+            <select id="presence-filter" name="presence">
+              <option value="">All channels</option>
+              <option value="active" {% if presence_filter == 'active' %}selected{% endif %}>Active (seen last scrape)</option>
+              <option value="inactive" {% if presence_filter == 'inactive' %}selected{% endif %}>Inactive (missing from scrapes)</option>
+              <option value="missed" {% if presence_filter == 'missed' %}selected{% endif %}>At risk (1+ missed scrapes)</option>
+              <option value="enabled_inactive" {% if presence_filter == 'enabled_inactive' %}selected{% endif %}>Enabled but inactive</option>
             </select>
           </div>
           <div class="filter-group">
