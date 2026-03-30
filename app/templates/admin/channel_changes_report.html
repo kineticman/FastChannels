@@ -212,22 +212,20 @@
   </nav>
 
   <div class="page">
-    <div class="hero">
+    <div class=”hero”>
       <div>
-        <h1>Channel Changes Report</h1>
-        <p class="subtitle">
-          Prototype change report built from the data FastChannels already stores today.
-          “New” is based on <code>created_at</code>. “Now inactive” is inferred from <code>is_active = false</code>
-          rows updated within the selected window, so it is operationally useful but not a precise historical loss log.
+        <h1>Channel Changes Report <span style=”font-size:0.65rem;font-weight:600;background:#1e3a5f;color:#7dd3fc;border:1px solid #1d4ed8;border-radius:999px;padding:0.15rem 0.55rem;vertical-align:middle;letter-spacing:0.05em”>BETA</span></h1>
+        <p class=”subtitle”>
+          Track channel lineup changes across your sources — new arrivals, channels that have gone inactive, and channels at risk of dropping out.
         </p>
       </div>
-      <div class="timestamp">
+      <div class=”timestamp”>
         Generated {{ now|localtime }}
       </div>
     </div>
 
-    <div class="banner">
-      <p><strong>Prototype caveat:</strong> this page deliberately uses cautious wording. It shows what the current schema can support without adding event history or changing the database.</p>
+    <div class=”banner”>
+      <p><strong>Note:</strong> this report is in beta. Inactive channel timing is approximate — it reflects when FastChannels detected the change, not necessarily when the channel disappeared. Accuracy improves over time as more scrape history is collected.</p>
     </div>
 
     <div class="toolbar">
@@ -267,7 +265,7 @@
     <div class="grid">
       <section class="card">
         <h2>New{% if window_days == 1 %} Today{% else %} in Last {{ window_days }} Days{% endif %}</h2>
-        <div class="section-subtitle">Best current signal for lineup additions. Good candidate for a user-facing digest.</div>
+        <div class="section-subtitle">Channels added to the lineup within the selected window.</div>
         {% if new_daily_counts %}
         <div class="mini-heading">Daily Buckets</div>
         <div class="source-list">
@@ -305,7 +303,7 @@
 
       <section class="card">
         <h2>Now Inactive{% if window_days == 1 %} Today{% else %} in Last {{ window_days }} Days{% endif %}</h2>
-        <div class="section-subtitle">Useful for operations, but these are inferred losses. Some rows may be long-stale channels that only flipped or were touched within the window.</div>
+        <div class="section-subtitle">Channels that went inactive within the selected window. Timing is approximate — based on when the change was detected, not when the channel actually disappeared.</div>
         {% if inferred_lost_daily_counts %}
         <div class="mini-heading">Daily Buckets</div>
         <div class="source-list">
@@ -336,7 +334,7 @@
               Missed scrapes {{ channel.missed_scrapes or 0 }}
             </div>
             {% if not channel.last_seen_at or (channel.missed_scrapes or 0) >= 3 %}
-            <div class="row-note">This may be a stale historical row rather than a clean same-day loss event.</div>
+            <div class="row-note">Loss time is an estimate — this channel may have been gone longer than the window suggests.</div>
             {% endif %}
           </div>
           {% else %}
@@ -378,7 +376,7 @@
       {% if lg_summary %}
       <section class="card">
         <h2>{{ lg_summary.display_name }} Snapshot</h2>
-        <div class="section-subtitle">Current scrape-health view for the provider we just validated.</div>
+        <div class="section-subtitle">Current scrape health for this source.</div>
         <div class="rows">
           <div class="row">
             <div class="row-top">
@@ -403,9 +401,8 @@
       {% endif %}
     </div>
 
-    <p class="footer-note">
-      If this prototype becomes a real feature, the next step is explicit transition tracking:
-      <code>first_seen_at</code>, <code>lost_at</code>, or a dedicated channel events table. That would let this page graduate from “inferred operational report” to a precise change history.
+    <p class=”footer-note”>
+      ⚠️ This report is in beta — data shown is based on what FastChannels currently tracks during scrapes. Have feedback? Let us know on the forum.
     </p>
   </div>
 </body>
