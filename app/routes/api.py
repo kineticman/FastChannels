@@ -1212,10 +1212,12 @@ def gracenote_community_apply_all():
     """
     Bulk-apply community Gracenote IDs to all matching channels.
     Skips channels already correctly applied.
-    Overwrites manual/off channels when confirmed (dry_run=false).
+    new_only=true  — only apply channels with no current ID (safe, no conflicts)
+    new_only=false — also overwrite manual/off channels (requires confirmation)
     """
-    dry_run = request.get_json(silent=True, force=True) or {}
-    dry_run = dry_run.get('dry_run', True)
+    body = request.get_json(silent=True, force=True) or {}
+    dry_run  = body.get('dry_run', True)
+    new_only = body.get('new_only', False)
 
     rows = (
         Channel.query
@@ -1251,7 +1253,7 @@ def gracenote_community_apply_all():
         else:
             applied.append(entry)
 
-        if not dry_run:
+        if not dry_run and (not is_override or not new_only):
             _apply_gracenote_update(ch, community_tmsid, 'manual')
 
     if not dry_run:
@@ -1259,12 +1261,102 @@ def gracenote_community_apply_all():
         _invalidate_and_refresh_xml()
 
     return jsonify({
-        'dry_run':      dry_run,
-        'applied':      applied,
-        'overwritten':  overwritten,
-        'already_done': already_done,
-        'total_changed': len(applied) + len(overwritten),
+        'dry_run':       dry_run,
+        'new_only':      new_only,
+        'applied':       applied,
+        'overwritten':   overwritten,
+        'already_done':  already_done,
+        'total_changed': len(applied) + (0 if new_only else len(overwritten)),
     })
+
+
+@api_bp.route('/gracenote/my-contributions', methods=['GET'])
+def gracenote_my_contributions():
+    """Return channels the user has mapped that are absent from or differ in the community CSV."""
+    from ..models import Source as _Source
+    rows = (
+        Channel.query.join(_Source)
+        .filter(
+            Channel.is_active == True,
+            Channel.gracenote_id.isnot(None),
+            Channel.gracenote_id != '',
+            Channel.gracenote_mode != 'off',
+        )
+        .order_by(_Source.name, Channel.name)
+        .all()
+    )
+    results = []
+    for ch in rows:
+        source_name = ch.source.name if ch.source else ''
+        match = lookup_gracenote(source_name, ch.source_channel_id)
+        community_tmsid = match.get('tmsid') if match else None
+        if community_tmsid == ch.gracenote_id:
+            continue  # already in community map with exact same tmsid
+        results.append({
+            'channel_id':       ch.id,
+            'channel_name':     ch.name,
+            'source_name':      source_name,
+            'source_channel_id': ch.source_channel_id or '',
+            'tmsid':            ch.gracenote_id,
+            'category':         ch.category or '',
+            'gracenote_mode':   ch.gracenote_mode or 'auto',
+            'in_community':     community_tmsid is not None,
+            'community_tmsid':  community_tmsid or '',
+        })
+    return jsonify({'results': results, 'total': len(results)})
+
+
+@api_bp.route('/gracenote/submit-contributions', methods=['POST'])
+def gracenote_submit_contributions():
+    """POST selected channel mappings to the configured contribution webhook URL."""
+    settings = AppSettings.get()
+    webhook_url = (settings.gracenote_contribution_url or '').strip()
+    if not webhook_url:
+        return jsonify({'ok': False, 'message': 'No contribution webhook URL configured in Settings.'}), 400
+
+    body = request.get_json(silent=True, force=True) or {}
+    channel_ids = body.get('channel_ids', [])
+    if not channel_ids:
+        return jsonify({'ok': False, 'message': 'No channels selected.'}), 400
+
+    from ..models import Source as _Source
+    channels = (
+        Channel.query.join(_Source)
+        .filter(
+            Channel.id.in_(channel_ids),
+            Channel.gracenote_id.isnot(None),
+            Channel.gracenote_id != '',
+        )
+        .all()
+    )
+
+    from datetime import datetime, timezone as _tz
+    from ..config import VERSION
+    import requests as _req
+    mappings = [
+        {
+            'provider':     ch.source.name if ch.source else '',
+            'key':          ch.source_channel_id or '',
+            'tmsid':        ch.gracenote_id,
+            'channel_name': ch.name,
+            'category':     ch.category or '',
+        }
+        for ch in channels
+    ]
+    payload = {
+        'submitted_at': datetime.now(_tz.utc).isoformat(),
+        'app_version':  VERSION,
+        'count':        len(mappings),
+        'mappings':     mappings,
+    }
+
+    try:
+        r = _req.post(webhook_url, json=payload, timeout=15)
+        r.raise_for_status()
+    except Exception as exc:
+        return jsonify({'ok': False, 'message': f'Webhook delivery failed: {exc}'}), 502
+
+    return jsonify({'ok': True, 'message': f'{len(mappings)} mapping(s) submitted — thank you!'})
 
 
 @api_bp.route('/gracenote/community-export', methods=['GET'])
@@ -1728,6 +1820,8 @@ def app_settings():
             row.gracenote_auto_fill = bool(data['gracenote_auto_fill'])
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
+        if 'gracenote_contribution_url' in data:
+            row.gracenote_contribution_url = (data['gracenote_contribution_url'] or '').strip() or None
         db.session.commit()
         write_timezone_cache(row.timezone_name)
         _invalidate_and_refresh_xml()
@@ -1738,6 +1832,7 @@ def app_settings():
         'timezone_name':     row.effective_timezone_name(),
         'gracenote_auto_fill': row.gracenote_auto_fill if row.gracenote_auto_fill is not None else True,
         'gracenote_map_url': row.gracenote_map_url or '',
+        'gracenote_contribution_url': row.gracenote_contribution_url or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.env_public_base_url() is not None else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',

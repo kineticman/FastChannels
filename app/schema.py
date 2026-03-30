@@ -126,6 +126,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN migration_012_done BOOLEAN NOT NULL DEFAULT 0"
                 ))
+            if "gracenote_contribution_url" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN gracenote_contribution_url TEXT"
+                ))
 
         if "sources" in tables:
             src_cols = {
