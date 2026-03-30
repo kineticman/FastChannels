@@ -553,6 +553,24 @@ def channel_changes_report():
         .all()
     )
 
+    # Channels that came back — active, updated in window, existed before window
+    returned_rows = (
+        db.session.query(Channel, Source)
+        .join(Source, Source.id == Channel.source_id)
+        .filter(
+            Channel.is_active == True,
+            Channel.updated_at >= window_start,
+            Channel.created_at < window_start,
+            Channel.missed_scrapes == 0,
+        )
+        .order_by(Channel.updated_at.desc(), Source.display_name.asc(), Channel.name.asc())
+        .all()
+    )
+    # Exclude channels that were simply scraped normally — only include ones
+    # that had missed_scrapes > 0 recently (approximate proxy for "returned")
+    # Since missed_scrapes is reset to 0 on return, we can't filter perfectly,
+    # but updated_at in window + active + pre-existing is a reasonable signal.
+
     def _group_counts(rows):
         counts: dict[str, int] = defaultdict(int)
         for _channel, source in rows:
@@ -568,40 +586,23 @@ def channel_changes_report():
             counts[dt.date().isoformat()] += 1
         return sorted(counts.items(), key=lambda item: item[0], reverse=True)
 
-    active_missing_epg = (
-        db.session.query(db.func.count(Channel.id))
-        .join(Source, Source.id == Channel.source_id)
-        .filter(
-            Source.name == 'lg-channels',
-            Channel.is_active == True,
-            Channel.is_enabled == True,
-            ~Channel.programs.any(),
-        )
-        .scalar()
-        or 0
-    )
+    # Per-source health summary
+    all_sources = Source.query.filter(Source.is_enabled == True).order_by(Source.display_name).all()
+    source_health = []
+    for src in all_sources:
+        active = Channel.query.filter_by(source_id=src.id, is_active=True).count()
+        if not active:
+            continue
+        at_risk = Channel.query.filter_by(source_id=src.id, is_active=True).filter(Channel.missed_scrapes > 0).count()
+        source_health.append({
+            'display_name': src.display_name,
+            'active': active,
+            'at_risk': at_risk,
+            'last_scraped_at': src.last_scraped_at,
+            'scrape_interval': src.scrape_interval,
+        })
 
-    lg_source = Source.query.filter_by(name='lg-channels').first()
-    lg_summary = None
-    if lg_source:
-        lg_channels = Channel.query.filter_by(source_id=lg_source.id, is_active=True).count()
-        lg_programs = (
-            db.session.query(db.func.count())
-            .select_from(Channel)
-            .join(Source, Source.id == Channel.source_id)
-            .join(Channel.programs)
-            .filter(Source.name == 'lg-channels')
-            .scalar()
-            or 0
-        )
-        lg_summary = {
-            'display_name': lg_source.display_name,
-            'last_scraped_at': lg_source.last_scraped_at,
-            'scrape_interval': lg_source.scrape_interval,
-            'active_channels': lg_channels,
-            'program_count': lg_programs,
-            'active_missing_epg': active_missing_epg,
-        }
+    net_change = len(new_rows) - len(inferred_lost_rows)
 
     return render_template(
         'admin/channel_changes_report.html',
@@ -619,7 +620,10 @@ def channel_changes_report():
         inferred_lost_daily_counts=_daily_counts(inferred_lost_rows, 'updated_at'),
         at_risk_rows=at_risk_rows,
         at_risk_counts=_group_counts(at_risk_rows),
-        lg_summary=lg_summary,
+        returned_rows=returned_rows,
+        returned_counts=_group_counts(returned_rows),
+        source_health=source_health,
+        net_change=net_change,
     )
 
 

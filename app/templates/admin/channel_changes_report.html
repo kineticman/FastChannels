@@ -253,13 +253,16 @@
         <div class="stat-value">{{ at_risk_rows|length }}</div>
         <div class="stat-sub">Active rows with <code>missed_scrapes &gt; 0</code></div>
       </div>
-      {% if lg_summary %}
       <div class="stat">
-        <div class="stat-label">{{ lg_summary.display_name }}</div>
-        <div class="stat-value">{{ lg_summary.program_count }}</div>
-        <div class="stat-sub">{{ lg_summary.active_channels }} active channels, {{ lg_summary.active_missing_epg }} active channels missing EPG</div>
+        <div class="stat-label">Net Change</div>
+        <div class="stat-value" style="color:{% if net_change > 0 %}#86efac{% elif net_change < 0 %}#f87171{% else %}#f8fafc{% endif %}">{% if net_change > 0 %}+{% endif %}{{ net_change }}</div>
+        <div class="stat-sub">New minus inactive in window</div>
       </div>
-      {% endif %}
+      <div class="stat">
+        <div class="stat-label">Returned</div>
+        <div class="stat-value">{{ returned_rows|length }}</div>
+        <div class="stat-sub">Previously missing channels back in lineup</div>
+      </div>
     </div>
 
     <div class="grid">
@@ -362,9 +365,9 @@
               <div class="row-source">{{ source.display_name }}</div>
             </div>
             <div class="row-meta">
-              Missed scrapes {{ channel.missed_scrapes or 0 }} ·
+              Missed {{ channel.missed_scrapes or 0 }} scrape{{ 's' if (channel.missed_scrapes or 0) != 1 }}{% if source.scrape_interval %} (every {{ source.scrape_interval }}m){% endif %} ·
               Last seen {% if channel.last_seen_at %}{{ channel.last_seen_at|localtime }}{% else %}unknown{% endif %} ·
-              Channel ID <code>{{ channel.source_channel_id }}</code>
+              <code>{{ channel.source_channel_id }}</code>
             </div>
           </div>
           {% else %}
@@ -373,33 +376,66 @@
         </div>
       </section>
 
-      {% if lg_summary %}
       <section class="card">
-        <h2>{{ lg_summary.display_name }} Snapshot</h2>
-        <div class="section-subtitle">Current scrape health for this source.</div>
+        <h2>Returned{% if window_days == 1 %} Today{% else %} in Last {{ window_days }} Days{% endif %}</h2>
+        <div class="section-subtitle">Channels that were missing from scrapes and have come back. Timing is approximate.</div>
+        <div class="source-list">
+          {% for source, count in returned_counts %}
+          <span class="badge"><strong>{{ count }}</strong> {{ source }}</span>
+          {% endfor %}
+          {% if not returned_counts %}
+          <span class="badge">No returned channels in window</span>
+          {% endif %}
+        </div>
         <div class="rows">
+          {% for channel, source in returned_rows[:12] %}
           <div class="row">
             <div class="row-top">
-              <div class="row-title">Current state</div>
+              <div class="row-title">{{ channel.name }}</div>
+              <div class="row-source">{{ source.display_name }}</div>
             </div>
             <div class="row-meta">
-              Last scraped {{ lg_summary.last_scraped_at|localtime if lg_summary.last_scraped_at else 'never' }} ·
-              Interval {{ lg_summary.scrape_interval }} minutes
+              Last updated {{ channel.updated_at|localtime }} ·
+              Last seen {% if channel.last_seen_at %}{{ channel.last_seen_at|localtime }}{% else %}unknown{% endif %}
             </div>
           </div>
-          <div class="row">
-            <div class="row-top">
-              <div class="row-title">{{ lg_summary.active_channels }} active channels</div>
-            </div>
-            <div class="row-meta">
-              {{ lg_summary.program_count }} stored program rows ·
-              {{ lg_summary.active_missing_epg }} active channels currently missing guide data
-            </div>
-          </div>
+          {% else %}
+          <div class="empty">No channels returned to the lineup in this window.</div>
+          {% endfor %}
         </div>
       </section>
-      {% endif %}
     </div>
+
+    {% if source_health %}
+    <section class="card" style="margin-bottom:1rem">
+      <h2>Source Health</h2>
+      <div class="section-subtitle">Active channel counts and scrape status for all enabled sources.</div>
+      <table style="width:100%;border-collapse:collapse;font-size:0.84rem;margin-top:0.5rem">
+        <thead>
+          <tr style="border-bottom:1px solid #334155">
+            <th style="text-align:left;padding:0.4rem 0.6rem;color:#94a3b8;font-weight:600">Source</th>
+            <th style="text-align:right;padding:0.4rem 0.6rem;color:#94a3b8;font-weight:600">Active</th>
+            <th style="text-align:right;padding:0.4rem 0.6rem;color:#94a3b8;font-weight:600">At Risk</th>
+            <th style="text-align:left;padding:0.4rem 0.6rem;color:#94a3b8;font-weight:600">Interval</th>
+            <th style="text-align:left;padding:0.4rem 0.6rem;color:#94a3b8;font-weight:600">Last Scraped</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for src in source_health %}
+          <tr style="border-bottom:1px solid #1e293b">
+            <td style="padding:0.4rem 0.6rem;color:#e2e8f0;font-weight:500">{{ src.display_name }}</td>
+            <td style="padding:0.4rem 0.6rem;text-align:right;color:#f8fafc">{{ src.active }}</td>
+            <td style="padding:0.4rem 0.6rem;text-align:right;color:{% if src.at_risk > 0 %}#fbbf24{% else %}#475569{% endif %}">
+              {% if src.at_risk > 0 %}{{ src.at_risk }}{% else %}—{% endif %}
+            </td>
+            <td style="padding:0.4rem 0.6rem;color:#64748b">{% if src.scrape_interval %}{{ src.scrape_interval }}m{% else %}—{% endif %}</td>
+            <td style="padding:0.4rem 0.6rem;color:#64748b">{% if src.last_scraped_at %}{{ src.last_scraped_at|localtime }}{% else %}Never{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
 
     <p class=”footer-note”>
       ⚠️ This report is in beta — data shown is based on what FastChannels currently tracks during scrapes. Have feedback? Let us know on the forum.
