@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     curl \
     redis-server \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
