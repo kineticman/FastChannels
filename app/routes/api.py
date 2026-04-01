@@ -758,7 +758,7 @@ def bulk_update_channel_gracenote():
     ids = [int(v) for v in (data.get('ids') or []) if str(v).isdigit()]
     filters = data.get('filters') or {}
 
-    if action not in ('set_auto', 'set_off', 'clear_ids'):
+    if action not in ('set_auto', 'set_manual', 'set_off', 'clear_ids'):
         return jsonify({'error': 'Invalid action.'}), 400
 
     if ids:
@@ -773,6 +773,10 @@ def bulk_update_channel_gracenote():
         current_mode = getattr(ch, 'gracenote_mode', None) or ('manual' if getattr(ch, 'gracenote_locked', False) and current_id else 'auto')
         if action == 'set_auto':
             _apply_gracenote_update(ch, current_id, 'auto')
+        elif action == 'set_manual':
+            # Lock whatever ID the channel already has; channels with no ID stay as-is (auto)
+            if current_id:
+                _apply_gracenote_update(ch, current_id, 'manual')
         elif action == 'set_off':
             _apply_gracenote_update(ch, None, 'off')
         elif action == 'clear_ids':

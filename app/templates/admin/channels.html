@@ -937,6 +937,7 @@
       <button class="btn-disable" onclick="bulkToggle(false)">Disable Selected</button>
       {% if gracenote_filter or gracenote_mode_filter %}
       <button class="btn-open-external" onclick="bulkGracenoteAction('set_auto')">Set Auto</button>
+      <button class="btn-open-external" onclick="bulkGracenoteAction('set_manual')">Set Manual</button>
       <button class="btn-open-external" onclick="bulkGracenoteAction('set_off')">Set Off</button>
       <button class="btn-cancel" onclick="bulkGracenoteAction('clear_ids')">Clear IDs</button>
       {% endif %}
@@ -1974,9 +1975,10 @@
 
     async function bulkGracenoteAction(action) {
       const actionLabels = {
-        set_auto: 'set to Auto',
-        set_off: 'set to Off',
-        clear_ids: 'clear Gracenote IDs for',
+        set_auto:    'set to Auto',
+        set_manual:  'set to Manual (lock current IDs) for',
+        set_off:     'set to Off',
+        clear_ids:   'clear Gracenote IDs for',
       };
       const selectedIds = [...document.querySelectorAll('.row-check:checked')].map(cb => parseInt(cb.value, 10));
       const usingFilter = _bulkSelectionScope === 'filter';
