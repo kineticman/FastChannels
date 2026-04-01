@@ -114,6 +114,7 @@ _CANONICAL_MAP: dict[str, str] = {
     # Horror (combos leading with Horror)
     'horror & sci-fi':              'Horror',
     'horror and scifi':             'Horror',
+    'april ghouls':                 'Horror',
 
     # International
     'bollywood':                    'International',
@@ -671,8 +672,23 @@ _NAME_OVERRIDES: dict[str, str] = {
     'amc thrillers':                        'Horror',
     'trailers from hell':                   'Horror',
     'watch it scream':                      'Horror',
+    'dread tv':                             'Horror',
+    'frightflix':                           'Horror',
+    'filmrise horror':                      'Horror',
+    'horror by alter':                      'Horror',
+    'horror stories':                       'Horror',
+    'scream factory tv':                    'Horror',
+    'screambox tv':                         'Horror',
+    'haunt tv':                             'Horror',
+    'haunttv':                              'Horror',
 
     # ── Kids ─────────────────────────────────────────────────────────────────
+    # Note: "Kids TV", "Kidz Bop TV", "Kung Fu Movies" and similar are caught
+    # by the call-sign regex (K/W + 3 alpha chars) and routed to Local News
+    # incorrectly — explicit overrides are required.
+    'kids tv':                              'Kids',
+    'kidz bop tv':                          'Kids',
+    'ok gamer':                             'Gaming',
     'pokémon':                              'Kids',
     'super mario':                          'Kids',
     'tmnt':                                 'Kids',
@@ -700,10 +716,16 @@ _NAME_OVERRIDES: dict[str, str] = {
     'box cinema':                           'Latino',
     'el rey rebel':                         'Latino',
     'latino vibes':                         'Latino',
-    'maverick black cinema':                'Latino',
     'todo cine':                            'Latino',
 
     # ── Local News ───────────────────────────────────────────────────────────
+    # The call-sign regex (W/K + 3 alpha + non-alpha) catches non-news channels
+    # whose names happen to start with W or K — override them explicitly:
+    'kung fu movies':                       'Action & Adventure',
+    'wild west tv':                         'Westerns',
+    'wine watches & whiskey':               'Lifestyle',
+    'witz comedy tv':                       'Comedy',
+    'witz-comedy tv':                       'Comedy',
     # Stations that don't match the call-sign or network patterns above
     '9&10 news northern michigan':          'Local News',
     '12 news beaumont tx':                  'Local News',
@@ -751,6 +773,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'news 22 abc dayton oh':                'Local News',
 
     # ── Movies ───────────────────────────────────────────────────────────────
+    'maverick black cinema':                'Movies',
     'encore+':                              'Movies',
     'free movies plus':                     'Movies',
     'outflix movies':                       'Movies',
@@ -762,8 +785,13 @@ _NAME_OVERRIDES: dict[str, str] = {
     'easy listening':                       'Music',
     'def jam':                              'Music',
     'circle country':                       'Music',
+    'billboard tv':                         'Music',
 
     # ── Nature ───────────────────────────────────────────────────────────────
+    'bbc travel':                           'Travel',
+    'gousa tv':                             'Travel',
+    'pbs nature':                           'Nature',
+    'love nature 4k':                       'Nature',
     'dog whisperer':                        'Nature',
     'nat geo sharks':                       'Nature',
     'wild nature':                          'Nature',
@@ -797,6 +825,10 @@ _NAME_OVERRIDES: dict[str, str] = {
     'rcn noticias':                         'News',
 
     # ── Outdoors ─────────────────────────────────────────────────────────────
+    'mlb channel':                          'Sports',
+    'nfl channel':                          'Sports',
+    'absinthe tv':                          'Sports',
+    'the ringer from spotify':              'Sports',
     'wild tv':                              'Outdoors',
     'rvtv':                                 'Outdoors',
     'the boat show':                        'Outdoors',
@@ -849,6 +881,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'pluto tv science':                     'Science',
     'robot wars by mech+':                  'Science',
     'startalk':                             'Science',
+    'startalk tv':                          'Science',
+    'popular science':                      'Science',
     'nasa+':                                'Science',
 
     # ── Shopping ─────────────────────────────────────────────────────────────
