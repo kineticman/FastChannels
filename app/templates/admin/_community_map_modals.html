@@ -1,0 +1,81 @@
+<!-- Community Map Modal -->
+<div class="cm-modal-overlay" id="cm-overlay" onclick="if(event.target===this)closeCommunityMap()">
+  <div class="cm-modal">
+    <button class="cm-close" onclick="closeCommunityMap()">&#x2715;</button>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.25rem">
+      <h2 style="margin:0">Community Gracenote Map</h2>
+      <div style="display:flex;gap:0.5rem;flex-shrink:0">
+        <button class="btn-cm-apply" id="btn-contribute" onclick="openContributeModal()" style="font-size:0.8rem;padding:0.3rem 0.75rem;background:#1d4ed8">Contribute</button>
+        <button class="btn-cm-apply" onclick="openApplyAllConfirm()" style="font-size:0.8rem;padding:0.3rem 0.75rem">Apply All</button>
+      </div>
+    </div>
+    <p class="cm-subtitle">Channels with curated community IDs. Applying sets the channel to Manual mode — it won't be overwritten by future scrapes.</p>
+    <details style="margin-bottom:0.75rem">
+      <summary style="cursor:pointer;color:#64748b;font-size:0.8rem;user-select:none">Status legend</summary>
+      <table style="margin-top:0.5rem;width:100%;border-collapse:collapse;font-size:0.8rem">
+        <tr><td style="padding:0.3rem 0.6rem;white-space:nowrap"><span class="cm-badge applied">Applied</span></td><td style="padding:0.3rem 0.6rem;color:#cbd5e1">Community tmsid is already the active ID on this channel</td></tr>
+        <tr><td style="padding:0.3rem 0.6rem;white-space:nowrap"><span class="cm-badge none">Available</span></td><td style="padding:0.3rem 0.6rem;color:#cbd5e1">No Gracenote ID set, in auto mode — community tmsid can be applied</td></tr>
+        <tr><td style="padding:0.3rem 0.6rem;white-space:nowrap"><span class="cm-badge native">Has native ID</span></td><td style="padding:0.3rem 0.6rem;color:#cbd5e1">Channel is in auto mode with a scraped ID that doesn't match the community tmsid</td></tr>
+        <tr><td style="padding:0.3rem 0.6rem;white-space:nowrap"><span class="cm-badge manual">Manual</span></td><td style="padding:0.3rem 0.6rem;color:#cbd5e1">Channel is in manual mode with a different tmsid than the community one</td></tr>
+        <tr><td style="padding:0.3rem 0.6rem;white-space:nowrap"><span class="cm-badge off">Off</span></td><td style="padding:0.3rem 0.6rem;color:#cbd5e1">Gracenote is disabled for this channel entirely</td></tr>
+      </table>
+    </details>
+    <div class="cm-filters">
+      <input type="search" id="cm-search" placeholder="Filter by channel or source…" oninput="renderCmTable()">
+      <select id="cm-filter-status" onchange="renderCmTable()">
+        <option value="">All statuses</option>
+        <option value="available">Available</option>
+        <option value="applied">Already applied</option>
+        <option value="native">Has native ID</option>
+        <option value="manual">Manual (different ID)</option>
+        <option value="off">Off</option>
+      </select>
+      <select id="cm-filter-source" onchange="renderCmTable()">
+        <option value="">All sources</option>
+      </select>
+      <select id="cm-filter-category" onchange="renderCmTable()">
+        <option value="">All categories</option>
+      </select>
+    </div>
+    <div class="cm-count" id="cm-count"></div>
+    <div class="cm-table-wrap">
+      <table class="cm-table">
+        <thead>
+          <tr>
+            <th>Channel</th><th>Source</th><th>Category</th><th>Community ID</th><th>Notes</th><th>Status</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="cm-tbody">
+          <tr><td colspan="7" class="cm-empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Apply All confirmation modal -->
+<div class="modal-overlay" id="cm-apply-all-modal" onclick="if(event.target===this)closeApplyAllConfirm()">
+  <div class="modal-box" style="max-width:500px">
+    <div id="cm-apply-all-content">
+      <div class="modal-loading">Checking…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Contribute modal -->
+<div class="modal-overlay" id="cm-contribute-modal" onclick="if(event.target===this)closeContributeModal()">
+  <div class="modal-box" style="max-width:560px">
+    <div id="cm-contribute-content">
+      <div class="modal-loading">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Gracenote Suggestions sub-modal -->
+<div class="modal-overlay" id="gs-suggest-modal" onclick="if(event.target===this)closeGracenoteSuggestModal()">
+  <div class="modal-box gs-modal">
+    <div id="gs-suggest-modal-content">
+      <div class="modal-loading">Loading suggestions…</div>
+    </div>
+  </div>
+</div>
