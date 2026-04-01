@@ -1171,6 +1171,30 @@ def station_now_playing(station_id):
     return jsonify(result)
 
 
+@api_bp.route('/gracenote/community-summary', methods=['GET'])
+def gracenote_community_summary():
+    """Fast summary of community map coverage for the dashboard stat card."""
+    from ..models import Source
+    rows = (
+        Channel.query
+        .join(Source)
+        .filter(Channel.is_active == True)
+        .all()
+    )
+    total = applied = available = 0
+    for ch in rows:
+        source_name = ch.source.name if ch.source else ''
+        match = lookup_gracenote(source_name, ch.source_channel_id)
+        if not match or not match.get('tmsid'):
+            continue
+        total += 1
+        if (ch.gracenote_id or '') == match['tmsid']:
+            applied += 1
+        else:
+            available += 1
+    return jsonify({'total': total, 'applied': applied, 'available': available})
+
+
 @api_bp.route('/gracenote/community-map', methods=['GET'])
 def gracenote_community_map():
     """Return all channels that have a community CSV mapping, with their current Gracenote state."""
@@ -1309,7 +1333,25 @@ def gracenote_my_contributions():
 @api_bp.route('/gracenote/submit-contributions', methods=['POST'])
 def gracenote_submit_contributions():
     """POST selected channel mappings to the configured contribution webhook URL."""
+    from datetime import datetime, timezone as _tz, timedelta as _td
     settings = AppSettings.get()
+
+    # Server-side rate limit: one submission per 24 hours
+    if settings.last_contribution_at:
+        last = settings.last_contribution_at
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=_tz.utc)
+        elapsed = datetime.now(_tz.utc) - last
+        if elapsed < _td(hours=24):
+            remaining_s = int((_td(hours=24) - elapsed).total_seconds())
+            h, m = divmod(remaining_s // 60, 60)
+            wait = f'{h}h {m}m' if h else f'{m}m'
+            return jsonify({
+                'ok': False,
+                'rate_limited': True,
+                'message': f'You already submitted recently. Please wait {wait} before submitting again.',
+            }), 429
+
     webhook_url = settings.effective_gracenote_contribution_url()
     if not webhook_url:
         return jsonify({'ok': False, 'message': 'No contribution webhook URL configured in Settings.'}), 400
@@ -1330,11 +1372,11 @@ def gracenote_submit_contributions():
         .all()
     )
 
-    from datetime import datetime, timezone as _tz
     from ..config import VERSION
     import requests as _req
     submitted_at = datetime.now(_tz.utc).isoformat()
-    errors = []
+    succeeded = []
+    failed = []
     for ch in channels:
         row = {
             'submitted_at': submitted_at,
@@ -1346,15 +1388,24 @@ def gracenote_submit_contributions():
             'category':     ch.category or '',
         }
         try:
-            r = _req.post(webhook_url, json=row, timeout=15)
-            r.raise_for_status()
+            resp = _req.post(webhook_url, json=row, timeout=15)
+            resp.raise_for_status()
+            succeeded.append(ch.name)
         except Exception as exc:
-            errors.append(str(exc))
+            failed.append({'name': ch.name, 'error': str(exc)})
 
-    if errors:
-        return jsonify({'ok': False, 'message': f'Some deliveries failed: {errors[0]}'}), 502
+    if succeeded:
+        settings.last_contribution_at = datetime.now(_tz.utc)
+        db.session.commit()
 
-    return jsonify({'ok': True, 'message': f'{len(channels)} mapping(s) submitted — thank you!'})
+    ok = len(succeeded) > 0
+    return jsonify({
+        'ok':          ok,
+        'submitted':   len(succeeded),
+        'failed':      len(failed),
+        'failed_names': [f['name'] for f in failed],
+        'message':     f'{len(succeeded)} mapping(s) submitted — thank you!' if ok else 'All submissions failed.',
+    }), (200 if ok else 502)
 
 
 @api_bp.route('/gracenote/community-export', methods=['GET'])

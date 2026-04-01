@@ -62,6 +62,16 @@ async function openCommunityMap() {
     const catSel = document.getElementById('cm-filter-category');
     categories.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; catSel.appendChild(o); });
     renderCmTable();
+    // First-time guidance: if nothing is applied yet, show a "get started" banner
+    const noneApplied = _cmData.length > 0 && _cmData.every(r => cmStatusInfo(r).key === 'available');
+    if (noneApplied && !document.getElementById('cm-firstrun-banner')) {
+      const banner = document.createElement('div');
+      banner.id = 'cm-firstrun-banner';
+      banner.style.cssText = 'background:#0d1f38;border:1px solid #1d4ed8;border-radius:8px;padding:0.75rem 1rem;margin-bottom:0.75rem;font-size:0.875rem;line-height:1.55;color:#cbd5e1';
+      banner.innerHTML = `<strong style="color:#7dd3fc">New here?</strong> The community has pre-mapped <strong>${_cmData.length}</strong> channels. Click <strong>Apply All</strong> above to apply them all at once, or filter and apply individually below.`;
+      const filters = document.querySelector('#cm-overlay .cm-filters');
+      if (filters) filters.parentNode.insertBefore(banner, filters);
+    }
   } catch(e) {
     document.getElementById('cm-tbody').innerHTML = `<tr><td colspan="7" class="cm-empty">Failed to load: ${escCm(String(e))}</td></tr>`;
   }
@@ -112,7 +122,7 @@ async function openApplyAllConfirm() {
       </div>
       ${overCount ? `<div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.3rem">Channels that will be overwritten:</div>${overList}` : ''}
       ${cleanCount + overCount === 0
-        ? `<div style="color:#64748b;font-size:0.875rem">Nothing to apply — all community IDs are already set.</div>
+        ? `<div style="background:#0d1f12;border:1px solid #14532d;border-radius:8px;padding:0.75rem 1rem;font-size:0.875rem;color:#86efac">✅ All ${doneCount} community ID${doneCount !== 1 ? 's' : ''} are already applied — you're fully up to date!</div>
            <div style="display:flex;justify-content:flex-end;margin-top:1rem">
              <button class="btn-sm btn-secondary" onclick="closeApplyAllConfirm()">Close</button>
            </div>`
@@ -326,10 +336,20 @@ async function submitContributions() {
       body: JSON.stringify({channel_ids: ids}),
     });
     const d = await r.json();
+    if (r.status === 429) {
+      result.innerHTML = `<div style="color:#fbbf24;font-size:0.875rem;margin-bottom:0.5rem">⏳ ${escCm(d.message)}</div>`;
+      btn.disabled = false; btn.textContent = 'Submit Selected';
+      return;
+    }
     if (d.ok) {
       localStorage.setItem(_CONTRIB_LS_KEY, String(Date.now()));
-      result.innerHTML = `<div style="color:#86efac;font-size:0.875rem;margin-bottom:0.5rem">✅ ${escCm(d.message)}</div>`;
-      btn.textContent = 'Done'; btn.style.background = '#166534';
+      let msg = `<div style="color:#86efac;font-size:0.875rem;margin-bottom:0.5rem">✅ ${d.submitted} mapping(s) submitted — thank you!</div>`;
+      if (d.failed > 0) {
+        msg += `<div style="color:#f87171;font-size:0.82rem;margin-bottom:0.5rem">⚠ ${d.failed} failed to deliver: ${escCm((d.failed_names || []).join(', '))}</div>`;
+      }
+      result.innerHTML = msg;
+      btn.textContent = d.failed > 0 ? 'Partial' : 'Done';
+      btn.style.background = d.failed > 0 ? '#92400e' : '#166534';
     } else {
       result.innerHTML = `<div style="color:#f87171;font-size:0.875rem;margin-bottom:0.5rem">❌ ${escCm(d.message)}</div>`;
       btn.disabled = false; btn.textContent = 'Submit Selected';

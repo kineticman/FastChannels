@@ -37,7 +37,7 @@ table.cm-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   border-radius: 999px; font-size: 0.72rem; font-weight: 600; white-space: nowrap;
 }
 .cm-badge.applied { background: #14532d; color: #86efac; border: 1px solid #166534; }
-.cm-badge.manual  { background: #14532d; color: #86efac; border: 1px solid #166534; }
+.cm-badge.manual  { background: #422006; color: #fcd34d; border: 1px solid #78350f; }
 .cm-badge.off     { background: #3b0764; color: #d8b4fe; border: 1px solid #6b21a8; }
 .cm-badge.native  { background: #1e3a5f; color: #7dd3fc; border: 1px solid #1d4ed8; }
 .cm-badge.none    { background: #1e293b; color: #475569; border: 1px solid #334155; }

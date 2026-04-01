@@ -130,6 +130,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN gracenote_contribution_url TEXT"
                 ))
+            if "last_contribution_at" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN last_contribution_at DATETIME"
+                ))
 
         if "sources" in tables:
             src_cols = {

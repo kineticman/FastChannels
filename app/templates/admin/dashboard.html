@@ -63,7 +63,11 @@
       table { min-width: 620px; }
       .link-box { padding: 0.6rem 0.75rem; }
     }
+    .stat-card.clickable { cursor: pointer; transition: border-color 0.15s; }
+    .stat-card.clickable:hover { border-color: #38bdf8; }
+    .stat-card .sub-label { font-size: 0.75rem; color: #475569; margin-top: 0.15rem; }
   </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/community_map.css') }}">
 </head>
 <body>
   <nav>
@@ -82,6 +86,11 @@
       <div class="stat-card"><div class="value">{{ total_channels }}</div><div class="label">Output Channels</div></div>
       <div class="stat-card"><div class="value">{{ sources|length }}</div><div class="label">Sources</div></div>
       <div class="stat-card"><div class="value">{{ feeds|length }}</div><div class="label">Output Feeds</div></div>
+      <div class="stat-card clickable" onclick="openCommunityMap()" id="cm-stat-card" title="Open Community Gracenote Map">
+        <div class="value" id="cm-stat-value" style="font-size:1.5rem;color:#7dd3fc">…</div>
+        <div class="label">Community IDs Available</div>
+        <div class="sub-label" id="cm-stat-sub"></div>
+      </div>
     </div>
 
     <!-- Feeds (named output pairs) -->
@@ -152,6 +161,10 @@
       </div>
     </div>
   </div>
+
+  {% include 'admin/_community_map_modals.html' %}
+  <script src="{{ url_for('static', filename='js/gracenote_suggest.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/community_map.js') }}"></script>
 
   <script>
     const APP_TIME_ZONE = {{ app_timezone_name|tojson }};
@@ -252,6 +265,28 @@
       }
       poll();
     }
+
+    (async function loadCmSummary() {
+      try {
+        const r = await fetch('/api/gracenote/community-summary');
+        const d = await r.json();
+        const valEl = document.getElementById('cm-stat-value');
+        const subEl = document.getElementById('cm-stat-sub');
+        if (d.available === 0 && d.total === 0) {
+          valEl.textContent = '—';
+          subEl.textContent = 'No community mappings found';
+        } else if (d.available === 0) {
+          valEl.textContent = '✓';
+          valEl.style.color = '#34d399';
+          subEl.textContent = `All ${d.total} applied`;
+        } else {
+          valEl.textContent = d.available;
+          subEl.textContent = `${d.applied} of ${d.total} applied`;
+        }
+      } catch(e) {
+        document.getElementById('cm-stat-value').textContent = '?';
+      }
+    })();
 
     async function run(id, btn) {
       if (_pollTimers[id]) return;
