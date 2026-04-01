@@ -1699,13 +1699,13 @@ if __name__ == '__main__':
     def _run_scheduler():
         scheduler = BackgroundScheduler(daemon=True)
         scheduler.add_job(_schedule_due_scrapes, 'interval', minutes=1, id='auto_scrape',
-                          max_instances=1, coalesce=True)
+                          max_instances=1, coalesce=True, misfire_grace_time=60)
         scheduler.add_job(_scheduled_prune, 'interval', hours=1, id='epg_prune',
-                          max_instances=1, coalesce=True)
+                          max_instances=1, coalesce=True, misfire_grace_time=3600)
         scheduler.add_job(_scheduled_integrity_cleanup, 'interval', days=1, id='integrity_cleanup',
-                          max_instances=1, coalesce=True)
+                          max_instances=1, coalesce=True, misfire_grace_time=3600)
         scheduler.add_job(_scheduled_logo_cache_cleanup, 'interval', hours=6, id='logo_cache_cleanup',
-                          max_instances=1, coalesce=True)
+                          max_instances=1, coalesce=True, misfire_grace_time=3600)
 
         def _scheduled_remote_gracenote_refresh():
             from app.gracenote_map import fetch_remote_gracenote_map
