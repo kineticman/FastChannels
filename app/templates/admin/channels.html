@@ -225,10 +225,12 @@
     .preview-action-btn.secondary:hover { background: #2563eb; border-color: #2563eb; }
     .preview-action-btn.neutral { background: #1e293b; border-color: #334155; color: #cbd5e1; }
     .preview-action-btn.neutral:hover { background: #273449; border-color: #475569; }
+    .flag-group { display: flex; align-items: center; gap: 0.25rem; }
+    .flag-icon { font-size: 0.9rem; line-height: 1; }
     .btn-reenable {
-      font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 4px; border: none;
-      background: #1e3a5f; color: #7dd3fc; cursor: pointer; margin-left: 0.4rem;
-      font-weight: 500; transition: background 0.15s;
+      font-size: 0.75rem; padding: 0.15rem 0.35rem; border-radius: 4px; border: none;
+      background: #1e3a5f; color: #7dd3fc; cursor: pointer;
+      font-weight: 600; transition: background 0.15s; line-height: 1;
     }
     .btn-reenable:hover { background: #1d4ed8; color: #fff; }
     .btn-reenable:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -489,8 +491,8 @@
     .channel-actions { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
     .btn-preview {
       background: none; border: 1px solid #334155; color: #7dd3fc;
-      padding: 0.2rem 0.5rem; border-radius: 4px; cursor: pointer;
-      font-size: 0.75rem; line-height: 1; transition: border-color 0.15s, color 0.15s, background 0.15s;
+      padding: 0.2rem 0.45rem; border-radius: 4px; cursor: pointer;
+      font-size: 0.8rem; line-height: 1; transition: border-color 0.15s, color 0.15s, background 0.15s;
     }
     .btn-preview:hover { border-color: #7dd3fc; background: #1e3a5f; color: #fff; }
     .preview-modal { width: 940px; max-width: min(97vw, 940px); }
@@ -963,8 +965,7 @@
             <th>Region</th>
             <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">TVG-CHNO <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
-            <th>Stream Flags</th>
-            <th>Preview / Inspect</th>
+            <th>Actions</th>
             <th>Enabled</th>
           </tr>
         </thead>
@@ -1054,21 +1055,21 @@
               </div>
             </td>
 
-            <td id="flags-cell-{{ ch.id }}">
-              {% if ch.disable_reason == 'DRM' %}
-              <span style="color:#f87171;font-size:0.75rem;font-weight:600;">🔒 DRM</span>
-              <button class="btn-reenable" onclick="reenable({{ ch.id }}, this)" title="Clear DRM flag and re-enable">Re-enable</button>
-              {% elif ch.disable_reason == 'Dead' %}
-              <span style="color:#94a3b8;font-size:0.75rem;font-weight:600;">💀 Dead</span>
-              <button class="btn-reenable" onclick="reenable({{ ch.id }}, this)" title="Clear Dead flag and re-enable">Re-enable</button>
-              {% endif %}
-              {% if ch.is_duplicate %}
-              <button class="btn-clear-dup" id="cleardup-{{ ch.id }}" onclick="clearManualDup({{ ch.id }}, this)" title="Remove duplicate label">⊘ Clear DUPL</button>
-              {% endif %}
-            </td>
             <td id="inspect-cell-{{ ch.id }}">
               <div class="channel-actions">
-                <button class="btn-preview" onclick="openPreview({{ ch.id }})" title="View current and next program, and preview playback">Preview</button>
+                <div id="flags-cell-{{ ch.id }}" class="flag-group">
+                  {% if ch.disable_reason == 'DRM' %}
+                  <span class="flag-icon" title="DRM — stream is protected, not playable in generic IPTV clients">🔒</span>
+                  <button class="btn-reenable btn-icon" onclick="reenable({{ ch.id }}, this)" title="Clear DRM flag and re-enable">↺</button>
+                  {% elif ch.disable_reason == 'Dead' %}
+                  <span class="flag-icon" title="Dead — stream audit found this channel not currently playable">💀</span>
+                  <button class="btn-reenable btn-icon" onclick="reenable({{ ch.id }}, this)" title="Clear Dead flag and re-enable">↺</button>
+                  {% endif %}
+                  {% if ch.is_duplicate %}
+                  <button class="btn-clear-dup" id="cleardup-{{ ch.id }}" onclick="clearManualDup({{ ch.id }}, this)" title="Remove duplicate label">⊘</button>
+                  {% endif %}
+                </div>
+                <button class="btn-preview btn-icon" onclick="openPreview({{ ch.id }})" title="Preview: view current and next program, preview playback">📺</button>
                 <button class="btn-inspect" onclick="inspectChannel({{ ch.id }}, this)" title="Test stream: check DRM, liveness, and segment data">&#128269;</button>
                 {% if not ch.is_duplicate %}
                 <button class="btn-mark-dup" id="markdup-{{ ch.id }}" onclick="markManualDup({{ ch.id }}, this)" title="Mark as duplicate — adds a DUPL label for filtering (does not disable the channel)">⊘</button>
@@ -1771,7 +1772,7 @@
           clearBtn.className = 'btn-clear-dup';
           clearBtn.id = `cleardup-${channelId}`;
           clearBtn.title = 'Remove duplicate label';
-          clearBtn.textContent = '⊘ Clear DUPL';
+          clearBtn.textContent = '⊘';
           clearBtn.onclick = () => clearManualDup(channelId, clearBtn);
           flagsCell.appendChild(clearBtn);
         }
