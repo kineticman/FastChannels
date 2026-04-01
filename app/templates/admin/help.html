@@ -30,17 +30,19 @@
     .page { max-width: 980px; margin: 0 auto; padding: 2.25rem 1.25rem 3rem; }
     h1 { font-size: 1.7rem; margin-bottom: 0.5rem; }
     .subtitle { color: #94a3b8; margin-bottom: 1.75rem; line-height: 1.5; }
-    .grid {
+    .card-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       gap: 1rem;
       margin-bottom: 1.5rem;
+      align-items: start;
     }
     .card {
       background: #1e293b;
       border: 1px solid #334155;
       border-radius: 12px;
       padding: 1rem 1.1rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
     }
     .card h2 {
       font-size: 0.95rem;
@@ -98,7 +100,7 @@
     <h1>Help</h1>
     <p class="subtitle">Quick reference for the admin UI, common terms, and source-specific notes.</p>
 
-    <div class="grid">
+    <div class="card-grid">
       <section class="card">
         <h2>Quick Start</h2>
         <ul>
@@ -115,11 +117,6 @@
           <li><a href="https://github.com/kineticman/FastChannels" target="_blank" rel="noopener noreferrer">FastChannels on GitHub</a></li>
           <li><a href="https://community.getchannels.com/" target="_blank" rel="noopener noreferrer">Channels Community Forum</a></li>
         </ul>
-      </section>
-
-      <section class="card">
-        <h2>Prototype Reports</h2>
-        <p>Try the inferred channel-change prototype at <a href="/admin/reports/channel-changes"><code>/admin/reports/channel-changes</code></a>. It shows “New”, “Now Inactive”, and “At Risk” using the data FastChannels already stores today.</p>
       </section>
 
       <section class="card">
@@ -182,6 +179,13 @@
           <li><strong>Amazon Prime Free</strong>: excluded from M3U output by default. Without cookie auth, channel discovery is limited.</li>
           <li><strong>Samsung TV Plus</strong>: EPG covers approximately the current day. Region is configurable in source settings.</li>
           <li><strong>Pluto TV</strong>: session pool size is configurable in source settings if you have many concurrent viewers.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Reports</h2>
+        <ul>
+          <li><a href="/admin/reports/channel-changes">Channel Changes</a> <code>BETA</code> — inferred "New", "Now Inactive", and "At Risk" channels from data FastChannels already stores.</li>
         </ul>
       </section>
     </div>
