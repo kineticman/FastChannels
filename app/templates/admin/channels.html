@@ -356,6 +356,7 @@
 
     /* Toggle switch */
     .toggle-wrap { display: flex; align-items: center; }
+    .inactive-warn { font-size: 0.7rem; color: #fbbf24; margin-top: 0.25rem; white-space: nowrap; }
     .toggle {
       position: relative; display: inline-block; width: 36px; height: 20px; cursor: pointer;
     }
@@ -1081,6 +1082,9 @@
                   <span class="slider"></span>
                 </label>
               </div>
+              {% if ch.is_enabled and not ch.is_active %}
+              <div class="inactive-warn" title="Enabled by you, but missing from recent scrapes — not currently in output">not in output</div>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
