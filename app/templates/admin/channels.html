@@ -350,6 +350,8 @@
          padding: 0.7rem 1rem; border-bottom: 1px solid #334155; background: #0f172a; }
     th.check-col { width: 40px; }
     td { padding: 0.6rem 1rem; font-size: 0.85rem; border-bottom: 1px solid #0f172a; vertical-align: middle; }
+    td.actions-col, td.toggle-col { padding-left: 0.4rem; padding-right: 0.4rem; }
+    th.actions-col, th.toggle-col { padding-left: 0.4rem; padding-right: 0.4rem; }
     tr:last-child td { border-bottom: none; }
     tr.disabled td:not(.toggle-col) { opacity: 0.4; }
     tr:hover td { background: #1a2744; }
@@ -965,8 +967,8 @@
             <th>Region</th>
             <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">TVG-CHNO <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
-            <th>Actions</th>
-            <th>Enabled</th>
+            <th class="actions-col">Actions</th>
+            <th class="toggle-col">Enabled</th>
           </tr>
         </thead>
         <tbody id="channel-tbody">
@@ -1055,7 +1057,7 @@
               </div>
             </td>
 
-            <td id="inspect-cell-{{ ch.id }}">
+            <td id="inspect-cell-{{ ch.id }}" class="actions-col">
               <div class="channel-actions">
                 <div id="flags-cell-{{ ch.id }}" class="flag-group">
                   {% if ch.disable_reason == 'DRM' %}
