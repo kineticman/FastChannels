@@ -823,6 +823,12 @@ class RokuScraper(BaseScraper):
     # ── fetch_channels ─────────────────────────────────────────────────────────
 
     def fetch_channels(self) -> list[ChannelData]:
+        if self._cooldown_active():
+            remaining = self._cooldown_remaining()
+            mins = max(1, (remaining + 59) // 60)
+            raise ScrapeSkipError(
+                f"Roku rate-limited (403) — cooldown active, ~{mins} min remaining. Previous channel data kept."
+            )
         if not self._ensure_session():
             raise ScrapeSkipError("[roku] session bootstrap failed; keeping previous channel data")
 
@@ -1012,6 +1018,12 @@ class RokuScraper(BaseScraper):
         import threading
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        if self._cooldown_active():
+            remaining = self._cooldown_remaining()
+            mins = max(1, (remaining + 59) // 60)
+            raise ScrapeSkipError(
+                f"Roku rate-limited (403) — cooldown active, ~{mins} min remaining. Previous EPG data kept."
+            )
         if not self._ensure_session():
             raise ScrapeSkipError("[roku] session bootstrap failed before EPG fetch; keeping previous EPG data")
 
