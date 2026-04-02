@@ -1031,7 +1031,7 @@
                   data-channel-id="{{ ch.id }}"
                   data-original-mode="{{ gn_mode }}"
                   onchange="gnModeChanged(this)"
-                  title="Auto = scraper-managed, Manual = lock this ID, Off = never use Gracenote for this channel."
+                  title="Auto = scraper-managed (if cleared, ID will repopulate on next scrape), Manual = lock this ID, Off = never use Gracenote for this channel."
                 >
                   <option value="auto" {% if gn_mode == 'auto' %}selected{% endif %}>Auto</option>
                   <option value="manual" {% if gn_mode == 'manual' %}selected{% endif %}>Manual</option>
