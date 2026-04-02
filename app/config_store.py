@@ -1,8 +1,10 @@
 import copy
 import fcntl
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from sqlalchemy.exc import OperationalError as _SAOperationalError
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.extensions import db
@@ -34,5 +36,13 @@ def persist_source_config_updates(source_id: int, updates: dict | None) -> bool:
         updated = merge_config_updates(live_source.config, copy.deepcopy(updates))
         live_source.config = updated
         flag_modified(live_source, 'config')
-        db.session.commit()
-        return True
+        for _attempt in range(3):
+            try:
+                db.session.commit()
+                return True
+            except _SAOperationalError:
+                db.session.rollback()
+                if _attempt == 2:
+                    raise
+                time.sleep(5 * (_attempt + 1))
+        return False

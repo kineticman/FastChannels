@@ -712,8 +712,12 @@ def run_stream_audit(source_name: str):
             'dead': dead, 'errors': errors, 'skipped_403': skipped_403,
             'ts': datetime.now(timezone.utc).isoformat(),
         }
+        # Only persist rate-limited channels — DRM/Dead are already written to the
+        # channels table and don't need re-checking. Storing 300+ flagged channel
+        # objects inflates the config blob and causes DB write contention.
+        recheck_channels = [c for c in report_channels if c.get('status') not in ('drm', 'dead')]
         cfg['last_audit_report'] = {
-            'channels': report_channels,
+            'channels': recheck_channels,
             'ts': datetime.now(timezone.utc).isoformat(),
         }
         source.config = cfg
