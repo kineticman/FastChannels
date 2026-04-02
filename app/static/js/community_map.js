@@ -28,17 +28,15 @@ function renderCmTable() {
   });
   document.getElementById('cm-count').textContent = `${rows.length} channel${rows.length !== 1 ? 's' : ''}`;
   const tbody = document.getElementById('cm-tbody');
-  if (!rows.length) { tbody.innerHTML = '<tr><td colspan="7" class="cm-empty">No matches.</td></tr>'; return; }
+  if (!rows.length) { tbody.innerHTML = '<tr><td colspan="5" class="cm-empty">No matches.</td></tr>'; return; }
   tbody.innerHTML = rows.map(row => {
     const s = cmStatusInfo(row);
     const alreadyApplied = s.key === 'applied';
     return `
       <tr id="cm-row-${row.channel_id}">
-        <td>${escCm(row.channel_name)}</td>
-        <td>${escCm(row.source_name)}</td>
-        <td style="color:#94a3b8;font-size:0.8rem">${escCm(row.category || '—')}</td>
+        <td title="${escCm(row.notes || '')}">${escCm(row.channel_name)}${row.category ? `<span style="color:#475569;font-size:0.75rem;margin-left:0.4rem">${escCm(row.category)}</span>` : ''}</td>
+        <td style="color:#94a3b8;font-size:0.8rem">${escCm(row.source_name)}</td>
         <td><code style="font-size:0.8rem">${escCm(row.community_tmsid)}</code></td>
-        <td style="color:#64748b;font-size:0.8rem">${escCm(row.notes)}</td>
         <td><span class="cm-badge ${escCm(s.cls)}">${escCm(s.label)}</span></td>
         <td><button class="btn-cm-apply" id="cm-btn-${row.channel_id}"
           onclick="openGracenoteSuggestModal(${row.channel_id}, {onApplied: _cmGnOnApplied})"
