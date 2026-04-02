@@ -6,6 +6,7 @@
       <h2 style="margin:0">Community Gracenote Map</h2>
       <div style="display:flex;gap:0.5rem;flex-shrink:0;margin-right:2rem">
         <button class="btn-cm-apply" id="btn-contribute" onclick="openContributeModal()" style="font-size:0.8rem;padding:0.3rem 0.75rem;background:#1d4ed8">Contribute</button>
+        <button class="btn-cm-apply" onclick="openClearAllConfirm()" style="font-size:0.8rem;padding:0.3rem 0.75rem;background:#7f1d1d">Clear All</button>
         <button class="btn-cm-apply" onclick="openApplyAllConfirm()" style="font-size:0.8rem;padding:0.3rem 0.75rem">Apply All</button>
       </div>
     </div>
@@ -57,6 +58,15 @@
 <div class="modal-overlay" id="cm-apply-all-modal" onclick="if(event.target===this)closeApplyAllConfirm()">
   <div class="modal-box" style="max-width:500px">
     <div id="cm-apply-all-content">
+      <div class="modal-loading">Checking…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Clear All confirmation modal -->
+<div class="modal-overlay" id="cm-clear-all-modal" onclick="if(event.target===this)closeClearAllConfirm()">
+  <div class="modal-box" style="max-width:500px">
+    <div id="cm-clear-all-content">
       <div class="modal-loading">Checking…</div>
     </div>
   </div>

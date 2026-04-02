@@ -168,6 +168,92 @@ async function runApplyAll(newOnly = false) {
   }
 }
 
+function closeClearAllConfirm() {
+  document.getElementById('cm-clear-all-modal').classList.remove('open');
+}
+
+async function openClearAllConfirm() {
+  const modal = document.getElementById('cm-clear-all-modal');
+  const content = document.getElementById('cm-clear-all-content');
+  content.innerHTML = '<div class="modal-loading">Checking…</div>';
+  modal.classList.add('open');
+
+  try {
+    const r = await fetch('/api/gracenote/community-clear-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: true }),
+    });
+    const d = await r.json();
+
+    const clearCount = d.cleared.length;
+    const alreadyClear = d.already_clear;
+
+    const clearList = clearCount
+      ? `<div style="margin-top:0.75rem;max-height:160px;overflow-y:auto;border:1px solid #334155;border-radius:6px;padding:0.4rem 0.6rem">
+          ${d.cleared.map(r =>
+            `<div style="font-size:0.8rem;padding:0.2rem 0;border-bottom:1px solid #1e293b;color:#fca5a5">
+              <strong>${escCm(r.channel_name)}</strong>
+              <span style="color:#64748b"> · ${escCm(r.source_name)}${r.current_id ? ` · ID: ${escCm(r.current_id)}` : ''} (${escCm(r.mode)})</span>
+            </div>`
+          ).join('')}
+        </div>` : '';
+
+    content.innerHTML = clearCount === 0
+      ? `<h3 style="margin-bottom:0.75rem;font-size:1rem">Clear All Community IDs</h3>
+         <div style="background:#0d1f12;border:1px solid #14532d;border-radius:8px;padding:0.75rem 1rem;font-size:0.875rem;color:#86efac">
+           ✅ Nothing to clear — all ${alreadyClear} community-mapped channel${alreadyClear !== 1 ? 's' : ''} already have no ID set.
+         </div>
+         <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+           <button class="btn-sm btn-secondary" onclick="closeClearAllConfirm()">Close</button>
+         </div>`
+      : `<h3 style="margin-bottom:0.75rem;font-size:1rem">Clear All Community IDs</h3>
+         <div style="font-size:0.875rem;color:#cbd5e1;line-height:1.6;margin-bottom:0.75rem">
+           <div style="color:#fca5a5">⚠️ <strong>${clearCount}</strong> channel${clearCount !== 1 ? 's' : ''} will have their Gracenote ID cleared and mode reset to Auto</div>
+           <div style="color:#475569">${alreadyClear} community-mapped channel${alreadyClear !== 1 ? 's' : ''} already have no ID — will be skipped</div>
+         </div>
+         <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.3rem">Channels that will be cleared:</div>
+         ${clearList}
+         <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
+           <button class="btn-sm btn-secondary" onclick="closeClearAllConfirm()">Cancel</button>
+           <button class="btn-sm" onclick="runClearAll()" style="background:#991b1b;color:#fff">Clear ${clearCount} Channel${clearCount !== 1 ? 's' : ''}</button>
+         </div>`;
+  } catch(e) {
+    content.innerHTML = `<p style="color:#f87171">Failed to check: ${escCm(String(e))}</p>
+      <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+        <button class="btn-sm btn-secondary" onclick="closeClearAllConfirm()">Close</button>
+      </div>`;
+  }
+}
+
+async function runClearAll() {
+  const content = document.getElementById('cm-clear-all-content');
+  content.innerHTML = '<div class="modal-loading">Clearing…</div>';
+  try {
+    const r = await fetch('/api/gracenote/community-clear-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: false }),
+    });
+    const d = await r.json();
+    content.innerHTML = `
+      <h3 style="margin-bottom:0.75rem;font-size:1rem">Done</h3>
+      <div style="font-size:0.875rem;color:#cbd5e1;line-height:1.8">
+        <div>✅ ${d.cleared.length} channel${d.cleared.length !== 1 ? 's' : ''} cleared — Gracenote IDs removed, mode reset to Auto</div>
+        <div style="color:#475569">${d.already_clear} already clear — skipped</div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+        <button class="btn-sm btn-secondary" onclick="closeClearAllConfirm();_cmData=[];openCommunityMap()">Refresh Map</button>
+      </div>
+    `;
+  } catch(e) {
+    content.innerHTML = `<p style="color:#f87171">Clear failed: ${escCm(String(e))}</p>
+      <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+        <button class="btn-sm btn-secondary" onclick="closeClearAllConfirm()">Close</button>
+      </div>`;
+  }
+}
+
 function _cmGnOnApplied(channelId, stationId) {
   const row = _cmData.find(r => r.channel_id === channelId);
   if (row) { row.current_id = stationId; row.gracenote_mode = 'manual'; row.already_applied = row.community_tmsid === stationId; }

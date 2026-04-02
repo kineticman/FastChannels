@@ -1305,6 +1305,63 @@ def gracenote_community_apply_all():
     })
 
 
+@api_bp.route('/gracenote/community-clear-all', methods=['POST'])
+def gracenote_community_clear_all():
+    """
+    Clear community-mapped Gracenote IDs from all matching channels.
+    Sets gracenote_id=None and gracenote_mode='auto' for every channel
+    that has an entry in the community map (regardless of current state).
+    Supports dry_run=true for preview.
+    """
+    body = request.get_json(silent=True, force=True) or {}
+    dry_run = body.get('dry_run', True)
+
+    rows = (
+        Channel.query
+        .join(Source)
+        .filter(Channel.is_active == True)
+        .order_by(Source.name, Channel.name)
+        .all()
+    )
+
+    cleared = []
+    already_clear = 0
+
+    for ch in rows:
+        source_name = ch.source.name if ch.source else ''
+        match = lookup_gracenote(source_name, ch.source_channel_id)
+        if not match or not match.get('tmsid'):
+            continue
+
+        has_id = bool(ch.gracenote_id)
+        not_auto = (ch.gracenote_mode or 'auto') != 'auto'
+        if not has_id and not not_auto:
+            already_clear += 1
+            continue
+
+        cleared.append({
+            'channel_id':   ch.id,
+            'channel_name': ch.name,
+            'source_name':  source_name,
+            'current_id':   ch.gracenote_id or '',
+            'mode':         ch.gracenote_mode or 'auto',
+        })
+
+        if not dry_run:
+            ch.gracenote_id   = None
+            ch.gracenote_mode = 'auto'
+
+    if not dry_run:
+        db.session.commit()
+        _invalidate_and_refresh_xml()
+
+    return jsonify({
+        'dry_run':       dry_run,
+        'cleared':       cleared,
+        'already_clear': already_clear,
+    })
+
+
 @api_bp.route('/gracenote/my-contributions', methods=['GET'])
 def gracenote_my_contributions():
     """Return channels the user has mapped that are absent from or differ in the community CSV."""
