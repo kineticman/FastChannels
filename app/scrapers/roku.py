@@ -1396,7 +1396,7 @@ class RokuScraper(BaseScraper):
                         need_content_details,
                     )
                     return stream_url
-            if r2.status_code in (401, 403, 404):
+            if r2.status_code in (401, 403, 404, 502):
                 self._invalidate_play_id(station_id)
                 self._invalidate_selector_url(station_id)
                 self._invalidate_stream_url(station_id)
