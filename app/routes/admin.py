@@ -234,7 +234,7 @@ def channels():
 
     # Status filter — admin always shows all channels regardless of is_active
     if drm_filter == '1':
-        q = q.filter(Channel.disable_reason == 'DRM')
+        q = q.filter(Channel.disable_reason.like('DRM%'))
     elif drm_filter == 'dead':
         q = q.filter(Channel.disable_reason == 'Dead')
     elif drm_filter == '0':

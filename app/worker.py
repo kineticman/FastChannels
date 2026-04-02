@@ -635,12 +635,13 @@ def run_stream_audit(source_name: str):
                     _widevine  = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
                     _playready = '9a04f079-9840-4286-ab92-e65be0885f95'
                     if _widevine in manifest_text.lower() or _playready in manifest_text.lower():
+                        _dash_drm_type = 'Widevine' if _widevine in manifest_text.lower() else 'PlayReady'
                         ch.is_active      = False
                         ch.is_enabled     = False
-                        ch.disable_reason = 'DRM'
+                        ch.disable_reason = f'DRM:{_dash_drm_type}'
                         flagged += 1
-                        report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': 'DRM'})
-                        logger.info('[audit] DASH DRM: %s  →  %s', ch.name, manifest_url[:80])
+                        report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': _dash_drm_type})
+                        logger.info('[audit] DASH DRM: %s  →  %s (%s)', ch.name, manifest_url[:80], _dash_drm_type)
                     continue   # DASH — skip HLS checks below
 
                 # EXT-X-KEY only appears in media playlists, not master playlists.
@@ -679,12 +680,13 @@ def run_stream_audit(source_name: str):
 
                 drm = inspect_hls_drm(manifest_text)
                 if drm:
+                    _drm_type = drm.get('drm_type', 'DRM')
                     ch.is_active      = False
                     ch.is_enabled     = False
-                    ch.disable_reason = 'DRM'
+                    ch.disable_reason = f'DRM:{_drm_type}'
                     flagged += 1
-                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': drm.get('drm_type', 'DRM')})
-                    logger.info('[audit] DRM: %s  →  %s (%s)', ch.name, manifest_url[:80], drm['drm_type'])
+                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': _drm_type})
+                    logger.info('[audit] DRM: %s  →  %s (%s)', ch.name, manifest_url[:80], _drm_type)
 
             except Exception as e:
                 if _is_transient_network_error(e):
@@ -906,7 +908,7 @@ def _epg_channels_for_source(source) -> list[Channel]:
     EPG refresh set preserves guide data in case support improves later.
     """
     return source.channels.filter(
-        (Channel.is_active == True) | (Channel.disable_reason == 'DRM')
+        (Channel.is_active == True) | (Channel.disable_reason.like('DRM%'))
     ).all()
 
 
@@ -1080,7 +1082,7 @@ def _channel_ids_for_filters(filters: dict) -> list[int]:
         q = q.filter(Channel.name.ilike(f'%{search}%'))
     if drm := filters.get('drm'):
         if drm == '1':
-            q = q.filter(Channel.disable_reason == 'DRM')
+            q = q.filter(Channel.disable_reason.like('DRM%'))
         elif drm == 'dead':
             q = q.filter(Channel.disable_reason == 'Dead')
         elif drm == '0':
@@ -1194,7 +1196,7 @@ def run_channel_auto_disable(channel_id: int, reason: str):
         if not ch:
             logger.warning('[play] auto-disable skipped; channel_id=%s not found', channel_id)
             return
-        if not ch.is_active and not ch.is_enabled and ch.disable_reason == reason:
+        if not ch.is_active and not ch.is_enabled and ch.disable_reason == reason:  # exact match is fine; reason already includes DRM type
             return
         ch.is_active = False
         ch.is_enabled = False
@@ -1352,12 +1354,12 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 ch.guide_key = cd.guide_key
             # Don't resurrect channels the stream audit flagged as Dead or DRM
             # unless the stream URL changed (source may have fixed the channel).
-            if ch.disable_reason in ('Dead', 'DRM') and not stream_url_changed:
+            if (ch.disable_reason == 'Dead' or (ch.disable_reason or '').startswith('DRM')) and not stream_url_changed:
                 ch.is_active  = False  # re-enforce — a prior scrape may have revived it
                 ch.is_enabled = False
             else:
                 ch.is_active = True
-                if stream_url_changed and ch.disable_reason in ('Dead', 'DRM'):
+                if stream_url_changed and (ch.disable_reason == 'Dead' or (ch.disable_reason or '').startswith('DRM')):
                     ch.disable_reason = None  # clear flag; let next audit re-check
             ch.last_seen_at = seen_at
             ch.missed_scrapes = 0

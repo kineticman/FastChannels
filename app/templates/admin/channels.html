@@ -1060,8 +1060,8 @@
             <td id="inspect-cell-{{ ch.id }}" class="actions-col">
               <div class="channel-actions">
                 <div id="flags-cell-{{ ch.id }}" class="flag-group">
-                  {% if ch.disable_reason == 'DRM' %}
-                  <span class="flag-icon" title="DRM — stream is protected, not playable in generic IPTV clients">🔒</span>
+                  {% if ch.disable_reason and ch.disable_reason.startswith('DRM') %}
+                  <span class="flag-icon" title="{{ ch.disable_reason }} — stream is protected, not playable in generic IPTV clients">🔒</span>
                   <button class="btn-reenable btn-icon" onclick="reenable({{ ch.id }}, this)" title="Clear DRM flag and re-enable">↺</button>
                   {% elif ch.disable_reason == 'Dead' %}
                   <span class="flag-icon" title="Dead — stream audit found this channel not currently playable">💀</span>

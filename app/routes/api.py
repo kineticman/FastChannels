@@ -109,7 +109,7 @@ def _apply_channel_filters(q, filters: dict | None = None):
         q = q.filter(Channel.name.ilike(f'%{search}%'))
     if drm := filters.get('drm'):
         if drm == '1':
-            q = q.filter(Channel.disable_reason == 'DRM')
+            q = q.filter(Channel.disable_reason.like('DRM%'))
         elif drm == 'dead':
             q = q.filter(Channel.disable_reason == 'Dead')
         elif drm == '0':
@@ -806,7 +806,7 @@ def update_channel(channel_id):
         ch.number_pinned = True
     if data.get('is_enabled') is True and 'is_active' not in data:
         ch.is_active = True
-        if ch.disable_reason in ('Dead', 'DRM'):
+        if ch.disable_reason == 'Dead' or (ch.disable_reason or '').startswith('DRM'):
             ch.disable_reason = None
         ch.last_seen_at = datetime.now(timezone.utc)
         ch.missed_scrapes = 0
@@ -1659,7 +1659,7 @@ def resolve_duplicates():
         groups[ch.name].append(ch)
 
     def is_unhealthy(ch):
-        return ch.disable_reason in {'DRM', 'Dead'} or not ch.is_active
+        return ch.disable_reason == 'Dead' or (ch.disable_reason or '').startswith('DRM') or not ch.is_active
 
     def priority_key(ch):
         try:
@@ -2010,7 +2010,7 @@ def system_stats():
 
     channels_total   = Channel.query.count()
     channels_active  = Channel.query.filter_by(is_active=True, is_enabled=True).count()
-    channels_drm     = Channel.query.filter_by(disable_reason='DRM').count()
+    channels_drm     = Channel.query.filter(Channel.disable_reason.like('DRM%')).count()
     channels_dead    = Channel.query.filter_by(disable_reason='Dead').count()
     sources_enabled  = Source.query.filter_by(is_enabled=True).count()
     sources_total    = Source.query.count()
