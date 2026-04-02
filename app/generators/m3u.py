@@ -647,7 +647,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
         gracenote_id = _parse_gracenote_id(ch)
         display_name = _channel_display_name(ch, multi_country_map)
         attrs = [
-            f'channel-id="{gracenote_id}"',
+            f'channel-id="{_tvg_id(ch)}"',
             f'tvc-guide-stationid="{gracenote_id}"',
             f'tvg-name="{_esc(display_name)}"',
             f'group-title="{_esc(ch.category or ch.source.display_name)}"',
