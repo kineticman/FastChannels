@@ -727,8 +727,15 @@ def list_channels():
     if search := request.args.get('search'):
         q = q.filter(Channel.name.ilike(f'%{search}%'))
     pag = q.order_by(Channel.name).paginate(page=page, per_page=per_page, error_out=False)
+    if request.args.get('slim') in ('1', 'true'):
+        items = [{'id': ch.id, 'name': ch.name, 'source_name': ch.source.name,
+                  'category': ch.category, 'language': ch.language,
+                  'country': ch.country, 'gracenote_id': ch.gracenote_id}
+                 for ch in pag.items]
+    else:
+        items = [ch.to_dict() for ch in pag.items]
     return jsonify({
-        'channels': [ch.to_dict() for ch in pag.items],
+        'channels': items,
         'total': pag.total, 'page': page, 'pages': pag.pages,
     })
 

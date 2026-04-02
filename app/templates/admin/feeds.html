@@ -435,7 +435,7 @@
           <button class="ch-bar-btn" type="button" onclick="clearAllChannels()">Clear</button>
         </span>
       </div>
-      <input class="ch-search" id="ch-search" type="text" placeholder="Filter channels…" oninput="renderChannelList()">
+      <input class="ch-search" id="ch-search" type="text" placeholder="Filter channels…" oninput="renderChannelListDebounced()">
       <div class="ch-list" id="channel-list"></div>
     </div>
 
@@ -474,7 +474,7 @@ async function ensureChannelsLoaded() {
   try {
     let page = 1, all = [];
     while (true) {
-      const r = await fetch(`/api/channels?feed_eligible=1&per_page=2000&page=${page}`);
+      const r = await fetch(`/api/channels?feed_eligible=1&slim=1&per_page=2000&page=${page}`);
       const d = await r.json();
       all = all.concat(d.channels);
       if (page >= (d.pages || 1)) break;
@@ -486,28 +486,34 @@ async function ensureChannelsLoaded() {
   }
 }
 
+let _renderDebounceTimer = null;
+function renderChannelListDebounced() {
+  clearTimeout(_renderDebounceTimer);
+  _renderDebounceTimer = setTimeout(renderChannelList, 150);
+}
+
+const _CH_RENDER_LIMIT = 200;
+
 function renderChannelList() {
   const container = document.getElementById('channel-list');
-  container.innerHTML = '';
+  const frag = document.createDocumentFragment();
 
   const visibleChannels = getVisibleChannels();
   const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
   const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
   const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
 
-  // Three modes:
-  //   explicit — manual channel_ids list (selectedChannelIds > 0)
-  //   exclude  — source/cat/lang filters active; all shown as checked, uncheck to exclude
-  //   free     — no filters, no selections; check to build an explicit list
   const hasFilters   = activeSources.size > 0 || activeCats.size > 0 || activeLangs.size > 0;
   const explicitMode = _selectedChannelIds.size > 0;
   const excludeMode  = !explicitMode && hasFilters;
 
-  // Hide "Select all" when in exclude mode (all are already "included")
   document.getElementById('ch-btn-selectall').style.display = excludeMode ? 'none' : '';
 
+  const renderSlice = visibleChannels.slice(0, _CH_RENDER_LIMIT);
+  const overflow    = visibleChannels.length - renderSlice.length;
+
   const groups = {};
-  for (const ch of visibleChannels) {
+  for (const ch of renderSlice) {
     if (!groups[ch.source_name]) groups[ch.source_name] = [];
     groups[ch.source_name].push(ch);
   }
@@ -516,7 +522,7 @@ function renderChannelList() {
     const hdr = document.createElement('div');
     hdr.className = 'ch-group-header';
     hdr.textContent = source;
-    container.appendChild(hdr);
+    frag.appendChild(hdr);
 
     for (const ch of channels) {
       const isExcluded = excludeMode && _excludedChannelIds.has(ch.id);
@@ -540,10 +546,19 @@ function renderChannelList() {
         updateChCount();
         schedulePreview();
       });
-      container.appendChild(label);
+      frag.appendChild(label);
     }
   }
 
+  if (overflow > 0) {
+    const msg = document.createElement('div');
+    msg.style.cssText = 'padding:0.4rem 0.6rem;font-size:0.78rem;color:#64748b;text-align:center';
+    msg.textContent = `…and ${overflow} more — refine search to narrow results`;
+    frag.appendChild(msg);
+  }
+
+  container.innerHTML = '';
+  container.appendChild(frag);
   updateChCount();
 }
 
