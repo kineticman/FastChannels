@@ -23,49 +23,63 @@ from ..url import public_base_url, detected_base_url
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
 
-def _canonical_duplicate_name(name: str) -> str:
+def _base_duplicate_name(name: str) -> str:
     s = unicodedata.normalize('NFKD', name or '')
     s = ''.join(ch for ch in s if not unicodedata.combining(ch))
     s = s.casefold()
     s = s.replace('&', ' and ')
     s = s.replace('’', "'")
+    s = re.sub(r'\s+presented\s+by\s+.+$', '', s).strip()
+    s = re.sub(r'\s+by\s+.+$', '', s).strip()
     s = re.sub(r'[^a-z0-9]+', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def _canonical_duplicate_name(name: str) -> str:
+    s = _base_duplicate_name(name)
+    return s
+
+
+def _soft_duplicate_name(name: str) -> str:
+    s = _base_duplicate_name(name)
     s = re.sub(r'\b(channel|tv|network)\s*$', '', s).strip()
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 
 def _duplicate_name_sets() -> tuple[set[str], set[str]]:
-    exact_rows = (
+    name_rows = (
         db.session.query(Channel.name)
         .filter(Channel.name != None, Channel.name != '')
-        .group_by(Channel.name)
-        .having(db.func.count(Channel.id) > 1)
         .all()
     )
-    exact_names = {row[0] for row in exact_rows if row[0]}
-
-    distinct_rows = (
-        db.session.query(Channel.name)
-        .filter(Channel.name != None, Channel.name != '')
-        .distinct()
-        .all()
-    )
-    by_key: dict[str, set[str]] = defaultdict(set)
-    for (name,) in distinct_rows:
+    strict_by_key: dict[str, set[str]] = defaultdict(set)
+    strict_by_key_count: dict[str, int] = defaultdict(int)
+    soft_by_key: dict[str, set[str]] = defaultdict(set)
+    for (name,) in name_rows:
         clean = (name or '').strip()
         if not clean:
             continue
-        key = _canonical_duplicate_name(clean)
-        if key:
-            by_key[key].add(clean)
+        strict_key = _canonical_duplicate_name(clean)
+        if strict_key:
+            strict_by_key[strict_key].add(clean)
+            strict_by_key_count[strict_key] += 1
+        soft_key = _soft_duplicate_name(clean)
+        if soft_key:
+            soft_by_key[soft_key].add(clean)
+
+    duplicate_names: set[str] = set()
+    for key, names in strict_by_key.items():
+        if strict_by_key_count[key] > 1:
+            duplicate_names.update(names)
 
     possible_names: set[str] = set()
-    for names in by_key.values():
+    for names in soft_by_key.values():
         if len(names) > 1:
             possible_names.update(names)
-    possible_names.difference_update(exact_names)
-    return exact_names, possible_names
+    possible_names.difference_update(duplicate_names)
+    return duplicate_names, possible_names
 
 
 def _page_source_chnum_map(page_items) -> dict[int, int]:
@@ -350,6 +364,7 @@ def channels():
     page_names = {(ch.name or '').strip() for ch in channels.items if (ch.name or '').strip()}
     duplicate_names = exact_duplicate_names & page_names
     possible_duplicate_names = possible_duplicate_names & page_names
+    duplicate_group_keys = {ch.id: _canonical_duplicate_name(ch.name or '') for ch in channels.items}
     chnum_map = _page_default_feed_chnum_map(channels.items)
 
     # Pinned-number conflict detection for the current page.
@@ -391,6 +406,7 @@ def channels():
                            duplicates_filter=duplicates_filter,
                            duplicate_names=duplicate_names,
                            possible_duplicate_names=possible_duplicate_names,
+                           duplicate_group_keys=duplicate_group_keys,
                            sort_by=sort_by, sort_dir=sort_dir,
                            chnum_map=chnum_map,
                            chnum_conflicts=chnum_conflicts,

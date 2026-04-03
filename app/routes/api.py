@@ -1574,23 +1574,31 @@ def stats():
 
 @api_bp.route('/channels/duplicate-summary', methods=['GET'])
 def duplicate_summary():
-    """Return per-source stats for channels involved in duplicates, sorted by gracenote coverage."""
+    """Return per-source stats for channels involved in normalized duplicate groups."""
     from collections import defaultdict
+    from .admin import _canonical_duplicate_name
 
-    dup_names_sq = select(Channel.name)\
-        .filter(Channel.is_enabled == True)\
-        .group_by(Channel.name)\
-        .having(db.func.count(Channel.id) > 1)
-
-    dup_channels = Channel.query.join(Source)\
-        .filter(Channel.is_enabled == True, Channel.name.in_(dup_names_sq))\
+    enabled_channels = (
+        Channel.query.join(Source)
+        .filter(
+            Channel.is_enabled == True,
+            Channel.name != None,
+            Channel.name != '',
+        )
         .all()
+    )
+    groups = defaultdict(list)
+    for ch in enabled_channels:
+        key = _canonical_duplicate_name(ch.name or '')
+        if key:
+            groups[key].append(ch)
+
+    dup_channels = [ch for channels in groups.values() if len(channels) > 1 for ch in channels]
 
     if not dup_channels:
         return jsonify({'sources': [], 'total_groups': 0, 'total_affected': 0})
 
-    # Count unique name groups
-    unique_names = {ch.name for ch in dup_channels}
+    unique_names = {key for key, channels in groups.items() if len(channels) > 1}
 
     # Find which duplicate channels actually have program data
     dup_channel_ids = [ch.id for ch in dup_channels]
@@ -1634,29 +1642,23 @@ def duplicate_summary():
 
 @api_bp.route('/channels/resolve-duplicates', methods=['POST'])
 def resolve_duplicates():
-    """Disable duplicate channels, keeping one winner per name group based on source priority."""
+    """Disable duplicate channels, keeping one winner per normalized-name group."""
     from collections import defaultdict
+    from .admin import _canonical_duplicate_name
 
     data = request.get_json(force=True) or {}
     priority = data.get('source_priority', [])  # ordered list of source names, index 0 = highest
 
-    # Find names where 2+ channels are currently ENABLED (matches duplicate-summary).
-    # Using all channels (including disabled) here would cause already-resolved
-    # groups to be reprocessed, risking ping-pong if priority order changes.
-    dup_names_sq = select(Channel.name)\
-        .filter(Channel.is_enabled == True)\
-        .group_by(Channel.name)\
-        .having(db.func.count(Channel.id) > 1)
-
-    # Fetch ALL channels for those names (incl. disabled) so the winner-selection
-    # sort can prefer a healthy channel over a dead one within each group.
-    dup_channels = Channel.query.join(Source)\
-        .filter(Channel.name.in_(dup_names_sq))\
-        .all()
-
     groups = defaultdict(list)
-    for ch in dup_channels:
-        groups[ch.name].append(ch)
+    all_named_channels = (
+        Channel.query.join(Source)
+        .filter(Channel.name != None, Channel.name != '')
+        .all()
+    )
+    for ch in all_named_channels:
+        key = _canonical_duplicate_name(ch.name or '')
+        if key:
+            groups[key].append(ch)
 
     def is_unhealthy(ch):
         return ch.disable_reason == 'Dead' or (ch.disable_reason or '').startswith('DRM') or not ch.is_active
@@ -1673,7 +1675,10 @@ def resolve_duplicates():
 
     disabled_count = 0
     enabled_count = 0
-    for name, channels in groups.items():
+    for channels in groups.values():
+        enabled_in_group = [ch for ch in channels if ch.is_enabled]
+        if len(enabled_in_group) < 2:
+            continue
         channels.sort(key=priority_key)
         winner = channels[0]
         if all(is_unhealthy(ch) for ch in channels):

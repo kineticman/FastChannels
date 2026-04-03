@@ -974,11 +974,11 @@
           </tr>
         </thead>
         <tbody id="channel-tbody">
-          {% set ns = namespace(prev_name='', group_idx=0) %}
+          {% set ns = namespace(prev_dup_key='', group_idx=0) %}
           {% for ch in channels.items %}
-          {% if duplicates_filter == '1' and ch.name != ns.prev_name %}
+          {% if duplicates_filter == '1' and duplicate_group_keys.get(ch.id, '') != ns.prev_dup_key %}
             {% set ns.group_idx = (ns.group_idx + 1) % 2 %}
-            {% set ns.prev_name = ch.name %}
+            {% set ns.prev_dup_key = duplicate_group_keys.get(ch.id, '') %}
           {% endif %}
           <tr id="row-{{ ch.id }}" data-channel-id="{{ ch.id }}" class="{% if not ch.is_enabled %}disabled{% endif %}{% if duplicates_filter == '1' %} dup-group-{{ ns.group_idx }}{% endif %}">
             <td><input type="checkbox" class="row-check" value="{{ ch.id }}" onchange="onRowCheck()"></td>
@@ -999,7 +999,7 @@
             {% if ch.last_seen_at %}
               {% set _ = hover_parts.append('Last seen: ' ~ (ch.last_seen_at | localtime)) %}
             {% endif %}
-            <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="This exact channel name exists in multiple sources">DUP</span>{% elif ch.name in possible_duplicate_names %} <span class="dup-badge" title="Possible duplicate: a very similar channel name exists in another source">DUP?</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup" title="Manually marked as duplicate">DUPL</span>{% endif %}</td>
+            <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="Duplicate match found after strict title normalization: case-insensitive and strips trailing 'by …' or 'presented by …'">DUP</span>{% elif ch.name in possible_duplicate_names %} <span class="dup-badge" title="Possible duplicate: a similar title exists in another source after softer brand normalization such as TV/Channel/Network">DUP?</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup" title="Manually marked as duplicate">DUPL</span>{% endif %}</td>
             <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
             <td data-channel-id="{{ ch.id }}">
               {% if ch.category %}
@@ -2015,7 +2015,7 @@
   <div class="modal-overlay" id="resolve-modal" onclick="closeResolveDupesModal(event)">
     <div class="modal-box">
       <h2>⚡ Resolve Duplicates</h2>
-      <p class="modal-sub">Drag to set source priority. The top source wins each exact-name duplicate group and the others will be disabled. Possible duplicates marked <strong>DUP?</strong> are not auto-resolved here.</p>
+      <p class="modal-sub">Drag to set source priority. The top source wins each strict duplicate group and the others will be disabled. Strict matching is case-insensitive and ignores trailing <strong>by …</strong> or <strong>presented by …</strong>. Softer brand variants marked <strong>DUP?</strong>, such as TV/Channel/Network differences, are not auto-resolved here.</p>
       <div id="resolve-modal-body" class="modal-loading">Loading…</div>
     </div>
   </div>
