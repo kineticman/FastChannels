@@ -9,13 +9,13 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
+      background: var(--bg);
+      color: var(--text);
       min-height: 100vh;
     }
     nav {
-      background: #1e293b;
-      border-bottom: 1px solid #334155;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
       padding: 0 2rem;
       display: flex;
       align-items: center;
@@ -23,10 +23,10 @@
       min-height: 56px;
       flex-wrap: wrap;
     }
-    nav .version { margin-left: auto; color: #475569; font-size: 0.75rem; }
-    nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
-    nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
-    nav a:hover, nav a.active { color: #e2e8f0; }
+    nav .version { margin-left: auto; color: var(--text-dim); font-size: 0.75rem; }
+    nav h1 { color: var(--accent); font-size: 1.2rem; font-weight: 700; }
+    nav a { color: var(--text-soft); text-decoration: none; font-size: 0.9rem; }
+    nav a:hover, nav a.active { color: var(--text); }
     .page { max-width: 1220px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
     .hero {
       display: flex;
@@ -37,17 +37,17 @@
       flex-wrap: wrap;
     }
     .hero h1 { font-size: 1.75rem; margin-bottom: 0.4rem; }
-    .subtitle { color: #94a3b8; line-height: 1.55; max-width: 760px; }
-    .timestamp { color: #64748b; font-size: 0.85rem; }
+    .subtitle { color: var(--text-soft); line-height: 1.55; max-width: 760px; }
+    .timestamp { color: var(--text-muted); font-size: 0.85rem; }
     .banner {
-      background: linear-gradient(135deg, #1e293b 0%, #172554 100%);
-      border: 1px solid #334155;
+      background: linear-gradient(135deg, var(--surface) 0%, var(--accent-bg) 100%);
+      border: 1px solid var(--border);
       border-radius: 14px;
       padding: 1rem 1.1rem;
       margin-bottom: 1.25rem;
     }
-    .banner strong { color: #f8fafc; }
-    .banner p { color: #cbd5e1; line-height: 1.5; font-size: 0.92rem; }
+    .banner strong { color: var(--text-strong); }
+    .banner p { color: var(--text-subtle); line-height: 1.5; font-size: 0.92rem; }
     .toolbar {
       display: flex;
       align-items: center;
@@ -55,7 +55,7 @@
       flex-wrap: wrap;
       margin-bottom: 1.25rem;
     }
-    .toolbar-label { color: #94a3b8; font-size: 0.82rem; margin-right: 0.1rem; }
+    .toolbar-label { color: var(--text-soft); font-size: 0.82rem; margin-right: 0.1rem; }
     .chip {
       display: inline-flex;
       align-items: center;
@@ -63,17 +63,17 @@
       min-width: 3.2rem;
       padding: 0.38rem 0.75rem;
       border-radius: 999px;
-      border: 1px solid #334155;
-      background: #1e293b;
-      color: #cbd5e1;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-subtle);
       text-decoration: none;
       font-size: 0.82rem;
       font-weight: 600;
     }
     .chip:hover, .chip.active {
-      color: #f8fafc;
-      border-color: #0ea5e9;
-      background: #082f49;
+      color: var(--text-strong);
+      border-color: var(--accent);
+      background: var(--accent-bg);
     }
     .stats {
       display: grid;
@@ -82,20 +82,20 @@
       margin-bottom: 1.5rem;
     }
     .stat {
-      background: #1e293b;
-      border: 1px solid #334155;
+      background: var(--surface);
+      border: 1px solid var(--border);
       border-radius: 12px;
       padding: 1rem;
     }
     .stat-label {
-      color: #94a3b8;
+      color: var(--text-soft);
       font-size: 0.75rem;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       margin-bottom: 0.35rem;
     }
-    .stat-value { font-size: 1.6rem; font-weight: 700; color: #f8fafc; }
-    .stat-sub { color: #64748b; font-size: 0.8rem; margin-top: 0.2rem; line-height: 1.45; }
+    .stat-value { font-size: 1.6rem; font-weight: 700; color: var(--text-strong); }
+    .stat-sub { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.2rem; line-height: 1.45; }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
@@ -103,18 +103,18 @@
       margin-bottom: 1rem;
     }
     .card {
-      background: #1e293b;
-      border: 1px solid #334155;
+      background: var(--surface);
+      border: 1px solid var(--border);
       border-radius: 14px;
       padding: 1rem 1.05rem;
     }
     .card h2 {
       font-size: 1rem;
-      color: #7dd3fc;
+      color: var(--accent-soft);
       margin-bottom: 0.25rem;
     }
     .card .section-subtitle {
-      color: #94a3b8;
+      color: var(--text-soft);
       font-size: 0.84rem;
       line-height: 1.45;
       margin-bottom: 0.85rem;
@@ -131,14 +131,14 @@
       align-items: center;
       padding: 0.28rem 0.55rem;
       border-radius: 999px;
-      border: 1px solid #334155;
-      background: #0f172a;
-      color: #cbd5e1;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text-subtle);
       font-size: 0.78rem;
     }
-    .badge strong { color: #f8fafc; }
+    .badge strong { color: var(--text-strong); }
     .mini-heading {
-      color: #64748b;
+      color: var(--text-muted);
       font-size: 0.72rem;
       text-transform: uppercase;
       letter-spacing: 0.06em;
@@ -146,8 +146,8 @@
     }
     .rows { display: grid; gap: 0.55rem; }
     .row {
-      background: #0f172a;
-      border: 1px solid #334155;
+      background: var(--bg);
+      border: 1px solid var(--border);
       border-radius: 10px;
       padding: 0.75rem 0.85rem;
     }
@@ -159,32 +159,32 @@
       flex-wrap: wrap;
       margin-bottom: 0.18rem;
     }
-    .row-title { color: #f8fafc; font-weight: 600; }
-    .row-source { color: #7dd3fc; font-size: 0.8rem; }
-    .row-meta { color: #94a3b8; font-size: 0.78rem; line-height: 1.45; }
+    .row-title { color: var(--text-strong); font-weight: 600; }
+    .row-source { color: var(--accent-soft); font-size: 0.8rem; }
+    .row-meta { color: var(--text-soft); font-size: 0.78rem; line-height: 1.45; }
     .row-meta code {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: #7dd3fc;
-      background: #020617;
+      color: var(--accent-soft);
+      background: var(--accent-bg-deep);
       padding: 0.08rem 0.28rem;
       border-radius: 4px;
     }
     .row-note {
-      color: #fbbf24;
+      color: var(--warning);
       font-size: 0.75rem;
       margin-top: 0.35rem;
     }
     .empty {
-      border: 1px dashed #334155;
+      border: 1px dashed var(--border);
       border-radius: 10px;
       padding: 1rem;
-      color: #64748b;
+      color: var(--text-muted);
       font-size: 0.86rem;
       text-align: center;
     }
     .footer-note {
       margin-top: 1rem;
-      color: #94a3b8;
+      color: var(--text-soft);
       font-size: 0.84rem;
       line-height: 1.55;
     }
@@ -197,6 +197,7 @@
       .stats { grid-template-columns: 1fr 1fr; }
     }
   </style>
+  {% include 'admin/_theme_head.html' %}
 </head>
 <body>
   <nav>
@@ -208,13 +209,14 @@
     <a href="/admin/settings">Settings</a>
     <a href="/admin/logs">Logs</a>
     <a href="/admin/help">Help</a>
-    <a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="{% if update_status.update_available %}Update available: {{ update_status.latest_version }}{% else %}View FastChannels on GitHub{% endif %}">v{{ app_version }}{% if update_status.update_available %} <span style="color:#fbbf24;">Update: {{ update_status.latest_version }}</span>{% endif %}</a>
+    {% include 'admin/_theme_toggle.html' %}
+    <a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="{% if update_status.update_available %}Update available: {{ update_status.latest_version }}{% else %}View FastChannels on GitHub{% endif %}">v{{ app_version }}{% if update_status.update_available %} <span style="color:var(--warning);">Update: {{ update_status.latest_version }}</span>{% endif %}</a>
   </nav>
 
   <div class="page">
     <div class=”hero”>
       <div>
-        <h1>Channel Changes Report <span style=”font-size:0.65rem;font-weight:600;background:#1e3a5f;color:#7dd3fc;border:1px solid #1d4ed8;border-radius:999px;padding:0.15rem 0.55rem;vertical-align:middle;letter-spacing:0.05em”>BETA</span></h1>
+        <h1>Channel Changes Report <span style=”font-size:0.65rem;font-weight:600;background:var(--accent-bg);color:var(--accent-soft);border:1px solid var(--info);border-radius:999px;padding:0.15rem 0.55rem;vertical-align:middle;letter-spacing:0.05em”>BETA</span></h1>
         <p class=”subtitle”>
           Track channel lineup changes across your sources — new arrivals, channels that have gone inactive, and channels at risk of dropping out.
         </p>
@@ -255,7 +257,7 @@
       </div>
       <div class="stat">
         <div class="stat-label">Net Change</div>
-        <div class="stat-value" style="color:{% if net_change > 0 %}#86efac{% elif net_change < 0 %}#f87171{% else %}#f8fafc{% endif %}">{% if net_change > 0 %}+{% endif %}{{ net_change }}</div>
+        <div class="stat-value" style="color:{% if net_change > 0 %}var(--success-soft){% elif net_change < 0 %}var(--danger){% else %}var(--text-strong){% endif %}">{% if net_change > 0 %}+{% endif %}{{ net_change }}</div>
         <div class="stat-sub">New minus inactive in window</div>
       </div>
       <div class="stat">
@@ -412,24 +414,24 @@
       <div class="section-subtitle">Active channel counts and scrape status for all enabled sources.</div>
       <table style="width:100%;border-collapse:collapse;font-size:0.84rem;margin-top:0.5rem">
         <thead>
-          <tr style="border-bottom:1px solid #334155">
-            <th style="text-align:left;padding:0.4rem 0.6rem;color:#94a3b8;font-weight:600">Source</th>
-            <th style="text-align:right;padding:0.4rem 0.6rem;color:#94a3b8;font-weight:600">Active</th>
-            <th style="text-align:right;padding:0.4rem 0.6rem;color:#94a3b8;font-weight:600">At Risk</th>
-            <th style="text-align:left;padding:0.4rem 0.6rem;color:#94a3b8;font-weight:600">Interval</th>
-            <th style="text-align:left;padding:0.4rem 0.6rem;color:#94a3b8;font-weight:600">Last Scraped</th>
+          <tr style="border-bottom:1px solid var(--border)">
+            <th style="text-align:left;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">Source</th>
+            <th style="text-align:right;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">Active</th>
+            <th style="text-align:right;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">At Risk</th>
+            <th style="text-align:left;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">Interval</th>
+            <th style="text-align:left;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">Last Scraped</th>
           </tr>
         </thead>
         <tbody>
           {% for src in source_health %}
-          <tr style="border-bottom:1px solid #1e293b">
-            <td style="padding:0.4rem 0.6rem;color:#e2e8f0;font-weight:500">{{ src.display_name }}</td>
-            <td style="padding:0.4rem 0.6rem;text-align:right;color:#f8fafc">{{ src.active }}</td>
-            <td style="padding:0.4rem 0.6rem;text-align:right;color:{% if src.at_risk > 0 %}#fbbf24{% else %}#475569{% endif %}">
+          <tr style="border-bottom:1px solid var(--surface)">
+            <td style="padding:0.4rem 0.6rem;color:var(--text);font-weight:500">{{ src.display_name }}</td>
+            <td style="padding:0.4rem 0.6rem;text-align:right;color:var(--text-strong)">{{ src.active }}</td>
+            <td style="padding:0.4rem 0.6rem;text-align:right;color:{% if src.at_risk > 0 %}var(--warning){% else %}var(--text-dim){% endif %}">
               {% if src.at_risk > 0 %}{{ src.at_risk }}{% else %}—{% endif %}
             </td>
-            <td style="padding:0.4rem 0.6rem;color:#64748b">{% if src.scrape_interval %}{{ src.scrape_interval }}m{% else %}—{% endif %}</td>
-            <td style="padding:0.4rem 0.6rem;color:#64748b">{% if src.last_scraped_at %}{{ src.last_scraped_at|localtime }}{% else %}Never{% endif %}</td>
+            <td style="padding:0.4rem 0.6rem;color:var(--text-muted)">{% if src.scrape_interval %}{{ src.scrape_interval }}m{% else %}—{% endif %}</td>
+            <td style="padding:0.4rem 0.6rem;color:var(--text-muted)">{% if src.last_scraped_at %}{{ src.last_scraped_at|localtime }}{% else %}Never{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -441,5 +443,6 @@
       ⚠️ This report is in beta — data shown is based on what FastChannels currently tracks during scrapes. Have feedback? Let us know on the forum.
     </p>
   </div>
+<script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
 </body>
 </html>

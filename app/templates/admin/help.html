@@ -9,13 +9,13 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
+      background: var(--bg);
+      color: var(--text);
       min-height: 100vh;
     }
     nav {
-      background: #1e293b;
-      border-bottom: 1px solid #334155;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
       padding: 0 2rem;
       display: flex;
       align-items: center;
@@ -23,13 +23,13 @@
       min-height: 56px;
       flex-wrap: wrap;
     }
-    nav .version { margin-left: auto; color: #475569; font-size: 0.75rem; }
-    nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
-    nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
-    nav a:hover, nav a.active { color: #e2e8f0; }
+    nav .version { margin-left: auto; color: var(--text-dim); font-size: 0.75rem; }
+    nav h1 { color: var(--accent); font-size: 1.2rem; font-weight: 700; }
+    nav a { color: var(--text-soft); text-decoration: none; font-size: 0.9rem; }
+    nav a:hover, nav a.active { color: var(--text); }
     .page { max-width: 980px; margin: 0 auto; padding: 2.25rem 1.25rem 3rem; }
     h1 { font-size: 1.7rem; margin-bottom: 0.5rem; }
-    .subtitle { color: #94a3b8; margin-bottom: 1.75rem; line-height: 1.5; }
+    .subtitle { color: var(--text-soft); margin-bottom: 1.75rem; line-height: 1.5; }
     .card-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -37,8 +37,8 @@
       margin-bottom: 1.5rem;
     }
     .card {
-      background: #1e293b;
-      border: 1px solid #334155;
+      background: var(--surface);
+      border: 1px solid var(--border);
       border-radius: 12px;
       padding: 1rem 1.1rem;
       box-shadow: 0 2px 8px rgba(0,0,0,0.4);
@@ -46,23 +46,23 @@
     .card h2 {
       font-size: 0.95rem;
       margin-bottom: 0.8rem;
-      color: #7dd3fc;
+      color: var(--accent-soft);
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }
     .card p, .card li {
-      color: #cbd5e1;
+      color: var(--text-subtle);
       font-size: 0.92rem;
       line-height: 1.55;
     }
     .card ul { padding-left: 1.1rem; }
     .card li + li { margin-top: 0.45rem; }
-    .card a { color: #7dd3fc; text-decoration: none; }
+    .card a { color: var(--accent-soft); text-decoration: none; }
     .card a:hover { text-decoration: underline; }
     code {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: #7dd3fc;
-      background: #0f172a;
+      color: var(--accent-soft);
+      background: var(--bg);
       padding: 0.08rem 0.28rem;
       border-radius: 4px;
     }
@@ -75,11 +75,12 @@
     }
     .btn-browse-cm {
       margin-top: 0.75rem;
-      background: #0d9488; color: #fff; border: none;
+      background: var(--teal); color: #fff; border: none;
       border-radius: 6px; padding: 0.4rem 1rem; font-size: 0.85rem; cursor: pointer;
     }
-    .btn-browse-cm:hover { background: #0f766e; }
+    .btn-browse-cm:hover { background: var(--teal-hover); }
   </style>
+  {% include 'admin/_theme_head.html' %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/community_map.css') }}">
 </head>
 <body>
@@ -92,7 +93,8 @@
     <a href="/admin/settings">Settings</a>
     <a href="/admin/logs">Logs</a>
     <a href="/admin/help" class="active">Help</a>
-    <a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="{% if update_status.update_available %}Update available: {{ update_status.latest_version }}{% else %}View FastChannels on GitHub{% endif %}">v{{ app_version }}{% if update_status.update_available %} <span style="color:#fbbf24;">Update: {{ update_status.latest_version }}</span>{% endif %}</a>
+    {% include 'admin/_theme_toggle.html' %}
+    <a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="{% if update_status.update_available %}Update available: {{ update_status.latest_version }}{% else %}View FastChannels on GitHub{% endif %}">v{{ app_version }}{% if update_status.update_available %} <span style="color:var(--warning);">Update: {{ update_status.latest_version }}</span>{% endif %}</a>
   </nav>
 
   <div class="page">
@@ -191,6 +193,7 @@
   </div>
   {% include 'admin/_community_map_modals.html' %}
 
+  <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
   <script src="{{ url_for('static', filename='js/gracenote_suggest.js') }}"></script>
   <script src="{{ url_for('static', filename='js/community_map.js') }}"></script>
   <script>

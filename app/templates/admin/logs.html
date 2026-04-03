@@ -10,7 +10,7 @@
     html, body { min-height: 100%; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f172a; color: #e2e8f0;
+      background: var(--bg); color: var(--text);
       display: grid;
       grid-template-rows: auto auto minmax(0, 1fr);
       min-height: 100vh;
@@ -18,29 +18,29 @@
       height: 100dvh;
       overflow: hidden;
     }
-    nav { background: #1e293b; padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #334155; flex-wrap: wrap; }
-    nav .version { margin-left: auto; color: #475569; font-size: 0.75rem; }
-    nav h1 { color: #38bdf8; font-size: 1.2rem; font-weight: 700; }
-    nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
-    nav a:hover, nav a.active { color: #e2e8f0; }
+    nav { background: var(--surface); padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    nav .version { margin-left: auto; color: var(--text-dim); font-size: 0.75rem; }
+    nav h1 { color: var(--accent); font-size: 1.2rem; font-weight: 700; }
+    nav a { color: var(--text-soft); text-decoration: none; font-size: 0.9rem; }
+    nav a:hover, nav a.active { color: var(--text); }
 
     .toolbar {
-      background: #1e293b; border-bottom: 1px solid #334155;
+      background: var(--surface); border-bottom: 1px solid var(--border);
       padding: 0.6rem 1.5rem; display: flex; align-items: center; gap: 1rem;
     }
-    .toolbar label { font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
-    .toolbar input[type=checkbox] { accent-color: #38bdf8; }
+    .toolbar label { font-size: 0.82rem; color: var(--text-soft); display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+    .toolbar input[type=checkbox] { accent-color: var(--accent); }
     .btn {
       padding: 0.35rem 0.85rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;
-      border: none; font-weight: 500; background: #0284c7; color: white; transition: background 0.15s;
+      border: none; font-weight: 500; background: var(--accent-strong); color: white; transition: background 0.15s;
     }
-    .btn:hover { background: #0369a1; }
+    .btn:hover { background: var(--accent-strong-hover); }
     .filter-input {
-      background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
       border-radius: 6px; padding: 0.3rem 0.6rem; font-size: 0.8rem; width: 220px;
     }
-    .filter-input:focus { outline: none; border-color: #38bdf8; }
-    .status { font-size: 0.78rem; color: #64748b; margin-left: auto; }
+    .filter-input:focus { outline: none; border-color: var(--accent); }
+    .status { font-size: 0.78rem; color: var(--text-muted); margin-left: auto; }
 
     #log-container {
       overflow: auto; padding: 0.75rem 1.5rem;
@@ -52,12 +52,12 @@
       touch-action: pan-x pan-y;
     }
     .line { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
-    .line-INFO    { color: #cbd5e1; }
-    .line-WARNING { color: #fbbf24; }
-    .line-ERROR   { color: #f87171; }
-    .line-CRITICAL{ color: #f87171; font-weight: 700; }
-    .line-DEBUG   { color: #475569; }
-    .line-other   { color: #94a3b8; }
+    .line-INFO    { color: var(--text-subtle); }
+    .line-WARNING { color: var(--warning); }
+    .line-ERROR   { color: var(--danger); }
+    .line-CRITICAL{ color: var(--danger); font-weight: 700; }
+    .line-DEBUG   { color: var(--text-dim); }
+    .line-other   { color: var(--text-soft); }
     .line.hidden  { display: none; }
     @media (max-width: 760px) {
       html { font-size: 16px; }
@@ -105,6 +105,7 @@
       }
     }
   </style>
+  {% include 'admin/_theme_head.html' %}
 </head>
 <body>
   <nav>
@@ -116,7 +117,8 @@
     <a href="/admin/settings">Settings</a>
     <a href="/admin/logs" class="active">Logs</a>
     <a href="/admin/help">Help</a>
-    <a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="{% if update_status.update_available %}Update available: {{ update_status.latest_version }}{% else %}View FastChannels on GitHub{% endif %}">v{{ app_version }}{% if update_status.update_available %} <span style="color:#fbbf24;">Update: {{ update_status.latest_version }}</span>{% endif %}</a>
+    {% include 'admin/_theme_toggle.html' %}
+    <a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="{% if update_status.update_available %}Update available: {{ update_status.latest_version }}{% else %}View FastChannels on GitHub{% endif %}">v{{ app_version }}{% if update_status.update_available %} <span style="color:var(--warning);">Update: {{ update_status.latest_version }}</span>{% endif %}</a>
   </nav>
 
   <div class="toolbar">
@@ -186,5 +188,6 @@
 
     refresh();
   </script>
+  <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
 </body>
 </html>
