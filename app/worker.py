@@ -473,7 +473,7 @@ def run_stream_audit(source_name: str):
             except Exception as _refresh_exc:
                 logger.warning('[audit] %s: pre-audit refresh failed (non-fatal): %s', source_name, _refresh_exc)
 
-        channels = source.channels.all()
+        channels = source.channels.filter_by(is_active=True).all()
         total    = len(channels)
         checked  = 0
         flagged  = 0
