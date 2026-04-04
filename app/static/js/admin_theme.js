@@ -14,11 +14,7 @@
         return saved;
       }
     } catch (err) {
-      // Ignore storage access failures and fall back to system preference.
-    }
-
-    if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
-      return "light";
+      // Ignore storage access failures and fall back to the default theme.
     }
     return DEFAULT_THEME;
   }

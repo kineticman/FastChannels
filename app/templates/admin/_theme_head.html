@@ -6,14 +6,8 @@
         var saved = window.localStorage.getItem(key);
         if (saved === 'dark' || saved === 'light' || saved === 'fun') {
           theme = saved;
-        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-          theme = 'light';
         }
-      } catch (err) {
-        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-          theme = 'light';
-        }
-      }
+      } catch (err) {}
       document.documentElement.setAttribute('data-theme', theme);
     })();
   </script>
