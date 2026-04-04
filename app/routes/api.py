@@ -1697,6 +1697,20 @@ def resolve_duplicates():
     def has_gracenote(ch):
         return bool((ch.gracenote_id or '').strip())
 
+    from ..models import Program as _Program
+    from datetime import datetime as _dt, timezone as _tz
+    _now = _dt.now(_tz.utc)
+    _channels_with_epg = {
+        row[0] for row in
+        db.session.query(_Program.channel_id)
+        .filter(_Program.end_time > _now)
+        .distinct()
+        .all()
+    }
+
+    def has_epg(ch):
+        return ch.id in _channels_with_epg
+
     def priority_key(ch):
         try:
             source_rank = priority.index(ch.source.name)
@@ -1705,6 +1719,7 @@ def resolve_duplicates():
         return (
             1 if is_unhealthy(ch) else 0,
             0 if has_gracenote(ch) else 1,
+            0 if has_epg(ch) else 1,
             source_rank,
         )
 

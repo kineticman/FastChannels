@@ -2353,7 +2353,7 @@
               Will keep <strong>${data.total_groups}</strong> channel${data.total_groups !== 1 ? 's' : ''}
               and disable <strong>${willDisable}</strong> duplicate${willDisable !== 1 ? 's' : ''}
               across <strong>${strictSources}</strong> source${strictSources !== 1 ? 's' : ''}.
-              Winner selection prefers healthy channels, then channels with Gracenote IDs, then your source priority.
+              Winner selection prefers healthy channels, then channels with Gracenote IDs, then channels with EPG coverage, then your source priority.
             </div>
             <div class="modal-actions" style="margin-top:0.75rem">
               <button class="btn-confirm" onclick="confirmResolve(this)">Disable Strict Duplicates</button>
@@ -2420,7 +2420,7 @@
             <div class="dup-soft-list">${softItems}</div>
             <div class="modal-preview" id="soft-dup-preview" style="margin-top:0.75rem;margin-bottom:0">
               Selected <strong>${selectedCount}</strong> of <strong>${softGroups.length}</strong> soft duplicate group${softGroups.length !== 1 ? 's' : ''}.
-              Approved groups use the same winner-selection rules as strict duplicates: healthy first, then Gracenote coverage, then source priority.
+              Approved groups use the same winner-selection rules as strict duplicates: healthy first, then Gracenote coverage, then EPG coverage, then source priority.
             </div>
             <div class="modal-actions" style="margin-top:0.75rem">
               <button class="btn-confirm" id="soft-dup-confirm-btn" type="button" onclick="confirmSoftResolve(this)" ${selectedCount ? '' : 'disabled'}>Disable Approved Soft Matches</button>
@@ -2459,7 +2459,7 @@
 
       if (selectedCountEl) selectedCountEl.textContent = String(selectedCount);
       if (previewEl) {
-        previewEl.innerHTML = `Selected <strong>${selectedCount}</strong> of <strong>${groups.length}</strong> soft duplicate group${groups.length !== 1 ? 's' : ''}. Approved groups use the same winner-selection rules as strict duplicates: healthy first, then Gracenote coverage, then source priority.`;
+        previewEl.innerHTML = `Selected <strong>${selectedCount}</strong> of <strong>${groups.length}</strong> soft duplicate group${groups.length !== 1 ? 's' : ''}. Approved groups use the same winner-selection rules as strict duplicates: healthy first, then Gracenote coverage, then EPG coverage, then source priority.`;
       }
       if (confirmBtn) confirmBtn.disabled = selectedCount === 0;
       if (toggleAllBtn && groups.length) {
