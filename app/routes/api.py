@@ -1574,9 +1574,9 @@ def stats():
 
 @api_bp.route('/channels/duplicate-summary', methods=['GET'])
 def duplicate_summary():
-    """Return per-source stats for channels involved in normalized duplicate groups."""
+    """Return strict duplicate stats plus reviewable soft-match groups."""
     from collections import defaultdict
-    from .admin import _canonical_duplicate_name
+    from .admin import _canonical_duplicate_name, _soft_duplicate_name
 
     enabled_channels = (
         Channel.query.join(Source)
@@ -1587,18 +1587,42 @@ def duplicate_summary():
         )
         .all()
     )
-    groups = defaultdict(list)
+    strict_groups = defaultdict(list)
+    soft_groups = defaultdict(list)
     for ch in enabled_channels:
-        key = _canonical_duplicate_name(ch.name or '')
-        if key:
-            groups[key].append(ch)
+        strict_key = _canonical_duplicate_name(ch.name or '')
+        if strict_key:
+            strict_groups[strict_key].append(ch)
+        soft_key = _soft_duplicate_name(ch.name or '')
+        if soft_key:
+            soft_groups[soft_key].append(ch)
 
-    dup_channels = [ch for channels in groups.values() if len(channels) > 1 for ch in channels]
+    dup_channels = [ch for channels in strict_groups.values() if len(channels) > 1 for ch in channels]
 
     if not dup_channels:
-        return jsonify({'sources': [], 'total_groups': 0, 'total_affected': 0})
+        strict_groups_found = set()
+    else:
+        strict_groups_found = {key for key, channels in strict_groups.items() if len(channels) > 1}
 
-    unique_names = {key for key, channels in groups.items() if len(channels) > 1}
+    soft_group_payload = []
+    for key, channels in soft_groups.items():
+        names = sorted({(ch.name or '').strip() for ch in channels if (ch.name or '').strip()})
+        if len(names) < 2:
+            continue
+        strict_keys_in_group = {_canonical_duplicate_name(name) for name in names}
+        if len(strict_keys_in_group) <= 1:
+            continue
+        enabled_count = sum(1 for ch in channels if ch.is_enabled)
+        if enabled_count < 2:
+            continue
+        soft_group_payload.append({
+            'group_key': key,
+            'names': names,
+            'channel_count': enabled_count,
+            'sources': sorted({ch.source.display_name for ch in channels}),
+            'match_reason': 'Matched after soft brand normalization (TV/Channel/Network).',
+        })
+    soft_group_payload.sort(key=lambda item: (-item['channel_count'], item['names'][0].casefold()))
 
     # Find which duplicate channels actually have program data
     dup_channel_ids = [ch.id for ch in dup_channels]
@@ -1635,8 +1659,9 @@ def duplicate_summary():
 
     return jsonify({
         'sources':       sources,
-        'total_groups':  len(unique_names),
+        'total_groups':  len(strict_groups_found),
         'total_affected': len(dup_channels),
+        'soft_groups': soft_group_payload,
     })
 
 
@@ -1644,10 +1669,16 @@ def duplicate_summary():
 def resolve_duplicates():
     """Disable duplicate channels, keeping one winner per normalized-name group."""
     from collections import defaultdict
-    from .admin import _canonical_duplicate_name
+    from .admin import _canonical_duplicate_name, _soft_duplicate_name
 
     data = request.get_json(force=True) or {}
     priority = data.get('source_priority', [])  # ordered list of source names, index 0 = highest
+    mode = (data.get('mode') or 'strict').strip().lower()
+    selected_group_keys = {
+        (key or '').strip()
+        for key in (data.get('group_keys') or [])
+        if (key or '').strip()
+    }
 
     groups = defaultdict(list)
     all_named_channels = (
@@ -1656,12 +1687,15 @@ def resolve_duplicates():
         .all()
     )
     for ch in all_named_channels:
-        key = _canonical_duplicate_name(ch.name or '')
+        key = _canonical_duplicate_name(ch.name or '') if mode == 'strict' else _soft_duplicate_name(ch.name or '')
         if key:
             groups[key].append(ch)
 
     def is_unhealthy(ch):
         return ch.disable_reason == 'Dead' or (ch.disable_reason or '').startswith('DRM') or not ch.is_active
+
+    def has_gracenote(ch):
+        return bool((ch.gracenote_id or '').strip())
 
     def priority_key(ch):
         try:
@@ -1670,12 +1704,20 @@ def resolve_duplicates():
             source_rank = len(priority)  # unlisted sources rank last
         return (
             1 if is_unhealthy(ch) else 0,
+            0 if has_gracenote(ch) else 1,
             source_rank,
         )
 
     disabled_count = 0
     enabled_count = 0
-    for channels in groups.values():
+    groups_resolved = 0
+    for group_key, channels in groups.items():
+        if mode == 'soft' and group_key not in selected_group_keys:
+            continue
+        if mode == 'soft':
+            strict_keys_in_group = {_canonical_duplicate_name(ch.name or '') for ch in channels if (ch.name or '').strip()}
+            if len(strict_keys_in_group) <= 1:
+                continue
         enabled_in_group = [ch for ch in channels if ch.is_enabled]
         if len(enabled_in_group) < 2:
             continue
@@ -1686,6 +1728,7 @@ def resolve_duplicates():
                 if ch.is_enabled:
                     ch.is_enabled = False
                     disabled_count += 1
+            groups_resolved += 1
             continue
         if not is_unhealthy(winner) and not winner.is_enabled:
             winner.is_enabled = True
@@ -1694,12 +1737,13 @@ def resolve_duplicates():
             if ch.is_enabled:
                 ch.is_enabled = False
                 disabled_count += 1
+        groups_resolved += 1
 
     db.session.commit()
     return jsonify({
         'disabled': disabled_count,
         'enabled': enabled_count,
-        'groups_resolved': len(groups),
+        'groups_resolved': groups_resolved,
     })
 
 

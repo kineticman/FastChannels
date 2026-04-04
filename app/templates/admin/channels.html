@@ -263,7 +263,12 @@
       padding: 0.35rem 0.8rem; border-radius: 6px; border: none;
       font-size: 0.82rem; cursor: pointer; font-weight: 500;
     }
-    .btn-secondary { background: var(--border); color: var(--text); }
+    .btn-secondary {
+      background: var(--border);
+      color: var(--text);
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
     .btn-secondary:hover { background: var(--text-dim); }
     .dup-badge {
       display: inline-block; font-size: 0.6rem; font-weight: 700; padding: 0.1rem 0.35rem;
@@ -310,6 +315,81 @@
     .modal-box h2 { margin: 0 0 0.25rem; font-size: 1.1rem; color: var(--text-strong); }
     .modal-box .modal-sub { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 1.25rem; }
     .modal-box .modal-loading { color: var(--text-muted); text-align: center; padding: 2rem 0; }
+    .dup-section {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 55%, transparent), transparent);
+      padding: 0.95rem;
+      margin-bottom: 0.95rem;
+    }
+    .dup-section:last-of-type { margin-bottom: 0; }
+    .dup-section-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.85rem;
+      margin-bottom: 0.85rem;
+      flex-wrap: wrap;
+    }
+    .dup-section-title {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      min-width: 0;
+    }
+    .dup-section-kicker {
+      font-size: 0.67rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+    .dup-section-title h3 {
+      font-size: 0.96rem;
+      color: var(--text-strong);
+      margin: 0;
+    }
+    .dup-section-note {
+      font-size: 0.8rem;
+      color: var(--text-soft);
+      max-width: 42rem;
+      line-height: 1.45;
+    }
+    .dup-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.55rem;
+      margin-bottom: 0.85rem;
+    }
+    .dup-stat {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      min-width: 0;
+    }
+    .dup-stat-label {
+      display: block;
+      font-size: 0.64rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+    }
+    .dup-stat-value {
+      display: block;
+      font-size: 1.02rem;
+      color: var(--text-strong);
+      font-weight: 700;
+    }
+    .dup-stat-copy {
+      display: block;
+      margin-top: 0.18rem;
+      font-size: 0.74rem;
+      color: var(--text-soft);
+      line-height: 1.35;
+    }
     .priority-list { list-style: none; margin: 0 0 1rem; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
     .priority-item {
       display: flex; align-items: center; gap: 0.6rem;
@@ -326,6 +406,144 @@
       font-size: 0.6rem; font-weight: 700; padding: 0.1rem 0.35rem; border-radius: 3px;
       background: var(--success-bg-2); color: var(--success-soft); letter-spacing: 0.04em;
     }
+    .dup-soft-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.8rem;
+      flex-wrap: wrap;
+    }
+    .dup-soft-count {
+      font-size: 0.78rem;
+      color: var(--text-soft);
+    }
+    .dup-soft-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      max-height: 360px;
+      overflow: auto;
+      padding-right: 0.15rem;
+    }
+    .dup-soft-item {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 0.85rem;
+      align-items: start;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+      padding: 0.8rem 0.9rem;
+      cursor: pointer;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      transition: border-color 0.15s, background 0.15s, transform 0.15s, box-shadow 0.15s;
+      user-select: none;
+    }
+    .dup-soft-item:hover {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent-bg-soft) 35%, var(--bg));
+      transform: translateY(-1px);
+    }
+    .dup-soft-item.selected {
+      border-color: color-mix(in srgb, var(--purple-soft) 55%, var(--accent));
+      background: linear-gradient(180deg, color-mix(in srgb, var(--purple-panel-2) 88%, transparent), color-mix(in srgb, var(--purple-panel) 58%, transparent));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--purple-panel-border-soft) 80%, transparent);
+    }
+    .dup-soft-check {
+      margin-top: 0.1rem;
+      width: 1.15rem;
+      height: 1.15rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: transparent;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.72rem;
+      font-weight: 700;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      padding: 0;
+      pointer-events: none;
+    }
+    .dup-soft-item.selected .dup-soft-check {
+      border-color: var(--accent);
+      background: var(--accent-strong);
+      color: #fff;
+    }
+    .dup-soft-main {
+      min-width: 0;
+    }
+    .dup-soft-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.45rem;
+    }
+    .dup-soft-reason {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.22rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      background: var(--accent-bg);
+      color: var(--accent-soft);
+      border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    }
+    .dup-soft-sources {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+    .dup-soft-names {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem 0.45rem;
+      margin-bottom: 0.45rem;
+    }
+    .dup-soft-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.28rem 0.58rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    .dup-soft-details {
+      font-size: 0.77rem;
+      color: var(--text-soft);
+      line-height: 1.42;
+    }
+    .dup-soft-aside {
+      min-width: 6.25rem;
+      text-align: right;
+      justify-self: end;
+    }
+    .dup-soft-aside strong {
+      display: block;
+      font-size: 1rem;
+      color: var(--text-strong);
+      line-height: 1.1;
+    }
+    .dup-soft-aside span {
+      display: block;
+      margin-top: 0.18rem;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
     .modal-preview {
       background: var(--bg); border: 1px solid var(--accent-bg); border-radius: 6px;
       padding: 0.65rem 0.85rem; font-size: 0.8rem; color: var(--accent-soft); margin-bottom: 1.25rem;
@@ -334,11 +552,15 @@
     .modal-actions .btn-cancel-modal {
       background: transparent; color: var(--text-muted); border: 1px solid var(--border);
       border-radius: 6px; padding: 0.45rem 1rem; font-size: 0.85rem; cursor: pointer;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     .modal-actions .btn-confirm {
       background: var(--warning-border); color: var(--warning-soft); border: none; border-radius: 6px;
       padding: 0.45rem 1.1rem; font-size: 0.85rem; font-weight: 600; cursor: pointer;
       transition: background 0.15s;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     .modal-actions .btn-confirm:hover { background: var(--warning-strong); }
     .modal-actions .btn-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -709,6 +931,14 @@
       /* Modal overlay: anchor to top so tall content scrolls naturally */
       .modal-overlay { align-items: flex-start; padding: 1rem 0.75rem 1rem; }
       .modal-box { width: 100%; max-width: 100%; max-height: calc(100dvh - 2rem); border-radius: 8px; padding: 1.1rem; }
+      .dup-stat-grid { grid-template-columns: 1fr; }
+      .dup-soft-item { grid-template-columns: auto 1fr; }
+      .dup-soft-aside {
+        grid-column: 2;
+        justify-self: start;
+        text-align: left;
+        min-width: 0;
+      }
       .preview-actions { grid-template-columns: 1fr; }
       /* GS modal: overlay scrolls, inner box has no height cap */
       .gs-modal { width: 100%; max-height: none; overflow-y: visible; }
@@ -2023,6 +2253,8 @@
   <script>
     // ── Resolve Duplicates Modal ───────────────────────────────────────────
     let _dupSources = [];  // current ordered list
+    let _dupSummary = null;
+    let _selectedSoftDupGroups = new Set();
 
     async function openResolveDupesModal() {
       const modal = document.getElementById('resolve-modal');
@@ -2033,45 +2265,149 @@
       const res  = await fetch('/api/channels/duplicate-summary');
       const data = await res.json();
       _dupSources = data.sources.map(s => ({ ...s }));
+      _dupSummary = data;
+      _selectedSoftDupGroups = new Set();
       renderModalBody(data);
     }
 
     function renderModalBody(data) {
       const body = document.getElementById('resolve-modal-body');
-      if (!_dupSources.length) {
+      const softGroups = data.soft_groups || [];
+      if (!_dupSources.length && !softGroups.length) {
         body.innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:2rem 0">No duplicates found.</p>';
         return;
       }
 
-      const bestGn = Math.max(..._dupSources.map(s => s.gn_pct));
+      let strictSection = '';
+      if (_dupSources.length) {
+        const bestGn = Math.max(..._dupSources.map(s => s.gn_pct));
+        const items = _dupSources.map((s, i) => {
+          const isRec = s.gn_pct === bestGn && bestGn > 0 && !s.epg_only;
+          return `
+            <li class="priority-item" draggable="true" data-idx="${i}"
+                ondragstart="onDragStart(event)" ondragover="onDragOver(event)"
+                ondrop="onDrop(event)" ondragleave="onDragLeave(event)">
+              <span class="drag-handle">⠿</span>
+              <span class="rank">${i + 1}</span>
+              <span class="src-name">${s.display_name}</span>
+              ${isRec ? '<span class="rec-badge">RECOMMENDED</span>' : ''}
+              ${s.epg_only ? '<span class="badge-epg-only" title="EPG-only source — cannot serve streams">EPG</span>' : ''}
+              <span class="src-meta">${s.dup_count} ch · ${s.gn_pct}% EPG</span>
+            </li>`;
+        }).join('');
+        const willDisable = data.total_affected - data.total_groups;
+        const strictSources = _dupSources.length;
+        strictSection = `
+          <section class="dup-section">
+            <div class="dup-section-header">
+              <div class="dup-section-title">
+                <span class="dup-section-kicker">Auto Resolve</span>
+                <h3>Strict Duplicates</h3>
+                <div class="dup-section-note">Safe matches only. Titles are compared after normalizing case, punctuation, <code>by ...</code>, and <code>presented by ...</code>.</div>
+              </div>
+            </div>
+            <div class="dup-stat-grid">
+              <div class="dup-stat">
+                <span class="dup-stat-label">Groups</span>
+                <span class="dup-stat-value">${data.total_groups}</span>
+                <span class="dup-stat-copy">Distinct strict duplicate sets</span>
+              </div>
+              <div class="dup-stat">
+                <span class="dup-stat-label">Will Disable</span>
+                <span class="dup-stat-value">${willDisable}</span>
+                <span class="dup-stat-copy">Extra enabled channels across those sets</span>
+              </div>
+              <div class="dup-stat">
+                <span class="dup-stat-label">Priority Sources</span>
+                <span class="dup-stat-value">${strictSources}</span>
+                <span class="dup-stat-copy">Drag to control the final tiebreaker</span>
+              </div>
+            </div>
+            <ul class="priority-list" id="priority-list">${items}</ul>
+            <div class="modal-preview">
+              Will keep <strong>${data.total_groups}</strong> channel${data.total_groups !== 1 ? 's' : ''}
+              and disable <strong>${willDisable}</strong> duplicate${willDisable !== 1 ? 's' : ''}
+              across <strong>${strictSources}</strong> source${strictSources !== 1 ? 's' : ''}.
+              Winner selection prefers healthy channels, then channels with Gracenote IDs, then your source priority.
+            </div>
+            <div class="modal-actions" style="margin-top:0.75rem">
+              <button class="btn-confirm" onclick="confirmResolve(this)">Disable Strict Duplicates</button>
+            </div>
+          </section>`;
+      }
 
-      const items = _dupSources.map((s, i) => {
-        const isRec = s.gn_pct === bestGn && bestGn > 0 && !s.epg_only;
-        return `
-          <li class="priority-item" draggable="true" data-idx="${i}"
-              ondragstart="onDragStart(event)" ondragover="onDragOver(event)"
-              ondrop="onDrop(event)" ondragleave="onDragLeave(event)">
-            <span class="drag-handle">⠿</span>
-            <span class="rank">${i + 1}</span>
-            <span class="src-name">${s.display_name}</span>
-            ${isRec ? '<span class="rec-badge">RECOMMENDED</span>' : ''}
-            ${s.epg_only ? '<span class="badge-epg-only" title="EPG-only source — cannot serve streams">EPG</span>' : ''}
-            <span class="src-meta">${s.dup_count} ch · ${s.gn_pct}% EPG</span>
-          </li>`;
-      }).join('');
-
-      const willDisable = data.total_affected - data.total_groups;
+      let softSection = '';
+      if (softGroups.length) {
+        const selectedCount = _selectedSoftDupGroups.size;
+        const softItems = softGroups.map(group => {
+          const selected = _selectedSoftDupGroups.has(group.group_key);
+          const selectedClass = selected ? 'selected' : '';
+          const names = group.names.map(name => `<span class="dup-soft-pill">${escapeHtml(name)}</span>`).join(' ');
+          const sources = escapeHtml(group.sources.join(', '));
+          const sourceCount = group.sources.length;
+          return `
+            <div class="dup-soft-item ${selectedClass}" data-group-key=${JSON.stringify(group.group_key)} role="checkbox" aria-checked="${selected ? 'true' : 'false'}" tabindex="0" onclick="toggleSoftDupGroup(this.dataset.groupKey)" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleSoftDupGroup(this.dataset.groupKey); }">
+              <span class="dup-soft-check" aria-hidden="true">${selected ? '✓' : ''}</span>
+              <div class="dup-soft-main">
+                <div class="dup-soft-meta">
+                  <span class="dup-soft-reason">Soft Match</span>
+                  <span class="dup-soft-sources">${sourceCount} source${sourceCount !== 1 ? 's' : ''}: ${sources}</span>
+                </div>
+                <div class="dup-soft-names">${names}</div>
+                <div class="dup-soft-details">${escapeHtml(group.match_reason)} Review this group before disabling anything.</div>
+              </div>
+              <div class="dup-soft-aside">
+                <strong>${group.channel_count}</strong>
+                <span>Enabled Channels</span>
+              </div>
+            </div>`;
+        }).join('');
+        softSection = `
+          <section class="dup-section">
+            <div class="dup-section-header">
+              <div class="dup-section-title">
+                <span class="dup-section-kicker">Needs Review</span>
+                <h3>Soft Duplicate Candidates</h3>
+                <div class="dup-section-note">These are looser brand variants such as <code>TV</code>, <code>Channel</code>, or <code>Network</code>. Nothing here is disabled unless you approve it.</div>
+              </div>
+              <button class="btn-secondary" id="soft-dup-toggle-all-btn" type="button" onclick="toggleAllSoftDupGroups()">${selectedCount === softGroups.length ? 'Clear All' : 'Select All'}</button>
+            </div>
+            <div class="dup-stat-grid">
+              <div class="dup-stat">
+                <span class="dup-stat-label">Candidates</span>
+                <span class="dup-stat-value">${softGroups.length}</span>
+                <span class="dup-stat-copy">Soft-match groups surfaced for review</span>
+              </div>
+              <div class="dup-stat">
+                <span class="dup-stat-label">Selected</span>
+                <span class="dup-stat-value" id="soft-dup-selected-count">${selectedCount}</span>
+                <span class="dup-stat-copy">Only selected groups will be resolved</span>
+              </div>
+              <div class="dup-stat">
+                <span class="dup-stat-label">Winner Logic</span>
+                <span class="dup-stat-value">GN</span>
+                <span class="dup-stat-copy">Healthy first, then Gracenote coverage, then source order</span>
+              </div>
+            </div>
+            <div class="dup-soft-toolbar">
+              <div class="dup-soft-count">Select the brand variants you want merged into a single winner.</div>
+            </div>
+            <div class="dup-soft-list">${softItems}</div>
+            <div class="modal-preview" id="soft-dup-preview" style="margin-top:0.75rem;margin-bottom:0">
+              Selected <strong>${selectedCount}</strong> of <strong>${softGroups.length}</strong> soft duplicate group${softGroups.length !== 1 ? 's' : ''}.
+              Approved groups use the same winner-selection rules as strict duplicates: healthy first, then Gracenote coverage, then source priority.
+            </div>
+            <div class="modal-actions" style="margin-top:0.75rem">
+              <button class="btn-confirm" id="soft-dup-confirm-btn" type="button" onclick="confirmSoftResolve(this)" ${selectedCount ? '' : 'disabled'}>Disable Approved Soft Matches</button>
+            </div>
+          </section>`;
+      }
 
       body.innerHTML = `
-        <ul class="priority-list" id="priority-list">${items}</ul>
-        <div class="modal-preview">
-          Will keep <strong>${data.total_groups}</strong> channel${data.total_groups !== 1 ? 's' : ''}
-          and disable <strong>${willDisable}</strong> duplicate${willDisable !== 1 ? 's' : ''}
-          across <strong>${_dupSources.length}</strong> source${_dupSources.length !== 1 ? 's' : ''}.
-        </div>
-        <div class="modal-actions">
-          <button class="btn-cancel-modal" onclick="closeResolveDupesModal()">Cancel</button>
-          <button class="btn-confirm" onclick="confirmResolve(this)">Disable Duplicates</button>
+        ${strictSection || ''}
+        ${softSection || ''}
+        <div class="modal-actions" style="margin-top:0.9rem">
+          <button class="btn-cancel-modal" onclick="closeResolveDupesModal()">Close</button>
         </div>`;
     }
 
@@ -2080,24 +2416,117 @@
       document.getElementById('resolve-modal').classList.remove('open');
     }
 
+    function updateSoftDupSelectionUI() {
+      const groups = (_dupSummary && _dupSummary.soft_groups) || [];
+      const selectedCount = _selectedSoftDupGroups.size;
+      const selectedCountEl = document.getElementById('soft-dup-selected-count');
+      const previewEl = document.getElementById('soft-dup-preview');
+      const confirmBtn = document.getElementById('soft-dup-confirm-btn');
+      const toggleAllBtn = document.getElementById('soft-dup-toggle-all-btn');
+
+      document.querySelectorAll('.dup-soft-item').forEach((item) => {
+        const isSelected = _selectedSoftDupGroups.has(item.dataset.groupKey);
+        item.classList.toggle('selected', isSelected);
+        item.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+        const check = item.querySelector('.dup-soft-check');
+        if (check) check.textContent = isSelected ? '✓' : '';
+      });
+
+      if (selectedCountEl) selectedCountEl.textContent = String(selectedCount);
+      if (previewEl) {
+        previewEl.innerHTML = `Selected <strong>${selectedCount}</strong> of <strong>${groups.length}</strong> soft duplicate group${groups.length !== 1 ? 's' : ''}. Approved groups use the same winner-selection rules as strict duplicates: healthy first, then Gracenote coverage, then source priority.`;
+      }
+      if (confirmBtn) confirmBtn.disabled = selectedCount === 0;
+      if (toggleAllBtn && groups.length) {
+        toggleAllBtn.textContent = selectedCount === groups.length ? 'Clear All' : 'Select All';
+      }
+    }
+
     async function confirmResolve(btn) {
       btn.disabled = true;
       btn.textContent = 'Resolving…';
-      const priority = _dupSources.map(s => s.name);
-      const res  = await fetch('/api/channels/resolve-duplicates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_priority: priority }),
-      });
-      const data = await res.json();
-      document.getElementById('resolve-modal-body').innerHTML = `
-        <p style="color:var(--success-soft);font-size:0.95rem;text-align:center;padding:1.5rem 0">
-          ✓ Done — disabled <strong>${data.disabled}</strong> duplicate channel${data.disabled !== 1 ? 's' : ''}
-          across <strong>${data.groups_resolved}</strong> group${data.groups_resolved !== 1 ? 's' : ''}.
-        </p>
-        <div class="modal-actions" style="justify-content:center">
-          <button class="btn-confirm" onclick="location.reload()">Reload Page</button>
-        </div>`;
+      try {
+        const priority = _dupSources.map(s => s.name);
+        const res  = await fetch('/api/channels/resolve-duplicates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_priority: priority }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to resolve duplicates');
+        document.getElementById('resolve-modal-body').innerHTML = `
+          <p style="color:var(--success-soft);font-size:0.95rem;text-align:center;padding:1.5rem 0">
+            ✓ Done — disabled <strong>${data.disabled}</strong> duplicate channel${data.disabled !== 1 ? 's' : ''}
+            across <strong>${data.groups_resolved}</strong> group${data.groups_resolved !== 1 ? 's' : ''}.
+            Reloading…
+          </p>
+          <div class="modal-actions" style="justify-content:center">
+            <button class="btn-confirm" onclick="location.reload()">Reload Page</button>
+          </div>`;
+        document.querySelector('#resolve-modal .modal-box').scrollTop = 0;
+        setTimeout(() => location.reload(), 1100);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Disable Strict Duplicates';
+        document.getElementById('resolve-modal-body').insertAdjacentHTML('beforeend', `
+          <div class="modal-preview" style="margin-top:0.75rem;color:var(--danger-soft);border-color:var(--danger-border-soft)">
+            ${escapeHtml(String(err.message || err))}
+          </div>`);
+      }
+    }
+
+    function toggleSoftDupGroup(groupKey) {
+      if (_selectedSoftDupGroups.has(groupKey)) _selectedSoftDupGroups.delete(groupKey);
+      else _selectedSoftDupGroups.add(groupKey);
+      updateSoftDupSelectionUI();
+    }
+
+    function toggleAllSoftDupGroups() {
+      const groups = (_dupSummary && _dupSummary.soft_groups) || [];
+      if (!groups.length) return;
+      if (_selectedSoftDupGroups.size === groups.length) {
+        _selectedSoftDupGroups.clear();
+      } else {
+        _selectedSoftDupGroups = new Set(groups.map(g => g.group_key));
+      }
+      updateSoftDupSelectionUI();
+    }
+
+    async function confirmSoftResolve(btn) {
+      btn.disabled = true;
+      btn.textContent = 'Resolving…';
+      try {
+        const priority = _dupSources.map(s => s.name);
+        const res  = await fetch('/api/channels/resolve-duplicates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source_priority: priority,
+            mode: 'soft',
+            group_keys: Array.from(_selectedSoftDupGroups),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to resolve soft duplicates');
+        document.getElementById('resolve-modal-body').innerHTML = `
+          <p style="color:var(--success-soft);font-size:0.95rem;text-align:center;padding:1.5rem 0">
+            ✓ Done — disabled <strong>${data.disabled}</strong> channel${data.disabled !== 1 ? 's' : ''}
+            across <strong>${data.groups_resolved}</strong> approved soft-match group${data.groups_resolved !== 1 ? 's' : ''}.
+            Reloading…
+          </p>
+          <div class="modal-actions" style="justify-content:center">
+            <button class="btn-confirm" onclick="location.reload()">Reload Page</button>
+          </div>`;
+        document.querySelector('#resolve-modal .modal-box').scrollTop = 0;
+        setTimeout(() => location.reload(), 1100);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Disable Approved Soft Matches';
+        document.getElementById('resolve-modal-body').insertAdjacentHTML('beforeend', `
+          <div class="modal-preview" style="margin-top:0.75rem;color:var(--danger-soft);border-color:var(--danger-border-soft)">
+            ${escapeHtml(String(err.message || err))}
+          </div>`);
+      }
     }
 
     // ── Drag-to-reorder ───────────────────────────────────────────────────
@@ -2126,7 +2555,10 @@
       // Recalculate counts from current state
       fetch('/api/channels/duplicate-summary')
         .then(r => r.json())
-        .then(d => { renderModalBody({ ...d, sources: _dupSources }); });
+        .then(d => {
+          _dupSummary = { ...d, sources: _dupSources };
+          renderModalBody(_dupSummary);
+        });
     }
 
     // ── Language override modal ───────────────────────────────────────────────
