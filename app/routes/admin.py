@@ -6,7 +6,7 @@ import unicodedata
 from flask import Blueprint, jsonify, render_template, request
 from sqlalchemy import select, case
 from ..extensions import db
-from ..models import Source, Channel, Feed, AppSettings
+from ..models import Source, Channel, Feed, AppSettings, Program
 from ..generators.m3u import (
     _build_channel_query,
     _build_feed_chnum_map,
@@ -232,6 +232,8 @@ def channels():
     country_filter   = request.args.get('country', '')
     category_filter  = request.args.get('category', '')
     duplicates_filter = request.args.get('duplicates', '')
+    new_filter       = request.args.get('new', '')
+    epg_filter       = request.args.get('epg', '')
     sort_by          = request.args.get('sort', 'name')
     sort_dir         = request.args.get('dir', 'asc')
 
@@ -309,6 +311,21 @@ def channels():
 
     if duplicates_filter == '1':
         q = q.filter(db.or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.is_duplicate == True))
+
+    if new_filter in ('3', '7', '14'):
+        cutoff = datetime.now(timezone.utc) - timedelta(days=int(new_filter))
+        q = q.filter(Channel.created_at >= cutoff)
+
+    if epg_filter in ('0', '1'):
+        now = datetime.now(timezone.utc)
+        has_epg = db.session.query(Program.channel_id).filter(
+            Program.channel_id == Channel.id,
+            Program.end_time > now,
+        ).exists()
+        if epg_filter == '1':
+            q = q.filter(has_epg)
+        else:
+            q = q.filter(~has_epg)
 
     sort_name = case(
         (db.func.lower(Channel.name).like('the %'), db.func.lower(db.func.substr(Channel.name, 5))),
@@ -389,6 +406,8 @@ def channels():
         'language': language_filter, 'country': country_filter,
         'gracenote': gracenote_filter, 'gracenote_mode': gracenote_mode_filter,
         'category': category_filter, 'duplicates': duplicates_filter,
+        'new': new_filter,
+        'epg': epg_filter,
         'sort': sort_by, 'dir': sort_dir,
     }.items() if v})
 
@@ -404,6 +423,8 @@ def channels():
                            country_filter=country_filter, countries=countries,
                            category_filter=category_filter, categories=categories,
                            duplicates_filter=duplicates_filter,
+                           new_filter=new_filter,
+                           epg_filter=epg_filter,
                            duplicate_names=duplicate_names,
                            possible_duplicate_names=possible_duplicate_names,
                            duplicate_group_keys=duplicate_group_keys,

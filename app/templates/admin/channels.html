@@ -977,6 +977,8 @@
       presence:   {{ presence_filter  | tojson }},
       gracenote:  {{ gracenote_filter | tojson }},
       gracenote_mode: {{ gracenote_mode_filter | tojson }},
+      new:            {{ new_filter            | tojson }},
+      epg:            {{ epg_filter            | tojson }},
       duplicates: {{ duplicates_filter| tojson }},
     };
     const _pageVisibleCount = {{ channels.items|length }};
@@ -1017,7 +1019,7 @@
           <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
         </div>
       </div>
-      <details class="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter %}open{% endif %}>
+      <details class="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter %}open{% endif %}>
         <summary>More filters</summary>
         <div class="toolbar-secondary">
           <div class="filter-group">
@@ -1109,6 +1111,23 @@
               <option value="1" {% if duplicates_filter == '1' %}selected{% endif %}>⚠ Duplicates only</option>
             </select>
           </div>
+          <div class="filter-group">
+            <label class="filter-label" for="epg-filter">EPG Coverage</label>
+            <select id="epg-filter" name="epg">
+              <option value="">Any</option>
+              <option value="1" {% if epg_filter == '1' %}selected{% endif %}>Has EPG</option>
+              <option value="0" {% if epg_filter == '0' %}selected{% endif %}>No EPG</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="new-filter">New Channels</label>
+            <select id="new-filter" name="new">
+              <option value="">All</option>
+              <option value="3"  {% if new_filter == '3'  %}selected{% endif %}>Last 3 days</option>
+              <option value="7"  {% if new_filter == '7'  %}selected{% endif %}>Last 7 days</option>
+              <option value="14" {% if new_filter == '14' %}selected{% endif %}>Last 14 days</option>
+            </select>
+          </div>
         </div>
       </details>
       <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1153,7 +1172,13 @@
       {% if duplicates_filter == '1' %}
       <span class="filter-chip"><strong>Duplicates</strong>Duplicates only</span>
       {% endif %}
-      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter == '1') %}
+      {% if epg_filter %}
+      <span class="filter-chip"><strong>EPG Coverage</strong>{% if epg_filter == '1' %}Has EPG{% else %}No EPG{% endif %}</span>
+      {% endif %}
+      {% if new_filter %}
+      <span class="filter-chip"><strong>New Channels</strong>Last {{ new_filter }} days</span>
+      {% endif %}
+      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter == '1' or new_filter in ('3','7','14') or epg_filter) %}
       <span class="filter-chip"><strong>View</strong>All channels</span>
       {% endif %}
       <button type="button" class="btn-hide-disabled{% if enabled_filter == '1' %} active{% endif %}" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}◉ Hiding disabled{% else %}○ Hide disabled{% endif %}</button>
