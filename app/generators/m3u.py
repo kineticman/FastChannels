@@ -474,6 +474,39 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int):
     return result
 
 
+def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) -> dict:
+    """
+    Assign channel numbers to Gracenote channels starting at gn_start, with
+    the same stickiness guarantee as standard channels: existing Channel.number
+    is kept if it's >= gn_start and not already taken.  New/displaced channels
+    fill in sequentially.
+    """
+    result = {}
+    unassigned = []
+    sorted_channels = sorted(
+        gn_channels,
+        key=lambda c: (c.number is None, c.number or 0, (c.name or '').lower()),
+    )
+    for ch in sorted_channels:
+        if getattr(ch, 'number_pinned', False) and ch.number is not None:
+            result[ch.id] = ch.number
+            used_numbers.add(ch.number)
+            continue
+        if ch.number is not None and ch.number >= gn_start and ch.number not in used_numbers:
+            result[ch.id] = ch.number
+            used_numbers.add(ch.number)
+        else:
+            unassigned.append(ch)
+    cursor = gn_start
+    for ch in unassigned:
+        while cursor in used_numbers:
+            cursor += 1
+        result[ch.id] = cursor
+        used_numbers.add(cursor)
+        cursor += 1
+    return result
+
+
 def _resolve_chnum_map(channels, *, feed_chnum_start: int = None, namespace_start: int = None):
     if namespace_start is not None:
         return _build_feed_chnum_map(channels, namespace_start), []

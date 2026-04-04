@@ -12,6 +12,7 @@ from ..generators.m3u import (
     _build_feed_chnum_map,
     _parse_gracenote_id,
     _build_source_chnum_map,
+    _build_sticky_gn_chnum_map,
     _selected_channel_stubs,
     feed_namespace_start,
     feed_to_query_filters,
@@ -85,9 +86,12 @@ def _duplicate_name_sets() -> tuple[set[str], set[str]]:
 def _page_source_chnum_map(page_items) -> dict[int, int]:
     if not page_items:
         return {}
-    full_map, _warnings = _build_source_chnum_map(
-        _selected_channel_stubs({}, gracenote=False)
-    )
+    std_channels = _selected_channel_stubs({}, gracenote=False)
+    full_map, _ = _build_source_chnum_map(std_channels)
+    gn_channels = _selected_channel_stubs({}, gracenote=True)
+    if gn_channels:
+        gn_start = (max(full_map.values()) + 1) if full_map else 1
+        full_map.update(_build_sticky_gn_chnum_map(gn_channels, gn_start, set(full_map.values())))
     page_ids = {ch.id for ch in page_items}
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
 
@@ -101,14 +105,17 @@ def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
         return _page_source_chnum_map(page_items)
 
     filters = feed_to_query_filters(default_feed.filters or {})
-    channels = _selected_channel_stubs(filters, gracenote=False)
-    if not channels:
-        return {}
+    std_channels = _selected_channel_stubs(filters, gracenote=False)
+    gn_channels  = _selected_channel_stubs(filters, gracenote=True)
 
     if default_feed.chnum_start is not None:
-        full_map = _build_feed_chnum_map(channels, default_feed.chnum_start)
+        full_map = _build_feed_chnum_map(std_channels, default_feed.chnum_start) if std_channels else {}
     else:
-        full_map, _ = _build_source_chnum_map(channels)
+        full_map, _ = _build_source_chnum_map(std_channels) if std_channels else ({}, [])
+
+    if gn_channels:
+        gn_start = (max(full_map.values()) + 1) if full_map else (default_feed.chnum_start or 1)
+        full_map.update(_build_sticky_gn_chnum_map(gn_channels, gn_start, set(full_map.values())))
 
     page_ids = {ch.id for ch in page_items}
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}

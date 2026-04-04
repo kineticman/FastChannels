@@ -1287,10 +1287,14 @@ def _refresh_auto_channel_numbers() -> None:
     Channel.number is system-managed unless the user pins it. Scraper-supplied
     numbers are ignored; this allocator preserves existing non-pinned numbers
     where possible and only fills gaps for channels that are new or invalid.
-    """
-    from app.generators.m3u import _build_source_chnum_map
 
-    channels = (
+    Standard and Gracenote channels are numbered in separate contiguous blocks:
+    standard channels first (source-based), then Gracenote channels starting
+    immediately after the highest standard number.  Both blocks are sticky.
+    """
+    from app.generators.m3u import _build_source_chnum_map, _build_sticky_gn_chnum_map
+
+    all_channels = (
         Channel.query
         .join(Source)
         .filter(
@@ -1302,11 +1306,21 @@ def _refresh_auto_channel_numbers() -> None:
         )
         .all()
     )
-    if not channels:
+    if not all_channels:
         return
 
-    chnum_map, _warnings = _build_source_chnum_map(channels)
-    for ch in channels:
+    std_channels = [ch for ch in all_channels if not (ch.gracenote_id or '').strip()]
+    gn_channels  = [ch for ch in all_channels if (ch.gracenote_id or '').strip()]
+
+    std_map, _ = _build_source_chnum_map(std_channels) if std_channels else ({}, [])
+
+    gn_map = {}
+    if gn_channels:
+        gn_start = (max(std_map.values()) + 1) if std_map else (AppSettings.get().effective_global_chnum_start() or 1)
+        gn_map = _build_sticky_gn_chnum_map(gn_channels, gn_start, set(std_map.values()))
+
+    chnum_map = {**std_map, **gn_map}
+    for ch in all_channels:
         if ch.number_pinned:
             continue
         next_number = chnum_map.get(ch.id)
