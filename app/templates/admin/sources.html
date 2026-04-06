@@ -236,7 +236,7 @@
     .field input:focus { border-color: var(--focus-accent); }
     .field .help { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.32rem; line-height: 1.45; }
     .region-select {
-      width: 100%; min-height: 15rem; background: var(--bg); border: 1px solid var(--border);
+      width: 100%; min-height: 8rem; background: var(--bg); border: 1px solid var(--border);
       border-radius: 8px; color: var(--text); font-size: 0.84rem; padding: 0.35rem;
       outline: none;
     }
@@ -1038,7 +1038,7 @@
         key: 'geo',
         label: 'Geo Feeds',
         default: 'US',
-        help_text: 'Select one or more region codes. Channels from multiple Distro geo feeds will be merged and labeled by region.',
+        help_text: 'If you need a region that is not listed above, enter its code here, separated by commas.',
       };
       const selected = new Set(String(values.geo || geoField.default || 'US')
         .split(/[,\s|/]+/)
@@ -1053,23 +1053,23 @@
 
       return `
         <div class="config-title">Source Settings</div>
-        <div class="config-note">Pick one or more Distro geo feeds to merge. The selected region code will be written to the channel Region field in the Channels view.</div>
+        <div class="config-note">Choose one or more Distro regions to include. Channels will be combined into one source, and each channel will show its region in the Channels view.</div>
         <div class="field field-full">
           <label>${escapeHtml(geoField.label)}</label>
           <select id="cfg-${sourceId}-geo-select" class="region-select" data-key="geo" multiple>
             ${options}
           </select>
           <div class="region-custom">
-            <label for="cfg-${sourceId}-geo-custom">Additional geo codes</label>
+            <label for="cfg-${sourceId}-geo-custom">Additional regions</label>
             <input type="text"
                    id="cfg-${sourceId}-geo-custom"
                    data-key="geo"
                    data-geo-custom="true"
                    value="${escapeHtml(customCodes.join(', '))}"
-                   placeholder="Optional, comma-separated codes">
+                   placeholder="Optional, comma-separated region codes">
             <div class="help">${escapeHtml(geoField.help_text || '')}</div>
           </div>
-          <div class="region-summary">Presets cover the distinct Distro lineups we confirmed by live probe. You can still add other geo codes manually if needed.</div>
+          <div class="region-summary">The list above covers the main Distro regions we confirmed. You can still add others manually if needed.</div>
         </div>
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
