@@ -195,6 +195,7 @@
       dvrSection = `
         <div class="gs-dvr-label">Channels DVR</div>
         <div class="gs-suggest-meta">Results come from your Channels DVR station search and are ranked locally, so the top row should usually be the useful one.</div>
+        <div class="gs-suggest-meta">Guide data shown below is pulled from a third-party source (not Channels DVR) — use it as a helper to confirm the match, not as a guarantee.</div>
         <div class="gs-suggest-list">${items}</div>`;
     }
 
