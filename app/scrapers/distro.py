@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from .base import BaseScraper, ChannelData, ProgramData
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,8 @@ MACRO_REPLACEMENTS = {
     "__ADVERTISING_ID__":         lambda: "",
     "__CLIENT_IP__":              lambda: "",
 }
+
+DEFAULT_GEO = "US"
 
 # Tags that indicate language/region rather than content genre.
 # These are split out into the channel's language field, not the category.
@@ -190,6 +192,23 @@ def _sanitize_url(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(sanitized, doseq=True), ""))
 
 
+def _normalize_geo(value: str | None) -> str:
+    geo = (value or DEFAULT_GEO).strip().upper()
+    return geo or DEFAULT_GEO
+
+
+def _qualified_channel_id(geo: str, channel_id: str) -> str:
+    return f"{_normalize_geo(geo)}:{channel_id}"
+
+
+def _split_qualified_channel_id(source_channel_id: str) -> tuple[str, str]:
+    raw = (source_channel_id or "").strip()
+    if ":" not in raw:
+        return DEFAULT_GEO, raw
+    geo, channel_id = raw.split(":", 1)
+    return _normalize_geo(geo), channel_id.strip()
+
+
 def _pick_best_variant(master_text: str, master_url: str) -> Optional[str]:
     lines   = [ln.strip() for ln in master_text.splitlines() if ln.strip()]
     best_bw = -1
@@ -243,7 +262,17 @@ class DistroScraper(BaseScraper):
     display_name    = "Distro TV"
     stream_audit_enabled = True
     scrape_interval = 720
-    config_schema   = []
+    config_schema   = [
+        ConfigField(
+            "geo",
+            "Geo Feeds",
+            field_type="text",
+            required=False,
+            default="US",
+            placeholder="US",
+            help_text="One or more Distro geo codes separated by commas. Examples: US, CA, MX, AR, XE. The probe found CA/MX/AR variants with some unique channels.",
+        ),
+    ]
 
     def __init__(self, config: dict = None):
         super().__init__(config)
@@ -252,56 +281,84 @@ class DistroScraper(BaseScraper):
             "Accept":     "application/json,*/*",
         })
 
+    def _geos(self) -> list[str]:
+        raw = self.config.get("geo") or DEFAULT_GEO
+        codes = [_normalize_geo(part) for part in re.split(r"[,|/\s]+", raw) if part.strip()]
+        return codes or [DEFAULT_GEO]
+
+    def _feed_url(self, geo: str) -> str:
+        geo = _normalize_geo(geo)
+        return FEED_URL if geo == DEFAULT_GEO else f"{FEED_URL}&geo={geo}"
+
     def fetch_channels(self) -> list[ChannelData]:
-        r = self.get(FEED_URL)
-        if not r:
-            return []
-        try:
-            feed = r.json()
-        except Exception as e:
-            logger.error("[distro] feed JSON decode failed: %s", e)
-            return []
+        channels: list[ChannelData] = []
+        seen_ids: set[str] = set()
+        geos = self._geos()
 
-        channels = []
-        for show in _iter_shows(feed):
-            if show.get("type") != "live":
+        for geo in geos:
+            r = self.get(self._feed_url(geo))
+            if not r:
                 continue
-            name     = (show.get("title") or "").strip()
-            logo     = (show.get("img_logo") or "").strip()
-            seasons  = show.get("seasons") or []
-            if not seasons or not isinstance(seasons[0], dict):
-                continue
-            episodes = seasons[0].get("episodes") or []
-            if not episodes or not isinstance(episodes[0], dict):
-                continue
-            ep           = episodes[0]
-            tvg_id       = ep.get("id")
-            content      = ep.get("content") or {}
-            upstream_url = content.get("url")
-            if not name or not tvg_id or not upstream_url:
+            try:
+                feed = r.json()
+            except Exception as e:
+                logger.error("[distro] feed JSON decode failed for geo=%s: %s", geo, e)
                 continue
 
-            raw_genre        = (show.get("genre") or "").strip()
-            category, lang   = _parse_distro_tags(raw_genre)
+            region_count = 0
+            for show in _iter_shows(feed):
+                if show.get("type") != "live":
+                    continue
+                name     = (show.get("title") or "").strip()
+                logo     = (show.get("img_logo") or "").strip()
+                seasons  = show.get("seasons") or []
+                if not seasons or not isinstance(seasons[0], dict):
+                    continue
+                episodes = seasons[0].get("episodes") or []
+                if not episodes or not isinstance(episodes[0], dict):
+                    continue
+                ep           = episodes[0]
+                tvg_id       = ep.get("id")
+                content      = ep.get("content") or {}
+                upstream_url = content.get("url")
+                if not name or not tvg_id or not upstream_url:
+                    continue
 
-            channels.append(ChannelData(
-                source_channel_id = str(tvg_id),
-                name              = name,
-                stream_url        = upstream_url,
-                stream_type       = "hls",
-                logo_url          = logo or None,
-                category          = category,
-                language          = lang,
-                country           = "US",
-            ))
+                source_channel_id = _qualified_channel_id(geo, str(tvg_id))
+                if source_channel_id in seen_ids:
+                    continue
+                seen_ids.add(source_channel_id)
 
-        logger.info("[distro] parsed %d channels", len(channels))
+                raw_genre      = (show.get("genre") or "").strip()
+                category, lang = _parse_distro_tags(raw_genre)
+
+                channels.append(ChannelData(
+                    source_channel_id = source_channel_id,
+                    name              = name,
+                    stream_url        = upstream_url,
+                    stream_type       = "hls",
+                    logo_url          = logo or None,
+                    category          = category,
+                    language          = lang,
+                    country           = _normalize_geo(geo),
+                ))
+                region_count += 1
+
+            logger.info("[distro] parsed %d channels for geo=%s", region_count, geo)
+
+        logger.info("[distro] parsed %d channels across %d geo feed(s)", len(channels), len(geos))
         return channels
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         if not channels:
             return []
-        all_ids = ",".join(ch.source_channel_id for ch in channels)
+        ids_by_raw: dict[str, list[str]] = {}
+        for ch in channels:
+            _, raw_id = _split_qualified_channel_id(ch.source_channel_id)
+            if not raw_id:
+                continue
+            ids_by_raw.setdefault(raw_id, []).append(ch.source_channel_id)
+        all_ids = ",".join(ids_by_raw)
         r = self.get(
             f"{EPG_URL}?id={all_ids}&range=now,24h",
             headers={"User-Agent": ANDROID_UA, "Accept": "application/json,*/*"},
@@ -316,20 +373,24 @@ class DistroScraper(BaseScraper):
 
         programs = []
         for ch_id, ch_epg in raw_epg.items():
+            target_ids = ids_by_raw.get(ch_id) or []
+            if not target_ids:
+                continue
             for slot in (ch_epg.get("slots") or []):
                 try:
                     start = datetime.strptime(slot["start"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                     end   = datetime.strptime(slot["end"],   "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 except (KeyError, ValueError):
                     continue
-                programs.append(ProgramData(
-                    source_channel_id = ch_id,
-                    title             = (slot.get("title") or "").strip() or "Unknown",
-                    description       = (slot.get("description") or "").strip() or None,
-                    start_time        = start,
-                    end_time          = end,
-                    poster_url        = slot.get("img_thumbh") or None,
-                ))
+                for qualified_id in target_ids:
+                    programs.append(ProgramData(
+                        source_channel_id = qualified_id,
+                        title             = (slot.get("title") or "").strip() or "Unknown",
+                        description       = (slot.get("description") or "").strip() or None,
+                        start_time        = start,
+                        end_time          = end,
+                        poster_url        = slot.get("img_thumbh") or None,
+                    ))
         logger.info("[distro] parsed %d EPG entries", len(programs))
         return programs
 

@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.scrapers.pluto import ALLOWED_COUNTRY_CODES as PLUTO_ALLOWED
+from app.scrapers.distro import DistroScraper
 from app.scrapers.pluto import PlutoScraper
 from app.scrapers.samsung import SamsungScraper
 
@@ -54,6 +55,28 @@ def _probe_samsung(regions: list[str]) -> list[ProbeRow]:
     for ch in channels:
         region = (ch.country or "").lower()
         if region and region.lower() not in by_region:
+            continue
+        rows.append(
+            ProbeRow(
+                region=region or "?",
+                source_channel_id=ch.source_channel_id,
+                name=ch.name,
+                country=ch.country,
+                category=ch.category,
+                number=ch.number,
+            )
+        )
+    return rows
+
+
+def _probe_distro(regions: list[str]) -> list[ProbeRow]:
+    scraper = DistroScraper({"geo": ",".join(regions)})
+    rows: list[ProbeRow] = []
+    channels = scraper.fetch_channels()
+    by_region = {r.upper() for r in regions}
+    for ch in channels:
+        region = (ch.country or "").upper()
+        if region and region not in by_region:
             continue
         rows.append(
             ProbeRow(
@@ -113,11 +136,11 @@ def _summarize(rows: list[ProbeRow], *, limit: int) -> str:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Probe multi-region channel overlap for a provider.")
-    parser.add_argument("provider", choices=["pluto", "samsung"])
+    parser.add_argument("provider", choices=["pluto", "samsung", "distro"])
     parser.add_argument(
         "--regions",
         required=True,
-        help="Comma-separated region list, e.g. us_east,ca,uk or us,ca,gb",
+        help="Comma-separated region list, e.g. us_east,ca,uk or us,ca,gb or us,ca,mx",
     )
     parser.add_argument("--limit", type=int, default=40, help="How many overlap examples to print.")
     return parser.parse_args()
@@ -129,7 +152,10 @@ def _validate_regions(provider: str, regions: Iterable[str]) -> list[str]:
         bad = [r for r in cleaned if r not in PLUTO_ALLOWED]
         if bad:
             raise SystemExit(f"Unsupported Pluto region(s): {', '.join(bad)}. Allowed: {', '.join(PLUTO_ALLOWED)}")
-    return cleaned
+        return cleaned
+    if provider == "distro":
+        return [r.upper() for r in cleaned]
+    return [r.lower() for r in cleaned]
 
 
 def main() -> int:
@@ -137,6 +163,8 @@ def main() -> int:
     regions = _validate_regions(args.provider, args.regions.split(","))
     if args.provider == "pluto":
         rows = _probe_pluto(regions)
+    elif args.provider == "distro":
+        rows = _probe_distro(regions)
     else:
         rows = _probe_samsung(regions)
 

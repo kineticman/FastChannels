@@ -235,6 +235,21 @@
     }
     .field input:focus { border-color: var(--focus-accent); }
     .field .help { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.32rem; line-height: 1.45; }
+    .region-select {
+      width: 100%; min-height: 15rem; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); font-size: 0.84rem; padding: 0.35rem;
+      outline: none;
+    }
+    .region-select:focus { border-color: var(--focus-accent); }
+    .region-select option {
+      padding: 0.45rem 0.55rem; border-radius: 6px;
+    }
+    .region-custom {
+      margin-top: 0.85rem;
+    }
+    .region-summary {
+      margin-top: 0.45rem; font-size: 0.76rem; color: var(--text-muted);
+    }
     .config-actions {
       display: flex; align-items: center; justify-content: flex-end; gap: 0.7rem;
       margin-top: 1rem;
@@ -1000,6 +1015,69 @@
         </div>`;
     }
 
+    const DISTRO_REGION_OPTIONS = [
+      { code: 'US', label: 'United States' },
+      { code: 'CA', label: 'Canada' },
+      { code: 'MX', label: 'Mexico' },
+      { code: 'AR', label: 'Argentina' },
+      { code: 'GB', label: 'United Kingdom' },
+      { code: 'DE', label: 'Germany' },
+      { code: 'FR', label: 'France' },
+      { code: 'IT', label: 'Italy' },
+      { code: 'ES', label: 'Spain' },
+      { code: 'AT', label: 'Austria' },
+      { code: 'CH', label: 'Switzerland' },
+      { code: 'JP', label: 'Japan' },
+      { code: 'NZ', label: 'New Zealand' },
+      { code: 'IN', label: 'India' },
+      { code: 'XE', label: 'Spanish Feed' },
+    ];
+
+    function renderDistroConfig(sourceId, schema, values) {
+      const geoField = schema.find(f => f.key === 'geo') || {
+        key: 'geo',
+        label: 'Geo Feeds',
+        default: 'US',
+        help_text: 'Select one or more region codes. Channels from multiple Distro geo feeds will be merged and labeled by region.',
+      };
+      const selected = new Set(String(values.geo || geoField.default || 'US')
+        .split(/[,\s|/]+/)
+        .map(v => v.trim().toUpperCase())
+        .filter(Boolean));
+      const presetCodes = new Set(DISTRO_REGION_OPTIONS.map(opt => opt.code));
+      const customCodes = [...selected].filter(code => !presetCodes.has(code));
+      const options = DISTRO_REGION_OPTIONS.map(opt => {
+        const checked = selected.has(opt.code);
+        return `<option value="${opt.code}" ${checked ? 'selected' : ''}>${opt.label} (${opt.code})</option>`;
+      }).join('');
+
+      return `
+        <div class="config-title">Source Settings</div>
+        <div class="config-note">Pick one or more Distro geo feeds to merge. The selected region code will be written to the channel Region field in the Channels view.</div>
+        <div class="field field-full">
+          <label>${escapeHtml(geoField.label)}</label>
+          <select id="cfg-${sourceId}-geo-select" class="region-select" data-key="geo" multiple>
+            ${options}
+          </select>
+          <div class="region-custom">
+            <label for="cfg-${sourceId}-geo-custom">Additional geo codes</label>
+            <input type="text"
+                   id="cfg-${sourceId}-geo-custom"
+                   data-key="geo"
+                   data-geo-custom="true"
+                   value="${escapeHtml(customCodes.join(', '))}"
+                   placeholder="Optional, comma-separated codes">
+            <div class="help">${escapeHtml(geoField.help_text || '')}</div>
+          </div>
+          <div class="region-summary">Presets cover the distinct Distro lineups we confirmed by live probe. You can still add other geo codes manually if needed.</div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
+    }
+
     function debounceCitySearch(sourceId, query) {
       clearTimeout(_citySearchTimers[sourceId]);
       const resultsEl = document.getElementById(`city-results-${sourceId}`);
@@ -1104,6 +1182,8 @@
         advancedCopy = 'These values rarely need changes. Use them only if you are troubleshooting session capture or targeting a different Amazon locale.';
       } else if (sourceName === 'localnow') {
         return renderLocalNowConfig(sourceId, schema, values);
+      } else if (sourceName === 'distro') {
+        return renderDistroConfig(sourceId, schema, values);
       }
 
       const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {
@@ -1152,9 +1232,27 @@
     async function saveSourceConfig(sourceId) {
       const container = document.getElementById(`source-config-${sourceId}`);
       const status = document.getElementById(`config-status-${sourceId}`);
-      const inputs = container.querySelectorAll('input[data-key]');
+      const fields = container.querySelectorAll('input[data-key], select[data-key]');
       const payload = {};
-      inputs.forEach(inp => { payload[inp.dataset.key] = inp.value; });
+      const keys = [...new Set([...fields].map(el => el.dataset.key))];
+      keys.forEach(key => {
+        const keyFields = [...container.querySelectorAll(`[data-key="${key}"]`)];
+        if (!keyFields.length) return;
+        if (keyFields.some(el => el.tagName === 'SELECT' && el.multiple)) {
+          const selected = keyFields
+            .filter(el => el.tagName === 'SELECT')
+            .flatMap(el => [...el.selectedOptions].map(opt => opt.value.trim().toUpperCase()))
+            .filter(Boolean);
+          const custom = keyFields
+            .filter(el => el.dataset.geoCustom === 'true')
+            .flatMap(el => el.value.split(/[,\s|/]+/))
+            .map(val => val.trim().toUpperCase())
+            .filter(Boolean);
+          payload[key] = [...new Set([...selected, ...custom])].join(',');
+          return;
+        }
+        payload[key] = keyFields[0].value;
+      });
 
       status.textContent = 'Saving…';
       status.className = 'config-status';
@@ -1167,9 +1265,9 @@
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         status.textContent = '✓ Saved';
         status.className = 'config-status ok';
-        inputs.forEach(inp => {
-          if (inp.dataset.secret === 'true' && inp.value && inp.value !== MASK) {
-            inp.value = MASK;
+        fields.forEach(field => {
+          if (field.dataset.secret === 'true' && field.value && field.value !== MASK) {
+            field.value = MASK;
           }
         });
         setTimeout(() => { status.textContent = ''; }, 2500);
@@ -1181,8 +1279,12 @@
     }
 
     function clearConfigFields(sourceId) {
-      document.querySelectorAll(`#source-config-${sourceId} input[data-key]`).forEach(inp => {
-        inp.value = '';
+      document.querySelectorAll(`#source-config-${sourceId} input[data-key], #source-config-${sourceId} select[data-key]`).forEach(field => {
+        if (field.tagName === 'SELECT' && field.multiple) {
+          [...field.options].forEach(opt => { opt.selected = false; });
+        } else {
+          field.value = '';
+        }
       });
     }
 
