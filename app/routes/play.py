@@ -84,6 +84,13 @@ def play_vlc(source_name: str, channel_id: str):
         .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
         .first()
     )
+    if not channel and source_name == 'distro' and ':' not in channel_id:
+        channel = (
+            Channel.query
+            .join(Source)
+            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
+            .first()
+        )
     if not channel:
         abort(404)
     base_url = request.host_url.rstrip('/')
@@ -105,6 +112,16 @@ def play(source_name: str, channel_id: str):
         .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
         .first()
     )
+    if not channel and source_name == 'distro' and ':' not in channel_id:
+        # Legacy Distro IDs were bare integers (e.g. "39730"); multi-region
+        # support prefixed them with "US:" — fall back so old cached playlists
+        # still work.
+        channel = (
+            Channel.query
+            .join(Source)
+            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
+            .first()
+        )
     if not channel:
         logger.warning('[play] request ip=%s unknown channel %s/%s', client_ip, source_name, channel_id)
         abort(404)

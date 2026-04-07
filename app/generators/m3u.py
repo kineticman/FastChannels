@@ -1,6 +1,7 @@
 import logging
 import re
 from dataclasses import dataclass
+from urllib.parse import quote as _url_quote
 from sqlalchemy.orm import contains_eager
 from ..extensions import db
 from ..models import Channel, Source, Feed, AppSettings
@@ -643,7 +644,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{display_name}')
-        lines.append(f'{base_url}/play/{ch.source.name}/{ch.source_channel_id}.m3u8')
+        lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
 
     return '\n'.join(lines)
 
@@ -691,7 +692,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{display_name}')
-        lines.append(f'{base_url}/play/{ch.source.name}/{ch.source_channel_id}.m3u8')
+        lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
 
     return '\n'.join(lines)
 
