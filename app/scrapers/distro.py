@@ -12,9 +12,16 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError
 
 logger = logging.getLogger(__name__)
+
+CHANNEL_SCHEME = "distro://channel/"
+
+# Module-level feed cache keyed by geo code: geo -> (fetched_at, {raw_id: stream_url})
+# Shared across scraper instances so a burst of play requests doesn't hammer the API.
+_feed_cache: dict[str, tuple[float, dict[str, str]]] = {}
+_FEED_CACHE_TTL = 1800  # 30 minutes
 
 FEED_URL = "https://tv.jsrdn.com/tv_v5/getfeed.php?type=live"
 EPG_URL  = "https://tv.jsrdn.com/epg/query.php"
@@ -257,6 +264,43 @@ def _iter_shows(feed: object):
         yield from (s for s in feed if isinstance(s, dict))
 
 
+def _resolve_from_feed(scraper: "DistroScraper", geo: str, raw_id: str) -> str | None:
+    """Return a fresh stream URL for a Distro channel, using a cached feed if available."""
+    now = time.time()
+    cached = _feed_cache.get(geo)
+    if cached and (now - cached[0]) < _FEED_CACHE_TTL:
+        return cached[1].get(raw_id)
+
+    r = scraper.get(scraper._feed_url(geo))
+    if not r:
+        return None
+    try:
+        feed = r.json()
+    except Exception:
+        return None
+
+    url_map: dict[str, str] = {}
+    for show in _iter_shows(feed):
+        if show.get("type") != "live":
+            continue
+        seasons = show.get("seasons") or []
+        if not seasons or not isinstance(seasons[0], dict):
+            continue
+        episodes = seasons[0].get("episodes") or []
+        if not episodes or not isinstance(episodes[0], dict):
+            continue
+        ep = episodes[0]
+        tvg_id = ep.get("id")
+        content = ep.get("content") or {}
+        upstream_url = content.get("url")
+        if tvg_id and upstream_url:
+            url_map[str(tvg_id)] = upstream_url
+
+    _feed_cache[geo] = (now, url_map)
+    logger.debug("[distro] feed cache refreshed for geo=%s (%d channels)", geo, len(url_map))
+    return url_map.get(raw_id)
+
+
 class DistroScraper(BaseScraper):
     source_name     = "distro"
     display_name    = "Distro TV"
@@ -335,7 +379,7 @@ class DistroScraper(BaseScraper):
                 channels.append(ChannelData(
                     source_channel_id = source_channel_id,
                     name              = name,
-                    stream_url        = upstream_url,
+                    stream_url        = f"{CHANNEL_SCHEME}{source_channel_id}",
                     stream_type       = "hls",
                     logo_url          = logo or None,
                     category          = category,
@@ -395,6 +439,15 @@ class DistroScraper(BaseScraper):
         return programs
 
     def resolve(self, raw_url: str) -> str:
+        if raw_url.startswith(CHANNEL_SCHEME):
+            source_channel_id = raw_url[len(CHANNEL_SCHEME):]
+            geo, raw_id = _split_qualified_channel_id(source_channel_id)
+            upstream_url = _resolve_from_feed(self, geo, raw_id)
+            if not upstream_url:
+                logger.warning("[distro] could not resolve fresh URL for %s", source_channel_id)
+                raise StreamDeadError(f"Channel {source_channel_id} not found in Distro feed")
+            raw_url = upstream_url
+
         sanitized = _sanitize_url(raw_url)
         host = urlsplit(sanitized).netloc
         if host in SESSION_CDN_HOSTS:
