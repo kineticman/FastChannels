@@ -9,12 +9,24 @@ disabled and manually re-enable if desired.
 """
 import logging
 import threading
+from urllib.parse import urljoin
+
+import requests as _requests
 
 from flask import Blueprint, redirect, abort, request, Response
 from app.config_store import persist_source_config_updates
 from ..hls import inspect_hls_drm
 from ..models import Channel, Source
 from ..scrapers import registry
+from ..scrapers.distro import (
+    CHANNEL_SCHEME as _DISTRO_SCHEME,
+    SESSION_CDN_HOSTS as _DISTRO_SESSION_CDN_HOSTS,
+    HLS_HEADERS as _DISTRO_HLS_HEADERS,
+    _resolve_from_feed as _distro_resolve_from_feed,
+    _split_qualified_channel_id as _distro_split_id,
+    _pick_best_variant as _distro_pick_best_variant,
+    DistroScraper,
+)
 from ..scrapers.base import StreamDeadError
 from .tasks import trigger_channel_auto_disable
 
@@ -103,6 +115,57 @@ def play_vlc(source_name: str, channel_id: str):
     )
 
 
+@play_bp.route('/play/distro/<channel_id>/proxy.m3u8')
+def distro_manifest_proxy(channel_id: str):
+    """
+    Manifest-only proxy for Distro channels on the Referer-restricted CDN.
+
+    Fetches the master + best-variant manifests from Distro's CDN using the
+    correct Origin/Referer headers, rewrites all segment/chunk URLs to absolute
+    so the client fetches them directly from the CDN, then returns the rewritten
+    variant manifest. If CDN segments are also header-restricted this won't work
+    and full stream proxying would be required instead.
+    """
+    from urllib.parse import urlsplit, unquote
+    geo, raw_id = _distro_split_id(unquote(channel_id))
+    scraper = DistroScraper()
+    upstream_url = _distro_resolve_from_feed(scraper, geo, raw_id)
+    if not upstream_url:
+        abort(502)
+
+    try:
+        master_r = _requests.get(upstream_url, headers=_DISTRO_HLS_HEADERS, timeout=10)
+        master_r.raise_for_status()
+    except Exception as e:
+        logger.warning('[distro-proxy] master fetch failed for %s: %s', channel_id, e)
+        abort(502)
+
+    best_variant = _distro_pick_best_variant(master_r.text, upstream_url)
+    if not best_variant:
+        abort(502)
+
+    try:
+        variant_r = _requests.get(best_variant, headers=_DISTRO_HLS_HEADERS, timeout=10)
+        variant_r.raise_for_status()
+    except Exception as e:
+        logger.warning('[distro-proxy] variant fetch failed for %s: %s', channel_id, e)
+        abort(502)
+
+    # Rewrite relative segment/chunk URLs to absolute so clients fetch directly.
+    variant_base = best_variant.rsplit('/', 1)[0] + '/'
+    lines = []
+    for line in variant_r.text.splitlines():
+        if line and not line.startswith('#'):
+            line = urljoin(variant_base, line)
+        lines.append(line)
+
+    return Response(
+        '\n'.join(lines),
+        mimetype='application/vnd.apple.mpegurl',
+        headers={'Cache-Control': 'no-cache'},
+    )
+
+
 @play_bp.route('/play/<source_name>/<channel_id>.m3u8')
 def play(source_name: str, channel_id: str):
     client_ip = _client_ip()
@@ -165,6 +228,19 @@ def play(source_name: str, channel_id: str):
 
     if not resolved_url or (source_name == 'roku' and resolved_url.startswith('roku://')):
         abort(502)
+
+    # Distro channels on the Referer-restricted CDN: serve a manifest proxy
+    # instead of a direct redirect so IPTV clients can access the segments
+    # (which are on an open CDN) without needing Origin/Referer headers.
+    if source_name == 'distro' and resolved_url:
+        from urllib.parse import urlsplit as _urlsplit
+        if _urlsplit(resolved_url).netloc in _DISTRO_SESSION_CDN_HOSTS:
+            from urllib.parse import quote as _quote
+            encoded_id = _quote(channel.source_channel_id, safe='')
+            return redirect(
+                f"{request.host_url.rstrip('/')}/play/distro/{encoded_id}/proxy.m3u8",
+                302,
+            )
 
     # Fire-and-forget manifest check — detect DRM or dead streams without
     # blocking the redirect. The check runs in a background thread so Channels
