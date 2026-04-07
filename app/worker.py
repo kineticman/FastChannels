@@ -581,8 +581,26 @@ def run_stream_audit(source_name: str):
                         logger.info('[audit] dead stream: %s  (SSL handshake rejected by server)', ch.name)
                         continue
                     if _is_transient_network_error(req_exc):
-                        logger.warning('[audit] transient manifest fetch failure for %s: %s', ch.name, req_exc)
-                        errors += 1
+                        # DNS failure after we've already checked several channels means
+                        # the network is fine but this specific hostname doesn't resolve —
+                        # treat as dead.  If checked < 5 we may be in a full network
+                        # outage, so keep it transient to avoid false mass-kills.
+                        dns_markers = ('name resolution', 'failed to resolve',
+                                       'temporary failure in name resolution',
+                                       'err_name_not_resolved', 'nameresolut')
+                        exc_text = str(req_exc).lower()
+                        is_dns = any(m in exc_text for m in dns_markers)
+                        if is_dns and checked >= 5:
+                            ch.is_active      = False
+                            ch.is_enabled     = False
+                            ch.disable_reason = 'Dead'
+                            dead += 1
+                            consecutive_errors = 0
+                            report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'dead', 'reason': 'DNS'})
+                            logger.info('[audit] dead stream: %s  (hostname does not resolve)', ch.name)
+                        else:
+                            logger.warning('[audit] transient manifest fetch failure for %s: %s', ch.name, req_exc)
+                            errors += 1
                         continue
                     raise
 
