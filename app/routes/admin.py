@@ -241,6 +241,7 @@ def channels():
     duplicates_filter = request.args.get('duplicates', '')
     new_filter       = request.args.get('new', '')
     epg_filter       = request.args.get('epg', '')
+    resolution_filter = request.args.get('resolution', '')
     sort_by          = request.args.get('sort', 'name')
     sort_dir         = request.args.get('dir', 'asc')
 
@@ -334,6 +335,23 @@ def channels():
         else:
             q = q.filter(~has_epg)
 
+    if resolution_filter == '4k':
+        q = q.filter(db.func.json_extract(Channel.stream_info, '$.has_4k') == True)
+    elif resolution_filter == 'hd':
+        q = q.filter(
+            db.func.json_extract(Channel.stream_info, '$.has_hd') == True,
+            db.func.json_extract(Channel.stream_info, '$.has_4k') != True,
+        )
+    elif resolution_filter == 'sd':
+        q = q.filter(
+            Channel.stream_info.isnot(None),
+            db.func.json_extract(Channel.stream_info, '$.has_hd') != True,
+        )
+    elif resolution_filter == 'hevc':
+        q = q.filter(db.func.json_extract(Channel.stream_info, '$.video_codec') == 'hevc')
+    elif resolution_filter == 'known':
+        q = q.filter(Channel.stream_info.isnot(None))
+
     sort_name = case(
         (db.func.lower(Channel.name).like('the %'), db.func.lower(db.func.substr(Channel.name, 5))),
         (db.func.lower(Channel.name).like('an %'),  db.func.lower(db.func.substr(Channel.name, 4))),
@@ -415,6 +433,7 @@ def channels():
         'category': category_filter, 'duplicates': duplicates_filter,
         'new': new_filter,
         'epg': epg_filter,
+        'resolution': resolution_filter,
         'sort': sort_by, 'dir': sort_dir,
     }.items() if v})
 
@@ -432,6 +451,7 @@ def channels():
                            duplicates_filter=duplicates_filter,
                            new_filter=new_filter,
                            epg_filter=epg_filter,
+                           resolution_filter=resolution_filter,
                            duplicate_names=duplicate_names,
                            possible_duplicate_names=possible_duplicate_names,
                            duplicate_group_keys=duplicate_group_keys,

@@ -298,6 +298,24 @@
       font-weight: 500; transition: background 0.15s;
     }
     .btn-clear-dup:hover { background: var(--purple-panel-hover); color: #fff; }
+    .badge-4k {
+      display: inline-block; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em;
+      padding: 1px 5px; border-radius: 20px; text-transform: uppercase;
+      background: #2d2000; color: #f5c518; border: 1px solid #5a4200;
+      margin-left: 0.35rem; vertical-align: middle;
+    }
+    .badge-hd {
+      display: inline-block; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em;
+      padding: 1px 5px; border-radius: 20px; text-transform: uppercase;
+      background: #001a2d; color: #5bb8f5; border: 1px solid #004470;
+      margin-left: 0.35rem; vertical-align: middle;
+    }
+    .badge-hevc {
+      display: inline-block; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em;
+      padding: 1px 5px; border-radius: 20px; text-transform: uppercase;
+      background: #1a0d2e; color: #b48ef5; border: 1px solid #4a2a7a;
+      margin-left: 0.35rem; vertical-align: middle;
+    }
     .btn-clear-dup:disabled { opacity: 0.4; cursor: not-allowed; }
 
     /* Resolve duplicates modal */
@@ -1019,7 +1037,7 @@
           <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
         </div>
       </div>
-      <details class="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter %}open{% endif %}>
+      <details class="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter %}open{% endif %}>
         <summary>More filters</summary>
         <div class="toolbar-secondary">
           <div class="filter-group">
@@ -1126,6 +1144,17 @@
               <option value="3"  {% if new_filter == '3'  %}selected{% endif %}>Last 3 days</option>
               <option value="7"  {% if new_filter == '7'  %}selected{% endif %}>Last 7 days</option>
               <option value="14" {% if new_filter == '14' %}selected{% endif %}>Last 14 days</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="resolution-filter">Resolution</label>
+            <select id="resolution-filter" name="resolution">
+              <option value="">All</option>
+              <option value="4k"   {% if resolution_filter == '4k'   %}selected{% endif %}>4K (≥2160p)</option>
+              <option value="hd"   {% if resolution_filter == 'hd'   %}selected{% endif %}>HD (≥720p)</option>
+              <option value="sd"   {% if resolution_filter == 'sd'   %}selected{% endif %}>SD (&lt;720p)</option>
+              <option value="hevc" {% if resolution_filter == 'hevc' %}selected{% endif %}>HEVC only</option>
+              <option value="known" {% if resolution_filter == 'known' %}selected{% endif %}>Stream info present</option>
             </select>
           </div>
         </div>
@@ -1255,7 +1284,7 @@
               {% set _ = hover_parts.append('Last seen: ' ~ (ch.last_seen_at | localtime)) %}
             {% endif %}
             <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="Duplicate match found after strict title normalization: case-insensitive and strips trailing 'by …' or 'presented by …'">DUP</span>{% elif ch.name in possible_duplicate_names %} <span class="dup-badge" title="Possible duplicate: a similar title exists in another source after softer brand normalization such as TV/Channel/Network">DUP?</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup" title="Manually marked as duplicate">DUPL</span>{% endif %}</td>
-            <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
+            <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}{% if ch.stream_info %}{% if ch.stream_info.has_4k %}<span class="badge-4k" title="4K stream ({{ ch.stream_info.max_resolution }})">4K</span>{% elif ch.stream_info.has_hd %}<span class="badge-hd" title="HD stream ({{ ch.stream_info.max_resolution }})">HD</span>{% endif %}{% if ch.stream_info.video_codec == 'hevc' %}<span class="badge-hevc" title="H.265/HEVC — may not play in all clients">HEVC</span>{% endif %}{% endif %}</td>
             <td data-channel-id="{{ ch.id }}">
               {% if ch.category %}
                 <span class="cat-label{% if ch.category_override %} has-override{% endif %}"
@@ -1597,6 +1626,8 @@
             const details = data?.details || '';
             if (details.includes('IncompatibleCodecs') || details.includes('incompatibleCodecs')) {
               status.textContent = 'Browser preview unavailable: this stream uses a codec (e.g. HEVC/H.265) that your browser cannot decode. Use "Open Externally" to play in VLC or Channels DVR.';
+            } else if (details === 'bufferStalledError') {
+              status.textContent = 'Browser preview stalled: the stream buffer could not be filled. This is common with HEVC/H.265 (4K) channels — use "Open Externally" to play in VLC or Channels DVR.';
             } else if (details.includes('manifestLoad') || details.includes('manifestParse')) {
               status.textContent = 'Browser preview unavailable for this source (CORS restriction on stream CDN). Use "Open Externally" to play outside the browser preview.';
             } else {
