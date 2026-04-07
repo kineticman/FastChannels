@@ -73,6 +73,7 @@ class Channel(db.Model):
     gracenote_mode    = db.Column(db.String(16), default='auto', nullable=False)  # auto | manual | off
     guide_key         = db.Column(db.String(256), nullable=True)  # provider-specific guide lookup key (e.g. Plex gridKey)
     disable_reason    = db.Column(db.String(64), nullable=True)  # e.g. 'DRM'; set by play proxy
+    stream_info       = db.Column(db.JSON, nullable=True)        # populated by audit/inspect: max_resolution, video_codec, has_4k, variants
     is_duplicate      = db.Column(db.Boolean, default=False)  # set by user — manual duplicate label (does not disable)
     is_active         = db.Column(db.Boolean, default=True)   # set by scraper — channel exists upstream
     is_enabled        = db.Column(db.Boolean, default=True)   # set by user — include in M3U/EPG

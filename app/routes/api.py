@@ -19,7 +19,7 @@ from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
 from ..gracenote_suggest import SuggestionChannel, suggest_gracenote_matches
 from ..gracenote_map import lookup_gracenote, fetch_remote_gracenote_map, remote_map_status
-from ..hls import inspect_hls_drm
+from ..hls import inspect_hls_drm, parse_stream_info as _parse_stream_info
 from ..url import public_base_url
 from .tasks import (
     trigger_bulk_channel_update,
@@ -935,10 +935,17 @@ def inspect_channel(channel_id):
                 return jsonify({'status': 'drm', 'detail': 'DASH DRM detected (Widevine/PlayReady)'})
             return jsonify({'status': 'live', 'detail': 'DASH manifest OK (live)'})
 
-        # Master playlist → parse variant stats then drill into first variant
+        # Master playlist → parse variant stats, persist stream_info, then drill into first variant
         variants = []
         if '#EXT-X-STREAM-INF' in manifest_text:
             variants = _parse_hls_variants(manifest_text)
+            stream_info = _parse_stream_info(manifest_text)
+            if stream_info:
+                ch.stream_info = stream_info
+                try:
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
             for line in manifest_text.splitlines():
                 line = line.strip()
                 if line and not line.startswith('#'):

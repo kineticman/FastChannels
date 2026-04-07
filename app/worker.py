@@ -24,7 +24,7 @@ from sqlalchemy.exc import OperationalError as _SAOperationalError
 from app import create_app
 from app.config_store import persist_source_config_updates
 from app.extensions import db
-from app.hls import inspect_hls_drm
+from app.hls import inspect_hls_drm, parse_stream_info as _parse_stream_info
 from app.models import Source, Channel, Program, Feed, AppSettings
 import time as _time
 from urllib.parse import urljoin as _urljoin
@@ -645,8 +645,17 @@ def run_stream_audit(source_name: str):
                     continue   # DASH — skip HLS checks below
 
                 # EXT-X-KEY only appears in media playlists, not master playlists.
-                # If we landed on a master, fetch the first variant to check properly.
+                # If we landed on a master, parse stream_info then fetch the first
+                # variant to continue DRM / VOD checks on the media playlist.
                 if '#EXT-X-STREAM-INF' in manifest_text:
+                    stream_info = _parse_stream_info(manifest_text)
+                    if stream_info:
+                        ch.stream_info = stream_info
+                        logger.debug('[audit] stream_info for %s: %s %s %s',
+                                     ch.name,
+                                     stream_info.get('max_resolution') or '?',
+                                     stream_info.get('video_codec') or '?',
+                                     '4K' if stream_info.get('has_4k') else '')
                     variant_url = None
                     for line in manifest_text.splitlines():
                         line = line.strip()
