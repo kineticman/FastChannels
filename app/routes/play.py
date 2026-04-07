@@ -10,7 +10,7 @@ disabled and manually re-enable if desired.
 import logging
 import threading
 
-from flask import Blueprint, redirect, abort, request
+from flask import Blueprint, redirect, abort, request, Response
 from app.config_store import persist_source_config_updates
 from ..hls import inspect_hls_drm
 from ..models import Channel, Source
@@ -73,6 +73,27 @@ def _check_manifest(url: str, session) -> str | None:
     except Exception as e:
         logger.debug('[play] manifest check fetch failed (ignoring): %s', e)
     return None
+
+
+@play_bp.route('/play/<source_name>/<channel_id>.m3u')
+def play_vlc(source_name: str, channel_id: str):
+    """Return a tiny M3U playlist so VLC (or any media player) can open the stream directly."""
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+    base_url = request.host_url.rstrip('/')
+    stream_url = f'{base_url}/play/{source_name}/{channel_id}.m3u8'
+    playlist = f'#EXTM3U\n#EXTINF:-1,{channel.name}\n{stream_url}\n'
+    return Response(
+        playlist,
+        mimetype='audio/x-mpegurl',
+        headers={'Content-Disposition': f'attachment; filename="{channel_id}.m3u"'},
+    )
 
 
 @play_bp.route('/play/<source_name>/<channel_id>.m3u8')

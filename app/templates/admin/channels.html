@@ -1543,6 +1543,7 @@
           <div class="preview-actions">
             ${playUrl ? `<button class="preview-action-btn primary" onclick="loadPreviewPlayer('${escapeHtml(playUrl)}')">Play Here</button>` : ''}
             ${playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open Externally</a>` : ''}
+            ${playUrl ? `<a class="preview-action-btn neutral" href="${escapeHtml(playUrl.replace('.m3u8', '.m3u'))}" title="Download playlist and open in VLC">Open in VLC</a>` : ''}
             <button class="preview-action-btn neutral" onclick="closePreviewModal()">Close</button>
           </div>
           <div class="preview-player-wrap" id="preview-player-wrap">
