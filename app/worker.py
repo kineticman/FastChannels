@@ -1753,16 +1753,19 @@ if __name__ == '__main__':
             except Exception as exc:
                 logger.warning('[tvtv-cache] could not enqueue via RQ: %s', exc)
 
-        # 03:00 UTC (pre-dawn US) — well after the tvtv grid window resets at 04:00 UTC,
-        # so today + 2 days of data are all fresh.  15:00 UTC is a midday safety net
-        # in case the overnight run failed.
+        # 03:00 user local time — reads timezone from AppSettings so it follows
+        # whatever the user has configured in admin/settings.
+        with flask_app.app_context():
+            from app.models import AppSettings as _AS
+            import pytz as _pytz
+            _tz_name = (_AS.get().timezone_name or 'UTC')
+            try:
+                _tz = _pytz.timezone(_tz_name)
+            except Exception:
+                _tz = _pytz.utc
         scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
-                          hour=3, minute=0,
+                          hour=3, minute=0, timezone=_tz,
                           id='tvtv_cache_refresh_night', max_instances=1, coalesce=True,
-                          misfire_grace_time=3600)
-        scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
-                          hour=15, minute=0,
-                          id='tvtv_cache_refresh_day', max_instances=1, coalesce=True,
                           misfire_grace_time=3600)
 
         scheduler.start()

@@ -20,6 +20,6 @@ class Config:
     # and writers proceed without blocking each other.
     SQLALCHEMY_ENGINE_OPTIONS = {
         'isolation_level': None,
-        'connect_args': {'check_same_thread': False},
+        'connect_args': {'check_same_thread': False, 'timeout': 30},
     }
     REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')

@@ -25,8 +25,8 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 _BATCH_SIZE  = 20    # station IDs per grid request — Cloudflare blocks >20
-_BATCH_DELAY = 1.5   # seconds between batches within a lineup-day
-_DAY_DELAY   = 2.0   # seconds between lineup-day pairs
+_BATCH_DELAY = 1.0   # seconds between batches within a lineup-day
+_DAY_DELAY   = 1.0   # seconds between lineup-day pairs
 _DAYS        = 3     # days of guide data to cache (today + 2)
 
 _TVTV_BASE = "https://tvtv.us"
@@ -306,6 +306,7 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
                         })
 
                 total_rows    += _upsert_rows(rows)
+                db.session.commit()
                 total_batches += 1
                 time.sleep(_BATCH_DELAY)
 
