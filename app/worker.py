@@ -560,6 +560,14 @@ def run_stream_audit(source_name: str):
                         break
                     continue
 
+                # audit_resolve() may return an opaque internal URL (e.g. stirr://)
+                # as a sentinel meaning "channel confirmed alive, skip manifest fetch".
+                if not resolved_url.startswith('http'):
+                    checked += 1
+                    consecutive_errors = 0
+                    logger.debug('[audit] %s: opaque URL — existence confirmed by scraper, skipping manifest fetch', ch.name)
+                    continue
+
                 try:
                     r = sess.get(resolved_url, timeout=15, allow_redirects=True)
                 except Exception as req_exc:

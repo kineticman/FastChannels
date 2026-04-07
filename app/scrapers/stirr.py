@@ -13,7 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 import requests
 from requests.adapters import HTTPAdapter
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +222,41 @@ class StirrScraper(BaseScraper):
         # short-lived session tokens that expire before the client plays them.
         # Let the client handle variant selection.
         return media_url
+
+    def audit_resolve(self, raw_url: str) -> str:
+        """
+        Lightweight audit check: confirm the channel still exists in Stirr's
+        catalogue via the /playable POST, but do NOT return the SSAI stream URL.
+
+        Stirr channels resolve to ssai.aniview.com URLs that require a real
+        browser session for ad targeting.  Fetching them server-side returns
+        HTTP 422, which the audit misinterprets as a dead stream.  Instead we
+        just validate channel existence and raise StreamDeadError on 404/410.
+        The audit won't fetch the returned sentinel URL — it still logs the
+        channel as "checked" and leaves is_active unchanged.
+        """
+        if not raw_url.startswith("stirr://"):
+            return raw_url
+
+        meta = self._parse_stirr_uri(raw_url)
+        videoid = meta.get("source_channel_id")
+        if not videoid:
+            return raw_url
+
+        playable_url = self.PLAYABLE_URL_TEMPLATE.format(videoid=videoid)
+        try:
+            r = self.session.post(playable_url, timeout=10)
+        except Exception as exc:
+            logger.warning("[stirr] audit_resolve network error for %s: %s", videoid, exc)
+            return raw_url  # treat as transient; don't mark dead
+
+        if r.status_code in (404, 410):
+            raise StreamDeadError(f"Stirr channel {videoid} returned {r.status_code} — removed from catalogue")
+
+        # Any other status (200, 422, 5xx, etc.) — leave the channel alone.
+        # 422 from the SSAI service means the request params are wrong for a
+        # server context, not that the channel is gone.
+        return raw_url
 
     # ── Internal Helpers ─────────────────────────────────────
 
