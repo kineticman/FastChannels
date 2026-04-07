@@ -10,6 +10,11 @@
 
 from __future__ import annotations
 
+import logging
+import re
+
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Canonical category list
 # ---------------------------------------------------------------------------
@@ -94,6 +99,7 @@ _CANONICAL_MAP: dict[str, str] = {
     # Food
     'cooking':                      'Food',
     'good eats':                    'Food',
+    'quality eats':                 'Food',
 
     # Game Shows
     'game show':                    'Game Shows',
@@ -199,15 +205,38 @@ _CANONICAL_MAP: dict[str, str] = {
 }
 
 
+_PRESENTED_BY_RE = re.compile(r'\s+presented\s+by\s+.+$', re.IGNORECASE)
+_CANONICAL_LOWER: dict[str, str] = {}  # populated lazily on first use
+
+
 def normalize_category(raw: str | None) -> str | None:
     """Map a raw scraper category string to a canonical category label.
 
-    Already-canonical values pass through unchanged. Unknown values also
-    pass through unchanged so new scrapers don't silently lose their data.
+    Priority:
+      1. Explicit alias in _CANONICAL_MAP
+      2. Already a canonical category (case-insensitive pass-through)
+      3. Unknown → None  (logged at DEBUG so new values are visible in logs)
     """
     if not raw:
         return raw
-    return _CANONICAL_MAP.get(raw.strip().lower(), raw)
+
+    # Strip sponsor suffixes like "Quality Eats Presented by Capital One".
+    cleaned = _PRESENTED_BY_RE.sub('', raw.strip()).strip()
+    key = cleaned.lower()
+
+    # 1. Explicit alias
+    if key in _CANONICAL_MAP:
+        return _CANONICAL_MAP[key]
+
+    # 2. Already canonical
+    if not _CANONICAL_LOWER:
+        _CANONICAL_LOWER.update({c.lower(): c for c in CANONICAL_CATEGORIES})
+    if key in _CANONICAL_LOWER:
+        return _CANONICAL_LOWER[key]
+
+    # 3. Unknown — discard rather than let garbage through
+    logger.debug("normalize_category: unrecognized value %r (raw: %r)", cleaned, raw)
+    return None
 
 
 # ---------------------------------------------------------------------------
