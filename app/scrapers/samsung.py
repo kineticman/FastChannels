@@ -14,7 +14,10 @@
 #   EPG:      https://i.mjh.nz/SamsungTVPlus/{region}.xml.gz
 #
 # Stream URLs: https://jmp2.uk/stvp-{channel_id}
-#   These redirect to Google DAI HLS streams — standard HTTP 302, clients follow fine.
+#   These redirect through Samsung's SIS CDN to Google DAI or Akamai HLS streams.
+#   resolve() follows the jmp2.uk redirect server-side so the play route can issue
+#   a single-hop redirect to the final CDN URL (which has Access-Control-Allow-Origin: *),
+#   avoiding a multi-hop cross-origin chain in the browser.
 #
 # No auth required. Data refreshes ~hourly upstream; we scrape every 6 hours.
 
@@ -84,6 +87,36 @@ class SamsungScraper(BaseScraper):
         r.raise_for_status()
         with gzip.GzipFile(fileobj=io.BytesIO(r.content)) as gz:
             return ET.parse(gz).getroot()
+
+    # ── resolve ────────────────────────────────────────────────────────────────
+
+    def resolve(self, raw_url: str) -> str:
+        """
+        Follow the jmp2.uk short-URL redirect chain server-side and return the
+        final CDN URL.  This lets the play route issue a single-hop redirect to
+        a CDN that already returns Access-Control-Allow-Origin: *, instead of
+        sending the browser through multiple cross-origin hops (jmp2.uk →
+        sis-global.prod.samsungtv.plus → akamaized.net) which can trigger CORS
+        failures in hls.js.
+        """
+        try:
+            # SIS CDN (intermediate hop) rejects HEAD → use GET with stream=True
+            # so we follow all redirects and get the final URL without reading the body.
+            r = self.session.get(
+                raw_url,
+                allow_redirects=True,
+                timeout=8,
+                stream=True,
+                headers={'User-Agent': 'okhttp/4.12.0'},
+            )
+            r.close()
+            final_url = r.url
+            if final_url and final_url != raw_url:
+                logger.debug('[samsung] resolved %s → %s', raw_url, final_url[:80])
+                return final_url
+        except Exception as e:
+            logger.debug('[samsung] resolve follow-redirect failed (%s), using raw URL', e)
+        return raw_url
 
     # ── fetch_channels ─────────────────────────────────────────────────────────
 

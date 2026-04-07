@@ -1595,7 +1595,9 @@
         _previewHls.on(window.Hls.Events.ERROR, (_event, data) => {
           if (status) {
             const details = data?.details || '';
-            if (details.includes('manifestLoad') || details.includes('manifestParse')) {
+            if (details.includes('IncompatibleCodecs') || details.includes('incompatibleCodecs')) {
+              status.textContent = 'Browser preview unavailable: this stream uses a codec (e.g. HEVC/H.265) that your browser cannot decode. Use "Open Externally" to play in VLC or Channels DVR.';
+            } else if (details.includes('manifestLoad') || details.includes('manifestParse')) {
               status.textContent = 'Browser preview unavailable for this source (CORS restriction on stream CDN). Use "Open Externally" to play outside the browser preview.';
             } else {
               const fatal = data?.fatal ? 'Fatal — ' : '';
