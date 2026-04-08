@@ -8,6 +8,7 @@ It remains visible in the admin channels page so users can see what was
 disabled and manually re-enable if desired.
 """
 import logging
+import re
 import threading
 from urllib.parse import urljoin
 
@@ -115,18 +116,57 @@ def play_vlc(source_name: str, channel_id: str):
     )
 
 
+_PRIVATE_IP_RE = re.compile(
+    r'^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|0\.0\.0\.0)',
+    re.IGNORECASE,
+)
+
+
+@play_bp.route('/play/distro/segment')
+def distro_segment_proxy():
+    """
+    Segment proxy for Distro CDNs that require Origin/Referer headers.
+
+    Segment URLs come from manifests we already fetched from known Distro CDNs,
+    so we trust their content.  We only block HTTPS requirement and private/internal
+    IPs to prevent SSRF — no static host allowlist needed.
+    """
+    from urllib.parse import urlsplit, unquote as _unquote
+    raw = request.args.get('url', '')
+    if not raw:
+        abort(400)
+    url = _unquote(raw)
+    parsed = urlsplit(url)
+    if parsed.scheme != 'https' or not parsed.netloc:
+        abort(400)
+    if _PRIVATE_IP_RE.match(parsed.netloc.split(':')[0]):
+        logger.warning('[distro-seg-proxy] blocked SSRF attempt to: %s', parsed.netloc)
+        abort(403)
+    try:
+        r = _requests.get(url, headers=_DISTRO_HLS_HEADERS, timeout=15, stream=True)
+        if r.status_code != 200:
+            abort(r.status_code)
+        return Response(
+            r.iter_content(65536),
+            status=200,
+            content_type=r.headers.get('Content-Type', 'video/MP2T'),
+            headers={'Cache-Control': 'no-cache'},
+        )
+    except Exception as e:
+        logger.warning('[distro-seg-proxy] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+
+
 @play_bp.route('/play/distro/<channel_id>/proxy.m3u8')
 def distro_manifest_proxy(channel_id: str):
     """
-    Manifest-only proxy for Distro channels on the Referer-restricted CDN.
+    Proxy for Distro channels on Referer-restricted CDNs.
 
-    Fetches the master + best-variant manifests from Distro's CDN using the
-    correct Origin/Referer headers, rewrites all segment/chunk URLs to absolute
-    so the client fetches them directly from the CDN, then returns the rewritten
-    variant manifest. If CDN segments are also header-restricted this won't work
-    and full stream proxying would be required instead.
+    Fetches master + best-variant manifests using correct Origin/Referer headers,
+    rewrites segment URLs to go through distro_segment_proxy (which adds the
+    required headers), then returns the rewritten manifest to the client.
     """
-    from urllib.parse import urlsplit, unquote
+    from urllib.parse import urlsplit, unquote, quote as _quote
     geo, raw_id = _distro_split_id(unquote(channel_id))
     scraper = DistroScraper()
     upstream_url = _distro_resolve_from_feed(scraper, geo, raw_id)
@@ -153,12 +193,15 @@ def distro_manifest_proxy(channel_id: str):
         logger.warning('[distro-proxy] variant fetch failed for %s: %s', channel_id, e)
         abort(502)
 
-    # Rewrite relative segment/chunk URLs to absolute so clients fetch directly.
+    # Rewrite segment URLs to go through our segment proxy so the CDN gets
+    # the required Origin/Referer headers regardless of client type.
+    base_url = request.host_url.rstrip('/')
     variant_base = best_variant.rsplit('/', 1)[0] + '/'
     lines = []
     for line in variant_r.text.splitlines():
         if line and not line.startswith('#'):
-            line = urljoin(variant_base, line)
+            abs_url = urljoin(variant_base, line)
+            line = f'{base_url}/play/distro/segment?url={_quote(abs_url, safe="")}'
         lines.append(line)
 
     return Response(

@@ -323,7 +323,7 @@ class DistroScraper(BaseScraper):
     display_name       = "Distro TV"
     stream_audit_enabled = True
     scrape_interval    = 720
-    session_cdn_hosts  = frozenset({"streamdot.broadpeak.io"})  # inspect bypasses manifest fetch for these
+    session_cdn_hosts  = SESSION_CDN_HOSTS | {"streamdot.broadpeak.io"}  # inspect verifies via feed for these
     config_schema   = [
         ConfigField(
             "geo",
