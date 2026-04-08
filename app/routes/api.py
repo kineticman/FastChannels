@@ -557,29 +557,45 @@ def _orphan_cutoff(days: int = 7):
     return datetime.now(timezone.utc) - timedelta(days=days)
 
 
-def _orphan_query(source_id: int, days: int = 7):
+def _source_active_geos(source) -> set | None:
+    """Return the configured geo codes for multi-region sources, or None."""
+    scraper_cls = registry.get(source.name)
+    if not scraper_cls or not hasattr(scraper_cls, '_geos'):
+        return None
+    scraper = scraper_cls(config=source.config or {})
+    return {g.upper() for g in scraper._geos()}
+
+
+def _orphan_query(source, days: int = 7):
     """
-    Inactive channels that haven't been seen in a scrape for `days` days,
-    excluding DRM-disabled channels (those are legitimately flagged and would
-    just reappear on the next scrape if re-enabled).
+    Inactive channels eligible for deletion:
+    - not DRM-disabled
+    - either not seen in `days` days, OR their region is no longer configured
     """
     cutoff = _orphan_cutoff(days)
-    return Channel.query.filter(
-        Channel.source_id == source_id,
+    base = Channel.query.filter(
+        Channel.source_id == source.id,
         Channel.is_active == False,
         ~Channel.disable_reason.like('DRM%'),
-        db.or_(
-            Channel.last_seen_at == None,
-            Channel.last_seen_at < cutoff,
-        ),
     )
+    time_filter = db.or_(
+        Channel.last_seen_at == None,
+        Channel.last_seen_at < cutoff,
+    )
+    active_geos = _source_active_geos(source)
+    if active_geos:
+        # Also catch inactive channels from regions that are no longer configured,
+        # even if last_seen_at is recent (e.g. user just unchecked that region).
+        region_filter = ~Channel.country.in_(active_geos)
+        return base.filter(db.or_(time_filter, region_filter))
+    return base.filter(time_filter)
 
 
 @api_bp.route('/sources/<int:source_id>/inactive-count')
 def inactive_channel_count(source_id):
     source = Source.query.get_or_404(source_id)
     days = int(request.args.get('days', 7))
-    count = _orphan_query(source_id, days).count()
+    count = _orphan_query(source, days).count()
     return jsonify({'count': count, 'source': source.name, 'days': days})
 
 
@@ -587,7 +603,7 @@ def inactive_channel_count(source_id):
 def delete_inactive_channels(source_id):
     source = Source.query.get_or_404(source_id)
     days = int((request.get_json() or {}).get('days', 7))
-    orphans = _orphan_query(source_id, days).all()
+    orphans = _orphan_query(source, days).all()
     count = len(orphans)
     for ch in orphans:
         db.session.delete(ch)

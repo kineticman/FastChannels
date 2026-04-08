@@ -1478,10 +1478,14 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     )
 
     # Always deactivate channels from removed regions regardless of collapse guard.
+    # Clear last_seen_at so the orphan-cleanup query treats them as immediately
+    # eligible — their last_seen_at reflects the previous scrape (today), which
+    # would otherwise keep them past the N-day cutoff.
     for ch_id in region_removed_ids:
         ch = existing[ch_id]
         ch.missed_scrapes = (ch.missed_scrapes or 0) + 1
         ch.is_active = False
+        ch.last_seen_at = None
         logger.info(
             '[%s] marking inactive — region %s no longer configured: %s (%s)',
             source.name,
