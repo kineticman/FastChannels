@@ -113,6 +113,12 @@
     .audit-status-queued  .status-text { color: var(--warning-soft); }
     .audit-last-result { font-size: 0.75rem; color: var(--text-soft); margin-top: 0.15rem; }
     .audit-last-result:empty { display: none; }
+    .delete-inactive-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.4rem; }
+    .btn-delete-inactive { background: none; border: none; padding: 0; font-size: 0.74rem; color: var(--text-muted); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+    .btn-delete-inactive:hover { color: var(--danger); }
+    .delete-inactive-status { font-size: 0.74rem; font-weight: 500; }
+    .delete-inactive-status.ok { color: var(--success-soft); }
+    .delete-inactive-status.error { color: var(--danger); }
     .audit-last-result .aud-dead    { color: var(--danger); }
     .audit-last-result .aud-drm     { color: var(--warning); }
     .audit-last-result .aud-403     { color: var(--warning); }
@@ -383,6 +389,10 @@
         <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
         <div class="audit-status" id="audit-status-{{ source.id }}"></div>
         <div class="audit-last-result" id="audit-last-result-{{ source.id }}"></div>
+        <div class="delete-inactive-row">
+          <button class="btn-delete-inactive" type="button" onclick="deleteInactiveChannels({{ source.id }})">Delete Inactive</button>
+          <span class="delete-inactive-status" id="delete-status-{{ source.id }}"></span>
+        </div>
         {% set interval_meta = source_interval_meta.get(source.name, {'recommended': source.scrape_interval, 'min': 30, 'max': 10080}) %}
         <div class="interval-control">
           <label for="scrape-interval-{{ source.id }}">Scrape every</label>
@@ -421,8 +431,6 @@
                 {% if not source.is_enabled %}disabled{% endif %}
                 title="View stream audit report and run new audits">📋 Stream Audit</button>
         {% endif %}
-        <span class="config-status" id="delete-status-{{ source.id }}"></span>
-        <button class="btn btn-danger" type="button" onclick="deleteInactiveChannels({{ source.id }})">Delete Inactive</button>
       </div>
     </div>
     {% endfor %}
@@ -1239,7 +1247,7 @@
 
     async function deleteInactiveChannels(sourceId, days = 7) {
       const status = document.getElementById(`delete-status-${sourceId}`);
-      const setStatus = (msg, cls = '') => { status.textContent = msg; status.className = 'config-status' + (cls ? ' ' + cls : ''); };
+      const setStatus = (msg, cls = '') => { status.textContent = msg; status.className = 'delete-inactive-status' + (cls ? ' ' + cls : ''); };
       setStatus('Checking…');
       const cr = await fetch(`/api/sources/${sourceId}/inactive-count?days=${days}`);
       const cd = await cr.json();
