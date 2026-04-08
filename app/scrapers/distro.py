@@ -294,11 +294,16 @@ def _resolve_from_feed(scraper: "DistroScraper", geo: str, raw_id: str) -> str |
         content = ep.get("content") or {}
         upstream_url = content.get("url")
         if tvg_id and upstream_url:
-            # Strip ad-targeting query params — they cause the CDN to return a
-            # broken master playlist (200 with dead variant URLs) instead of
-            # redirecting to the working /hls/... distribution path.
+            # The jsrdn feed embeds ad-targeting query params in stream URLs.
+            # For the d3s7x6kmqcnb6b CDN (/d/distro001a/ paths) these params
+            # cause the CDN to return a broken master (200 with dead variants)
+            # instead of redirecting to the working /hls/... path — strip them.
+            # For the d35j504z0x2vu2 CDN (/v1/master/ paths) the params are
+            # required — the CDN returns 404 without them, so keep as-is.
             parsed = urlsplit(upstream_url)
-            url_map[str(tvg_id)] = urlunsplit(parsed._replace(query=''))
+            if parsed.path.startswith('/d/distro001a/'):
+                upstream_url = urlunsplit(parsed._replace(query=''))
+            url_map[str(tvg_id)] = upstream_url
 
     _feed_cache[geo] = (now, url_map)
     logger.debug("[distro] feed cache refreshed for geo=%s (%d channels)", geo, len(url_map))
