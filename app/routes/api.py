@@ -882,8 +882,7 @@ def inspect_channel(channel_id):
     if scraper_cls:
         scraper = scraper_cls(config=source.config or {})
         try:
-            _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
-            resolved_url = _resolve(ch.stream_url)
+            resolved_url = scraper.resolve(ch.stream_url)
         except StreamDeadError as e:
             return jsonify({'status': 'dead', 'detail': str(e)})
         except Exception as e:
@@ -905,6 +904,23 @@ def inspect_channel(channel_id):
 
     if not resolved_url:
         return jsonify({'status': 'error', 'detail': 'No stream URL'})
+
+    # For session-based CDNs (e.g. Broadpeak) that return intermittent 404s
+    # when fetched server-side, verify via the scraper's audit_resolve() instead.
+    # audit_resolve() checks feed/catalogue presence and raises StreamDeadError
+    # if the channel is genuinely gone.  Scrapers advertise which CDN hosts need
+    # this treatment via a class-level `session_cdn_hosts` frozenset.
+    if scraper_cls and hasattr(scraper_cls, 'audit_resolve'):
+        from urllib.parse import urlsplit as _us
+        _session_cdn = getattr(scraper_cls, 'session_cdn_hosts', frozenset())
+        if resolved_url.startswith('http') and _us(resolved_url).netloc in _session_cdn:
+            try:
+                scraper.audit_resolve(ch.stream_url)
+                return jsonify({'status': 'live', 'detail': 'Session-based CDN — verified via feed (client playback should work)'})
+            except StreamDeadError as e:
+                return jsonify({'status': 'dead', 'detail': str(e)})
+            except Exception:
+                pass  # fall through to normal manifest fetch
 
     try:
         r = sess.get(resolved_url, timeout=15, allow_redirects=True)

@@ -35,9 +35,17 @@ HLS_HEADERS = {
     "Referer":    "https://distro.tv/",
 }
 
+# Hosts that require a manifest proxy in play.py (Origin/Referer restricted or session-token CDN).
 SESSION_CDN_HOSTS = {
-    "d3s7x6kmqcnb6b.cloudfront.net",   # session-token CDN
-    "d35j504z0x2vu2.cloudfront.net",   # requires Origin/Referer headers — don't pre-fetch
+    "d3s7x6kmqcnb6b.cloudfront.net",   # session-token CDN (proxy required)
+    "d35j504z0x2vu2.cloudfront.net",   # requires Origin/Referer headers (proxy required)
+}
+
+# Superset: hosts where resolve() should skip the server-side pre-fetch.
+# Broadpeak is included here (direct redirect works for clients) but NOT in
+# SESSION_CDN_HOSTS because it does NOT need the manifest proxy.
+NO_PREFETCH_HOSTS = SESSION_CDN_HOSTS | {
+    "streamdot.broadpeak.io",           # session-based; server-side fetches return intermittent 404
 }
 
 MACRO_RE = re.compile(r"__[^_].*?__")
@@ -311,10 +319,11 @@ def _resolve_from_feed(scraper: "DistroScraper", geo: str, raw_id: str) -> str |
 
 
 class DistroScraper(BaseScraper):
-    source_name     = "distro"
-    display_name    = "Distro TV"
+    source_name        = "distro"
+    display_name       = "Distro TV"
     stream_audit_enabled = True
-    scrape_interval = 720
+    scrape_interval    = 720
+    session_cdn_hosts  = NO_PREFETCH_HOSTS  # hosts that can't be reliably fetched server-side
     config_schema   = [
         ConfigField(
             "geo",
@@ -447,6 +456,27 @@ class DistroScraper(BaseScraper):
         logger.info("[distro] parsed %d EPG entries", len(programs))
         return programs
 
+    def audit_resolve(self, raw_url: str) -> str:
+        """
+        Lightweight audit check: confirm the channel is still in the Distro
+        feed without attempting a server-side manifest fetch.
+
+        Distro channels on Broadpeak's session-based CDN (streamdot.broadpeak.io)
+        return intermittent 404s when fetched server-side — Broadpeak's session
+        tokens are tied to the initiating client context.  A 404 does not mean
+        the channel is dead; it just means our server didn't establish the right
+        session.  Returning the opaque distro:// URL tells the audit runner to
+        count the channel as "checked" without fetching the manifest.
+        """
+        if not raw_url.startswith(CHANNEL_SCHEME):
+            return raw_url
+        source_channel_id = raw_url[len(CHANNEL_SCHEME):]
+        geo, raw_id = _split_qualified_channel_id(source_channel_id)
+        upstream_url = _resolve_from_feed(self, geo, raw_id)
+        if not upstream_url:
+            raise StreamDeadError(f"Channel {source_channel_id} not found in Distro feed")
+        return raw_url  # opaque URL → audit runner skips manifest fetch
+
     def resolve(self, raw_url: str) -> str:
         if raw_url.startswith(CHANNEL_SCHEME):
             source_channel_id = raw_url[len(CHANNEL_SCHEME):]
@@ -459,7 +489,7 @@ class DistroScraper(BaseScraper):
 
         sanitized = _sanitize_url(raw_url)
         host = urlsplit(sanitized).netloc
-        if host in SESSION_CDN_HOSTS:
+        if host in NO_PREFETCH_HOSTS:
             return sanitized
         try:
             r = self.session.get(sanitized, headers=HLS_HEADERS, timeout=15)
