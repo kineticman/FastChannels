@@ -576,7 +576,7 @@ def _orphan_query(source, days: int = 7):
     base = Channel.query.filter(
         Channel.source_id == source.id,
         Channel.is_active == False,
-        ~Channel.disable_reason.like('DRM%'),
+        db.or_(Channel.disable_reason == None, ~Channel.disable_reason.like('DRM%')),
     )
     time_filter = db.or_(
         Channel.last_seen_at == None,
