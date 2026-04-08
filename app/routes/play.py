@@ -140,7 +140,9 @@ def distro_manifest_proxy(channel_id: str):
         logger.warning('[distro-proxy] master fetch failed for %s: %s', channel_id, e)
         abort(502)
 
-    best_variant = _distro_pick_best_variant(master_r.text, upstream_url)
+    # Use the final URL after any redirects as the base for resolving variant paths.
+    effective_master_url = master_r.url
+    best_variant = _distro_pick_best_variant(master_r.text, effective_master_url)
     if not best_variant:
         abort(502)
 

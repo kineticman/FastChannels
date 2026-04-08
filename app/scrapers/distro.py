@@ -294,7 +294,11 @@ def _resolve_from_feed(scraper: "DistroScraper", geo: str, raw_id: str) -> str |
         content = ep.get("content") or {}
         upstream_url = content.get("url")
         if tvg_id and upstream_url:
-            url_map[str(tvg_id)] = upstream_url
+            # Strip ad-targeting query params — they cause the CDN to return a
+            # broken master playlist (200 with dead variant URLs) instead of
+            # redirecting to the working /hls/... distribution path.
+            parsed = urlsplit(upstream_url)
+            url_map[str(tvg_id)] = urlunsplit(parsed._replace(query=''))
 
     _feed_cache[geo] = (now, url_map)
     logger.debug("[distro] feed cache refreshed for geo=%s (%d channels)", geo, len(url_map))
