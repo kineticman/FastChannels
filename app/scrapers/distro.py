@@ -323,7 +323,7 @@ class DistroScraper(BaseScraper):
     display_name       = "Distro TV"
     stream_audit_enabled = True
     scrape_interval    = 720
-    session_cdn_hosts  = NO_PREFETCH_HOSTS  # hosts that can't be reliably fetched server-side
+    session_cdn_hosts  = frozenset({"streamdot.broadpeak.io"})  # inspect bypasses manifest fetch for these
     config_schema   = [
         ConfigField(
             "geo",
@@ -456,16 +456,16 @@ class DistroScraper(BaseScraper):
         logger.info("[distro] parsed %d EPG entries", len(programs))
         return programs
 
+    # Broadpeak's session-based CDN returns intermittent 404s when fetched
+    # server-side — a 404 would trigger a false-positive disable in the audit.
+    # Channels on these hosts skip the manifest fetch; feed presence is enough.
+    _AUDIT_SKIP_HOSTS = frozenset({"streamdot.broadpeak.io"})
+
     def audit_resolve(self, raw_url: str) -> str:
         """
         Audit-time resolve: confirm the channel is in the feed, then return
         either a real HTTP URL (for full manifest verification) or the opaque
-        distro:// URL (to skip manifest fetch) depending on the CDN host.
-
-        Channels on NO_PREFETCH_HOSTS (Broadpeak, Referer-restricted CloudFront)
-        cannot be reliably verified server-side and skip the manifest check —
-        feed presence is sufficient proof of life.  All other channels return
-        their real HTTP URL so the audit can check for DRM/dead streams.
+        distro:// URL (to skip manifest fetch) for hosts that cause false positives.
         """
         if not raw_url.startswith(CHANNEL_SCHEME):
             return raw_url
@@ -476,7 +476,7 @@ class DistroScraper(BaseScraper):
             raise StreamDeadError(f"Channel {source_channel_id} not found in Distro feed")
         sanitized = _sanitize_url(upstream_url)
         host = urlsplit(sanitized).netloc
-        if host in NO_PREFETCH_HOSTS:
+        if host in self._AUDIT_SKIP_HOSTS:
             return raw_url  # opaque URL → audit runner skips manifest fetch
         return sanitized   # real URL → audit does full manifest verification
 
