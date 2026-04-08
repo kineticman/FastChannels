@@ -1332,18 +1332,19 @@ def _refresh_auto_channel_numbers() -> None:
     """
     from app.generators.m3u import _build_source_chnum_map, _build_sticky_gn_chnum_map
 
-    all_channels = (
-        Channel.query
-        .join(Source)
-        .filter(
-            Channel.is_active == True,
-            Channel.is_enabled == True,
-            Source.is_enabled == True,
-            Source.epg_only == False,
-            Channel.stream_url != None,
+    with db.session.no_autoflush:
+        all_channels = (
+            Channel.query
+            .join(Source)
+            .filter(
+                Channel.is_active == True,
+                Channel.is_enabled == True,
+                Source.is_enabled == True,
+                Source.epg_only == False,
+                Channel.stream_url != None,
+            )
+            .all()
         )
-        .all()
-    )
     if not all_channels:
         return
 
@@ -1516,8 +1517,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                         ch.name,
                         ch.source_channel_id,
                     )
-    _refresh_auto_channel_numbers()
     db.session.flush()
+    _refresh_auto_channel_numbers()
 
 
 def _prune_old_programs(batch_size: int = 2000):
