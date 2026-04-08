@@ -325,7 +325,10 @@ def run_scraper(source_name: str, force_full: bool = False):
                 logger.info('[%s] EPG fetch complete', source_name)
                 for _attempt in range(3):
                     try:
-                        _upsert_channels(source, channels, _gracenote_auto_fill)
+                        _active_geos = None
+                        if hasattr(scraper, '_geos'):
+                            _active_geos = {g.upper() for g in scraper._geos()}
+                        _upsert_channels(source, channels, _gracenote_auto_fill, active_geos=_active_geos)
                         _upsert_programs(source, programs)
                         _apply_scraper_config_updates(source, scraper)
                         source.last_scraped_at = datetime.now(timezone.utc)
@@ -1363,7 +1366,7 @@ def _refresh_auto_channel_numbers() -> None:
             ch.number = next_number
 
 
-def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True):
+def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
     logo_validation_cache: dict[str, bool] = {}
     seen_at = datetime.now(timezone.utc)
@@ -1447,30 +1450,57 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     existing_active_ids = {ch_id for ch_id, ch in existing.items() if ch.is_active}
     missing_active_ids = existing_active_ids - seen
 
+    # Channels from regions the scraper no longer has configured are intentionally
+    # absent — exclude them from the collapse ratio so a region removal doesn't
+    # trigger the false-positive guard.
+    if active_geos is not None:
+        region_removed_ids = {
+            ch_id for ch_id in missing_active_ids
+            if (existing[ch_id].country or '').upper() not in active_geos
+        }
+    else:
+        region_removed_ids = set()
+    missing_active_organic = missing_active_ids - region_removed_ids
+
     # Guard against upstream/parser glitches returning a tiny partial lineup.
     # If we previously had a substantial active set and the new fetch would
     # deactivate most of it, keep the old rows active and log loudly instead
     # of collapsing the source to a handful of channels.
-    if existing_active_ids:
-        missing_ratio = len(missing_active_ids) / max(len(existing_active_ids), 1)
+    organic_existing = len(existing_active_ids) - len(region_removed_ids)
+    if organic_existing > 0:
+        missing_ratio = len(missing_active_organic) / max(organic_existing, 1)
     else:
         missing_ratio = 0.0
     suspicious_collapse = (
-        len(existing_active_ids) >= 50
-        and len(seen) < max(25, int(len(existing_active_ids) * 0.35))
+        organic_existing >= 50
+        and len(seen) < max(25, int(organic_existing * 0.35))
         and missing_ratio >= 0.6
     )
+
+    # Always deactivate channels from removed regions regardless of collapse guard.
+    for ch_id in region_removed_ids:
+        ch = existing[ch_id]
+        ch.missed_scrapes = (ch.missed_scrapes or 0) + 1
+        ch.is_active = False
+        logger.info(
+            '[%s] marking inactive — region %s no longer configured: %s (%s)',
+            source.name,
+            ch.country,
+            ch.name,
+            ch.source_channel_id,
+        )
+
     if suspicious_collapse:
         logger.warning(
             '[%s] suspicious channel refresh collapse: existing_active=%d incoming=%d missing_active=%d; preserving prior active rows',
             source.name,
             len(existing_active_ids),
             len(seen),
-            len(missing_active_ids),
+            len(missing_active_organic),
         )
     else:
         for ch_id, ch in existing.items():
-            if ch_id not in seen:
+            if ch_id not in seen and ch_id not in region_removed_ids:
                 next_missed = (ch.missed_scrapes or 0) + 1
                 ch.missed_scrapes = next_missed
                 if ch.is_active and next_missed >= _CHANNEL_MISS_THRESHOLD:

@@ -552,22 +552,46 @@ def stream_audit_recheck(source_id):
     return jsonify({'status': 'queued', 'count': len(channel_ids)})
 
 
+def _orphan_cutoff(days: int = 7):
+    from datetime import datetime, timezone, timedelta
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
+def _orphan_query(source_id: int, days: int = 7):
+    """
+    Inactive channels that haven't been seen in a scrape for `days` days,
+    excluding DRM-disabled channels (those are legitimately flagged and would
+    just reappear on the next scrape if re-enabled).
+    """
+    cutoff = _orphan_cutoff(days)
+    return Channel.query.filter(
+        Channel.source_id == source_id,
+        Channel.is_active == False,
+        ~Channel.disable_reason.like('DRM%'),
+        db.or_(
+            Channel.last_seen_at == None,
+            Channel.last_seen_at < cutoff,
+        ),
+    )
+
+
 @api_bp.route('/sources/<int:source_id>/inactive-count')
 def inactive_channel_count(source_id):
     source = Source.query.get_or_404(source_id)
-    count = Channel.query.filter_by(source_id=source_id, is_active=False).count()
-    return jsonify({'count': count, 'source': source.name})
+    days = int(request.args.get('days', 7))
+    count = _orphan_query(source_id, days).count()
+    return jsonify({'count': count, 'source': source.name, 'days': days})
 
 
 @api_bp.route('/sources/<int:source_id>/delete-inactive', methods=['POST'])
 def delete_inactive_channels(source_id):
     source = Source.query.get_or_404(source_id)
-    inactive = Channel.query.filter_by(source_id=source_id, is_active=False).all()
-    count = len(inactive)
-    for ch in inactive:
+    days = int((request.get_json() or {}).get('days', 7))
+    orphans = _orphan_query(source_id, days).all()
+    count = len(orphans)
+    for ch in orphans:
         db.session.delete(ch)
     db.session.commit()
-    logger.info('[api] deleted %d inactive channels from source %s', count, source.name)
     return jsonify({'deleted': count, 'source': source.name})
 
 

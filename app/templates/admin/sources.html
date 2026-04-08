@@ -1235,13 +1235,17 @@
         </div>`;
     }
 
-    async function deleteInactiveChannels(sourceId) {
-      const cr = await fetch(`/api/sources/${sourceId}/inactive-count`);
+    async function deleteInactiveChannels(sourceId, days = 7) {
+      const cr = await fetch(`/api/sources/${sourceId}/inactive-count?days=${days}`);
       const cd = await cr.json();
       if (!cr.ok) { alert('Error: ' + (cd.error || cr.status)); return; }
-      if (cd.count === 0) { alert('No inactive channels to delete.'); return; }
-      if (!confirm(`Delete ${cd.count} inactive channel(s) from ${cd.source}? This cannot be undone.`)) return;
-      const r = await fetch(`/api/sources/${sourceId}/delete-inactive`, {method: 'POST'});
+      if (cd.count === 0) { alert(`No orphaned inactive channels (not seen in ${days}+ days) to delete.`); return; }
+      if (!confirm(`Delete ${cd.count} inactive channel(s) from ${cd.source} not seen in ${days}+ days? DRM-disabled channels are excluded. This cannot be undone.`)) return;
+      const r = await fetch(`/api/sources/${sourceId}/delete-inactive`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({days}),
+      });
       const data = await r.json();
       if (!r.ok) { alert('Error deleting: ' + (data.error || r.status)); return; }
       location.reload();
