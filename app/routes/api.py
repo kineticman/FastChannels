@@ -552,6 +552,25 @@ def stream_audit_recheck(source_id):
     return jsonify({'status': 'queued', 'count': len(channel_ids)})
 
 
+@api_bp.route('/sources/<int:source_id>/inactive-count')
+def inactive_channel_count(source_id):
+    source = Source.query.get_or_404(source_id)
+    count = Channel.query.filter_by(source_id=source_id, is_active=False).count()
+    return jsonify({'count': count, 'source': source.name})
+
+
+@api_bp.route('/sources/<int:source_id>/delete-inactive', methods=['POST'])
+def delete_inactive_channels(source_id):
+    source = Source.query.get_or_404(source_id)
+    inactive = Channel.query.filter_by(source_id=source_id, is_active=False).all()
+    count = len(inactive)
+    for ch in inactive:
+        db.session.delete(ch)
+    db.session.commit()
+    logger.info('[api] deleted %d inactive channels from source %s', count, source.name)
+    return jsonify({'deleted': count, 'source': source.name})
+
+
 @api_bp.route('/sources/<int:source_id>/audit-status')
 def audit_status(source_id):
     import time as _time

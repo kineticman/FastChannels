@@ -201,6 +201,8 @@
     .modal-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
     .btn-cancel  { background: transparent; color: var(--text-soft); border: 1px solid var(--border); }
     .btn-cancel:hover { color: var(--text); }
+    .btn-danger  { background: transparent; color: var(--error, #e05252); border: 1px solid var(--error, #e05252); }
+    .btn-danger:hover { background: var(--error, #e05252); color: white; }
     .btn-confirm { background: var(--danger-border); color: white; }
     .btn-confirm:hover { background: var(--danger-border); }
 
@@ -1011,6 +1013,7 @@
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-danger" type="button" onclick="deleteInactiveChannels(${sourceId})">Delete Inactive</button>
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
     }
@@ -1075,6 +1078,7 @@
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-danger" type="button" onclick="deleteInactiveChannels(${sourceId})">Delete Inactive</button>
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
     }
@@ -1226,8 +1230,21 @@
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-danger" type="button" onclick="deleteInactiveChannels(${sourceId})">Delete Inactive</button>
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
+    }
+
+    async function deleteInactiveChannels(sourceId) {
+      const cr = await fetch(`/api/sources/${sourceId}/inactive-count`);
+      const cd = await cr.json();
+      if (!cr.ok) { alert('Error: ' + (cd.error || cr.status)); return; }
+      if (cd.count === 0) { alert('No inactive channels to delete.'); return; }
+      if (!confirm(`Delete ${cd.count} inactive channel(s) from ${cd.source}? This cannot be undone.`)) return;
+      const r = await fetch(`/api/sources/${sourceId}/delete-inactive`, {method: 'POST'});
+      const data = await r.json();
+      if (!r.ok) { alert('Error deleting: ' + (data.error || r.status)); return; }
+      location.reload();
     }
 
     async function saveSourceConfig(sourceId) {
