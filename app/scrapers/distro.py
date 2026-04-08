@@ -458,15 +458,14 @@ class DistroScraper(BaseScraper):
 
     def audit_resolve(self, raw_url: str) -> str:
         """
-        Lightweight audit check: confirm the channel is still in the Distro
-        feed without attempting a server-side manifest fetch.
+        Audit-time resolve: confirm the channel is in the feed, then return
+        either a real HTTP URL (for full manifest verification) or the opaque
+        distro:// URL (to skip manifest fetch) depending on the CDN host.
 
-        Distro channels on Broadpeak's session-based CDN (streamdot.broadpeak.io)
-        return intermittent 404s when fetched server-side — Broadpeak's session
-        tokens are tied to the initiating client context.  A 404 does not mean
-        the channel is dead; it just means our server didn't establish the right
-        session.  Returning the opaque distro:// URL tells the audit runner to
-        count the channel as "checked" without fetching the manifest.
+        Channels on NO_PREFETCH_HOSTS (Broadpeak, Referer-restricted CloudFront)
+        cannot be reliably verified server-side and skip the manifest check —
+        feed presence is sufficient proof of life.  All other channels return
+        their real HTTP URL so the audit can check for DRM/dead streams.
         """
         if not raw_url.startswith(CHANNEL_SCHEME):
             return raw_url
@@ -475,7 +474,11 @@ class DistroScraper(BaseScraper):
         upstream_url = _resolve_from_feed(self, geo, raw_id)
         if not upstream_url:
             raise StreamDeadError(f"Channel {source_channel_id} not found in Distro feed")
-        return raw_url  # opaque URL → audit runner skips manifest fetch
+        sanitized = _sanitize_url(upstream_url)
+        host = urlsplit(sanitized).netloc
+        if host in NO_PREFETCH_HOSTS:
+            return raw_url  # opaque URL → audit runner skips manifest fetch
+        return sanitized   # real URL → audit does full manifest verification
 
     def resolve(self, raw_url: str) -> str:
         if raw_url.startswith(CHANNEL_SCHEME):
