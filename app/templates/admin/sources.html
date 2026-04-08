@@ -1236,19 +1236,27 @@
     }
 
     async function deleteInactiveChannels(sourceId, days = 7) {
+      const status = document.getElementById(`config-status-${sourceId}`);
+      const setStatus = (msg, cls = '') => { status.textContent = msg; status.className = 'config-status' + (cls ? ' ' + cls : ''); };
+      setStatus('Checking…');
       const cr = await fetch(`/api/sources/${sourceId}/inactive-count?days=${days}`);
       const cd = await cr.json();
-      if (!cr.ok) { alert('Error: ' + (cd.error || cr.status)); return; }
-      if (cd.count === 0) { alert(`No orphaned inactive channels (not seen in ${days}+ days) to delete.`); return; }
-      if (!confirm(`Delete ${cd.count} inactive channel(s) from ${cd.source} not seen in ${days}+ days? DRM-disabled channels are excluded. This cannot be undone.`)) return;
+      if (!cr.ok) { setStatus('Error: ' + (cd.error || cr.status), 'error'); return; }
+      if (cd.count === 0) { setStatus('No orphaned channels to delete', ''); return; }
+      if (!confirm(`Delete ${cd.count} inactive channel(s) from ${cd.source} not seen in ${days}+ days?\nDRM-disabled channels are excluded. This cannot be undone.`)) {
+        setStatus('');
+        return;
+      }
+      setStatus('Deleting…');
       const r = await fetch(`/api/sources/${sourceId}/delete-inactive`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({days}),
       });
       const data = await r.json();
-      if (!r.ok) { alert('Error deleting: ' + (data.error || r.status)); return; }
-      location.reload();
+      if (!r.ok) { setStatus('Error: ' + (data.error || r.status), 'error'); return; }
+      setStatus(`✓ Deleted ${data.deleted} channel(s)`, 'ok');
+      setTimeout(() => location.reload(), 1200);
     }
 
     async function saveSourceConfig(sourceId) {
