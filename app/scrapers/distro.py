@@ -332,7 +332,7 @@ class DistroScraper(BaseScraper):
             required=False,
             default="US",
             placeholder="US",
-            help_text="One or more Distro geo codes separated by commas. Examples: US, CA, MX, AR, XE. The probe found CA/MX/AR variants with some unique channels.",
+            help_text="One or more Distro geo codes separated by commas. Examples: US, CA, MX, AR, XE, QQ. QQ is a worldwide feed with 26 extra channels not in the US feed.",
         ),
     ]
 
