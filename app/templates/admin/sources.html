@@ -421,6 +421,8 @@
                 {% if not source.is_enabled %}disabled{% endif %}
                 title="View stream audit report and run new audits">📋 Stream Audit</button>
         {% endif %}
+        <span class="config-status" id="delete-status-{{ source.id }}"></span>
+        <button class="btn btn-danger" type="button" onclick="deleteInactiveChannels({{ source.id }})">Delete Inactive</button>
       </div>
     </div>
     {% endfor %}
@@ -1013,7 +1015,7 @@
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
-          <button class="btn btn-danger" type="button" onclick="deleteInactiveChannels(${sourceId})">Delete Inactive</button>
+
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
     }
@@ -1078,7 +1080,7 @@
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
-          <button class="btn btn-danger" type="button" onclick="deleteInactiveChannels(${sourceId})">Delete Inactive</button>
+
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
     }
@@ -1230,13 +1232,13 @@
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
-          <button class="btn btn-danger" type="button" onclick="deleteInactiveChannels(${sourceId})">Delete Inactive</button>
+
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
     }
 
     async function deleteInactiveChannels(sourceId, days = 7) {
-      const status = document.getElementById(`config-status-${sourceId}`);
+      const status = document.getElementById(`delete-status-${sourceId}`);
       const setStatus = (msg, cls = '') => { status.textContent = msg; status.className = 'config-status' + (cls ? ' ' + cls : ''); };
       setStatus('Checking…');
       const cr = await fetch(`/api/sources/${sourceId}/inactive-count?days=${days}`);
