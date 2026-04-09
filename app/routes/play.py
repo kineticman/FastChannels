@@ -75,7 +75,7 @@ def _check_manifest(url: str, session) -> str | None:
                         pass
                     break
 
-        if 'EXT-X-PLAYLIST-TYPE:VOD' in text and '#EXT-X-ENDLIST' in text:
+        if '#EXT-X-PLAYLIST-TYPE:VOD' in text and '#EXT-X-ENDLIST' in text:
             logger.info('[play] finished VOD playlist in manifest: %s', url[:80])
             return 'Dead'
 

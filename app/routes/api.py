@@ -1034,7 +1034,7 @@ def inspect_channel(channel_id):
                         pass
                     break
 
-        if 'EXT-X-PLAYLIST-TYPE:VOD' in manifest_text and '#EXT-X-ENDLIST' in manifest_text:
+        if '#EXT-X-PLAYLIST-TYPE:VOD' in manifest_text and '#EXT-X-ENDLIST' in manifest_text:
             return jsonify({'status': 'vod', 'detail': 'Finished VOD — not a live channel'})
 
         drm = inspect_hls_drm(manifest_text)
