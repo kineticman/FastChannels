@@ -26,6 +26,23 @@ STITCHER = "https://cfd-v4-service-channel-stitcher-use1-1.prd.pluto.tv"
 
 ALLOWED_COUNTRY_CODES = ['local', 'us_east', 'us_west', 'ca', 'uk', 'fr', 'de']
 
+# Map Pluto region code → ISO 3166-1 alpha-2 country code
+REGION_COUNTRY = {
+    'us_east': 'US',
+    'us_west': 'US',
+    'local':   'US',
+    'ca':      'CA',
+    'uk':      'GB',
+    'fr':      'FR',
+    'de':      'DE',
+}
+
+# Map Pluto region code → ISO 639-1 language code (only non-English regions)
+REGION_LANGUAGE = {
+    'fr': 'fr',
+    'de': 'de',
+}
+
 X_FORWARD = {
     "local":   {"X-Forwarded-For": ""},
     "uk":      {"X-Forwarded-For": "178.238.11.6"},
@@ -300,8 +317,8 @@ class PlutoScraper(BaseScraper):
                 logo_url          = logo,
                 slug              = elem.get('slug') or name.lower().replace(' ', '-'),
                 category          = cat_map.get(ch_id),
-                language          = infer_language_from_metadata(name, cat_map.get(ch_id)),
-                country           = country_code,
+                language          = REGION_LANGUAGE.get(country_code) or infer_language_from_metadata(name, cat_map.get(ch_id)),
+                country           = REGION_COUNTRY.get(country_code, 'US'),
                 number            = number,
                 gracenote_id      = resolve_gracenote('pluto', upstream_id=elem.get('tmsid'), lookup_key=ch_id),
             ))
