@@ -895,6 +895,10 @@
     }
     .preview-player-wrap.open { display: block; }
     .preview-player-wrap video { width: 100%; max-height: 420px; background: #000; border-radius: 6px; }
+    .preview-volume-row { display: flex; align-items: center; gap: 0.55rem; margin-top: 0.55rem; }
+    .preview-volume-row label { color: var(--text-soft); font-size: 0.78rem; white-space: nowrap; }
+    .preview-volume-row input[type=range] { flex: 1; accent-color: var(--accent); }
+    .preview-volume-pct { color: var(--text-muted); font-size: 0.75rem; min-width: 2.5rem; text-align: right; }
     .preview-note { color: var(--text-soft); font-size: 0.78rem; margin-top: 0.55rem; line-height: 1.45; }
     .preview-empty { color: var(--text-muted); font-size: 0.84rem; }
     .preview-player-status { color: var(--text-soft); font-size: 0.78rem; margin-top: 0.55rem; line-height: 1.45; }
@@ -1580,6 +1584,11 @@
           </div>
           <div class="preview-player-wrap" id="preview-player-wrap">
             <video id="preview-player" controls playsinline preload="none"></video>
+            <div class="preview-volume-row">
+              <label for="preview-volume">Volume</label>
+              <input type="range" id="preview-volume" min="0" max="100" value="50" oninput="document.getElementById('preview-player').volume=this.value/100;document.getElementById('preview-volume-pct').textContent=this.value+'%'">
+              <span class="preview-volume-pct" id="preview-volume-pct">50%</span>
+            </div>
             <div class="preview-player-status" id="preview-player-status"></div>
             <div class="preview-note">
               Browser playback depends on the stream format, source restrictions, and DRM. If playback fails here, the channel may still work in Channels DVR or another HLS client.
@@ -1603,6 +1612,7 @@
       const video = document.getElementById('preview-player');
       const status = document.getElementById('preview-player-status');
       if (!wrap || !video) return;
+      video.volume = 0.5;
       if (_previewHls) {
         _previewHls.destroy();
         _previewHls = null;
