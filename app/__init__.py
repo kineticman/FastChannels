@@ -67,6 +67,7 @@ def create_app(config_class=Config):
             if isinstance(dbapi_conn, _sqlite3.Connection):
                 dbapi_conn.execute("PRAGMA journal_mode=WAL")
                 dbapi_conn.execute("PRAGMA busy_timeout=30000")
+                dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
         # Fresh installs need the base tables before any startup path queries
         # AppSettings (for timezone cache, template globals, etc.).
