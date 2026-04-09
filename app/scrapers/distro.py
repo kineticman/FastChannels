@@ -4,6 +4,7 @@ No config fields required — anonymous public API.
 """
 from __future__ import annotations
 
+import html as _html
 import logging
 import re
 import time
@@ -15,6 +16,15 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError
 
 logger = logging.getLogger(__name__)
+
+
+def _unescape(text: str) -> str:
+    """Fully unescape HTML entities, handling multiply-encoded upstream data."""
+    prev = None
+    while prev != text:
+        prev = text
+        text = _html.unescape(text)
+    return text
 
 CHANNEL_SCHEME = "distro://channel/"
 
@@ -447,8 +457,8 @@ class DistroScraper(BaseScraper):
                 for qualified_id in target_ids:
                     programs.append(ProgramData(
                         source_channel_id = qualified_id,
-                        title             = (slot.get("title") or "").strip() or "Unknown",
-                        description       = (slot.get("description") or "").strip() or None,
+                        title             = _unescape((slot.get("title") or "").strip()) or "Unknown",
+                        description       = _unescape((slot.get("description") or "").strip()) or None,
                         start_time        = start,
                         end_time          = end,
                         poster_url        = slot.get("img_thumbh") or None,
