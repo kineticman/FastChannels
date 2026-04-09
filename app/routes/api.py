@@ -1682,7 +1682,20 @@ def duplicate_summary():
         if soft_key:
             soft_groups[soft_key].append(ch)
 
-    dup_channels = [ch for channels in strict_groups.values() if len(channels) > 1 for ch in channels]
+    # Exclude groups where all channels share the same source but differ only by
+    # region — those are cross-region duplicates, not true duplicates.
+    def _is_cross_region_only(channels):
+        source_ids = {ch.source_id for ch in channels}
+        if len(source_ids) > 1:
+            return False
+        countries = {ch.country for ch in channels}
+        return len(countries) > 1
+
+    dup_channels = [
+        ch for channels in strict_groups.values()
+        if len(channels) > 1 and not _is_cross_region_only(channels)
+        for ch in channels
+    ]
 
     if not dup_channels:
         strict_groups_found = set()

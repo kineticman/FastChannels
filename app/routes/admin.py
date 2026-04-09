@@ -51,34 +51,50 @@ def _soft_duplicate_name(name: str) -> str:
 
 def _duplicate_name_sets() -> tuple[set[str], set[str]]:
     name_rows = (
-        db.session.query(Channel.name)
+        db.session.query(Channel.name, Channel.source_id, Channel.country)
         .filter(Channel.name != None, Channel.name != '')
         .all()
     )
-    strict_by_key: dict[str, set[str]] = defaultdict(set)
-    strict_by_key_count: dict[str, int] = defaultdict(int)
+    # strict_by_key → list of (name, source_id, country) tuples
+    strict_by_key: dict[str, list] = defaultdict(list)
     soft_by_key: dict[str, set[str]] = defaultdict(set)
-    for (name,) in name_rows:
+
+    for name, source_id, country in name_rows:
         clean = (name or '').strip()
         if not clean:
             continue
         strict_key = _canonical_duplicate_name(clean)
         if strict_key:
-            strict_by_key[strict_key].add(clean)
-            strict_by_key_count[strict_key] += 1
+            strict_by_key[strict_key].append((clean, source_id, country))
         soft_key = _soft_duplicate_name(clean)
         if soft_key:
             soft_by_key[soft_key].add(clean)
 
     duplicate_names: set[str] = set()
-    for key, names in strict_by_key.items():
-        if strict_by_key_count[key] > 1:
-            duplicate_names.update(names)
+    cross_region_names: set[str] = set()
+
+    for key, entries in strict_by_key.items():
+        if len(entries) <= 1:
+            continue
+        source_ids = {e[1] for e in entries}
+        if len(source_ids) > 1:
+            # Multiple sources → real duplicate regardless of region
+            duplicate_names.update(e[0] for e in entries)
+        else:
+            # Single source — check if it's just the same channel in multiple regions
+            countries = {e[2] for e in entries}
+            if len(countries) > 1:
+                # Same source, different regions → softer flag (DUP?)
+                cross_region_names.update(e[0] for e in entries)
+            else:
+                # Same source, same region → real duplicate
+                duplicate_names.update(e[0] for e in entries)
 
     possible_names: set[str] = set()
     for names in soft_by_key.values():
         if len(names) > 1:
             possible_names.update(names)
+    possible_names.update(cross_region_names)
     possible_names.difference_update(duplicate_names)
     return duplicate_names, possible_names
 
