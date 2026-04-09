@@ -211,6 +211,98 @@ def distro_manifest_proxy(channel_id: str):
     )
 
 
+@play_bp.route('/play/stirr/<channel_id>/proxy.m3u8')
+def stirr_manifest_proxy(channel_id: str):
+    """
+    Manifest proxy for STIRR channels.
+
+    STIRR resolves to ssai.aniview.com URLs whose vx_token JWT is bound to
+    the server's IP.  If the browser follows a 302 redirect directly it fails
+    token validation because the browser has a different IP.  Instead we proxy
+    both the master and variant manifests through FastChannels (so aniview
+    always sees the server IP), then rewrite variant URLs so the browser hits
+    this proxy again on each refresh.  Segments go straight to the CDN — they
+    are on a CORS-open host (ohlscdn.wurl.tv) and contain no IP-bound tokens.
+    """
+    from urllib.parse import quote as _quote, unquote as _unquote
+    from ..scrapers.stirr import StirrScraper
+
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'stirr', Channel.source_channel_id == _unquote(channel_id))
+        .first_or_404()
+    )
+
+    scraper = StirrScraper(config=channel.source.config or {})
+    try:
+        master_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[stirr-proxy] resolve failed for %s: %s', channel_id, e)
+        abort(502)
+
+    # Fetch master playlist with the correct server-side headers/IP
+    _hdrs = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    try:
+        master_r = _requests.get(master_url, headers=_hdrs, timeout=10)
+        master_r.raise_for_status()
+    except Exception as e:
+        logger.warning('[stirr-proxy] master fetch failed for %s: %s', channel_id, e)
+        abort(502)
+
+    # Rewrite variant playlist lines to go through this proxy so every refresh
+    # uses the server IP. Non-playlist lines (segments, EXT-* tags) pass through.
+    base_url = request.host_url.rstrip('/')
+    effective_master_url = master_r.url
+    lines = []
+    for line in master_r.text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            abs_url = urljoin(effective_master_url, stripped)
+            encoded = _quote(abs_url, safe='')
+            line = f'{base_url}/play/stirr/variant?url={encoded}'
+        lines.append(line)
+
+    return Response(
+        '\n'.join(lines),
+        mimetype='application/vnd.apple.mpegurl',
+        headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+    )
+
+
+@play_bp.route('/play/stirr/variant')
+def stirr_variant_proxy():
+    """
+    Proxy a STIRR variant playlist through the server so the IP-bound session
+    token in the URL is always validated against the server's IP.
+    Segment URLs inside the variant are absolute CDN URLs — left as-is.
+    """
+    from urllib.parse import urlsplit, unquote as _unquote
+    raw = request.args.get('url', '')
+    if not raw:
+        abort(400)
+    url = _unquote(raw)
+    parsed = urlsplit(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        abort(400)
+    if parsed.netloc != 'ssai.aniview.com':
+        logger.warning('[stirr-variant] blocked request to unexpected host: %s', parsed.netloc)
+        abort(403)
+    _hdrs = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    try:
+        r = _requests.get(url, headers=_hdrs, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[stirr-variant] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+    return Response(
+        r.content,
+        status=200,
+        mimetype='application/vnd.apple.mpegurl',
+        headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+    )
+
+
 @play_bp.route('/play/<source_name>/<channel_id>.m3u8')
 def play(source_name: str, channel_id: str):
     client_ip = _client_ip()
@@ -273,6 +365,17 @@ def play(source_name: str, channel_id: str):
 
     if not resolved_url or (source_name == 'roku' and resolved_url.startswith('roku://')):
         abort(502)
+
+    # STIRR channels resolve to ssai.aniview.com URLs whose vx_token JWT is
+    # bound to the server's IP — redirect to our proxy so every manifest fetch
+    # (including variant refreshes on live streams) goes through the server.
+    if source_name == 'stirr' and resolved_url and 'ssai.aniview.com' in resolved_url:
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/stirr/{encoded_id}/proxy.m3u8",
+            302,
+        )
 
     # Distro channels on the Referer-restricted CDN: serve a manifest proxy
     # instead of a direct redirect so IPTV clients can access the segments
