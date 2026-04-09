@@ -1005,7 +1005,7 @@ def _refresh_xml_artifacts() -> None:
                 ),
             ))
             if feed.chnum_start is not None:
-                std_kw = {'feed_chnum_start': feed.chnum_start}
+                std_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
             else:
                 std_kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
             m3u_artifacts.append((
@@ -1014,7 +1014,10 @@ def _refresh_xml_artifacts() -> None:
                     generate_m3u(filters, base_url=base_url, **std_kw)
                 ),
             ))
-            gn_kw = {'namespace_start': feed_gracenote_start(feed)}
+            if feed.chnum_start is not None:
+                gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
+            else:
+                gn_kw = {'namespace_start': feed_gracenote_start(feed)}
             m3u_artifacts.append((
                 f'feed-{feed.slug}-gracenote-m3u',
                 lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
@@ -1329,8 +1332,15 @@ def _refresh_auto_channel_numbers() -> None:
     Standard and Gracenote channels are numbered in separate contiguous blocks:
     standard channels first (source-based), then Gracenote channels starting
     immediately after the highest standard number.  Both blocks are sticky.
+
+    For feeds with an explicit chnum_start, feed-specific numbers are persisted
+    in FeedChannelNumber so they remain stable across scrapes (sticky).
     """
-    from app.generators.m3u import _build_source_chnum_map, _build_sticky_gn_chnum_map
+    from app.generators.m3u import (
+        _build_source_chnum_map, _build_sticky_gn_chnum_map,
+        _build_feed_chnum_map, _selected_channel_stubs, feed_to_query_filters,
+    )
+    from app.models import Feed, FeedChannelNumber
 
     with db.session.no_autoflush:
         all_channels = (
@@ -1365,6 +1375,39 @@ def _refresh_auto_channel_numbers() -> None:
         next_number = chnum_map.get(ch.id)
         if ch.number != next_number:
             ch.number = next_number
+
+    # Persist feed-specific channel numbers for feeds with explicit chnum_start.
+    all_channel_ids = {ch.id for ch in all_channels}
+    feeds_with_chnum = Feed.query.filter(
+        Feed.chnum_start != None,
+        Feed.is_enabled == True,
+    ).all()
+    for feed in feeds_with_chnum:
+        filters = feed_to_query_filters(feed.filters or {})
+        with db.session.no_autoflush:
+            feed_stubs = _selected_channel_stubs(filters, gracenote=None)
+        feed_channel_ids = {s.id for s in feed_stubs}
+
+        # Load existing stored numbers for stickiness.
+        stored = {
+            fcn.channel_id: fcn.number
+            for fcn in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
+        }
+        new_map = _build_feed_chnum_map(list(feed_stubs), feed.chnum_start, stored_numbers=stored)
+
+        # Upsert new assignments.
+        existing_fcn = {fcn.channel_id: fcn for fcn in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
+        for channel_id, number in new_map.items():
+            if channel_id in existing_fcn:
+                if existing_fcn[channel_id].number != number:
+                    existing_fcn[channel_id].number = number
+            else:
+                db.session.add(FeedChannelNumber(feed_id=feed.id, channel_id=channel_id, number=number))
+
+        # Remove stale rows for channels no longer in this feed.
+        for channel_id, fcn in existing_fcn.items():
+            if channel_id not in feed_channel_ids:
+                db.session.delete(fcn)
 
 
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None):

@@ -452,28 +452,32 @@ def _build_source_chnum_map(channels):
     return chnum_map, warnings
 
 
-def _build_feed_chnum_map(channels, feed_chnum_start: int):
+def _build_feed_chnum_map(channels, feed_chnum_start: int,
+                          stored_numbers: dict[int, int] | None = None):
     """
     Sticky sequential numbering for a feed-level chnum_start.
-    Pinned channels keep their stored number. Non-pinned channels keep their
-    existing Channel.number if it is >= feed_chnum_start and not already taken
-    (same stickiness guarantee as _build_source_chnum_map). Only new or
-    displaced channels get freshly assigned sequential numbers.
+
+    Pinned channels keep their stored number.  Non-pinned channels keep their
+    previously-assigned feed number from `stored_numbers` (persisted in
+    FeedChannelNumber) if it is >= feed_chnum_start and still free.  Only new
+    or displaced channels get freshly assigned sequential numbers.
     """
     used_numbers: set[int] = set()
     result: dict[int, int] = {}
     unassigned = []
 
-    # First pass: honour pinned channels and keep valid existing numbers.
+    # First pass: honour pinned channels and preserve valid stored assignments.
     for ch in channels:
         if getattr(ch, 'number_pinned', False) and ch.number is not None:
             result[ch.id] = ch.number
             used_numbers.add(ch.number)
-        elif ch.number is not None and ch.number >= feed_chnum_start and ch.number not in used_numbers:
-            result[ch.id] = ch.number
-            used_numbers.add(ch.number)
         else:
-            unassigned.append(ch)
+            stored = stored_numbers.get(ch.id) if stored_numbers else None
+            if stored is not None and stored >= feed_chnum_start and stored not in used_numbers:
+                result[ch.id] = stored
+                used_numbers.add(stored)
+            else:
+                unassigned.append(ch)
 
     # Second pass: assign fresh sequential numbers to new/displaced channels.
     cursor = feed_chnum_start
@@ -520,11 +524,17 @@ def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) ->
     return result
 
 
-def _resolve_chnum_map(channels, *, feed_chnum_start: int = None, namespace_start: int = None):
+def _resolve_chnum_map(channels, *, feed_chnum_start: int = None,
+                       namespace_start: int = None, feed_id: int = None):
     if namespace_start is not None:
         return _build_feed_chnum_map(channels, namespace_start), []
     if feed_chnum_start is not None:
-        return _build_feed_chnum_map(channels, feed_chnum_start), []
+        stored_numbers: dict[int, int] = {}
+        if feed_id is not None:
+            from app.models import FeedChannelNumber
+            rows = FeedChannelNumber.query.filter_by(feed_id=feed_id).all()
+            stored_numbers = {r.channel_id: r.number for r in rows}
+        return _build_feed_chnum_map(channels, feed_chnum_start, stored_numbers=stored_numbers), []
     return _build_source_chnum_map(channels)
 
 
@@ -571,6 +581,7 @@ def get_global_chnum_overlaps() -> list[str]:
             std_channels,
             feed_chnum_start=feed.chnum_start,
             namespace_start=std_ns,
+            feed_id=feed.id if feed.chnum_start is not None else None,
         )
         feed_outputs.append((f'feed {feed.slug} /m3u', std_channels, std_map))
 
@@ -580,6 +591,7 @@ def get_global_chnum_overlaps() -> list[str]:
             gn_channels,
             feed_chnum_start=feed.chnum_start,
             namespace_start=gn_ns,
+            feed_id=feed.id if feed.chnum_start is not None else None,
         )
         feed_outputs.append((f'feed {feed.slug} /m3u/gracenote', gn_channels, gn_map))
 
@@ -614,7 +626,8 @@ def get_global_chnum_overlaps() -> list[str]:
 
 
 def generate_m3u(filters: dict = None, base_url: str = None,
-                 feed_chnum_start: int = None, namespace_start: int = None) -> str:
+                 feed_chnum_start: int = None, namespace_start: int = None,
+                 feed_id: int = None) -> str:
     """
     Standard XMLTV-backed playlist.
     Excludes channels with a valid Gracenote ID — those belong in /m3u/gracenote
@@ -634,6 +647,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         channels,
         feed_chnum_start=feed_chnum_start,
         namespace_start=namespace_start,
+        feed_id=feed_id if feed_chnum_start is not None else None,
     )
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
@@ -662,7 +676,8 @@ def generate_m3u(filters: dict = None, base_url: str = None,
 
 
 def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
-                            feed_chnum_start: int = None, namespace_start: int = None) -> str:
+                            feed_chnum_start: int = None, namespace_start: int = None,
+                            feed_id: int = None) -> str:
     """
     Gracenote-backed playlist for Channels DVR.
 
@@ -682,6 +697,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
         channels,
         feed_chnum_start=feed_chnum_start,
         namespace_start=namespace_start,
+        feed_id=feed_id if feed_chnum_start is not None else None,
     )
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:

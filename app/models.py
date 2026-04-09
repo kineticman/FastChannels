@@ -207,6 +207,17 @@ class Feed(db.Model):
         }
 
 
+class FeedChannelNumber(db.Model):
+    """Persistent feed-specific channel number assignments (sticky tvg-chno for feeds)."""
+    __tablename__ = 'feed_channel_numbers'
+
+    feed_id    = db.Column(db.Integer, db.ForeignKey('feeds.id',    ondelete='CASCADE'), primary_key=True)
+    channel_id = db.Column(db.Integer, db.ForeignKey('channels.id', ondelete='CASCADE'), primary_key=True)
+    number     = db.Column(db.Integer, nullable=False)
+
+    __table_args__ = (db.Index('ix_feed_channel_numbers_feed_id', 'feed_id'),)
+
+
 class AppSettings(db.Model):
     """Single-row global settings table (always id=1)."""
     __tablename__ = 'app_settings'
