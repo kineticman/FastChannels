@@ -454,24 +454,36 @@ def _build_source_chnum_map(channels):
 
 def _build_feed_chnum_map(channels, feed_chnum_start: int):
     """
-    Sequential numbering for a feed-level chnum_start.
-    Pinned channels keep their stored number; others fill in sequentially,
-    skipping any numbers reserved by pins.
+    Sticky sequential numbering for a feed-level chnum_start.
+    Pinned channels keep their stored number. Non-pinned channels keep their
+    existing Channel.number if it is >= feed_chnum_start and not already taken
+    (same stickiness guarantee as _build_source_chnum_map). Only new or
+    displaced channels get freshly assigned sequential numbers.
     """
-    pinned_numbers = {
-        ch.number for ch in channels
-        if getattr(ch, 'number_pinned', False) and ch.number is not None
-    }
+    used_numbers: set[int] = set()
     result: dict[int, int] = {}
-    cursor = feed_chnum_start
+    unassigned = []
+
+    # First pass: honour pinned channels and keep valid existing numbers.
     for ch in channels:
         if getattr(ch, 'number_pinned', False) and ch.number is not None:
             result[ch.id] = ch.number
+            used_numbers.add(ch.number)
+        elif ch.number is not None and ch.number >= feed_chnum_start and ch.number not in used_numbers:
+            result[ch.id] = ch.number
+            used_numbers.add(ch.number)
         else:
-            while cursor in pinned_numbers:
-                cursor += 1
-            result[ch.id] = cursor
+            unassigned.append(ch)
+
+    # Second pass: assign fresh sequential numbers to new/displaced channels.
+    cursor = feed_chnum_start
+    for ch in unassigned:
+        while cursor in used_numbers:
             cursor += 1
+        result[ch.id] = cursor
+        used_numbers.add(cursor)
+        cursor += 1
+
     return result
 
 
