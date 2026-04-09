@@ -319,6 +319,8 @@ def channels():
 
     if duplicates_filter == '1':
         q = q.filter(db.or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.is_duplicate == True))
+    elif duplicates_filter == 'unique':
+        q = q.filter(Channel.name.notin_(sorted(all_duplicate_names)), Channel.is_duplicate == False)
 
     if new_filter in ('3', '7', '14'):
         cutoff = datetime.now(timezone.utc) - timedelta(days=int(new_filter))

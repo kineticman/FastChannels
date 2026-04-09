@@ -1127,6 +1127,7 @@
             <select id="duplicates-filter" name="duplicates">
               <option value="">Normal list</option>
               <option value="1" {% if duplicates_filter == '1' %}selected{% endif %}>⚠ Duplicates only</option>
+              <option value="unique" {% if duplicates_filter == 'unique' %}selected{% endif %}>✓ Unique only</option>
             </select>
           </div>
           <div class="filter-group">
@@ -1200,6 +1201,8 @@
       {% endif %}
       {% if duplicates_filter == '1' %}
       <span class="filter-chip"><strong>Duplicates</strong>Duplicates only</span>
+      {% elif duplicates_filter == 'unique' %}
+      <span class="filter-chip"><strong>Duplicates</strong>Unique only</span>
       {% endif %}
       {% if epg_filter %}
       <span class="filter-chip"><strong>EPG Coverage</strong>{% if epg_filter == '1' %}Has EPG{% else %}No EPG{% endif %}</span>
@@ -1207,7 +1210,7 @@
       {% if new_filter %}
       <span class="filter-chip"><strong>New Channels</strong>Last {{ new_filter }} days</span>
       {% endif %}
-      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter == '1' or new_filter in ('3','7','14') or epg_filter) %}
+      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('3','7','14') or epg_filter) %}
       <span class="filter-chip"><strong>View</strong>All channels</span>
       {% endif %}
       <button type="button" class="btn-hide-disabled{% if enabled_filter == '1' %} active{% endif %}" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}◉ Hiding disabled{% else %}○ Hide disabled{% endif %}</button>

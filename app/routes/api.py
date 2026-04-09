@@ -142,10 +142,13 @@ def _apply_channel_filters(q, filters: dict | None = None):
             q = q.filter(off_mode)
         elif gm == 'auto':
             q = q.filter(not_(or_(manual_mode, off_mode)))
-    if filters.get('duplicates') == '1':
+    if filters.get('duplicates') in ('1', 'unique'):
         exact_duplicate_names, possible_duplicate_names = _duplicate_name_sets()
         all_duplicate_names = exact_duplicate_names | possible_duplicate_names
-        q = q.filter(or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.is_duplicate == True))
+        if filters['duplicates'] == '1':
+            q = q.filter(or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.is_duplicate == True))
+        else:
+            q = q.filter(Channel.name.notin_(sorted(all_duplicate_names)), Channel.is_duplicate == False)
     return q
 
 
