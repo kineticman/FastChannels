@@ -706,14 +706,14 @@ def run_stream_audit(source_name: str):
 
                 if (
                     'EXT-X-PLAYLIST-TYPE:VOD' in manifest_text
-                    and not getattr(scraper, 'audit_ignore_playlist_type_vod', False)
+                    and '#EXT-X-ENDLIST' in manifest_text
                 ):
                     ch.is_active      = False
                     ch.is_enabled     = False
                     ch.disable_reason = 'Dead'
                     dead += 1
                     report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'dead', 'reason': 'VOD'})
-                    logger.info('[audit] VOD (not live): %s', ch.name)
+                    logger.info('[audit] finished VOD (not live): %s', ch.name)
                     continue
 
                 drm = inspect_hls_drm(manifest_text)

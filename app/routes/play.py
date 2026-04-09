@@ -45,7 +45,7 @@ def _client_ip() -> str:
     return request.remote_addr or 'unknown'
 
 
-def _check_manifest(url: str, session, ignore_playlist_type_vod: bool = False) -> str | None:
+def _check_manifest(url: str, session) -> str | None:
     """
     Fetch the HLS manifest at url and return a disable reason string if the
     stream is unplayable, or None if it looks fine.
@@ -75,8 +75,8 @@ def _check_manifest(url: str, session, ignore_playlist_type_vod: bool = False) -
                         pass
                     break
 
-        if not ignore_playlist_type_vod and 'EXT-X-PLAYLIST-TYPE:VOD' in text:
-            logger.info('[play] VOD playlist (not live) in manifest: %s', url[:80])
+        if 'EXT-X-PLAYLIST-TYPE:VOD' in text and '#EXT-X-ENDLIST' in text:
+            logger.info('[play] finished VOD playlist in manifest: %s', url[:80])
             return 'Dead'
 
         drm = inspect_hls_drm(text)
@@ -296,14 +296,12 @@ def play(source_name: str, channel_id: str):
         _channel_id = channel.id
         _source_name = source_name
         _source_id = channel.source_id
-        _ignore_vod = bool(getattr(scraper_cls, 'audit_ignore_playlist_type_vod', False))
-
         def _bg_check():
             import requests
             # Use a plain session without retry adapters — this is a one-shot
             # health probe; retries just add latency in the background thread.
             s = requests.Session()
-            reason = _check_manifest(resolved_url, s, ignore_playlist_type_vod=_ignore_vod)
+            reason = _check_manifest(resolved_url, s)
             if not reason:
                 return
             if reason == 'Unauthorized' and _source_name == 'roku':
