@@ -75,6 +75,26 @@ async function openCommunityMap() {
   }
 }
 
+async function refreshCommunityMap(btn) {
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Refreshing…';
+  try {
+    await fetch('/api/gracenote/remote-map/refresh', { method: 'POST' });
+    // Reset cached data and dropdowns so openCommunityMap reloads fresh
+    _cmData = [];
+    document.getElementById('cm-filter-source').innerHTML = '<option value="">All sources</option>';
+    document.getElementById('cm-filter-category').innerHTML = '<option value="">All categories</option>';
+    const banner = document.getElementById('cm-firstrun-banner');
+    if (banner) banner.remove();
+    document.getElementById('cm-tbody').innerHTML = '<tr><td colspan="5" class="cm-empty">Loading…</td></tr>';
+    await openCommunityMap();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
 function closeCommunityMap() {
   document.getElementById('cm-overlay').classList.remove('open');
 }
