@@ -4,7 +4,6 @@ import csv
 import logging
 import os
 import time
-from functools import lru_cache
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -15,6 +14,13 @@ _REMOTE_CACHE_PATH = Path("/data/gracenote_map_remote.csv")
 
 # Timestamp of the last successful remote fetch (epoch seconds, 0 = never).
 _remote_fetched_at: float = 0.0
+
+# mtime-based in-process cache — shared across requests in this worker,
+# but automatically invalidated when any source file changes on disk.
+# This means all gunicorn workers pick up new files without an explicit
+# cache-clear signal.
+_map_cache: dict[tuple[str, str], dict[str, str]] | None = None
+_map_cache_mtimes: tuple[float, ...] = ()
 
 
 def _normalize_station_id(value) -> str | None:
@@ -42,8 +48,22 @@ def _iter_rows(path: Path):
         log.warning("[gracenote-map] failed to read %s: %s", path, exc)
 
 
-@lru_cache(maxsize=1)
+def _source_mtimes() -> tuple[float, ...]:
+    mtimes = []
+    for path in (_BUILTIN_PATH, _REMOTE_CACHE_PATH, _OVERRIDE_PATH):
+        try:
+            mtimes.append(path.stat().st_mtime)
+        except FileNotFoundError:
+            mtimes.append(0.0)
+    return tuple(mtimes)
+
+
 def _load_map() -> dict[tuple[str, str], dict[str, str]]:
+    global _map_cache, _map_cache_mtimes
+    current_mtimes = _source_mtimes()
+    if _map_cache is not None and current_mtimes == _map_cache_mtimes:
+        return _map_cache
+
     # Priority: builtin < remote cache < local overrides
     mapping: dict[tuple[str, str], dict[str, str]] = {}
     for path in (_BUILTIN_PATH, _REMOTE_CACHE_PATH, _OVERRIDE_PATH):
@@ -69,11 +89,15 @@ def _load_map() -> dict[tuple[str, str], dict[str, str]]:
                 _, suffix = key.split("-", 1)
                 if suffix:
                     mapping.setdefault((provider, suffix), payload)
+
+    _map_cache = mapping
+    _map_cache_mtimes = current_mtimes
     return mapping
 
 
 def reload_gracenote_map() -> None:
-    _load_map.cache_clear()
+    global _map_cache
+    _map_cache = None
 
 
 def fetch_remote_gracenote_map(url: str) -> tuple[bool, str]:
