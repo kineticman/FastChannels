@@ -80,7 +80,8 @@ async function refreshCommunityMap(btn) {
   btn.disabled = true;
   btn.textContent = 'Refreshing…';
   try {
-    await fetch('/api/gracenote/remote-map/refresh', { method: 'POST' });
+    const resp = await fetch('/api/gracenote/remote-map/refresh', { method: 'POST' });
+    if (!resp.ok) throw new Error(`Refresh failed (${resp.status})`);
     // Reset cached data and dropdowns so openCommunityMap reloads fresh
     _cmData = [];
     document.getElementById('cm-filter-source').innerHTML = '<option value="">All sources</option>';
@@ -89,6 +90,8 @@ async function refreshCommunityMap(btn) {
     if (banner) banner.remove();
     document.getElementById('cm-tbody').innerHTML = '<tr><td colspan="5" class="cm-empty">Loading…</td></tr>';
     await openCommunityMap();
+  } catch (err) {
+    document.getElementById('cm-tbody').innerHTML = `<tr><td colspan="5" class="cm-empty" style="color:var(--danger)">${err.message}</td></tr>`;
   } finally {
     btn.disabled = false;
     btn.textContent = orig;
