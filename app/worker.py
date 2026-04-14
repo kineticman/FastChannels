@@ -566,6 +566,7 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                     logger.warning('[audit] resolve failed for %s: %s', ch.name, re_exc)
                     errors += 1
                     consecutive_errors += 1
+                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'error', 'reason': type(re_exc).__name__})
                     if consecutive_errors >= 20:
                         logger.error('[audit] %s: 20 consecutive errors — aborting.', source_name)
                         break
@@ -651,6 +652,7 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                     logger.debug('[audit] %d for %s', r.status_code, ch.name)
                     errors += 1
                     consecutive_errors += 1
+                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'error', 'reason': f'HTTP {r.status_code}'})
                     if consecutive_errors >= 20:
                         logger.error('[audit] %s: 20 consecutive errors — aborting. '
                                      'Source may be rate-limiting or down.', source_name)
@@ -773,12 +775,8 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
             'dead': dead, 'errors': errors, 'skipped_403': skipped_403,
             'ts': datetime.now(timezone.utc).isoformat(),
         }
-        # Only persist rate-limited channels — DRM/Dead are already written to the
-        # channels table and don't need re-checking. Storing 300+ flagged channel
-        # objects inflates the config blob and causes DB write contention.
-        recheck_channels = [c for c in report_channels if c.get('status') not in ('drm', 'dead')]
         cfg['last_audit_report'] = {
-            'channels': recheck_channels,
+            'channels': report_channels,
             'ts': datetime.now(timezone.utc).isoformat(),
         }
         source.config = cfg

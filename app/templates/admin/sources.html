@@ -702,6 +702,7 @@
           const dead    = report.channels.filter(c => c.status === 'dead');
           const drm     = report.channels.filter(c => c.status === 'drm');
           const limited = report.channels.filter(c => c.status === 'rate-limited');
+          const errors  = report.channels.filter(c => c.status === 'error');
 
           const renderGroup = (title, chans, showReEnable) => {
             if (!chans.length) return '';
@@ -718,6 +719,7 @@
           html += renderGroup('Dead', dead, true);
           html += renderGroup('DRM', drm, false);
           html += renderGroup('Rate-limited', limited, false);
+          html += renderGroup('Errors', errors, false);
           html += `</div>`;
           _lastRecheckIds[sourceId] = limited.map(c => c.id).filter(Boolean);
         } else if (!result) {
