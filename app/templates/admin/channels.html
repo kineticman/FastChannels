@@ -1445,7 +1445,10 @@
   </div>
 
   <!-- Language override modal -->
-  <div class="modal-overlay" id="langModal" onclick="if(event.target===this)closeLangModal()">
+  <div class="modal-overlay" id="langModal"
+       onmousedown="if(event.target===this)_langModalMousedownOnOverlay=true"
+       onmouseup="if(!_langModalMousedownOnOverlay)_langModalMousedownOnOverlay=false"
+       onclick="if(event.target===this&&_langModalMousedownOnOverlay){_langModalMousedownOnOverlay=false;closeLangModal()}else{_langModalMousedownOnOverlay=false}">
     <div class="modal-box" style="max-width:400px">
       <div id="langModal-content">
         <div class="modal-loading">Loading…</div>
@@ -2658,6 +2661,8 @@
 
     // ── Language override modal ───────────────────────────────────────────────
     const _langCache = {};
+
+    let _langModalMousedownOnOverlay = false;
 
     function closeLangModal() {
       document.getElementById('langModal').classList.remove('open');
