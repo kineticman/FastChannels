@@ -749,6 +749,7 @@
     .preview-title { font-size: 1.1rem; font-weight: 700; color: var(--text-strong); }
     .preview-meta { color: var(--text-soft); font-size: 0.82rem; margin-top: 0.2rem; }
     .preview-description { font-size: 0.82rem; color: var(--text-soft); line-height: 1.5; margin-bottom: 0.85rem; border-left: 2px solid var(--border); padding-left: 0.75rem; }
+    .preview-description--empty { color: var(--text-dim); font-style: italic; }
     .preview-grid {
       display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
       gap: 0.9rem; margin-bottom: 1rem;
@@ -1594,7 +1595,7 @@
               ${(ch.tags && ch.tags.length > 1) ? `<div style="margin-top:0.3rem;font-size:0.78rem;color:var(--text-dim)">${ch.tags.map(t => escapeHtml(t)).join(' · ')}</div>` : ''}
             </div>
           </div>
-          ${ch.description ? `<div class="preview-description">${escapeHtml(ch.description)}</div>` : ''}
+          ${ch.description ? `<div class="preview-description">${escapeHtml(ch.description)}</div>` : '<div class="preview-description preview-description--empty">No channel description available.</div>'}
           ${warning}
           ${playbackNote}
           <div class="preview-grid">
