@@ -248,6 +248,13 @@ def channels():
     search           = request.args.get('search', '')
     enabled_filter   = request.args.get('enabled', '')
     presence_filter  = request.args.get('presence', '')
+    # When a feed is selected, default to active+enabled channels only so the view
+    # matches what actually outputs. User can override via the dropdowns.
+    if feed_filter:
+        if not enabled_filter:
+            enabled_filter = '1'
+        if not presence_filter:
+            presence_filter = 'active'
     drm_filter       = request.args.get('drm', '')
     gracenote_filter = request.args.get('gracenote', '')
     gracenote_mode_filter = request.args.get('gracenote_mode', '')
