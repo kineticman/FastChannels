@@ -266,17 +266,32 @@ def stirr_manifest_proxy(channel_id: str):
         logger.warning('[stirr-proxy] master fetch failed for %s: %s', channel_id, e)
         abort(502)
 
-    # Rewrite variant playlist lines to go through this proxy so every refresh
-    # uses the server IP. Non-playlist lines (segments, EXT-* tags) pass through.
+    # Rewrite variant playlist lines AND EXT-X-MEDIA URI= attributes to go through
+    # this proxy so every manifest fetch uses the server IP.  The URI= attribute in
+    # #EXT-X-MEDIA tags (e.g. subtitle playlists) is a relative path that must also
+    # be proxied — clients with AUTOSELECT=YES will fetch it automatically, and a 404
+    # on a DEFAULT subtitle track causes Channels DVR to drop the stream entirely.
+    import re as _re
     base_url = request.host_url.rstrip('/')
     effective_master_url = master_r.url
+
+    def _rewrite_uri(m):
+        rel = m.group(1)
+        abs_url = urljoin(effective_master_url, rel)
+        encoded = _quote(abs_url, safe='')
+        return f'URI="{base_url}/play/stirr/variant?url={encoded}"'
+
     lines = []
     for line in master_r.text.splitlines():
         stripped = line.strip()
         if stripped and not stripped.startswith('#'):
+            # Bare URL line (variant playlist reference)
             abs_url = urljoin(effective_master_url, stripped)
             encoded = _quote(abs_url, safe='')
             line = f'{base_url}/play/stirr/variant?url={encoded}'
+        elif stripped.startswith('#EXT-X-MEDIA') and 'URI=' in stripped:
+            # Rewrite URI= attribute inside EXT-X-MEDIA tags (subtitles, audio, etc.)
+            line = _re.sub(r'URI="([^"]+)"', _rewrite_uri, line)
         lines.append(line)
 
     return Response(
