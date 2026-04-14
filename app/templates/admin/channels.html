@@ -1051,7 +1051,7 @@
         <div class="toolbar-secondary">
           <div class="filter-group">
             <label class="filter-label" for="feed-filter">Feed</label>
-            <select id="feed-filter" name="feed">
+            <select id="feed-filter" name="feed" onchange="onFeedFilterChange(this)">
               <option value="">Any feed membership</option>
               {% for feed in feeds %}
               <option value="{{ feed.slug }}" {% if feed_filter == feed.slug %}selected{% endif %}>{{ feed.name }}</option>
@@ -1070,7 +1070,7 @@
           <div class="filter-group">
             <label class="filter-label" for="enabled-filter">Channel State</label>
             <select id="enabled-filter" name="enabled">
-              <option value="">Enabled + Disabled</option>
+              <option value="" {% if enabled_filter not in ('1', '0') %}selected{% endif %}>Enabled + Disabled</option>
               <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
               <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
             </select>
@@ -1078,7 +1078,7 @@
           <div class="filter-group">
             <label class="filter-label" for="presence-filter">Scraper Presence</label>
             <select id="presence-filter" name="presence">
-              <option value="">All channels</option>
+              <option value="" {% if presence_filter not in ('active', 'inactive', 'missed', 'enabled_inactive') %}selected{% endif %}>All channels</option>
               <option value="active" {% if presence_filter == 'active' %}selected{% endif %}>Active (seen last scrape)</option>
               <option value="inactive" {% if presence_filter == 'inactive' %}selected{% endif %}>Inactive (missing from scrapes)</option>
               <option value="missed" {% if presence_filter == 'missed' %}selected{% endif %}>At risk (1+ missed scrapes)</option>
@@ -2247,6 +2247,16 @@
       t.textContent = msg;
       t.classList.add('show');
       setTimeout(() => t.classList.remove('show'), ms);
+    }
+
+    function onFeedFilterChange(sel) {
+      if (sel.value) {
+        // Feed selected — default to active+enabled unless user already has an override
+        const enabledSel  = document.getElementById('enabled-filter');
+        const presenceSel = document.getElementById('presence-filter');
+        if (enabledSel  && (enabledSel.value  === '' || enabledSel.value  === 'any')) enabledSel.value  = '1';
+        if (presenceSel && (presenceSel.value === '' || presenceSel.value === 'any')) presenceSel.value = 'active';
+      }
     }
 
     function toggleHideDisabled() {
