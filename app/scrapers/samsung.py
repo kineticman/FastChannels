@@ -154,6 +154,8 @@ class SamsungScraper(BaseScraper):
                 chno     = ch.get('chno')
                 language = infer_language_from_metadata(name, group)
 
+                description = (ch.get('description') or '').strip() or None
+
                 channels.append(ChannelData(
                     source_channel_id = ch_id,
                     name              = name,
@@ -164,6 +166,7 @@ class SamsungScraper(BaseScraper):
                     country           = region.upper(),
                     stream_type       = 'hls',
                     number            = int(chno) if chno else None,
+                    description       = description,
                 ))
                 region_count += 1
 

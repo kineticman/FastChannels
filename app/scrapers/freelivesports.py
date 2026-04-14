@@ -96,6 +96,8 @@ class FreeLiveSportsScraper(BaseScraper):
                 logger.warning("[freelivesports] no stream URL for '%s', skipping", name)
                 continue
 
+            description = (ch.get("description") or "").strip() or None
+
             channels.append(ChannelData(
                 source_channel_id = channel_id,
                 name              = name,
@@ -107,6 +109,7 @@ class FreeLiveSportsScraper(BaseScraper):
                 language          = infer_language_from_metadata(ch.get("language"), name),
                 country           = "US",
                 number            = ch.get("channelNumber") or None,
+                description       = description,
             ))
 
         logger.info("[freelivesports] %d channels", len(channels))

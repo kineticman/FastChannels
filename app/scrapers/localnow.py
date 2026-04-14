@@ -167,6 +167,8 @@ class LocalNowScraper(BaseScraper):
             if slug:
                 raw_url += f"?slug={quote(slug, safe='')}"
 
+            description = (ch.get("description") or "").strip() or None
+
             channels.append(
                 ChannelData(
                     source_channel_id=source_channel_id,
@@ -179,6 +181,7 @@ class LocalNowScraper(BaseScraper):
                     country="US",
                     stream_type="hls",
                     number=self._safe_int(ch.get("channel_number"), None),
+                    description=description,
                 )
             )
             self._channels_by_id[source_channel_id] = ch
