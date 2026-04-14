@@ -58,6 +58,7 @@ class Channel(db.Model):
     name              = db.Column(db.String(256), nullable=False)
     slug              = db.Column(db.String(256))
     logo_url          = db.Column(db.Text)
+    logo_url_pinned   = db.Column(db.Boolean, default=False, nullable=False)  # True when user has manually pinned a logo URL
     stream_url        = db.Column(db.Text)
     stream_type       = db.Column(db.String(16), default='hls')
     category          = db.Column(db.String(128))
@@ -105,6 +106,7 @@ class Channel(db.Model):
             'name':             self.name,
             'slug':             self.slug,
             'logo_url':         self.logo_url,
+            'logo_url_pinned':  bool(self.logo_url_pinned),
             'stream_url':       self.stream_url,
             'stream_type':      self.stream_type,
             'category':          self.category,

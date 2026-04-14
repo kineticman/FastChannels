@@ -597,6 +597,9 @@
     tr:hover td { background: var(--accent-row-hover); }
 
     .logo { width: 32px; height: 32px; object-fit: contain; border-radius: 4px; background: var(--bg); }
+    .logo-wrap { position: relative; display: inline-block; cursor: pointer; }
+    .logo-wrap:hover .logo { outline: 2px solid var(--accent-soft); border-radius: 4px; }
+    .logo-pin-badge { position: absolute; bottom: -3px; right: -3px; background: var(--accent-strong); border-radius: 50%; width: 11px; height: 11px; display: flex; align-items: center; justify-content: center; font-size: 7px; color: #fff; line-height: 1; pointer-events: none; }
 
     /* Toggle switch */
     .toggle-wrap { display: flex; align-items: center; }
@@ -1274,11 +1277,19 @@
           <tr id="row-{{ ch.id }}" data-channel-id="{{ ch.id }}" class="{% if not ch.is_enabled %}disabled{% endif %}{% if duplicates_filter == '1' %} dup-group-{{ ns.group_idx }}{% endif %}">
             <td><input type="checkbox" class="row-check" value="{{ ch.id }}" onchange="onRowCheck()"></td>
             <td>
-              {% if ch.logo_url %}
-              <img src="{{ ch.logo_url }}" class="logo" loading="lazy">
-              {% else %}
-              <div class="logo"></div>
-              {% endif %}
+              <span class="logo-wrap" onclick="openLogoModal({{ ch.id }})" title="Edit logo"
+                    data-name="{{ ch.name | e }}"
+                    data-logo="{{ ch.logo_url or '' | e }}"
+                    data-pinned="{{ 'true' if ch.logo_url_pinned else 'false' }}">
+                {% if ch.logo_url %}
+                <img src="{{ ch.logo_url }}" class="logo" loading="lazy">
+                {% else %}
+                <div class="logo"></div>
+                {% endif %}
+                {% if ch.logo_url_pinned %}
+                <span class="logo-pin-badge" title="Logo pinned by user">📌</span>
+                {% endif %}
+              </span>
             </td>
             {% set hover_parts = [] %}
             {% if not ch.is_active %}
@@ -1416,6 +1427,15 @@
   <div class="modal-overlay" id="catModal" onclick="if(event.target===this)closeCatModal()">
     <div class="modal-box" style="max-width:440px">
       <div id="catModal-content">
+        <div class="modal-loading">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Logo override modal -->
+  <div class="modal-overlay" id="logoModal" onclick="if(event.target===this)closeLogoModal()">
+    <div class="modal-box" style="max-width:420px">
+      <div id="logoModal-content">
         <div class="modal-loading">Loading…</div>
       </div>
     </div>
@@ -2737,6 +2757,101 @@
         if (lbl) { lbl.textContent = updated.language || '—'; lbl.classList.remove('has-override'); }
       }
       closeLangModal();
+    }
+
+    // ── Logo override modal ───────────────────────────────────────────────────
+    let _logoModalChId = null;
+
+    function openLogoModal(chId) {
+      _logoModalChId = chId;
+      const modal   = document.getElementById('logoModal');
+      const content = document.getElementById('logoModal-content');
+      modal.classList.add('open');
+
+      const wrap       = document.querySelector(`.logo-wrap[onclick="openLogoModal(${chId})"]`);
+      const chName     = wrap ? wrap.dataset.name     : '';
+      const currentUrl = wrap ? wrap.dataset.logo     : '';
+      const isPinned   = wrap ? wrap.dataset.pinned === 'true' : false;
+
+      content.innerHTML = `
+        <h3 style="margin:0 0 0.9rem;font-size:1rem">${escapeHtml(chName)}</h3>
+        <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">
+          <div id="logo-preview-wrap" style="width:64px;height:64px;flex-shrink:0;background:var(--surface-2);border-radius:6px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden">
+            ${currentUrl ? `<img id="logo-preview-img" src="${escapeHtml(currentUrl)}" style="max-width:60px;max-height:60px;object-fit:contain">` : `<span id="logo-preview-img" style="font-size:1.6rem;color:var(--text-muted)">?</span>`}
+          </div>
+          <div style="flex:1;min-width:0">
+            <label style="font-size:0.8rem;color:var(--text-soft);display:block;margin-bottom:0.3rem">Logo URL${isPinned ? ' <span style="color:var(--accent-soft)">(pinned)</span>' : ''}</label>
+            <input id="logo-url-input" type="url" value="${escapeHtml(currentUrl)}"
+              placeholder="https://example.com/logo.png"
+              style="width:100%;padding:0.45rem 0.6rem;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.85rem;box-sizing:border-box"
+              oninput="previewLogoInput(this.value)">
+          </div>
+        </div>
+        <div style="display:flex;gap:0.6rem;justify-content:flex-end;flex-wrap:wrap">
+          ${isPinned ? `<button class="btn-sm btn-secondary" onclick="clearLogoOverride(${chId})">Clear Pin</button>` : ''}
+          <button class="btn-sm btn-secondary" onclick="closeLogoModal()">Cancel</button>
+          <button class="btn-sm" onclick="saveLogoOverride(${chId})" style="background:var(--accent-strong);color:#fff">Save &amp; Pin</button>
+        </div>
+      `;
+      document.getElementById('logo-url-input').focus();
+    }
+
+    function previewLogoInput(url) {
+      const wrap = document.getElementById('logo-preview-wrap');
+      const el   = document.getElementById('logo-preview-img');
+      if (!el || !wrap) return;
+      if (url) {
+        if (el.tagName === 'SPAN') {
+          const img = document.createElement('img');
+          img.id = 'logo-preview-img';
+          img.style.cssText = 'max-width:60px;max-height:60px;object-fit:contain';
+          img.onerror = () => { img.style.display = 'none'; };
+          img.src = url;
+          el.replaceWith(img);
+        } else {
+          el.style.display = '';
+          el.onerror = () => { el.style.display = 'none'; };
+          el.src = url;
+        }
+      } else {
+        if (el.tagName === 'IMG') {
+          const span = document.createElement('span');
+          span.id = 'logo-preview-img';
+          span.textContent = '?';
+          span.style.cssText = 'font-size:1.6rem;color:var(--text-muted)';
+          el.replaceWith(span);
+        }
+      }
+    }
+
+    function closeLogoModal() {
+      document.getElementById('logoModal').classList.remove('open');
+      _logoModalChId = null;
+    }
+
+    async function saveLogoOverride(chId) {
+      const input = document.getElementById('logo-url-input');
+      if (!input) return;
+      const url = input.value.trim();
+      const r = await fetch(`/api/channels/${chId}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({logo_url: url || null, logo_url_pinned: true}),
+      });
+      if (!r.ok) { alert('Save failed'); return; }
+      closeLogoModal();
+      location.reload();
+    }
+
+    async function clearLogoOverride(chId) {
+      const r = await fetch(`/api/channels/${chId}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({logo_url_pinned: false}),
+      });
+      if (!r.ok) { alert('Clear failed'); return; }
+      closeLogoModal();
+      location.reload();
     }
 
     // ── Category explain / override modal ────────────────────────────────────

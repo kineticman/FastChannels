@@ -860,7 +860,7 @@ def bulk_update_channel_gracenote():
 def update_channel(channel_id):
     ch   = Channel.query.get_or_404(channel_id)
     data = request.get_json()
-    for field in ('name', 'logo_url', 'category', 'category_override', 'language', 'language_override', 'is_active', 'is_enabled', 'number', 'number_pinned', 'disable_reason', 'is_duplicate'):
+    for field in ('name', 'logo_url', 'logo_url_pinned', 'category', 'category_override', 'language', 'language_override', 'is_active', 'is_enabled', 'number', 'number_pinned', 'disable_reason', 'is_duplicate'):
         if field in data:
             setattr(ch, field, data[field])
     # Setting a number without explicitly managing the pin auto-pins it.

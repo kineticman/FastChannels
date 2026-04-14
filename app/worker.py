@@ -1437,14 +1437,15 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             ch.stream_url    = cd.stream_url
             ch.stream_type   = cd.stream_type
             old_logo_url = ch.logo_url
-            next_logo = _resolved_logo_url(ch.logo_url, cd.logo_url, logo_validation_cache)
-            if next_logo != (ch.logo_url or None) and next_logo != (cd.logo_url or '').strip():
-                logger.info('[%s] keeping existing logo for %s after invalid replacement URL from scrape',
-                            source.name, cd.name)
-            ch.logo_url      = next_logo
-            if old_logo_url and old_logo_url != (next_logo or ''):
-                delete_cached_logo(old_logo_url)
-                logger.debug('[%s] evicted cached logo for %s (URL changed)', source.name, cd.name)
+            if not getattr(ch, 'logo_url_pinned', False):
+                next_logo = _resolved_logo_url(ch.logo_url, cd.logo_url, logo_validation_cache)
+                if next_logo != (ch.logo_url or None) and next_logo != (cd.logo_url or '').strip():
+                    logger.info('[%s] keeping existing logo for %s after invalid replacement URL from scrape',
+                                source.name, cd.name)
+                ch.logo_url = next_logo
+                if old_logo_url and old_logo_url != (next_logo or ''):
+                    delete_cached_logo(old_logo_url)
+                    logger.debug('[%s] evicted cached logo for %s (URL changed)', source.name, cd.name)
             ch.slug          = cd.slug
             ch.category      = ch.category_override or category_for_channel(cd.name, cd.category)
             ch.language      = ch.language_override or cd.language
