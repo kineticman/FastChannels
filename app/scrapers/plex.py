@@ -428,6 +428,14 @@ class PlexScraper(BaseScraper):
                     node.get("title"),
                     category,
                 )
+                description = (
+                    node.get("summary") or data.get("summary")
+                    or node.get("description") or data.get("description")
+                    or None
+                )
+                if description:
+                    description = str(description).strip() or None
+
                 channels[channel_id] = ChannelData(
                     source_channel_id = channel_id,
                     name              = node.get("title") or node.get("slug") or channel_id,
@@ -441,6 +449,7 @@ class PlexScraper(BaseScraper):
                     gracenote_id      = resolve_gracenote("plex", lookup_key=channel_id),
                     guide_key         = grid_keys.get(channel_id),
                     tags              = tags_map.get(channel_id, []),
+                    description       = description,
                 )
 
         result = sorted(channels.values(), key=lambda c: (c.name or "").lower())

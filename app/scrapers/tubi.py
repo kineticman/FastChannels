@@ -233,6 +233,7 @@ class TubiScraper(BaseScraper):
                 stream_type       = 'hls',
                 gracenote_id      = gracenote_id,
                 tags              = group_list,
+                description       = (row.get('description') or row.get('summary') or '').strip() or None,
             ))
 
         logger.info('[tubi] %d channels (anonymous)', len(channels))
@@ -390,6 +391,7 @@ class TubiScraper(BaseScraper):
                 stream_type       = 'hls',
                 gracenote_id      = gracenote_id,
                 tags              = group_list,
+                description       = (elem.get('description') or elem.get('summary') or '').strip() or None,
             ))
 
         logger.info('[tubi] %d channels (authenticated)', len(channels))

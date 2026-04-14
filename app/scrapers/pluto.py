@@ -321,6 +321,7 @@ class PlutoScraper(BaseScraper):
                 country           = REGION_COUNTRY.get(country_code, 'US'),
                 number            = number,
                 gracenote_id      = resolve_gracenote('pluto', upstream_id=elem.get('tmsid'), lookup_key=ch_id),
+                description       = (elem.get('summary') or elem.get('description') or '').strip() or None,
             ))
 
         logger.info("[pluto] %s: %d channels", country_code, len(channels))

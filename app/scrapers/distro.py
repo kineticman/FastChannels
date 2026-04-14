@@ -404,6 +404,14 @@ class DistroScraper(BaseScraper):
                 raw_genre      = (show.get("genre") or "").strip()
                 category, lang = _parse_distro_tags(raw_genre)
 
+                description = (
+                    show.get("summary") or show.get("description")
+                    or show.get("short_description") or show.get("long_description")
+                    or None
+                )
+                if description:
+                    description = str(description).strip() or None
+
                 channels.append(ChannelData(
                     source_channel_id = source_channel_id,
                     name              = name,
@@ -413,6 +421,7 @@ class DistroScraper(BaseScraper):
                     category          = category,
                     language          = lang,
                     country           = _normalize_geo(geo),
+                    description       = description,
                 ))
                 region_count += 1
 

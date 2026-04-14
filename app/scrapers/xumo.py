@@ -123,6 +123,16 @@ class XumoScraper(BaseScraper):
                 continue
             category = self._extract_genre(item)
 
+            descs = item.get("descriptions") or {}
+            description = (
+                descs.get("large") or descs.get("medium")
+                or descs.get("small") or descs.get("tiny")
+                or item.get("description") or item.get("summary")
+                or None
+            )
+            if description:
+                description = str(description).strip() or None
+
             channels.append(
                 ChannelData(
                     source_channel_id=channel_id,
@@ -131,6 +141,7 @@ class XumoScraper(BaseScraper):
                     logo_url=self._extract_logo(item),
                     category=category,
                     language=infer_language_from_metadata(name, category),
+                    description=description,
                 )
             )
 
