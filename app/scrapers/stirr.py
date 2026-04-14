@@ -72,6 +72,11 @@ class StirrScraper(BaseScraper):
         self._epg_session.mount("https://", _no_retry)
         self._epg_session.mount("http://", _no_retry)
 
+        # Lax-TLS session for probing Stirr CDN URLs (ssai.aniview.com,
+        # weathernationtv.com, etc.) that have non-standard cert chains or
+        # require SECLEVEL=1 ciphers. No retries — one probe is enough.
+        self._cdn_session = self._make_cdn_session()
+
     # ── Required ─────────────────────────────────────────────
 
     def fetch_channels(self) -> list[ChannelData]:
@@ -225,16 +230,18 @@ class StirrScraper(BaseScraper):
 
     def audit_resolve(self, raw_url: str) -> str:
         """
-        Lightweight audit check: confirm the channel still exists in Stirr's
-        catalogue via the /playable POST, but do NOT return the SSAI stream URL.
+        Audit check: confirm the channel exists in Stirr's catalogue AND that
+        the upstream SSAI/CDN URL is still live.
 
-        Stirr channels resolve to ssai.aniview.com URLs that require a real
-        browser session for ad targeting.  Fetching them server-side returns
-        HTTP 422, which the audit misinterprets as a dead stream.  Instead we
-        just validate channel existence and raise StreamDeadError on 404/410.
-        The audit won't fetch the returned sentinel URL — it still logs the
-        channel as "checked" and leaves is_active unchanged.
+        Two-stage probe:
+          1. POST /playable — raises StreamDeadError on 404/410 (removed from catalogue).
+          2. GET the resolved stream URL — raises StreamDeadError on aniview 422 with
+             error=CON ("can not get a content"), which means the aniview channel config
+             has been deleted even though Stirr still lists the channel.  Other non-200
+             responses (5xx, transient network errors) are treated as transient.
         """
+        import secrets
+
         if not raw_url.startswith("stirr://"):
             return raw_url
 
@@ -245,7 +252,9 @@ class StirrScraper(BaseScraper):
 
         playable_url = self.PLAYABLE_URL_TEMPLATE.format(videoid=videoid)
         try:
-            r = self.session.post(playable_url, timeout=10)
+            # Use the no-retry session so a RemoteDisconnected/timeout doesn't
+            # burn multiple attempts and stall the audit on a single channel.
+            r = self._epg_session.post(playable_url, timeout=10)
         except Exception as exc:
             logger.warning("[stirr] audit_resolve network error for %s: %s", videoid, exc)
             return raw_url  # treat as transient; don't mark dead
@@ -253,10 +262,76 @@ class StirrScraper(BaseScraper):
         if r.status_code in (404, 410):
             raise StreamDeadError(f"Stirr channel {videoid} returned {r.status_code} — removed from catalogue")
 
-        # Any other status (200, 422, 5xx, etc.) — leave the channel alone.
-        # 422 from the SSAI service means the request params are wrong for a
-        # server context, not that the channel is gone.
+        if r.status_code != 200:
+            return raw_url  # 5xx or other transient — leave alone
+
+        # Probe the SSAI/CDN URL to catch channels whose aniview config has been
+        # deleted. The nonce template must be filled in or aniview returns 422 for
+        # a different reason (bad params). Use verify=False — Stirr CDN hosts have
+        # non-standard cert chains that fail Python's default verification.
+        media_url = self._extract_media_url_from_payload(r.json())
+        if not media_url or not media_url.startswith('http'):
+            return raw_url
+
+        media_url = media_url.replace('[vx_nonce]', secrets.token_hex(16))
+        try:
+            probe = self._cdn_session.get(media_url, timeout=10)
+        except Exception as exc:
+            logger.debug("[stirr] audit SSAI probe network error for %s: %s", videoid, exc)
+            return raw_url  # transient network issue — don't mark dead
+
+        if probe.status_code == 422:
+            try:
+                body = probe.json()
+                if body.get('error') == 'CON':
+                    raise StreamDeadError(
+                        f"Stirr channel {videoid} aniview config deleted (422 CON)"
+                    )
+            except StreamDeadError:
+                raise
+            except Exception:
+                pass  # unparseable 422 body — treat as transient
+
         return raw_url
+
+    # ── CDN session ──────────────────────────────────────────
+
+    @staticmethod
+    def _make_cdn_session() -> requests.Session:
+        """
+        Requests session for fetching Stirr CDN URLs (aniview, weathernationtv, etc.).
+        - SECLEVEL=1 ciphers: some hosts reject the default SECLEVEL=2 handshake.
+        - verify=False: CDN hosts have self-signed intermediates not in the system bundle.
+        - No retries: one probe attempt is enough for audit/resolve purposes.
+        """
+        import ssl
+        import urllib3
+        from urllib3.util.ssl_ import create_urllib3_context
+
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        class _LaxTLSAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args, **kwargs):
+                ctx = create_urllib3_context()
+                ctx.set_ciphers('DEFAULT@SECLEVEL=1')
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                kwargs['ssl_context'] = ctx
+                super().init_poolmanager(*args, **kwargs)
+
+        s = requests.Session()
+        s.verify = False
+        adapter = _LaxTLSAdapter(max_retries=0)
+        s.mount('https://', adapter)
+        s.mount('http://', adapter)
+        s.headers.update({
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/145.0.0.0 Safari/537.36'
+            ),
+        })
+        return s
 
     # ── Internal Helpers ─────────────────────────────────────
 

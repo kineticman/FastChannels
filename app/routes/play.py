@@ -211,19 +211,25 @@ def distro_manifest_proxy(channel_id: str):
     )
 
 
+def _stirr_session() -> _requests.Session:
+    """Lax-TLS session for Stirr CDN fetches — delegates to the scraper's factory."""
+    from ..scrapers.stirr import StirrScraper
+    return StirrScraper._make_cdn_session()
+
+
 @play_bp.route('/play/stirr/<channel_id>/proxy.m3u8')
 def stirr_manifest_proxy(channel_id: str):
     """
     Manifest proxy for STIRR channels.
 
-    STIRR resolves to ssai.aniview.com URLs whose vx_token JWT is bound to
-    the server's IP.  If the browser follows a 302 redirect directly it fails
-    token validation because the browser has a different IP.  Instead we proxy
-    both the master and variant manifests through FastChannels (so aniview
-    always sees the server IP), then rewrite variant URLs so the browser hits
-    this proxy again on each refresh.  Segments go straight to the CDN — they
-    are on a CORS-open host (ohlscdn.wurl.tv) and contain no IP-bound tokens.
+    STIRR resolves to IP-bound URLs (ssai.aniview.com, weathernationtv.com, etc.)
+    whose vx_token JWT is bound to the server's IP.  If the client follows a 302
+    redirect directly it fails token validation because the client has a different IP.
+    Instead we proxy both the master and variant manifests through FastChannels (so
+    the CDN always sees the server IP), then rewrite variant URLs so the client hits
+    this proxy again on each refresh.  Segments go straight to the CDN.
     """
+    import secrets
     from urllib.parse import quote as _quote, unquote as _unquote
     from ..scrapers.stirr import StirrScraper
 
@@ -241,10 +247,20 @@ def stirr_manifest_proxy(channel_id: str):
         logger.warning('[stirr-proxy] resolve failed for %s: %s', channel_id, e)
         abort(502)
 
-    # Fetch master playlist with the correct server-side headers/IP
+    if not master_url or not master_url.startswith(('http://', 'https://')):
+        logger.warning('[stirr-proxy] resolve returned non-HTTP URL for %s: %s', channel_id, (master_url or '')[:60])
+        abort(502)
+
+    # Stirr SSAI URLs contain an unfilled nonce template [vx_nonce] that must be
+    # substituted before the request — aniview returns 422 if it's left as-is.
+    master_url = master_url.replace('[vx_nonce]', secrets.token_hex(16))
+
+    # Fetch master playlist with the correct server-side headers/IP.
+    # Use a lax-TLS session so CDN hosts with non-standard cipher requirements work.
     _hdrs = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    _sess = _stirr_session()
     try:
-        master_r = _requests.get(master_url, headers=_hdrs, timeout=10)
+        master_r = _sess.get(master_url, headers=_hdrs, timeout=10)
         master_r.raise_for_status()
     except Exception as e:
         logger.warning('[stirr-proxy] master fetch failed for %s: %s', channel_id, e)
@@ -283,14 +299,14 @@ def stirr_variant_proxy():
         abort(400)
     url = _unquote(raw)
     parsed = urlsplit(url)
-    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+    if parsed.scheme != 'https' or not parsed.netloc:
         abort(400)
-    if parsed.netloc != 'ssai.aniview.com':
-        logger.warning('[stirr-variant] blocked request to unexpected host: %s', parsed.netloc)
+    if _PRIVATE_IP_RE.match(parsed.netloc.split(':')[0]):
+        logger.warning('[stirr-variant] blocked SSRF attempt to: %s', parsed.netloc)
         abort(403)
     _hdrs = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
-        r = _requests.get(url, headers=_hdrs, timeout=10)
+        r = _stirr_session().get(url, headers=_hdrs, timeout=10)
         r.raise_for_status()
     except Exception as e:
         logger.warning('[stirr-variant] fetch failed for %s: %s', url[:80], e)
@@ -363,13 +379,13 @@ def play(source_name: str, channel_id: str):
     else:
         resolved_url = channel.stream_url
 
-    if not resolved_url or (source_name == 'roku' and resolved_url.startswith('roku://')):
+    if not resolved_url or not resolved_url.startswith(('http://', 'https://')):
         abort(502)
 
-    # STIRR channels resolve to ssai.aniview.com URLs whose vx_token JWT is
-    # bound to the server's IP — redirect to our proxy so every manifest fetch
-    # (including variant refreshes on live streams) goes through the server.
-    if source_name == 'stirr' and resolved_url and 'ssai.aniview.com' in resolved_url:
+    # STIRR channels resolve to URLs with IP-bound session tokens — proxy all
+    # Stirr streams so every manifest fetch goes through the server IP, regardless
+    # of which CDN (ssai.aniview.com, weathernationtv.com, etc.) is serving.
+    if source_name == 'stirr':
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
