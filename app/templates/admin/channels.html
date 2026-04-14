@@ -1433,7 +1433,10 @@
   </div>
 
   <!-- Logo override modal -->
-  <div class="modal-overlay" id="logoModal" onclick="if(event.target===this&&Date.now()-_logoModalOpenAt>400)closeLogoModal()">
+  <div class="modal-overlay" id="logoModal"
+       onmousedown="if(event.target===this)_logoModalMousedownOnOverlay=true"
+       onmouseup="if(!_logoModalMousedownOnOverlay)_logoModalMousedownOnOverlay=false"
+       onclick="if(event.target===this&&_logoModalMousedownOnOverlay){_logoModalMousedownOnOverlay=false;closeLogoModal()}else{_logoModalMousedownOnOverlay=false}">
     <div class="modal-box" style="max-width:420px">
       <div id="logoModal-content">
         <div class="modal-loading">Loading…</div>
@@ -2760,8 +2763,9 @@
     }
 
     // ── Logo override modal ───────────────────────────────────────────────────
-    let _logoModalChId   = null;
-    let _logoModalOpenAt = 0;  // timestamp — guard against double-click auto-close
+    let _logoModalChId              = null;
+    let _logoModalOpenAt            = 0;     // timestamp — guard against double-click auto-close
+    let _logoModalMousedownOnOverlay = false; // true only when drag started on the overlay background
 
     function openLogoModal(chId) {
       _logoModalChId   = chId;
