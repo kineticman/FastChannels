@@ -373,6 +373,7 @@ class PlexScraper(BaseScraper):
             return {}
 
         grid_keys: dict[str, str] = {}
+        desc_map: dict[str, str] = {}
         headers = self._provider_headers()
         for genre_slug in genre_slugs:
             try:
@@ -392,9 +393,13 @@ class PlexScraper(BaseScraper):
                 grid_key = channel.get("gridKey")
                 if channel_id and grid_key and channel_id not in grid_keys:
                     grid_keys[channel_id] = grid_key
+                if channel_id and channel_id not in desc_map:
+                    raw = (channel.get("summary") or "").strip()
+                    if raw:
+                        desc_map[channel_id] = raw
 
-        logger.info("[plex] lineup gridKey map built for %d channels", len(grid_keys))
-        return grid_keys
+        logger.info("[plex] lineup gridKey map built for %d channels (%d with descriptions)", len(grid_keys), len(desc_map))
+        return grid_keys, desc_map
 
     # ── fetch_channels ─────────────────────────────────────────────────────────
 
@@ -406,7 +411,7 @@ class PlexScraper(BaseScraper):
 
         rsc_objects = _extract_rsc_objects(text)
         cat_map, spanish_ids, tags_map = _build_category_map(rsc_objects)
-        grid_keys = self._fetch_lineup_grid_keys()
+        grid_keys, lineup_descs = self._fetch_lineup_grid_keys()
 
         channels: dict[str, ChannelData] = {}
         for obj in rsc_objects:
@@ -431,6 +436,7 @@ class PlexScraper(BaseScraper):
                 description = (
                     node.get("summary") or data.get("summary")
                     or node.get("description") or data.get("description")
+                    or lineup_descs.get(channel_id)
                     or None
                 )
                 if description:
