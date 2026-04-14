@@ -440,13 +440,16 @@ def _active_network_outage() -> str | None:
 
 
 
-def run_stream_audit(source_name: str):
+def run_stream_audit(source_name: str, include_inactive: bool = False):
     """
     Stream Audit — resolves each active channel via the scraper, fetches the
     HLS manifest using the scraper's session (so source-specific headers like
     Origin/Referer are included), drills master → variant playlist, and checks
     for dead streams, VOD-only content, and SAMPLE-AES DRM encryption.
     Flagged channels are marked is_active=False so they drop out of M3U/EPG output.
+
+    include_inactive: when True, also checks channels already marked inactive/dead.
+    Any that pass are re-activated automatically.
     """
     with flask_app.app_context():
         source = Source.query.filter_by(name=source_name).first()
@@ -476,7 +479,12 @@ def run_stream_audit(source_name: str):
             except Exception as _refresh_exc:
                 logger.warning('[audit] %s: pre-audit refresh failed (non-fatal): %s', source_name, _refresh_exc)
 
-        channels = source.channels.filter(Channel.is_active == True).all()
+        if include_inactive:
+            channels = source.channels.filter(
+                db.or_(Channel.is_active == True, Channel.disable_reason == 'Dead')
+            ).all()
+        else:
+            channels = source.channels.filter(Channel.is_active == True).all()
         total    = len(channels)
         checked  = 0
         flagged  = 0
@@ -568,6 +576,10 @@ def run_stream_audit(source_name: str):
                 if not resolved_url.startswith('http'):
                     checked += 1
                     consecutive_errors = 0
+                    if include_inactive and not ch.is_active:
+                        ch.is_active = True
+                        ch.disable_reason = None
+                        logger.info('[audit] re-activated previously dead channel: %s', ch.name)
                     logger.debug('[audit] %s: opaque URL — existence confirmed by scraper, skipping manifest fetch', ch.name)
                     continue
 
@@ -671,6 +683,12 @@ def run_stream_audit(source_name: str):
                         flagged += 1
                         report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': _dash_drm_type})
                         logger.info('[audit] DASH DRM: %s  →  %s (%s)', ch.name, manifest_url[:80], _dash_drm_type)
+                    else:
+                        # DASH alive (no VOD, no DRM)
+                        if include_inactive and not ch.is_active:
+                            ch.is_active = True
+                            ch.disable_reason = None
+                            logger.info('[audit] re-activated previously dead channel: %s', ch.name)
                     continue   # DASH — skip HLS checks below
 
                 # EXT-X-KEY only appears in media playlists, not master playlists.
@@ -725,6 +743,11 @@ def run_stream_audit(source_name: str):
                     flagged += 1
                     report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': _drm_type})
                     logger.info('[audit] DRM: %s  →  %s (%s)', ch.name, manifest_url[:80], _drm_type)
+                elif include_inactive and not ch.is_active:
+                    # HLS alive — re-activate previously dead channel
+                    ch.is_active = True
+                    ch.disable_reason = None
+                    logger.info('[audit] re-activated previously dead channel: %s', ch.name)
 
             except Exception as e:
                 if _is_transient_network_error(e):

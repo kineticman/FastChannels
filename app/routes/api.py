@@ -540,7 +540,9 @@ def scrape_status(source_id):
 @api_bp.route('/sources/<int:source_id>/stream-audit', methods=['POST'])
 def stream_audit_source(source_id):
     source = Source.query.get_or_404(source_id)
-    trigger_stream_audit(source.name)
+    data = request.get_json() or {}
+    include_inactive = bool(data.get('include_inactive', False))
+    trigger_stream_audit(source.name, include_inactive=include_inactive)
     return jsonify({'status': 'queued', 'source': source.name})
 
 

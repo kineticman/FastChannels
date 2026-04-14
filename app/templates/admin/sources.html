@@ -729,8 +729,9 @@
       const recheckIds = _lastRecheckIds[sourceId] || [];
       html += `
         <div class="audit-modal-actions">
-          ${!isRunning && recheckIds.length ? `<button class="btn btn-audit" style="background:var(--accent-bg);color:var(--accent-soft)" onclick="recheckRateLimited(${Number(sourceId)})">Recheck Rate-limited (${recheckIds.length})</button>` : ''}
+          ${!isRunning && recheckIds.length ? `<button class="btn btn-audit" onclick="recheckRateLimited(${Number(sourceId)})">Recheck Rate-limited (${recheckIds.length})</button>` : ''}
           ${!isRunning ? `<button class="btn btn-audit" onclick="runAuditFromModal(${Number(sourceId)})">Run Audit</button>` : ''}
+          ${!isRunning ? `<button class="btn btn-audit" onclick="runAuditIncludeDead(${Number(sourceId)})" title="Re-check all channels including ones previously marked dead — any that pass will be re-activated automatically">Recheck All (incl. previously dead)</button>` : ''}
           <button class="btn-cancel-modal" onclick="_closeAuditModal()">Close</button>
         </div>`;
 
@@ -744,6 +745,29 @@
         {status: 'queued', last_result: null, last_report: null});
       try {
         const r = await fetch(`/api/sources/${sourceId}/stream-audit`, {method: 'POST'});
+        const d = await r.json();
+        if (d.status === 'queued') {
+          _auditGrace[sourceId] = Date.now() + 12000;
+          _auditModalGrace = Date.now() + 15000;
+          _startAuditPolling(sourceId, null);
+          _auditModalPollTimer = setTimeout(_pollAuditModal, 1500);
+        } else {
+          _pollAuditModal();
+        }
+      } catch (e) { _pollAuditModal(); }
+    }
+
+    async function runAuditIncludeDead(sourceId) {
+      const content = document.getElementById('audit-modal-content');
+      if (!content) return;
+      content.innerHTML = _renderAuditModalContent(sourceId, _auditModalSourceName,
+        {status: 'queued', last_result: null, last_report: null});
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/stream-audit`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({include_inactive: true}),
+        });
         const d = await r.json();
         if (d.status === 'queued') {
           _auditGrace[sourceId] = Date.now() + 12000;

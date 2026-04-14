@@ -122,20 +122,20 @@ def trigger_scrape(source_name: str, *, force_full: bool = False):
         threading.Thread(target=run_scraper, args=(source_name, force_full), daemon=True).start()
 
 
-def trigger_stream_audit(source_name: str):
+def trigger_stream_audit(source_name: str, include_inactive: bool = False):
     try:
         q = get_queue()
         job_id = f'audit-{source_name}'
         if _job_already_active(q, job_id):
             logger.info('Stream audit already queued/running for %s', source_name)
             return
-        q.enqueue('app.worker.run_stream_audit', source_name, job_timeout=1800, job_id=job_id)
-        logger.info(f'Enqueued stream audit for {source_name}')
+        q.enqueue('app.worker.run_stream_audit', source_name, include_inactive, job_timeout=1800, job_id=job_id)
+        logger.info(f'Enqueued stream audit for {source_name} (include_inactive={include_inactive})')
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for {source_name}')
         import threading
         from app.worker import run_stream_audit
-        threading.Thread(target=run_stream_audit, args=(source_name,), daemon=True).start()
+        threading.Thread(target=run_stream_audit, args=(source_name, include_inactive), daemon=True).start()
 
 
 def trigger_stream_audit_recheck(source_name: str, channel_ids: list):
