@@ -1433,7 +1433,7 @@
   </div>
 
   <!-- Logo override modal -->
-  <div class="modal-overlay" id="logoModal" onclick="if(event.target===this)closeLogoModal()">
+  <div class="modal-overlay" id="logoModal" onclick="if(event.target===this&&Date.now()-_logoModalOpenAt>400)closeLogoModal()">
     <div class="modal-box" style="max-width:420px">
       <div id="logoModal-content">
         <div class="modal-loading">Loading…</div>
@@ -2760,10 +2760,12 @@
     }
 
     // ── Logo override modal ───────────────────────────────────────────────────
-    let _logoModalChId = null;
+    let _logoModalChId   = null;
+    let _logoModalOpenAt = 0;  // timestamp — guard against double-click auto-close
 
     function openLogoModal(chId) {
-      _logoModalChId = chId;
+      _logoModalChId   = chId;
+      _logoModalOpenAt = Date.now();
       const modal   = document.getElementById('logoModal');
       const content = document.getElementById('logoModal-content');
       modal.classList.add('open');
