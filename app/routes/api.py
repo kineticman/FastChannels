@@ -1161,6 +1161,7 @@ def preview_channel(channel_id):
             'disable_reason': ch.disable_reason,
             'is_active': ch.is_active,
             'is_enabled': ch.is_enabled,
+            'description': ch.description,
         },
         'current_program': _program_dict(current_program),
         'next_program': _program_dict(next_program),

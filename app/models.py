@@ -73,6 +73,7 @@ class Channel(db.Model):
     gracenote_locked  = db.Column(db.Boolean, default=False, nullable=False)  # True when user manually sets/locks Gracenote ID
     gracenote_mode    = db.Column(db.String(16), default='auto', nullable=False)  # auto | manual | off
     guide_key         = db.Column(db.String(256), nullable=True)  # provider-specific guide lookup key (e.g. Plex gridKey)
+    description       = db.Column(db.Text, nullable=True)         # optional channel description from scraper
     disable_reason    = db.Column(db.String(64), nullable=True)  # e.g. 'DRM'; set by play proxy
     stream_info       = db.Column(db.JSON, nullable=True)        # populated by audit/inspect: max_resolution, video_codec, has_4k, variants
     is_duplicate      = db.Column(db.Boolean, default=False)  # set by user — manual duplicate label (does not disable)
@@ -120,6 +121,7 @@ class Channel(db.Model):
             'gracenote_locked': self.gracenote_locked,
             'gracenote_mode':   self.gracenote_mode or 'auto',
             'guide_key':        self.guide_key,
+            'description':      self.description,
             'is_active':        self.is_active,
             'disable_reason':   self.disable_reason,
             'is_duplicate':     self.is_duplicate,

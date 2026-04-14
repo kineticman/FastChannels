@@ -112,6 +112,17 @@ class StirrScraper(BaseScraper):
                 epg_channel_id=row.get("epg_channel_id") or "",
             )
 
+            raw_desc = row.get("description")
+            description = None
+            if isinstance(raw_desc, dict):
+                description = raw_desc.get("value") or raw_desc.get("text")
+            elif isinstance(raw_desc, str):
+                description = raw_desc or None
+            if description:
+                import re as _re
+                description = _re.sub(r'<[^>]+>', ' ', description)
+                description = _re.sub(r'\s+', ' ', description).strip() or None
+
             channels.append(
                 ChannelData(
                     source_channel_id=source_channel_id,
@@ -123,6 +134,7 @@ class StirrScraper(BaseScraper):
                     country="US",
                     language="en",
                     stream_type="hls",
+                    description=description,
                 )
             )
 

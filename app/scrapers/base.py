@@ -179,7 +179,7 @@ class ChannelData:
     def __init__(self, source_channel_id, name, stream_url, logo_url=None,
                  slug=None, category=None, language='en', country='US',
                  stream_type='hls', number=None, gracenote_id=None,
-                 guide_key=None, tags=None):
+                 guide_key=None, tags=None, description=None):
         self.source_channel_id = source_channel_id
         self.name        = name
         self.stream_url  = stream_url
@@ -193,6 +193,7 @@ class ChannelData:
         self.gracenote_id = gracenote_id
         self.guide_key   = guide_key
         self.tags        = tags or []  # list of raw tag/group strings from source
+        self.description = description  # optional long-form channel description
 
 
 class ProgramData:

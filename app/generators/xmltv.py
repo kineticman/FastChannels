@@ -96,6 +96,8 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             SubElement(el, 'display-name').text = ch.name
         if ch.logo_url:
             SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url) or ch.logo_url)
+        if ch.description:
+            SubElement(el, 'desc', lang='en').text = ch.description
         yield tostring(el, encoding='unicode') + '\n'
 
     # ── Programme elements — keyset pagination ────────────────────────────

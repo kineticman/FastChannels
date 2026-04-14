@@ -194,6 +194,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN logo_url_pinned BOOLEAN NOT NULL DEFAULT 0"
                 ))
+            if "description" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN description TEXT"
+                ))
             conn.execute(text(
                 "UPDATE channels SET missed_scrapes = 0 WHERE missed_scrapes IS NULL"
             ))
