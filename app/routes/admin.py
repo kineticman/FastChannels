@@ -404,7 +404,7 @@ def channels():
     sources = sources_q.order_by(Source.display_name).all()
 
     # Drive facet counts from the current filtered set so counts reflect active filters.
-    filtered_ids = q.with_entities(Channel.id).subquery()
+    filtered_ids = q.with_entities(Channel.id).scalar_subquery()
 
     lang_rows = db.session.query(Channel.language, db.func.count(Channel.id))\
         .filter(Channel.id.in_(filtered_ids), Channel.language != None)\
