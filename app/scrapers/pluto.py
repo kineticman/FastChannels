@@ -463,13 +463,19 @@ class PlutoScraper(BaseScraper):
                     categories.append('Movie')
                 categories.extend(mapped_categories(ep.get('subGenre')))
                 unique_categories = list(dict.fromkeys(cat for cat in categories if cat))
+                poster_url = (
+                    (ep.get('thumbnail')     or {}).get('path') or
+                    (ep.get('poster')        or {}).get('path') or
+                    (series.get('tile')      or {}).get('path') or
+                    None
+                )
                 programs.append(ProgramData(
                     source_channel_id = channel_id,
                     title             = title,
                     description       = clean_meta(ep.get('description', '')),
                     start_time        = start,
                     end_time          = end,
-                    poster_url        = series.get('tile', {}).get('path') or None,
+                    poster_url        = poster_url,
                     category          = ';'.join(unique_categories) or None,
                     season            = ep.get('season'),
                     episode           = ep.get('number'),
