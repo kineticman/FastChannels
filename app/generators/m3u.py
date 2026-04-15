@@ -589,7 +589,7 @@ def get_global_chnum_overlaps() -> list[str]:
         gn_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=True)
         gn_map, _ = _resolve_chnum_map(
             gn_channels,
-            feed_chnum_start=feed.chnum_start,
+            feed_chnum_start=feed_gracenote_start(feed) if feed.chnum_start is not None else None,
             namespace_start=gn_ns,
             feed_id=feed.id if feed.chnum_start is not None else None,
         )

@@ -1036,7 +1036,7 @@ def _refresh_xml_artifacts() -> None:
                 ),
             ))
             if feed.chnum_start is not None:
-                gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
+                gn_kw = {'feed_chnum_start': feed_gracenote_start(feed), 'feed_id': feed.id}
             else:
                 gn_kw = {'namespace_start': feed_gracenote_start(feed)}
             m3u_artifacts.append((
@@ -1406,15 +1406,21 @@ def _refresh_auto_channel_numbers() -> None:
     for feed in feeds_with_chnum:
         filters = feed_to_query_filters(feed.filters or {})
         with db.session.no_autoflush:
-            feed_stubs = _selected_channel_stubs(filters, gracenote=None)
-        feed_channel_ids = {s.id for s in feed_stubs}
+            std_stubs = _selected_channel_stubs(filters, gracenote=False)
+            gn_stubs  = _selected_channel_stubs(filters, gracenote=True)
+        feed_channel_ids = {s.id for s in std_stubs} | {s.id for s in gn_stubs}
 
         # Load existing stored numbers for stickiness.
         stored = {
             fcn.channel_id: fcn.number
             for fcn in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
         }
-        new_map = _build_feed_chnum_map(list(feed_stubs), feed.chnum_start, stored_numbers=stored)
+        # Standard channels occupy feed.chnum_start .. (chnum_start + len(std_stubs) - 1).
+        # Gracenote channels start immediately after so the two sources never overlap.
+        std_map = _build_feed_chnum_map(std_stubs, feed.chnum_start, stored_numbers=stored)
+        gn_start = feed.chnum_start + len(std_stubs)
+        gn_map   = _build_feed_chnum_map(gn_stubs, gn_start, stored_numbers=stored)
+        new_map  = {**std_map, **gn_map}
 
         # Upsert new assignments.
         existing_fcn = {fcn.channel_id: fcn for fcn in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
