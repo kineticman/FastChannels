@@ -265,6 +265,45 @@
     }
     .btn-audit:hover { background: var(--info); }
 
+    /* ── Timezone combobox ── */
+    .tz-combobox { position: relative; }
+    .tz-combobox input[type=text] {
+      width: 100%;
+      background: var(--accent-bg-deep);
+      border: 1px solid var(--surface-5);
+      border-radius: 6px;
+      padding: 0.55rem 0.75rem;
+      color: var(--text);
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .tz-combobox input[type=text]:focus { border-color: var(--focus-accent); }
+    .tz-combobox input[type=text]::placeholder { color: var(--text-dim); }
+    .tz-dropdown {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0; right: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: var(--shadow-soft);
+      max-height: 240px;
+      overflow-y: auto;
+      z-index: 200;
+    }
+    .tz-option {
+      padding: 0.5rem 0.75rem;
+      font-size: 0.875rem;
+      color: var(--text);
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tz-option:hover, .tz-option.active { background: var(--accent-bg); color: var(--accent-soft); }
+    .tz-no-results { padding: 0.5rem 0.75rem; font-size: 0.875rem; color: var(--text-muted); }
+
     .btn {
       padding: 0.5rem 1.2rem;
       border-radius: 6px;
@@ -435,14 +474,13 @@
     <div class="source-body open">
       <div class="fields-grid" style="max-width:480px">
         <div class="field field-full">
-          <label for="timezone-name">Time Zone</label>
-          <input type="text" id="timezone-name" list="timezone-options"
-                 placeholder="America/New_York" value="{{ timezone_name }}">
-          <datalist id="timezone-options">
-            {% for tz in timezone_choices %}
-            <option value="{{ tz }}"></option>
-            {% endfor %}
-          </datalist>
+          <label for="tz-input">Time Zone</label>
+          <div class="tz-combobox" id="tz-combobox">
+            <input type="text" id="tz-input" autocomplete="off"
+                   placeholder="Type to search… e.g. Eastern, Chicago, London"
+                   value="{{ timezone_name }}">
+            <div class="tz-dropdown" id="tz-dropdown" hidden></div>
+          </div>
           <div class="help">Type an IANA timezone like <code>America/New_York</code> or <code>Europe/London</code>. This controls admin timestamps and FastChannels app log timestamps.</div>
           {% if not timezone_name_from_db %}
           <div class="help">Currently using the system timezone because no explicit timezone has been saved yet.</div>
@@ -602,11 +640,109 @@ function saveDvrSettings() {
 }
 
 function saveTimezoneSettings() {
-  const timezoneName = document.getElementById('timezone-name').value.trim();
+  const timezoneName = document.getElementById('tz-input').value.trim();
   saveSettings({
     timezone_name: timezoneName || null,
   }, 'timezone-settings-status');
 }
+
+// ── Timezone searchable combobox ───────────────────────────────────────────
+(function () {
+  const TZ_LIST = {{ timezone_choices | tojson }};
+
+  const input    = document.getElementById('tz-input');
+  const dropdown = document.getElementById('tz-dropdown');
+  if (!input || !dropdown) return;
+
+  let activeIdx = -1;
+
+  function getItems() { return dropdown.querySelectorAll('.tz-option'); }
+
+  function setActive(idx) {
+    const items = getItems();
+    items.forEach((el, i) => el.classList.toggle('active', i === idx));
+    activeIdx = idx;
+    if (idx >= 0 && items[idx]) {
+      items[idx].scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function renderDropdown(query) {
+    const q = query.toLowerCase();
+    const matches = q
+      ? TZ_LIST.filter(tz => tz.toLowerCase().includes(q)).slice(0, 100)
+      : TZ_LIST.slice(0, 100);
+
+    dropdown.innerHTML = '';
+    activeIdx = -1;
+
+    if (matches.length === 0) {
+      const el = document.createElement('div');
+      el.className = 'tz-no-results';
+      el.textContent = 'No timezones match';
+      dropdown.appendChild(el);
+    } else {
+      matches.forEach((tz, i) => {
+        const el = document.createElement('div');
+        el.className = 'tz-option';
+        el.textContent = tz;
+        el.dataset.value = tz;
+        el.addEventListener('mousedown', e => {
+          e.preventDefault(); // keep focus on input
+          input.value = tz;
+          closeDropdown();
+        });
+        dropdown.appendChild(el);
+      });
+    }
+  }
+
+  function openDropdown() {
+    renderDropdown(input.value);
+    dropdown.hidden = false;
+  }
+
+  function closeDropdown() {
+    dropdown.hidden = true;
+    activeIdx = -1;
+  }
+
+  input.addEventListener('focus', () => openDropdown());
+
+  input.addEventListener('input', () => {
+    renderDropdown(input.value);
+    dropdown.hidden = false;
+  });
+
+  input.addEventListener('keydown', e => {
+    if (dropdown.hidden) {
+      if (e.key === 'ArrowDown' || e.key === 'Enter') { openDropdown(); e.preventDefault(); }
+      return;
+    }
+    const items = getItems();
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActive(Math.min(activeIdx + 1, items.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive(Math.max(activeIdx - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeIdx >= 0 && items[activeIdx]) {
+        input.value = items[activeIdx].dataset.value;
+      }
+      closeDropdown();
+    } else if (e.key === 'Escape') {
+      closeDropdown();
+    }
+  });
+
+  document.addEventListener('click', e => {
+    if (!document.getElementById('tz-combobox').contains(e.target)) {
+      closeDropdown();
+    }
+  });
+})();
 
 // ── Gracenote auto-fill toggle ─────────────────────────────────────────────
 function onGracenoteAutoFillChange(checkbox) {

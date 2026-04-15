@@ -403,20 +403,23 @@ def channels():
         )
     sources = sources_q.order_by(Source.display_name).all()
 
+    # Drive facet counts from the current filtered set so counts reflect active filters.
+    filtered_ids = q.with_entities(Channel.id).subquery()
+
     lang_rows = db.session.query(Channel.language, db.func.count(Channel.id))\
-        .filter(Channel.language != None)\
+        .filter(Channel.id.in_(filtered_ids), Channel.language != None)\
         .group_by(Channel.language)\
         .order_by(Channel.language).all()
     languages = [(lang, count) for lang, count in lang_rows]
 
     cat_rows = db.session.query(Channel.category, db.func.count(Channel.id))\
-        .filter(Channel.category != None)\
+        .filter(Channel.id.in_(filtered_ids), Channel.category != None)\
         .group_by(Channel.category)\
         .order_by(Channel.category).all()
     categories = [(cat, count) for cat, count in cat_rows]
 
     country_rows = db.session.query(Channel.country, db.func.count(Channel.id))\
-        .filter(Channel.country != None, Channel.country != '')\
+        .filter(Channel.id.in_(filtered_ids), Channel.country != None, Channel.country != '')\
         .group_by(Channel.country)\
         .order_by(Channel.country).all()
     countries = [(c, cnt) for c, cnt in country_rows]
