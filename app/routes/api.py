@@ -1289,7 +1289,8 @@ def gracenote_community_summary():
         total += 1
         if (ch.gracenote_id or '') == match['tmsid']:
             applied += 1
-        else:
+        elif (ch.gracenote_mode or 'auto') not in ('manual', 'off'):
+            # Only count as available if auto-mode — manual/off overrides are intentional
             available += 1
     return jsonify({'total': total, 'applied': applied, 'available': available})
 
