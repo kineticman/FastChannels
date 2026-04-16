@@ -711,7 +711,7 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                         if line and not line.startswith('#'):
                             variant_url = _urljoin(manifest_url, line)
                             break
-                    if variant_url:
+                    if variant_url and not variant_url.lower().split('?')[0].endswith('.ts'):
                         try:
                             rv = sess.get(variant_url, timeout=10)
                             if rv.status_code == 200:
