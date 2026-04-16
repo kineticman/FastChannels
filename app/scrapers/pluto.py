@@ -464,9 +464,9 @@ class PlutoScraper(BaseScraper):
                 categories.extend(mapped_categories(ep.get('subGenre')))
                 unique_categories = list(dict.fromkeys(cat for cat in categories if cat))
                 poster_url = (
-                    (ep.get('thumbnail')     or {}).get('path') or
                     (ep.get('poster')        or {}).get('path') or
                     (series.get('tile')      or {}).get('path') or
+                    (ep.get('thumbnail')     or {}).get('path') or
                     None
                 )
                 programs.append(ProgramData(
