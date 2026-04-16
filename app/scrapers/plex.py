@@ -273,14 +273,13 @@ class PlexScraper(BaseScraper):
 
     def pre_run_setup(self) -> None:
         """Acquire anonymous token early so it can be persisted before EPG."""
-        self._ensure_auth()
+        self._ensure_auth()  # token for provider API; RSC cookies seeded in _fetch_rsc
 
     def _ensure_auth(self, force: bool = False) -> bool:
         if self._auth_token and not force:
             return True
         t0 = time.monotonic()
         try:
-            self.session.get("https://watch.plex.tv/", timeout=15)
             r = self.session.post(
                 "https://plex.tv/api/v2/users/anonymous",
                 headers={"Accept": "application/json", "Content-Type": "application/json"},
@@ -297,7 +296,7 @@ class PlexScraper(BaseScraper):
             )
             return True
         except Exception as exc:
-            logger.error("[plex] auth failed: %s", exc)
+            logger.warning("[plex] anonymous auth failed (%s) — provider API calls may fail", exc)
             return False
 
     # ── RSC fetch (shared by channels + EPG) ───────────────────────────────────
@@ -305,16 +304,20 @@ class PlexScraper(BaseScraper):
     def _fetch_rsc(self) -> str:
         if self._rsc_cache:
             return self._rsc_cache
-        if not self._ensure_auth():
-            return ""
+        # Seed watch.plex.tv session cookies — required for RSC endpoint.
+        # Do NOT call _ensure_auth() here: the anonymous auth POST to plex.tv
+        # sets cross-domain cookies that cause the RSC endpoint to return 500.
+        try:
+            self.session.get("https://watch.plex.tv/", timeout=15)
+        except Exception as exc:
+            logger.warning("[plex] watch.plex.tv cookie seed failed: %s", exc)
         t0 = time.monotonic()
         r = self.session.get(
             f"https://watch.plex.tv/live-tv?_rsc={_rand_rsc()}",
             headers={
-                "Accept":                 "*/*",
-                "RSC":                    "1",
-                "Next-Url":               "/en",
-                "Next-Router-State-Tree": _NEXT_ROUTER_STATE_TREE,
+                "Accept":    "*/*",
+                "RSC":       "1",
+                "Next-Url":  "/en",
             },
             timeout=30,
         )
