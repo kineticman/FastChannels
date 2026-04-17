@@ -669,6 +669,8 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         chnum = chnum_map.get(ch.id)
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')
+        if ch.description:
+            attrs.append(f'tvg-description="{_esc(ch.description)}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{display_name}')
         lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
 
@@ -719,6 +721,8 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
         chnum = chnum_map.get(ch.id)
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')
+        if ch.description:
+            attrs.append(f'tvg-description="{_esc(ch.description)}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{display_name}')
         lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
 
