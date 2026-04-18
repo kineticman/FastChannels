@@ -671,6 +671,15 @@ def generate_m3u(filters: dict = None, base_url: str = None,
             attrs.append(f'tvg-chno="{chnum}"')
         if ch.description:
             attrs.append(f'tvg-description="{_esc(ch.description)}"')
+        if ch.stream_info:
+            vcodec, acodec = _tvc_stream_codecs(ch.stream_info)
+            if vcodec:
+                attrs.append(f'tvc-stream-vcodec="{vcodec}"')
+            if acodec:
+                attrs.append(f'tvc-stream-acodec="{acodec}"')
+        guide_cat = _tvc_guide_category(ch)
+        if guide_cat:
+            attrs.append(f'tvc-guide-categories="{guide_cat}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{display_name}')
         lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
 
@@ -723,6 +732,15 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
             attrs.append(f'tvg-chno="{chnum}"')
         if ch.description:
             attrs.append(f'tvg-description="{_esc(ch.description)}"')
+        if ch.stream_info:
+            vcodec, acodec = _tvc_stream_codecs(ch.stream_info)
+            if vcodec:
+                attrs.append(f'tvc-stream-vcodec="{vcodec}"')
+            if acodec:
+                attrs.append(f'tvc-stream-acodec="{acodec}"')
+        guide_cat = _tvc_guide_category(ch)
+        if guide_cat:
+            attrs.append(f'tvc-guide-categories="{guide_cat}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{display_name}')
         lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
 
@@ -735,3 +753,28 @@ def _tvg_id(ch) -> str:
 
 def _esc(s):
     return (s or '').replace('"', "'")
+
+
+# Channels DVR tvc-guide-categories accepted values: Movie, Sports event, Series
+_GUIDE_CATEGORY_MAP = {
+    'movies': 'Movie',
+    'sports': 'Sports event',
+}
+
+
+def _tvc_guide_category(ch) -> str | None:
+    return _GUIDE_CATEGORY_MAP.get((ch.category or '').lower())
+
+
+def _tvc_stream_codecs(stream_info: dict) -> tuple[str | None, str | None]:
+    """Return (vcodec, acodec) strings for tvc-stream-vcodec/acodec, or None if unknown."""
+    vcodec = stream_info.get('video_codec') or None  # already 'h264' / 'mpeg2'
+    acodec = None
+    variants = stream_info.get('variants') or []
+    if variants:
+        codecs_str = (variants[0].get('codecs') or '').upper()
+        if 'AAC' in codecs_str:
+            acodec = 'aac'
+        elif 'AC3' in codecs_str or 'AC-3' in codecs_str:
+            acodec = 'ac3'
+    return vcodec, acodec
