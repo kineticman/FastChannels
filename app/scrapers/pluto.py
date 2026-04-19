@@ -463,10 +463,13 @@ class PlutoScraper(BaseScraper):
                     categories.append('Movie')
                 categories.extend(mapped_categories(ep.get('subGenre')))
                 unique_categories = list(dict.fromkeys(cat for cat in categories if cat))
+                def _pluto_img(url):
+                    # Reject Pluto's generic fallback placeholder
+                    return url if url and 'assets/images/default' not in url else None
                 poster_url = (
-                    (ep.get('poster')        or {}).get('path') or
-                    (series.get('tile')      or {}).get('path') or
-                    (ep.get('thumbnail')     or {}).get('path') or
+                    _pluto_img((ep.get('poster')    or {}).get('path')) or
+                    _pluto_img((series.get('tile')  or {}).get('path')) or
+                    _pluto_img((ep.get('thumbnail') or {}).get('path')) or
                     None
                 )
                 programs.append(ProgramData(
