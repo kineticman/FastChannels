@@ -333,6 +333,109 @@
     .modal-box h2 { margin: 0 0 0.25rem; font-size: 1.1rem; color: var(--text-strong); }
     .modal-box .modal-sub { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 1.25rem; }
     .modal-box .modal-loading { color: var(--text-muted); text-align: center; padding: 2rem 0; }
+    /* Duplicate finder modal — legacy (used by mark-dup modal) */
+    .dup-finder-subject {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.6rem 0.75rem; margin-bottom: 1rem;
+      background: var(--surface-2); border-radius: 8px;
+      border-left: 3px solid var(--accent);
+    }
+    .dup-finder-subject img { width: 36px; height: 27px; object-fit: contain; border-radius: 4px; background: var(--surface); }
+    .dup-finder-subject .dup-finder-name { font-weight: 600; font-size: 0.92rem; color: var(--text-strong); }
+    .dup-finder-subject .dup-finder-source { font-size: 0.78rem; color: var(--text-muted); }
+    .dup-finder-group-label {
+      font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--text-muted); margin: 0.85rem 0 0.4rem;
+    }
+    .dup-finder-group-label.soft { color: var(--text-muted); opacity: 0.75; }
+    .dup-finder-row {
+      display: flex; align-items: center; gap: 0.55rem;
+      padding: 0.45rem 0.5rem; border-radius: 6px; cursor: pointer;
+      transition: background 0.12s;
+    }
+    .dup-finder-row:hover { background: var(--surface-2); }
+    .dup-finder-row input[type=checkbox] { flex-shrink: 0; accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+    .dup-finder-row img { width: 36px; height: 27px; object-fit: contain; border-radius: 4px; background: var(--surface-2); flex-shrink: 0; }
+    .dup-finder-row .dup-finder-info { flex: 1; min-width: 0; }
+    .dup-finder-row .dup-finder-name { font-size: 0.88rem; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dup-finder-row .dup-finder-source { font-size: 0.76rem; color: var(--text-muted); }
+    .dup-finder-row .dup-finder-badges { display: flex; gap: 0.3rem; flex-shrink: 0; }
+    .dup-finder-none { color: var(--text-muted); font-size: 0.85rem; font-style: italic; padding: 0.5rem 0; }
+    .dup-finder-actions { display: flex; gap: 0.6rem; justify-content: flex-end; margin-top: 1.1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+    /* Duplicate viewer cards */
+    .dc-group-label {
+      font-size: 0.67rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-muted); margin: 1rem 0 0.5rem; padding-bottom: 0.3rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .dc-group-label:first-child { margin-top: 0; }
+    .dc-card {
+      border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+      padding: 0.85rem 0.9rem; margin-bottom: 0.55rem; transition: opacity 0.2s;
+    }
+    .dc-card.dc-subject { border-color: var(--accent); background: color-mix(in srgb, var(--accent-bg-deep) 60%, var(--surface)); }
+    .dc-card.dc-card-disabled { opacity: 0.5; }
+    /* Header row: logo | identity | status badges */
+    .dc-head { display: flex; align-items: flex-start; gap: 0.7rem; margin-bottom: 0.7rem; }
+    .dc-logo { width: 44px; height: 33px; object-fit: contain; border-radius: 5px; background: var(--surface-2); flex-shrink: 0; margin-top: 2px; }
+    .dc-logo-blank { width: 44px; height: 33px; flex-shrink: 0; }
+    .dc-identity { flex: 1; min-width: 0; }
+    .dc-kicker { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent-soft); margin-bottom: 0.15rem; }
+    .dc-name { font-size: 0.92rem; font-weight: 700; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.25; }
+    .dc-source { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.15rem; }
+    .dc-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; justify-content: flex-end; flex-shrink: 0; }
+    .dc-badge {
+      display: inline-flex; align-items: center;
+      font-size: 0.6rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+      padding: 0.15rem 0.5rem; border-radius: 20px; white-space: nowrap; border: 1px solid transparent;
+    }
+    .dc-badge-on   { background: var(--success-bg); color: var(--success); border-color: var(--success-border); }
+    .dc-badge-off  { background: var(--danger-bg);  color: var(--danger);  border-color: var(--danger-border); }
+    .dc-badge-dead { background: var(--danger-bg-2); color: var(--danger-soft); border-color: var(--danger-border); }
+    .dc-badge-inact{ background: var(--surface-4);  color: var(--text-muted); border-color: var(--border); }
+    .dc-badge-dupl { background: var(--purple-panel); color: var(--purple); border-color: var(--purple-panel-border-soft); }
+    /* Stats grid */
+    .dc-stats {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      gap: 0.35rem; background: var(--surface-2); border-radius: 7px;
+      padding: 0.55rem 0.7rem; margin-bottom: 0.7rem;
+    }
+    .dc-stat { min-width: 0; }
+    .dc-stat-lbl {
+      display: block; font-size: 0.59rem; text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--text-muted); font-weight: 700; margin-bottom: 0.18rem;
+    }
+    .dc-stat-val {
+      display: block; font-size: 0.8rem; font-weight: 700; color: var(--text-strong);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .dc-sv-4k   { color: #f5c518; }
+    .dc-sv-hd   { color: var(--accent-soft); }
+    .dc-sv-sd   { color: var(--text-muted); }
+    .dc-sv-rich { color: var(--success); }
+    .dc-sv-some { color: var(--warning); }
+    .dc-sv-none { color: var(--text-muted); }
+    .dc-sv-gn   { color: var(--success); }
+    .dc-sv-warn { color: var(--warning); }
+    .dc-sv-muted{ color: var(--text-muted); }
+    /* Action buttons */
+    .dc-foot { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+    .dc-btn {
+      font-size: 0.82rem; font-weight: 600; padding: 0.5rem 1rem; border-radius: 7px;
+      cursor: pointer; border: 1px solid var(--border); background: var(--surface-2);
+      color: var(--text-soft); transition: background 0.12s, color 0.12s, border-color 0.12s;
+      text-align: center; line-height: 1;
+    }
+    .dc-btn:hover { background: var(--surface-4); color: var(--text); }
+    .dc-btn:disabled { opacity: 0.45; cursor: default; }
+    .dc-btn-enable  { border-color: var(--success-border); color: var(--success); background: var(--success-bg); }
+    .dc-btn-enable:hover  { background: var(--success-bg-2); }
+    .dc-btn-disable { border-color: var(--danger-border);  color: var(--danger);  background: var(--danger-bg); }
+    .dc-btn-disable:hover { background: var(--danger-bg-2); }
+    .dc-none { color: var(--text-muted); font-size: 0.84rem; font-style: italic; padding: 0.75rem 0; text-align: center; }
+    .dc-scroll { max-height: 460px; overflow-y: auto; padding-right: 3px; }
+    .dc-modal-foot { display: flex; gap: 0.6rem; justify-content: flex-end; margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--border); }
+
     .dup-section {
       border: 1px solid var(--border);
       border-radius: 10px;
@@ -1303,7 +1406,7 @@
             {% if ch.last_seen_at %}
               {% set _ = hover_parts.append('Last seen: ' ~ (ch.last_seen_at | localtime)) %}
             {% endif %}
-            <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge" title="Duplicate match found after strict title normalization: case-insensitive and strips trailing 'by …' or 'presented by …'">DUP</span>{% elif ch.name in possible_duplicate_names %} <span class="dup-badge" title="Possible duplicate: a similar title exists in another source after softer brand normalization such as TV/Channel/Network">DUP?</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup" title="Manually marked as duplicate">DUPL</span>{% endif %}</td>
+            <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Duplicate match found — click to see matches">DUP</span>{% elif ch.name in possible_duplicate_names %} <span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Possible duplicate — click to see matches">DUP?</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup badge-dup-clickable" data-channel-id="{{ ch.id }}" title="Click to see potential duplicates" style="cursor:pointer">DUPL</span>{% endif %}</td>
             <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}{% if ch.stream_info %}{% if ch.stream_info.has_4k %}<span class="badge-4k" title="4K stream ({{ ch.stream_info.max_resolution }})">4K</span>{% elif ch.stream_info.has_hd %}<span class="badge-hd" title="HD stream ({{ ch.stream_info.max_resolution }})">HD</span>{% endif %}{% if ch.stream_info.video_codec == 'hevc' %}<span class="badge-hevc" title="H.265/HEVC — may not play in all clients">HEVC</span>{% endif %}{% endif %}</td>
             <td data-channel-id="{{ ch.id }}">
               {% if ch.category %}
@@ -1453,6 +1556,15 @@
        onclick="if(event.target===this&&_langModalMousedownOnOverlay){_langModalMousedownOnOverlay=false;closeLangModal()}else{_langModalMousedownOnOverlay=false}">
     <div class="modal-box" style="max-width:400px">
       <div id="langModal-content">
+        <div class="modal-loading">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Duplicate finder modal -->
+  <div class="modal-overlay" id="dupModal" onclick="if(event.target===this)closeDupModal()">
+    <div class="modal-box" style="max-width:580px">
+      <div id="dupModal-content">
         <div class="modal-loading">Loading…</div>
       </div>
     </div>
@@ -2085,38 +2197,358 @@
     async function markManualDup(channelId, btn) {
       btn.disabled = true;
       try {
-        const r = await fetch(`/api/channels/${channelId}`, {
-          method:  'PATCH',
-          headers: {'Content-Type': 'application/json'},
-          body:    JSON.stringify({is_duplicate: true}),
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        // Add DUPL badge to name cell
-        const row = document.getElementById(`row-${channelId}`);
-        const nameCell = row.querySelector('td:nth-child(3)');
-        if (nameCell && !nameCell.querySelector('.badge-manual-dup')) {
-          const badge = document.createElement('span');
-          badge.className = 'badge-manual-dup';
-          badge.title = 'Manually marked as duplicate';
-          badge.textContent = 'DUPL';
-          nameCell.appendChild(badge);
-        }
-        // Add clear button to flags cell
-        const flagsCell = document.getElementById(`flags-cell-${channelId}`);
-        if (flagsCell && !flagsCell.querySelector('.btn-clear-dup')) {
-          const clearBtn = document.createElement('button');
-          clearBtn.className = 'btn-clear-dup';
-          clearBtn.id = `cleardup-${channelId}`;
-          clearBtn.title = 'Remove duplicate label';
-          clearBtn.textContent = '⊘';
-          clearBtn.onclick = () => clearManualDup(channelId, clearBtn);
-          flagsCell.appendChild(clearBtn);
-        }
-        // Remove the ⊘ mark button
-        btn.remove();
+        await _applyDuplicate(channelId);
+        _applyDupUiChanges(channelId, btn);
       } catch (e) {
         btn.disabled = false;
         console.error('markManualDup failed:', e);
+      }
+    }
+
+    async function _applyDuplicate(channelId) {
+      const r = await fetch(`/api/channels/${channelId}`, {
+        method:  'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body:    JSON.stringify({is_duplicate: true}),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    }
+
+    function _applyDupUiChanges(channelId, btn) {
+      const row = document.getElementById(`row-${channelId}`);
+      if (!row) return;
+      const nameCell = row.querySelector('td:nth-child(3)');
+      if (nameCell && !nameCell.querySelector('.badge-manual-dup')) {
+        const badge = document.createElement('span');
+        badge.className = 'badge-manual-dup badge-dup-clickable';
+        badge.title = 'Click to see potential duplicates';
+        badge.style.cursor = 'pointer';
+        badge.textContent = 'DUPL';
+        badge.dataset.channelId = channelId;
+        nameCell.appendChild(badge);
+      }
+      const flagsCell = document.getElementById(`flags-cell-${channelId}`);
+      if (flagsCell && !flagsCell.querySelector('.btn-clear-dup')) {
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'btn-clear-dup';
+        clearBtn.id = `cleardup-${channelId}`;
+        clearBtn.title = 'Remove duplicate label';
+        clearBtn.textContent = '⊘';
+        clearBtn.onclick = () => clearManualDup(channelId, clearBtn);
+        flagsCell.appendChild(clearBtn);
+      }
+      if (btn) btn.remove();
+    }
+
+    function openDupFinderModal(channelId, btn, data) {
+      const modal = document.getElementById('dupModal');
+      const content = document.getElementById('dupModal-content');
+
+      function renderRow(ch, checked) {
+        const logo = ch.logo_url
+          ? `<img src="${escapeHtml(ch.logo_url)}" onerror="this.style.display='none'">`
+          : `<span style="width:36px;height:27px;display:inline-block"></span>`;
+        const badges = [
+          ch.is_duplicate ? `<span class="badge-manual-dup" title="Already marked duplicate">DUPL</span>` : '',
+          !ch.is_enabled  ? `<span class="badge-disabled" title="Disabled">OFF</span>` : '',
+        ].filter(Boolean).join('');
+        return `
+          <label class="dup-finder-row">
+            <input type="checkbox" name="dup-pick" value="${ch.id}" ${checked ? 'checked' : ''} ${ch.is_duplicate ? 'disabled' : ''}>
+            ${logo}
+            <div class="dup-finder-info">
+              <div class="dup-finder-name">${escapeHtml(ch.name)}</div>
+              <div class="dup-finder-source">${escapeHtml(ch.source)}</div>
+            </div>
+            <div class="dup-finder-badges">${badges}</div>
+          </label>`;
+      }
+
+      const strictHtml = data.strict.length
+        ? data.strict.map(c => renderRow(c, true)).join('')
+        : `<div class="dup-finder-none">None found</div>`;
+      const softHtml = data.soft.length
+        ? data.soft.map(c => renderRow(c, false)).join('')
+        : '';
+
+      content.innerHTML = `
+        <h2>Potential Duplicates</h2>
+        <p class="modal-sub">Marking <strong>${escapeHtml(data.channel.name)}</strong> as duplicate. Select any related channels to mark at the same time.</p>
+        <div class="dup-finder-subject">
+          ${data.channel.logo_url ? `<img src="${escapeHtml(data.channel.logo_url)}" onerror="this.style.display='none'">` : ''}
+          <div>
+            <div class="dup-finder-name">${escapeHtml(data.channel.name)}</div>
+            <div class="dup-finder-source">${escapeHtml(data.channel.source)}</div>
+          </div>
+        </div>
+        ${data.strict.length ? `<div class="dup-finder-group-label">Strict matches — same name, different source</div>${strictHtml}` : ''}
+        ${data.soft.length   ? `<div class="dup-finder-group-label soft">Possible matches — similar name</div>${softHtml}` : ''}
+        <div class="dup-finder-actions">
+          <button class="btn-cancel-modal" onclick="closeDupModal()">Cancel</button>
+          <button class="btn-primary" id="dupModal-confirm">Mark Selected as Duplicate</button>
+        </div>`;
+
+      document.getElementById('dupModal-confirm').onclick = async () => {
+        const checked = [...content.querySelectorAll('input[name=dup-pick]:checked')].map(el => parseInt(el.value));
+        const confirmBtn = document.getElementById('dupModal-confirm');
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Saving…';
+        try {
+          // Mark the original channel
+          await _applyDuplicate(channelId);
+          _applyDupUiChanges(channelId, btn);
+          // Mark any selected others
+          for (const id of checked) {
+            await _applyDuplicate(id);
+            const otherBtn = document.getElementById(`markdup-${id}`);
+            _applyDupUiChanges(id, otherBtn || null);
+          }
+          closeDupModal();
+        } catch (e) {
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Mark Selected as Duplicate';
+          console.error('dupModal confirm failed:', e);
+        }
+      };
+
+      modal.classList.add('open');
+    }
+
+    function closeDupModal() {
+      document.getElementById('dupModal').classList.remove('open');
+    }
+
+    document.addEventListener('click', function(e) {
+      const badge = e.target.closest('.badge-dup-clickable');
+      if (badge) {
+        const id = parseInt(badge.dataset.channelId);
+        if (id) window.openDupFinderView(id);
+      }
+    });
+
+    function _dcRenderCard(ch, isSubject) {
+      const logo = ch.logo_url
+        ? `<img class="dc-logo" src="${escapeHtml(ch.logo_url)}" onerror="this.style.display='none'">`
+        : `<div class="dc-logo-blank"></div>`;
+
+      // Header status badges (right side)
+      const badges = [];
+      if (!ch.is_active) {
+        badges.push(`<span class="dc-badge dc-badge-inact">Inactive</span>`);
+      }
+      if (ch.disable_reason) {
+        badges.push(`<span class="dc-badge dc-badge-dead">${escapeHtml(ch.disable_reason)}</span>`);
+      } else if (ch.is_enabled) {
+        badges.push(`<span class="dc-badge dc-badge-on dc-status-chip">On</span>`);
+      } else {
+        badges.push(`<span class="dc-badge dc-badge-off dc-status-chip">Off</span>`);
+      }
+      if (ch.is_duplicate) {
+        badges.push(`<span class="dc-badge dc-badge-dupl dc-dupl-chip">DUPL</span>`);
+      }
+
+      // Stats grid
+      const stats = [];
+      const si = ch.stream_info;
+      if (si) {
+        // Video resolution
+        let resLabel = '—', resClass = 'dc-sv-muted';
+        if (si.has_4k) { resLabel = si.max_resolution || '4K'; resClass = 'dc-sv-4k'; }
+        else if (si.has_hd) { resLabel = si.max_resolution || 'HD'; resClass = 'dc-sv-hd'; }
+        else if (si.max_resolution) { resLabel = si.max_resolution; resClass = 'dc-sv-sd'; }
+        stats.push(`<div class="dc-stat"><span class="dc-stat-lbl">Video</span><span class="dc-stat-val ${resClass}">${resLabel}</span></div>`);
+        // Codec
+        const codecLabel = !si.video_codec ? '—'
+          : si.video_codec === 'h264'  ? 'H.264'
+          : si.video_codec === 'hevc'  ? 'HEVC'
+          : si.video_codec === 'mpeg2' ? 'MPEG-2'
+          : si.video_codec.toUpperCase();
+        const codecClass = si.video_codec === 'hevc' ? 'dc-sv-warn' : '';
+        stats.push(`<div class="dc-stat"><span class="dc-stat-lbl">Codec</span><span class="dc-stat-val ${codecClass}">${codecLabel}${si.drm ? ' · DRM' : ''}</span></div>`);
+      } else {
+        stats.push(`<div class="dc-stat"><span class="dc-stat-lbl">Video</span><span class="dc-stat-val dc-sv-muted">Not audited</span></div>`);
+      }
+
+      // EPG
+      const pc = ch.program_count || 0;
+      const epgClass = pc >= 20 ? 'dc-sv-rich' : pc > 0 ? 'dc-sv-some' : 'dc-sv-none';
+      const epgLabel = pc === 0 ? 'None' : `${pc} programs`;
+      stats.push(`<div class="dc-stat"><span class="dc-stat-lbl">EPG</span><span class="dc-stat-val ${epgClass}">${epgLabel}</span></div>`);
+
+      // Gracenote
+      let gnLabel, gnClass;
+      if (ch.gracenote_mode === 'off') {
+        gnLabel = 'Disabled'; gnClass = 'dc-sv-muted';
+      } else if (ch.gracenote_id) {
+        gnLabel = ch.gracenote_id; gnClass = 'dc-sv-gn';
+      } else {
+        gnLabel = 'Not matched'; gnClass = 'dc-sv-none';
+      }
+      stats.push(`<div class="dc-stat"><span class="dc-stat-lbl">Gracenote</span><span class="dc-stat-val ${gnClass}" title="${ch.gracenote_id || ''}">${gnLabel}</span></div>`);
+
+      // Missed scrapes (only if notable)
+      if (ch.missed_scrapes >= 2) {
+        stats.push(`<div class="dc-stat"><span class="dc-stat-lbl">Missed</span><span class="dc-stat-val dc-sv-warn">${ch.missed_scrapes}× scrapes</span></div>`);
+      }
+
+      // Action buttons
+      const toggleBtnClass = ch.is_enabled ? 'dc-btn dc-btn-disable' : 'dc-btn dc-btn-enable';
+      const toggleBtnLabel = ch.is_enabled ? 'Disable' : 'Enable';
+      const dupBtnLabel    = ch.is_duplicate ? 'Clear DUPL' : 'Mark DUPL';
+
+      return `
+        <div class="dc-card${isSubject ? ' dc-subject' : ''}${!ch.is_enabled ? ' dc-card-disabled' : ''}" id="dc-card-${ch.id}"
+             data-enabled="${ch.is_enabled}" data-is-duplicate="${ch.is_duplicate}">
+          <div class="dc-head">
+            ${logo}
+            <div class="dc-identity">
+              ${isSubject ? `<div class="dc-kicker">This channel</div>` : ''}
+              <div class="dc-name">${escapeHtml(ch.name)}</div>
+              <div class="dc-source">${escapeHtml(ch.source)}</div>
+            </div>
+            <div class="dc-badges">${badges.join('')}</div>
+          </div>
+          <div class="dc-stats">${stats.join('')}</div>
+          <div class="dc-foot">
+            <button class="${toggleBtnClass}" onclick="dcToggleEnabled(${ch.id}, this)">${toggleBtnLabel}</button>
+            <button class="dc-btn" onclick="dcToggleDup(${ch.id}, this)">${dupBtnLabel}</button>
+          </div>
+        </div>`;
+    }
+
+    window.openDupFinderView = async function(channelId) {
+      const modal = document.getElementById('dupModal');
+      const content = document.getElementById('dupModal-content');
+      content.innerHTML = '<div class="modal-loading">Loading…</div>';
+      modal.classList.add('open');
+      try {
+        const res  = await fetch(`/api/channels/${channelId}/duplicates`);
+        const data = await res.json();
+
+        const hasAny = data.strict.length || data.soft.length;
+        let html = `<h2>Duplicate Finder</h2>`;
+        html += `<div class="dc-scroll">`;
+        html += `<div class="dc-group-label">This channel</div>`;
+        html += _dcRenderCard(data.channel, true);
+        if (data.strict.length) {
+          html += `<div class="dc-group-label">Exact matches — same name, different source</div>`;
+          html += data.strict.map(c => _dcRenderCard(c, false)).join('');
+        }
+        if (data.soft.length) {
+          html += `<div class="dc-group-label">Similar names</div>`;
+          html += data.soft.map(c => _dcRenderCard(c, false)).join('');
+        }
+        if (!hasAny) {
+          html += `<div class="dc-none">No matching channels found in other sources.</div>`;
+        }
+        html += `</div>`;
+        html += `<div class="dc-modal-foot"><button class="btn-cancel-modal" onclick="closeDupModal()">Close</button></div>`;
+        content.innerHTML = html;
+      } catch (e) {
+        content.innerHTML = `<p class="modal-sub" style="color:var(--danger)">Failed to load duplicates.</p>
+          <div class="dc-modal-foot"><button class="btn-cancel-modal" onclick="closeDupModal()">Close</button></div>`;
+      }
+    }
+
+    async function dcToggleEnabled(channelId, btn) {
+      const card = document.getElementById(`dc-card-${channelId}`);
+      const curEnabled = card.dataset.enabled === 'true';
+      const newEnabled = !curEnabled;
+      btn.disabled = true;
+      const prevText = btn.textContent;
+      btn.textContent = '…';
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method: 'PATCH', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({is_enabled: newEnabled}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        card.dataset.enabled = String(newEnabled);
+        card.classList.toggle('dc-card-disabled', !newEnabled);
+        // Update status badge
+        const chip = card.querySelector('.dc-status-chip');
+        if (chip) {
+          chip.className = `dc-badge dc-status-chip ${newEnabled ? 'dc-badge-on' : 'dc-badge-off'}`;
+          chip.textContent = newEnabled ? 'On' : 'Off';
+        }
+        // Update button
+        btn.className = newEnabled ? 'dc-btn dc-btn-disable' : 'dc-btn dc-btn-enable';
+        btn.textContent = newEnabled ? 'Disable' : 'Enable';
+        btn.disabled = false;
+        // Sync main table row styling
+        const row = document.getElementById(`row-${channelId}`);
+        if (row) row.classList.toggle('disabled', !newEnabled);
+        // Sync main table toggle checkbox
+        const tog = document.getElementById(`toggle-${channelId}`);
+        if (tog) { tog.checked = newEnabled; tog.dataset.original = String(newEnabled); }
+      } catch(e) {
+        btn.disabled = false;
+        btn.textContent = prevText;
+        console.error('dcToggleEnabled failed:', e);
+      }
+    }
+
+    async function dcToggleDup(channelId, btn) {
+      const card = document.getElementById(`dc-card-${channelId}`);
+      const curDup = card.dataset.isDuplicate === 'true';
+      const newDup = !curDup;
+      btn.disabled = true;
+      const prevText = btn.textContent;
+      btn.textContent = '…';
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method: 'PATCH', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({is_duplicate: newDup}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        card.dataset.isDuplicate = String(newDup);
+        // Update DUPL chip visibility
+        const chip = card.querySelector('.dc-dupl-chip');
+        if (newDup && !chip) {
+          const badgesEl = card.querySelector('.dc-badges');
+          const newChip = document.createElement('span');
+          newChip.className = 'dc-badge dc-badge-dupl dc-dupl-chip';
+          newChip.textContent = 'DUPL';
+          badgesEl && badgesEl.appendChild(newChip);
+        } else if (!newDup && chip) {
+          chip.remove();
+        }
+        btn.textContent = newDup ? 'Clear DUPL' : 'Mark DUPL';
+        btn.disabled = false;
+        // Sync main table
+        const row = document.getElementById(`row-${channelId}`);
+        if (row) {
+          const nameCell = row.querySelector('td:nth-child(3)');
+          if (newDup) {
+            if (nameCell && !nameCell.querySelector('.badge-manual-dup')) {
+              const badge = document.createElement('span');
+              badge.className = 'badge-manual-dup badge-dup-clickable';
+              badge.title = 'Click to see potential duplicates';
+              badge.style.cursor = 'pointer';
+              badge.textContent = 'DUPL';
+              badge.dataset.channelId = channelId;
+              nameCell.appendChild(badge);
+            }
+            const markBtn = document.getElementById(`markdup-${channelId}`);
+            if (markBtn) markBtn.style.display = 'none';
+          } else {
+            nameCell && nameCell.querySelector('.badge-manual-dup')?.remove();
+            const clearBtn = document.getElementById(`cleardup-${channelId}`);
+            if (clearBtn) clearBtn.remove();
+            const actionsDiv = document.querySelector(`#inspect-cell-${channelId} .channel-actions`);
+            if (actionsDiv && !document.getElementById(`markdup-${channelId}`)) {
+              const mb = document.createElement('button');
+              mb.className = 'btn-mark-dup'; mb.id = `markdup-${channelId}`;
+              mb.title = 'Mark as duplicate';  mb.textContent = '⊘';
+              mb.onclick = () => markManualDup(channelId, mb);
+              actionsDiv.appendChild(mb);
+            }
+          }
+        }
+      } catch(e) {
+        btn.disabled = false;
+        btn.textContent = prevText;
+        console.error('dcToggleDup failed:', e);
       }
     }
 

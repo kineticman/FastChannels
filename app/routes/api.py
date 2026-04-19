@@ -879,7 +879,16 @@ def update_channel(channel_id):
             _apply_gracenote_update(ch, data.get('gracenote_id'), data.get('gracenote_mode'))
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 422
-    db.session.commit()
+    # Retry commit up to 3× (1s apart) if SQLite is briefly locked by a worker
+    for _attempt in range(3):
+        try:
+            db.session.commit()
+            break
+        except OperationalError as _oe:
+            if 'database is locked' not in str(_oe) or _attempt == 2:
+                raise
+            db.session.rollback()
+            _time.sleep(1)
     _invalidate_and_refresh_xml()
     return jsonify(ch.to_dict())
 
@@ -1658,6 +1667,73 @@ def stats():
         'total_channels': q.count(),
         'total_sources':  Source.query.filter_by(is_enabled=True).count(),
         'categories':     [{'name': c or 'Uncategorized', 'count': n} for c, n in cat_rows],
+    })
+
+
+@api_bp.route('/channels/<int:channel_id>/duplicates', methods=['GET'])
+def channel_duplicates(channel_id):
+    """Return channels whose name matches the given channel (strict or soft normalisation)."""
+    from .admin import _canonical_duplicate_name, _soft_duplicate_name
+    from sqlalchemy import func as _func
+    ch = db.session.get(Channel, channel_id)
+    if ch is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    strict_key = _canonical_duplicate_name(ch.name or '')
+    soft_key   = _soft_duplicate_name(ch.name or '')
+
+    candidates = (
+        Channel.query.join(Source)
+        .filter(Channel.id != channel_id, Channel.name != None, Channel.name != '')
+        .all()
+    )
+
+    strict, soft, seen = [], [], set()
+    for c in candidates:
+        if _canonical_duplicate_name(c.name) == strict_key and strict_key:
+            strict.append(c)
+            seen.add(c.id)
+        elif _soft_duplicate_name(c.name) == soft_key and soft_key and c.id not in seen:
+            soft.append(c)
+
+    # Fetch program counts for all relevant channels in one query
+    all_ids = [ch.id] + [c.id for c in strict] + [c.id for c in soft]
+    prog_counts = dict(
+        db.session.query(Program.channel_id, _func.count(Program.id))
+        .filter(Program.channel_id.in_(all_ids))
+        .group_by(Program.channel_id)
+        .all()
+    )
+
+    def _fmt(c):
+        si = c.stream_info or {}
+        return {
+            'id':             c.id,
+            'name':           c.name,
+            'source':         c.source.display_name,
+            'logo_url':       c.logo_url,
+            'is_duplicate':   c.is_duplicate,
+            'is_enabled':     c.is_enabled,
+            'is_active':      c.is_active,
+            'disable_reason': c.disable_reason,
+            'missed_scrapes': c.missed_scrapes or 0,
+            'category':       c.category,
+            'gracenote_id':   c.gracenote_id,
+            'gracenote_mode': c.gracenote_mode or 'auto',
+            'program_count':  prog_counts.get(c.id, 0),
+            'stream_info': {
+                'max_resolution': si.get('max_resolution'),
+                'video_codec':    si.get('video_codec'),
+                'has_4k':         si.get('has_4k', False),
+                'has_hd':         si.get('has_hd', False),
+                'drm':            si.get('drm', False),
+            } if si else None,
+        }
+
+    return jsonify({
+        'channel': _fmt(ch),
+        'strict':  [_fmt(c) for c in strict],
+        'soft':    [_fmt(c) for c in soft],
     })
 
 
