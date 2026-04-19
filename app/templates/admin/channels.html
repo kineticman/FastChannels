@@ -1406,7 +1406,7 @@
             {% if ch.last_seen_at %}
               {% set _ = hover_parts.append('Last seen: ' ~ (ch.last_seen_at | localtime)) %}
             {% endif %}
-            <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Duplicate match found — click to see matches">DUP</span>{% elif ch.name in possible_duplicate_names %} <span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Possible duplicate — click to see matches">DUP?</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup badge-dup-clickable" data-channel-id="{{ ch.id }}" title="Click to see potential duplicates" style="cursor:pointer">DUPL</span>{% endif %}</td>
+            <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong>{% if ch.name in duplicate_names %} <span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Duplicate match found — click to see matches">DUP</span>{% elif ch.name in possible_duplicate_names %} <span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Possible duplicate — click to see matches">DUP?</span>{% elif ch.id in gn_duplicate_ids %} <span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Same Gracenote ID found on another source — click to see matches">GN DUP</span>{% endif %}{% if ch.is_duplicate %} <span class="badge-manual-dup badge-dup-clickable" data-channel-id="{{ ch.id }}" title="Click to see potential duplicates" style="cursor:pointer">DUPL</span>{% endif %}</td>
             <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}{% if ch.stream_info %}{% if ch.stream_info.has_4k %}<span class="badge-4k" title="4K stream ({{ ch.stream_info.max_resolution }})">4K</span>{% elif ch.stream_info.has_hd %}<span class="badge-hd" title="HD stream ({{ ch.stream_info.max_resolution }})">HD</span>{% endif %}{% if ch.stream_info.video_codec == 'hevc' %}<span class="badge-hevc" title="H.265/HEVC — may not play in all clients">HEVC</span>{% endif %}{% endif %}</td>
             <td data-channel-id="{{ ch.id }}">
               {% if ch.category %}
@@ -2425,7 +2425,7 @@
         const res  = await fetch(`/api/channels/${channelId}/duplicates`);
         const data = await res.json();
 
-        const hasAny = data.strict.length || data.soft.length;
+        const hasAny = data.strict.length || data.soft.length || (data.gn || []).length;
         let html = `<h2>Duplicate Finder</h2>`;
         html += `<div class="dc-scroll">`;
         html += `<div class="dc-group-label">This channel</div>`;
@@ -2437,6 +2437,10 @@
         if (data.soft.length) {
           html += `<div class="dc-group-label">Similar names</div>`;
           html += data.soft.map(c => _dcRenderCard(c, false)).join('');
+        }
+        if ((data.gn || []).length) {
+          html += `<div class="dc-group-label">Same Gracenote ID — different name</div>`;
+          html += data.gn.map(c => _dcRenderCard(c, false)).join('');
         }
         if (!hasAny) {
           html += `<div class="dc-none">No matching channels found in other sources.</div>`;

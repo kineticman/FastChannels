@@ -49,7 +49,7 @@ def _soft_duplicate_name(name: str) -> str:
     return s
 
 
-def _duplicate_name_sets() -> tuple[set[str], set[str]]:
+def _duplicate_name_sets() -> tuple[set[str], set[str], set[int]]:
     name_rows = (
         db.session.query(Channel.name, Channel.source_id, Channel.country)
         .filter(Channel.name != None, Channel.name != '')
@@ -96,7 +96,30 @@ def _duplicate_name_sets() -> tuple[set[str], set[str]]:
             possible_names.update(names)
     possible_names.update(cross_region_names)
     possible_names.difference_update(duplicate_names)
-    return duplicate_names, possible_names
+
+    # Gracenote-based duplicate detection: channels sharing a GN ID across
+    # multiple sources but with different names (missed by name normalizers).
+    gn_rows = (
+        db.session.query(Channel.id, Channel.name, Channel.gracenote_id, Channel.source_id)
+        .filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+        .all()
+    )
+    gn_by_id: dict[str, list] = defaultdict(list)
+    for cid, cname, gn, sid in gn_rows:
+        gn_by_id[gn].append((cid, (cname or '').strip(), sid))
+
+    gn_duplicate_ids: set[int] = set()
+    for gn, entries in gn_by_id.items():
+        if len({e[2] for e in entries}) < 2:
+            continue  # all from same source — not cross-source
+        canonical_keys = {_canonical_duplicate_name(e[1]) for e in entries if e[1]}
+        if len(canonical_keys) <= 1:
+            continue  # names already identical — caught by name matching
+        for cid, cname, _ in entries:
+            if cname not in duplicate_names:
+                gn_duplicate_ids.add(cid)
+
+    return duplicate_names, possible_names, gn_duplicate_ids
 
 
 def _page_source_chnum_map(page_items) -> dict[int, int]:
@@ -261,7 +284,7 @@ def channels():
     sort_by          = request.args.get('sort', 'name')
     sort_dir         = request.args.get('dir', 'asc')
 
-    exact_duplicate_names, possible_duplicate_names = _duplicate_name_sets()
+    exact_duplicate_names, possible_duplicate_names, gn_duplicate_ids = _duplicate_name_sets()
     all_duplicate_names = exact_duplicate_names | possible_duplicate_names
 
     q = Channel.query.join(Source)
@@ -334,9 +357,17 @@ def channels():
         q = q.filter(Channel.name.ilike(f'%{search}%'))
 
     if duplicates_filter == '1':
-        q = q.filter(db.or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.is_duplicate == True))
+        q = q.filter(db.or_(
+            Channel.name.in_(sorted(all_duplicate_names)),
+            Channel.id.in_(gn_duplicate_ids),
+            Channel.is_duplicate == True,
+        ))
     elif duplicates_filter == 'unique':
-        q = q.filter(Channel.name.notin_(sorted(all_duplicate_names)), Channel.is_duplicate == False)
+        q = q.filter(
+            Channel.name.notin_(sorted(all_duplicate_names)),
+            Channel.id.notin_(gn_duplicate_ids),
+            Channel.is_duplicate == False,
+        )
 
     if new_filter in ('3', '7', '14'):
         cutoff = datetime.now(timezone.utc) - timedelta(days=int(new_filter))
@@ -425,8 +456,10 @@ def channels():
     countries = [(c, cnt) for c, cnt in country_rows]
 
     page_names = {(ch.name or '').strip() for ch in channels.items if (ch.name or '').strip()}
+    page_ids   = {ch.id for ch in channels.items}
     duplicate_names = exact_duplicate_names & page_names
     possible_duplicate_names = possible_duplicate_names & page_names
+    gn_duplicate_page_ids = gn_duplicate_ids & page_ids
     duplicate_group_keys = {ch.id: _canonical_duplicate_name(ch.name or '') for ch in channels.items}
     chnum_map = _page_default_feed_chnum_map(channels.items)
 
@@ -475,6 +508,7 @@ def channels():
                            resolution_filter=resolution_filter,
                            duplicate_names=duplicate_names,
                            possible_duplicate_names=possible_duplicate_names,
+                           gn_duplicate_ids=gn_duplicate_page_ids,
                            duplicate_group_keys=duplicate_group_keys,
                            sort_by=sort_by, sort_dir=sort_dir,
                            chnum_map=chnum_map,

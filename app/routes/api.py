@@ -1695,9 +1695,26 @@ def channel_duplicates(channel_id):
             seen.add(c.id)
         elif _soft_duplicate_name(c.name) == soft_key and soft_key and c.id not in seen:
             soft.append(c)
+            seen.add(c.id)
+
+    # Gracenote-based tier: other channels sharing the same GN ID but different names
+    gn_matches = []
+    if ch.gracenote_id:
+        gn_candidates = (
+            Channel.query.join(Source)
+            .filter(
+                Channel.id != channel_id,
+                Channel.gracenote_id == ch.gracenote_id,
+                Channel.id.notin_(seen),
+            )
+            .all()
+        )
+        for c in gn_candidates:
+            if _canonical_duplicate_name(c.name or '') != strict_key:
+                gn_matches.append(c)
 
     # Fetch program counts for all relevant channels in one query
-    all_ids = [ch.id] + [c.id for c in strict] + [c.id for c in soft]
+    all_ids = [ch.id] + [c.id for c in strict] + [c.id for c in soft] + [c.id for c in gn_matches]
     prog_counts = dict(
         db.session.query(Program.channel_id, _func.count(Program.id))
         .filter(Program.channel_id.in_(all_ids))
@@ -1734,6 +1751,7 @@ def channel_duplicates(channel_id):
         'channel': _fmt(ch),
         'strict':  [_fmt(c) for c in strict],
         'soft':    [_fmt(c) for c in soft],
+        'gn':      [_fmt(c) for c in gn_matches],
     })
 
 
