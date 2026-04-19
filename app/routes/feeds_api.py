@@ -199,6 +199,50 @@ def delete_feed(feed_id):
     return jsonify({'status': 'deleted', 'slug': slug})
 
 
+@feeds_api_bp.route('/<int:feed_id>/pin', methods=['POST'])
+def pin_channel(feed_id):
+    feed = Feed.query.get_or_404(feed_id)
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        return jsonify({'error': 'Built-in feeds cannot be modified.'}), 403
+    data = request.get_json() or {}
+    try:
+        channel_id = int(data.get('channel_id', 0))
+    except (TypeError, ValueError):
+        channel_id = 0
+    if not channel_id:
+        return jsonify({'error': 'channel_id is required'}), 400
+    filters = dict(feed.filters or {})
+    pinned = list(filters.get('pinned_channel_ids', []))
+    if channel_id not in pinned:
+        pinned.append(channel_id)
+        filters['pinned_channel_ids'] = pinned
+        feed.filters = filters
+        err = _safe_commit()
+        if err:
+            return err
+        _invalidate_and_refresh_xml()
+    return jsonify({'status': 'pinned', 'feed_id': feed_id, 'channel_id': channel_id})
+
+
+@feeds_api_bp.route('/<int:feed_id>/pin/<int:channel_id>', methods=['DELETE'])
+def unpin_channel(feed_id, channel_id):
+    feed = Feed.query.get_or_404(feed_id)
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        return jsonify({'error': 'Built-in feeds cannot be modified.'}), 403
+    filters = dict(feed.filters or {})
+    pinned = [i for i in filters.get('pinned_channel_ids', []) if i != channel_id]
+    if pinned:
+        filters['pinned_channel_ids'] = pinned
+    else:
+        filters.pop('pinned_channel_ids', None)
+    feed.filters = filters
+    err = _safe_commit()
+    if err:
+        return err
+    _invalidate_and_refresh_xml()
+    return jsonify({'status': 'unpinned', 'feed_id': feed_id, 'channel_id': channel_id})
+
+
 def _parse_chnum_start(val) -> int | None:
     """Coerce chnum_start to a positive int, or None to clear it."""
     if val is None or val == '':
@@ -241,6 +285,8 @@ def _clean_filters(raw: dict) -> dict:
             out['gracenote'] = gracenote
     if excluded_ids := raw.get('excluded_channel_ids'):
         out['excluded_channel_ids'] = [int(i) for i in excluded_ids if str(i).isdigit() or isinstance(i, int)]
+    if pinned_ids := raw.get('pinned_channel_ids'):
+        out['pinned_channel_ids'] = [int(i) for i in pinned_ids if str(i).isdigit() or isinstance(i, int)]
     if max_ch := raw.get('max_channels'):
         try:
             out['max_channels'] = max(1, int(max_ch))

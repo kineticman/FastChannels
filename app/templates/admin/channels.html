@@ -1088,6 +1088,28 @@
       /* Cat override modal full width */
       #catModal .modal-box { max-width: 100%; }
     }
+    /* Pin-to-feed button & dropdown */
+    .btn-pin-feed {
+      background: none; border: 1px solid var(--border); color: var(--text-muted);
+      padding: 0.2rem 0.45rem; border-radius: 4px; cursor: pointer;
+      font-size: 0.75rem; line-height: 1; transition: border-color 0.15s, color 0.15s;
+    }
+    .btn-pin-feed:hover { border-color: var(--success-border); color: var(--success-border); }
+    #pinFeedDropdown {
+      position: fixed; z-index: 9999; background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); padding: 0.4rem 0;
+      min-width: 180px; max-width: 260px; display: none;
+    }
+    #pinFeedDropdown .pfd-header {
+      font-size: 0.72rem; color: var(--text-muted); padding: 0.3rem 0.75rem 0.4rem;
+      border-bottom: 1px solid var(--border); margin-bottom: 0.25rem;
+    }
+    #pinFeedDropdown button {
+      display: block; width: 100%; text-align: left; background: none; border: none;
+      padding: 0.4rem 0.75rem; color: var(--text); font-size: 0.85rem; cursor: pointer;
+    }
+    #pinFeedDropdown button:hover { background: var(--surface-3); color: var(--accent-soft); }
+    #pinFeedDropdown .pfd-empty { padding: 0.5rem 0.75rem; color: var(--text-muted); font-size: 0.82rem; }
   </style>
   {% include 'admin/_theme_head.html' %}
 </head>
@@ -1113,6 +1135,7 @@
     };
     const _pageVisibleCount = {{ channels.items|length }};
     const _pageTotalCount = {{ channels.total }};
+    const FEEDS = [{% for f in feeds %}{% if f.is_enabled and f.slug != 'default' %}{"id":{{ f.id }},"name":{{ f.name | tojson }}},{% endif %}{% endfor %}];
   </script>
   <nav>
     <h1>⚡ FastChannels</h1>
@@ -1482,6 +1505,7 @@
                 </div>
                 <button class="btn-preview btn-icon" onclick="openPreview({{ ch.id }})" title="Preview: view current and next program, preview playback">📺</button>
                 <button class="btn-inspect" onclick="inspectChannel({{ ch.id }}, this)" title="Test stream: check DRM, liveness, and segment data">&#128269;</button>
+                <button class="btn-pin-feed" onclick="openPinFeedMenu({{ ch.id }}, this)" title="Add to a feed">+feed</button>
                 {% if not ch.is_duplicate %}
                 <button class="btn-mark-dup" id="markdup-{{ ch.id }}" onclick="markManualDup({{ ch.id }}, this)" title="Mark as duplicate — adds a DUPL label for filtering (does not disable the channel)">⊘</button>
                 {% endif %}
@@ -1559,6 +1583,12 @@
         <div class="modal-loading">Loading…</div>
       </div>
     </div>
+  </div>
+
+  <!-- Pin-to-feed dropdown (singleton, repositioned on demand) -->
+  <div id="pinFeedDropdown">
+    <div class="pfd-header">Add to feed</div>
+    <div id="pinFeedDropdown-list"></div>
   </div>
 
   <!-- Duplicate finder modal -->
@@ -2786,6 +2816,56 @@
         showToast('⚠ Bulk request failed — ' + e.message);
       }
     }
+
+    // ── Pin-to-feed ───────────────────────────────────────────────────────
+    let _pinChannelId = null;
+
+    function openPinFeedMenu(channelId, btn) {
+      _pinChannelId = channelId;
+      const menu = document.getElementById('pinFeedDropdown');
+      const list = document.getElementById('pinFeedDropdown-list');
+      list.innerHTML = '';
+      if (!FEEDS.length) {
+        list.innerHTML = '<div class="pfd-empty">No custom feeds configured</div>';
+      } else {
+        FEEDS.forEach(f => {
+          const b = document.createElement('button');
+          b.textContent = f.name;
+          b.onclick = () => pinChannelToFeed(channelId, f.id, f.name);
+          list.appendChild(b);
+        });
+      }
+      const rect = btn.getBoundingClientRect();
+      menu.style.display = 'block';
+      const menuW = menu.offsetWidth;
+      let left = rect.left + window.scrollX;
+      if (left + menuW > window.innerWidth - 8) left = window.innerWidth - menuW - 8;
+      menu.style.left = left + 'px';
+      menu.style.top  = (rect.bottom + window.scrollY + 4) + 'px';
+    }
+
+    async function pinChannelToFeed(channelId, feedId, feedName) {
+      document.getElementById('pinFeedDropdown').style.display = 'none';
+      try {
+        const r = await fetch(`/api/feeds/${feedId}/pin`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({channel_id: channelId}),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        showToast(`✓ Added to "${feedName}"`);
+      } catch (e) {
+        showToast('⚠ Could not pin channel — ' + e.message);
+      }
+    }
+
+    document.addEventListener('click', function(e) {
+      const menu = document.getElementById('pinFeedDropdown');
+      if (menu && menu.style.display === 'block' && !menu.contains(e.target) && !e.target.closest('.btn-pin-feed')) {
+        menu.style.display = 'none';
+      }
+    });
   </script>
 
   <!-- ── Resolve Duplicates Modal ───────────────────────────────────────── -->

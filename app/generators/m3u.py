@@ -233,6 +233,13 @@ def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = 
     filters = filters or {}
     channels = _build_channel_query(filters).all()
 
+    pinned_ids = filters.get('pinned_channel_ids')
+    if pinned_ids:
+        existing_ids = {ch.id for ch in channels}
+        extra_ids = [i for i in pinned_ids if i not in existing_ids]
+        if extra_ids:
+            channels = list(channels) + _build_channel_query({'channel_ids': extra_ids}).all()
+
     if gracenote is True:
         channels = [ch for ch in channels if _parse_gracenote_id(ch)]
     elif gracenote is False:
@@ -306,6 +313,8 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
         f['gracenote'] = gracenote
     if excluded_ids := feed_filters.get('excluded_channel_ids'):
         f['excluded_channel_ids'] = excluded_ids
+    if pinned_ids := feed_filters.get('pinned_channel_ids'):
+        f['pinned_channel_ids'] = pinned_ids
     if max_ch := feed_filters.get('max_channels'):
         f['max_channels'] = max_ch
     return f
