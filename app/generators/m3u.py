@@ -766,9 +766,15 @@ def _tvc_guide_category(ch) -> str | None:
     return _GUIDE_CATEGORY_MAP.get((ch.category or '').lower())
 
 
+_VALID_VCODECS = {'h264', 'mpeg2', 'hevc'}
+
+
 def _tvc_stream_codecs(stream_info: dict) -> tuple[str | None, str | None]:
-    """Return (vcodec, acodec) strings for tvc-stream-vcodec/acodec, or None if unknown."""
-    vcodec = stream_info.get('video_codec') or None  # already 'h264' / 'mpeg2'
+    """Return (vcodec, acodec) strings for tvc-stream-vcodec/acodec, or None if unknown.
+    Only emits values Channels DVR recognises; 'unknown' and unrecognised codecs are suppressed.
+    """
+    raw = (stream_info.get('video_codec') or '').lower()
+    vcodec = raw if raw in _VALID_VCODECS else None
     acodec = None
     variants = stream_info.get('variants') or []
     if variants:
