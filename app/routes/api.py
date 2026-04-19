@@ -143,12 +143,12 @@ def _apply_channel_filters(q, filters: dict | None = None):
         elif gm == 'auto':
             q = q.filter(not_(or_(manual_mode, off_mode)))
     if filters.get('duplicates') in ('1', 'unique'):
-        exact_duplicate_names, possible_duplicate_names = _duplicate_name_sets()
+        exact_duplicate_names, possible_duplicate_names, gn_dup_ids = _duplicate_name_sets()
         all_duplicate_names = exact_duplicate_names | possible_duplicate_names
         if filters['duplicates'] == '1':
-            q = q.filter(or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.is_duplicate == True))
+            q = q.filter(or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.id.in_(gn_dup_ids), Channel.is_duplicate == True))
         else:
-            q = q.filter(Channel.name.notin_(sorted(all_duplicate_names)), Channel.is_duplicate == False)
+            q = q.filter(Channel.name.notin_(sorted(all_duplicate_names)), Channel.id.notin_(gn_dup_ids), Channel.is_duplicate == False)
     return q
 
 
@@ -879,7 +879,9 @@ def update_channel(channel_id):
             _apply_gracenote_update(ch, data.get('gracenote_id'), data.get('gracenote_mode'))
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 422
-    # Retry commit up to 3× (1s apart) if SQLite is briefly locked by a worker
+    # Retry commit up to 3× (1s apart) if SQLite is briefly locked by a worker.
+    # Do NOT rollback between attempts — in autocommit mode the failed flush leaves
+    # the session dirty state intact, so a plain retry will re-attempt the write.
     for _attempt in range(3):
         try:
             db.session.commit()
@@ -887,7 +889,6 @@ def update_channel(channel_id):
         except OperationalError as _oe:
             if 'database is locked' not in str(_oe) or _attempt == 2:
                 raise
-            db.session.rollback()
             _time.sleep(1)
     _invalidate_and_refresh_xml()
     return jsonify(ch.to_dict())

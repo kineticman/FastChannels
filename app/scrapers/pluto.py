@@ -171,6 +171,11 @@ class _StreamSession:
         return resp, None
 
 
+def _pluto_img(url):
+    """Reject Pluto's generic fallback placeholder images."""
+    return url if url and 'assets/images/default' not in url else None
+
+
 class PlutoScraper(BaseScraper):
     source_name     = "pluto"
     display_name    = "Pluto TV"
@@ -463,9 +468,6 @@ class PlutoScraper(BaseScraper):
                     categories.append('Movie')
                 categories.extend(mapped_categories(ep.get('subGenre')))
                 unique_categories = list(dict.fromkeys(cat for cat in categories if cat))
-                def _pluto_img(url):
-                    # Reject Pluto's generic fallback placeholder
-                    return url if url and 'assets/images/default' not in url else None
                 poster_url = (
                     _pluto_img((ep.get('poster')    or {}).get('path')) or
                     _pluto_img((series.get('tile')  or {}).get('path')) or
