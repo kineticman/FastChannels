@@ -717,11 +717,14 @@ async function checkInlineChnumConflict(feedId) {
   const val = parseInt(input.value, 10);
   if (isNaN(val)) { el.innerHTML = ''; return; }
 
-  // Use feed's current channel count from placeholder text as estimate
-  const ph = input.placeholder;
-  const phMatch = ph && ph !== 'auto' ? null : null;
-  const myCount = 500; // conservative fallback; exact count not critical for advisory
-  const myEnd = val + myCount - 1;
+  // Use the feed's actual channel count from the full ranges list (fetched without exclude_id)
+  let myCount = 100; // fallback if we can't determine actual count
+  try {
+    const allRanges = await fetch('/api/feeds/chnum-ranges').then(r => r.json());
+    const mine = allRanges.find(r => r.feed_id === feedId);
+    if (mine) myCount = (mine.count || 0) + (mine.gn_count || 0);
+  } catch { /* keep fallback */ }
+  const myEnd = val + Math.max(myCount, 1) - 1;
 
   const conflicts = ranges.filter(r => val <= r.end && myEnd >= r.start && r.explicit);
   const shown     = ranges.filter(r => r.explicit && !conflicts.find(c => c.feed_id === r.feed_id));
