@@ -1003,6 +1003,23 @@
     }
     .preview-player-wrap.open { display: block; }
     .preview-player-wrap video { width: 100%; max-height: 420px; background: #000; border-radius: 6px; }
+    .preview-video-wrap { position: relative; display: inline-block; width: 100%; }
+    .preview-stats-overlay {
+      display: none; position: absolute; top: 8px; left: 8px; z-index: 10;
+      background: rgba(0,0,0,0.75); color: #e8e8e8; font-family: monospace;
+      font-size: 0.72rem; line-height: 1.6; padding: 0.5rem 0.7rem; border-radius: 6px;
+      pointer-events: none; white-space: nowrap; backdrop-filter: blur(2px);
+    }
+    .preview-stats-overlay.visible { display: block; }
+    .preview-stats-overlay .sfn-row { display: flex; gap: 0.6rem; }
+    .preview-stats-overlay .sfn-lbl { color: #aaa; min-width: 110px; }
+    .preview-stats-overlay .sfn-val { color: #fff; font-weight: 600; }
+    .btn-stats-toggle {
+      background: none; border: 1px solid var(--border); color: var(--text-muted);
+      border-radius: 4px; padding: 0.15rem 0.5rem; font-size: 0.72rem; cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .btn-stats-toggle.active { border-color: var(--accent-soft); color: var(--accent-soft); }
     .preview-volume-row { display: flex; align-items: center; gap: 0.55rem; margin-top: 0.55rem; }
     .preview-volume-row label { color: var(--text-soft); font-size: 0.78rem; white-space: nowrap; }
     .preview-volume-row input[type=range] { flex: 1; accent-color: var(--accent); }
@@ -1763,11 +1780,15 @@
             <button class="preview-action-btn neutral" onclick="closePreviewModal()">Close</button>
           </div>
           <div class="preview-player-wrap" id="preview-player-wrap">
-            <video id="preview-player" controls playsinline preload="none"></video>
+            <div class="preview-video-wrap">
+              <video id="preview-player" controls playsinline preload="none"></video>
+              <div class="preview-stats-overlay" id="preview-stats-overlay"></div>
+            </div>
             <div class="preview-volume-row">
               <label for="preview-volume">Volume</label>
               <input type="range" id="preview-volume" min="0" max="100" value="50" oninput="document.getElementById('preview-player').volume=this.value/100;document.getElementById('preview-volume-pct').textContent=this.value+'%'">
               <span class="preview-volume-pct" id="preview-volume-pct">50%</span>
+              <button class="btn-stats-toggle" id="btn-stats-toggle" onclick="togglePreviewStats()" title="Stats for nerds">Stats</button>
             </div>
             <div class="preview-player-status" id="preview-player-status"></div>
             <div class="preview-note">
@@ -1797,6 +1818,10 @@
         _previewHls.destroy();
         _previewHls = null;
       }
+      _stopStatsLoop();
+      _lastFrag = null;
+      _droppedFrames0 = null;
+      if (_statsVisible) _startStatsLoop();
       video.pause();
       video.removeAttribute('src');
       video.load();
@@ -1849,11 +1874,135 @@
       if (status) status.textContent = 'This browser does not support HLS playback here.';
     }
 
+    // ── Stats for Nerds ──────────────────────────────────────────────────────
+    let _statsInterval  = null;
+    let _statsVisible   = false;
+    let _lastFrag       = null;
+    let _droppedFrames0 = null;
+
+    _previewHls && void 0; // ensure ref accessible
+
+    function togglePreviewStats() {
+      _statsVisible = !_statsVisible;
+      const overlay = document.getElementById('preview-stats-overlay');
+      const btn     = document.getElementById('btn-stats-toggle');
+      if (!overlay) return;
+      if (_statsVisible) {
+        overlay.classList.add('visible');
+        btn && btn.classList.add('active');
+        _startStatsLoop();
+      } else {
+        overlay.classList.remove('visible');
+        btn && btn.classList.remove('active');
+        _stopStatsLoop();
+      }
+    }
+
+    function _startStatsLoop() {
+      _stopStatsLoop();
+      _droppedFrames0 = null;
+      if (_previewHls) {
+        _previewHls.on(window.Hls.Events.FRAG_LOADED, (_e, data) => { _lastFrag = data; });
+      }
+      _updateStats();
+      _statsInterval = setInterval(_updateStats, 1000);
+    }
+
+    function _stopStatsLoop() {
+      if (_statsInterval) { clearInterval(_statsInterval); _statsInterval = null; }
+    }
+
+    function _updateStats() {
+      const overlay = document.getElementById('preview-stats-overlay');
+      const video   = document.getElementById('preview-player');
+      if (!overlay || !video || !_statsVisible) return;
+
+      const hls = _previewHls;
+      const rows = [];
+
+      const fmt = (v, u='') => v != null ? `${v}${u}` : '—';
+
+      // Resolution & frame rate
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const res = vw ? `${vw}×${vh}` : '—';
+      rows.push(['Resolution', res]);
+
+      // Dropped frames
+      if (video.getVideoPlaybackQuality) {
+        const q = video.getVideoPlaybackQuality();
+        if (_droppedFrames0 === null) _droppedFrames0 = q.droppedVideoFrames;
+        const dropped = q.droppedVideoFrames - _droppedFrames0;
+        rows.push(['Dropped Frames', `${dropped} / ${q.totalVideoFrames}`]);
+      }
+
+      // Playback rate & current time
+      rows.push(['Playback', `${video.paused ? 'Paused' : 'Playing'}  ${video.playbackRate}×`]);
+
+      if (hls) {
+        // Bandwidth estimate
+        const bw = hls.bandwidthEstimate;
+        if (bw) rows.push(['Bandwidth Est.', `${(bw / 1000).toFixed(0)} Kbps`]);
+
+        // Current level
+        const lvl = hls.currentLevel >= 0 ? hls.levels?.[hls.currentLevel] : null;
+        if (lvl) {
+          rows.push(['Stream Bitrate', `${(lvl.bitrate / 1000).toFixed(0)} Kbps`]);
+          if (lvl.attrs?.CODECS) rows.push(['Codecs', lvl.attrs.CODECS]);
+          if (lvl.videoCodec)    rows.push(['Video Codec', lvl.videoCodec]);
+          if (lvl.audioCodec)    rows.push(['Audio Codec', lvl.audioCodec]);
+          if (lvl.attrs?.['FRAME-RATE']) rows.push(['Frame Rate', `${lvl.attrs['FRAME-RATE']} fps`]);
+        }
+
+        // Levels available
+        const levels = hls.levels || [];
+        if (levels.length > 1) {
+          const variants = levels.map(l => l.height ? `${l.height}p` : `${(l.bitrate/1000).toFixed(0)}K`).join(' / ');
+          rows.push(['Variants', variants]);
+        }
+
+        // Buffer health
+        const buf = hls.media?.buffered;
+        if (buf && buf.length > 0) {
+          const ct = hls.media.currentTime;
+          let ahead = 0;
+          for (let i = 0; i < buf.length; i++) {
+            if (buf.start(i) <= ct && buf.end(i) >= ct) {
+              ahead = buf.end(i) - ct;
+              break;
+            }
+          }
+          rows.push(['Buffer', `${ahead.toFixed(1)}s`]);
+        }
+
+        // Last fragment
+        if (_lastFrag?.frag) {
+          const f = _lastFrag.frag;
+          const ms = _lastFrag.stats?.loading?.end - _lastFrag.stats?.loading?.start;
+          rows.push(['Last Segment', `sn:${f.sn}  ${ms ? ms.toFixed(0)+'ms' : ''}`]);
+          if (f.url) rows.push(['Segment URL', f.url.split('?')[0].split('/').slice(-1)[0]]);
+        }
+      }
+
+      // Network type (if available)
+      const conn = navigator.connection;
+      if (conn) {
+        const parts = [conn.effectiveType, conn.downlink ? conn.downlink+'Mbps' : ''].filter(Boolean);
+        if (parts.length) rows.push(['Network', parts.join('  ')]);
+      }
+
+      overlay.innerHTML = rows.map(([lbl, val]) =>
+        `<div class="sfn-row"><span class="sfn-lbl">${lbl}</span><span class="sfn-val">${val}</span></div>`
+      ).join('');
+    }
+
     function closePreviewModal(event) {
       if (event && event.target !== event.currentTarget) return;
       const modal = document.getElementById('preview-modal');
       const video = document.getElementById('preview-player');
       const status = document.getElementById('preview-player-status');
+      _stopStatsLoop();
+      _statsVisible = false;
+      _lastFrag = null;
       if (_previewHls) {
         _previewHls.destroy();
         _previewHls = null;
