@@ -1191,7 +1191,7 @@ def _channel_ids_for_filters(filters: dict) -> list[int]:
             q = q.filter(not_(or_(manual_mode, off_mode)))
     if filters.get('duplicates') == '1':
         from app.routes.admin import _duplicate_name_sets
-        exact_duplicate_names, possible_duplicate_names = _duplicate_name_sets()
+        exact_duplicate_names, possible_duplicate_names, _ = _duplicate_name_sets()
         all_duplicate_names = exact_duplicate_names | possible_duplicate_names
         q = q.filter(or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.is_duplicate == True))
     return [row[0] for row in q.with_entities(Channel.id).all()]
