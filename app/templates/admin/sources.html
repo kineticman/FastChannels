@@ -734,8 +734,8 @@
       html += `
         <div class="audit-modal-actions">
           ${!isRunning && recheckIds.length ? `<button class="btn btn-audit" onclick="recheckRateLimited(${Number(sourceId)})">Recheck Rate-limited (${recheckIds.length})</button>` : ''}
-          ${!isRunning ? `<button class="btn btn-audit" onclick="runAuditFromModal(${Number(sourceId)})">Run Audit</button>` : ''}
-          ${!isRunning ? `<button class="btn btn-audit" onclick="runAuditIncludeDead(${Number(sourceId)})" title="Re-check all channels including ones previously marked dead — any that pass will be re-activated automatically">Recheck All (incl. previously dead)</button>` : ''}
+          ${!isRunning && result ? `<button class="btn btn-audit" onclick="runAuditFromModal(${Number(sourceId)})">Run Audit</button>` : ''}
+          ${!isRunning ? `<button class="btn btn-audit" onclick="runAuditIncludeDead(${Number(sourceId)})" title="Re-check all channels including ones previously marked dead — any that pass will be re-activated automatically">${result ? 'Recheck All (incl. previously dead)' : 'Run Audit'}</button>` : ''}
           <button class="btn-cancel-modal" onclick="_closeAuditModal()">Close</button>
         </div>`;
 
