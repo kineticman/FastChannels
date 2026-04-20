@@ -227,6 +227,8 @@
     .preview-action-btn.neutral:hover { background: var(--surface-4); border-color: var(--text-dim); }
     .flag-group { display: flex; align-items: center; gap: 0.25rem; }
     .flag-icon { font-size: 0.9rem; line-height: 1; }
+    .flag-clickable { cursor: pointer; opacity: 0.85; transition: opacity 0.15s, transform 0.15s; }
+    .flag-clickable:hover { opacity: 1; transform: scale(1.2); }
     .btn-reenable {
       font-size: 0.75rem; padding: 0.15rem 0.35rem; border-radius: 4px; border: none;
       background: var(--accent-bg); color: var(--accent-soft); cursor: pointer;
@@ -1519,11 +1521,9 @@
               <div class="channel-actions">
                 <div id="flags-cell-{{ ch.id }}" class="flag-group">
                   {% if ch.disable_reason and ch.disable_reason.startswith('DRM') %}
-                  <span class="flag-icon" title="{{ ch.disable_reason }} — stream is protected, not playable in generic IPTV clients">🔒</span>
-                  <button class="btn-reenable btn-icon" onclick="reenable({{ ch.id }}, this)" title="Clear DRM flag and re-enable">↺</button>
+                  <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'DRM')" title="{{ ch.disable_reason }} — stream is protected, not playable in generic IPTV clients. Click to re-enable.">🔒</span>
                   {% elif ch.disable_reason == 'Dead' %}
-                  <span class="flag-icon" title="Dead — stream audit found this channel not currently playable">💀</span>
-                  <button class="btn-reenable btn-icon" onclick="reenable({{ ch.id }}, this)" title="Clear Dead flag and re-enable">↺</button>
+                  <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'Dead')" title="Dead — stream audit found this channel not currently playable. Click to re-enable.">💀</span>
                   {% endif %}
                   {% if ch.is_duplicate %}
                   <button class="btn-clear-dup" id="cleardup-{{ ch.id }}" onclick="clearManualDup({{ ch.id }}, this)" title="Remove duplicate label">⊘</button>
@@ -2775,7 +2775,27 @@
       }
     }
 
-    async function reenable(channelId, btn) {
+    let _reenableChannelId = null;
+
+    function openReenableModal(channelId, flagType) {
+      _reenableChannelId = channelId;
+      const icon = flagType === 'DRM' ? '🔒' : '💀';
+      const label = flagType === 'DRM' ? 'DRM-protected' : 'Dead';
+      document.getElementById('reenable-modal-title').textContent = `Re-enable ${icon} ${label} Channel`;
+      document.getElementById('reenable-modal-body').textContent =
+        `Clear the "${label}" flag and re-enable this channel? It will be included in outputs again until the next stream audit.`;
+      document.getElementById('reenable-modal').classList.add('open');
+    }
+
+    function closeReenableModal() {
+      document.getElementById('reenable-modal').classList.remove('open');
+      _reenableChannelId = null;
+    }
+
+    async function confirmReenable() {
+      const channelId = _reenableChannelId;
+      if (!channelId) return;
+      const btn = document.getElementById('reenable-confirm-btn');
       btn.disabled = true;
       btn.textContent = '…';
       try {
@@ -2785,14 +2805,17 @@
           body:    JSON.stringify({is_active: true, is_enabled: true, disable_reason: null}),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        // Remove the badge and button, flip the toggle on
-        const cell = btn.closest('td');
-        cell.innerHTML = '';
+        closeReenableModal();
+        const flagsCell = document.getElementById(`flags-cell-${channelId}`);
+        if (flagsCell) {
+          flagsCell.querySelectorAll('.flag-clickable').forEach(el => el.remove());
+        }
         const checkbox = document.querySelector(`#toggle-${channelId} input`);
         if (checkbox) { checkbox.checked = true; }
         document.getElementById(`row-${channelId}`).classList.remove('disabled');
       } catch (e) {
         btn.textContent = 'Error';
+        btn.disabled = false;
         console.error('Re-enable failed:', e);
       }
     }
@@ -3108,6 +3131,17 @@
       <h2>⚡ Resolve Duplicates</h2>
       <p class="modal-sub">Drag to set source priority. The top source wins each strict duplicate group and the others will be disabled. Strict matching is case-insensitive and ignores trailing <strong>by …</strong> or <strong>presented by …</strong>. Softer brand variants marked <strong>DUP?</strong>, such as TV/Channel/Network differences, are not auto-resolved here.</p>
       <div id="resolve-modal-body" class="modal-loading">Loading…</div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="reenable-modal" onclick="if(event.target===this)closeReenableModal()">
+    <div class="modal-box" style="max-width:400px">
+      <h2 id="reenable-modal-title">Re-enable Channel</h2>
+      <p id="reenable-modal-body" style="margin:0.75rem 0 1.25rem"></p>
+      <div style="display:flex;gap:0.75rem;justify-content:flex-end">
+        <button style="padding:0.4rem 1rem;border-radius:4px;border:1px solid #555;background:#333;color:#ccc;cursor:pointer" onclick="closeReenableModal()">Cancel</button>
+        <button id="reenable-confirm-btn" style="padding:0.4rem 1rem;border-radius:4px;border:none;background:#c0392b;color:#fff;cursor:pointer;font-weight:600" onclick="confirmReenable()">Re-enable</button>
+      </div>
     </div>
   </div>
 
