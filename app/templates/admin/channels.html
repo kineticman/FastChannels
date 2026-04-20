@@ -13,7 +13,7 @@
     nav h1 { color: var(--accent); font-size: 1.2rem; font-weight: 700; }
     nav a { color: var(--text-soft); text-decoration: none; font-size: 0.9rem; }
     nav a:hover, nav a.active { color: var(--text); }
-    .container { max-width: 1400px; margin: 2rem auto; padding: 0 2rem; }
+    .container { max-width: 1600px; margin: 2rem auto; padding: 0 2rem; }
 
     /* Filters */
     .toolbar {
@@ -229,6 +229,14 @@
     .flag-icon { font-size: 0.9rem; line-height: 1; }
     .flag-clickable { cursor: pointer; opacity: 0.85; transition: opacity 0.15s, transform 0.15s; }
     .flag-clickable:hover { opacity: 1; transform: scale(1.2); }
+    .col-filter-select {
+      background: var(--bg); border: 1px solid transparent; color: var(--text-muted);
+      font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.04em; cursor: pointer; padding: 0.1rem 0.2rem;
+      border-radius: 4px; outline: none; max-width: 100px;
+    }
+    .col-filter-select:hover { border-color: var(--border); color: var(--text-soft); }
+    .col-filter-select.col-filter-active { color: var(--accent); border-color: var(--accent-border); background: var(--accent-bg-soft); }
     .btn-reenable {
       font-size: 0.75rem; padding: 0.15rem 0.35rem; border-radius: 4px; border: none;
       background: var(--accent-bg); color: var(--accent-soft); cursor: pointer;
@@ -693,9 +701,9 @@
     .section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
     table { width: 100%; border-collapse: collapse; }
     th { text-align: left; font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;
-         padding: 0.7rem 1rem; border-bottom: 1px solid var(--border); background: var(--bg); }
+         padding: 0.7rem 0.6rem; border-bottom: 1px solid var(--border); background: var(--bg); }
     th.check-col { width: 40px; }
-    td { padding: 0.6rem 1rem; font-size: 0.85rem; border-bottom: 1px solid var(--bg); vertical-align: middle; }
+    td { padding: 0.6rem 0.6rem; font-size: 0.85rem; border-bottom: 1px solid var(--bg); vertical-align: middle; }
     td.actions-col, td.toggle-col { padding-left: 0.25rem; padding-right: 0.25rem; }
     th.actions-col, th.toggle-col { padding-left: 0.25rem; padding-right: 0.25rem; }
     tr:last-child td { border-bottom: none; }
@@ -746,7 +754,7 @@
     .chnum-input { width: 54px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; font-size: inherit; }
 
     /* ── Gracenote ID input ─────────────────────────────────────────────── */
-    .gn-cell { min-width: 90px; }
+    .gn-cell { min-width: 76px; }
 
     .gn-wrap {
       display: flex;
@@ -762,14 +770,14 @@
       color: var(--text-subtle);
       font-size: 0.68rem;
       padding: 0.22rem 0.25rem;
-      max-width: 64px;
+      max-width: 52px;
       outline: none;
     }
     .gn-mode.gn-mode-manual { border-color: var(--success-fill); color: var(--success-soft); }
     .gn-mode.gn-mode-off { border-color: var(--text-muted); color: var(--text-soft); }
 
     .gn-input {
-      width: 72px;
+      width: 60px;
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: 5px;
@@ -1408,16 +1416,42 @@
             <th class="sortable {% if sort_by == 'name' %}active{% endif %}" onclick="sortBy('name')">
               Name <span class="sort-arrow">{% if sort_by == 'name' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span>
             </th>
-            <th style="width:1px"></th>
-            <th class="sortable {% if sort_by == 'source' %}active{% endif %}" onclick="sortBy('source')">
-              Source <span class="sort-arrow">{% if sort_by == 'source' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span>
+            <th style="width:1px;white-space:nowrap">
+              <select class="col-filter-select{% if duplicates_filter %} col-filter-active{% endif %}" onchange="filterBy('duplicates', this.value)" title="Filter by duplicate status">
+                <option value="">DUP</option>
+                <option value="1" {% if duplicates_filter == '1' %}selected{% endif %}>⚠ Dupes</option>
+                <option value="unique" {% if duplicates_filter == 'unique' %}selected{% endif %}>✓ Unique</option>
+              </select>
             </th>
-            <th class="sortable {% if sort_by == 'category' %}active{% endif %}" onclick="sortBy('category')">
-              Category <span class="sort-arrow">{% if sort_by == 'category' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span>
+            <th>
+              <select class="col-filter-select{% if source_filter %} col-filter-active{% endif %}" onchange="filterBy('source', this.value)" title="Filter by source">
+                <option value="">Source</option>
+                {% for s in sources %}
+                <option value="{{ s.name }}" {% if source_filter == s.name %}selected{% endif %}>{{ s.display_name }}</option>
+                {% endfor %}
+              </select>
+            </th>
+            <th style="width:1px;white-space:nowrap">
+              <select class="col-filter-select{% if resolution_filter %} col-filter-active{% endif %}" onchange="filterBy('resolution', this.value)" title="Filter by resolution / codec">
+                <option value="">Res</option>
+                <option value="4k"   {% if resolution_filter == '4k'   %}selected{% endif %}>4K</option>
+                <option value="hd"   {% if resolution_filter == 'hd'   %}selected{% endif %}>HD</option>
+                <option value="sd"   {% if resolution_filter == 'sd'   %}selected{% endif %}>SD</option>
+                <option value="hevc" {% if resolution_filter == 'hevc' %}selected{% endif %}>HEVC</option>
+                <option value="known" {% if resolution_filter == 'known' %}selected{% endif %}>Known</option>
+              </select>
+            </th>
+            <th>
+              <select class="col-filter-select{% if category_filter %} col-filter-active{% endif %}" onchange="filterBy('category', this.value)" title="Filter by category">
+                <option value="">Category</option>
+                {% for cat, count in categories %}
+                <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+              </select>
             </th>
             <th style="max-width:60px">Lang</th>
             <th>Region</th>
-            <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">TVG-CHNO <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
+            <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">Ch# <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
             <th class="actions-col">Actions</th>
             <th class="toggle-col">Enabled</th>
@@ -1459,7 +1493,8 @@
             {% endif %}
             <td title="{{ hover_parts|join(' · ') if hover_parts else '' }}"><strong>{{ ch.name }}</strong></td>
             <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.name in duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Duplicate match found — click to see matches">DUP</span>{% elif ch.name in possible_duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Possible duplicate — click to see matches">DUP?</span>{% elif ch.id in gn_duplicate_ids %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Same Gracenote ID found on another source — click to see matches">GN DUP</span>{% endif %}{% if ch.is_duplicate %}<span class="badge-manual-dup badge-dup-clickable" data-channel-id="{{ ch.id }}" title="Click to see potential duplicates" style="cursor:pointer">DUPL</span>{% endif %}</td>
-            <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}{% if ch.stream_info %}{% if ch.stream_info.has_4k %}<span class="badge-4k" title="4K stream ({{ ch.stream_info.max_resolution }})">4K</span>{% elif ch.stream_info.has_hd %}<span class="badge-hd" title="HD stream ({{ ch.stream_info.max_resolution }})">HD</span>{% endif %}{% if ch.stream_info.video_codec == 'hevc' %}<span class="badge-hevc" title="H.265/HEVC — may not play in all clients">HEVC</span>{% endif %}{% endif %}</td>
+            <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
+            <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.stream_info %}{% if ch.stream_info.has_4k %}<span class="badge-4k" title="4K stream ({{ ch.stream_info.max_resolution }})">4K</span>{% elif ch.stream_info.has_hd %}<span class="badge-hd" title="HD stream ({{ ch.stream_info.max_resolution }})">HD</span>{% endif %}{% if ch.stream_info.video_codec == 'hevc' %}<span class="badge-hevc" title="H.265/HEVC — may not play in all clients">HEVC</span>{% endif %}{% endif %}</td>
             <td data-channel-id="{{ ch.id }}">
               {% if ch.category %}
                 <span class="cat-label{% if ch.category_override %} has-override{% endif %}"
@@ -2886,6 +2921,13 @@
       const curDir = params.get('dir')  || 'asc';
       params.set('sort', col);
       params.set('dir', cur === col && curDir === 'asc' ? 'desc' : 'asc');
+      params.set('page', '1');
+      window.location.search = params.toString();
+    }
+
+    function filterBy(param, val) {
+      const params = new URLSearchParams(window.location.search);
+      if (val) params.set(param, val); else params.delete(param);
       params.set('page', '1');
       window.location.search = params.toString();
     }
