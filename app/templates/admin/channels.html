@@ -1135,7 +1135,7 @@
     };
     const _pageVisibleCount = {{ channels.items|length }};
     const _pageTotalCount = {{ channels.total }};
-    const FEEDS = [{% for f in feeds %}{% if f.is_enabled and f.slug != 'default' %}{"id":{{ f.id }},"name":{{ f.name | tojson }}},{% endif %}{% endfor %}];
+    const FEEDS = [{% for f in feeds %}{% if f.is_enabled and f.slug != 'default' %}{"id":{{ f.id }},"name":{{ f.name | tojson }},"pinned":{{ (f.filters or {}).get('pinned_channel_ids', []) | tojson }}},{% endif %}{% endfor %}];
   </script>
   <nav>
     <h1>⚡ FastChannels</h1>
@@ -2829,9 +2829,16 @@
         list.innerHTML = '<div class="pfd-empty">No custom feeds configured</div>';
       } else {
         FEEDS.forEach(f => {
+          const pinned = f.pinned.includes(channelId);
           const b = document.createElement('button');
-          b.textContent = f.name;
-          b.onclick = () => pinChannelToFeed(channelId, f.id, f.name);
+          b.dataset.feedId = f.id;
+          b.dataset.pinned = pinned ? '1' : '0';
+          b.innerHTML = pinned
+            ? `<span style="color:var(--success-border);margin-right:0.4rem">✓</span>${f.name} <span style="color:var(--text-muted);font-size:0.75rem;margin-left:auto;padding-left:0.5rem">remove</span>`
+            : f.name;
+          b.style.display = 'flex';
+          b.style.alignItems = 'center';
+          b.onclick = () => togglePinChannel(channelId, f.id, f.name, pinned, b);
           list.appendChild(b);
         });
       }
@@ -2844,19 +2851,30 @@
       menu.style.top  = (rect.bottom + window.scrollY + 4) + 'px';
     }
 
-    async function pinChannelToFeed(channelId, feedId, feedName) {
+    async function togglePinChannel(channelId, feedId, feedName, isPinned, btn) {
       document.getElementById('pinFeedDropdown').style.display = 'none';
+      const feed = FEEDS.find(f => f.id === feedId);
       try {
-        const r = await fetch(`/api/feeds/${feedId}/pin`, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({channel_id: channelId}),
-        });
+        let r;
+        if (isPinned) {
+          r = await fetch(`/api/feeds/${feedId}/pin/${channelId}`, {method: 'DELETE'});
+        } else {
+          r = await fetch(`/api/feeds/${feedId}/pin`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({channel_id: channelId}),
+          });
+        }
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-        showToast(`✓ Added to "${feedName}"`);
+        // Update local FEEDS cache so reopening the dropdown reflects the change
+        if (feed) {
+          if (isPinned) feed.pinned = feed.pinned.filter(id => id !== channelId);
+          else feed.pinned.push(channelId);
+        }
+        showToast(isPinned ? `Removed from "${feedName}"` : `✓ Added to "${feedName}"`);
       } catch (e) {
-        showToast('⚠ Could not pin channel — ' + e.message);
+        showToast('⚠ Could not update feed — ' + e.message);
       }
     }
 
