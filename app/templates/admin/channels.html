@@ -1099,6 +1099,7 @@
       position: fixed; z-index: 9999; background: var(--surface-2); border: 1px solid var(--border);
       border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); padding: 0.4rem 0;
       min-width: 180px; max-width: 260px; display: none;
+      max-height: 260px; overflow-y: auto;
     }
     #pinFeedDropdown .pfd-header {
       font-size: 0.72rem; color: var(--text-muted); padding: 0.3rem 0.75rem 0.4rem;
@@ -2845,10 +2846,16 @@
       const rect = btn.getBoundingClientRect();
       menu.style.display = 'block';
       const menuW = menu.offsetWidth;
-      let left = rect.left + window.scrollX;
+      let left = rect.left;
       if (left + menuW > window.innerWidth - 8) left = window.innerWidth - menuW - 8;
       menu.style.left = left + 'px';
-      menu.style.top  = (rect.bottom + window.scrollY + 4) + 'px';
+      const menuH = menu.offsetHeight;
+      const spaceBelow = window.innerHeight - rect.bottom;
+      if (spaceBelow < menuH + 8 && rect.top > menuH + 8) {
+        menu.style.top = (rect.top - menuH - 4) + 'px';
+      } else {
+        menu.style.top = (rect.bottom + 4) + 'px';
+      }
     }
 
     async function togglePinChannel(channelId, feedId, feedName, isPinned, btn) {
