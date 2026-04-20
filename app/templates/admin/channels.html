@@ -1915,6 +1915,7 @@
     let _statsVisible   = false;
     let _lastFrag       = null;
     let _droppedFrames0 = null;
+    let _fragListener   = null;
 
     _previewHls && void 0; // ensure ref accessible
 
@@ -1938,7 +1939,8 @@
       _stopStatsLoop();
       _droppedFrames0 = null;
       if (_previewHls) {
-        _previewHls.on(window.Hls.Events.FRAG_LOADED, (_e, data) => { _lastFrag = data; });
+        _fragListener = (_e, data) => { _lastFrag = data; };
+        _previewHls.on(window.Hls.Events.FRAG_LOADED, _fragListener);
       }
       _updateStats();
       _statsInterval = setInterval(_updateStats, 1000);
@@ -1946,6 +1948,10 @@
 
     function _stopStatsLoop() {
       if (_statsInterval) { clearInterval(_statsInterval); _statsInterval = null; }
+      if (_fragListener && _previewHls) {
+        _previewHls.off(window.Hls.Events.FRAG_LOADED, _fragListener);
+        _fragListener = null;
+      }
     }
 
     function _updateStats() {
