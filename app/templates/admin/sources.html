@@ -724,6 +724,8 @@
           _lastRecheckIds[sourceId] = limited.map(c => c.id).filter(Boolean);
         } else if (!result) {
           html += `<div class="audit-no-results">No audit has been run yet. Run an audit to check all channels for dead streams, DRM, and VOD-only content.</div>`;
+        } else if (result && result.checked > 0) {
+          html += `<div class="audit-no-results" style="color:var(--success-soft)">✓ All ${result.checked} checked channels are healthy.</div>`;
         }
       }
 
