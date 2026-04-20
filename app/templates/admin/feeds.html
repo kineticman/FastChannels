@@ -178,6 +178,13 @@
     .ch-item .ch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ch-item.excluded { opacity: 0.4; }
     .ch-item.excluded .ch-name { text-decoration: line-through; }
+    .ch-pinned-section { margin-bottom: 0.4rem; border-bottom: 1px solid var(--surface-5); padding-bottom: 0.4rem; }
+    .ch-pinned-header { font-size: 0.7rem; font-weight: 600; color: var(--success-border); text-transform: uppercase; letter-spacing: 0.06em; padding: 0.4rem 0.3rem 0.2rem; }
+    .ch-pinned-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.4rem; border-radius: 4px; font-size: 0.82rem; background: color-mix(in srgb, var(--success-bg-2) 40%, transparent); }
+    .ch-pinned-item .ch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ch-pinned-item .ch-source { color: var(--text-dim); font-size: 0.72rem; margin-left: auto; flex-shrink: 0; }
+    .btn-unpin { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.78rem; padding: 0 0.2rem; flex-shrink: 0; }
+    .btn-unpin:hover { color: var(--danger); }
     .pill-manual { background: var(--accent-bg); color: var(--accent-soft); }
     .pill-red  { background: color-mix(in srgb, var(--danger-bg) 72%, var(--surface)); color: var(--danger); }
     .pill-teal { background: color-mix(in srgb, var(--teal) 26%, var(--surface)); color: var(--teal-soft); }
@@ -469,6 +476,7 @@ const FEED_CHNUM_PLACEHOLDER = {{ feed_chnum_placeholder | tojson }};
 let _allChannels = [];
 let _selectedChannelIds = new Set();
 let _excludedChannelIds = new Set();
+let _pinnedChannelIds   = new Set();
 
 async function ensureChannelsLoaded() {
   if (_allChannels.length > 0) return;
@@ -499,6 +507,29 @@ const _CH_RENDER_LIMIT = 200;
 function renderChannelList() {
   const container = document.getElementById('channel-list');
   const frag = document.createDocumentFragment();
+
+  // Pinned section — always shown at the top regardless of other filters
+  if (_pinnedChannelIds.size > 0) {
+    const pinnedSection = document.createElement('div');
+    pinnedSection.className = 'ch-pinned-section';
+    const hdr = document.createElement('div');
+    hdr.className = 'ch-pinned-header';
+    hdr.textContent = '📌 Pinned';
+    pinnedSection.appendChild(hdr);
+    for (const id of _pinnedChannelIds) {
+      const ch = _allChannels.find(c => c.id === id);
+      const row = document.createElement('div');
+      row.className = 'ch-pinned-item';
+      row.innerHTML = `<span class="ch-name">${ch ? ch.name : `Channel #${id}`}</span><span class="ch-source">${ch ? ch.source_name : ''}</span><button class="btn-unpin" title="Remove from pinned">×</button>`;
+      row.querySelector('.btn-unpin').onclick = () => {
+        _pinnedChannelIds.delete(id);
+        renderChannelList();
+        updateCountPreview();
+      };
+      pinnedSection.appendChild(row);
+    }
+    frag.appendChild(pinnedSection);
+  }
 
   const visibleChannels = getVisibleChannels();
   const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
@@ -628,9 +659,10 @@ async function openModal(feed = null) {
   document.getElementById('modal-status').textContent = '';
   document.getElementById('ch-search').value  = '';
 
-  // Restore selected / excluded channel IDs
+  // Restore selected / excluded / pinned channel IDs
   _selectedChannelIds  = new Set((feed?.filters?.channel_ids          || []).map(Number));
   _excludedChannelIds  = new Set((feed?.filters?.excluded_channel_ids || []).map(Number));
+  _pinnedChannelIds    = new Set((feed?.filters?.pinned_channel_ids   || []).map(Number));
 
   // Reset filter checkboxes
   document.querySelectorAll('.src-cb').forEach(cb => {
@@ -795,9 +827,11 @@ async function updateCountPreview() {
   }
 
   const shown = max ? Math.min(total, max) : total;
-  const warn  = shown > 750 ? ' ⚠️ over 750 — Channels DVR may be slow' : '';
+  const pinnedExtra = _pinnedChannelIds.size;
+  const warn  = (shown + pinnedExtra) > 750 ? ' ⚠️ over 750 — Channels DVR may be slow' : '';
+  const pinnedNote = pinnedExtra > 0 ? ` + <strong>${pinnedExtra}</strong> pinned` : '';
   document.getElementById('count-preview').innerHTML =
-    `<strong>${shown}</strong> channels will be in this feed${warn}`;
+    `<strong>${shown}</strong>${pinnedNote} channels will be in this feed${warn}`;
 }
 
 // Wire up live preview on checkbox changes
@@ -842,6 +876,7 @@ function buildFilters() {
     if (gracenote) f.gracenote = gracenote;
     if (_excludedChannelIds.size > 0) f.excluded_channel_ids = [..._excludedChannelIds];
   }
+  if (_pinnedChannelIds.size > 0) f.pinned_channel_ids = [..._pinnedChannelIds];
   const max = parseInt(document.getElementById('f-max').value);
   if (max > 0) f.max_channels = max;
   return f;
