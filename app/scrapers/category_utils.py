@@ -80,7 +80,23 @@ _CANONICAL_MAP: dict[str, str] = {
     # Drama
     'tv dramas':                    'Drama',
 
+    # Vizio WatchFree+ compound categories
+    'kids + family':                'Kids',
+    'food + travel':                'Food',
+    'nature + science':             'Nature',
+    'history + docs':               'History',
+    'inspiration + faith':          'Faith',
+    'westerns + classics':          'Classic TV',
+    'news + opinion':               'News',
+    'crime + thriller':             'True Crime',
+    'mood + ambiance':              'Ambiance',
+    'culture + lifestyle':          'Lifestyle',
+    'en español':                   'Latino',
+    'home':                         'Home & DIY',
+    'featured':                     'Entertainment',
+
     # Entertainment — misc catch-alls and source artifacts
+    'tv':                           'Entertainment',   # Vizio WatchFree+ generic bucket
     'general':                      'Entertainment',
     'pop culture':                  'Entertainment',
     'black entertainment':          'Entertainment',
@@ -156,6 +172,9 @@ _CANONICAL_MAP: dict[str, str] = {
     'nature and outdoors':          'Nature',
     'science & nature':             'Nature',
     'nature, history & science':    'Science',
+
+    # Local News
+    'local channels':               'Local News',   # Vizio WatchFree+ category
 
     # News
     'national news':                'News',
