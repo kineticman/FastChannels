@@ -250,6 +250,7 @@
       cursor: pointer; border-bottom: 1px dotted var(--text-dim);
       display: inline; white-space: nowrap; color: var(--text-muted);
     }
+    td[data-lang-channel-id] { max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.78rem; }
     .lang-label.has-override { border-bottom-color: var(--warning-strong); color: var(--warning-strong) !important; }
     #catModal .source-badge {
       display: inline-block; font-size: 0.68rem; font-weight: 700;
@@ -1414,7 +1415,7 @@
             <th class="sortable {% if sort_by == 'category' %}active{% endif %}" onclick="sortBy('category')">
               Category <span class="sort-arrow">{% if sort_by == 'category' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span>
             </th>
-            <th>Lang</th>
+            <th style="max-width:60px">Lang</th>
             <th>Region</th>
             <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">TVG-CHNO <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
