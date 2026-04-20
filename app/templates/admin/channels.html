@@ -1505,7 +1505,7 @@
                 </div>
                 <button class="btn-preview btn-icon" onclick="openPreview({{ ch.id }})" title="Preview: view current and next program, preview playback">📺</button>
                 <button class="btn-inspect" onclick="inspectChannel({{ ch.id }}, this)" title="Test stream: check DRM, liveness, and segment data">&#128269;</button>
-                <button class="btn-pin-feed" onclick="openPinFeedMenu({{ ch.id }}, this)" title="Add to a feed">+feed</button>
+                <button class="btn-pin-feed" onclick="openPinFeedMenu({{ ch.id }}, this)" title="Add to a feed">🗂️</button>
                 {% if not ch.is_duplicate %}
                 <button class="btn-mark-dup" id="markdup-{{ ch.id }}" onclick="markManualDup({{ ch.id }}, this)" title="Mark as duplicate — adds a DUPL label for filtering (does not disable the channel)">⊘</button>
                 {% endif %}
