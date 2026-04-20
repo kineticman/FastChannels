@@ -1756,6 +1756,28 @@ def channel_duplicates(channel_id):
     })
 
 
+@api_bp.route('/channels/<int:channel_id>/feed-membership', methods=['GET'])
+def channel_feed_membership(channel_id):
+    """Return each non-default feed's membership status for a channel."""
+    from ..generators.m3u import _build_channel_query
+    feeds = Feed.query.filter(Feed.is_enabled == True, Feed.slug != 'default').order_by(Feed.name).all()
+    result = []
+    for feed in feeds:
+        filters = feed.filters or {}
+        pinned   = channel_id in (filters.get('pinned_channel_ids')   or [])
+        excluded = channel_id in (filters.get('excluded_channel_ids') or [])
+        if pinned:
+            status = 'pinned'
+        elif excluded:
+            status = 'excluded'
+        else:
+            q_filters = feed_to_query_filters(filters)
+            in_filter = _build_channel_query(q_filters).filter(Channel.id == channel_id).count() > 0
+            status = 'filtered' if in_filter else 'absent'
+        result.append({'feed_id': feed.id, 'status': status})
+    return jsonify(result)
+
+
 @api_bp.route('/channels/duplicate-summary', methods=['GET'])
 def duplicate_summary():
     """Return strict duplicate stats plus reviewable soft-match groups."""

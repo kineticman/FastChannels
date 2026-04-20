@@ -243,6 +243,50 @@ def unpin_channel(feed_id, channel_id):
     return jsonify({'status': 'unpinned', 'feed_id': feed_id, 'channel_id': channel_id})
 
 
+@feeds_api_bp.route('/<int:feed_id>/exclude', methods=['POST'])
+def exclude_channel(feed_id):
+    feed = Feed.query.get_or_404(feed_id)
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        return jsonify({'error': 'Built-in feeds cannot be modified.'}), 403
+    data = request.get_json() or {}
+    try:
+        channel_id = int(data.get('channel_id', 0))
+    except (TypeError, ValueError):
+        channel_id = 0
+    if not channel_id:
+        return jsonify({'error': 'channel_id is required'}), 400
+    filters = dict(feed.filters or {})
+    excluded = list(filters.get('excluded_channel_ids', []))
+    if channel_id not in excluded:
+        excluded.append(channel_id)
+        filters['excluded_channel_ids'] = excluded
+        feed.filters = filters
+        err = _safe_commit()
+        if err:
+            return err
+        _invalidate_and_refresh_xml()
+    return jsonify({'status': 'excluded', 'feed_id': feed_id, 'channel_id': channel_id})
+
+
+@feeds_api_bp.route('/<int:feed_id>/exclude/<int:channel_id>', methods=['DELETE'])
+def unexclude_channel(feed_id, channel_id):
+    feed = Feed.query.get_or_404(feed_id)
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        return jsonify({'error': 'Built-in feeds cannot be modified.'}), 403
+    filters = dict(feed.filters or {})
+    excluded = [i for i in filters.get('excluded_channel_ids', []) if i != channel_id]
+    if excluded:
+        filters['excluded_channel_ids'] = excluded
+    else:
+        filters.pop('excluded_channel_ids', None)
+    feed.filters = filters
+    err = _safe_commit()
+    if err:
+        return err
+    _invalidate_and_refresh_xml()
+    return jsonify({'status': 'unexcluded', 'feed_id': feed_id, 'channel_id': channel_id})
+
+
 def _parse_chnum_start(val) -> int | None:
     """Coerce chnum_start to a positive int, or None to clear it."""
     if val is None or val == '':

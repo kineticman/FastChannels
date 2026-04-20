@@ -2820,36 +2820,16 @@
 
     // ── Pin-to-feed ───────────────────────────────────────────────────────
     let _pinChannelId = null;
+    const _membershipCache = {};  // channelId -> [{feed_id, status}]
 
-    function openPinFeedMenu(channelId, btn) {
-      _pinChannelId = channelId;
-      const menu = document.getElementById('pinFeedDropdown');
-      const list = document.getElementById('pinFeedDropdown-list');
-      list.innerHTML = '';
-      if (!FEEDS.length) {
-        list.innerHTML = '<div class="pfd-empty">No custom feeds configured</div>';
-      } else {
-        FEEDS.forEach(f => {
-          const pinned = f.pinned.includes(channelId);
-          const b = document.createElement('button');
-          b.dataset.feedId = f.id;
-          b.dataset.pinned = pinned ? '1' : '0';
-          b.innerHTML = pinned
-            ? `<span style="color:var(--success-border);margin-right:0.4rem">✓</span>${f.name} <span style="color:var(--text-muted);font-size:0.75rem;margin-left:auto;padding-left:0.5rem">remove</span>`
-            : f.name;
-          b.style.display = 'flex';
-          b.style.alignItems = 'center';
-          b.onclick = () => togglePinChannel(channelId, f.id, f.name, pinned, b);
-          list.appendChild(b);
-        });
-      }
-      const rect = btn.getBoundingClientRect();
+    function _positionDropdown(menu, btn) {
       menu.style.display = 'block';
+      const rect = btn.getBoundingClientRect();
       const menuW = menu.offsetWidth;
+      const menuH = menu.offsetHeight;
       let left = rect.left;
       if (left + menuW > window.innerWidth - 8) left = window.innerWidth - menuW - 8;
       menu.style.left = left + 'px';
-      const menuH = menu.offsetHeight;
       const spaceBelow = window.innerHeight - rect.bottom;
       if (spaceBelow < menuH + 8 && rect.top > menuH + 8) {
         menu.style.top = (rect.top - menuH - 4) + 'px';
@@ -2858,28 +2838,100 @@
       }
     }
 
-    async function togglePinChannel(channelId, feedId, feedName, isPinned, btn) {
+    async function openPinFeedMenu(channelId, btn) {
+      _pinChannelId = channelId;
+      const menu = document.getElementById('pinFeedDropdown');
+      const list = document.getElementById('pinFeedDropdown-list');
+
+      // Show loading state immediately
+      list.innerHTML = '<div class="pfd-empty">Loading…</div>';
+      _positionDropdown(menu, btn);
+
+      if (!FEEDS.length) {
+        list.innerHTML = '<div class="pfd-empty">No custom feeds configured</div>';
+        _positionDropdown(menu, btn);
+        return;
+      }
+
+      // Fetch membership if not cached
+      if (!_membershipCache[channelId]) {
+        try {
+          const r = await fetch(`/api/channels/${channelId}/feed-membership`);
+          const data = await r.json();
+          _membershipCache[channelId] = {};
+          data.forEach(d => { _membershipCache[channelId][d.feed_id] = d.status; });
+        } catch {
+          list.innerHTML = '<div class="pfd-empty">Failed to load</div>';
+          _positionDropdown(menu, btn);
+          return;
+        }
+      }
+
+      _renderPinDropdown(channelId, btn);
+    }
+
+    function _renderPinDropdown(channelId, btn) {
+      const menu = document.getElementById('pinFeedDropdown');
+      const list = document.getElementById('pinFeedDropdown-list');
+      const membership = _membershipCache[channelId] || {};
+      list.innerHTML = '';
+
+      FEEDS.forEach(f => {
+        const status = membership[f.id] || 'absent';
+        const b = document.createElement('button');
+        b.style.display = 'flex';
+        b.style.alignItems = 'center';
+
+        if (status === 'pinned') {
+          b.innerHTML = `<span style="color:var(--success-border);margin-right:0.4rem">📌</span>${f.name}<span style="color:var(--text-muted);font-size:0.72rem;margin-left:auto;padding-left:0.5rem">unpin</span>`;
+          b.onclick = () => _feedAction(channelId, f.id, f.name, 'unpin');
+        } else if (status === 'filtered') {
+          b.innerHTML = `<span style="color:var(--accent-soft);margin-right:0.4rem">●</span>${f.name}<span style="color:var(--text-muted);font-size:0.72rem;margin-left:auto;padding-left:0.5rem">exclude</span>`;
+          b.onclick = () => _feedAction(channelId, f.id, f.name, 'exclude');
+        } else if (status === 'excluded') {
+          b.innerHTML = `<span style="color:var(--danger);margin-right:0.4rem">✕</span>${f.name}<span style="color:var(--text-muted);font-size:0.72rem;margin-left:auto;padding-left:0.5rem">re-add</span>`;
+          b.onclick = () => _feedAction(channelId, f.id, f.name, 'unexclude');
+        } else {
+          b.innerHTML = f.name;
+          b.onclick = () => _feedAction(channelId, f.id, f.name, 'pin');
+        }
+        list.appendChild(b);
+      });
+
+      _positionDropdown(menu, btn);
+    }
+
+    async function _feedAction(channelId, feedId, feedName, action) {
       document.getElementById('pinFeedDropdown').style.display = 'none';
       const feed = FEEDS.find(f => f.id === feedId);
+
+      const endpoints = {
+        pin:       ['/api/feeds/' + feedId + '/pin',                   'POST',   {channel_id: channelId}],
+        unpin:     ['/api/feeds/' + feedId + '/pin/' + channelId,      'DELETE', null],
+        exclude:   ['/api/feeds/' + feedId + '/exclude',               'POST',   {channel_id: channelId}],
+        unexclude: ['/api/feeds/' + feedId + '/exclude/' + channelId,  'DELETE', null],
+      };
+      const [url, method, body] = endpoints[action];
+      const toasts = {
+        pin: `✓ Pinned to "${feedName}"`, unpin: `Unpinned from "${feedName}"`,
+        exclude: `Excluded from "${feedName}"`, unexclude: `Re-added to "${feedName}"`,
+      };
+      const nextStatus = {pin: 'pinned', unpin: 'absent', exclude: 'excluded', unexclude: 'filtered'};
+
       try {
-        let r;
-        if (isPinned) {
-          r = await fetch(`/api/feeds/${feedId}/pin/${channelId}`, {method: 'DELETE'});
-        } else {
-          r = await fetch(`/api/feeds/${feedId}/pin`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({channel_id: channelId}),
-          });
-        }
+        const opts = {method, headers: body ? {'Content-Type': 'application/json'} : {}};
+        if (body) opts.body = JSON.stringify(body);
+        const r = await fetch(url, opts);
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-        // Update local FEEDS cache so reopening the dropdown reflects the change
+
+        // Update local caches
+        if (_membershipCache[channelId]) _membershipCache[channelId][feedId] = nextStatus[action];
         if (feed) {
-          if (isPinned) feed.pinned = feed.pinned.filter(id => id !== channelId);
-          else feed.pinned.push(channelId);
+          if (action === 'pin') feed.pinned.push(channelId);
+          if (action === 'unpin') feed.pinned = feed.pinned.filter(id => id !== channelId);
         }
-        showToast(isPinned ? `Removed from "${feedName}"` : `✓ Added to "${feedName}"`);
+        showToast(toasts[action]);
       } catch (e) {
         showToast('⚠ Could not update feed — ' + e.message);
       }
