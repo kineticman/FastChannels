@@ -1,0 +1,14 @@
+  <script>
+    (function () {
+      var key = 'fastchannels-admin-theme';
+      var theme = 'dark';
+      try {
+        var saved = window.localStorage.getItem(key);
+        if (saved === 'dark' || saved === 'light' || saved === 'fun') {
+          theme = saved;
+        }
+      } catch (err) {}
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/admin_theme.css') }}">
