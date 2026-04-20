@@ -729,20 +729,24 @@ async function checkInlineChnumConflict(feedId) {
   const conflicts = ranges.filter(r => val <= r.end && myEnd >= r.start && r.explicit);
   const shown     = ranges.filter(r => r.explicit && !conflicts.find(c => c.feed_id === r.feed_id));
 
+  const chip = (r, conflict) => {
+    const gnBadge = r.gn_count
+      ? `<span style="font-size:0.68rem;background:color-mix(in srgb,var(--teal) 20%,transparent);color:var(--teal-soft);border-radius:3px;padding:0.05rem 0.3rem;margin-left:0.25rem">+${r.gn_count} gn</span>`
+      : '';
+    const border = conflict ? 'var(--danger)' : 'var(--surface-5)';
+    const nameColor = conflict ? 'var(--danger)' : 'var(--text-soft)';
+    return `<div style="display:inline-flex;flex-direction:column;border:1px solid ${border};border-radius:6px;padding:0.2rem 0.5rem;background:var(--bg)">
+      <span style="font-size:0.78rem;font-weight:600;color:${nameColor}">${conflict ? '⚠ ' : ''}${r.feed_name}</span>
+      <span style="font-size:0.7rem;color:var(--text-muted)">${r.start.toLocaleString()}–${r.end.toLocaleString()}${gnBadge}</span>
+    </div>`;
+  };
+
   let html = '';
-  if (conflicts.length > 0) {
-    html += conflicts.map(r =>
-      `<div style="color:var(--danger);font-weight:600">⚠ Overlaps with "${r.feed_name}" (${r.start.toLocaleString()}–${r.end.toLocaleString()})</div>`
-    ).join('');
-  }
-  if (shown.length > 0) {
-    html += '<span style="color:var(--text-muted)">In use: </span>';
-    html += shown.map(r => {
-      let label = `${r.feed_name} (${r.start.toLocaleString()}–${r.end.toLocaleString()}`;
-      if (r.gn_count) label += ` +${r.gn_count.toLocaleString()} gracenote`;
-      label += ')';
-      return `<span style="color:var(--text-soft)">${label}</span>`;
-    }).join(' &nbsp;·&nbsp; ');
+  if (conflicts.length > 0 || shown.length > 0) {
+    html += `<div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.35rem">`;
+    html += conflicts.map(r => chip(r, true)).join('');
+    html += shown.map(r => chip(r, false)).join('');
+    html += `</div>`;
   }
   el.innerHTML = html;
 }
