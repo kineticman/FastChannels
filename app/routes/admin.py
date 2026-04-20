@@ -478,6 +478,23 @@ def channels():
         if ch.number_pinned and ch.number in _conflict_numbers
     }
 
+    # Compute which page channels appear in at least one non-default feed.
+    in_any_feed_ids: set[int] = set()
+    for feed in feeds:
+        if feed.slug == 'default':
+            continue
+        f_filters = feed.filters or {}
+        pinned = set(f_filters.get('pinned_channel_ids') or [])
+        in_any_feed_ids.update(pinned & page_ids)
+        q_filters = feed_to_query_filters(f_filters)
+        matched = (
+            _build_channel_query(q_filters)
+            .filter(Channel.id.in_(page_ids))
+            .with_entities(Channel.id)
+            .all()
+        )
+        in_any_feed_ids.update(r[0] for r in matched)
+
     from urllib.parse import urlencode
     filter_qs = urlencode({k: v for k, v in {
         'feed': feed_filter, 'source': source_filter, 'search': search,
@@ -513,6 +530,7 @@ def channels():
                            sort_by=sort_by, sort_dir=sort_dir,
                            chnum_map=chnum_map,
                            chnum_conflicts=chnum_conflicts,
+                           in_any_feed_ids=in_any_feed_ids,
                            filter_qs=filter_qs)
 
 

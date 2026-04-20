@@ -1093,8 +1093,14 @@
       background: none; border: 1px solid var(--border); color: var(--text-muted);
       padding: 0.2rem 0.45rem; border-radius: 4px; cursor: pointer;
       font-size: 0.75rem; line-height: 1; transition: border-color 0.15s, color 0.15s;
+      position: relative;
     }
     .btn-pin-feed:hover { border-color: var(--success-border); color: var(--success-border); }
+    .btn-pin-feed.not-in-feed::after {
+      content: ''; position: absolute; top: -3px; right: -3px;
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--danger); border: 1px solid var(--bg);
+    }
     #pinFeedDropdown {
       position: fixed; z-index: 9999; background: var(--surface-2); border: 1px solid var(--border);
       border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); padding: 0.4rem 0;
@@ -1506,7 +1512,7 @@
                 </div>
                 <button class="btn-preview btn-icon" onclick="openPreview({{ ch.id }})" title="Preview: view current and next program, preview playback">📺</button>
                 <button class="btn-inspect" onclick="inspectChannel({{ ch.id }}, this)" title="Test stream: check DRM, liveness, and segment data">&#128269;</button>
-                <button class="btn-pin-feed" onclick="openPinFeedMenu({{ ch.id }}, this)" title="Add to a feed">🗂️</button>
+                <button class="btn-pin-feed{% if ch.id not in in_any_feed_ids %} not-in-feed{% endif %}" onclick="openPinFeedMenu({{ ch.id }}, this)" title="{% if ch.id in in_any_feed_ids %}Manage feed membership{% else %}Not in any feed — add to one{% endif %}">🗂️</button>
                 {% if not ch.is_duplicate %}
                 <button class="btn-mark-dup" id="markdup-{{ ch.id }}" onclick="markManualDup({{ ch.id }}, this)" title="Mark as duplicate — adds a DUPL label for filtering (does not disable the channel)">⊘</button>
                 {% endif %}
