@@ -33,6 +33,16 @@ _VALID_RATINGS = frozenset({
 })
 
 
+import re as _re
+_SE_SUFFIX = _re.compile(r'\s+S\d+\s+E\d+$', _re.IGNORECASE)
+
+
+def _strip_se_suffix(title: str | None) -> str | None:
+    if not title:
+        return title
+    return _SE_SUFFIX.sub('', title).strip() or title
+
+
 def _normalize_rating(raw: str | None) -> str | None:
     if not raw:
         return None
@@ -240,7 +250,7 @@ class TCLScraper(BaseScraper):
 
             all_programs.append(ProgramData(
                 source_channel_id=bundle_id,
-                title=d.get("title") or list_title or "No Title",
+                title=_strip_se_suffix(d.get("title") or list_title) or "No Title",
                 start_time=start_time,
                 end_time=end_time,
                 description=d.get("desc"),
