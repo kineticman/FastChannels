@@ -1338,6 +1338,9 @@ def _resolved_logo_url(existing_logo: str | None, incoming_logo: str | None, cac
         return incoming
     if not incoming.startswith(('http://', 'https://')):
         return current
+    # Never keep a non-absolute existing URL when we have an absolute replacement.
+    if not (current or '').startswith(('http://', 'https://')):
+        return incoming
     if _validate_logo_url(incoming, cache):
         return incoming
     return current
@@ -1455,8 +1458,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         gracenote_id = getattr(cd, 'gracenote_id', None) or None
         if not gracenote_id and cd.slug and '|' in cd.slug:
             candidate = cd.slug.split('|', 1)[1].strip()
-            if candidate:
-                gracenote_id = candidate or None
+            if candidate and candidate.isdigit():
+                gracenote_id = candidate
 
         if ch:
             stream_url_changed = ch.stream_url != cd.stream_url

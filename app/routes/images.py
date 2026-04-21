@@ -22,12 +22,23 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests as _req
+from requests.adapters import HTTPAdapter
 from flask import Blueprint, Response, abort, request, send_file
 from PIL import Image
 
 logger = logging.getLogger(__name__)
 
 images_bp = Blueprint('images', __name__)
+
+# urllib3.connection logs WARNINGs for malformed response headers (e.g.
+# NoBoundaryInMultipartDefect from some CDNs).  Responses succeed despite the
+# malformed Content-Type, so these are pure noise.  Raise the level to ERROR
+# so only genuine connection-level failures surface.
+logging.getLogger('urllib3.connection').setLevel(logging.ERROR)
+
+_session = _req.Session()
+_session.mount("http://", HTTPAdapter())
+_session.mount("https://", HTTPAdapter())
 
 _LOGO_DIR     = '/data/logo_cache/logos'
 _POSTER_DIR   = '/data/logo_cache/posters'
@@ -114,7 +125,7 @@ def _fetch_and_cache(url: str, img_path: str, ct_path: str,
                      img_type: str = 'logo') -> bool:
     """Fetch *url* and write it to *img_path*/*ct_path*. Returns True on success."""
     try:
-        r = _req.get(url, timeout=10, headers={'User-Agent': 'FastChannels/1.0'})
+        r = _session.get(url, timeout=10, headers={'User-Agent': 'FastChannels/1.0'})
         if not r.ok:
             logger.debug('[images] fetch HTTP %s for %s', r.status_code, url)
             return False

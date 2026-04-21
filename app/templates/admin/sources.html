@@ -1232,15 +1232,24 @@
       const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {
         const val = values[f.key] ?? f.default ?? '';
         const req = f.required ? '<span class="req">*</span>' : '';
-        const inputType = f.field_type === 'password' ? 'password' : (f.field_type === 'number' ? 'number' : 'text');
-        const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : '';
         const help = f.help_text ? `<div class="help">${escapeHtml(f.help_text)}</div>` : '';
         const cls = fieldSchema.length === 1 ? 'field field-full' : 'field';
+        let control;
+        if (f.field_type === 'select' && Array.isArray(f.options) && f.options.length) {
+          const opts = f.options.map(o =>
+            `<option value="${escapeHtml(String(o.value))}" ${String(val) === String(o.value) ? 'selected' : ''}>${escapeHtml(o.label)}</option>`
+          ).join('');
+          control = `<select id="cfg-${sourceId}-${f.key}" data-key="${f.key}">${opts}</select>`;
+        } else {
+          const inputType = f.field_type === 'password' ? 'password' : (f.field_type === 'number' ? 'number' : 'text');
+          const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : '';
+          control = `<input type="${inputType}" id="cfg-${sourceId}-${f.key}" data-key="${f.key}"
+                   data-secret="${f.secret}" value="${escapeHtml(String(val))}" ${placeholder} autocomplete="off">`;
+        }
         return `
           <div class="${cls}">
             <label for="cfg-${sourceId}-${f.key}">${escapeHtml(f.label)}${req}</label>
-            <input type="${inputType}" id="cfg-${sourceId}-${f.key}" data-key="${f.key}"
-                   data-secret="${f.secret}" value="${escapeHtml(String(val))}" ${placeholder} autocomplete="off">
+            ${control}
             ${help}
           </div>`;
       }).join('');

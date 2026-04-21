@@ -159,7 +159,8 @@ class ConfigField:
     """Declares a single config field a scraper needs from the UI."""
     def __init__(self, key: str, label: str, field_type: str = 'text',
                  required: bool = False, secret: bool = False,
-                 placeholder: str = '', help_text: str = '', default=None):
+                 placeholder: str = '', help_text: str = '', default=None,
+                 options: list | None = None):
         self.key         = key          # key in source.config JSON
         self.label       = label        # human label in UI
         self.field_type  = field_type   # 'text' | 'password' | 'select' | 'toggle' | 'number'
@@ -168,9 +169,10 @@ class ConfigField:
         self.placeholder = placeholder
         self.help_text   = help_text
         self.default     = default
+        self.options     = options or []  # [{'value': ..., 'label': ...}] for select fields
 
     def to_dict(self):
-        return {
+        d = {
             'key':         self.key,
             'label':       self.label,
             'field_type':  self.field_type,
@@ -180,6 +182,9 @@ class ConfigField:
             'help_text':   self.help_text,
             'default':     self.default,
         }
+        if self.options:
+            d['options'] = self.options
+        return d
 
 
 class ChannelData:

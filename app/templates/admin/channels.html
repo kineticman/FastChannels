@@ -1449,7 +1449,14 @@
                 {% endfor %}
               </select>
             </th>
-            <th style="max-width:60px">Lang</th>
+            <th style="width:1px;white-space:nowrap">
+              <select class="col-filter-select{% if language_filter %} col-filter-active{% endif %}" onchange="filterBy('language', this.value)" title="Filter by language">
+                <option value="">LAN</option>
+                {% for lang, count in languages %}
+                <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }}</option>
+                {% endfor %}
+              </select>
+            </th>
             <th>Region</th>
             <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">Ch# <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
