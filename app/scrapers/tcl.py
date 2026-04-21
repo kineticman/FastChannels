@@ -15,6 +15,33 @@ from .category_utils import category_for_channel, infer_category_from_name
 
 _SPANISH_CAT_NAMES = frozenset({'en español', 'noticias'})
 
+# Normalise TCL's inconsistent rating strings to standard US TV/MPAA values.
+# Strip sub-rating descriptors (e.g. "TV-14 L,V" → "TV-14") then map variants.
+_RATING_NORM: dict[str, str] = {
+    'TVY':   'TV-Y',  'TV Y':  'TV-Y',
+    'TVY7':  'TV-Y7', 'TV Y7': 'TV-Y7',
+    'TVG':   'TV-G',  'TV G':  'TV-G',
+    'TVPG':  'TV-PG', 'TV PG': 'TV-PG',
+    'TV14':  'TV-14', 'TV 14': 'TV-14',
+    'TVMA':  'TV-MA', 'TV MA': 'TV-MA',
+    'TVNR':  'TV-NR', 'TV NR': 'TV-NR',
+    'NR':    'TV-NR', 'NA':    'TV-NR', 'UNRATED': 'TV-NR',
+}
+_VALID_RATINGS = frozenset({
+    'TV-Y', 'TV-Y7', 'TV-Y7-FV', 'TV-G', 'TV-PG', 'TV-14', 'TV-MA', 'TV-NR',
+    'G', 'PG', 'PG-13', 'R', 'NC-17', 'NR',
+})
+
+
+def _normalize_rating(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    # Strip sub-rating descriptors: "TV-14 D,L,V" → "TV-14"
+    base = raw.strip().split()[0].upper()
+    normed = _RATING_NORM.get(base, base)
+    return normed if normed in _VALID_RATINGS else None
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -158,8 +185,10 @@ class TCLScraper(BaseScraper):
         
         livetab = self._get_json("/api/metadata/v2/livetab", params=self._common_params())
         categories = livetab.get("lines", [])
-        
-        seen_programs = set()
+
+        seen_programs: set = set()
+        # raw stub list: (bundle_id, prog_id, start_iso, end_iso, ch_poster_url)
+        stubs: List[tuple] = []
 
         for cat in categories:
             cat_id = cat["id"]
@@ -172,39 +201,73 @@ class TCLScraper(BaseScraper):
 
             for ch in payload.get("channels", []):
                 bundle_id = str(ch.get("bundle_id") or ch.get("id"))
-                
                 ch_poster = ch.get("poster_h_small") or ch.get("poster_h_medium") or ch.get("poster_v_small")
                 ch_poster_url = self._fix_url(ch_poster)
 
-                raw_programs = ch.get("programs") or []
-                for prog in raw_programs:
+                for prog in (ch.get("programs") or []):
                     prog_id = prog.get("id")
                     if not prog_id:
                         continue
-                        
                     unique_key = f"{bundle_id}:{prog_id}:{prog.get('start')}"
                     if unique_key in seen_programs:
                         continue
                     seen_programs.add(unique_key)
+                    stubs.append((bundle_id, prog_id, prog.get("start"), prog.get("end"), ch_poster_url))
 
-                    try:
-                        start_time = datetime.fromisoformat(prog.get("start").replace('Z', '+00:00'))
-                        end_time = datetime.fromisoformat(prog.get("end").replace('Z', '+00:00'))
-                    except (ValueError, TypeError):
-                        continue
-                    
-                    poster_url = prog.get("poster_h") or prog.get("poster_v") or ch_poster_url
+        # Batch-fetch program details (desc, rating, season, episode, poster)
+        details = self._fetch_program_details([s[1] for s in stubs])
 
-                    all_programs.append(ProgramData(
-                        source_channel_id=bundle_id,
-                        title=prog.get("title") or "No Title",
-                        start_time=start_time,
-                        end_time=end_time,
-                        description=prog.get("desc"),
-                        poster_url=self._fix_url(poster_url),
-                    ))
-        
+        for bundle_id, prog_id, start_iso, end_iso, ch_poster_url in stubs:
+            try:
+                start_time = datetime.fromisoformat(start_iso.replace('Z', '+00:00'))
+                end_time   = datetime.fromisoformat(end_iso.replace('Z', '+00:00'))
+            except (ValueError, TypeError, AttributeError):
+                continue
+
+            d = details.get(prog_id, {})
+            poster_url = self._fix_url(
+                d.get("poster_h_large") or d.get("poster_h_medium") or
+                d.get("poster_v_large") or d.get("poster_v_medium") or ch_poster_url
+            )
+            series = d.get("series") or {}
+
+            all_programs.append(ProgramData(
+                source_channel_id=bundle_id,
+                title=d.get("title") or "No Title",
+                start_time=start_time,
+                end_time=end_time,
+                description=d.get("desc"),
+                poster_url=poster_url,
+                rating=_normalize_rating(d.get("rating")),
+                season=series.get("season"),
+                episode=series.get("episode"),
+            ))
+
         return all_programs
+
+    def _fetch_program_details(self, prog_ids: List[str]) -> Dict[str, dict]:
+        """Batch-fetch /epg/program/detail for *prog_ids*, returning id→detail map."""
+        unique_ids = list(dict.fromkeys(prog_ids))  # dedupe, preserve order
+        details: Dict[str, dict] = {}
+        batch_size = 25
+        base_params = self._common_params()
+
+        for i in range(0, len(unique_ids), batch_size):
+            batch = unique_ids[i:i + batch_size]
+            qs = urlencode(list(base_params.items()) + [("ids", pid) for pid in batch])
+            url = f"{self.BASE}/api/metadata/v1/epg/program/detail?{qs}"
+            try:
+                resp = self.session.get(url, timeout=self.timeout)
+                resp.raise_for_status()
+                for item in resp.json():
+                    pid = item.get("id")
+                    if pid:
+                        details[pid] = item
+            except Exception as e:
+                logger.warning("[tcl] program detail batch %d failed: %s", i // batch_size, e)
+
+        logger.info("[tcl] program details fetched: %d/%d", len(details), len(unique_ids))
+        return details
 
     def resolve(self, raw_url: str) -> str:
         if not raw_url.startswith("tcl://"):
