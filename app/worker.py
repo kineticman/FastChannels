@@ -78,10 +78,35 @@ def _enqueue_xml_refresh_job() -> None:
         r = redis.from_url(flask_app.config['REDIS_URL'])
         q = Queue('fast', connection=r)
         job_id = 'xml-refresh'
-        active_ids = set(q.get_job_ids()) | set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
-        if job_id in active_ids:
-            logger.info('[xml-cache] refresh already queued/running')
+
+        # If the job appears to be running (in StartedJobRegistry), verify a live
+        # fast worker actually owns it. After a container restart the registry entry
+        # persists in Redis (RDB snapshot) even though no worker is executing the
+        # job. In that case it's a zombie and must be cleared before re-enqueuing.
+        started_registry = StartedJobRegistry(q.name, connection=q.connection)
+        if job_id in started_registry.get_job_ids():
+            from rq import Worker as _Worker
+            live_fast_workers = [
+                w for w in _Worker.all(connection=r)
+                if 'fast' in w.queue_names()
+            ]
+            if not live_fast_workers:
+                started_registry.remove(job_id)
+                try:
+                    job = Job.fetch(job_id, connection=r)
+                    job.delete()
+                except Exception:
+                    pass
+                logger.warning('[xml-cache] cleared orphaned xml-refresh from StartedJobRegistry (no live fast workers)')
+            else:
+                logger.info('[xml-cache] refresh already running')
+                return
+
+        queued_ids = set(q.get_job_ids())
+        if job_id in queued_ids:
+            logger.info('[xml-cache] refresh already queued')
             return
+
         try:
             job = Job.fetch(job_id, connection=q.connection)
             status = job.get_status(refresh=False)
@@ -89,7 +114,7 @@ def _enqueue_xml_refresh_job() -> None:
                 logger.info('[xml-cache] refresh already queued/running')
                 return
             if status == 'started':
-                # Zombie job: 'started' but not in any registry — dead worker remnant.
+                # Zombie hash not in any registry — delete so enqueue can proceed.
                 try:
                     job.delete()
                 except Exception:
