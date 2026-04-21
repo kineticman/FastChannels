@@ -23,7 +23,7 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from ..extensions import db
 from ..models import Program
 from ..url import proxy_logo_url
-from .m3u import _selected_channels, _tvg_id, _channel_display_name, _source_multi_country_map
+from .m3u import _selected_channels, _tvg_id, _channel_display_name, _source_multi_country_map, _sanitize
 
 log = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
         if ch.logo_url:
             SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url) or ch.logo_url)
         if ch.description:
-            SubElement(el, 'desc', lang='en').text = ch.description
+            SubElement(el, 'desc', lang='en').text = _sanitize(ch.description)
         yield tostring(el, encoding='unicode') + '\n'
 
     # ── Programme elements — keyset pagination ────────────────────────────
@@ -137,7 +137,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             })
             SubElement(el, 'title', lang='en').text = prog.title or ''
             if prog.description:
-                SubElement(el, 'desc', lang='en').text = prog.description
+                SubElement(el, 'desc', lang='en').text = _sanitize(prog.description)
             channel_cat = ch_cat_map.get(prog.channel_id) or ''
             program_cat = prog.category or ''
             combined_cats = [c.strip() for c in f'{program_cat};{channel_cat}'.split(';') if c.strip()]

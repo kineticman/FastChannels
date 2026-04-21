@@ -4,6 +4,7 @@ Background worker — run with: python -m app.worker
 import logging
 import multiprocessing
 import gc
+import re
 import signal
 import sys
 import threading
@@ -1306,6 +1307,14 @@ def _fresh_epg_sids(source, horizon_hours: float = 2.0) -> set[str]:
     return {row[0] for row in rows}
 
 
+def _sanitize_description(s: str | None) -> str | None:
+    if not s:
+        return None
+    s = re.sub(r'[\r\n\t]+', ' ', s)
+    s = re.sub(r'  +', ' ', s).strip()
+    return s or None
+
+
 def _validate_logo_url(url: str, cache: dict[str, bool]) -> bool:
     cached = cache.get(url)
     if cached is not None:
@@ -1482,7 +1491,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             ch.country       = cd.country
             ch.tags          = ','.join(cd.tags) if getattr(cd, 'tags', None) else None
             if getattr(cd, 'description', None):
-                ch.description = cd.description
+                ch.description = _sanitize_description(cd.description)
             if getattr(cd, 'guide_key', None):
                 ch.guide_key = cd.guide_key
             # Don't resurrect channels the stream audit flagged as Dead or DRM
@@ -1692,7 +1701,7 @@ def _upsert_programs(source, program_data_list):
         rows.append({
             'channel_id':    ch.id,
             'title':         pd.title,
-            'description':   pd.description,
+            'description':   _sanitize_description(pd.description),
             'start_time':    pd.start_time,
             'end_time':      pd.end_time,
             'poster_url':    pd.poster_url,
