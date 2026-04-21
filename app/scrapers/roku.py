@@ -158,6 +158,22 @@ class RokuScraper(BaseScraper):
     # No config needed — fully anonymous, no credentials
     config_schema = []
 
+    def _retry_config(self):
+        from urllib3.util.retry import Retry
+        # Disable read retries — content proxy timeouts don't recover on retry,
+        # they just add 10s × retry_count of wasted time and log noise.
+        # Status retries (429/5xx) still apply via the status_forcelist.
+        return Retry(
+            total=3,
+            connect=3,
+            read=0,
+            status=2,
+            backoff_factor=1.0,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=None,
+            raise_on_status=False,
+        )
+
     def __init__(self, config: dict = None):
         super().__init__(config)
         self.session.headers.update({

@@ -4,7 +4,7 @@ TCL TV+ scraper for FastChannels.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -190,10 +190,17 @@ class TCLScraper(BaseScraper):
         # raw stub list: (bundle_id, prog_id, start_iso, end_iso, ch_poster_url)
         stubs: List[tuple] = []
 
+        now = datetime.now(timezone.utc)
+        range_params = {
+            "start": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end": (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+
         for cat in categories:
             cat_id = cat["id"]
             params = self._common_params()
             params["category_id"] = cat_id
+            params.update(range_params)
             try:
                 payload = self._get_json("/api/metadata/v1/epg/programlist/by/category", params=params)
             except Exception:
