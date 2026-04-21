@@ -4,7 +4,7 @@ set -e
 echo "🚀 Starting FastChannels..."
 
 # Start Redis
-redis-server --daemonize yes --logfile /var/log/redis.log
+redis-server --daemonize yes --logfile /var/log/redis.log --save "" --appendonly no
 echo "✅ Redis started"
 
 # Wait for Redis to be ready before proceeding
