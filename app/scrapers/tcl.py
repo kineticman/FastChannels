@@ -219,12 +219,12 @@ class TCLScraper(BaseScraper):
                     if unique_key in seen_programs:
                         continue
                     seen_programs.add(unique_key)
-                    stubs.append((bundle_id, prog_id, prog.get("start"), prog.get("end"), ch_poster_url))
+                    stubs.append((bundle_id, prog_id, prog.get("start"), prog.get("end"), ch_poster_url, prog.get("title", "")))
 
         # Batch-fetch program details (desc, rating, season, episode, poster)
         details = self._fetch_program_details([s[1] for s in stubs])
 
-        for bundle_id, prog_id, start_iso, end_iso, ch_poster_url in stubs:
+        for bundle_id, prog_id, start_iso, end_iso, ch_poster_url, list_title in stubs:
             try:
                 start_time = datetime.fromisoformat(start_iso.replace('Z', '+00:00'))
                 end_time   = datetime.fromisoformat(end_iso.replace('Z', '+00:00'))
@@ -240,7 +240,7 @@ class TCLScraper(BaseScraper):
 
             all_programs.append(ProgramData(
                 source_channel_id=bundle_id,
-                title=d.get("title") or "No Title",
+                title=d.get("title") or list_title or "No Title",
                 start_time=start_time,
                 end_time=end_time,
                 description=d.get("desc"),
@@ -252,24 +252,48 @@ class TCLScraper(BaseScraper):
 
         return all_programs
 
+    @staticmethod
+    def _detail_lookup_id(prog_id: str) -> str:
+        """Extract the content_id the detail API expects from a compound prog_id.
+
+        The EPG list returns composite IDs in the form bundle_id:content_id:slot_id.
+        The /epg/program/detail endpoint only accepts the content_id (middle part).
+        Simple (non-compound) IDs are returned unchanged.
+        """
+        parts = prog_id.split(":")
+        return parts[1] if len(parts) == 3 else prog_id
+
     def _fetch_program_details(self, prog_ids: List[str]) -> Dict[str, dict]:
-        """Batch-fetch /epg/program/detail for *prog_ids*, returning id→detail map."""
+        """Batch-fetch /epg/program/detail for *prog_ids*, returning id→detail map.
+
+        Compound prog_ids (bundle:content:slot) are resolved to their content_id
+        for the API call; results are indexed by the original prog_id so callers
+        can look up by the same key they passed in.
+        """
         unique_ids = list(dict.fromkeys(prog_ids))  # dedupe, preserve order
+
+        # Map content_id → original prog_id so we can re-key the response
+        lookup_to_orig: Dict[str, str] = {}
+        for pid in unique_ids:
+            lookup_to_orig[self._detail_lookup_id(pid)] = pid
+
         details: Dict[str, dict] = {}
         batch_size = 25
         base_params = self._common_params()
+        lookup_ids = list(lookup_to_orig.keys())
 
-        for i in range(0, len(unique_ids), batch_size):
-            batch = unique_ids[i:i + batch_size]
-            qs = urlencode(list(base_params.items()) + [("ids", pid) for pid in batch])
+        for i in range(0, len(lookup_ids), batch_size):
+            batch = lookup_ids[i:i + batch_size]
+            qs = urlencode(list(base_params.items()) + [("ids", lid) for lid in batch])
             url = f"{self.BASE}/api/metadata/v1/epg/program/detail?{qs}"
             try:
                 resp = self.session.get(url, timeout=self.timeout)
                 resp.raise_for_status()
                 for item in resp.json():
-                    pid = item.get("id")
-                    if pid:
-                        details[pid] = item
+                    lid = str(item.get("id") or "")
+                    if lid:
+                        orig_id = lookup_to_orig.get(lid, lid)
+                        details[orig_id] = item
             except Exception as e:
                 logger.warning("[tcl] program detail batch %d failed: %s", i // batch_size, e)
 
