@@ -564,7 +564,7 @@ function renderChannelList() {
                        : false;
       const label = document.createElement('label');
       label.className = 'ch-item' + (checked && !isExcluded ? ' selected' : '') + (isExcluded ? ' excluded' : '');
-      label.innerHTML = `<input type="checkbox" value="${ch.id}" ${checked ? 'checked' : ''}><span class="ch-name">${ch.name}</span><span class="ch-source">${ch.source_name}</span>`;
+      label.innerHTML = `<input type="checkbox" value="${ch.id}" ${checked ? 'checked' : ''}><span class="ch-name">${ch.name}</span>`;
       label.querySelector('input').addEventListener('change', e => {
         if (excludeMode) {
           if (e.target.checked) _excludedChannelIds.delete(ch.id);
