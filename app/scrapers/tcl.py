@@ -192,7 +192,7 @@ class TCLScraper(BaseScraper):
 
         now = datetime.now(timezone.utc)
         range_params = {
-            "start": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "start": (now - timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "end": (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
@@ -231,7 +231,7 @@ class TCLScraper(BaseScraper):
             except (ValueError, TypeError, AttributeError):
                 continue
 
-            d = details.get(prog_id, {})
+            d = details.get(self._detail_lookup_id(str(prog_id)), {})
             poster_url = self._fix_url(
                 d.get("poster_h_large") or d.get("poster_h_medium") or
                 d.get("poster_v_large") or d.get("poster_v_medium") or ch_poster_url
@@ -264,26 +264,21 @@ class TCLScraper(BaseScraper):
         return parts[1] if len(parts) == 3 else prog_id
 
     def _fetch_program_details(self, prog_ids: List[str]) -> Dict[str, dict]:
-        """Batch-fetch /epg/program/detail for *prog_ids*, returning id→detail map.
+        """Batch-fetch /epg/program/detail for *prog_ids*, returning content_id→detail map.
 
         Compound prog_ids (bundle:content:slot) are resolved to their content_id
-        for the API call; results are indexed by the original prog_id so callers
-        can look up by the same key they passed in.
+        for the API call; results are keyed by content_id so callers use
+        _detail_lookup_id(prog_id) to look up.
         """
-        unique_ids = list(dict.fromkeys(prog_ids))  # dedupe, preserve order
-
-        # Map content_id → original prog_id so we can re-key the response
-        lookup_to_orig: Dict[str, str] = {}
-        for pid in unique_ids:
-            lookup_to_orig[self._detail_lookup_id(pid)] = pid
+        # Dedupe by content_id — multiple slots may share the same content
+        unique_lookup_ids = list(dict.fromkeys(self._detail_lookup_id(pid) for pid in prog_ids))
 
         details: Dict[str, dict] = {}
         batch_size = 25
         base_params = self._common_params()
-        lookup_ids = list(lookup_to_orig.keys())
 
-        for i in range(0, len(lookup_ids), batch_size):
-            batch = lookup_ids[i:i + batch_size]
+        for i in range(0, len(unique_lookup_ids), batch_size):
+            batch = unique_lookup_ids[i:i + batch_size]
             qs = urlencode(list(base_params.items()) + [("ids", lid) for lid in batch])
             url = f"{self.BASE}/api/metadata/v1/epg/program/detail?{qs}"
             try:
@@ -292,12 +287,11 @@ class TCLScraper(BaseScraper):
                 for item in resp.json():
                     lid = str(item.get("id") or "")
                     if lid:
-                        orig_id = lookup_to_orig.get(lid, lid)
-                        details[orig_id] = item
+                        details[lid] = item
             except Exception as e:
                 logger.warning("[tcl] program detail batch %d failed: %s", i // batch_size, e)
 
-        logger.info("[tcl] program details fetched: %d/%d", len(details), len(unique_ids))
+        logger.info("[tcl] program details fetched: %d/%d", len(details), len(unique_lookup_ids))
         return details
 
     def resolve(self, raw_url: str) -> str:
