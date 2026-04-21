@@ -48,6 +48,10 @@ def _cleanup_stale_started_job(q: Queue, job_id: str) -> bool:
 
     if job.get_status(refresh=False) != 'started':
         registry.remove(job)
+        try:
+            job.delete()
+        except Exception:
+            pass
         logger.warning('Removed stale started-job marker for non-started job %s', job_id)
         return True
 
@@ -59,6 +63,10 @@ def _cleanup_stale_started_job(q: Queue, job_id: str) -> bool:
 
     if heartbeat_age is not None and heartbeat_age > _STALE_STARTED_JOB_GRACE_SECONDS:
         registry.remove(job)
+        try:
+            job.delete()
+        except Exception:
+            pass
         logger.warning(
             'Removed stale started job %s after %.0fs without heartbeat',
             job_id,
@@ -68,6 +76,10 @@ def _cleanup_stale_started_job(q: Queue, job_id: str) -> bool:
 
     if last_heartbeat is None and started_age is not None and started_age > _STALE_STARTED_JOB_GRACE_SECONDS:
         registry.remove(job)
+        try:
+            job.delete()
+        except Exception:
+            pass
         logger.warning(
             'Removed stale started job %s after %.0fs without heartbeat metadata',
             job_id,
@@ -93,7 +105,18 @@ def _job_already_active(q: Queue, job_id: str) -> bool:
         job = Job.fetch(job_id, connection=q.connection)
     except Exception:
         return False
-    return job.get_status(refresh=False) in {'queued', 'started', 'deferred', 'scheduled'}
+    status = job.get_status(refresh=False)
+    # Job hash exists with 'started' status but is not in any registry — zombie from
+    # a dead worker that was already removed from StartedJobRegistry. Delete it so a
+    # fresh job can be enqueued.
+    if status == 'started':
+        try:
+            job.delete()
+        except Exception:
+            pass
+        logger.warning('Deleted zombie job %s (started status, not in any registry)', job_id)
+        return False
+    return status in {'queued', 'deferred', 'scheduled'}
 
 
 def _bulk_job_id(filters: dict, enable: bool) -> str:

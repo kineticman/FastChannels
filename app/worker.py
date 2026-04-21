@@ -84,9 +84,17 @@ def _enqueue_xml_refresh_job() -> None:
             return
         try:
             job = Job.fetch(job_id, connection=q.connection)
-            if job.get_status(refresh=False) in {'queued', 'started', 'deferred', 'scheduled'}:
+            status = job.get_status(refresh=False)
+            if status in {'queued', 'deferred', 'scheduled'}:
                 logger.info('[xml-cache] refresh already queued/running')
                 return
+            if status == 'started':
+                # Zombie job: 'started' but not in any registry — dead worker remnant.
+                try:
+                    job.delete()
+                except Exception:
+                    pass
+                logger.warning('[xml-cache] deleted zombie xml-refresh job, enqueuing fresh one')
         except Exception:
             pass
         q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id=job_id)
@@ -108,6 +116,10 @@ def _cleanup_stale_started_job(q: Queue, job_id: str) -> bool:
 
     if job.get_status(refresh=False) != 'started':
         registry.remove(job)
+        try:
+            job.delete()
+        except Exception:
+            pass
         logger.warning('[rq] removed stale started-job marker for non-started job %s', job_id)
         return True
 
@@ -119,11 +131,19 @@ def _cleanup_stale_started_job(q: Queue, job_id: str) -> bool:
 
     if heartbeat_age is not None and heartbeat_age > _STALE_STARTED_JOB_GRACE_SECONDS:
         registry.remove(job)
+        try:
+            job.delete()
+        except Exception:
+            pass
         logger.warning('[rq] removed stale started job %s after %.0fs without heartbeat', job_id, heartbeat_age)
         return True
 
     if last_heartbeat is None and started_age is not None and started_age > _STALE_STARTED_JOB_GRACE_SECONDS:
         registry.remove(job)
+        try:
+            job.delete()
+        except Exception:
+            pass
         logger.warning(
             '[rq] removed stale started job %s after %.0fs without heartbeat metadata',
             job_id,
@@ -1099,7 +1119,7 @@ def _refresh_xml_artifacts_subprocess(timeout_seconds: int = 1800) -> None:
 
 def run_xml_refresh():
     with flask_app.app_context():
-        _refresh_xml_artifacts_subprocess()
+        _refresh_xml_artifacts()
 
 
 def run_tvtv_cache_refresh():
@@ -1134,7 +1154,7 @@ def run_tvtv_cache_refresh():
 
 def _invalidate_and_refresh_xml() -> None:
     invalidate_xml_cache()
-    _refresh_xml_artifacts_subprocess()
+    _refresh_xml_artifacts()
 
 
 def _channel_ids_for_filters(filters: dict) -> list[int]:
