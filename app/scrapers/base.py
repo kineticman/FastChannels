@@ -51,6 +51,13 @@ _SPANISH_LANGUAGE_MARKERS = (
     'el rey',        # El Rey Network (Robert Rodriguez's Spanish channel)
     'pitufo',        # "Pitufo TV" (Los Pitufos = The Smurfs, Spanish)
     'vix',           # ViX / Vix+ (Univision/Televisa FAST service)
+    'caracol',       # Caracol TV (Colombian network)
+    'tudn',          # Telemundo/Univision Deportes Network
+    'exitos',        # "Éxitos del Momento" (accent stripped by fold)
+    'parejas',       # "Grandes Parejas" (Spanish for couples)
+    'ahora',         # "Aqui y Ahora" (Spanish for now)
+    'lo mejor de',   # "Lo Mejor de Liga" (Spanish for the best of)
+    'desimpedidos',  # Brazilian Portuguese football channel
 )
 
 

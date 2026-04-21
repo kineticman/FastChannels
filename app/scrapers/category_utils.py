@@ -111,6 +111,8 @@ _CANONICAL_MAP: dict[str, str] = {
     # Faith
     'faith & family':               'Faith',
     'family and faith':             'Faith',
+    'religious':                    'Faith',
+    'religion':                     'Faith',
 
     # Food
     'cooking':                      'Food',
@@ -584,6 +586,10 @@ _NAME_OVERRIDES: dict[str, str] = {
     'inwonder':                             'Documentary',
 
     # ── Drama ────────────────────────────────────────────────────────────────
+    'arous beiru':                          'Drama',
+    'al loba':                              'Drama',
+    'rakuten viki':                         'Drama',
+    'new kpop':                             'Music',
     'bbc drama':                            'Drama',
     'bet x tyler perry drama':             'Drama',
     'drama life':                           'Drama',
@@ -631,6 +637,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'baywatch':                             'Drama',
 
     # ── Faith ────────────────────────────────────────────────────────────────
+    'sikh ratnavali':                       'Faith',
     'byu tv':                               'Faith',
     'byutv':                                'Faith',
     'daystar tv':                           'Faith',
@@ -648,6 +655,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'daystar español':                      'Faith',
 
     # ── Food ─────────────────────────────────────────────────────────────────
+    'new kfood':                            'Food',
     "america's test kitchen":               'Food',
     'bbc food':                             'Food',
     'bizarre foods with andrew zimmern':    'Food',
@@ -674,6 +682,11 @@ _NAME_OVERRIDES: dict[str, str] = {
     'team liquid':                          'Gaming',
 
     # ── History ──────────────────────────────────────────────────────────────
+    'royalworld - nobility & dynasties':    'History',
+    'desimpedidos':                         'Sports',
+    'gg good game':                         'Gaming',
+    'canal do artesanato':                  'Home & DIY',
+    'cine retro':                           'Movies',
     'history & warfare now':                'History',
     'history 365':                          'History',
     'history film channel':                 'History',
@@ -765,6 +778,15 @@ _NAME_OVERRIDES: dict[str, str] = {
     'el rey rebel':                         'Latino',
     'latino vibes':                         'Latino',
     'todo cine':                            'Latino',
+    'cine de oro':                          'Movies',
+    'grandes parejas':                      'Latino',
+    '4uv':                                  'Entertainment',
+    'éxitos del momento':                   'Latino',
+    'caracol mix':                          'Latino',
+    'aqui y ahora':                         'Latino',
+    'canela.tv narco-drama':               'Latino',
+    'novelas y dramas':                     'Latino',
+    'canela.tv hollywood y mas':           'Latino',
 
     # ── Local News ───────────────────────────────────────────────────────────
     # The call-sign regex (W/K + 3 alpha + non-alpha) catches non-news channels
@@ -829,8 +851,18 @@ _NAME_OVERRIDES: dict[str, str] = {
     'new kmovies':                          'Movies',
 
     # ── Music ────────────────────────────────────────────────────────────────
+    'saga music haryanvi':                  'Music',
+    'saga music':                           'Music',
+    'yrf music':                            'Music',
+    'ghaint punjab':                        'Music',
     'smooth jazz':                          'Music',
     'easy listening':                       'Music',
+    'classic rock':                         'Music',
+    'hit list':                             'Music',
+    'hip-hop/r&b':                          'Music',
+    'qwest tv':                             'Music',
+    'k-asmr':                               'Music',
+    'euro hits - vidaa':                    'Music',
     'def jam':                              'Music',
     'circle country':                       'Music',
     'billboard tv':                         'Music',
@@ -854,6 +886,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'inwild':                               'Nature',
 
     # ── News ─────────────────────────────────────────────────────────────────
+    'cna':                                  'News',
     'fox weather':                          'News',
     'weatherspy':                           'News',
     'cnn originals':                        'News',
@@ -942,6 +975,11 @@ _NAME_OVERRIDES: dict[str, str] = {
     'jtv jewelry love':                     'Shopping',
 
     # ── Sports ───────────────────────────────────────────────────────────────
+    'formula 1 tv':                         'Sports',
+    'motogp tv':                            'Sports',
+    'mtrspt1':                              'Sports',
+    'victory plus national':                'Sports',
+    'perform':                              'Sports',
     'acc digital network':                  'Sports',
     'big 12 studios':                       'Sports',
     'billiard tv':                          'Sports',
@@ -977,6 +1015,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'world poker tour':                     'Sports',
     "yahoo! sports network":                'Sports',
     'bein sports xtra':                     'Sports',
+    'bein sports xtra en español':          'Sports',
     'fubo sports network':                  'Sports',
     't2':                                   'Sports',
     'pfl':                                  'Sports',
