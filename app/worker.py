@@ -1399,7 +1399,9 @@ def _resolved_logo_url(existing_logo: str | None, incoming_logo: str | None, cac
         return current
     # Never keep a non-absolute existing URL when we have an absolute replacement.
     if not (current or '').startswith(('http://', 'https://')):
-        return incoming
+        if _validate_logo_url(incoming, cache):
+            return incoming
+        return current
     if _validate_logo_url(incoming, cache):
         return incoming
     return current

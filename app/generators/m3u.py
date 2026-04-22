@@ -763,16 +763,17 @@ def _tvg_id(ch) -> str:
 
 
 def _sanitize(s: str | None) -> str:
-    """Strip control characters and escape quotes for M3U attributes / XMLTV text."""
+    """Strip control characters from text (safe for both M3U attributes and XML text nodes)."""
     if not s:
         return ''
     s = re.sub(r'[\r\n\t]+', ' ', s)
     s = re.sub(r'  +', ' ', s).strip()
-    return s.replace('"', "'")
+    return s
 
 
 def _esc(s):
-    return _sanitize(s)
+    """Sanitize and replace double quotes for use inside M3U attribute values."""
+    return _sanitize(s).replace('"', "'")
 
 
 # Channels DVR tvc-guide-categories accepted values: Movie, Sports event, Series
