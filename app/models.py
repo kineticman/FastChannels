@@ -14,8 +14,18 @@ def _logo_display_url(raw_url: str | None) -> str | None:
         return raw_url  # already local
     key = hashlib.md5(raw_url.encode()).hexdigest()
     ext = next((e for e in ('jpg', 'jpeg', 'png', 'gif') if f'.{e}' in raw_url.lower()), 'jpg')
-    if os.path.exists(os.path.join(_LOGO_CACHE_ROOT, key)):
+    cache_dir = _LOGO_CACHE_ROOT
+    if os.path.exists(os.path.join(cache_dir, key)):
         return f'/logos/{key}.{ext}'
+    # Write .url sidecar so the proxy route can fetch the image on demand.
+    url_path = os.path.join(cache_dir, key + '.url')
+    if not os.path.exists(url_path):
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(url_path, 'w') as _f:
+                _f.write(raw_url)
+        except OSError:
+            return raw_url  # can't write sidecar — fall back to CDN URL
     return f'/images/proxy/logo/{key}.{ext}'
 
 
