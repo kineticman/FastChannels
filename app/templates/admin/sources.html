@@ -472,8 +472,11 @@
 
             <td class="col-actions">
               <div class="dash-actions">
-                <button class="btn btn-run btn-sm" onclick="run({{ source.id }}, this)"
+                <button class="btn btn-run btn-sm" data-label="Scrape" onclick="run({{ source.id }}, this)"
                         {% if not source.is_enabled %}disabled{% endif %}>Scrape</button>
+                <button class="btn btn-run btn-sm" data-label="Force Full" style="opacity:0.75" onclick="forceRefreshSource({{ source.id }}, this)"
+                        {% if not source.is_enabled %}disabled{% endif %}
+                        title="Clear scrape state and force a full channel + guide refresh">Force Full</button>
                 {% if audit_enabled.get(source.name) %}
                 <button class="btn btn-audit btn-sm"
                         onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
@@ -723,6 +726,27 @@
       } catch (e) {
         btn.textContent = 'Error';
         setTimeout(() => { btn.textContent = 'Scrape'; btn.disabled = false; }, 3000);
+      }
+    }
+
+    async function forceRefreshSource(id, btn) {
+      if (_pollTimers[id]) return;
+      btn.disabled = true;
+      btn.textContent = 'Queued…';
+      try {
+        const r = await fetch(`/api/sources/${id}/force-full`, {method: 'POST'});
+        const d = await r.json();
+        if (d.status === 'queued') {
+          btn.textContent = 'Running…';
+          _scrapeStart[id] = Date.now();
+          _startPolling(id, btn);
+        } else {
+          btn.textContent = 'Error';
+          setTimeout(() => { btn.textContent = 'Force Full'; btn.disabled = false; }, 3000);
+        }
+      } catch (e) {
+        btn.textContent = 'Error';
+        setTimeout(() => { btn.textContent = 'Force Full'; btn.disabled = false; }, 3000);
       }
     }
 
@@ -981,7 +1005,7 @@
       delete _scrapeStart[sourceId];
       document.getElementById(`dash-row-${sourceId}`)?.classList.remove('scraping');
       const btn = _scrapeBtn[sourceId];
-      if (btn) { btn.textContent = 'Scrape'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
+      if (btn) { btn.textContent = btn.dataset.label || 'Scrape'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
       const statusEl = document.getElementById(`scrape-status-${sourceId}`);
       if (!statusEl) return;
       if (lastError) {

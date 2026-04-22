@@ -471,12 +471,31 @@ class PlutoScraper(BaseScraper):
                     categories.append('Movie')
                 categories.extend(mapped_categories(ep.get('subGenre')))
                 unique_categories = list(dict.fromkeys(cat for cat in categories if cat))
-                poster_url = (
-                    _pluto_img((ep.get('poster')    or {}).get('path')) or
-                    _pluto_img((series.get('tile')  or {}).get('path')) or
-                    _pluto_img((ep.get('thumbnail') or {}).get('path')) or
-                    None
-                )
+                ep_p169 = _pluto_img((ep.get('poster16_9') or {}).get('path'))
+                if ep_p169:
+                    # Real 16:9 episode art exists — episode images are show-specific
+                    poster_url = (
+                        ep_p169 or
+                        _pluto_img((ep.get('poster')            or {}).get('path')) or
+                        _pluto_img((ep.get('featuredImage')     or {}).get('path')) or
+                        _pluto_img((series.get('tile')          or {}).get('path')) or
+                        _pluto_img((ep.get('thumbnail')         or {}).get('path')) or
+                        _pluto_img((series.get('featuredImage') or {}).get('path')) or
+                        _pluto_img((series.get('poster16_9')    or {}).get('path')) or
+                        None
+                    )
+                else:
+                    # ep.poster16_9 is Pluto's generic placeholder — episode images
+                    # are also generic blobs served via episode URLs; prefer series art
+                    poster_url = (
+                        _pluto_img((series.get('tile')          or {}).get('path')) or
+                        _pluto_img((series.get('featuredImage') or {}).get('path')) or
+                        _pluto_img((series.get('poster16_9')    or {}).get('path')) or
+                        _pluto_img((ep.get('poster')            or {}).get('path')) or
+                        _pluto_img((ep.get('featuredImage')     or {}).get('path')) or
+                        _pluto_img((ep.get('thumbnail')         or {}).get('path')) or
+                        None
+                    )
                 programs.append(ProgramData(
                     source_channel_id = channel_id,
                     title             = title,

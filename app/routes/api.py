@@ -478,6 +478,16 @@ def run_source(source_id):
     return jsonify({'status': 'queued', 'source': source.name})
 
 
+@api_bp.route('/sources/<int:source_id>/force-full', methods=['POST'])
+def force_refresh_source(source_id):
+    source = Source.query.get_or_404(source_id)
+    source.last_scraped_at = None
+    source.last_error = None
+    db.session.commit()
+    trigger_scrape(source.name, force_full=True)
+    return jsonify({'status': 'queued', 'source': source.name})
+
+
 @api_bp.route('/sources/force-refresh', methods=['POST'])
 def force_refresh_sources():
     enabled_sources = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
