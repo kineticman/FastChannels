@@ -165,7 +165,7 @@ class XumoScraper(BaseScraper):
         ]
 
         for date_str in dates:
-            for page in range(1, self.EPG_PAGES_PER_DAY + 1):
+            for page in range(0, self.EPG_PAGES_PER_DAY):
                 found_any_for_page = False
 
                 page_no_data = False
