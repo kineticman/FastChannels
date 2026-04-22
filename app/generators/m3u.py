@@ -9,6 +9,47 @@ from ..url import proxy_logo_url
 
 log = logging.getLogger(__name__)
 
+# Windows-1252 codepoints that arrived as Unicode scalars (sources that decoded
+# bytes as Latin-1 instead of UTF-8).  Map them to the proper Unicode characters
+# they were always meant to be; undefined C1 slots are stripped (None).
+_WIN1252_REMAP = str.maketrans({
+    0x80: '€',  # €
+    0x81: None,      # undefined
+    0x82: '‚',  # ‚
+    0x83: 'ƒ',  # ƒ
+    0x84: '„',  # „
+    0x85: '…',  # …
+    0x86: '†',  # †
+    0x87: '‡',  # ‡
+    0x88: 'ˆ',  # ˆ
+    0x89: '‰',  # ‰
+    0x8A: 'Š',  # Š
+    0x8B: '‹',  # ‹
+    0x8C: 'Œ',  # Œ
+    0x8D: None,      # undefined
+    0x8E: 'Ž',  # Ž
+    0x8F: None,      # undefined
+    0x90: None,      # undefined
+    0x91: '‘',  # '
+    0x92: '’',  # '
+    0x93: '“',  # "
+    0x94: '”',  # "
+    0x95: '•',  # •
+    0x96: '–',  # –
+    0x97: '—',  # —
+    0x98: '˜',  # ˜
+    0x99: '™',  # ™
+    0x9A: 'š',  # š
+    0x9B: '›',  # ›
+    0x9C: 'œ',  # œ
+    0x9D: None,      # undefined
+    0x9E: 'ž',  # ž
+    0x9F: 'Ÿ',  # Ÿ
+    0x00A0: ' ',     # NO-BREAK SPACE → regular space
+    0x200B: None,    # ZERO WIDTH SPACE
+    0xFFFD: None,    # REPLACEMENT CHARACTER
+})
+
 _CHNUM_NAMESPACE_BLOCK = 100000
 _MASTER_GRACENOTE_START = 100000
 _FEED_NAMESPACE_BASE = 200000
@@ -762,10 +803,26 @@ def _tvg_id(ch) -> str:
     return f'{ch.source.name}.{ch.source_channel_id}'
 
 
+def _try_fix_mojibake(s: str) -> str:
+    """Fix UTF-8 bytes that were decoded as Latin-1 (up to two rounds)."""
+    for _ in range(2):
+        try:
+            fixed = s.encode('latin-1').decode('utf-8')
+            if fixed == s:
+                break
+            s = fixed
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            break
+    return s
+
+
 def _sanitize(s: str | None) -> str:
     """Strip control characters from text (safe for both M3U attributes and XML text nodes)."""
     if not s:
         return ''
+    s = _try_fix_mojibake(s)
+    s = s.translate(_WIN1252_REMAP)
+    s = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+', '', s)  # strip remaining C0 controls
     s = re.sub(r'[\r\n\t]+', ' ', s)
     s = re.sub(r'  +', ' ', s).strip()
     return s

@@ -1357,9 +1357,39 @@ def _fresh_epg_sids(source, horizon_hours: float = 2.0) -> set[str]:
     return {row[0] for row in rows}
 
 
+_WIN1252_REMAP = str.maketrans({
+    0x80: '€',  0x81: None,  0x82: '‚',  0x83: 'ƒ',  0x84: '„',
+    0x85: '…',  0x86: '†',  0x87: '‡',  0x88: 'ˆ',  0x89: '‰',
+    0x8A: 'Š',  0x8B: '‹',  0x8C: 'Œ',  0x8D: None,  0x8E: 'Ž',
+    0x8F: None,  0x90: None,  0x91: ''',  0x92: ''',  0x93: '"',
+    0x94: '"',  0x95: '•',  0x96: '–',  0x97: '—',  0x98: '˜',
+    0x99: '™',  0x9A: 'š',  0x9B: '›',  0x9C: 'œ',  0x9D: None,
+    0x9E: 'ž',  0x9F: 'Ÿ',
+    0x00A0: ' ',   # NO-BREAK SPACE → regular space
+    0x200B: None,  # ZERO WIDTH SPACE
+    0xFFFD: None,  # REPLACEMENT CHARACTER
+})
+
+
+def _try_fix_mojibake(s: str) -> str:
+    """Fix UTF-8 bytes that were decoded as Latin-1 (up to two rounds)."""
+    for _ in range(2):
+        try:
+            fixed = s.encode('latin-1').decode('utf-8')
+            if fixed == s:
+                break
+            s = fixed
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            break
+    return s
+
+
 def _sanitize_description(s: str | None) -> str | None:
     if not s:
         return None
+    s = _try_fix_mojibake(s)
+    s = s.translate(_WIN1252_REMAP)
+    s = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+', '', s)  # strip remaining C0 controls
     s = re.sub(r'[\r\n\t]+', ' ', s)
     s = re.sub(r'  +', ' ', s).strip()
     return s or None
