@@ -35,6 +35,34 @@ MACRO_REPLACEMENTS: dict[str, str] = {
 }
 
 MACRO_RE = re.compile(r"\[[A-Z_]+\]")
+_FLS_SXE_DASH_RE = re.compile(
+    r"^(?P<series>.+?)\s[-–]\sS(?P<season>\d+)E(?P<episode>\d+)\s[-–]\s(?P<episode_title>.+?)\s*$",
+    re.IGNORECASE,
+)
+_FLS_EPISODE_WITH_SUBTITLE_RE = re.compile(
+    r"^(?P<series>.+?)\s[-–]\sEpisode\s(?P<episode>\d+)(?::|\s[-–]\s)(?P<episode_title>.+?)\s*$",
+    re.IGNORECASE,
+)
+_FLS_EPISODE_ONLY_RE = re.compile(
+    r"^(?P<series>.+?)\s[-–]\sEpisode\s(?P<episode>\d+)\s*$",
+    re.IGNORECASE,
+)
+_FLS_SEASON_EPISODE_RE = re.compile(
+    r"^(?P<series>.+?)\sSeason\s(?P<season>\d+)\sEpisode\s(?P<episode>\d+)(?:\s*[-:]\s*(?P<episode_title>.+?))?\s*$",
+    re.IGNORECASE,
+)
+_FLS_SEASON_COMMA_EPISODE_RE = re.compile(
+    r"^(?P<series>.+?)\sSeason\s(?P<season>\d+),\s*Episode\s(?P<episode>\d+)(?:,\s*(?P<episode_title>.+?))?\s*$",
+    re.IGNORECASE,
+)
+_FLS_SERIES_EPISODE_RE = re.compile(
+    r"^(?P<series>.+?)(?::\s*|\s[-–]\s|\s+)Episode\s*(?P<episode>\d+)(?:(?:\s*[-:]\s*|\s+)(?P<episode_title>.+?))?\s*$",
+    re.IGNORECASE,
+)
+_FLS_REPEATED_SERIES_EPISODE_RE = re.compile(
+    r"^(?P<series>.+?)\s[-–]\s(?P<dup>.+?)\s(?P<code>\d+):\s*Episode\s(?P<episode>\d+)\s*$",
+    re.IGNORECASE,
+)
 
 
 def _replace_macros(url: str) -> str:
@@ -42,6 +70,81 @@ def _replace_macros(url: str) -> str:
         url = url.replace(key, value)
     url = MACRO_RE.sub("", url)
     return url
+
+
+def _parse_freelivesports_title(raw: str | None) -> tuple[str | None, int | None, int | None, str | None]:
+    if not raw:
+        return raw, None, None, None
+
+    title = raw.strip()
+
+    def _normalize_episode_title(series: str, episode: int, raw_episode_title: str | None) -> str | None:
+        episode_label = f"Episode {episode}"
+        candidate = (raw_episode_title or "").strip(" -:") or None
+        if not candidate:
+            return episode_label
+        if candidate.upper() == "NEW":
+            return episode_label
+        if candidate == title or candidate == f"{series} {episode_label}":
+            return episode_label
+        return candidate
+
+    match = _FLS_SXE_DASH_RE.match(title)
+    if match:
+        return (
+            match.group("series").strip(),
+            int(match.group("season")),
+            int(match.group("episode")),
+            match.group("episode_title").strip() or None,
+        )
+
+    match = _FLS_EPISODE_WITH_SUBTITLE_RE.match(title)
+    if match:
+        episode = int(match.group("episode"))
+        return (
+            match.group("series").strip(),
+            None,
+            episode,
+            match.group("episode_title").strip() or None,
+        )
+
+    match = _FLS_EPISODE_ONLY_RE.match(title)
+    if match:
+        episode = int(match.group("episode"))
+        return match.group("series").strip(), None, episode, f"Episode {episode}"
+
+    match = _FLS_SEASON_EPISODE_RE.match(title)
+    if match:
+        series = match.group("series").strip()
+        season = int(match.group("season"))
+        episode = int(match.group("episode"))
+        episode_title = _normalize_episode_title(series, episode, match.group("episode_title"))
+        return series, season, episode, episode_title
+
+    match = _FLS_SEASON_COMMA_EPISODE_RE.match(title)
+    if match:
+        series = match.group("series").strip()
+        season = int(match.group("season"))
+        episode = int(match.group("episode"))
+        episode_title = _normalize_episode_title(series, episode, match.group("episode_title"))
+        return series, season, episode, episode_title
+
+    match = _FLS_SERIES_EPISODE_RE.match(title)
+    if match:
+        series = match.group("series").strip()
+        episode = int(match.group("episode"))
+        episode_title = _normalize_episode_title(series, episode, match.group("episode_title"))
+        return series, None, episode, episode_title
+
+    match = _FLS_REPEATED_SERIES_EPISODE_RE.match(title)
+    if match:
+        series = match.group("series").strip()
+        dup = match.group("dup").strip()
+        if dup.startswith(series):
+            episode = int(match.group("episode"))
+            return series, None, episode, f"Episode {episode}"
+
+    return title, None, None, None
 
 
 class FreeLiveSportsScraper(BaseScraper):
@@ -152,15 +255,19 @@ class FreeLiveSportsScraper(BaseScraper):
                 stop_ts  = _parse_ts(entry.get("stop", ""))
                 if not start_ts or not stop_ts:
                     continue
+                title, season, episode, episode_title = _parse_freelivesports_title(entry.get("title"))
 
                 programs.append(ProgramData(
                     source_channel_id = channel_id,
-                    title             = (entry.get("title") or "").strip() or "Unknown",
+                    title             = title or "Unknown",
                     description       = (entry.get("description") or "").strip() or None,
                     start_time        = start_ts,
                     end_time          = stop_ts,
                     poster_url        = entry.get("image") or None,
                     category          = "Sports",
+                    episode_title     = episode_title,
+                    season            = season,
+                    episode           = episode,
                 ))
 
         logger.info("[freelivesports] %d EPG entries", len(programs))

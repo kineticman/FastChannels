@@ -17,6 +17,19 @@ from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDead
 
 logger = logging.getLogger(__name__)
 
+_DISTRO_SXE_DASH_RE = re.compile(
+    r"^(?P<series>.+?)\s+S(?P<season>\d+)\s*E(?P<episode>\d+)\s*[-–]\s*(?P<episode_title>.+?)\s*$",
+    re.IGNORECASE,
+)
+_DISTRO_EPISODE_ONLY_RE = re.compile(
+    r"^(?P<series>.+?)(?::\s*|,\s*)Episode\s+(?P<episode>\d+)\s*$",
+    re.IGNORECASE,
+)
+_DISTRO_EPISODE_WITH_SUBTITLE_RE = re.compile(
+    r"^(?P<series>.+?)(?::\s*|,\s*)Episode\s+(?P<episode>\d+)\s*[-:]\s*(?P<episode_title>.+?)\s*$",
+    re.IGNORECASE,
+)
+
 
 def _unescape(text: str) -> str:
     """Fully unescape HTML entities, handling multiply-encoded upstream data."""
@@ -25,6 +38,38 @@ def _unescape(text: str) -> str:
         prev = text
         text = _html.unescape(text)
     return text
+
+
+def _parse_distro_title(raw: str | None) -> tuple[str | None, int | None, int | None, str | None]:
+    if not raw:
+        return raw, None, None, None
+
+    title = _unescape(raw.strip()) or raw
+
+    match = _DISTRO_SXE_DASH_RE.match(title)
+    if match:
+        return (
+            match.group("series").strip(),
+            int(match.group("season")),
+            int(match.group("episode")),
+            match.group("episode_title").strip() or None,
+        )
+
+    match = _DISTRO_EPISODE_WITH_SUBTITLE_RE.match(title)
+    if match:
+        return (
+            match.group("series").strip(),
+            None,
+            int(match.group("episode")),
+            match.group("episode_title").strip() or None,
+        )
+
+    match = _DISTRO_EPISODE_ONLY_RE.match(title)
+    if match:
+        episode = int(match.group("episode"))
+        return match.group("series").strip(), None, episode, f"Episode {episode}"
+
+    return title, None, None, None
 
 CHANNEL_SCHEME = "distro://channel/"
 
@@ -463,14 +508,18 @@ class DistroScraper(BaseScraper):
                     end   = datetime.strptime(slot["end"],   "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 except (KeyError, ValueError):
                     continue
+                title, season, episode, episode_title = _parse_distro_title(slot.get("title"))
                 for qualified_id in target_ids:
                     programs.append(ProgramData(
                         source_channel_id = qualified_id,
-                        title             = _unescape((slot.get("title") or "").strip()) or "Unknown",
+                        title             = title or "Unknown",
                         description       = _unescape((slot.get("description") or "").strip()) or None,
                         start_time        = start,
                         end_time          = end,
                         poster_url        = slot.get("img_thumbh") or None,
+                        episode_title     = episode_title,
+                        season            = season,
+                        episode           = episode,
                     ))
         logger.info("[distro] parsed %d EPG entries", len(programs))
         return programs

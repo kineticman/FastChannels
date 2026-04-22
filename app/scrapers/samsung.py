@@ -27,6 +27,7 @@ import gzip
 import io
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from xml.etree import ElementTree as ET
 
@@ -40,6 +41,7 @@ _STREAM_URL   = 'https://jmp2.uk/stvp-{id}'
 
 # XMLTV datetime format used by this EPG source
 _XMLTV_TS_FMT = '%Y%m%d%H%M%S %z'
+_ONSCREEN_EPISODE_RE = re.compile(r'^S(?P<season>\d+)E(?P<episode>\d+)$', re.IGNORECASE)
 
 
 def _parse_xmltv_ts(ts: str) -> datetime | None:
@@ -47,6 +49,21 @@ def _parse_xmltv_ts(ts: str) -> datetime | None:
         return datetime.strptime(ts.strip(), _XMLTV_TS_FMT)
     except (ValueError, TypeError):
         return None
+
+
+def _parse_onscreen_episode_num(prog: ET.Element) -> tuple[int | None, int | None]:
+    for epnum in prog.findall('episode-num'):
+        if (epnum.get('system') or '').lower() != 'onscreen':
+            continue
+        text = (epnum.text or '').strip()
+        match = _ONSCREEN_EPISODE_RE.match(text)
+        if not match:
+            continue
+        try:
+            return int(match.group('season')), int(match.group('episode'))
+        except (TypeError, ValueError):
+            return None, None
+    return None, None
 
 
 class SamsungScraper(BaseScraper):
@@ -206,6 +223,8 @@ class SamsungScraper(BaseScraper):
                 title     = (prog.findtext('title') or '').strip() or 'Unknown'
                 desc      = (prog.findtext('desc') or '').strip() or None
                 rating    = (prog.findtext('rating/value') or '').strip() or None
+                episode_title = (prog.findtext('sub-title') or '').strip() or None
+                season, episode = _parse_onscreen_episode_num(prog)
                 icon_el   = prog.find('icon')
                 poster    = icon_el.get('src') if icon_el is not None else None
 
@@ -217,6 +236,9 @@ class SamsungScraper(BaseScraper):
                     description       = desc,
                     poster_url        = poster,
                     rating            = rating,
+                    episode_title     = episode_title,
+                    season            = season,
+                    episode           = episode,
                 ))
                 region_count += 1
 

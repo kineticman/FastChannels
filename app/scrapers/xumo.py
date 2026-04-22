@@ -231,6 +231,14 @@ class XumoScraper(BaseScraper):
                                 or descriptions.get("small")
                                 or descriptions.get("tiny")
                             )
+                            episode_title = str(asset.get("episodeTitle") or "").strip() or None
+                            season = asset.get("season")
+                            episode = asset.get("episode")
+                            try:
+                                season = int(season) if season is not None else None
+                                episode = int(episode) if episode is not None else None
+                            except (TypeError, ValueError):
+                                season = episode = None
                             poster_url = (self._poster_url(asset_id)
                                           or f"{self.CHANNEL_IMAGE}/{channel_id}/600x336.jpg?type=channelTile")
                             category = self._extract_asset_genre(asset)
@@ -249,6 +257,9 @@ class XumoScraper(BaseScraper):
                                     description=description,
                                     poster_url=poster_url,
                                     category=category,
+                                    episode_title=episode_title,
+                                    season=season,
+                                    episode=episode,
                                 )
                             )
 

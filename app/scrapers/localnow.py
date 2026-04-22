@@ -8,6 +8,22 @@ import re
 from datetime import datetime, timedelta, timezone
 
 _CALL_SIGN_RE = re.compile(r'^[WK][A-Z]{2,4}\b')
+_LOCALNOW_COMPOSITE_TITLE_RE = re.compile(
+    r'^(?P<series>.+):\s+S(?P<season>\d+)\s+E(?P<episode>\d+)\s*-\s*(?P<episode_title>.+?)\s*$',
+    re.IGNORECASE,
+)
+_LOCALNOW_SE_RATING_RE = re.compile(
+    r'^(?P<series>.+):\s+S(?P<season>\d+)\s+E(?P<episode>\d+)\s*\([^)]*\)\s*$',
+    re.IGNORECASE,
+)
+_LOCALNOW_EPISODE_SUBTITLE_RE = re.compile(
+    r'^(?P<series>.+?)\s[-–]\sEpisode\s(?P<episode>\d+)\s[-–]\s(?P<episode_title>.+?)\s*$',
+    re.IGNORECASE,
+)
+_LOCALNOW_EPISODE_ONLY_RE = re.compile(
+    r'^(?P<series>.+?)(?::\s*|,\s*|\s[-–]\s)Episode\s(?P<episode>\d+)\s*$',
+    re.IGNORECASE,
+)
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote, urljoin
 
@@ -15,6 +31,49 @@ from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_lang
 from .category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_localnow_title(
+    raw: Optional[str],
+    api_season: Optional[int],
+    api_episode: Optional[int],
+    api_episode_title: Optional[str],
+) -> Tuple[Optional[str], Optional[int], Optional[int], Optional[str]]:
+    """Normalize Local Now composite titles into XMLTV-friendly fields."""
+    if not raw:
+        return raw, api_season, api_episode, api_episode_title
+
+    title = raw.strip()
+    match = _LOCALNOW_COMPOSITE_TITLE_RE.match(title)
+    if match:
+        series_title = match.group("series").strip()
+        season = int(match.group("season"))
+        episode = int(match.group("episode"))
+        episode_title = (api_episode_title or match.group("episode_title") or "").strip() or None
+        return series_title, season, episode, episode_title
+
+    match = _LOCALNOW_SE_RATING_RE.match(title)
+    if match:
+        return (
+            match.group("series").strip(),
+            int(match.group("season")),
+            int(match.group("episode")),
+            api_episode_title,
+        )
+
+    match = _LOCALNOW_EPISODE_SUBTITLE_RE.match(title)
+    if match:
+        episode = int(match.group("episode"))
+        episode_title = (api_episode_title or match.group("episode_title") or "").strip() or None
+        return match.group("series").strip(), api_season, api_episode or episode, episode_title
+
+    match = _LOCALNOW_EPISODE_ONLY_RE.match(title)
+    if match:
+        episode = int(match.group("episode"))
+        episode_title = (api_episode_title or f"Episode {episode}").strip() or None
+        return match.group("series").strip(), api_season, api_episode or episode, episode_title
+
+    return title, api_season, api_episode, api_episode_title
 
 
 class LocalNowScraper(BaseScraper):
@@ -215,19 +274,28 @@ class LocalNowScraper(BaseScraper):
                 except Exception:
                     continue
 
+                raw_title = (item.get("program_title") or payload.get("name") or "Unknown").strip()
+                api_episode_title = (item.get("episode_title") or "").strip() or None
+                title, season, episode, episode_title = _parse_localnow_title(
+                    raw_title,
+                    self._safe_int(item.get("season"), None),
+                    self._safe_int(item.get("episode"), None),
+                    api_episode_title,
+                )
+
                 programs.append(
                     ProgramData(
                         source_channel_id=source_channel_id,
-                        title=(item.get("program_title") or payload.get("name") or "Unknown").strip(),
+                        title=title or "Unknown",
                         start_time=start_dt,
                         end_time=end_dt,
                         description=(item.get("program_description") or payload.get("description") or "").strip() or None,
                         poster_url=(item.get("image") or payload.get("poster") or None),
                         category=((payload.get("iab_genres") or payload.get("genres") or [None])[0]),
                         rating=(payload.get("rating") or None),
-                        episode_title=(item.get("episode_title") or None),
-                        season=self._safe_int(item.get("season"), None),
-                        episode=self._safe_int(item.get("episode"), None),
+                        episode_title=episode_title,
+                        season=season,
+                        episode=episode,
                     )
                 )
 
