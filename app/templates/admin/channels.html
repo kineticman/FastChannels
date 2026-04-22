@@ -1479,7 +1479,7 @@
                     data-logo="{{ ch.logo_url or '' | e }}"
                     data-pinned="{{ 'true' if ch.logo_url_pinned else 'false' }}">
                 {% if ch.logo_url %}
-                <img src="{{ ch.logo_url }}" class="logo" loading="lazy">
+                <img src="{{ ch.logo_display_url or ch.logo_url }}" class="logo" loading="lazy">
                 {% else %}
                 <div class="logo"></div>
                 {% endif %}
@@ -1794,7 +1794,7 @@
           : '';
         content.innerHTML = `
           <div class="preview-header">
-            ${ch.logo_url ? `<img class="preview-logo" src="${escapeHtml(ch.logo_url)}" alt="">` : '<div class="preview-logo"></div>'}
+            ${ch.logo_url ? `<img class="preview-logo" src="${escapeHtml(ch.logo_display_url || ch.logo_url)}" alt="">` : '<div class="preview-logo"></div>'}
             <div>
               <div class="preview-title">${escapeHtml(ch.name || 'Channel')}</div>
               <div class="preview-meta">
@@ -2483,7 +2483,7 @@
 
       function renderRow(ch, checked) {
         const logo = ch.logo_url
-          ? `<img src="${escapeHtml(ch.logo_url)}" onerror="this.style.display='none'">`
+          ? `<img src="${escapeHtml(ch.logo_display_url || ch.logo_url)}" onerror="this.style.display='none'">`
           : `<span style="width:36px;height:27px;display:inline-block"></span>`;
         const badges = [
           ch.is_duplicate ? `<span class="badge-manual-dup" title="Already marked duplicate">DUPL</span>` : '',
@@ -2512,7 +2512,7 @@
         <h2>Potential Duplicates</h2>
         <p class="modal-sub">Marking <strong>${escapeHtml(data.channel.name)}</strong> as duplicate. Select any related channels to mark at the same time.</p>
         <div class="dup-finder-subject">
-          ${data.channel.logo_url ? `<img src="${escapeHtml(data.channel.logo_url)}" onerror="this.style.display='none'">` : ''}
+          ${data.channel.logo_url ? `<img src="${escapeHtml(data.channel.logo_display_url || data.channel.logo_url)}" onerror="this.style.display='none'">` : ''}
           <div>
             <div class="dup-finder-name">${escapeHtml(data.channel.name)}</div>
             <div class="dup-finder-source">${escapeHtml(data.channel.source)}</div>
@@ -2565,7 +2565,7 @@
 
     function _dcRenderCard(ch, isSubject) {
       const logo = ch.logo_url
-        ? `<img class="dc-logo" src="${escapeHtml(ch.logo_url)}" onerror="this.style.display='none'">`
+        ? `<img class="dc-logo" src="${escapeHtml(ch.logo_display_url || ch.logo_url)}" onerror="this.style.display='none'">`
         : `<div class="dc-logo-blank"></div>`;
 
       // Header status badges (right side)

@@ -110,8 +110,18 @@ def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> st
         static_dir = 'posters' if img_type == 'poster' else 'logos'
         return f"{base_url}/{static_dir}/{key}.{ext}"
 
-    # Not cached yet — use upstream CDN URL directly as fallback
-    return url
+    # Not cached yet — write a .url sidecar so the proxy route can fetch on
+    # demand, and return the proxy URL.  This keeps all logo traffic through our
+    # server so clients never need to trust upstream CDN certificates directly.
+    url_path = os.path.join(cache_root, key + '.url')
+    if not os.path.exists(url_path):
+        try:
+            os.makedirs(cache_root, exist_ok=True)
+            with open(url_path, 'w') as _f:
+                _f.write(url)
+        except OSError:
+            return url
+    return f"{base_url}/images/proxy/logo/{key}.{ext}"
 
 
 def public_base_url() -> str:

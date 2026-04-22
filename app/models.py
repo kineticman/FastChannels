@@ -1,6 +1,22 @@
+import hashlib
 import os
 from datetime import datetime, timedelta, timezone
 from .extensions import db
+
+_LOGO_CACHE_ROOT = '/data/logo_cache/logos'
+
+
+def _logo_display_url(raw_url: str | None) -> str | None:
+    """Return a server-relative proxy URL for a logo so browsers never hit upstream CDNs."""
+    if not raw_url:
+        return None
+    if raw_url.startswith('/'):
+        return raw_url  # already local
+    key = hashlib.md5(raw_url.encode()).hexdigest()
+    ext = next((e for e in ('jpg', 'jpeg', 'png', 'gif') if f'.{e}' in raw_url.lower()), 'jpg')
+    if os.path.exists(os.path.join(_LOGO_CACHE_ROOT, key)):
+        return f'/logos/{key}.{ext}'
+    return f'/images/proxy/logo/{key}.{ext}'
 
 
 class Source(db.Model):
@@ -107,6 +123,7 @@ class Channel(db.Model):
             'name':             self.name,
             'slug':             self.slug,
             'logo_url':         self.logo_url,
+            'logo_display_url': _logo_display_url(self.logo_url),
             'logo_url_pinned':  bool(self.logo_url_pinned),
             'stream_url':       self.stream_url,
             'stream_type':      self.stream_type,
