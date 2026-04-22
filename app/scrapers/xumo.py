@@ -224,7 +224,8 @@ class XumoScraper(BaseScraper):
                                 or descriptions.get("small")
                                 or descriptions.get("tiny")
                             )
-                            poster_url = self._poster_url(asset_id)
+                            poster_url = (self._poster_url(asset_id)
+                                          or f"{self.CHANNEL_IMAGE}/{channel_id}/600x336.jpg?type=channelTile")
                             category = self._extract_asset_genre(asset)
 
                             dedupe_key = (channel_id, start.isoformat(), asset_id)
