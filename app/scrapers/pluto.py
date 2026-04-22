@@ -438,6 +438,16 @@ class PlutoScraper(BaseScraper):
         from datetime import date as _date
         _today = _date.today()
 
+        _year_suffix = re.compile(r'\s*\((\d{4})\)\s*$')
+
+        def strip_year_from_title(s: str) -> tuple[str, int | None]:
+            """Remove trailing (YYYY) from title; return (cleaned_title, year_or_None)."""
+            m = _year_suffix.search(s)
+            if not m:
+                return s, None
+            year = int(m.group(1))
+            return s[:m.start()].strip(), year
+
         def parse_original_air_date(value):
             if not value:
                 return None
@@ -465,7 +475,7 @@ class PlutoScraper(BaseScraper):
                 ep       = tl.get('episode', {})
                 series   = ep.get('series', {})
                 clip     = ep.get('clip', {}) if isinstance(ep.get('clip'), dict) else {}
-                title    = clean(tl.get('title', ''))
+                title, _title_year = strip_year_from_title(clean(tl.get('title', '')))
                 ep_title = clean(ep.get('name', ''))
                 categories = []
                 # Skip Pluto filler slots — no real program data
@@ -506,7 +516,10 @@ class PlutoScraper(BaseScraper):
                     season            = ep.get('season'),
                     episode           = ep.get('number'),
                     episode_title     = ep_title if ep_title.lower() != title.lower() else None,
-                    original_air_date = parse_original_air_date(clip.get('originalReleaseDate')),
+                    original_air_date = (
+                        parse_original_air_date(clip.get('originalReleaseDate')) or
+                        (_date(_title_year, 1, 1) if _title_year and _title_year > 1970 else None)
+                    ),
                 ))
         return programs
 
