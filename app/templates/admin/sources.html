@@ -1002,14 +1002,26 @@
     function _startPolling(sourceId, btn) {
       if (btn) _scrapeBtn[sourceId] = btn;
       if (_pollTimers[sourceId]) return;
+      let seenRunning = false;
       async function poll() {
         try {
           const r = await fetch(`/api/sources/${sourceId}/scrape-status`);
           const d = await r.json();
           if (d.status === 'running' || d.status === 'queued') {
+            seenRunning = true;
             _renderStatus(sourceId, d);
             _pollTimers[sourceId] = setTimeout(poll, 1000);
+          } else if (seenRunning) {
+            // Transitioned running→idle: the job finished.
+            delete _pollTimers[sourceId];
+            const countEl = document.getElementById(`ch-count-${sourceId}`);
+            if (countEl) fetch('/api/sources').then(r => r.json()).then(ss => {
+              const s = ss.find(x => x.id === sourceId);
+              if (s) countEl.textContent = s.channel_count;
+            }).catch(() => {});
+            _showResult(sourceId, d.last_error || null);
           } else {
+            // Idle before we ever saw running — check if a recent scrape completed.
             const scraped = d.last_scraped_ms || 0;
             const start   = _scrapeStart[sourceId] || 0;
             if (scraped > start) {
@@ -1021,7 +1033,6 @@
               }).catch(() => {});
               _showResult(sourceId, d.last_error || null);
             } else if (Date.now() - start < 30000) {
-              _renderStatus(sourceId, d);
               _pollTimers[sourceId] = setTimeout(poll, 1500);
             } else {
               delete _pollTimers[sourceId];
