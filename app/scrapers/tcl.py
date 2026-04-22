@@ -35,14 +35,19 @@ _VALID_RATINGS = frozenset({
 
 import re as _re
 
-# Matches titles like:
-#   "Show Name S2 E4"                   → series="Show Name", S=2, E=4, ep_title=None
-#   "Show Name S1 - \"Ep Title\""       → series="Show Name", S=1, E=None, ep_title="Ep Title"
-#   "Show Name S3 E7 - \"Ep Title\""    → series="Show Name", S=3, E=7, ep_title="Ep Title"
-_TCL_TITLE_RE = _re.compile(
+# "Bones S06: Twisted Bones In The Melted Truck 608"
+# "Law & Order: SVU S23: People vs. Richard Wheatley 2309"
+_TCL_COLON_RE = _re.compile(r'^(.+?)\s+S(\d+):\s+(.+)$', _re.IGNORECASE)
+_TCL_TRAILING_CODE = _re.compile(r'\s+\d+$')
+
+# "Show S1 - \"Ep Title\"" / "Show S2 E4" / "Show S1"
+_TCL_DASH_RE = _re.compile(
     r'^(.+?)\s+S(\d+)(?:\s+E(\d+))?(?:\s*[-–]\s*"?(.+?)"?\s*)?$',
     _re.IGNORECASE,
 )
+
+# "The Rifleman  - A Matter of Faith" (no season marker; 1–2 spaces before dash)
+_TCL_PLAIN_DASH_RE = _re.compile(r'^(.+?)\s{1,2}-\s+(.+)$')
 
 
 def _parse_tcl_title(
@@ -53,14 +58,32 @@ def _parse_tcl_title(
     """Parse a TCL composite title into (series_title, season, episode, episode_title)."""
     if not raw:
         return raw, api_season, api_episode, None
-    m = _TCL_TITLE_RE.match(raw.strip())
-    if not m:
-        return raw, api_season, api_episode, None
-    series_title = m.group(1).strip()
-    season    = int(m.group(2)) if m.group(2) else api_season
-    episode   = int(m.group(3)) if m.group(3) else api_episode
-    ep_title  = m.group(4).strip().strip('"') if m.group(4) else None
-    return series_title, season, episode, ep_title
+    s = raw.strip()
+
+    # Pattern: "Series S06: Episode Title 608"
+    m = _TCL_COLON_RE.match(s)
+    if m:
+        series   = m.group(1).strip()
+        season   = int(m.group(2))
+        ep_title = _TCL_TRAILING_CODE.sub('', m.group(3)).strip() or None
+        return series, season, api_episode, ep_title
+
+    # Pattern: "Series S1 - \"Ep Title\"" / "Series S2 E4" / "Series S1"
+    m = _TCL_DASH_RE.match(s)
+    if m:
+        series   = m.group(1).strip()
+        season   = int(m.group(2)) if m.group(2) else api_season
+        episode  = int(m.group(3)) if m.group(3) else api_episode
+        ep_title = m.group(4).strip().strip('"') if m.group(4) else None
+        return series, season, episode, ep_title
+
+    # Pattern: "The Rifleman  - A Matter of Faith" (no season in title, API has none either)
+    if api_season is None and api_episode is None:
+        m = _TCL_PLAIN_DASH_RE.match(s)
+        if m:
+            return m.group(1).strip(), None, None, m.group(2).strip() or None
+
+    return s, api_season, api_episode, None
 
 
 def _normalize_rating(raw: str | None) -> str | None:
