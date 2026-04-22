@@ -34,13 +34,33 @@ _VALID_RATINGS = frozenset({
 
 
 import re as _re
-_SE_SUFFIX = _re.compile(r'\s+S\d+\s+E\d+$', _re.IGNORECASE)
+
+# Matches titles like:
+#   "Show Name S2 E4"                   → series="Show Name", S=2, E=4, ep_title=None
+#   "Show Name S1 - \"Ep Title\""       → series="Show Name", S=1, E=None, ep_title="Ep Title"
+#   "Show Name S3 E7 - \"Ep Title\""    → series="Show Name", S=3, E=7, ep_title="Ep Title"
+_TCL_TITLE_RE = _re.compile(
+    r'^(.+?)\s+S(\d+)(?:\s+E(\d+))?(?:\s*[-–]\s*"?(.+?)"?\s*)?$',
+    _re.IGNORECASE,
+)
 
 
-def _strip_se_suffix(title: str | None) -> str | None:
-    if not title:
-        return title
-    return _SE_SUFFIX.sub('', title).strip() or title
+def _parse_tcl_title(
+    raw: str | None,
+    api_season: int | None,
+    api_episode: int | None,
+) -> tuple[str | None, int | None, int | None, str | None]:
+    """Parse a TCL composite title into (series_title, season, episode, episode_title)."""
+    if not raw:
+        return raw, api_season, api_episode, None
+    m = _TCL_TITLE_RE.match(raw.strip())
+    if not m:
+        return raw, api_season, api_episode, None
+    series_title = m.group(1).strip()
+    season    = int(m.group(2)) if m.group(2) else api_season
+    episode   = int(m.group(3)) if m.group(3) else api_episode
+    ep_title  = m.group(4).strip().strip('"') if m.group(4) else None
+    return series_title, season, episode, ep_title
 
 
 def _normalize_rating(raw: str | None) -> str | None:
@@ -247,17 +267,22 @@ class TCLScraper(BaseScraper):
                 d.get("poster_v_large") or d.get("poster_v_medium") or ch_poster_url
             )
             series = d.get("series") or {}
+            raw_title = d.get("title") or list_title or "No Title"
+            title, season, episode, ep_title = _parse_tcl_title(
+                raw_title, series.get("season"), series.get("episode")
+            )
 
             all_programs.append(ProgramData(
                 source_channel_id=bundle_id,
-                title=_strip_se_suffix(d.get("title") or list_title) or "No Title",
+                title=title or "No Title",
                 start_time=start_time,
                 end_time=end_time,
                 description=d.get("desc"),
                 poster_url=poster_url,
                 rating=_normalize_rating(d.get("rating")),
-                season=series.get("season"),
-                episode=series.get("episode"),
+                season=season,
+                episode=episode,
+                episode_title=ep_title,
             ))
 
         return all_programs
