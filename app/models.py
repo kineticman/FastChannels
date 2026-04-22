@@ -125,6 +125,10 @@ class Channel(db.Model):
     def __repr__(self):
         return f'<Channel {self.name}>'
 
+    @property
+    def logo_display_url(self):
+        return _logo_display_url(self.logo_url)
+
     def to_dict(self):
         return {
             'id':               self.id,
