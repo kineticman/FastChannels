@@ -576,6 +576,8 @@ class PlexScraper(BaseScraper):
 
         start_t = time.monotonic()
         futures = []
+        total_tasks = len(guide_channels) * _PLEX_EXTRA_DAYS
+        done_tasks = 0
         with ThreadPoolExecutor(max_workers=_PLEX_GUIDE_WORKERS) as pool:
             for day_offset in range(1, _PLEX_EXTRA_DAYS + 1):
                 for ch in guide_channels:
@@ -585,6 +587,9 @@ class PlexScraper(BaseScraper):
                     results.extend(future.result())
                 except Exception:
                     logger.debug("[plex] targeted guide future failed", exc_info=True)
+                done_tasks += 1
+                if self._progress_cb:
+                    self._progress_cb('epg', done_tasks, total_tasks)
 
         logger.info(
             "[plex] targeted extra-day fetch complete: channels=%d days=%d programs=%d in %.1fs",
@@ -722,6 +727,8 @@ class PlexScraper(BaseScraper):
                 len(programs),
                 len(seen),
             )
+            if self._progress_cb:
+                self._progress_cb('epg', w + 1, n_windows)
 
         logger.info(
             "[plex] %d EPG entries fetched from grid API in %.1fs",
