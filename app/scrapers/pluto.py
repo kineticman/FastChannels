@@ -435,6 +435,9 @@ class PlutoScraper(BaseScraper):
                     return list(labels)
             return [value]
 
+        from datetime import date as _date
+        _today = _date.today()
+
         def parse_original_air_date(value):
             if not value:
                 return None
@@ -443,6 +446,11 @@ class PlutoScraper(BaseScraper):
             except Exception:
                 return None
             if parsed.year <= 1970:
+                return None
+            # Pluto sets originalReleaseDate to today/yesterday for compilation
+            # channels — that's the broadcast date, not the original air date.
+            # Reject anything within the last 14 days as noise.
+            if parsed >= _today - timedelta(days=14):
                 return None
             return parsed
 
