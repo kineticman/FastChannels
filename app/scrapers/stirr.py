@@ -158,9 +158,20 @@ class StirrScraper(BaseScraper):
                     if r:
                         text = r.text.strip()
                         if text.startswith("<"):
-                            result.extend(self._extract_programs_from_xmltv(
-                                ch.source_channel_id, text, epg_channel_id
-                            ))
+                            try:
+                                root = ET.fromstring(text)
+                            except ET.ParseError as exc:
+                                logger.debug("[%s] XML parse error for %s: %s", self.source_name, ch.source_channel_id, exc)
+                                root = None
+                            if root is not None:
+                                if root.tag == 'xml' and root.find('.//item') is not None:
+                                    result.extend(self._extract_programs_from_ctvcraft(
+                                        ch.source_channel_id, root
+                                    ))
+                                else:
+                                    result.extend(self._extract_programs_from_xmltv(
+                                        ch.source_channel_id, text, epg_channel_id
+                                    ))
                         else:
                             payload = r.json()
                             if isinstance(payload, dict) and "schedules" in payload:
@@ -194,6 +205,8 @@ class StirrScraper(BaseScraper):
             logger.debug("[%s] %d EPG rows for %s", self.source_name, len(result), ch.source_channel_id)
             return result
 
+        total = len(channels)
+        done = 0
         programs: list[ProgramData] = []
         with ThreadPoolExecutor(max_workers=8) as pool:
             futures = {pool.submit(_fetch_one, ch): ch for ch in channels}
@@ -204,6 +217,9 @@ class StirrScraper(BaseScraper):
                     except Exception as exc:
                         ch = futures[future]
                         logger.debug("[%s] EPG worker error for %s: %s", self.source_name, ch.source_channel_id, exc)
+                    done += 1
+                    if self._progress_cb:
+                        self._progress_cb('epg', done, total)
             except FuturesTimeoutError:
                 incomplete = sum(1 for f in futures if not f.done())
                 logger.warning("[%s] EPG fetch timed out after 300s; %d channel(s) incomplete", self.source_name, incomplete)
@@ -499,31 +515,86 @@ class StirrScraper(BaseScraper):
 
 
     def _extract_programs_from_wurl(self, channel_id: str, payload: dict) -> list[ProgramData]:
-        movies = {str(m["id"]): m for m in payload.get("movies", []) if "id" in m}
-        shorts = {str(s["id"]): s for s in payload.get("shortFormVideos", []) if "id" in s}
-        specials = {str(t["id"]): t for t in payload.get("tvSpecials", []) if "id" in t}
-        
+        movies   = {str(m["id"]): m for m in (payload.get("movies") or []) if "id" in m}
+        shorts   = {str(s["id"]): s for s in (payload.get("shortFormVideos") or []) if "id" in s}
+        specials = {str(t["id"]): t for t in (payload.get("tvSpecials") or []) if "id" in t}
+        # Episode IDs live inside series[].seasons[].episodes[] — index them flat
+        episodes: dict[str, dict] = {}
+        for show in (payload.get("series") or []):
+            for season in (show.get("seasons") or []):
+                for ep in (season.get("episodes") or []):
+                    if "id" in ep:
+                        episodes[str(ep["id"])] = ep
+
+        def _title(item: dict) -> str | None:
+            t = item.get("title")
+            if isinstance(t, dict):
+                return t.get("value") or t.get("text")
+            return t or item.get("name") or None
+
         results = []
-        for sched in payload.get("schedules", []):
+        for sched in (payload.get("schedules") or []):
             sid = str(sched.get("id", ""))
             start = self._parse_dt(sched.get("startDateTime"))
             dur = sched.get("durSecs")
             if not sid or not start or not dur: continue
-            
-            item = movies.get(sid) or shorts.get(sid) or specials.get(sid)
+
+            item = movies.get(sid) or shorts.get(sid) or specials.get(sid) or episodes.get(sid)
             if not item: continue
-            
-            title = item.get("title", {}).get("value") or item.get("name")
+
+            title = _title(item)
             if not title: continue
-            
+
+            desc_raw = item.get("description")
+            description = (
+                desc_raw.get("value") if isinstance(desc_raw, dict) else desc_raw
+            ) or None
+
             results.append(ProgramData(
                 source_channel_id = channel_id,
                 title             = title,
                 start_time        = start,
                 end_time          = start + timedelta(seconds=int(dur)),
-                description       = item.get("description", {}).get("value"),
+                description       = description,
                 poster_url        = (item.get("thumbnails") or [{}])[0].get("url"),
                 category          = (item.get("genres") or [{}])[0].get("description"),
+            ))
+        return results
+
+    def _extract_programs_from_ctvcraft(self, channel_id: str, root: ET.Element) -> list[ProgramData]:
+        results = []
+        for item in root.findall('.//item'):
+            title = item.findtext('title')
+            start_str = item.findtext('startTime')
+            dur_str = item.findtext('duration')
+            if not title or not start_str or not dur_str:
+                continue
+            start = self._parse_dt(start_str)
+            try:
+                dur = int(dur_str)
+            except (ValueError, TypeError):
+                continue
+            if not start or dur <= 0:
+                continue
+            # Pick highest-resolution thumbnail
+            poster_url = None
+            best_width = -1
+            for thumb in item.findall('.//thumbnail'):
+                try:
+                    w = int(thumb.attrib.get('width', 0) or 0)
+                except (ValueError, TypeError):
+                    w = 0
+                if w > best_width:
+                    best_width = w
+                    poster_url = thumb.attrib.get('url')
+            results.append(ProgramData(
+                source_channel_id = channel_id,
+                title             = title,
+                start_time        = start,
+                end_time          = start + timedelta(seconds=dur),
+                description       = item.findtext('description'),
+                poster_url        = poster_url,
+                category          = item.findtext('genre'),
             ))
         return results
 
@@ -620,7 +691,13 @@ class StirrScraper(BaseScraper):
     def _parse_xmltv_dt(self, val: str | None) -> datetime | None:
         if not val: return None
         s = val.strip()
+        # Standard XMLTV: YYYYMMDDHHMMSS (14 digits)
         try:
             return datetime.strptime(s[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+        # Some feeds omit seconds: YYYYMMDDHHMM (12 digits)
+        try:
+            return datetime.strptime(s[:12], "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
         except ValueError:
             return None
