@@ -340,8 +340,8 @@ class DistroScraper(BaseScraper):
             "Geo Feeds",
             field_type="text",
             required=False,
-            default="US",
-            placeholder="US",
+            default="QQ",
+            placeholder="QQ",
             help_text="One or more Distro geo codes separated by commas. Examples: US, CA, MX, AR, XE, QQ. QQ is a worldwide feed with 26 extra channels not in the US feed.",
         ),
     ]

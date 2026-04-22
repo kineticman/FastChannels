@@ -181,18 +181,19 @@ class PlutoScraper(BaseScraper):
     display_name    = "Pluto TV"
     stream_audit_enabled = True
     scrape_interval = 360
+    config_required = True
 
     config_schema = [
         ConfigField(
             key='username', label='Pluto TV Username',
-            field_type='text', secret=False,
+            field_type='text', required=True, secret=False,
             placeholder='email@example.com',
-            help_text='Optional. Log in to access your favourites and additional content.',
+            help_text='Required. Enter your Pluto TV login email.',
         ),
         ConfigField(
             key='password', label='Pluto TV Password',
-            field_type='password', secret=True,
-            help_text='Optional. Leave blank for anonymous access.',
+            field_type='password', required=True, secret=True,
+            help_text='Required. Enter your Pluto TV password.',
         ),
         ConfigField(
             key='country_codes', label='Country/Region Feeds',

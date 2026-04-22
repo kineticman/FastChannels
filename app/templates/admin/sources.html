@@ -110,6 +110,11 @@
       border-color: color-mix(in srgb, var(--success-fill) 28%, transparent);
     }
     .config-badge.anon { background: var(--surface); color: var(--text-muted); border-color: var(--border); }
+    .config-badge.auto {
+      background: color-mix(in srgb, var(--bg) 45%, transparent);
+      color: var(--text-soft);
+      border-color: var(--border);
+    }
     .config-badge.needs-config {
       background: color-mix(in srgb, var(--warning-bg) 60%, transparent);
       color: var(--warning-soft);
@@ -442,7 +447,7 @@
                 {% elif cfg_status == 'optional' %}
                   <span class="config-badge anon" id="config-badge-{{ source.id }}">Optional</span>
                 {% else %}
-                  <span class="config-badge" id="config-badge-{{ source.id }}" style="display:none"></span>
+                  <span class="config-badge auto" id="config-badge-{{ source.id }}">Auto</span>
                 {% endif %}
               </div>
               <div class="source-meta" id="source-meta-{{ source.id }}">
@@ -1337,7 +1342,11 @@
         const values = cfg.values || {};
 
         if (!schema.length) {
-          if (badge) { badge.textContent = ''; badge.style.display = 'none'; }
+          if (badge) {
+            badge.textContent = 'Auto';
+            badge.className = 'config-badge auto';
+            badge.style.display = '';
+          }
           if (container) { container.innerHTML = ''; container.classList.add('hidden'); }
           return;
         }

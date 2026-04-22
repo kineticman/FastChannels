@@ -261,12 +261,27 @@ def sources():
         for name, cls in all_scrapers.items()
     }
 
+    def _has_meaningful_config(source, cls):
+        schema = getattr(cls, 'config_schema', [])
+        if not schema:
+            return False
+
+        values = source.config or {}
+        for field in schema:
+            value = values.get(field.key)
+            default = field.default
+            if value in (None, ''):
+                continue
+            if value == default:
+                continue
+            return True
+        return False
+
     def _config_status(source, cls):
         schema = getattr(cls, 'config_schema', [])
         if not schema:
             return 'none'
-        has_values = bool(source.config)
-        if has_values:
+        if _has_meaningful_config(source, cls):
             return 'configured'
         return 'required' if getattr(cls, 'config_required', False) else 'optional'
 
