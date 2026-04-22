@@ -164,6 +164,26 @@ def _parse_ts(value) -> datetime | None:
         return None
 
 
+import re as _re
+_PLEX_EP_ONLY  = _re.compile(r'^Episode\s+\d+$', _re.IGNORECASE)
+_PLEX_EP_COLON = _re.compile(r'^Episode\s+\d+\s*:\s*(.+)$', _re.IGNORECASE)
+
+
+def _clean_ep_title(raw: str | None) -> str | None:
+    """Drop or fix generic Plex episode titles like 'Episode 3' or 'Episode 1 : Real Name'."""
+    if not raw:
+        return None
+    t = raw.strip()
+    if not t or t in ('.', '-', '_'):
+        return None
+    m = _PLEX_EP_COLON.match(t)
+    if m:
+        return m.group(1).strip() or None
+    if _PLEX_EP_ONLY.match(t):
+        return None
+    return t
+
+
 def _parse_date(value: str | None) -> date | None:
     if not value:
         return None
@@ -502,7 +522,7 @@ class PlexScraper(BaseScraper):
             gp_title = video.attrib.get("grandparentTitle") or ""
             if gp_title and gp_title.lower() != raw_title.lower():
                 title = gp_title
-                ep_title = raw_title
+                ep_title = _clean_ep_title(raw_title)
             else:
                 title = raw_title
                 ep_title = None
@@ -689,7 +709,7 @@ class PlexScraper(BaseScraper):
                     # original title and omit episode_title.
                     if gp_title and gp_title.lower() != raw_title.lower():
                         title = gp_title
-                        ep_title = raw_title
+                        ep_title = _clean_ep_title(raw_title)
                     else:
                         title = raw_title
                         ep_title = None
