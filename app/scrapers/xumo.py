@@ -140,7 +140,7 @@ class XumoScraper(BaseScraper):
                     source_channel_id=channel_id,
                     name=name,
                     stream_url=f"{self.CHANNEL_SCHEME}{channel_id}",
-                    logo_url=f"{self.CHANNEL_IMAGE}/{channel_id}/600x336.jpg?type=channelTile",
+                    logo_url=f"{self.CHANNEL_IMAGE}/{channel_id}/300x300.png?type=color_onBlack",
                     category=category,
                     language=infer_language_from_metadata(name, category),
                     description=description,
