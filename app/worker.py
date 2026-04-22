@@ -1730,8 +1730,11 @@ def _upsert_programs(source, program_data_list):
         active_rows = [row for row in incoming_rows if _utc_aware(row.end_time) > cutoff]
         if not active_rows:
             continue
-        win_start = min(_utc_aware(row.start_time) for row in active_rows)
-        win_end   = max(_utc_aware(row.end_time)   for row in active_rows)
+        # Delete window covers ALL incoming rows for this channel, not just active ones.
+        # Using only active_rows for win_start would miss programs that aged past the
+        # cutoff between the scrape and the upsert, leaving stale rows permanently.
+        win_start = min(_utc_aware(row.start_time) for row in incoming_rows)
+        win_end   = max(_utc_aware(row.end_time)   for row in incoming_rows)
         Program.query.filter(
             Program.channel_id == channel_id,
             Program.end_time   >  win_start,

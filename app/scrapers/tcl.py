@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 class TCLScraper(BaseScraper):
     source_name = "tcl"
     display_name = "TCL TV+"
-    scrape_interval = 360
+    scrape_interval = 720
     stream_audit_enabled = True
 
     BASE = "https://gateway-prod.ideonow.com"
