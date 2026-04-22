@@ -32,6 +32,8 @@ class XumoScraper(BaseScraper):
     config_schema = []
 
     BASE_URL = "https://valencia-app-mds.xumo.com"
+    IMAGE_BASE    = "https://image.xumo.com/v1/assets/asset"
+    CHANNEL_IMAGE = "https://image.xumo.com/v1/channels/channel"
     MARKET_ID = "10006"
     DEFAULT_GEO_ID = "2f08a9b3"
 
@@ -138,7 +140,7 @@ class XumoScraper(BaseScraper):
                     source_channel_id=channel_id,
                     name=name,
                     stream_url=f"{self.CHANNEL_SCHEME}{channel_id}",
-                    logo_url=self._extract_logo(item),
+                    logo_url=f"{self.CHANNEL_IMAGE}/{channel_id}/600x336.jpg?type=channelTile",
                     category=category,
                     language=infer_language_from_metadata(name, category),
                     description=description,
@@ -222,7 +224,7 @@ class XumoScraper(BaseScraper):
                                 or descriptions.get("small")
                                 or descriptions.get("tiny")
                             )
-                            poster_url = self._extract_poster(asset)
+                            poster_url = self._poster_url(asset_id)
                             category = self._extract_asset_genre(asset)
 
                             dedupe_key = (channel_id, start.isoformat(), asset_id)
@@ -467,6 +469,13 @@ class XumoScraper(BaseScraper):
             if label and label not in labels:
                 labels.append(label)
         return ';'.join(labels) or None
+
+    def _poster_url(self, asset_id: str) -> str | None:
+        # EP-prefixed IDs require a separate connectorId lookup; skip for now.
+        # SH, MV, XM, XT prefixed IDs resolve directly on the image CDN.
+        if not asset_id or asset_id.startswith("EP"):
+            return None
+        return f"{self.IMAGE_BASE}/{asset_id}/600x336.jpg"
 
     @staticmethod
     def _extract_genre(item: dict[str, Any]) -> str | None:
