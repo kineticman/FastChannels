@@ -166,6 +166,9 @@ class XumoScraper(BaseScraper):
             for day in range(-1, self.MAX_EPG_DAYS)
         ]
 
+        total = len(wanted_ids)
+        seen_channels: set[str] = set()
+
         for date_str in dates:
             for page in range(0, self.EPG_PAGES_PER_DAY):
                 found_any_for_page = False
@@ -205,6 +208,10 @@ class XumoScraper(BaseScraper):
                         if channel_id not in wanted_ids:
                             continue
                         matched_channel_count += 1
+                        if channel_id not in seen_channels:
+                            seen_channels.add(channel_id)
+                            if self._progress_cb:
+                                self._progress_cb('epg', len(seen_channels), total)
 
                         for slot in channel_row.get("schedule") or []:
                             asset_id = str(slot.get("assetId") or "")
