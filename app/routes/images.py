@@ -385,10 +385,11 @@ def cache_logo(url: str, img_type: str = 'logo') -> bool:
     return _fetch_and_cache(url, img_path, ct_path, img_type)
 
 
-def prewarm_logo_cache(urls: list[str]) -> tuple[int, int]:
+def prewarm_logo_cache(urls: list[str], progress_cb=None) -> tuple[int, int]:
     """
     Download channel logo *urls* into the logo cache using a thread pool.
     Skips URLs already cached and fresh.  Returns (cached, failed) counts.
+    progress_cb(done, total), if provided, is called after each completed fetch.
     """
     urls = [u for u in urls if u]
     if not urls:
@@ -406,6 +407,8 @@ def prewarm_logo_cache(urls: list[str]) -> tuple[int, int]:
     total = len(urls)
     logger.info('[images] pre-warm starting: %d URLs — %d already fresh, %d to fetch (%d workers)',
                 total, skipped, len(stale), _PREWARM_WORKERS)
+    if progress_cb:
+        progress_cb(skipped, total)
     cached = failed = 0
     with ThreadPoolExecutor(max_workers=_PREWARM_WORKERS) as pool:
         futures = {pool.submit(cache_logo, u, 'logo'): u for u in stale}
@@ -414,10 +417,12 @@ def prewarm_logo_cache(urls: list[str]) -> tuple[int, int]:
                 cached += 1
             else:
                 failed += 1
-            done = cached + failed
-            if done % 100 == 0:
+            done = skipped + cached + failed
+            if progress_cb:
+                progress_cb(done, total)
+            if (cached + failed) % 100 == 0:
                 logger.info('[images] pre-warm progress: %d/%d fetched (cached=%d failed=%d)',
-                            done, len(stale), cached, failed)
+                            cached + failed, len(stale), cached, failed)
     logger.info('[images] pre-warm done: %d cached, %d already fresh, %d failed (of %d total)',
                 cached, skipped, failed, total)
     return cached, failed

@@ -948,6 +948,7 @@
       bootstrap: 'Authenticating…',
       channels:  'Fetching channels…',
       epg:       null,
+      logos:     null,
       starting:  'Starting…',
     };
 
@@ -957,6 +958,10 @@
         if (data.phase === 'epg' && data.total > 0) {
           const pct = Math.round(data.done / data.total * 100);
           return { cls: 'status-running', text: `EPG ${data.done} / ${data.total} (${pct}%)` };
+        }
+        if (data.phase === 'logos' && data.total > 0) {
+          const pct = Math.round(data.done / data.total * 100);
+          return { cls: 'status-running', text: `Caching logos ${data.done} / ${data.total} (${pct}%)` };
         }
         return { cls: 'status-running', text: _phaseLabel[data.phase] || 'Running…' };
       }
