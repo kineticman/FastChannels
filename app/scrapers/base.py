@@ -235,6 +235,7 @@ class BaseScraper(ABC):
     min_scrape_interval: int = 30
     max_scrape_interval: int = 10080
     stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source
+    config_required: bool = False      # True if source won't return useful channels without user configuration
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
 
     # Per-phase wall-clock limits (seconds). Overriding in a subclass replaces

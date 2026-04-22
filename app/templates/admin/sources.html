@@ -13,7 +13,9 @@
     nav h1 { color: var(--accent); font-size: 1.2rem; font-weight: 700; }
     nav a { color: var(--text-soft); text-decoration: none; font-size: 0.9rem; }
     nav a:hover, nav a.active { color: var(--text); }
-    .container { max-width: 900px; margin: 2rem auto; padding: 0 2rem; }
+    .container { max-width: 960px; margin: 2rem auto; padding: 0 2rem; }
+
+    /* Page-level actions panel */
     .page-actions {
       display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
       margin-bottom: 1rem; padding: 1rem 1.25rem; background: var(--surface);
@@ -26,45 +28,18 @@
     .global-status.ok { color: var(--success-soft); }
     .global-status.error { color: var(--danger); }
 
-    .card {
-      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-      padding: 1.25rem 1.5rem; margin-bottom: 1rem;
-      display: flex; align-items: center; justify-content: space-between; gap: 1.5rem;
-      transition: border-color 0.2s;
+    /* Needs-config banner */
+    .needs-config-banner {
+      background: color-mix(in srgb, var(--warning-bg) 70%, var(--surface));
+      border: 1px solid var(--warning-border); border-radius: 8px;
+      padding: 0.85rem 1.25rem; margin-bottom: 1rem; color: var(--warning-soft);
     }
-    .card.disabled { opacity: 0.55; }
-    .card-info { flex: 1; min-width: 0; }
-    .card-info h3 { font-size: 1rem; font-weight: 600; }
-    .meta { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.3rem; }
-    .error { color: var(--danger); font-size: 0.75rem; margin-top: 0.4rem; font-family: monospace;
-             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 500px; }
-    .interval-control { margin-top: 0.7rem; display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
-    .interval-control label { font-size: 0.76rem; color: var(--text-soft); font-weight: 600; }
-    .interval-control input {
-      width: 84px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-      padding: 0.35rem 0.5rem; color: var(--text); font-size: 0.8rem;
-    }
-    .interval-control .unit { font-size: 0.76rem; color: var(--text-soft); }
-    .interval-control .help { width: 100%; font-size: 0.74rem; color: var(--text-muted); line-height: 1.4; }
+    .needs-config-banner strong { display: block; margin-bottom: 0.4rem; font-size: 0.9rem; }
+    .needs-config-banner ul { margin: 0; padding-left: 1.25rem; font-size: 0.82rem; line-height: 1.7; }
+    .needs-config-banner a { color: var(--warning-soft); font-weight: 600; }
+    .needs-config-banner a:hover { text-decoration: underline; }
 
-    .actions { display: flex; gap: 0.75rem; align-items: center; flex-shrink: 0; }
-    .btn { padding: 0.4rem 0.9rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;
-           border: none; font-weight: 500; transition: background 0.15s; }
-    .btn-run { background: var(--accent-strong); color: white; }
-    .btn-run:hover:not(:disabled) { background: var(--accent-strong-hover); }
-    .btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-audit { background: var(--warning-bg-2); color: var(--warning-soft); }
-    .btn-audit:hover:not(:disabled) { background: var(--warning-border); }
-    .btn-audit:disabled { opacity: 0.4; cursor: not-allowed; }
-    .badge-audit {
-      display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
-      padding: 2px 7px; border-radius: 20px; text-transform: uppercase;
-      background: color-mix(in srgb, var(--success-bg) 85%, var(--surface)); color: var(--success-soft); border: 1px solid var(--success-border-soft);
-      margin-left: 0.5rem; vertical-align: middle;
-    }
-
-
-    /* overlap warning banner */
+    /* Overlap banner */
     .overlap-banner {
       background: var(--warning-bg); border: 1px solid var(--warning-border); border-radius: 8px;
       padding: 0.85rem 1.25rem; margin-bottom: 1.25rem; color: var(--warning-soft);
@@ -72,9 +47,100 @@
     .overlap-banner strong { display: block; margin-bottom: 0.4rem; font-size: 0.9rem; }
     .overlap-banner ul { margin: 0; padding-left: 1.25rem; font-size: 0.82rem; line-height: 1.7; }
 
+    /* ── Dashboard table ────────────────────────────────────────── */
+    .dashboard-panel {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      overflow: hidden; margin-bottom: 2rem;
+    }
+    .dashboard-table {
+      width: 100%; border-collapse: collapse;
+    }
+    .dashboard-table thead tr {
+      border-bottom: 1px solid var(--border);
+    }
+    .dashboard-table th {
+      padding: 0.6rem 1rem; font-size: 0.72rem; font-weight: 700; color: var(--text-soft);
+      text-transform: uppercase; letter-spacing: 0.05em; text-align: left;
+      background: var(--surface);
+    }
+    .dashboard-table th.col-toggle,
+    .dashboard-table th.col-actions { text-align: center; }
+    .dashboard-table tbody tr.dash-row {
+      border-bottom: 1px solid var(--border);
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+    .dashboard-table tbody tr.dash-row:last-of-type {
+      border-bottom: none;
+    }
+    .dashboard-table tbody tr.dash-row:hover {
+      background: color-mix(in srgb, var(--bg) 40%, transparent);
+    }
+    .dashboard-table tbody tr.dash-row.disabled {
+      opacity: 0.55;
+    }
+    .dashboard-table tbody tr.dash-row.scraping td:first-child {
+      border-left: 3px solid var(--accent);
+    }
+    .dashboard-table tbody tr.dash-row.scraping {
+      background: color-mix(in srgb, var(--accent-bg, #1e293b) 30%, transparent);
+    }
+    .dashboard-table td {
+      padding: 0.75rem 1rem; vertical-align: middle;
+    }
+    .col-source { width: auto; }
+    .col-toggle { width: 90px; text-align: center; }
+    .col-actions { width: 220px; text-align: right; }
+
+    /* Source cell content */
+    .source-name-wrap { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.2rem; }
+    .source-name { font-size: 0.95rem; font-weight: 600; }
+    .err-pip { color: var(--danger); font-size: 0.82rem; cursor: default; }
+    .source-meta { font-size: 0.76rem; color: var(--text-muted); }
+
+    /* Config badges */
+    .config-badge {
+      display: inline-block; font-size: 0.64rem; font-weight: 700;
+      letter-spacing: 0.04em; padding: 2px 7px; border-radius: 20px; text-transform: uppercase;
+      background: var(--surface); color: var(--text-muted); border: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    .config-badge.configured {
+      background: color-mix(in srgb, var(--success-bg-2) 20%, transparent);
+      color: var(--success-soft);
+      border-color: color-mix(in srgb, var(--success-fill) 28%, transparent);
+    }
+    .config-badge.anon { background: var(--surface); color: var(--text-muted); border-color: var(--border); }
+    .config-badge.needs-config {
+      background: color-mix(in srgb, var(--warning-bg) 60%, transparent);
+      color: var(--warning-soft);
+      border-color: var(--warning-border);
+    }
+
+    /* Scrape / audit status in dashboard row */
+    .scrape-status { font-size: 0.75rem; margin-top: 0.2rem; display: flex; align-items: center; gap: 0.35rem; min-height: 0; }
+    .scrape-status:empty { display: none; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .status-running .status-dot { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+    .status-queued  .status-dot { background: var(--warning); }
+    .status-running .status-text { color: var(--accent-soft); }
+    .status-queued  .status-text { color: var(--warning-soft); }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+    .audit-status { font-size: 0.75rem; margin-top: 0.15rem; display: flex; align-items: center; gap: 0.35rem; min-height: 0; }
+    .audit-status:empty { display: none; }
+    .audit-status-running .status-dot { background: var(--warning); animation: pulse 1.2s ease-in-out infinite; }
+    .audit-status-queued  .status-dot { background: var(--warning); }
+    .audit-status-running .status-text { color: var(--warning-soft); }
+    .audit-status-queued  .status-text { color: var(--warning-soft); }
+    .audit-last-result { font-size: 0.72rem; color: var(--text-soft); margin-top: 0.1rem; }
+    .audit-last-result:empty { display: none; }
+    .audit-last-result .aud-dead    { color: var(--danger); }
+    .audit-last-result .aud-drm     { color: var(--warning); }
+    .audit-last-result .aud-403     { color: var(--warning); }
+    .audit-last-result .aud-ok      { color: var(--success-soft); }
+
     /* Toggle */
-    .toggle-wrap { display: flex; align-items: center; gap: 0.6rem; }
-    .toggle-label { font-size: 0.78rem; font-weight: 600; min-width: 52px; text-align: center; }
+    .toggle-wrap { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; }
+    .toggle-label { font-size: 0.72rem; font-weight: 600; }
     .toggle-label.on  { color: var(--success); }
     .toggle-label.off { color: var(--text-muted); }
     .toggle {
@@ -94,43 +160,127 @@
     .toggle input:checked + .slider:before { transform: translateX(20px); }
     .toggle.saving { pointer-events: none; opacity: 0.5; }
 
-    /* Scrape status */
-    .scrape-status { font-size: 0.78rem; margin-top: 0.35rem; display: flex; align-items: center; gap: 0.4rem; min-height: 1.1rem; }
-    .scrape-status:empty { display: none; }
-    .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-    .status-running .status-dot { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
-    .status-queued  .status-dot { background: var(--warning); }
-    .status-running .status-text { color: var(--accent-soft); }
-    .status-queued  .status-text { color: var(--warning-soft); }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+    /* Buttons */
+    .btn { padding: 0.4rem 0.9rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;
+           border: none; font-weight: 500; transition: background 0.15s; }
+    .btn-sm { padding: 0.3rem 0.65rem; font-size: 0.75rem; }
+    .btn-run { background: var(--accent-strong); color: white; }
+    .btn-run:hover:not(:disabled) { background: var(--accent-strong-hover); }
+    .btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-audit { background: var(--warning-bg-2); color: var(--warning-soft); }
+    .btn-audit:hover:not(:disabled) { background: var(--warning-border); }
+    .btn-audit:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-configure {
+      background: transparent; color: var(--text-soft);
+      border: 1px solid var(--border); font-size: 0.75rem;
+    }
+    .btn-configure:hover { background: var(--bg); color: var(--text); border-color: var(--text-muted); }
+    .btn-configure.open { color: var(--accent-soft); border-color: var(--accent-soft); }
+    .btn-cancel  { background: transparent; color: var(--text-soft); border: 1px solid var(--border); }
+    .btn-cancel:hover { color: var(--text); }
+    .btn-danger  { background: transparent; color: var(--error, #e05252); border: 1px solid var(--error, #e05252); }
+    .btn-danger:hover { background: var(--error, #e05252); color: white; }
+    .btn-confirm { background: var(--danger-border); color: white; }
+    .btn-confirm:hover { background: var(--danger-border); }
 
-    /* Stream Audit status */
-    .audit-status { font-size: 0.78rem; margin-top: 0.25rem; display: flex; align-items: center; gap: 0.4rem; min-height: 1.1rem; }
-    .audit-status:empty { display: none; }
-    .audit-status-running .status-dot { background: var(--warning); animation: pulse 1.2s ease-in-out infinite; }
-    .audit-status-queued  .status-dot { background: var(--warning); }
-    .audit-status-running .status-text { color: var(--warning-soft); }
-    .audit-status-queued  .status-text { color: var(--warning-soft); }
-    .audit-last-result { font-size: 0.75rem; color: var(--text-soft); margin-top: 0.15rem; }
-    .audit-last-result:empty { display: none; }
-    .delete-inactive-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.4rem; }
+    .dash-actions { display: flex; gap: 0.5rem; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+
+    /* ── Config panel (inline table row) ──────────────────────────── */
+    .config-panel-row { background: var(--bg); }
+    .config-panel-row td { padding: 0; border-bottom: 1px solid var(--border); }
+    .config-panel { padding: 1.25rem 1.5rem; }
+    .drm-note { color: var(--warning-strong); font-size: 0.8rem; margin-bottom: 0.75rem; }
+
+    /* Interval control */
+    .interval-control { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+    .interval-control label { font-size: 0.76rem; color: var(--text-soft); font-weight: 600; }
+    .interval-control input {
+      width: 84px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+      padding: 0.35rem 0.5rem; color: var(--text); font-size: 0.8rem;
+    }
+    .interval-control .unit { font-size: 0.76rem; color: var(--text-soft); }
+    .interval-control .help { width: 100%; font-size: 0.74rem; color: var(--text-muted); line-height: 1.4; }
+    .delete-inactive-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
     .btn-delete-inactive { background: none; border: none; padding: 0; font-size: 0.74rem; color: var(--text-muted); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
     .btn-delete-inactive:hover { color: var(--danger); }
     .delete-inactive-status { font-size: 0.74rem; font-weight: 500; }
     .delete-inactive-status.ok { color: var(--success-soft); }
     .delete-inactive-status.error { color: var(--danger); }
-    .audit-last-result .aud-dead    { color: var(--danger); }
-    .audit-last-result .aud-drm     { color: var(--warning); }
-    .audit-last-result .aud-403     { color: var(--warning); }
-    .audit-last-result .aud-ok      { color: var(--success-soft); }
+
+    /* Source-specific settings */
+    .source-config { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+    .source-config.hidden { display: none; }
+    .config-title {
+      font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--text-soft); margin-bottom: 0.75rem;
+    }
+    .config-note { color: var(--text-muted); font-size: 0.8rem; line-height: 1.45; margin-bottom: 0.9rem; }
+    .fields-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; margin-top: 0.8rem;
+    }
+    @media (max-width: 700px) { .fields-grid { grid-template-columns: 1fr; } }
+    .field-full { grid-column: 1 / -1; }
+    .field label {
+      display: block; font-size: 0.74rem; font-weight: 600; color: var(--text-soft);
+      margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .field label .req { color: var(--danger); margin-left: 2px; }
+    .field input[type=text],
+    .field input[type=password],
+    .field input[type=number] {
+      width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      padding: 0.5rem 0.7rem; color: var(--text); font-size: 0.84rem; outline: none;
+    }
+    .field input:focus { border-color: var(--focus-accent); }
+    .field .help { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.32rem; line-height: 1.45; }
+    .region-select {
+      width: 100%; min-height: 8rem; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); font-size: 0.84rem; padding: 0.35rem; outline: none;
+    }
+    .region-select:focus { border-color: var(--focus-accent); }
+    .region-select option { padding: 0.45rem 0.55rem; border-radius: 6px; }
+    .region-custom { margin-top: 0.85rem; }
+    .region-summary { margin-top: 0.45rem; font-size: 0.76rem; color: var(--text-muted); }
+    .config-actions {
+      display: flex; align-items: center; justify-content: flex-end; gap: 0.7rem; margin-top: 1rem;
+    }
+    .config-status { font-size: 0.78rem; font-weight: 500; min-width: 110px; text-align: right; }
+    .config-status.ok { color: var(--success-soft); }
+    .config-status.error { color: var(--danger); }
+    .advanced-box {
+      margin-top: 1rem; border: 1px solid var(--border); border-radius: 8px;
+      overflow: hidden; background: var(--surface-2);
+    }
+    .advanced-toggle {
+      width: 100%; background: transparent; border: none; color: var(--text-subtle);
+      padding: 0.8rem 0.95rem; text-align: left; font-size: 0.84rem; font-weight: 600;
+      cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+    }
+    .advanced-toggle:hover { background: var(--surface-4); }
+    .advanced-copy { color: var(--text-soft); font-size: 0.76rem; line-height: 1.45; padding: 0 0.95rem 0.85rem; }
+    .advanced-body { display: none; padding: 0 0.95rem 0.95rem; border-top: 1px solid var(--border); }
+    .advanced-body.open { display: block; }
+    .advanced-chevron { color: var(--text-muted); font-size: 0.76rem; transition: transform 0.2s; }
+    .advanced-chevron.open { transform: rotate(180deg); }
+
+    /* City search autocomplete */
+    .city-search-wrap { position: relative; }
+    .city-search-results {
+      position: absolute; top: 100%; left: 0; right: 0; z-index: 50;
+      background: var(--surface); border: 1px solid var(--text-dim); border-top: none;
+      border-radius: 0 0 6px 6px; max-height: 220px; overflow-y: auto;
+    }
+    .city-result-item { padding: 0.5rem 0.75rem; font-size: 0.84rem; cursor: pointer; color: var(--text); }
+    .city-result-item:hover { background: var(--bg); }
+    .city-result-meta { font-size: 0.73rem; color: var(--text-muted); margin-top: 1px; }
+    .city-searching { padding: 0.5rem 0.75rem; font-size: 0.8rem; color: var(--text-muted); font-style: italic; }
+
     /* Audit modal */
     .modal-box {
       background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
       padding: 1.5rem 1.75rem; overflow: hidden; display: flex; flex-direction: column;
     }
-    .audit-modal-box {
-      width: 700px; max-width: 95vw; max-height: 88vh;
-    }
+    .audit-modal-box { width: 700px; max-width: 95vw; max-height: 88vh; }
     .audit-modal-header { margin-bottom: 0.75rem; flex-shrink: 0; }
     .audit-modal-title { color: var(--text-strong); font-size: 1.05rem; font-weight: 700; }
     .audit-summary {
@@ -145,12 +295,8 @@
     }
     .audit-running-status { font-size: 0.85rem; color: var(--warning-soft); margin-bottom: 0.45rem; }
     .audit-running-note { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.45rem; }
-    .audit-progress-bar {
-      background: var(--surface); border-radius: 4px; height: 5px; overflow: hidden; margin: 0.35rem 0;
-    }
-    .audit-progress-fill {
-      height: 100%; background: var(--warning); border-radius: 4px; transition: width 0.5s ease;
-    }
+    .audit-progress-bar { background: var(--surface); border-radius: 4px; height: 5px; overflow: hidden; margin: 0.35rem 0; }
+    .audit-progress-fill { height: 100%; background: var(--warning); border-radius: 4px; transition: width 0.5s ease; }
     .audit-report { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 0.65rem; }
     .audit-report-group-title {
       font-size: 0.73rem; font-weight: 700; color: var(--text-soft);
@@ -178,18 +324,6 @@
       margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--surface); flex-shrink: 0;
     }
 
-    /* EPG-only toggle */
-    .epg-only-wrap { margin-top: 0.5rem; }
-    .epg-only-wrap label { font-size: 0.74rem; color: var(--text-dim); cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 0.35rem; }
-    .epg-only-wrap label:hover { color: var(--text-soft); }
-    .epg-only-wrap input[type=checkbox] { accent-color: #7c3aed; cursor: pointer; }
-    .badge-epg-only {
-      display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
-      padding: 2px 7px; border-radius: 20px; text-transform: uppercase;
-      background: var(--purple-panel); color: var(--purple-soft); border: 1px solid var(--purple-panel-border-soft);
-      margin-left: 0.5rem; vertical-align: middle;
-    }
-
     /* Confirm modal */
     .modal-overlay {
       display: none; position: fixed; inset: 0;
@@ -205,114 +339,12 @@
     .modal p  { color: var(--text-soft); font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.5rem; }
     .modal p strong { color: var(--danger); }
     .modal-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
-    .btn-cancel  { background: transparent; color: var(--text-soft); border: 1px solid var(--border); }
-    .btn-cancel:hover { color: var(--text); }
-    .btn-danger  { background: transparent; color: var(--error, #e05252); border: 1px solid var(--error, #e05252); }
-    .btn-danger:hover { background: var(--error, #e05252); color: white; }
-    .btn-confirm { background: var(--danger-border); color: white; }
-    .btn-confirm:hover { background: var(--danger-border); }
 
-    /* Source-specific settings */
-    .source-config {
-      margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);
-    }
-    .source-config.hidden { display: none; }
-    .config-title {
-      font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em;
-      text-transform: uppercase; color: var(--text-soft); margin-bottom: 0.75rem;
-    }
-    .config-note {
-      color: var(--text-muted); font-size: 0.8rem; line-height: 1.45; margin-bottom: 0.9rem;
-    }
-    .fields-grid {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem;
-      margin-top: 0.8rem;
-    }
-    @media (max-width: 700px) { .fields-grid { grid-template-columns: 1fr; } }
-    .field-full { grid-column: 1 / -1; }
-    .field label {
-      display: block; font-size: 0.74rem; font-weight: 600; color: var(--text-soft);
-      margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.04em;
-    }
-    .field label .req { color: var(--danger); margin-left: 2px; }
-    .field input[type=text],
-    .field input[type=password],
-    .field input[type=number] {
-      width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-      padding: 0.5rem 0.7rem; color: var(--text); font-size: 0.84rem; outline: none;
-    }
-    .field input:focus { border-color: var(--focus-accent); }
-    .field .help { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.32rem; line-height: 1.45; }
-    .region-select {
-      width: 100%; min-height: 8rem; background: var(--bg); border: 1px solid var(--border);
-      border-radius: 8px; color: var(--text); font-size: 0.84rem; padding: 0.35rem;
-      outline: none;
-    }
-    .region-select:focus { border-color: var(--focus-accent); }
-    .region-select option {
-      padding: 0.45rem 0.55rem; border-radius: 6px;
-    }
-    .region-custom {
-      margin-top: 0.85rem;
-    }
-    .region-summary {
-      margin-top: 0.45rem; font-size: 0.76rem; color: var(--text-muted);
-    }
-    .config-actions {
-      display: flex; align-items: center; justify-content: flex-end; gap: 0.7rem;
-      margin-top: 1rem;
-    }
-    .config-status {
-      font-size: 0.78rem; font-weight: 500; min-width: 110px; text-align: right;
-    }
-    .config-status.ok { color: var(--success-soft); }
-    .config-status.error { color: var(--danger); }
-    .advanced-box {
-      margin-top: 1rem; border: 1px solid var(--border); border-radius: 8px;
-      overflow: hidden; background: var(--surface-2);
-    }
-    .advanced-toggle {
-      width: 100%; background: transparent; border: none; color: var(--text-subtle);
-      padding: 0.8rem 0.95rem; text-align: left; font-size: 0.84rem; font-weight: 600;
-      cursor: pointer; display: flex; align-items: center; justify-content: space-between;
-    }
-    .advanced-toggle:hover { background: var(--surface-4); }
-    .advanced-copy {
-      color: var(--text-soft); font-size: 0.76rem; line-height: 1.45; padding: 0 0.95rem 0.85rem;
-    }
-    .advanced-body {
-      display: none; padding: 0 0.95rem 0.95rem; border-top: 1px solid var(--border);
-    }
-    .advanced-body.open { display: block; }
-    .advanced-chevron {
-      color: var(--text-muted); font-size: 0.76rem; transition: transform 0.2s;
-    }
-    .advanced-chevron.open { transform: rotate(180deg); }
-    .config-badge {
-      display: inline-block; margin-left: 0.55rem; font-size: 0.64rem; font-weight: 700;
-      letter-spacing: 0.04em; padding: 2px 7px; border-radius: 20px; text-transform: uppercase;
-      background: var(--surface); color: var(--text-muted); border: 1px solid var(--border);
-    }
-    .config-badge.configured {
-      background: color-mix(in srgb, var(--success-bg-2) 20%, transparent);
-      color: var(--success-soft);
-      border-color: color-mix(in srgb, var(--success-fill) 28%, transparent);
-    }
-    .config-badge.anon { background: var(--surface); color: var(--text-muted); border-color: var(--border); }
-
-    /* City search autocomplete */
-    .city-search-wrap { position: relative; }
-    .city-search-results {
-      position: absolute; top: 100%; left: 0; right: 0; z-index: 50;
-      background: var(--surface); border: 1px solid var(--text-dim); border-top: none;
-      border-radius: 0 0 6px 6px; max-height: 220px; overflow-y: auto;
-    }
-    .city-result-item {
-      padding: 0.5rem 0.75rem; font-size: 0.84rem; cursor: pointer; color: var(--text);
-    }
-    .city-result-item:hover { background: var(--bg); }
-    .city-result-meta { font-size: 0.73rem; color: var(--text-muted); margin-top: 1px; }
-    .city-searching { padding: 0.5rem 0.75rem; font-size: 0.8rem; color: var(--text-muted); font-style: italic; }
+    /* EPG-only toggle */
+    .epg-only-wrap { margin-top: 0.5rem; }
+    .epg-only-wrap label { font-size: 0.74rem; color: var(--text-dim); cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 0.35rem; }
+    .epg-only-wrap label:hover { color: var(--text-soft); }
+    .epg-only-wrap input[type=checkbox] { accent-color: #7c3aed; cursor: pointer; }
 
     @media (max-width: 760px) {
       html { font-size: 16px; }
@@ -322,12 +354,15 @@
       .container { margin: 1rem auto; padding: 0 1rem; }
       .page-actions { padding: 1rem; flex-direction: column; align-items: stretch; }
       .page-actions .right { align-items: stretch; }
-      .card { padding: 1rem; flex-direction: column; align-items: stretch; gap: 1rem; }
-      .actions { flex-wrap: wrap; }
-      .error { white-space: normal; max-width: none; }
+      .col-toggle { display: none; }
+      .dashboard-table th.col-toggle { display: none; }
+      .col-actions { width: auto; }
+      .dash-actions { justify-content: flex-start; flex-wrap: wrap; }
+      .config-panel { padding: 1rem; }
       .config-actions, .modal-actions { flex-wrap: wrap; }
       .config-actions { justify-content: flex-start; }
       .config-status { min-width: 0; text-align: left; }
+      .fields-grid { grid-template-columns: 1fr; }
     }
   </style>
   {% include 'admin/_theme_head.html' %}
@@ -347,6 +382,21 @@
   </nav>
 
   <div class="container">
+
+    {% if needs_config %}
+    <div class="needs-config-banner" id="needs-config-banner">
+      <strong>⚠ {{ needs_config | length }} source{{ 's' if needs_config | length != 1 else '' }} need{{ '' if needs_config | length != 1 else 's' }} configuration before scraping will return channels</strong>
+      <ul>
+        {% for s in needs_config %}
+        <li id="needs-config-item-{{ s.id }}">
+          <a href="#" onclick="scrollToConfig({{ s.id }}); return false;">{{ s.display_name }}</a>
+          — click to configure
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
     <div class="page-actions">
       <div>
         <h2>Source Actions</h2>
@@ -367,73 +417,117 @@
     </div>
     {% endif %}
 
-    {% for source in sources %}
-    <div class="card {% if not source.is_enabled %}disabled{% endif %}" id="card-{{ source.id }}" data-source-name="{{ source.name }}">
-      <div class="card-info">
-        <h3>
-          {{ source.display_name }}
-          <span class="config-badge" id="config-badge-{{ source.id }}">Loading…</span>
-        </h3>
-        <div class="meta">
-          Every {{ source.scrape_interval }}min &nbsp;·&nbsp;
-          <span id="ch-count-{{ source.id }}">{{ source.to_dict().channel_count }}</span> channels &nbsp;·&nbsp;
-          Last scraped: {{ source.last_scraped_at | localtime }}
-          {% if source.last_audited_at %}&nbsp;·&nbsp; Last audited: {{ source.last_audited_at | localtime }}{% endif %}
-        </div>
-        {% if source.name in ('amazon_prime_free', 'sling') %}
-        <div class="config-note" style="color:var(--warning-strong)">⚠ All streams from this source are DRM-protected and will not play. Disabled by default.</div>
-        {% endif %}
-        {% if source.last_error %}
-        <div class="error">⚠ {{ source.last_error }}</div>
-        {% endif %}
-        <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
-        <div class="audit-status" id="audit-status-{{ source.id }}"></div>
-        <div class="audit-last-result" id="audit-last-result-{{ source.id }}"></div>
-        <div class="delete-inactive-row">
-          <button class="btn-delete-inactive" type="button" onclick="deleteInactiveChannels({{ source.id }})">Delete Inactive</button>
-          <span class="delete-inactive-status" id="delete-status-{{ source.id }}"></span>
-        </div>
-        {% set interval_meta = source_interval_meta.get(source.name, {'recommended': source.scrape_interval, 'min': 30, 'max': 10080}) %}
-        <div class="interval-control">
-          <label for="scrape-interval-{{ source.id }}">Scrape every</label>
-          <input type="number"
-                 id="scrape-interval-{{ source.id }}"
-                 min="{{ interval_meta.min }}"
-                 max="{{ interval_meta.max }}"
-                 value="{{ source.scrape_interval }}"
-                 {% if not source.is_enabled %}disabled{% endif %}
-                 onkeydown="if (event.key === 'Enter') saveScrapeInterval({{ source.id }})">
-          <span class="unit">min</span>
-          <button class="btn btn-cancel" type="button"
-                  id="scrape-interval-save-{{ source.id }}"
-                  onclick="saveScrapeInterval({{ source.id }})"
-                  {% if not source.is_enabled %}disabled{% endif %}>Save</button>
-          <div class="help">Recommended {{ interval_meta.recommended }} min · allowed {{ interval_meta.min }}-{{ interval_meta.max }} min.</div>
-        </div>
-        <div class="source-config hidden" id="source-config-{{ source.id }}"></div>
-      </div>
-      <div class="actions">
-        <div class="toggle-wrap">
-          <label class="toggle" id="toggle-{{ source.id }}">
-            <input type="checkbox" {% if source.is_enabled %}checked{% endif %}
-                   onchange="onSourceToggle({{ source.id }}, '{{ source.display_name }}', this)">
-            <span class="slider"></span>
-          </label>
-          <span class="toggle-label {% if source.is_enabled %}on{% else %}off{% endif %}"
-                id="toggle-label-{{ source.id }}">
-            {% if source.is_enabled %}Enabled{% else %}Disabled{% endif %}
-          </span>
-        </div>
-        <button class="btn btn-run" onclick="run({{ source.id }}, this)"
-                {% if not source.is_enabled %}disabled{% endif %}>Scrape Now</button>
-        {% if audit_enabled.get(source.name) %}
-        <button class="btn btn-audit" onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
-                {% if not source.is_enabled %}disabled{% endif %}
-                title="View stream audit report and run new audits">📋 Stream Audit</button>
-        {% endif %}
-      </div>
+    <div class="dashboard-panel">
+      <table class="dashboard-table">
+        <thead>
+          <tr>
+            <th class="col-source">Source</th>
+            <th class="col-toggle">Enabled</th>
+            <th class="col-actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for source in sources %}
+          {% set cfg_status = source_config_status.get(source.id, 'none') %}
+
+          <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}">
+            <td class="col-source">
+              <div class="source-name-wrap">
+                <span class="source-name">{{ source.display_name }}</span>
+                {% if source.last_error %}<span class="err-pip" title="{{ source.last_error }}">⚠</span>{% endif %}
+                {% if cfg_status == 'configured' %}
+                  <span class="config-badge configured" id="config-badge-{{ source.id }}">Configured</span>
+                {% elif cfg_status == 'required' %}
+                  <span class="config-badge needs-config" id="config-badge-{{ source.id }}">⚠ Needs Config</span>
+                {% elif cfg_status == 'optional' %}
+                  <span class="config-badge anon" id="config-badge-{{ source.id }}">Optional</span>
+                {% else %}
+                  <span class="config-badge" id="config-badge-{{ source.id }}" style="display:none"></span>
+                {% endif %}
+              </div>
+              <div class="source-meta" id="source-meta-{{ source.id }}">
+                <span id="ch-count-{{ source.id }}">{{ source.to_dict().channel_count }}</span> channels
+                &nbsp;·&nbsp; Every <span id="scrape-interval-display-{{ source.id }}">{{ source.scrape_interval }}</span> min
+                &nbsp;·&nbsp; Last scraped: {{ source.last_scraped_at | localtime }}
+                {% if source.last_audited_at %}&nbsp;·&nbsp; Audited: {{ source.last_audited_at | localtime }}{% endif %}
+              </div>
+              <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
+              <div class="audit-status" id="audit-status-{{ source.id }}"></div>
+              <div class="audit-last-result" id="audit-last-result-{{ source.id }}"></div>
+            </td>
+
+            <td class="col-toggle">
+              <div class="toggle-wrap">
+                <label class="toggle" id="toggle-{{ source.id }}">
+                  <input type="checkbox" {% if source.is_enabled %}checked{% endif %}
+                         onchange="onSourceToggle({{ source.id }}, '{{ source.display_name }}', this)">
+                  <span class="slider"></span>
+                </label>
+                <span class="toggle-label {% if source.is_enabled %}on{% else %}off{% endif %}"
+                      id="toggle-label-{{ source.id }}">
+                  {% if source.is_enabled %}On{% else %}Off{% endif %}
+                </span>
+              </div>
+            </td>
+
+            <td class="col-actions">
+              <div class="dash-actions">
+                <button class="btn btn-run btn-sm" onclick="run({{ source.id }}, this)"
+                        {% if not source.is_enabled %}disabled{% endif %}>Scrape</button>
+                {% if audit_enabled.get(source.name) %}
+                <button class="btn btn-audit btn-sm"
+                        onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
+                        {% if not source.is_enabled %}disabled{% endif %}>Audit</button>
+                {% endif %}
+                <button class="btn btn-configure btn-sm" id="configure-btn-{{ source.id }}"
+                        onclick="toggleConfigPanel({{ source.id }})">Configure ▾</button>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Collapsible config panel row -->
+          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" style="display:none">
+            <td colspan="3" class="config-panel-cell">
+              <div class="config-panel" id="card-{{ source.id }}"
+                   data-source-name="{{ source.name }}"
+                   data-config-required="{{ 'true' if config_required.get(source.name) else 'false' }}">
+
+                {% if source.name in ('amazon_prime_free', 'sling') %}
+                <div class="drm-note">⚠ All streams from this source are DRM-protected and will not play on most clients.</div>
+                {% endif %}
+
+                {% set interval_meta = source_interval_meta.get(source.name, {'recommended': source.scrape_interval, 'min': 30, 'max': 10080}) %}
+                <div class="interval-control">
+                  <label for="scrape-interval-{{ source.id }}">Scrape every</label>
+                  <input type="number"
+                         id="scrape-interval-{{ source.id }}"
+                         min="{{ interval_meta.min }}"
+                         max="{{ interval_meta.max }}"
+                         value="{{ source.scrape_interval }}"
+                         {% if not source.is_enabled %}disabled{% endif %}
+                         onkeydown="if (event.key === 'Enter') saveScrapeInterval({{ source.id }})">
+                  <span class="unit">min</span>
+                  <button class="btn btn-cancel btn-sm" type="button"
+                          id="scrape-interval-save-{{ source.id }}"
+                          onclick="saveScrapeInterval({{ source.id }})"
+                          {% if not source.is_enabled %}disabled{% endif %}>Save</button>
+                  <div class="help">Recommended {{ interval_meta.recommended }} min · allowed {{ interval_meta.min }}–{{ interval_meta.max }} min.</div>
+                </div>
+
+                <div class="delete-inactive-row">
+                  <button class="btn-delete-inactive" type="button" onclick="deleteInactiveChannels({{ source.id }})">Delete Inactive</button>
+                  <span class="delete-inactive-status" id="delete-status-{{ source.id }}"></span>
+                </div>
+
+                <div class="source-config hidden" id="source-config-{{ source.id }}"></div>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-    {% endfor %}
+
   </div>
 
   <!-- Stream Audit modal -->
@@ -464,11 +558,38 @@
     let _pendingSourceId   = null;
     let _pendingCheckbox   = null;
 
+    // ── Config panel expand/collapse ─────────────────────────────────────
+    function toggleConfigPanel(sourceId) {
+      const row = document.getElementById(`config-panel-row-${sourceId}`);
+      const btn = document.getElementById(`configure-btn-${sourceId}`);
+      if (!row) return;
+      const isOpen = row.style.display !== 'none';
+      row.style.display = isOpen ? 'none' : '';
+      if (btn) {
+        btn.textContent = isOpen ? 'Configure ▾' : 'Configure ▴';
+        btn.classList.toggle('open', !isOpen);
+      }
+      if (!isOpen) {
+        // Load config form on first open
+        loadSourceConfig(sourceId, getSourceName(sourceId));
+        row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+
+    function scrollToConfig(sourceId) {
+      const row = document.getElementById(`config-panel-row-${sourceId}`);
+      if (!row || row.style.display !== 'none') {
+        row?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+      toggleConfigPanel(sourceId);
+    }
+
+    // ── Scrape interval ──────────────────────────────────────────────────
     async function saveScrapeInterval(sourceId) {
       const input = document.getElementById(`scrape-interval-${sourceId}`);
       const saveBtn = document.getElementById(`scrape-interval-save-${sourceId}`);
-      const card = document.getElementById(`card-${sourceId}`);
-      if (!input || !saveBtn || !card) return;
+      if (!input || !saveBtn) return;
       const value = parseInt(input.value, 10);
       if (!Number.isFinite(value)) return;
       saveBtn.disabled = true;
@@ -482,10 +603,8 @@
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-        const meta = card.querySelector('.meta');
-        if (meta) {
-          meta.innerHTML = meta.innerHTML.replace(/Every \d+min/, `Every ${data.scrape_interval}min`);
-        }
+        const displayEl = document.getElementById(`scrape-interval-display-${sourceId}`);
+        if (displayEl) displayEl.textContent = data.scrape_interval;
         saveBtn.textContent = 'Saved';
         setTimeout(() => { saveBtn.textContent = prevText; saveBtn.disabled = false; }, 1200);
       } catch (e) {
@@ -495,6 +614,7 @@
       }
     }
 
+    // ── Force refresh ─────────────────────────────────────────────────────
     async function forceCompleteRefresh() {
       if (!confirm('Force a complete refresh for all enabled sources? This clears the last scrape time and queues a full channel + guide refresh for each enabled source.')) return;
       const btn = document.getElementById('force-refresh-btn');
@@ -519,6 +639,7 @@
       }
     }
 
+    // ── Source enable/disable ─────────────────────────────────────────────
     function onSourceToggle(sourceId, sourceName, checkbox) {
       if (!checkbox.checked) {
         checkbox.checked = true;
@@ -545,12 +666,12 @@
     }
 
     async function setSourceEnabled(sourceId, enabled, checkbox) {
-      const toggleEl = document.getElementById(`toggle-${sourceId}`);
-      const labelEl  = document.getElementById(`toggle-label-${sourceId}`);
-      const card     = document.getElementById(`card-${sourceId}`);
-      const runBtn   = card.querySelector('.btn-run');
-      const drmBtn   = card.querySelector('.btn-audit');
-      const intervalInput = document.getElementById(`scrape-interval-${sourceId}`);
+      const toggleEl   = document.getElementById(`toggle-${sourceId}`);
+      const labelEl    = document.getElementById(`toggle-label-${sourceId}`);
+      const dashRow    = document.getElementById(`dash-row-${sourceId}`);
+      const runBtn     = dashRow?.querySelector('.btn-run');
+      const auditBtn   = dashRow?.querySelector('.btn-audit');
+      const intervalInput   = document.getElementById(`scrape-interval-${sourceId}`);
       const intervalSaveBtn = document.getElementById(`scrape-interval-save-${sourceId}`);
       toggleEl.classList.add('saving');
 
@@ -565,11 +686,11 @@
         if (!enabled) document.getElementById(`ch-count-${sourceId}`).textContent = '0';
 
         checkbox.checked = enabled;
-        labelEl.textContent = enabled ? 'Enabled' : 'Disabled';
+        labelEl.textContent = enabled ? 'On' : 'Off';
         labelEl.className = `toggle-label ${enabled ? 'on' : 'off'}`;
-        card.classList.toggle('disabled', !enabled);
-        runBtn.disabled = !enabled;
-        if (drmBtn) drmBtn.disabled = !enabled;
+        if (dashRow) dashRow.classList.toggle('disabled', !enabled);
+        if (runBtn) runBtn.disabled = !enabled;
+        if (auditBtn) auditBtn.disabled = !enabled;
         if (intervalInput) intervalInput.disabled = !enabled;
         if (intervalSaveBtn) intervalSaveBtn.disabled = !enabled;
 
@@ -583,8 +704,9 @@
       }
     }
 
+    // ── Scrape now ────────────────────────────────────────────────────────
     async function run(id, btn) {
-      if (_pollTimers[id]) return;  // already running — ignore
+      if (_pollTimers[id]) return;
       btn.disabled = true;
       btn.textContent = 'Queued…';
       try {
@@ -596,11 +718,11 @@
           _startPolling(id, btn);
         } else {
           btn.textContent = 'Error';
-          setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
+          setTimeout(() => { btn.textContent = 'Scrape'; btn.disabled = false; }, 3000);
         }
       } catch (e) {
         btn.textContent = 'Error';
-        setTimeout(() => { btn.textContent = 'Scrape Now'; btn.disabled = false; }, 3000);
+        setTimeout(() => { btn.textContent = 'Scrape'; btn.disabled = false; }, 3000);
       }
     }
 
@@ -608,7 +730,7 @@
     let _auditModalSourceId   = null;
     let _auditModalSourceName = '';
     let _auditModalPollTimer  = null;
-    let _auditModalGrace      = 0;   // keep polling until this timestamp even if status is idle
+    let _auditModalGrace      = 0;
     const _lastRecheckIds     = {};
 
     function openAuditModal(sourceId, sourceName) {
@@ -646,7 +768,6 @@
         } else if (Date.now() < _auditModalGrace) {
           _auditModalPollTimer = setTimeout(_pollAuditModal, 1000);
         }
-        // Keep card summary fresh
         if (d.last_result) _renderLastAuditResult(_auditModalSourceId, d.last_result);
       } catch (e) { /* silently ignore network errors */ }
     }
@@ -658,7 +779,6 @@
 
       let html = `<div class="audit-modal-header"><div class="audit-modal-title">Stream Audit — ${escapeHtml(sourceName)}</div></div>`;
 
-      // Running / queued state
       if (isRunning) {
         const done  = data.done  || 0;
         const total = data.total || 0;
@@ -678,7 +798,6 @@
           </div>`;
       }
 
-      // Last result summary (idle only)
       if (result && !isRunning) {
         const ts  = result.ts ? new Date(result.ts).toLocaleString() : '';
         const ok  = Math.max(0, (result.checked || 0) - (result.dead || 0) - (result.flagged || 0));
@@ -696,7 +815,6 @@
           </div>`;
       }
 
-      // Per-channel report
       if (!isRunning) {
         if (report && report.channels && report.channels.length) {
           const dead    = report.channels.filter(c => c.status === 'dead');
@@ -729,13 +847,12 @@
         }
       }
 
-      // Actions
       const recheckIds = _lastRecheckIds[sourceId] || [];
       html += `
         <div class="audit-modal-actions">
           ${!isRunning && recheckIds.length ? `<button class="btn btn-audit" onclick="recheckRateLimited(${Number(sourceId)})">Recheck Rate-limited (${recheckIds.length})</button>` : ''}
           ${!isRunning && result ? `<button class="btn btn-audit" onclick="runAuditFromModal(${Number(sourceId)})">Run Audit</button>` : ''}
-          ${!isRunning ? `<button class="btn btn-audit" onclick="runAuditIncludeDead(${Number(sourceId)})" title="Re-check all channels including ones previously marked dead — any that pass will be re-activated automatically">${result ? 'Recheck All (incl. previously dead)' : 'Run Audit'}</button>` : ''}
+          ${!isRunning ? `<button class="btn btn-audit" onclick="runAuditIncludeDead(${Number(sourceId)})" title="Re-check all channels including ones previously marked dead">${result ? 'Recheck All (incl. previously dead)' : 'Run Audit'}</button>` : ''}
           <button class="btn-cancel-modal" onclick="_closeAuditModal()">Close</button>
         </div>`;
 
@@ -825,12 +942,12 @@
 
     // ── Scrape progress polling ───────────────────────────────────────────
     const _pollTimers  = {};
-    const _scrapeBtn   = {};   // sourceId → button element
-    const _scrapeStart = {};   // sourceId → ms timestamp when scrape was triggered
+    const _scrapeBtn   = {};
+    const _scrapeStart = {};
     const _phaseLabel  = {
       bootstrap: 'Authenticating…',
       channels:  'Fetching channels…',
-      epg:       null,   // built dynamically
+      epg:       null,
       starting:  'Starting…',
     };
 
@@ -852,25 +969,32 @@
       const info = _statusText(data);
       el.className = `scrape-status ${info.cls}`;
       el.innerHTML = `<span class="status-dot"></span><span class="status-text">${info.text}</span>`;
+      document.getElementById(`dash-row-${sourceId}`)?.classList.add('scraping');
     }
 
     function _showResult(sourceId, lastError) {
       delete _scrapeStart[sourceId];
+      document.getElementById(`dash-row-${sourceId}`)?.classList.remove('scraping');
       const btn = _scrapeBtn[sourceId];
-      if (btn) { btn.textContent = 'Scrape Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
+      if (btn) { btn.textContent = 'Scrape'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
       const statusEl = document.getElementById(`scrape-status-${sourceId}`);
       if (!statusEl) return;
       if (lastError) {
         statusEl.className = 'scrape-status';
-        statusEl.innerHTML = `<span class="status-text" style="color:var(--danger)">⚠ ${lastError}</span>`;
-        const errEl = statusEl.closest('.card-info')?.querySelector('.error');
-        if (errEl) errEl.textContent = '⚠ ' + lastError;
+        statusEl.innerHTML = `<span class="status-text" style="color:var(--danger)">⚠ ${escapeHtml(lastError)}</span>`;
+        // Update err-pip in dashboard row
+        const dashRow = document.getElementById(`dash-row-${sourceId}`);
+        let pip = dashRow?.querySelector('.err-pip');
+        if (!pip && dashRow) {
+          pip = document.createElement('span');
+          pip.className = 'err-pip';
+          dashRow.querySelector('.source-name-wrap')?.appendChild(pip);
+        }
+        if (pip) pip.title = lastError;
         setTimeout(() => { statusEl.innerHTML = ''; statusEl.className = 'scrape-status'; }, 12000);
       } else {
         statusEl.className = 'scrape-status';
         statusEl.innerHTML = '<span class="status-text" style="color:var(--success)">✓ Complete</span>';
-        const errEl = statusEl.closest('.card-info')?.querySelector('.error');
-        if (errEl) errEl.textContent = '';
         setTimeout(() => { statusEl.innerHTML = ''; statusEl.className = 'scrape-status'; }, 8000);
       }
     }
@@ -884,13 +1008,11 @@
           const d = await r.json();
           if (d.status === 'running' || d.status === 'queued') {
             _renderStatus(sourceId, d);
-            _pollTimers[sourceId] = setTimeout(poll, 2000);
+            _pollTimers[sourceId] = setTimeout(poll, 1000);
           } else {
-            // idle — check if last_scraped_at is newer than when we triggered
             const scraped = d.last_scraped_ms || 0;
             const start   = _scrapeStart[sourceId] || 0;
             if (scraped > start) {
-              // confirmed done — update channel count and show result
               delete _pollTimers[sourceId];
               const countEl = document.getElementById(`ch-count-${sourceId}`);
               if (countEl) fetch('/api/sources').then(r => r.json()).then(ss => {
@@ -899,11 +1021,9 @@
               }).catch(() => {});
               _showResult(sourceId, d.last_error || null);
             } else if (Date.now() - start < 30000) {
-              // not done yet — keep waiting (up to 30s)
               _renderStatus(sourceId, d);
-              _pollTimers[sourceId] = setTimeout(poll, 2000);
+              _pollTimers[sourceId] = setTimeout(poll, 1500);
             } else {
-              // 30s elapsed with no update — give up
               delete _pollTimers[sourceId];
               _showResult(sourceId, null);
             }
@@ -911,7 +1031,7 @@
         } catch (e) {
           delete _pollTimers[sourceId];
           const b = _scrapeBtn[sourceId];
-          if (b) { b.textContent = 'Scrape Now'; b.disabled = false; delete _scrapeBtn[sourceId]; }
+          if (b) { b.textContent = 'Scrape'; b.disabled = false; delete _scrapeBtn[sourceId]; }
         }
       }
       poll();
@@ -920,7 +1040,7 @@
     // ── Stream Audit progress polling ─────────────────────────────────────
     const _auditPollTimers = {};
     const _auditRunBtns    = {};
-    const _auditGrace      = {};   // sourceId → ms timestamp: don't stop on idle before this
+    const _auditGrace      = {};
 
     function _auditStatusText(data) {
       if (data.status === 'queued') return { cls: 'audit-status-queued', text: 'Stream Audit queued' };
@@ -973,12 +1093,11 @@
           if (d.status === 'running' || d.status === 'queued') {
             _auditPollTimers[sourceId] = setTimeout(poll, 2000);
           } else if (Date.now() < (_auditGrace[sourceId] || 0)) {
-            // Job was just queued — worker may not have written progress yet; keep polling
             _auditPollTimers[sourceId] = setTimeout(poll, 1000);
           } else {
             delete _auditPollTimers[sourceId];
             const b = _auditRunBtns[sourceId];
-            if (b) { b.textContent = '📋 Stream Audit'; b.disabled = false; delete _auditRunBtns[sourceId]; }
+            if (b) { b.textContent = 'Audit'; b.disabled = false; delete _auditRunBtns[sourceId]; }
             if (d.last_result) _renderLastAuditResult(sourceId, d.last_result);
           }
         } catch (e) {
@@ -988,18 +1107,7 @@
       poll();
     }
 
-    // Load persisted audit results on page load for all audit-enabled sources
-    document.addEventListener('DOMContentLoaded', () => {
-      document.querySelectorAll('[id^="audit-last-result-"]').forEach(el => {
-        const sourceId = el.id.replace('audit-last-result-', '');
-        fetch(`/api/sources/${sourceId}/audit-status`)
-          .then(r => r.json())
-          .then(d => { if (d.last_result) _renderLastAuditResult(sourceId, d.last_result); })
-          .catch(() => {});
-      });
-    });
-
-    // ── Local Now city search ─────────────────────────────────────────
+    // ── LocalNow city search ──────────────────────────────────────────────
     const _citySearchTimers = {};
 
     function renderLocalNowConfig(sourceId, schema, values) {
@@ -1009,7 +1117,6 @@
         ? `<div id="city-selected-display-${sourceId}" style="font-size:0.78rem;color:var(--success-soft);margin-top:0.35rem">✓ DMA ${escapeHtml(dma)} &nbsp;·&nbsp; ${escapeHtml(market)}</div>`
         : `<div id="city-selected-display-${sourceId}" style="font-size:0.78rem;color:var(--text-muted);margin-top:0.35rem">No city configured — defaulting to New York, NY</div>`;
 
-      // render all schema fields (dma, market, etc) inside Advanced
       const renderFieldSet = (fields) => fields.map(f => {
         const val = values[f.key] ?? f.default ?? '';
         const req = f.required ? '<span class="req">*</span>' : '';
@@ -1051,7 +1158,6 @@
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
-
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
     }
@@ -1095,7 +1201,7 @@
 
       return `
         <div class="config-title">Source Settings</div>
-        <div class="config-note">Choose one or more Distro regions to include. Channels will be combined into one source, and each channel will show its region in the Channels view.</div>
+        <div class="config-note">Choose one or more Distro regions to include. Channels will be combined into one source.</div>
         <div class="field field-full">
           <label>${escapeHtml(geoField.label)}</label>
           <select id="cfg-${sourceId}-geo-select" class="region-select" data-key="geo" multiple>
@@ -1111,12 +1217,11 @@
                    placeholder="Optional, comma-separated region codes">
             <div class="help">${escapeHtml(geoField.help_text || '')}</div>
           </div>
-          <div class="region-summary">The list above covers the main Distro regions we confirmed. You can still add others manually if needed.</div>
+          <div class="region-summary">The list above covers the main Distro regions. You can add others manually if needed.</div>
         </div>
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
-
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
     }
@@ -1170,9 +1275,12 @@
       }
     }
 
+    // ── Source config load / save ─────────────────────────────────────────
     async function loadSourceConfig(sourceId, sourceName) {
       const container = document.getElementById(`source-config-${sourceId}`);
       const badge = document.getElementById(`config-badge-${sourceId}`);
+      const card  = document.getElementById(`card-${sourceId}`);
+      const isRequired = card?.dataset.configRequired === 'true';
       try {
         const r = await fetch(`/api/sources/${sourceId}/config`);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1181,10 +1289,8 @@
         const values = cfg.values || {};
 
         if (!schema.length) {
-          badge.textContent = 'No config';
-          badge.className = 'config-badge anon';
-          container.innerHTML = '';
-          container.classList.add('hidden');
+          if (badge) { badge.textContent = ''; badge.style.display = 'none'; }
+          if (container) { container.innerHTML = ''; container.classList.add('hidden'); }
           return;
         }
 
@@ -1192,15 +1298,33 @@
           const val = values[f.key];
           return val && val !== MASK && val !== (f.default || '');
         });
-        badge.textContent = configured ? 'Configured' : 'Anonymous';
-        badge.className = `config-badge ${configured ? 'configured' : 'anon'}`;
-        container.innerHTML = renderConfigFields(sourceId, sourceName, schema, values);
-        container.classList.remove('hidden');
+
+        if (badge) {
+          if (configured) {
+            badge.textContent = 'Configured';
+            badge.className = 'config-badge configured';
+            badge.style.display = '';
+          } else if (isRequired) {
+            badge.textContent = '⚠ Needs Config';
+            badge.className = 'config-badge needs-config';
+            badge.style.display = '';
+          } else {
+            badge.textContent = 'Optional';
+            badge.className = 'config-badge anon';
+            badge.style.display = '';
+          }
+        }
+
+        if (container) {
+          container.innerHTML = renderConfigFields(sourceId, sourceName, schema, values);
+          container.classList.remove('hidden');
+        }
       } catch (e) {
-        badge.textContent = 'Config error';
-        badge.className = 'config-badge anon';
-        container.innerHTML = `<div class="config-title">Source Settings</div><div class="config-note">Failed to load source-specific settings: ${escapeHtml(e.message)}</div>`;
-        container.classList.remove('hidden');
+        if (badge) { badge.textContent = 'Config error'; badge.className = 'config-badge anon'; badge.style.display = ''; }
+        if (container) {
+          container.innerHTML = `<div class="config-title">Source Settings</div><div class="config-note">Failed to load source-specific settings: ${escapeHtml(e.message)}</div>`;
+          container.classList.remove('hidden');
+        }
       }
     }
 
@@ -1277,7 +1401,6 @@
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
-
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
     }
@@ -1349,6 +1472,15 @@
         });
         setTimeout(() => { status.textContent = ''; }, 2500);
         loadSourceConfig(sourceId, getSourceName(sourceId));
+        // Remove this source from the needs-config banner if present
+        const bannerItem = document.getElementById(`needs-config-item-${sourceId}`);
+        if (bannerItem) {
+          bannerItem.remove();
+          const banner = document.getElementById('needs-config-banner');
+          if (banner && banner.querySelectorAll('li').length === 0) {
+            banner.remove();
+          }
+        }
       } catch (e) {
         status.textContent = '✗ ' + e.message;
         status.className = 'config-status error';
@@ -1385,15 +1517,20 @@
         .replace(/'/g,'&#39;');
     }
 
-    // On page load, start polling for any source that may already be running
+    // ── Page load ─────────────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
-      document.querySelectorAll('[id^="card-"]').forEach(el => {
-        const id = parseInt(el.id.replace('card-', ''), 10);
-        loadSourceConfig(id, el.dataset.sourceName || '');
+      // Load persisted audit results
+      document.querySelectorAll('[id^="audit-last-result-"]').forEach(el => {
+        const sourceId = el.id.replace('audit-last-result-', '');
+        fetch(`/api/sources/${sourceId}/audit-status`)
+          .then(r => r.json())
+          .then(d => { if (d.last_result) _renderLastAuditResult(sourceId, d.last_result); })
+          .catch(() => {});
       });
+
+      // Poll any currently running scrape/audit jobs
       document.querySelectorAll('[id^="scrape-status-"]').forEach(el => {
         const id = parseInt(el.id.replace('scrape-status-', ''));
-        // Page-load: only poll if a job is actively running (don't show result on idle)
         fetch(`/api/sources/${id}/scrape-status`).then(r => r.json()).then(d => {
           if (d.status === 'running' || d.status === 'queued') {
             _scrapeStart[id] = Date.now();

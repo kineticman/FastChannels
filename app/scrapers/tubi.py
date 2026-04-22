@@ -316,7 +316,8 @@ class TubiScraper(BaseScraper):
     def _fetch_epg_rows_anon(self, channel_ids: list) -> list[dict]:
         """Calls the public EPG endpoint in batches, returns raw row dicts."""
         rows: list[dict] = []
-        for i in range(0, len(channel_ids), _BATCH):
+        total = len(channel_ids)
+        for i in range(0, total, _BATCH):
             batch  = channel_ids[i:i + _BATCH]
             params = {'content_id': ','.join(str(x) for x in batch)}
             try:
@@ -326,6 +327,8 @@ class TubiScraper(BaseScraper):
                 logger.debug('[tubi] anon EPG batch %d–%d: %d rows', i, i + len(batch), len(rows))
             except Exception as e:
                 logger.warning('[tubi] anon EPG batch %d failed: %s', i, e)
+            if self._progress_cb:
+                self._progress_cb('epg', min(i + _BATCH, total), total)
         return rows
 
     # ── Authenticated channel fetch ───────────────────────────────────────────
@@ -415,7 +418,8 @@ class TubiScraper(BaseScraper):
         params  = {'platform': 'web', 'device_id': self._device_id, 'lookahead': 1}
 
         rows: list[dict] = []
-        for i in range(0, len(channel_ids), _BATCH):
+        total = len(channel_ids)
+        for i in range(0, total, _BATCH):
             batch = channel_ids[i:i + _BATCH]
             params['content_id'] = ','.join(batch)
             try:
@@ -424,6 +428,8 @@ class TubiScraper(BaseScraper):
                 rows.extend(r.json().get('rows', []))
             except Exception as e:
                 logger.warning('[tubi] auth EPG batch %d failed: %s', i, e)
+            if self._progress_cb:
+                self._progress_cb('epg', min(i + _BATCH, total), total)
 
         return self._parse_epg_rows(rows)
 

@@ -33,6 +33,7 @@ class LocalNowScraper(BaseScraper):
     display_name = "Local Now"
     scrape_interval = 60  # API returns exactly 5 programs per channel; worst channels cover ~1h, so scrape hourly for continuous EPG
     stream_audit_enabled = True
+    config_required = True  # local city channels are the point; without config defaults to New York
 
     config_schema = [
         ConfigField(

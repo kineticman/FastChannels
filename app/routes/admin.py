@@ -248,6 +248,10 @@ def sources():
         name: getattr(cls, 'stream_audit_enabled', False)
         for name, cls in all_scrapers.items()
     }
+    config_required = {
+        name: getattr(cls, 'config_required', False)
+        for name, cls in all_scrapers.items()
+    }
     source_interval_meta = {
         name: {
             'recommended': getattr(cls, 'scrape_interval', 360),
@@ -256,11 +260,35 @@ def sources():
         }
         for name, cls in all_scrapers.items()
     }
+
+    def _config_status(source, cls):
+        schema = getattr(cls, 'config_schema', [])
+        if not schema:
+            return 'none'
+        has_values = bool(source.config)
+        if has_values:
+            return 'configured'
+        return 'required' if getattr(cls, 'config_required', False) else 'optional'
+
+    sources_list = Source.query.order_by(Source.display_name).all()
+    source_config_status = {
+        s.id: _config_status(s, all_scrapers[s.name])
+        for s in sources_list
+        if s.name in all_scrapers
+    }
+    needs_config = [
+        s for s in sources_list
+        if s.is_enabled and source_config_status.get(s.id) == 'required'
+    ]
+
     return render_template('admin/sources.html',
-                           sources=Source.query.order_by(Source.display_name).all(),
+                           sources=sources_list,
                            chnum_warnings=[],
                            audit_enabled=audit_enabled,
-                           source_interval_meta=source_interval_meta)
+                           config_required=config_required,
+                           source_interval_meta=source_interval_meta,
+                           source_config_status=source_config_status,
+                           needs_config=needs_config)
 
 
 @admin_bp.route('/channels')

@@ -307,8 +307,9 @@ class VidaaScraper(BaseScraper):
         # Channel-level genre for EPG fallback
         uid_to_genre = {ch.source_channel_id: ch.category for ch in channels if ch.category}
 
+        total = len(station_ids)
         all_entries: list[dict] = []
-        for i in range(0, len(station_ids), _EPG_CHUNK_SIZE):
+        for i in range(0, total, _EPG_CHUNK_SIZE):
             chunk = station_ids[i : i + _EPG_CHUNK_SIZE]
             epg_url = (
                 f"{self._bo_url}/catalogue-search/{self._tenant}"
@@ -323,6 +324,8 @@ class VidaaScraper(BaseScraper):
                     all_entries.extend(chunk_data)
             except Exception as exc:
                 logger.warning("[vidaa] EPG chunk %d-%d failed: %s", i, i + _EPG_CHUNK_SIZE, exc)
+            if self._progress_cb:
+                self._progress_cb('epg', min(i + _EPG_CHUNK_SIZE, total), total)
 
         programs: list[ProgramData] = []
         for entry in all_entries:

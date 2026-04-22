@@ -367,6 +367,7 @@ class PlutoScraper(BaseScraper):
 
         n_batches = (len(all_ids) + 99) // 100
 
+        total_ops = n_batches * 3
         for window in range(3):
             if window > 0:
                 start_time = end_time
@@ -395,6 +396,8 @@ class PlutoScraper(BaseScraper):
                 except Exception as e:
                     logger.warning("[pluto] EPG fetch failed %s window=%d batch=%d: %s",
                                    country_code, window + 1, batch_num, e)
+                if self._progress_cb:
+                    self._progress_cb('epg', window * n_batches + batch_num, total_ops)
 
         # Deduplicate within the fetch — programs near window boundaries can
         # appear in both adjacent window responses.

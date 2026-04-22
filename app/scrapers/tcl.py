@@ -286,8 +286,9 @@ class TCLScraper(BaseScraper):
         details: Dict[str, dict] = {}
         batch_size = 25
         base_params = self._common_params()
+        total = len(unique_lookup_ids)
 
-        for i in range(0, len(unique_lookup_ids), batch_size):
+        for i in range(0, total, batch_size):
             batch = unique_lookup_ids[i:i + batch_size]
             qs = urlencode(list(base_params.items()) + [("ids", lid) for lid in batch])
             url = f"{self.BASE}/api/metadata/v1/epg/program/detail?{qs}"
@@ -300,6 +301,8 @@ class TCLScraper(BaseScraper):
                         details[lid] = item
             except Exception as e:
                 logger.warning("[tcl] program detail batch %d failed: %s", i // batch_size, e)
+            if self._progress_cb:
+                self._progress_cb('epg', min(i + batch_size, total), total)
 
         logger.info("[tcl] program details fetched: %d/%d", len(details), len(unique_lookup_ids))
         return details
