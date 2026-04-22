@@ -633,6 +633,14 @@
         status.textContent = `Queued ${d.count} source${d.count === 1 ? '' : 's'} for a full refresh.`;
         status.className = 'global-status ok';
         btn.textContent = 'Force Complete Refresh';
+        const now = Date.now();
+        document.querySelectorAll('[id^="scrape-status-"]').forEach(el => {
+          const id = parseInt(el.id.replace('scrape-status-', ''));
+          if (!_pollTimers[id]) {
+            _scrapeStart[id] = now;
+            _startPolling(id);
+          }
+        });
       } catch (e) {
         status.textContent = 'Failed to queue full refresh.';
         status.className = 'global-status error';
