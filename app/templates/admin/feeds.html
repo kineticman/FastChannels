@@ -16,7 +16,7 @@
     .container { max-width: 1100px; margin: 2rem auto; padding: 0 2rem; }
 
     /* Header row */
-    .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
+    .page-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
     .page-header h2 { font-size: 1.1rem; font-weight: 600; }
     .btn { padding: 0.45rem 1rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; border: none; font-weight: 500; }
     .btn-primary { background: var(--accent-strong); color: #fff; }
@@ -50,6 +50,8 @@
     .inline-setting { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
     .inline-setting .field { margin-bottom: 0; min-width: 260px; flex: 1; }
     .inline-setting .save-status { min-width: 0; text-align: left; align-self: center; }
+    .inline-controls { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .inline-controls input[type=number] { width: 150px; flex: 0 0 150px; }
     .feed-urls { margin-top: 0.9rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
     .url-chip {
       background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
@@ -74,7 +76,7 @@
     }
     .url-chip .copy-btn:hover { background: var(--border); color: var(--text); border-color: var(--text-muted); }
     .url-chip .copy-btn.ok { background: var(--success-bg-2); border-color: var(--success-strong); color: var(--success-strong); }
-    .feed-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+    .feed-actions { display: flex; gap: 0.5rem; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
     .badge-pill {
       display: inline-block; padding: 0.15rem 0.55rem; border-radius: 9999px;
       font-size: 0.7rem; font-weight: 600;
@@ -193,15 +195,85 @@
       nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
       nav h1 { width: 100%; }
       nav .version { margin-left: 0; width: 100%; order: 99; }
-      .container { margin: 1rem auto; padding: 0 1rem; }
-      .page-header, .feed-top, .feed-actions, .modal-footer { flex-direction: column; align-items: stretch; }
+      .container { margin: 1rem auto; padding: 0 1rem 1.5rem; }
+      .page-header {
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+      .feed-top { flex-direction: column; align-items: stretch; }
+      .feed-actions {
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-start;
+      }
+      .modal-footer { flex-direction: column; align-items: stretch; }
+      .page-header .btn { width: auto; }
       .feed-card { padding: 1rem; }
-      .feed-actions { flex-wrap: wrap; }
+      .feed-meta {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.65rem;
+      }
+      .feed-stat {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.65rem 0.75rem;
+        background: var(--bg);
+      }
+      .feed-actions .btn { justify-content: center; }
       .inline-setting { align-items: stretch; }
       .inline-setting .field { min-width: 0; }
-      .url-chip { width: 100%; justify-content: space-between; }
-      .url-chip-text { white-space: normal; word-break: break-all; }
-      .modal { padding: 1rem; }
+      .inline-controls { flex-direction: column; align-items: stretch; }
+      .inline-controls > * { width: 100%; }
+      .inline-controls input[type=number] { width: 100%; flex: 1 1 100%; }
+      .save-status { text-align: left; min-width: 0; }
+      .url-chip {
+        width: 100%;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+          "label label"
+          "text text"
+          "open copy";
+        align-items: center;
+        gap: 0.45rem 0.6rem;
+      }
+      .url-chip > span:first-child { grid-area: label; }
+      .url-chip-text {
+        grid-area: text;
+        white-space: normal;
+        word-break: break-all;
+      }
+      .url-chip > a { grid-area: open; justify-self: start; }
+      .url-chip .copy-btn { grid-area: copy; justify-self: end; }
+      .modal {
+        padding: 1rem;
+        border-radius: 14px;
+      }
+      .check-group { max-height: 220px; }
+      .ch-bar { align-items: stretch; }
+      .ch-bar-actions { width: 100%; justify-content: space-between; }
+      .ch-item,
+      .ch-pinned-item {
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .ch-item .ch-source,
+      .ch-pinned-item .ch-source {
+        width: 100%;
+        margin-left: 1.65rem;
+      }
+    }
+    @media (max-width: 480px) {
+      .feed-meta { grid-template-columns: 1fr; }
+      .filter-tags { gap: 0.35rem; }
+      .modal-footer {
+        position: sticky;
+        bottom: 0;
+        background: var(--surface);
+        padding-top: 0.85rem;
+      }
+      .modal-footer .btn { width: 100%; }
     }
   </style>
   {% include 'admin/_theme_head.html' %}
@@ -310,14 +382,17 @@
         <div class="inline-setting">
           <div class="field">
             <label>Master Channel Number Start <span style="color:var(--text-dim);font-weight:400;text-transform:none;font-size:0.75rem">(tvg-chno)</span></label>
-            <input type="number" id="chnum-{{ feed.id }}" min="1" max="999999"
-                   placeholder="e.g. 10000" value="{{ feed.chnum_start or '' }}"
-                   oninput="checkInlineChnumConflict({{ feed.id }})">
+            <div class="inline-controls">
+              <input type="number" id="chnum-{{ feed.id }}" min="1" max="999999"
+                     placeholder="e.g. 10000" value="{{ feed.chnum_start or '' }}"
+                     oninput="checkInlineChnumConflict({{ feed.id }})">
+              <button class="btn btn-ghost" type="button" onclick="saveFeedChnum({{ feed.id }})">Save</button>
+              <button class="btn btn-ghost" type="button" onclick="resetFeedChnums({{ feed.id }}, '{{ feed.name|e }}', true, this)">Reset Channel Numbers</button>
+            </div>
             <div class="help">Applies to all sources without their own channel number start.{% if default_chnum_from_env %} Currently inherited from env var <code>MASTER_CHANNEL_NUMBER_START</code> — saving here overrides it.{% endif %}</div>
             <div id="chnum-conflict-{{ feed.id }}" style="margin-top:4px;font-size:0.78rem;line-height:1.6"></div>
           </div>
           <span class="save-status" id="chnum-status-{{ feed.id }}"></span>
-          <button class="btn btn-ghost" type="button" onclick="saveFeedChnum({{ feed.id }})">Save</button>
         </div>
       </div>
       {% else %}
@@ -325,15 +400,18 @@
         <div class="inline-setting">
           <div class="field">
             <label>Channel Number Start <span style="color:var(--text-dim);font-weight:400;text-transform:none;font-size:0.75rem">(tvg-chno)</span></label>
-            <input type="number" id="chnum-{{ feed.id }}" min="1" max="99999"
-                   placeholder="{{ feed_chnum_placeholder.get(feed.id, 'auto') }}"
-                   value="{{ feed.chnum_start or '' }}"
-                   oninput="checkInlineChnumConflict({{ feed.id }})">
+            <div class="inline-controls">
+              <input type="number" id="chnum-{{ feed.id }}" min="1" max="99999"
+                     placeholder="{{ feed_chnum_placeholder.get(feed.id, 'auto') }}"
+                     value="{{ feed.chnum_start or '' }}"
+                     oninput="checkInlineChnumConflict({{ feed.id }})">
+              <button class="btn btn-ghost" type="button" onclick="saveFeedChnum({{ feed.id }})">Save</button>
+              <button class="btn btn-ghost" type="button" onclick="resetFeedChnums({{ feed.id }}, '{{ feed.name|e }}', false, this)">Reset Channel Numbers</button>
+            </div>
             <div class="help">Leave blank to auto-assign (currently {{ feed_chnum_placeholder.get(feed.id, 'auto') }}). Set a value to number all channels in this feed sequentially from here.</div>
             <div id="chnum-conflict-{{ feed.id }}" style="margin-top:4px;font-size:0.78rem;line-height:1.6"></div>
           </div>
           <span class="save-status" id="chnum-status-{{ feed.id }}"></span>
-          <button class="btn btn-ghost" type="button" onclick="saveFeedChnum({{ feed.id }})">Save</button>
         </div>
       </div>
       {% endif %}
@@ -1072,6 +1150,34 @@ async function saveFeedChnum(feedId) {
   } catch(e) {
     status.textContent = '✗ ' + e.message;
     status.className   = 'save-status error';
+  }
+}
+
+async function resetFeedChnums(feedId, feedName, isDefault, btn) {
+  const status = document.getElementById(`chnum-status-${feedId}`);
+  const message = isDefault
+    ? `Warning: reset channel numbers for "${feedName}"?\n\nThis will overwrite the current sticky channel-number assignments for the master feed and regenerate them from the saved start number.\n\nThis is destructive and cannot be undone automatically.`
+    : `Warning: reset channel numbers for "${feedName}"?\n\nThis will overwrite this feed's sticky channel-number assignments and regenerate them from the saved Channel Number Start.\n\nThis is destructive and cannot be undone automatically.`;
+  if (!confirm(message)) return;
+
+  const orig = btn.textContent;
+  btn.disabled = true;
+  status.textContent = 'Resetting…';
+  status.className = 'save-status';
+  try {
+    const r = await fetch(`/api/feeds/${feedId}/reset-channel-numbers`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    _prewarmFeed(data.feed, status);
+  } catch (e) {
+    status.textContent = '✗ ' + e.message;
+    status.className   = 'save-status error';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
   }
 }
 

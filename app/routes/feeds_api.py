@@ -7,7 +7,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import OperationalError
 from ..extensions import db
 from ..generators.m3u import get_global_chnum_overlaps, _selected_channels, feed_to_query_filters
-from ..models import Feed
+from ..models import Channel, Feed, FeedChannelNumber, Source
 from ..url import public_base_url
 from ..xml_cache import delete_xml_artifact, invalidate_xml_cache
 from .tasks import trigger_xml_refresh
@@ -69,10 +69,8 @@ def chnum_ranges():
         if exclude_id and feed.id == exclude_id:
             continue
         filters = feed_to_query_filters(feed.filters or {})
-        std_filters = {**filters, 'gracenote': 'missing'}
-        std_count = _build_channel_query(std_filters).count()
-        gn_filters  = {**filters, 'gracenote': 'has'}
-        gn_count    = _build_channel_query(gn_filters).count()
+        std_count = len(_selected_channels(filters, gracenote=False))
+        gn_count  = len(_selected_channels(filters, gracenote=True))
         total_count = std_count + gn_count
         if total_count == 0:
             continue
@@ -182,6 +180,59 @@ def update_feed(feed_id):
         return err
     _invalidate_and_refresh_xml()
     return jsonify(feed.to_dict(public_base_url()))
+
+
+def _reset_default_channel_numbers() -> None:
+    """Force a fresh global/master numbering pass for channels affected by the master start."""
+    channels = (
+        Channel.query
+        .join(Source)
+        .filter(
+            Channel.is_active == True,
+            Channel.is_enabled == True,
+            Channel.number_pinned == False,
+            Source.is_enabled == True,
+            Source.epg_only == False,
+            Channel.stream_url != None,
+            (
+                (Source.chnum_start == None)
+                | ((Channel.gracenote_id != None) & (Channel.gracenote_id != ''))
+            ),
+        )
+        .all()
+    )
+    for channel in channels:
+        channel.number = None
+
+
+@feeds_api_bp.route('/<int:feed_id>/reset-channel-numbers', methods=['POST'])
+def reset_feed_channel_numbers(feed_id):
+    feed = Feed.query.get_or_404(feed_id)
+
+    if feed.slug == 'default':
+        _reset_default_channel_numbers()
+    else:
+        if feed.chnum_start is None:
+            return jsonify({'error': 'Set a Channel Number Start before resetting this feed.'}), 400
+        for row in FeedChannelNumber.query.filter_by(feed_id=feed.id).all():
+            db.session.delete(row)
+
+    err = _safe_flush()
+    if err:
+        return err
+
+    from ..worker import _refresh_auto_channel_numbers
+    _refresh_auto_channel_numbers()
+
+    err = _safe_commit()
+    if err:
+        return err
+    _invalidate_and_refresh_xml()
+    return jsonify({
+        'status': 'reset',
+        'message': 'Channel numbers regenerated from the current start value.',
+        'feed': feed.to_dict(public_base_url()),
+    })
 
 
 @feeds_api_bp.route('/<int:feed_id>', methods=['DELETE'])

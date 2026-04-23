@@ -3056,7 +3056,7 @@
 
     // ── Pin-to-feed ───────────────────────────────────────────────────────
     let _pinChannelId = null;
-    const _membershipCache = {};  // channelId -> [{feed_id, status}]
+    const _membershipCache = {};  // channelId -> {feed_id: {status, feed_channel_number}}
 
     function _positionDropdown(menu, btn) {
       menu.style.display = 'block';
@@ -3095,7 +3095,12 @@
           const r = await fetch(`/api/channels/${channelId}/feed-membership`);
           const data = await r.json();
           _membershipCache[channelId] = {};
-          data.forEach(d => { _membershipCache[channelId][d.feed_id] = d.status; });
+          data.forEach(d => {
+            _membershipCache[channelId][d.feed_id] = {
+              status: d.status,
+              feed_channel_number: d.feed_channel_number,
+            };
+          });
         } catch {
           list.innerHTML = '<div class="pfd-empty">Failed to load</div>';
           _positionDropdown(menu, btn);
@@ -3113,19 +3118,23 @@
       list.innerHTML = '';
 
       FEEDS.forEach(f => {
-        const status = membership[f.id] || 'absent';
+        const entry = membership[f.id] || {status: 'absent', feed_channel_number: null};
+        const status = entry.status || 'absent';
+        const numberBadge = entry.feed_channel_number
+          ? `<span style="color:var(--text-muted);font-size:0.72rem;margin-left:0.45rem">Ch ${entry.feed_channel_number}</span>`
+          : '';
         const b = document.createElement('button');
         b.style.display = 'flex';
         b.style.alignItems = 'center';
 
         if (status === 'pinned') {
-          b.innerHTML = `<span style="color:var(--success-border);margin-right:0.4rem">📌</span>${f.name}<span style="color:var(--text-muted);font-size:0.72rem;margin-left:auto;padding-left:0.5rem">unpin</span>`;
+          b.innerHTML = `<span style="color:var(--success-border);margin-right:0.4rem">📌</span>${f.name}${numberBadge}<span style="color:var(--text-muted);font-size:0.72rem;margin-left:auto;padding-left:0.5rem">unpin</span>`;
           b.onclick = () => _feedAction(channelId, f.id, f.name, 'unpin');
         } else if (status === 'filtered') {
-          b.innerHTML = `<span style="color:var(--accent-soft);margin-right:0.4rem">●</span>${f.name}<span style="color:var(--text-muted);font-size:0.72rem;margin-left:auto;padding-left:0.5rem">exclude</span>`;
+          b.innerHTML = `<span style="color:var(--accent-soft);margin-right:0.4rem">●</span>${f.name}${numberBadge}<span style="color:var(--text-muted);font-size:0.72rem;margin-left:auto;padding-left:0.5rem">exclude</span>`;
           b.onclick = () => _feedAction(channelId, f.id, f.name, 'exclude');
         } else if (status === 'excluded') {
-          b.innerHTML = `<span style="color:var(--danger);margin-right:0.4rem">✕</span>${f.name}<span style="color:var(--text-muted);font-size:0.72rem;margin-left:auto;padding-left:0.5rem">re-add</span>`;
+          b.innerHTML = `<span style="color:var(--danger);margin-right:0.4rem">✕</span>${f.name}${numberBadge}<span style="color:var(--text-muted);font-size:0.72rem;margin-left:auto;padding-left:0.5rem">re-add</span>`;
           b.onclick = () => _feedAction(channelId, f.id, f.name, 'unexclude');
         } else {
           b.innerHTML = f.name;
@@ -3162,7 +3171,13 @@
         if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
 
         // Update local caches
-        if (_membershipCache[channelId]) _membershipCache[channelId][feedId] = nextStatus[action];
+        if (_membershipCache[channelId]) {
+          const current = _membershipCache[channelId][feedId] || {};
+          _membershipCache[channelId][feedId] = {
+            ...current,
+            status: nextStatus[action],
+          };
+        }
         if (feed) {
           if (action === 'pin') feed.pinned.push(channelId);
           if (action === 'unpin') feed.pinned = feed.pinned.filter(id => id !== channelId);

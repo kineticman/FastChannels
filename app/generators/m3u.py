@@ -316,10 +316,9 @@ def feed_gracenote_start(feed: Feed) -> int:
     to find the actual highest number in use.
     """
     filters = feed_to_query_filters(feed.filters or {})
-    std_filters = {**filters, 'gracenote': 'missing'}
 
     if feed.slug == 'default':
-        std_channels = _selected_channels(std_filters, gracenote=None)
+        std_channels = _selected_channels(filters, gracenote=False)
         if not std_channels:
             return AppSettings.get().effective_global_chnum_start() or 1
         chnum_map, _ = _build_source_chnum_map(std_channels)
@@ -327,7 +326,7 @@ def feed_gracenote_start(feed: Feed) -> int:
             return AppSettings.get().effective_global_chnum_start() or 1
         return max(chnum_map.values()) + 1
     elif feed.chnum_start is not None:
-        std_count = _build_channel_query(std_filters).count()
+        std_count = len(_selected_channel_stubs(filters, gracenote=False))
         return feed.chnum_start + std_count
     else:
         return feed_namespace_start(feed, gracenote=True)

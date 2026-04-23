@@ -33,6 +33,9 @@ from .tasks import (
 from ..generators.m3u import (
     feed_to_query_filters,
     get_global_chnum_overlaps,
+    _selected_channel_stubs,
+    _resolve_chnum_map,
+    feed_namespace_start,
 )
 from .. import logfile
 from ..timezone_utils import normalize_timezone_name, write_timezone_cache
@@ -1813,7 +1816,23 @@ def channel_feed_membership(channel_id):
             q_filters = feed_to_query_filters(filters)
             in_filter = _build_channel_query(q_filters).filter(Channel.id == channel_id).count() > 0
             status = 'filtered' if in_filter else 'absent'
-        result.append({'feed_id': feed.id, 'status': status})
+        feed_channel_number = None
+        if status != 'absent':
+            q_filters = feed_to_query_filters(filters)
+            std_channels = _selected_channel_stubs(q_filters, gracenote=False)
+            namespace_start = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=False)
+            chnum_map, _ = _resolve_chnum_map(
+                std_channels,
+                feed_chnum_start=feed.chnum_start,
+                namespace_start=namespace_start,
+                feed_id=feed.id if feed.chnum_start is not None else None,
+            )
+            feed_channel_number = chnum_map.get(channel_id)
+        result.append({
+            'feed_id': feed.id,
+            'status': status,
+            'feed_channel_number': feed_channel_number,
+        })
     return jsonify(result)
 
 
