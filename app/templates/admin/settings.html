@@ -359,6 +359,15 @@
     /* ── Loading / empty states ── */
     .loading { text-align: center; padding: 3rem; color: var(--text-dim); }
     .error-msg { color: var(--danger); padding: 1rem; }
+    .needs-config-banner {
+      background: color-mix(in srgb, var(--warning-bg) 70%, var(--surface));
+      border: 1px solid var(--warning-border); border-radius: 8px;
+      padding: 0.85rem 1.25rem; margin: 0 0 1rem; color: var(--warning-soft);
+    }
+    .needs-config-banner strong { display: block; margin-bottom: 0.4rem; font-size: 0.9rem; }
+    .needs-config-banner ul { margin: 0; padding-left: 1.25rem; font-size: 0.82rem; line-height: 1.7; }
+    .needs-config-banner a { color: var(--warning-soft); font-weight: 600; }
+    .needs-config-banner a:hover { text-decoration: underline; }
     @media (max-width: 760px) {
       html { font-size: 16px; }
       nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
@@ -393,8 +402,22 @@
   <h1>Settings</h1>
   <p class="subtitle">Configure server URLs and the display timezone used across the UI and app logs. Source-specific credentials and advanced options now live on the Sources page.</p>
 
+  {% if settings_needs_config %}
+  <div class="needs-config-banner" id="settings-needs-config-banner">
+    <strong>⚠ {{ settings_needs_config | length }} setting{{ 's' if settings_needs_config | length != 1 else '' }} should be configured on new installs</strong>
+    <ul id="settings-needs-config-list">
+      {% for item in settings_needs_config %}
+      <li id="settings-needs-config-item-{{ item.key }}">
+        <a href="#{{ item.anchor }}" onclick="scrollToSettingCard('{{ item.anchor }}'); return false;">{{ item.label }}</a>
+        — click to configure
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
   <!-- FastChannels Server card -->
-  <div class="source-card">
+  <div class="source-card" id="settings-card-public-base-url">
     <div class="source-header" style="cursor:default">
       <div class="source-title">
         <div class="source-icon">🌐</div>
@@ -431,7 +454,7 @@
   </div>
 
   <!-- Channels DVR card -->
-  <div class="source-card">
+  <div class="source-card" id="settings-card-channels-dvr">
     <div class="source-header" style="cursor:default">
       <div class="source-title">
         <div class="source-icon">📺</div>
@@ -461,7 +484,7 @@
   </div>
 
   <!-- Time Zone card -->
-  <div class="source-card">
+  <div class="source-card" id="settings-card-timezone">
     <div class="source-header" style="cursor:default">
       <div class="source-title">
         <div class="source-icon">🕒</div>
@@ -603,6 +626,40 @@
 <script src="{{ url_for('static', filename='js/gracenote_suggest.js') }}"></script>
 <script src="{{ url_for('static', filename='js/community_map.js') }}"></script>
 <script>
+const settingsNeedsConfigState = {
+  public_base_url: {{ 'true' if settings_needs_config | selectattr('key', 'equalto', 'public_base_url') | list else 'false' }},
+  channels_dvr_url: {{ 'true' if settings_needs_config | selectattr('key', 'equalto', 'channels_dvr_url') | list else 'false' }},
+  timezone_name: {{ 'true' if settings_needs_config | selectattr('key', 'equalto', 'timezone_name') | list else 'false' }},
+};
+
+function scrollToSettingCard(anchorId) {
+  const el = document.getElementById(anchorId);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function refreshSettingsNeedsConfigBanner() {
+  const banner = document.getElementById('settings-needs-config-banner');
+  const list = document.getElementById('settings-needs-config-list');
+  if (!banner || !list) return;
+
+  Object.entries(settingsNeedsConfigState).forEach(([key, needsConfig]) => {
+    const item = document.getElementById(`settings-needs-config-item-${key}`);
+    if (item) item.style.display = needsConfig ? '' : 'none';
+  });
+
+  const remaining = Object.values(settingsNeedsConfigState).filter(Boolean).length;
+  if (remaining === 0) {
+    banner.remove();
+    return;
+  }
+
+  const strong = banner.querySelector('strong');
+  if (strong) {
+    strong.textContent = `⚠ ${remaining} setting${remaining === 1 ? '' : 's'} should be configured on new installs`;
+  }
+}
+
 async function saveSettings(body, statusId) {
   const status = document.getElementById(statusId);
   status.className = 'save-status';
@@ -619,31 +676,45 @@ async function saveSettings(body, statusId) {
     status.className = 'save-status ok';
     status.textContent = '✓ Saved';
     setTimeout(() => { status.textContent = ''; }, 2500);
+    return true;
   } catch (e) {
     status.className = 'save-status error';
     status.textContent = '✕ ' + e.message;
+    return false;
   }
 }
 
-function savePublicBaseUrlSettings() {
+async function savePublicBaseUrlSettings() {
   const publicBaseUrl = document.getElementById('public-base-url').value.trim();
-  saveSettings({
+  const ok = await saveSettings({
     public_base_url: publicBaseUrl || null,
   }, 'public-base-url-status');
+  if (ok) {
+    settingsNeedsConfigState.public_base_url = !publicBaseUrl && {{ 'true' if not public_base_url_from_env else 'false' }};
+    refreshSettingsNeedsConfigBanner();
+  }
 }
 
-function saveDvrSettings() {
+async function saveDvrSettings() {
   const dvrUrl = document.getElementById('channels-dvr-url').value.trim();
-  saveSettings({
+  const ok = await saveSettings({
     channels_dvr_url: dvrUrl || null,
   }, 'dvr-settings-status');
+  if (ok) {
+    settingsNeedsConfigState.channels_dvr_url = !dvrUrl && {{ 'true' if not channels_dvr_url_from_env else 'false' }};
+    refreshSettingsNeedsConfigBanner();
+  }
 }
 
-function saveTimezoneSettings() {
+async function saveTimezoneSettings() {
   const timezoneName = document.getElementById('tz-input').value.trim();
-  saveSettings({
+  const ok = await saveSettings({
     timezone_name: timezoneName || null,
   }, 'timezone-settings-status');
+  if (ok) {
+    settingsNeedsConfigState.timezone_name = !timezoneName;
+    refreshSettingsNeedsConfigBanner();
+  }
 }
 
 // ── Timezone searchable combobox ───────────────────────────────────────────

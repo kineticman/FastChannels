@@ -681,14 +681,30 @@
       }
     }
 
-    async function setSourceEnabled(sourceId, enabled, checkbox) {
+    function applySourceEnabledState(sourceId, enabled) {
       const toggleEl   = document.getElementById(`toggle-${sourceId}`);
+      const checkbox   = toggleEl?.querySelector('input[type="checkbox"]');
       const labelEl    = document.getElementById(`toggle-label-${sourceId}`);
       const dashRow    = document.getElementById(`dash-row-${sourceId}`);
       const runBtn     = dashRow?.querySelector('.btn-run');
       const auditBtn   = dashRow?.querySelector('.btn-audit');
       const intervalInput   = document.getElementById(`scrape-interval-${sourceId}`);
       const intervalSaveBtn = document.getElementById(`scrape-interval-save-${sourceId}`);
+
+      if (checkbox) checkbox.checked = enabled;
+      if (labelEl) {
+        labelEl.textContent = enabled ? 'On' : 'Off';
+        labelEl.className = `toggle-label ${enabled ? 'on' : 'off'}`;
+      }
+      if (dashRow) dashRow.classList.toggle('disabled', !enabled);
+      if (runBtn) runBtn.disabled = !enabled;
+      if (auditBtn) auditBtn.disabled = !enabled;
+      if (intervalInput) intervalInput.disabled = !enabled;
+      if (intervalSaveBtn) intervalSaveBtn.disabled = !enabled;
+    }
+
+    async function setSourceEnabled(sourceId, enabled, checkbox) {
+      const toggleEl   = document.getElementById(`toggle-${sourceId}`);
       toggleEl.classList.add('saving');
 
       try {
@@ -700,15 +716,7 @@
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
 
         if (!enabled) document.getElementById(`ch-count-${sourceId}`).textContent = '0';
-
-        checkbox.checked = enabled;
-        labelEl.textContent = enabled ? 'On' : 'Off';
-        labelEl.className = `toggle-label ${enabled ? 'on' : 'off'}`;
-        if (dashRow) dashRow.classList.toggle('disabled', !enabled);
-        if (runBtn) runBtn.disabled = !enabled;
-        if (auditBtn) auditBtn.disabled = !enabled;
-        if (intervalInput) intervalInput.disabled = !enabled;
-        if (intervalSaveBtn) intervalSaveBtn.disabled = !enabled;
+        applySourceEnabledState(sourceId, enabled);
 
       } catch (e) {
         checkbox.checked = !enabled;
@@ -1351,10 +1359,7 @@
           return;
         }
 
-        const configured = schema.some(f => {
-          const val = values[f.key];
-          return val && val !== MASK && val !== (f.default || '');
-        });
+        const configured = cfg.config_status === 'configured';
 
         if (badge) {
           if (configured) {
@@ -1520,6 +1525,7 @@
           body: JSON.stringify(payload),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
         status.textContent = '✓ Saved';
         status.className = 'config-status ok';
         fields.forEach(field => {
@@ -1529,13 +1535,17 @@
         });
         setTimeout(() => { status.textContent = ''; }, 2500);
         loadSourceConfig(sourceId, getSourceName(sourceId));
-        // Remove this source from the needs-config banner if present
-        const bannerItem = document.getElementById(`needs-config-item-${sourceId}`);
-        if (bannerItem) {
-          bannerItem.remove();
-          const banner = document.getElementById('needs-config-banner');
-          if (banner && banner.querySelectorAll('li').length === 0) {
-            banner.remove();
+        if (data.auto_enabled) {
+          applySourceEnabledState(sourceId, true);
+        }
+        if (data.config_status === 'configured') {
+          const bannerItem = document.getElementById(`needs-config-item-${sourceId}`);
+          if (bannerItem) {
+            bannerItem.remove();
+            const banner = document.getElementById('needs-config-banner');
+            if (banner && banner.querySelectorAll('li').length === 0) {
+              banner.remove();
+            }
           }
         }
       } catch (e) {

@@ -18,6 +18,7 @@ from ..generators.m3u import (
     feed_to_query_filters,
 )
 from ..scrapers import registry as _scraper_registry
+from ..source_config import build_setup_checklist, has_meaningful_source_config, is_source_config_complete
 from ..timezone_utils import timezone_choices
 from ..url import public_base_url, detected_base_url
 
@@ -217,6 +218,13 @@ def dashboard():
     total_channels = Channel.query.filter_by(is_active=True, is_enabled=True).count()
     base_url       = public_base_url()
     feeds          = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
+    app_settings   = AppSettings.get()
+    all_scrapers   = _scraper_registry.get_all()
+    setup_checklist = build_setup_checklist(
+        app_settings,
+        {source.name: source for source in sources},
+        all_scrapers,
+    )
     count_rows = (
         db.session.query(Source.id, db.func.count(Channel.id))
         .join(Channel)
@@ -238,6 +246,9 @@ def dashboard():
     return render_template('admin/dashboard.html', sources=sources,
                            total_channels=total_channels, base_url=base_url,
                            feeds=feeds, source_output_meta=source_output_meta,
+                           setup_checklist=setup_checklist,
+                           setup_complete_count=5 - len(setup_checklist),
+                           setup_total_count=5,
                            now=datetime.now(timezone.utc))
 
 
@@ -261,29 +272,13 @@ def sources():
         for name, cls in all_scrapers.items()
     }
 
-    def _has_meaningful_config(source, cls):
-        schema = getattr(cls, 'config_schema', [])
-        if not schema:
-            return False
-
-        values = source.config or {}
-        for field in schema:
-            value = values.get(field.key)
-            default = field.default
-            if value in (None, ''):
-                continue
-            if value == default:
-                continue
-            return True
-        return False
-
     def _config_status(source, cls):
         schema = getattr(cls, 'config_schema', [])
         if not schema:
             return 'none'
-        if _has_meaningful_config(source, cls):
-            return 'configured'
-        return 'required' if getattr(cls, 'config_required', False) else 'optional'
+        if getattr(cls, 'config_required', False):
+            return 'configured' if is_source_config_complete(source.name, cls, source.config or {}) else 'required'
+        return 'configured' if has_meaningful_source_config(cls, source.config or {}) else 'optional'
 
     sources_list = Source.query.order_by(Source.display_name).all()
     source_config_status = {
@@ -293,7 +288,7 @@ def sources():
     }
     needs_config = [
         s for s in sources_list
-        if s.is_enabled and source_config_status.get(s.id) == 'required'
+        if source_config_status.get(s.id) == 'required'
     ]
 
     return render_template('admin/sources.html',
@@ -668,6 +663,25 @@ def feeds():
 def settings():
     app_settings = AppSettings.get()
     request_base_url = request.host_url.rstrip('/')
+    settings_needs_config = []
+    if not (app_settings.public_base_url or '').strip() and app_settings.env_public_base_url() is None:
+        settings_needs_config.append({
+            'key': 'public_base_url',
+            'label': 'FastChannels Server URL',
+            'anchor': 'settings-card-public-base-url',
+        })
+    if not (app_settings.channels_dvr_url or '').strip() and app_settings.env_channels_dvr_url() is None:
+        settings_needs_config.append({
+            'key': 'channels_dvr_url',
+            'label': 'Channels DVR',
+            'anchor': 'settings-card-channels-dvr',
+        })
+    if not (app_settings.timezone_name or '').strip():
+        settings_needs_config.append({
+            'key': 'timezone_name',
+            'label': 'Time Zone',
+            'anchor': 'settings-card-timezone',
+        })
     return render_template('admin/settings.html',
                            channels_dvr_url=app_settings.effective_channels_dvr_url() or '',
                            public_base_url=app_settings.effective_public_base_url() or '',
@@ -676,6 +690,7 @@ def settings():
                            timezone_choices=timezone_choices(),
                            channels_dvr_url_from_env=(not (app_settings.channels_dvr_url or '').strip()) and app_settings.env_channels_dvr_url() is not None,
                            public_base_url_from_env=(not (app_settings.public_base_url or '').strip()) and app_settings.env_public_base_url() is not None,
+                           settings_needs_config=settings_needs_config,
                            request_base_url=request_base_url,
                            detected_base_url=detected_base_url(),
                            gracenote_auto_fill=app_settings.gracenote_auto_fill if app_settings.gracenote_auto_fill is not None else True,

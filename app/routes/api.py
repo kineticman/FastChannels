@@ -20,6 +20,7 @@ from ..scrapers.base import StreamDeadError
 from ..gracenote_suggest import SuggestionChannel, suggest_gracenote_matches
 from ..gracenote_map import lookup_gracenote, fetch_remote_gracenote_map, remote_map_status
 from ..hls import inspect_hls_drm, parse_stream_info as _parse_stream_info
+from ..source_config import is_source_config_complete
 from ..url import public_base_url
 from .tasks import (
     trigger_bulk_channel_update,
@@ -754,7 +755,13 @@ def get_source_config(source_id):
             values[key] = '••••••••'
         else:
             values[key] = saved.get(key, f['default'] or '')
-    return jsonify({'schema': schema, 'values': values})
+    config_complete = bool(scraper_cls and is_source_config_complete(source.name, scraper_cls, saved))
+    config_status = (
+        'configured'
+        if config_complete else
+        ('required' if scraper_cls and getattr(scraper_cls, 'config_required', False) else 'optional')
+    )
+    return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete, 'config_status': config_status})
 
 
 @api_bp.route('/sources/<int:source_id>/config', methods=['POST'])
@@ -777,8 +784,30 @@ def save_source_config(source_id):
         else:
             current[key] = val
     source.config = current
+    auto_enabled = False
+    if (
+        scraper_cls
+        and source.name in {'pluto', 'localnow'}
+        and not source.is_enabled
+        and is_source_config_complete(source.name, scraper_cls, current)
+    ):
+        source.is_enabled = True
+        auto_enabled = True
     db.session.commit()
-    return jsonify({'status': 'saved', 'source': source.name})
+    config_complete = bool(scraper_cls and is_source_config_complete(source.name, scraper_cls, current))
+    config_status = (
+        'configured'
+        if config_complete else
+        ('required' if scraper_cls and getattr(scraper_cls, 'config_required', False) else 'optional')
+    )
+    return jsonify({
+        'status': 'saved',
+        'source': source.name,
+        'is_enabled': source.is_enabled,
+        'auto_enabled': auto_enabled,
+        'config_complete': config_complete,
+        'config_status': config_status,
+    })
 
 
 @api_bp.route('/channels')

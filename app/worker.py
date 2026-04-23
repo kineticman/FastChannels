@@ -1844,7 +1844,7 @@ def _schedule_due_scrapes():
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
-        default_disabled_sources = {'amazon_prime_free', 'sling'}
+        default_disabled_sources = {'amazon_prime_free', 'sling', 'localnow', 'pluto'}
         seeded_names = set()
         for name, cls in scrapers.items():
             canonical_name = getattr(cls, 'source_name', None) or name

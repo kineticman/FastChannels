@@ -19,6 +19,19 @@
     .stat-card .value { font-size: 2rem; font-weight: 700; color: var(--accent); }
     .stat-card .label { color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem; }
     .section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }
+    .welcome-panel {
+      background: color-mix(in srgb, var(--warning-bg) 55%, var(--surface));
+      border: 1px solid var(--warning-border);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+    .welcome-panel h2 { font-size: 1rem; font-weight: 700; margin-bottom: 0.35rem; color: var(--warning-soft); }
+    .welcome-panel p { color: var(--text-soft); font-size: 0.88rem; line-height: 1.5; }
+    .welcome-panel .progress { margin-top: 0.5rem; font-size: 0.8rem; color: var(--warning-soft); font-weight: 600; }
+    .welcome-panel ul { margin: 0.75rem 0 0; padding-left: 1.25rem; font-size: 0.84rem; line-height: 1.7; color: var(--text-soft); }
+    .welcome-panel a { color: var(--warning-soft); font-weight: 600; text-decoration: none; }
+    .welcome-panel a:hover { text-decoration: underline; }
     .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
     .section-header h2 { font-size: 1rem; font-weight: 600; color: var(--text-subtle); }
     .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -84,6 +97,19 @@
     {% if update_status.update_available %}<span class="version" style="cursor:pointer" onclick="openUpdateModal()" title="Update available: v{{ update_status.latest_version }}">v{{ app_version }}<span class="update-pip"></span></span>{% else %}<a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="View FastChannels on GitHub">v{{ app_version }}</a>{% endif %}
   </nav>
   <div class="container">
+    {% if setup_checklist %}
+    <div class="welcome-panel">
+      <h2>Welcome to FastChannels</h2>
+      <p>Finish a few setup steps to get the best results. Start in <a href="/admin/settings">Settings</a>, then configure the required sources in <a href="/admin/sources">Sources</a>. Background scraping may already be running, but these items should be configured before your setup is fully ready.</p>
+      <div class="progress">Setup complete: {{ setup_complete_count }} of {{ setup_total_count }}</div>
+      <ul>
+        {% for item in setup_checklist %}
+        <li><a href="{{ item.href }}">{{ item.label }}</a></li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
     <div class="stats">
       <div class="stat-card"><div class="value">{{ total_channels }}</div><div class="label">Output Channels</div></div>
       <div class="stat-card"><div class="value">{{ sources|length }}</div><div class="label">Sources</div></div>
