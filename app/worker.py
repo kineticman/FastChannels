@@ -394,7 +394,12 @@ def run_scraper(source_name: str, force_full: bool = False):
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
-                _prewarm_logos(source_name, [ch.logo_url for ch in channels], progress_cb=_progress)
+                logo_urls = [ch.logo_url for ch in channels if ch.logo_url]
+                if logo_urls:
+                    # Publish the phase change immediately so the UI does not sit
+                    # on "EPG 100%" while the first cache callback is still pending.
+                    _progress('logos', 0, len(set(logo_urls)))
+                _prewarm_logos(source_name, logo_urls, progress_cb=_progress)
             _progress('done')
         except ScrapeSkipError as e:
             elapsed = time.monotonic() - t0

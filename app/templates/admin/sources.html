@@ -1242,6 +1242,37 @@
       { code: 'QQ', label: 'Worldwide Feed' },
     ];
 
+    const VIDAA_REGION_OPTIONS = [
+      { code: 'AR', label: 'Argentina' },
+      { code: 'AT', label: 'Austria' },
+      { code: 'AU', label: 'Australia' },
+      { code: 'BE', label: 'Belgium' },
+      { code: 'BR', label: 'Brazil' },
+      { code: 'CA', label: 'Canada' },
+      { code: 'CH', label: 'Switzerland' },
+      { code: 'CL', label: 'Chile' },
+      { code: 'CO', label: 'Colombia' },
+      { code: 'DE', label: 'Germany' },
+      { code: 'EC', label: 'Ecuador' },
+      { code: 'ES', label: 'Spain' },
+      { code: 'FR', label: 'France' },
+      { code: 'GB', label: 'United Kingdom' },
+      { code: 'IE', label: 'Ireland' },
+      { code: 'IL', label: 'Israel' },
+      { code: 'IN', label: 'India' },
+      { code: 'IT', label: 'Italy' },
+      { code: 'MX', label: 'Mexico' },
+      { code: 'NL', label: 'Netherlands' },
+      { code: 'NZ', label: 'New Zealand' },
+      { code: 'PE', label: 'Peru' },
+      { code: 'PL', label: 'Poland' },
+      { code: 'PY', label: 'Paraguay' },
+      { code: 'US', label: 'United States' },
+      { code: 'UY', label: 'Uruguay' },
+      { code: 'VE', label: 'Venezuela' },
+      { code: 'ZA', label: 'South Africa' },
+    ];
+
     function renderDistroConfig(sourceId, schema, values) {
       const geoField = schema.find(f => f.key === 'geo') || {
         key: 'geo',
@@ -1279,6 +1310,38 @@
             <div class="help">${escapeHtml(geoField.help_text || '')}</div>
           </div>
           <div class="region-summary">The list above covers the main Distro regions. You can add others manually if needed.</div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
+    }
+
+    function renderVidaaConfig(sourceId, schema, values) {
+      const geoField = schema.find(f => f.key === 'geo') || {
+        key: 'geo',
+        label: 'Geo Feeds',
+        default: 'US,CA',
+      };
+      const selected = new Set(String(values.geo || geoField.default || 'US,CA')
+        .split(/[,\s|/]+/)
+        .map(v => v.trim().toUpperCase())
+        .filter(Boolean));
+      const options = VIDAA_REGION_OPTIONS.map(opt => {
+        const checked = selected.has(opt.code);
+        return `<option value="${opt.code}" ${checked ? 'selected' : ''}>${opt.label} (${opt.code})</option>`;
+      }).join('');
+
+      return `
+        <div class="config-title">Source Settings</div>
+        <div class="config-note">Choose one or more VIDAA regions to include. The default is United States plus Canada.</div>
+        <div class="field field-full">
+          <label>${escapeHtml(geoField.label)}</label>
+          <select id="cfg-${sourceId}-geo-select" class="region-select" data-key="geo" multiple>
+            ${options}
+          </select>
+          <div class="region-summary">Use this if you want more than the default US and Canada lineup. Regions are merged into one source.</div>
         </div>
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
@@ -1413,6 +1476,8 @@
         return renderLocalNowConfig(sourceId, schema, values);
       } else if (sourceName === 'distro') {
         return renderDistroConfig(sourceId, schema, values);
+      } else if (sourceName === 'vidaa') {
+        return renderVidaaConfig(sourceId, schema, values);
       }
 
       const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {

@@ -635,6 +635,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'kocowa k-drama':                       'Drama',
     'genie k-drama':                        'Drama',
     'baywatch':                             'Drama',
+    'wedotv legacy':                        'Drama',
 
     # ── Faith ────────────────────────────────────────────────────────────────
     'sikh ratnavali':                       'Faith',
@@ -709,6 +710,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'welcome home':                         'Home & DIY',
     'property brothers':                    'Home & DIY',
     'property brothers channel':            'Home & DIY',
+    'flipping nation':                      'Home & DIY',
     'grand designs':                        'Home & DIY',
     'my first place':                       'Home & DIY',
     'nbc lx home':                          'Home & DIY',
@@ -748,6 +750,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     # by the call-sign regex (K/W + 3 alpha chars) and routed to Local News
     # incorrectly — explicit overrides are required.
     'kids tv':                              'Kids',
+    'kidoodletv canada':                    'Kids',
     'kidz bop tv':                          'Kids',
     'ok gamer':                             'Gaming',
     'pokémon':                              'Kids',
@@ -854,6 +857,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'saga music haryanvi':                  'Music',
     'saga music':                           'Music',
     'yrf music':                            'Music',
+    'hot country':                          'Music',
+    'pop adult':                            'Music',
     'ghaint punjab':                        'Music',
     'smooth jazz':                          'Music',
     'easy listening':                       'Music',
@@ -872,6 +877,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'gousa tv':                             'Travel',
     'pbs nature':                           'Nature',
     'love nature 4k':                       'Nature',
+    'evolution earth':                      'Nature',
     'dog whisperer':                        'Nature',
     'nat geo sharks':                       'Nature',
     'wild nature':                          'Nature',
@@ -944,6 +950,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'paternity court':                      'Reality TV',
     'the doctors':                          'Reality TV',
     'bravo vault':                          'Reality TV',
+    'intervention':                         'Reality TV',
+    'little women: la':                     'Reality TV',
 
     # ── Sci-Fi ───────────────────────────────────────────────────────────────
     'bbc sci-fi':                           'Sci-Fi',
@@ -1037,6 +1045,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'gopro tv':                             'Sports',
     'hi-yah!':                              'Sports',
     'lacrosse tv':                          'Sports',
+    'top barca english':                    'Sports',
     'uefa champions league':                'Sports',
 
     # ── Travel ───────────────────────────────────────────────────────────────
