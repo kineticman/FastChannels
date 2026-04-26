@@ -459,10 +459,12 @@ class TubiScraper(BaseScraper):
                 if ratings and isinstance(ratings[0], dict):
                     rating = ratings[0].get('code')
 
-                # Best available artwork
+                # Best available artwork.
+                # Prefer 2:3 portrait poster for movies (Channels DVR expects it);
+                # TV shows rarely have 'poster' so they fall through to 'landscape'.
                 poster = None
                 images = p.get('images') or {}
-                for key in ('landscape', 'poster', 'hero'):
+                for key in ('poster', 'landscape', 'hero'):
                     lst = images.get(key)
                     if lst:
                         poster = lst[0] if isinstance(lst, list) else lst

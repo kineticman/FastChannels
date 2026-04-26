@@ -490,18 +490,29 @@ class PlutoScraper(BaseScraper):
                     categories.append('Movie')
                 categories.extend(mapped_categories(ep.get('subGenre')))
                 unique_categories = list(dict.fromkeys(cat for cat in categories if cat))
-                ep_p169 = _pluto_img((ep.get('poster16_9') or {}).get('path'))
-                if ep_p169:
-                    # Real 16:9 episode art exists — use it directly
+                ep_p169     = _pluto_img((ep.get('poster16_9') or {}).get('path'))
+                ep_poster23 = _pluto_img((ep.get('poster')     or {}).get('path'))
+                if series_type == 'film':
+                    # Movies: prefer 2:3 portrait poster; fall back to 16:9 or series art
+                    poster_url = (
+                        ep_poster23 or
+                        ep_p169 or
+                        _pluto_img((series.get('tile')          or {}).get('path')) or
+                        _pluto_img((series.get('featuredImage') or {}).get('path')) or
+                        _pluto_img((ep.get('featuredImage')     or {}).get('path')) or
+                        _pluto_img((ep.get('thumbnail')         or {}).get('path')) or
+                        None
+                    )
+                elif ep_p169:
+                    # TV: use episode 16:9 still when available
                     poster_url = ep_p169
                 else:
-                    # ep.poster16_9 is Pluto's generic placeholder — episode images
-                    # are also generic blobs served via episode URLs; prefer series art
+                    # TV: no episode still — fall back to series art
                     poster_url = (
                         _pluto_img((series.get('tile')          or {}).get('path')) or
                         _pluto_img((series.get('featuredImage') or {}).get('path')) or
                         _pluto_img((series.get('poster16_9')    or {}).get('path')) or
-                        _pluto_img((ep.get('poster')            or {}).get('path')) or
+                        ep_poster23 or
                         _pluto_img((ep.get('featuredImage')     or {}).get('path')) or
                         _pluto_img((ep.get('thumbnail')         or {}).get('path')) or
                         None

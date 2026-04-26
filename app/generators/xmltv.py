@@ -27,6 +27,22 @@ from .m3u import _selected_channels, _tvg_id, _channel_display_name, _source_mul
 
 log = logging.getLogger(__name__)
 
+# Maps common scraped category variants to the canonical values Channels DVR
+# recognises for guide filtering (Movie, Children, News, Sports, Drama).
+_XMLTV_CAT_NORM = {
+    'movies': 'Movie',
+    'movie': 'Movie',
+    'kids': 'Children',
+    'children': 'Children',
+    'kids & family': 'Children',
+    'family': 'Children',
+    'news': 'News',
+    'news & politics': 'News',
+    'sports': 'Sports',
+    'sport': 'Sports',
+    'drama': 'Drama',
+}
+
 
 def generate_xmltv(filters: dict = None, base_url: str = None, feed_name: str = None) -> str:
     """Compatibility wrapper — full XML as a string. Use streaming for HTTP."""
@@ -84,8 +100,13 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     epg_end   = datetime.utcnow() + timedelta(days=5)
 
     # ── Header ────────────────────────────────────────────────────────────
+    now_utc = datetime.now(tz=timezone.utc)
     yield '<?xml version="1.0" encoding="UTF-8"?>\n'
-    yield f'<tv generator-info-name="FastChannels" generator-info-url="{_esc_attr(base_url)}">\n'
+    yield (
+        f'<tv generator-info-name="FastChannels"'
+        f' generator-info-url="{_esc_attr(base_url)}"'
+        f' date="{now_utc.strftime("%Y%m%d%H%M%S %z")}">\n'
+    )
 
     # ── Channel elements ──────────────────────────────────────────────────
     for ch in channels:
@@ -96,8 +117,6 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             SubElement(el, 'display-name').text = ch.name
         if ch.logo_url:
             SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url) or ch.logo_url)
-        if ch.description:
-            SubElement(el, 'desc', lang='en').text = _sanitize(ch.description)
         yield tostring(el, encoding='unicode') + '\n'
 
     # ── Programme elements — keyset pagination ────────────────────────────
@@ -151,7 +170,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                     if key in seen_categories:
                         continue
                     seen_categories.add(key)
-                    SubElement(el, 'category', lang='en').text = cat
+                    SubElement(el, 'category', lang='en').text = _XMLTV_CAT_NORM.get(key, cat)
             # Always add source name as a category so clients can filter by provider
             src_name = ch_src_map.get(prog.channel_id)
             if src_name:

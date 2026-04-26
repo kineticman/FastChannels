@@ -1,3 +1,6 @@
+import logging
+import os
+
 from flask import Blueprint, Response, request, send_file, stream_with_context
 from ..generators.m3u import (
     generate_m3u,
@@ -10,9 +13,58 @@ from ..generators.m3u import (
 from ..generators.xmltv import generate_xmltv_stream
 from ..models import Feed
 from ..url import public_base_url
-from ..xml_cache import get_artifact, get_or_build, get_xml_artifact
+from ..xml_cache import get_artifact, get_xml_artifact, xml_artifact_path, _xml_stale_path, _GLOBAL_XML_STALE
+
+log = logging.getLogger(__name__)
 
 output_bp = Blueprint('output', __name__)
+
+
+def _log_epg_request(label: str, path, stale: bool) -> None:
+    """Log detailed diagnostics for an EPG XML request."""
+    ua      = request.headers.get('User-Agent', '–')
+    ip      = request.headers.get('X-Forwarded-For') or request.remote_addr
+    ims     = request.headers.get('If-Modified-Since', '–')
+    inm     = request.headers.get('If-None-Match', '–')
+    enc     = request.headers.get('Accept-Encoding', '–')
+
+    if path is not None and path.exists():
+        stat      = path.stat()
+        size_mb   = stat.st_size / 1_048_576
+        from datetime import datetime, timezone
+        mtime_str = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    else:
+        size_mb   = 0.0
+        mtime_str = '–'
+
+    # Stale marker details
+    key       = label.replace('/', '-')
+    key_stale = _xml_stale_path(key)
+    if key_stale.exists():
+        from datetime import datetime, timezone
+        sm = datetime.fromtimestamp(key_stale.stat().st_mtime, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        stale_src = f'key-marker mtime={sm}'
+    elif _GLOBAL_XML_STALE.exists():
+        from datetime import datetime, timezone
+        gm = datetime.fromtimestamp(_GLOBAL_XML_STALE.stat().st_mtime, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        stale_src = f'global-marker mtime={gm}'
+    else:
+        stale_src = 'none'
+
+    decision = '503 WARMING' if path is None else f'200 OK ({size_mb:.1f} MB, stale={stale})'
+
+    log.info(
+        '[epg:%s] %s from %s | ua="%s" | '
+        'If-Modified-Since=%s If-None-Match=%s Accept-Encoding=%s | '
+        'artifact: exists=%s stale=%s mtime=%s size=%.1fMB | '
+        'stale-marker: %s | '
+        'response: %s',
+        label, request.method, ip, ua,
+        ims, inm, enc,
+        path is not None and path.exists(), stale, mtime_str, size_mb,
+        stale_src,
+        decision,
+    )
 
 
 def _filters():
@@ -26,6 +78,26 @@ def _filters():
     if q := request.args.get('search'):
         f['search'] = q
     return f
+
+
+def _send_feed_artifact(path, *, mimetype: str, download_name: str):
+    response = send_file(
+        path,
+        mimetype=mimetype,
+        as_attachment=True,
+        download_name=download_name,
+        conditional=False,
+        etag=False,
+        max_age=0,
+    )
+    # Force clients to fetch the full artifact every time instead of
+    # revalidating against ETag/Last-Modified and receiving 304 responses.
+    response.headers['Cache-Control'] = 'no-store, max-age=0, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    response.headers.pop('ETag', None)
+    response.headers.pop('Last-Modified', None)
+    return response
 
 @output_bp.route('/m3u')
 def m3u():
@@ -43,13 +115,10 @@ def m3u():
             mimetype='text/plain',
             headers={'Retry-After': '15'},
         )
-    return send_file(
+    return _send_feed_artifact(
         path,
         mimetype='application/x-mpegurl',
-        as_attachment=True,
         download_name='fastchannels.m3u',
-        conditional=True,
-        max_age=0,
     )
 
 
@@ -82,13 +151,10 @@ def m3u_gracenote():
             mimetype='text/plain',
             headers={'Retry-After': '15'},
         )
-    return send_file(
+    return _send_feed_artifact(
         path,
         mimetype='application/x-mpegurl',
-        as_attachment=True,
         download_name='fastchannels-gracenote.m3u',
-        conditional=True,
-        max_age=0,
     )
 
 
@@ -104,6 +170,7 @@ def epg_xml():
         )
 
     path, stale = get_xml_artifact('master')
+    _log_epg_request('master', path, stale)
     if path is None:
         return Response(
             'EPG artifact is warming. Retry shortly.',
@@ -111,14 +178,10 @@ def epg_xml():
             mimetype='text/plain',
             headers={'Retry-After': '15'},
         )
-    return send_file(
+    return _send_feed_artifact(
         path,
         mimetype='application/xml',
-        as_attachment=True,
         download_name='fastchannels.xml',
-        conditional=True,
-        max_age=0,
-        etag=not stale,
     )
 
 
@@ -133,13 +196,10 @@ def feed_m3u(slug):
             mimetype='text/plain',
             headers={'Retry-After': '15'},
         )
-    return send_file(
+    return _send_feed_artifact(
         path,
         mimetype='application/x-mpegurl',
-        as_attachment=True,
         download_name=f'{slug}.m3u',
-        conditional=True,
-        max_age=0,
     )
 
 
@@ -154,13 +214,10 @@ def feed_m3u_gracenote(slug):
             mimetype='text/plain',
             headers={'Retry-After': '15'},
         )
-    return send_file(
+    return _send_feed_artifact(
         path,
         mimetype='application/x-mpegurl',
-        as_attachment=True,
         download_name=f'{slug}-gracenote.m3u',
-        conditional=True,
-        max_age=0,
     )
 
 
@@ -168,6 +225,7 @@ def feed_m3u_gracenote(slug):
 def feed_epg(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     path, stale = get_xml_artifact(f'feed-{feed.slug}')
+    _log_epg_request(f'feed-{feed.slug}', path, stale)
     if path is None:
         return Response(
             f'Feed XML artifact for {feed.slug} is warming. Retry shortly.',
@@ -175,12 +233,8 @@ def feed_epg(slug):
             mimetype='text/plain',
             headers={'Retry-After': '15'},
         )
-    return send_file(
+    return _send_feed_artifact(
         path,
         mimetype='application/xml',
-        as_attachment=True,
         download_name=f'{slug}.xml',
-        conditional=True,
-        max_age=0,
-        etag=not stale,
     )
