@@ -2013,6 +2013,43 @@ if __name__ == '__main__':
                           id='tvtv_cache_refresh_night', max_instances=1, coalesce=True,
                           misfire_grace_time=3600)
 
+        def _scheduled_dvr_epg_refresh():
+            import re as _re
+            import requests as _requests
+            with flask_app.app_context():
+                from app.models import AppSettings as _AS, Feed as _Feed
+                _settings = _AS.get()
+                dvr_url = (_settings.effective_channels_dvr_url() or '').strip().rstrip('/')
+                if not dvr_url:
+                    return
+                feed_names = [
+                    f'FastChannels {f.name}'
+                    for f in _Feed.query.filter_by(is_enabled=True).all()
+                ]
+            import time as _time
+            refreshed, errors = [], []
+            for name in feed_names:
+                safe      = _re.sub(r'[^a-zA-Z0-9]', '', name)
+                lineup_id = f'XMLTV-{safe}'
+                try:
+                    r = _requests.put(f'{dvr_url}/dvr/lineups/{lineup_id}', timeout=15)
+                    if r.ok:
+                        refreshed.append(lineup_id)
+                    else:
+                        errors.append(f'{lineup_id}={r.status_code}')
+                except Exception as exc:
+                    errors.append(f'{lineup_id}={exc}')
+                _time.sleep(2)
+            if refreshed:
+                logger.info('[dvr-epg] pushed guide refresh for %d lineup(s): %s',
+                            len(refreshed), ', '.join(refreshed))
+            if errors:
+                logger.warning('[dvr-epg] guide refresh errors: %s', ', '.join(errors))
+
+        scheduler.add_job(_scheduled_dvr_epg_refresh, 'interval', hours=1,
+                          id='dvr_epg_refresh', max_instances=1, coalesce=True,
+                          misfire_grace_time=3600)
+
         scheduler.start()
         logger.info('Scheduler started — checking sources every 60s')
         with flask_app.app_context():
