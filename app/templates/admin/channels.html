@@ -1214,6 +1214,7 @@
             <label class="filter-label" for="feed-filter">Feed</label>
             <select id="feed-filter" name="feed" onchange="onFeedFilterChange(this)">
               <option value="">Any feed membership</option>
+              <option value="__none__" {% if feed_filter == '__none__' %}selected{% endif %}>Not in any feed</option>
               {% for feed in feeds %}
               <option value="{{ feed.slug }}" {% if feed_filter == feed.slug %}selected{% endif %}>{{ feed.name }}</option>
               {% endfor %}
@@ -1343,7 +1344,7 @@
       <span class="filter-chip"><strong>Source</strong>{{ source_filter }}</span>
       {% endif %}
       {% if feed_filter %}
-      <span class="filter-chip"><strong>Feed</strong>{{ selected_feed.name if selected_feed else feed_filter }}</span>
+      <span class="filter-chip"><strong>Feed</strong>{{ 'Not in any feed' if feed_filter == '__none__' else (selected_feed.name if selected_feed else feed_filter) }}</span>
       {% endif %}
       {% if category_filter %}
       <span class="filter-chip"><strong>Category</strong>{{ category_filter }}</span>
@@ -2953,7 +2954,7 @@
     }
 
     function onFeedFilterChange(sel) {
-      if (sel.value) {
+      if (sel.value && sel.value !== '__none__') {
         // Feed selected — default to active+enabled unless user already has an override
         const enabledSel  = document.getElementById('enabled-filter');
         const presenceSel = document.getElementById('presence-filter');

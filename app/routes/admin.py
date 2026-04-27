@@ -328,7 +328,18 @@ def channels():
     q = Channel.query.join(Source)
 
     selected_feed = None
-    if feed_filter:
+    if feed_filter == '__none__':
+        _in_any: set[int] = set()
+        for _f in Feed.query.filter_by(is_enabled=True).filter(Feed.slug != 'default').all():
+            _ids = _apply_admin_feed_membership_filters(
+                db.session.query(Channel.id).join(Source), _f
+            ).all()
+            _in_any.update(r[0] for r in _ids)
+        if _in_any:
+            _id_list = list(_in_any)
+            for _i in range(0, len(_id_list), 900):
+                q = q.filter(Channel.id.notin_(_id_list[_i:_i + 900]))
+    elif feed_filter:
         selected_feed = Feed.query.filter_by(slug=feed_filter).first()
         if selected_feed:
             q = _apply_admin_feed_membership_filters(q, selected_feed)
