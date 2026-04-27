@@ -53,7 +53,7 @@ def _log_epg_request(label: str, path, stale: bool) -> None:
 
     decision = '503 WARMING' if path is None else f'200 OK ({size_mb:.1f} MB, stale={stale})'
 
-    log.info(
+    log.debug(
         '[epg:%s] %s from %s | ua="%s" | '
         'If-Modified-Since=%s If-None-Match=%s Accept-Encoding=%s | '
         'artifact: exists=%s stale=%s mtime=%s size=%.1fMB | '
