@@ -862,8 +862,9 @@
     }
     .preview-title { font-size: 1.1rem; font-weight: 700; color: var(--text-strong); }
     .preview-meta { color: var(--text-soft); font-size: 0.82rem; margin-top: 0.2rem; }
-    .preview-description { font-size: 0.82rem; color: var(--text-soft); line-height: 1.5; margin-bottom: 0.85rem; border-left: 2px solid var(--border); padding-left: 0.75rem; }
+    .preview-description { font-size: 0.82rem; color: var(--text-soft); line-height: 1.5; margin-bottom: 0.6rem; border-left: 2px solid var(--border); padding-left: 0.75rem; }
     .preview-description--empty { color: var(--text-dim); font-style: italic; }
+    .preview-epg-coverage { font-size: 0.78rem; color: var(--text-soft); margin-bottom: 0.85rem; }
     .preview-grid {
       display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
       gap: 0.9rem; margin-bottom: 1rem;
@@ -1808,6 +1809,11 @@
             </div>
           </div>
           ${ch.description ? `<div class="preview-description">${escapeHtml(ch.description)}</div>` : '<div class="preview-description preview-description--empty">No channel description available.</div>'}
+          <div class="preview-epg-coverage">
+            ${data.epg_programs > 0
+              ? `📅 Channel has <strong>${data.epg_programs}</strong> program${data.epg_programs !== 1 ? 's' : ''} and <strong>${data.epg_hours}h</strong> of program data available from source`
+              : '📅 No program data available from source'}
+          </div>
           ${warning}
           ${playbackNote}
           <div class="preview-grid">

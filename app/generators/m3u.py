@@ -690,6 +690,9 @@ def generate_m3u(filters: dict = None, base_url: str = None,
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
 
+    _s = AppSettings.get()
+    _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
+
     channels = _selected_channels(filters, gracenote=False)
 
     chnum_map, warnings = _resolve_chnum_map(
@@ -714,7 +717,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
             f'group-title="{_esc(ch.category or ch.source.display_name)}"',
         ]
         if ch.logo_url:
-            attrs.append(f'tvg-logo="{proxy_logo_url(ch.logo_url, base_url) or ch.logo_url}"')
+            attrs.append(f'tvg-logo="{proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url}"')
         chnum = chnum_map.get(ch.id)
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')
@@ -752,6 +755,9 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
 
+    _s = AppSettings.get()
+    _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
+
     channels = _selected_channels(filters, gracenote=True)
 
     chnum_map, warnings = _resolve_chnum_map(
@@ -776,7 +782,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
             f'group-title="{_esc(ch.category or ch.source.display_name)}"',
         ]
         if ch.logo_url:
-            attrs.append(f'tvg-logo="{proxy_logo_url(ch.logo_url, base_url) or ch.logo_url}"')
+            attrs.append(f'tvg-logo="{proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url}"')
         chnum = chnum_map.get(ch.id)
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')

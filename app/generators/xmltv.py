@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 from ..extensions import db
-from ..models import Program
+from ..models import Program, AppSettings
 from ..url import proxy_logo_url
 from .m3u import _selected_channels, _tvg_id, _channel_display_name, _source_multi_country_map, _sanitize
 
@@ -76,6 +76,9 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     filters  = filters or {}
     base_url = (base_url or 'http://localhost:5523').rstrip('/')
 
+    _s = AppSettings.get()
+    _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
+
     # Standard XMLTV must expose the same channel identity set as the standard
     # XMLTV-backed M3U; otherwise clients that join on tvg-id see orphaned or
     # shifted channels. Gracenote-backed channels are intentionally excluded.
@@ -116,7 +119,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
         if display_name != (ch.name or ''):
             SubElement(el, 'display-name').text = ch.name
         if ch.logo_url:
-            SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url) or ch.logo_url)
+            SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url)
         yield tostring(el, encoding='unicode') + '\n'
 
     # ── Programme elements — keyset pagination ────────────────────────────
@@ -182,7 +185,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                 # Only proxy/cache Roku posters (CDN returns 403 to clients).
                 # All other sources serve artwork directly — no caching overhead.
                 if ch_src_name_map.get(prog.channel_id) == 'roku':
-                    poster_src = proxy_logo_url(prog.poster_url, base_url, 'poster') or prog.poster_url
+                    poster_src = proxy_logo_url(prog.poster_url, base_url, 'poster', image_proxy_enabled=_image_proxy) or prog.poster_url
                 else:
                     poster_src = prog.poster_url
                 SubElement(el, 'icon', src=poster_src)

@@ -409,6 +409,7 @@
       </div>
       <div class="right">
         <button class="btn btn-run" id="force-refresh-btn" onclick="forceCompleteRefresh()">Force Complete Refresh</button>
+        <button class="btn btn-audit" id="audit-all-btn" onclick="auditAll()">Audit All Sources</button>
         <div class="global-status" id="global-status"></div>
       </div>
     </div>
@@ -651,6 +652,33 @@
         status.className = 'global-status error';
         btn.textContent = 'Force Complete Refresh';
       } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function auditAll() {
+      const btn = document.getElementById('audit-all-btn');
+      const status = document.getElementById('global-status');
+      btn.disabled = true;
+      btn.textContent = 'Queuing…';
+      status.textContent = '';
+      status.className = 'global-status';
+      try {
+        const r = await fetch('/api/sources/stream-audit-all', { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        status.textContent = `Queued stream audit for ${d.count} source${d.count === 1 ? '' : 's'}: ${d.sources.map(s => s.name).join(', ')}`;
+        status.className = 'global-status ok';
+        const now = Date.now();
+        d.sources.forEach(s => {
+          _auditGrace[s.id] = now + 12000;
+          _startAuditPolling(s.id, null);
+        });
+      } catch (e) {
+        status.textContent = 'Failed to queue audits.';
+        status.className = 'global-status error';
+      } finally {
+        btn.textContent = 'Audit All Sources';
         btn.disabled = false;
       }
     }

@@ -560,6 +560,19 @@ def stream_audit_source(source_id):
     return jsonify({'status': 'queued', 'source': source.name})
 
 
+@api_bp.route('/sources/stream-audit-all', methods=['POST'])
+def stream_audit_all():
+    from ..scrapers import registry
+    sources = Source.query.filter_by(is_enabled=True).all()
+    queued = []
+    for src in sources:
+        cls = registry.get(src.name)
+        if cls and getattr(cls, 'stream_audit_enabled', False):
+            trigger_stream_audit(src.name, include_inactive=False)
+            queued.append({'id': src.id, 'name': src.name})
+    return jsonify({'status': 'queued', 'sources': queued, 'count': len(queued)})
+
+
 @api_bp.route('/sources/<int:source_id>/stream-audit-recheck', methods=['POST'])
 def stream_audit_recheck(source_id):
     source = Source.query.get_or_404(source_id)
@@ -1198,6 +1211,19 @@ def preview_channel(channel_id):
     ):
         play_url = f'/play/{ch.source.name}/{ch.source_channel_id}.m3u8'
 
+    future_count = Program.query.filter(
+        Program.channel_id == ch.id,
+        Program.end_time > now,
+    ).count()
+    last_future = (
+        Program.query
+        .filter(Program.channel_id == ch.id, Program.end_time > now)
+        .order_by(Program.end_time.desc())
+        .first()
+    )
+    last_end = last_future.end_time.replace(tzinfo=timezone.utc) if last_future and last_future.end_time.tzinfo is None else (last_future.end_time if last_future else None)
+    epg_hours = round((last_end - now).total_seconds() / 3600, 1) if last_end else 0
+
     return jsonify({
         'channel': {
             'id': ch.id,
@@ -1218,6 +1244,8 @@ def preview_channel(channel_id):
         'current_program': _program_dict(current_program),
         'next_program': _program_dict(next_program),
         'play_url': play_url,
+        'epg_programs': future_count,
+        'epg_hours': epg_hours,
     })
 
 
@@ -2278,6 +2306,8 @@ def app_settings():
             row.gracenote_auto_fill = bool(data['gracenote_auto_fill'])
         if 'dvr_epg_auto_refresh' in data:
             row.dvr_epg_auto_refresh = bool(data['dvr_epg_auto_refresh'])
+        if 'image_proxy_enabled' in data:
+            row.image_proxy_enabled = bool(data['image_proxy_enabled'])
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:
@@ -2292,6 +2322,7 @@ def app_settings():
         'timezone_name':     row.effective_timezone_name(),
         'gracenote_auto_fill': row.gracenote_auto_fill if row.gracenote_auto_fill is not None else True,
         'dvr_epg_auto_refresh': row.dvr_epg_auto_refresh if row.dvr_epg_auto_refresh is not None else True,
+        'image_proxy_enabled': row.image_proxy_enabled if row.image_proxy_enabled is not None else True,
         'gracenote_map_url': row.gracenote_map_url or '',
         'gracenote_contribution_url': row.gracenote_contribution_url or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),

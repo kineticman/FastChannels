@@ -58,7 +58,7 @@ _POSTER_CACHE_ROOT = '/data/logo_cache/posters'
 _UNSUPPORTED_TYPES = ('webp', 'svg')
 
 
-def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> str | None:
+def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo', image_proxy_enabled: bool = True) -> str | None:
     """Return the best logo URL for M3U/XMLTV output.
 
     If the image is already cached locally, return a direct static-file URL
@@ -75,6 +75,8 @@ def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo') -> st
     native apps cannot display those formats.
     """
     if not url or not base_url:
+        return url
+    if not image_proxy_enabled:
         return url
 
     key = hashlib.md5(url.encode()).hexdigest()
