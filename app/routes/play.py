@@ -193,15 +193,20 @@ def distro_manifest_proxy(channel_id: str):
         logger.warning('[distro-proxy] variant fetch failed for %s: %s', channel_id, e)
         abort(502)
 
-    # Rewrite segment URLs to go through our segment proxy so the CDN gets
-    # the required Origin/Referer headers regardless of client type.
+    # Only proxy segments whose CDN host requires Origin/Referer headers.
+    # Segments on other hosts (e.g. b.jsrdn.com) are publicly accessible and
+    # can be served as direct URLs, avoiding unnecessary proxy overhead.
     base_url = request.host_url.rstrip('/')
     variant_base = best_variant.rsplit('/', 1)[0] + '/'
     lines = []
     for line in variant_r.text.splitlines():
         if line and not line.startswith('#'):
             abs_url = urljoin(variant_base, line)
-            line = f'{base_url}/play/distro/segment?url={_quote(abs_url, safe="")}'
+            seg_host = urlsplit(abs_url).netloc
+            if seg_host in _DISTRO_SESSION_CDN_HOSTS:
+                line = f'{base_url}/play/distro/segment?url={_quote(abs_url, safe="")}'
+            else:
+                line = abs_url
         lines.append(line)
 
     return Response(
