@@ -2276,6 +2276,8 @@ def app_settings():
             row.timezone_name = tz_name
         if 'gracenote_auto_fill' in data:
             row.gracenote_auto_fill = bool(data['gracenote_auto_fill'])
+        if 'dvr_epg_auto_refresh' in data:
+            row.dvr_epg_auto_refresh = bool(data['dvr_epg_auto_refresh'])
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:
@@ -2289,6 +2291,7 @@ def app_settings():
         'public_base_url':   row.effective_public_base_url(),
         'timezone_name':     row.effective_timezone_name(),
         'gracenote_auto_fill': row.gracenote_auto_fill if row.gracenote_auto_fill is not None else True,
+        'dvr_epg_auto_refresh': row.dvr_epg_auto_refresh if row.dvr_epg_auto_refresh is not None else True,
         'gracenote_map_url': row.gracenote_map_url or '',
         'gracenote_contribution_url': row.gracenote_contribution_url or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),

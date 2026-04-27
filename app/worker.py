@@ -2019,6 +2019,8 @@ if __name__ == '__main__':
             with flask_app.app_context():
                 from app.models import AppSettings as _AS, Feed as _Feed
                 _settings = _AS.get()
+                if not (_settings.dvr_epg_auto_refresh if _settings.dvr_epg_auto_refresh is not None else True):
+                    return
                 dvr_url = (_settings.effective_channels_dvr_url() or '').strip().rstrip('/')
                 if not dvr_url:
                     return

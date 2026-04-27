@@ -476,6 +476,19 @@
           {% endif %}
         </div>
       </div>
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Auto-refresh guide data hourly</div>
+          <div class="toggle-row-help">When enabled, FastChannels forces Channels DVR to re-import guide data for all registered FastChannels lineups once per hour. Only applies if you've added feeds via the "Add to Channels DVR" button.</div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="dvr-epg-auto-refresh" {% if dvr_epg_auto_refresh %}checked{% endif %}
+                   onchange="saveDvrSettings()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
       <div class="field-actions">
         <span class="save-status" id="dvr-settings-status"></span>
         <button class="btn btn-primary" onclick="saveDvrSettings()">Save</button>
@@ -697,8 +710,10 @@ async function savePublicBaseUrlSettings() {
 
 async function saveDvrSettings() {
   const dvrUrl = document.getElementById('channels-dvr-url').value.trim();
+  const autoRefresh = document.getElementById('dvr-epg-auto-refresh').checked;
   const ok = await saveSettings({
     channels_dvr_url: dvrUrl || null,
+    dvr_epg_auto_refresh: autoRefresh,
   }, 'dvr-settings-status');
   if (ok) {
     settingsNeedsConfigState.channels_dvr_url = !dvrUrl && {{ 'true' if not channels_dvr_url_from_env else 'false' }};

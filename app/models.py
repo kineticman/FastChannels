@@ -263,6 +263,7 @@ class AppSettings(db.Model):
     public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True)  # scrapers auto-assign Gracenote IDs
+    dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True)  # hourly PUT to Channels DVR lineups
     gracenote_map_url          = db.Column(db.Text, nullable=True)      # remote community CSV URL (defaults to built-in Gist)
     gracenote_contribution_url = db.Column(db.Text, nullable=True)      # webhook URL for submitting community contributions
     last_contribution_at       = db.Column(db.DateTime, nullable=True)  # server-side rate-limit: last successful submission

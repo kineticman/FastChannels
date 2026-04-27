@@ -705,6 +705,7 @@ def settings():
                            request_base_url=request_base_url,
                            detected_base_url=detected_base_url(),
                            gracenote_auto_fill=app_settings.gracenote_auto_fill if app_settings.gracenote_auto_fill is not None else True,
+                           dvr_epg_auto_refresh=app_settings.dvr_epg_auto_refresh if app_settings.dvr_epg_auto_refresh is not None else True,
                            gracenote_contribution_url=app_settings.gracenote_contribution_url or '')
 
 
