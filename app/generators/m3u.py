@@ -719,6 +719,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')
         if ch.description:
+            attrs.append(f'tvg-description="{_esc(ch.description)}"')
             attrs.append(f'tvc-guide-description="{_esc(ch.description)}"')
         if ch.stream_info:
             vcodec, acodec = _tvc_stream_codecs(ch.stream_info)
@@ -780,6 +781,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')
         if ch.description:
+            attrs.append(f'tvg-description="{_esc(ch.description)}"')
             attrs.append(f'tvc-guide-description="{_esc(ch.description)}"')
         if ch.stream_info:
             vcodec, acodec = _tvc_stream_codecs(ch.stream_info)
