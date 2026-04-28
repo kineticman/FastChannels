@@ -702,6 +702,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'dungeons & dragons adventures':        'Gaming',
     'jacksepticeye':                        'Gaming',
     'lazarbeam':                            'Gaming',
+    'mrbeast':                              'Gaming',
     'prestonplayz':                         'Gaming',
     'team liquid':                          'Gaming',
 
