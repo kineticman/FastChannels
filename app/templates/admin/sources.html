@@ -631,6 +631,13 @@
             Proxy segments through FastChannels (required when headers are needed for segment access)
           </label>
         </div>
+        <!-- Re-detect on play toggle (only shown for page URLs with expiring tokens) -->
+        <div id="cc-redetect-wrap" style="display:none;margin-top:.5rem;">
+          <label style="display:inline-flex;align-items:center;gap:.5rem;cursor:pointer;font-size:.82rem;color:var(--text-soft);">
+            <input type="checkbox" id="cc-redetect-toggle" style="accent-color:var(--accent-strong);cursor:pointer;">
+            Re-detect stream on play <span style="font-size:.74rem;color:var(--text-muted);">(re-scrapes source page ~every 5 min to refresh expiring tokens)</span>
+          </label>
+        </div>
       </div>
 
       <!-- Channel metadata -->
@@ -1885,6 +1892,7 @@
             <div style="display:flex;align-items:center;gap:.4rem;flex-shrink:0;">
               <span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:${ch.is_enabled ? 'var(--success-soft)' : 'var(--text-muted)'};border:1px solid var(--border);">${ch.is_enabled ? 'On' : 'Off'}</span>
               ${ch.proxy_segments ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--accent-soft);border:1px solid var(--border);">Proxied</span>' : ''}
+              ${ch.redetect_on_play ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--text-muted);border:1px solid var(--border);">Re-detect</span>' : ''}
               <button class="btn btn-configure btn-sm" onclick="editCustomChannel(${ch.id})">Edit</button>
             </div>
           </div>
@@ -1920,22 +1928,27 @@
     let _ccEditId = null;   // null = create, number = editing channel id
     let _ccDetectedUrl = null;
     let _ccDetectedHeaders = {};
+    let _ccPageUrl = null;      // original input URL when it was a page (not direct stream)
+    let _ccIsPageUrl = false;   // true when input was a page URL
 
     function openCustomChannelModal(channelData) {
       _ccEditId = channelData ? channelData.id : null;
       _ccDetectedUrl = channelData ? channelData.stream_url : null;
       _ccDetectedHeaders = channelData ? (channelData.custom_headers || {}) : {};
+      _ccPageUrl = channelData ? (channelData.page_url || null) : null;
+      _ccIsPageUrl = !!_ccPageUrl;
 
       document.getElementById('custom-modal-title').textContent =
         _ccEditId ? 'Edit Custom Channel' : 'Add Custom Channel';
       document.getElementById('cc-input-url').value =
-        channelData ? (channelData.stream_url || '') : '';
+        channelData ? (channelData.page_url || channelData.stream_url || '') : '';
       document.getElementById('cc-input-name').value  = channelData ? channelData.name || '' : '';
       document.getElementById('cc-input-desc').value  = channelData ? channelData.description || '' : '';
       document.getElementById('cc-input-logo').value  = channelData ? channelData.logo_url || '' : '';
       document.getElementById('cc-input-category').value = channelData ? channelData.category || '' : '';
       document.getElementById('cc-input-language').value = channelData ? (channelData.language || 'en') : 'en';
       document.getElementById('cc-proxy-toggle').checked = channelData ? !!channelData.proxy_segments : false;
+      document.getElementById('cc-redetect-toggle').checked = channelData ? !!channelData.redetect_on_play : false;
       document.getElementById('cc-detect-status').textContent = '';
       document.getElementById('cc-detect-status').style.color = '';
       document.getElementById('cc-save-status').textContent = '';
@@ -1943,9 +1956,10 @@
 
       if (channelData && channelData.stream_url) {
         _showDetectResult(true, channelData.stream_url, channelData.custom_headers || {},
-                          !!channelData.proxy_segments);
+                          !!channelData.proxy_segments, _ccIsPageUrl);
       } else {
         document.getElementById('cc-detect-result').style.display = 'none';
+        document.getElementById('cc-redetect-wrap').style.display = 'none';
       }
 
       document.getElementById('custom-channel-modal').classList.add('open');
@@ -1958,14 +1972,18 @@
       _ccEditId = null;
       _ccDetectedUrl = null;
       _ccDetectedHeaders = {};
+      _ccPageUrl = null;
+      _ccIsPageUrl = false;
     }
 
     function onCustomUrlInput() {
-      // Clear previous detection result when the URL is changed
       document.getElementById('cc-detect-result').style.display = 'none';
       document.getElementById('cc-detect-status').textContent = '';
+      document.getElementById('cc-redetect-wrap').style.display = 'none';
       _ccDetectedUrl = null;
       _ccDetectedHeaders = {};
+      _ccPageUrl = null;
+      _ccIsPageUrl = false;
     }
 
     async function detectStream() {
@@ -1991,8 +2009,10 @@
         if (data.success && data.stream_url) {
           _ccDetectedUrl = data.stream_url;
           _ccDetectedHeaders = data.headers || {};
+          _ccIsPageUrl = !!data.is_page_url;
+          _ccPageUrl = _ccIsPageUrl ? url : null;
           statusEl.textContent = '';
-          _showDetectResult(true, data.stream_url, data.headers, data.needs_proxy);
+          _showDetectResult(true, data.stream_url, data.headers, data.needs_proxy, _ccIsPageUrl);
           // Auto-fill name from URL if empty
           if (!document.getElementById('cc-input-name').value.trim()) {
             const urlParts = data.stream_url.split('/');
@@ -2002,10 +2022,12 @@
         } else {
           _ccDetectedUrl = data.stream_url || null;
           _ccDetectedHeaders = {};
+          _ccIsPageUrl = !!data.is_page_url;
+          _ccPageUrl = _ccIsPageUrl ? url : null;
           statusEl.textContent = data.error || 'Detection failed';
           statusEl.style.color = 'var(--danger)';
           if (data.stream_url) {
-            _showDetectResult(false, data.stream_url, {}, false);
+            _showDetectResult(false, data.stream_url, {}, false, _ccIsPageUrl);
           }
         }
       } catch (e) {
@@ -2017,7 +2039,7 @@
       }
     }
 
-    function _showDetectResult(ok, streamUrl, headers, needsProxy) {
+    function _showDetectResult(ok, streamUrl, headers, needsProxy, isPageUrl) {
       const panel = document.getElementById('cc-detect-result');
       document.getElementById('cc-result-icon').textContent = ok ? '✅' : '⚠️';
       document.getElementById('cc-result-label').textContent = ok ? 'Stream detected' : 'Stream found (unverified)';
@@ -2026,7 +2048,7 @@
       const hdrEl = document.getElementById('cc-result-headers');
       const hdrEntries = Object.entries(headers || {});
       if (hdrEntries.length) {
-        hdrEl.textContent = 'Headers: ' + hdrEntries.map(([k, v]) => `${k}: ${v}`).join(' · ');
+        hdrEl.textContent = 'Headers: ' + hdrEntries.map(([k, v]) => k + ': ' + v).join(' · ');
       } else {
         hdrEl.textContent = 'No special headers required';
       }
@@ -2036,6 +2058,8 @@
       if (needsProxy) {
         document.getElementById('cc-proxy-toggle').checked = true;
       }
+
+      document.getElementById('cc-redetect-wrap').style.display = isPageUrl ? '' : 'none';
 
       panel.style.display = '';
     }
@@ -2060,6 +2084,8 @@
         language: document.getElementById('cc-input-language').value.trim() || 'en',
         custom_headers: _ccDetectedHeaders || {},
         proxy_segments: document.getElementById('cc-proxy-toggle').checked,
+        page_url: _ccPageUrl || null,
+        redetect_on_play: document.getElementById('cc-redetect-toggle').checked,
       };
 
       const btn = document.getElementById('cc-save-btn');
@@ -2086,6 +2112,7 @@
         setTimeout(() => {
           document.getElementById('custom-channel-modal').classList.remove('open');
           _ccEditId = null; _ccDetectedUrl = null; _ccDetectedHeaders = {};
+          _ccPageUrl = null; _ccIsPageUrl = false;
         }, 600);
       } catch (e) {
         statusEl.textContent = e.message;
@@ -2106,6 +2133,7 @@
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         document.getElementById('custom-channel-modal').classList.remove('open');
         _ccEditId = null; _ccDetectedUrl = null; _ccDetectedHeaders = {};
+        _ccPageUrl = null; _ccIsPageUrl = false;
         _refreshCustomSourceCount();
         loadCustomChannelList();
       } catch (e) {

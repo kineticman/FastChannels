@@ -10,6 +10,7 @@ disabled and manually re-enable if desired.
 import logging
 import re
 import threading
+import time as _time
 from urllib.parse import urljoin
 
 import requests as _requests
@@ -34,6 +35,51 @@ from .tasks import trigger_channel_auto_disable
 logger = logging.getLogger(__name__)
 
 play_bp = Blueprint('play', __name__)
+
+# In-process cache for custom channel re-detection results.
+# Key: channel.id  Value: (stream_url, headers, monotonic_timestamp)
+_CUSTOM_STREAM_CACHE: dict[int, tuple[str, dict, float]] = {}
+_REDETECT_TTL = 300  # seconds
+
+
+def _redetect_custom_stream(channel) -> tuple[str, dict]:
+    """
+    Re-detect a custom channel's stream URL from its source page.
+    Results are cached for _REDETECT_TTL seconds so manifest/segment proxy
+    requests within the same window skip the page fetch.
+    Updates channel.stream_url and channel.custom_headers in the DB when changed.
+    Returns (stream_url, custom_headers).
+    """
+    channel_id = channel.id
+    now = _time.monotonic()
+    cached = _CUSTOM_STREAM_CACHE.get(channel_id)
+    if cached:
+        cached_url, cached_hdrs, fetched_at = cached
+        if now - fetched_at < _REDETECT_TTL:
+            return cached_url, cached_hdrs
+
+    from ..scrapers.stream_detector import StreamDetector
+    from ..extensions import db as _db
+
+    page_url = channel.page_url or channel.stream_url
+    result = StreamDetector().detect(page_url)
+    if result.success and result.stream_url:
+        stream_url = result.stream_url
+        headers = result.headers or {}
+        _CUSTOM_STREAM_CACHE[channel_id] = (stream_url, headers, now)
+        if stream_url != channel.stream_url or headers != (channel.custom_headers or {}):
+            try:
+                channel.stream_url = stream_url
+                channel.custom_headers = headers
+                _db.session.commit()
+            except Exception as e:
+                logger.warning('[custom-redetect] DB update failed for channel %d: %s', channel_id, e)
+                _db.session.rollback()
+        return stream_url, headers
+
+    logger.warning('[custom-redetect] detection failed for channel %d (%s): %s',
+                   channel_id, (page_url or '')[:80], result.error)
+    return channel.stream_url or '', channel.custom_headers or {}
 
 def _client_ip() -> str:
     forwarded = (request.headers.get('X-Forwarded-For') or '').strip()
@@ -360,8 +406,13 @@ def custom_manifest_proxy(channel_id: str):
     if not channel or not channel.stream_url:
         abort(404)
 
-    custom_headers = channel.custom_headers or {}
-    stream_url = channel.stream_url
+    if getattr(channel, 'redetect_on_play', False) and channel.page_url:
+        stream_url, custom_headers = _redetect_custom_stream(channel)
+        if not stream_url:
+            abort(502)
+    else:
+        custom_headers = channel.custom_headers or {}
+        stream_url = channel.stream_url
 
     try:
         master_r = _requests.get(stream_url, headers=custom_headers, timeout=10)
@@ -544,6 +595,13 @@ def play(source_name: str, channel_id: str):
             f"{request.host_url.rstrip('/')}/play/stirr/{encoded_id}/proxy.m3u8",
             302,
         )
+
+    # Custom channels: optionally re-detect stream URL from source page on every
+    # play request (TTL-cached so the page is only fetched once per 5 minutes).
+    if source_name == 'custom' and getattr(channel, 'redetect_on_play', False) and channel.page_url:
+        fresh_url, _ = _redetect_custom_stream(channel)
+        if fresh_url:
+            resolved_url = fresh_url
 
     # Custom channels with segment proxying enabled: serve a manifest proxy
     # so the client never needs to send custom headers directly.

@@ -783,6 +783,10 @@ def detect_custom_stream():
         return jsonify({'error': 'URL must start with http:// or https://'}), 400
 
     from ..scrapers.stream_detector import StreamDetector
+    from urllib.parse import urlsplit as _us
+    _path = _us(url).path.lower()
+    is_page_url = '.m3u8' not in _path and not _path.endswith('.ts')
+
     result = StreamDetector().detect(url)
 
     return jsonify({
@@ -791,6 +795,7 @@ def detect_custom_stream():
         'headers': result.headers,
         'needs_proxy': result.needs_proxy,
         'error': result.error,
+        'is_page_url': is_page_url,
     })
 
 
@@ -824,6 +829,8 @@ def create_custom_channel():
         stream_url=stream_url,
         custom_headers=data.get('custom_headers') or {},
         proxy_segments=bool(data.get('proxy_segments', False)),
+        page_url=(data.get('page_url') or '').strip() or None,
+        redetect_on_play=bool(data.get('redetect_on_play', False)),
         is_active=True,
         is_enabled=True,
         last_seen_at=datetime.now(_tz.utc),
@@ -865,6 +872,10 @@ def update_custom_channel(channel_id):
         channel.custom_headers = data['custom_headers'] or {}
     if 'proxy_segments' in data:
         channel.proxy_segments = bool(data['proxy_segments'])
+    if 'page_url' in data:
+        channel.page_url = (data['page_url'] or '').strip() or None
+    if 'redetect_on_play' in data:
+        channel.redetect_on_play = bool(data['redetect_on_play'])
 
     db.session.commit()
     _invalidate_and_refresh_xml()
