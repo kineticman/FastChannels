@@ -1201,8 +1201,30 @@ def inspect_channel(channel_id):
         if r.status_code != 200:
             return jsonify({'status': 'error', 'detail': f'HTTP {r.status_code}'})
 
+        manifest_url = r.url
+        content_type = (r.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
+
+        # Direct video sources like MP4/WebM are valid custom channels, but they are
+        # not HLS manifests and should not be run through playlist parsing.
+        if (
+            content_type.startswith('video/')
+            or manifest_url.lower().split('?', 1)[0].endswith(('.mp4', '.webm', '.mkv', '.mov'))
+        ):
+            try:
+                chunk = next(r.iter_content(8192), None)
+            finally:
+                r.close()
+            seg_bytes = len(chunk) if chunk else 0
+            if seg_bytes == 0:
+                return jsonify({'status': 'no_data', 'detail': 'Direct video returned 0 bytes'})
+            return jsonify({
+                'status': 'live',
+                'detail': f'Direct video OK — {seg_bytes} bytes received',
+                'segment_bytes': seg_bytes,
+                'variants': [],
+            })
+
         manifest_text = r.text
-        manifest_url  = r.url
 
         # ── DASH/MPD manifest ─────────────────────────────────────────────
         is_mpd = ('<MPD ' in manifest_text or manifest_text.lstrip().startswith('<?xml')
