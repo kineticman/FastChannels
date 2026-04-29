@@ -489,10 +489,15 @@ class XumoScraper(BaseScraper):
                 labels.append(label)
         return ';'.join(labels) or None
 
+    # Asset ID prefixes that resolve directly on the image CDN.
+    # XMP (SIMULCAST type) and EP (episode, needs connectorId lookup) do not.
+    _IMAGE_CDN_PREFIXES = ("SH", "MV", "XT", "XM")
+
     def _poster_url(self, asset_id: str) -> str | None:
-        # EP-prefixed IDs require a separate connectorId lookup; skip for now.
-        # SH, MV, XM, XT prefixed IDs resolve directly on the image CDN.
-        if not asset_id or asset_id.startswith("EP"):
+        if not asset_id:
+            return None
+        prefix = asset_id[:2]
+        if prefix not in self._IMAGE_CDN_PREFIXES or asset_id.startswith("XMP"):
             return None
         return f"{self.IMAGE_BASE}/{asset_id}/600x336.jpg"
 
