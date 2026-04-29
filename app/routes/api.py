@@ -52,6 +52,18 @@ api_bp = Blueprint('api', __name__)
 _localnow_city_scraper: dict = {}  # {'scraper': LocalNowScraper, 'expires': float}
 _GRACENOTE_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$', re.I)
 _GRACENOTE_MODES = {'auto', 'manual', 'off'}
+_CUSTOM_DIRECT_SUFFIXES = ('.m3u8', '.mpd', '.mp4', '.webm', '.ts')
+
+
+def _normalize_custom_stream_type(raw_type, stream_url: str | None = None) -> str:
+    from ..scrapers.stream_detector import StreamDetector
+
+    explicit = (raw_type or '').strip().lower()
+    if explicit:
+        return explicit
+
+    inferred = StreamDetector.infer_stream_type(stream_url)
+    return inferred or 'hls'
 
 
 def _apply_gracenote_update(channel: Channel, raw_value, raw_mode=None) -> str | None:
@@ -774,7 +786,7 @@ def list_custom_channels():
 
 @api_bp.route('/custom-channels/detect', methods=['POST'])
 def detect_custom_stream():
-    """Probe a URL (web page or direct stream) and return the working HLS URL + headers."""
+    """Probe a URL (web page or direct stream) and return the working stream URL + type + headers."""
     data = request.get_json() or {}
     url = (data.get('url') or '').strip()
     if not url:
@@ -785,13 +797,14 @@ def detect_custom_stream():
     from ..scrapers.stream_detector import StreamDetector
     from urllib.parse import urlsplit as _us
     _path = _us(url).path.lower()
-    is_page_url = '.m3u8' not in _path and not _path.endswith('.ts')
+    is_page_url = not any(suffix in _path for suffix in _CUSTOM_DIRECT_SUFFIXES)
 
     result = StreamDetector().detect(url)
 
     return jsonify({
         'success': result.success,
         'stream_url': result.stream_url,
+        'stream_type': result.stream_type,
         'headers': result.headers,
         'needs_proxy': result.needs_proxy,
         'error': result.error,
@@ -828,6 +841,7 @@ def create_custom_channel():
         category=(data.get('category') or '').strip() or None,
         language=(data.get('language') or 'en').strip() or 'en',
         stream_url=stream_url,
+        stream_type=_normalize_custom_stream_type(data.get('stream_type'), stream_url),
         custom_headers=data.get('custom_headers') or {},
         proxy_segments=bool(data.get('proxy_segments', False)),
         page_url=(data.get('page_url') or '').strip() or None,
@@ -869,6 +883,10 @@ def update_custom_channel(channel_id):
         if not stream_url.startswith('http'):
             return jsonify({'error': 'stream_url must be a valid HTTP(S) URL'}), 400
         channel.stream_url = stream_url
+        if 'stream_type' not in data:
+            channel.stream_type = _normalize_custom_stream_type(None, stream_url)
+    if 'stream_type' in data:
+        channel.stream_type = _normalize_custom_stream_type(data.get('stream_type'), data.get('stream_url') or channel.stream_url)
     if 'custom_headers' in data:
         channel.custom_headers = data['custom_headers'] or {}
     if 'proxy_segments' in data:

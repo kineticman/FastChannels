@@ -622,6 +622,7 @@
           <span id="cc-result-icon" style="font-size:1rem;"></span>
           <strong id="cc-result-label" style="color:var(--text);"></strong>
         </div>
+        <div id="cc-result-type" style="color:var(--accent-soft);font-size:.75rem;font-weight:600;margin-bottom:.35rem;"></div>
         <div id="cc-result-stream" style="word-break:break-all;color:var(--text-soft);font-size:.75rem;margin-bottom:.4rem;"></div>
         <div id="cc-result-headers" style="color:var(--text-muted);font-size:.74rem;"></div>
         <div id="cc-youtube-note" style="display:none;margin-top:.4rem;font-size:.74rem;color:var(--text-muted);">YouTube stream URLs expire quickly, so this is usually best left on.</div>
@@ -1892,6 +1893,7 @@
             </div>
             <div style="display:flex;align-items:center;gap:.4rem;flex-shrink:0;">
               <span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:${ch.is_enabled ? 'var(--success-soft)' : 'var(--text-muted)'};border:1px solid var(--border);">${ch.is_enabled ? 'On' : 'Off'}</span>
+              ${ch.stream_type ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--text-soft);border:1px solid var(--border);">' + _esc(_streamTypeLabel(ch.stream_type)) + '</span>' : ''}
               ${ch.proxy_segments ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--accent-soft);border:1px solid var(--border);">Proxied</span>' : ''}
               ${ch.redetect_on_play ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--text-muted);border:1px solid var(--border);">Re-detect</span>' : ''}
               <button class="btn btn-configure btn-sm" onclick="editCustomChannel(${ch.id})">Edit</button>
@@ -1928,6 +1930,7 @@
     // ── Custom Channel modal ─────────────────────────────────────────────────
     let _ccEditId = null;   // null = create, number = editing channel id
     let _ccDetectedUrl = null;
+    let _ccDetectedType = null;
     let _ccDetectedHeaders = {};
     let _ccPageUrl = null;      // original input URL when it was a page (not direct stream)
     let _ccIsPageUrl = false;   // true when input was a page URL
@@ -1935,6 +1938,7 @@
     function openCustomChannelModal(channelData) {
       _ccEditId = channelData ? channelData.id : null;
       _ccDetectedUrl = channelData ? channelData.stream_url : null;
+      _ccDetectedType = channelData ? (channelData.stream_type || null) : null;
       _ccDetectedHeaders = channelData ? (channelData.custom_headers || {}) : {};
       _ccPageUrl = channelData ? (channelData.page_url || null) : null;
       _ccIsPageUrl = !!_ccPageUrl;
@@ -1957,7 +1961,7 @@
 
       if (channelData && channelData.stream_url) {
         const _editIsYt = !!(channelData.page_url && /youtube\.com|youtu\.be/i.test(channelData.page_url));
-        _showDetectResult(true, channelData.stream_url, channelData.custom_headers || {},
+        _showDetectResult(true, channelData.stream_url, channelData.stream_type || null, channelData.custom_headers || {},
                           !!channelData.proxy_segments, _ccIsPageUrl, _editIsYt);
       } else {
         document.getElementById('cc-detect-result').style.display = 'none';
@@ -1974,6 +1978,7 @@
       document.getElementById('custom-channel-modal').classList.remove('open');
       _ccEditId = null;
       _ccDetectedUrl = null;
+      _ccDetectedType = null;
       _ccDetectedHeaders = {};
       _ccPageUrl = null;
       _ccIsPageUrl = false;
@@ -1984,6 +1989,7 @@
       document.getElementById('cc-detect-status').textContent = '';
       document.getElementById('cc-redetect-wrap').style.display = 'none';
       _ccDetectedUrl = null;
+      _ccDetectedType = null;
       _ccDetectedHeaders = {};
       _ccPageUrl = null;
       _ccIsPageUrl = false;
@@ -2012,11 +2018,12 @@
         const isYt = !!data.is_youtube;
         if (data.success && data.stream_url) {
           _ccDetectedUrl = data.stream_url;
+          _ccDetectedType = data.stream_type || null;
           _ccDetectedHeaders = data.headers || {};
           _ccIsPageUrl = !!data.is_page_url;
           _ccPageUrl = _ccIsPageUrl ? url : null;
           statusEl.textContent = '';
-          _showDetectResult(true, data.stream_url, data.headers, data.needs_proxy, _ccIsPageUrl, isYt);
+          _showDetectResult(true, data.stream_url, data.stream_type || null, data.headers, data.needs_proxy, _ccIsPageUrl, isYt);
           if (!_ccEditId && (_ccIsPageUrl || isYt)) {
             // Page-based sources often issue short-lived or rotating URLs.
             document.getElementById('cc-redetect-toggle').checked = true;
@@ -2029,15 +2036,16 @@
           }
         } else {
           _ccDetectedUrl = data.stream_url || null;
+          _ccDetectedType = data.stream_type || null;
           _ccDetectedHeaders = {};
           _ccIsPageUrl = !!data.is_page_url;
           _ccPageUrl = _ccIsPageUrl ? url : null;
           statusEl.textContent = data.error || 'Detection failed';
           statusEl.style.color = 'var(--danger)';
           if (data.stream_url) {
-            _showDetectResult(false, data.stream_url, {}, false, _ccIsPageUrl, isYt);
+            _showDetectResult(false, data.stream_url, data.stream_type || null, {}, false, _ccIsPageUrl, isYt);
           } else if (isYt) {
-            _showDetectResult(false, null, {}, false, true, true);
+            _showDetectResult(false, null, data.stream_type || null, {}, false, true, true);
           }
         }
       } catch (e) {
@@ -2049,12 +2057,30 @@
       }
     }
 
-    function _showDetectResult(ok, streamUrl, headers, needsProxy, isPageUrl, isYoutube) {
+    function _streamTypeLabel(streamType) {
+      const raw = String(streamType || '').toLowerCase();
+      const labels = {
+        hls: 'HLS',
+        dash: 'DASH',
+        mpegts: 'MPEG-TS',
+        mp4: 'MP4',
+        webm: 'WebM',
+        mjpeg: 'MJPEG',
+        jpeg_snapshot: 'JPEG Snapshot',
+        mov: 'MOV',
+        mkv: 'MKV',
+        direct: 'Direct Media',
+      };
+      return labels[raw] || (raw ? raw.toUpperCase() : 'Unknown');
+    }
+
+    function _showDetectResult(ok, streamUrl, streamType, headers, needsProxy, isPageUrl, isYoutube) {
       const panel = document.getElementById('cc-detect-result');
       document.getElementById('cc-result-icon').textContent = ok ? '✅' : '⚠️';
       document.getElementById('cc-result-label').textContent =
         isYoutube ? (ok ? 'YouTube stream detected' : 'YouTube (extraction failed)')
                   : (ok ? 'Stream detected' : 'Stream found (unverified)');
+      document.getElementById('cc-result-type').textContent = streamType ? `Type: ${_streamTypeLabel(streamType)}` : 'Type: Unknown';
       document.getElementById('cc-result-stream').textContent = streamUrl || '';
 
       const hdrEl = document.getElementById('cc-result-headers');
@@ -2095,6 +2121,7 @@
         logo_url: document.getElementById('cc-input-logo').value.trim() || null,
         category: document.getElementById('cc-input-category').value.trim() || null,
         language: document.getElementById('cc-input-language').value.trim() || 'en',
+        stream_type: _ccDetectedType || null,
         custom_headers: _ccDetectedHeaders || {},
         proxy_segments: document.getElementById('cc-proxy-toggle').checked,
         page_url: _ccPageUrl || null,

@@ -41,12 +41,12 @@ _M3U8_RE = re.compile(
 # Match JS object properties like src: "...", file: "...", url: "..."
 # Covers both HLS (.m3u8) and direct video (.mp4, .webm) values
 _PROP_RE = re.compile(
-    r'''(?:src|source|file|url|hls|video|stream)\s*[:=]\s*['"]?(https?://[^\s'"<>()\[\]{}]+?\.(?:m3u8|mp4|webm)(?:\?[^\s'"<>()\[\]{}]*)?)''',
+    r'''(?:src|source|file|url|hls|video|stream)\s*[:=]\s*['"]?(https?://[^\s'"<>()\[\]{}]+?\.(?:m3u8|mp4|webm|mjpg|mjpeg|jpg|jpeg)(?:\?[^\s'"<>()\[\]{}]*)?)''',
     re.IGNORECASE,
 )
 # Match bare direct-video URLs (.mp4, .webm) — lower priority than HLS
 _VIDEO_URL_RE = re.compile(
-    r'https?://[^\s"\'<>()\[\]{}]+?\.(?:mp4|webm)(?:\?[^\s"\'<>()\[\]{}]*)?',
+    r'https?://[^\s"\'<>()\[\]{}]+?\.(?:mp4|webm|mjpg|mjpeg|jpg|jpeg)(?:\?[^\s"\'<>()\[\]{}]*)?',
     re.IGNORECASE,
 )
 _IFRAME_RE = re.compile(r'''<iframe[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
@@ -58,7 +58,7 @@ _BROWNRICE_STREAMURL_RE = re.compile(r'''camera\[['"]streamurl['"]\]\s*=\s*['"](
 _BROWNRICE_NAME_RE = re.compile(r'''camera\[['"]name['"]\]\s*=\s*['"]([^'"]+)['"]''')
 _BROWNRICE_TYPEID_RE = re.compile(r'''camera\[['"]typeid['"]\]\s*=\s*['"]([^'"]+)['"]''')
 _PLAYER_RELATIVE_MEDIA_RE = re.compile(
-    r'''(?:file|src|contentUrl)\s*[:=]\s*['"]([^'"]+?\.(?:m3u8|mp4|webm)(?:\?[^'"]*)?)['"]''',
+    r'''(?:file|src|contentUrl)\s*[:=]\s*['"]([^'"]+?\.(?:m3u8|mp4|webm|mjpg|mjpeg|jpg|jpeg)(?:\?[^'"]*)?)['"]''',
     re.IGNORECASE,
 )
 _OXBLUE_IFRAME_RE = re.compile(r'https?://app\.oxblue\.com/\?openlink=([^&"\']+)', re.IGNORECASE)
@@ -82,6 +82,7 @@ _OXBLUE_API_BASE = 'https://api.oxblue.com/v1'
 @dataclass
 class DetectionResult:
     stream_url: str | None = None
+    stream_type: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     needs_proxy: bool = False   # True when segment access also requires headers
     success: bool = False
@@ -111,6 +112,7 @@ class StreamDetector:
                     return DetectionResult(error='No stream URL found on page or in iframes')
 
             origin = self._origin_of(page_url)
+            best_failure: DetectionResult | None = None
 
             for candidate in candidates:
                 candidate = self._unwrap_stream_wrapper(html.unescape(candidate))
@@ -118,10 +120,19 @@ class StreamDetector:
                     result = self._resolve_youtube(candidate)
                     if result.success:
                         return result
+                    if result.stream_type or result.error:
+                        best_failure = result
                     continue
                 result = self._probe(session, candidate, page_url, origin)
                 if result.success:
                     return result
+                if result.stream_type or result.error:
+                    best_failure = result
+
+            if best_failure:
+                if not best_failure.stream_url and candidates:
+                    best_failure.stream_url = self._unwrap_stream_wrapper(html.unescape(candidates[0]))
+                return best_failure
 
             if candidates:
                 return DetectionResult(
@@ -139,12 +150,39 @@ class StreamDetector:
     @staticmethod
     def _is_stream_url(url: str) -> bool:
         path = urlsplit(url).path.lower()
-        return any(ext in path for ext in ('.m3u8', '.mp4', '.webm')) or path.endswith('.ts')
+        return any(ext in path for ext in ('.m3u8', '.mp4', '.webm', '.mpd', '.mjpg', '.mjpeg', '.jpg', '.jpeg')) or path.endswith('.ts')
 
     @staticmethod
     def _is_hls_url(url: str) -> bool:
         path = urlsplit(url).path.lower()
         return '.m3u8' in path
+
+    @staticmethod
+    def infer_stream_type(url: str | None, content_type: str | None = None) -> str | None:
+        path = urlsplit(url or '').path.lower()
+        ct = (content_type or '').split(';', 1)[0].strip().lower()
+
+        if '.m3u8' in path or 'mpegurl' in ct:
+            return 'hls'
+        if '.mpd' in path or ct in ('application/dash+xml', 'video/vnd.mpeg.dash.mpd'):
+            return 'dash'
+        if path.endswith('.ts') or ct in ('video/mp2t', 'video/mp2t;charset=utf-8'):
+            return 'mpegts'
+        if '.mjpg' in path or '.mjpeg' in path or ct.startswith('multipart/x-mixed-replace'):
+            return 'mjpeg'
+        if '.jpg' in path or '.jpeg' in path or ct == 'image/jpeg':
+            return 'jpeg_snapshot'
+        if '.mp4' in path or ct == 'video/mp4':
+            return 'mp4'
+        if '.webm' in path or ct == 'video/webm':
+            return 'webm'
+        if '.mov' in path or ct == 'video/quicktime':
+            return 'mov'
+        if '.mkv' in path or ct == 'video/x-matroska':
+            return 'mkv'
+        if ct.startswith('video/') or ct.startswith('audio/'):
+            return 'direct'
+        return None
 
     @staticmethod
     def _origin_of(url: str) -> str:
@@ -556,7 +594,7 @@ class StreamDetector:
             if not value:
                 return
             lower = value.lower()
-            if not any(ext in lower for ext in ('.m3u8', '.mp4', '.webm')):
+            if not any(ext in lower for ext in ('.m3u8', '.mp4', '.webm', '.mjpg', '.mjpeg', '.jpg', '.jpeg')):
                 return
             candidate = urljoin(base_url, value)
             if candidate not in candidates:
@@ -619,6 +657,7 @@ class StreamDetector:
 
                 return DetectionResult(
                     stream_url=stream_url,
+                    stream_type='hls',
                     headers=headers,
                     needs_proxy=needs_proxy,
                     success=True,
@@ -652,12 +691,33 @@ class StreamDetector:
                 if r.status_code not in (200, 206):
                     continue
                 ct = r.headers.get('Content-Type', '').lower()
-                if not any(ct.startswith(t) for t in _VIDEO_CONTENT_TYPES):
+                stream_type = self.infer_stream_type(r.url or stream_url, ct)
+                if not any(ct.startswith(t) for t in _VIDEO_CONTENT_TYPES) and stream_type not in ('mjpeg', 'jpeg_snapshot'):
                     continue
+                stream_type = stream_type or 'direct'
+                if stream_type == 'mjpeg':
+                    return DetectionResult(
+                        stream_url=stream_url,
+                        stream_type='mjpeg',
+                        headers=headers,
+                        needs_proxy=False,
+                        success=False,
+                        error='MJPEG stream detected, but MJPEG custom channels are not supported',
+                    )
+                if stream_type == 'jpeg_snapshot':
+                    return DetectionResult(
+                        stream_url=stream_url,
+                        stream_type='jpeg_snapshot',
+                        headers=headers,
+                        needs_proxy=False,
+                        success=False,
+                        error='JPEG snapshot feed detected, but JPEG snapshot custom channels are not supported',
+                    )
 
                 logger.info('[detector] direct video probe OK %s ct=%s', stream_url[:80], ct)
                 return DetectionResult(
                     stream_url=stream_url,
+                    stream_type=stream_type,
                     headers=headers,
                     needs_proxy=False,
                     success=True,
@@ -757,8 +817,10 @@ class StreamDetector:
                     continue
 
                 logger.info('[youtube] resolved via client=%s url=%s…', client, stream_url[:80])
+                stream_type = 'hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct')
                 return DetectionResult(
                     stream_url=stream_url,
+                    stream_type=stream_type,
                     headers={},
                     needs_proxy=False,
                     success=True,

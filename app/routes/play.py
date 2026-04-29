@@ -85,10 +85,16 @@ def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dic
         stream_url = result.stream_url
         headers = result.headers or {}
         _CUSTOM_STREAM_CACHE[channel_id] = (stream_url, headers, now)
-        if stream_url != channel.stream_url or headers != (channel.custom_headers or {}):
+        detected_type = result.stream_type or channel.stream_type
+        if (
+            stream_url != channel.stream_url
+            or headers != (channel.custom_headers or {})
+            or detected_type != channel.stream_type
+        ):
             try:
                 channel.stream_url = stream_url
                 channel.custom_headers = headers
+                channel.stream_type = detected_type
                 _db.session.commit()
             except Exception as e:
                 logger.warning('[custom-redetect] DB update failed for channel %d: %s', channel_id, e)
