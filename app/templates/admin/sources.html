@@ -624,7 +624,7 @@
         </div>
         <div id="cc-result-stream" style="word-break:break-all;color:var(--text-soft);font-size:.75rem;margin-bottom:.4rem;"></div>
         <div id="cc-result-headers" style="color:var(--text-muted);font-size:.74rem;"></div>
-        <div id="cc-youtube-note" style="display:none;margin-top:.4rem;font-size:.74rem;color:var(--text-muted);">YouTube stream URLs expire — <em>Re-detect stream on play</em> is strongly recommended.</div>
+        <div id="cc-youtube-note" style="display:none;margin-top:.4rem;font-size:.74rem;color:var(--text-muted);">YouTube stream URLs expire quickly, so this is usually best left on.</div>
         <!-- Proxy segments toggle -->
         <div id="cc-proxy-wrap" style="display:none;margin-top:.65rem;padding-top:.65rem;border-top:1px solid var(--border);">
           <label style="display:inline-flex;align-items:center;gap:.5rem;cursor:pointer;font-size:.82rem;color:var(--text-soft);">
@@ -632,11 +632,11 @@
             Proxy segments through FastChannels (required when headers are needed for segment access)
           </label>
         </div>
-        <!-- Re-detect on play toggle (only shown for page URLs with expiring tokens) -->
+        <!-- Re-detect on play toggle (shown for page-based sources) -->
         <div id="cc-redetect-wrap" style="display:none;margin-top:.5rem;">
           <label style="display:inline-flex;align-items:center;gap:.5rem;cursor:pointer;font-size:.82rem;color:var(--text-soft);">
             <input type="checkbox" id="cc-redetect-toggle" style="accent-color:var(--accent-strong);cursor:pointer;">
-            Re-detect stream on play <span style="font-size:.74rem;color:var(--text-muted);">(re-scrapes source page ~every 5 min to refresh expiring tokens)</span>
+            Refresh stream URL during playback <span style="font-size:.74rem;color:var(--text-muted);">(re-checks the source page when the channel is played so expired or rotated stream URLs stay fresh)</span>
           </label>
         </div>
       </div>
@@ -2017,8 +2017,8 @@
           _ccPageUrl = _ccIsPageUrl ? url : null;
           statusEl.textContent = '';
           _showDetectResult(true, data.stream_url, data.headers, data.needs_proxy, _ccIsPageUrl, isYt);
-          if (isYt) {
-            // YouTube URLs expire — auto-enable re-detect
+          if (!_ccEditId && (_ccIsPageUrl || isYt)) {
+            // Page-based sources often issue short-lived or rotating URLs.
             document.getElementById('cc-redetect-toggle').checked = true;
           }
           // Auto-fill name from URL if empty

@@ -16,8 +16,8 @@ Detection flow:
   5. Return DetectionResult with the first working URL + headers combo.
 """
 from __future__ import annotations
-
 import logging
+import html
 import re
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urljoin
@@ -49,9 +49,20 @@ _VIDEO_URL_RE = re.compile(
     re.IGNORECASE,
 )
 _IFRAME_RE = re.compile(r'''<iframe[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
+_SCRIPT_SRC_RE = re.compile(r'''<script[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
+_SCRIPT_BLOCK_RE = re.compile(r'''<script\b[^>]*>(.*?)</script>''', re.IGNORECASE | re.DOTALL)
+_JSON_URL_RE = re.compile(r'''https?://[^\s"'<>()\[\]{}]+?\.json(?:\?[^\s"'<>()\[\]{}]*)?''', re.IGNORECASE)
+_JSON_REL_RE = re.compile(r'''['"]([^'"]+?\.json(?:\?[^'"]*)?)['"]''', re.IGNORECASE)
+_BROWNRICE_STREAMURL_RE = re.compile(r'''camera\[['"]streamurl['"]\]\s*=\s*['"]([^'"]+)['"]''')
+_BROWNRICE_NAME_RE = re.compile(r'''camera\[['"]name['"]\]\s*=\s*['"]([^'"]+)['"]''')
+_BROWNRICE_TYPEID_RE = re.compile(r'''camera\[['"]typeid['"]\]\s*=\s*['"]([^'"]+)['"]''')
+_PLAYER_RELATIVE_MEDIA_RE = re.compile(
+    r'''(?:file|src|contentUrl)\s*[:=]\s*['"]([^'"]+?\.(?:m3u8|mp4|webm)(?:\?[^'"]*)?)['"]''',
+    re.IGNORECASE,
+)
 
 _YOUTUBE_RE = re.compile(
-    r'^https?://(www\.)?(youtube\.com/(watch|live|@|channel|user|c/|shorts/)|youtu\.be/)',
+    r'^https?://(www\.)?(youtube\.com/(watch|live|embed/|@|channel|user|c/|shorts/)|youtu\.be/)',
     re.IGNORECASE,
 )
 _YT_PLAYER_CLIENTS = ('tv_embedded', 'web_safari', 'web', 'ios')
@@ -94,6 +105,11 @@ class StreamDetector:
             origin = self._origin_of(page_url)
 
             for candidate in candidates:
+                if _YOUTUBE_RE.match(candidate):
+                    result = self._resolve_youtube(html.unescape(candidate))
+                    if result.success:
+                        return result
+                    continue
                 result = self._probe(session, candidate, page_url, origin)
                 if result.success:
                     return result
@@ -138,6 +154,21 @@ class StreamDetector:
             logger.debug('[detector] page fetch failed %s: %s', url[:80], exc)
             return []
 
+        hls_candidates, video_candidates = self._extract_generic_candidates(text)
+
+        # Provider-specific handlers run before iframe recursion so they can use
+        # page-local bootstrap config without needing to brute-force every script.
+        for c in self._extract_provider_candidates(session, url, text):
+            if '.m3u8' in c.lower():
+                if c not in hls_candidates:
+                    hls_candidates.append(c)
+            elif c not in video_candidates:
+                video_candidates.append(c)
+
+        return self._merge_with_iframe_candidates(session, url, depth, text, hls_candidates, video_candidates)
+
+    @staticmethod
+    def _extract_generic_candidates(text: str) -> tuple[list[str], list[str]]:
         hls_candidates: list[str] = []
         video_candidates: list[str] = []
 
@@ -162,6 +193,37 @@ class StreamDetector:
             if c not in hls_candidates and c not in video_candidates:
                 video_candidates.append(c)
 
+        return hls_candidates, video_candidates
+
+    def _extract_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        candidates: list[str] = []
+
+        for extractor in (
+            self._extract_brownrice_provider_candidates,
+            self._extract_player_config_candidates,
+            self._extract_json_config_candidates,
+        ):
+            for c in extractor(session, url, text):
+                if c not in candidates:
+                    candidates.append(c)
+
+        return candidates
+
+    def _merge_with_iframe_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        depth: int,
+        text: str,
+        hls_candidates: list[str],
+        video_candidates: list[str],
+    ) -> list[str]:
+
         # Recurse into iframes, keeping HLS-first ordering
         iframe_hls: list[str] = []
         iframe_video: list[str] = []
@@ -169,7 +231,10 @@ class StreamDetector:
             src = m.group(1).strip()
             if not src or src.startswith('javascript:') or src.startswith('about:'):
                 continue
-            iframe_url = urljoin(url, src)
+            iframe_url = urljoin(url, html.unescape(src))
+            if _YOUTUBE_RE.match(iframe_url):
+                iframe_hls.append(iframe_url)
+                continue
             for c in self._extract_from_page(session, iframe_url, depth + 1):
                 if c in hls_candidates or c in video_candidates:
                     continue
@@ -179,6 +244,165 @@ class StreamDetector:
                     iframe_video.append(c)
 
         return hls_candidates + iframe_hls + video_candidates + iframe_video
+
+    def _extract_brownrice_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        candidates: list[str] = []
+
+        # Brownrice embeds sometimes expose the synthesized stream components
+        # directly in page JS.
+        for c in self._extract_brownrice_candidates(text):
+            if c not in candidates:
+                candidates.append(c)
+
+        # Some Brownrice embeds only expose a bootstrap script URL in the page.
+        for script_url in self._brownrice_script_urls(text, url):
+            try:
+                sr = session.get(script_url, timeout=self.TIMEOUT)
+                if not sr.ok:
+                    continue
+                for c in self._extract_brownrice_candidates(sr.text):
+                    if c not in candidates:
+                        candidates.append(c)
+            except Exception as exc:
+                logger.debug('[detector] brownrice script fetch failed %s: %s', script_url[:80], exc)
+
+        return candidates
+
+    @staticmethod
+    def _extract_brownrice_candidates(text: str) -> list[str]:
+        streamurl_m = _BROWNRICE_STREAMURL_RE.search(text)
+        name_m = _BROWNRICE_NAME_RE.search(text)
+        typeid_m = _BROWNRICE_TYPEID_RE.search(text)
+        if not streamurl_m or not name_m:
+            return []
+
+        streamurl = streamurl_m.group(1).rstrip('/')
+        name = name_m.group(1).strip()
+        typeid = (typeid_m.group(1).strip() if typeid_m else '')
+        if not streamurl or not name:
+            return []
+
+        if typeid == '20':
+            suffix = f'/{name}/{name}.stream_360p/playlist.m3u8'
+        elif typeid == '5':
+            suffix = f'/{name}/{name}.stream_aac/playlist.m3u8'
+        else:
+            suffix = f'/{name}/{name}.stream/main_playlist.m3u8'
+        return [f'{streamurl}{suffix}']
+
+    @staticmethod
+    def _brownrice_script_urls(text: str, base_url: str) -> list[str]:
+        urls: list[str] = []
+        for m in _SCRIPT_SRC_RE.finditer(text):
+            src = (m.group(1) or '').strip()
+            if not src:
+                continue
+            abs_url = urljoin(base_url, src)
+            if 'brownrice.com/' not in abs_url:
+                continue
+            if 'sn=' not in abs_url and 'bri_embed' not in text:
+                continue
+            if abs_url not in urls:
+                urls.append(abs_url)
+        return urls
+
+    def _extract_player_config_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        candidates: list[str] = []
+
+        # JW Player / Video.js style config often stores media URLs in script
+        # blocks as relative or absolute file/src/contentUrl values.
+        for block in _SCRIPT_BLOCK_RE.findall(text):
+            if not any(token in block.lower() for token in ('jwplayer', 'videojs', 'sources', 'playlist', 'contenturl')):
+                continue
+            for m in _PLAYER_RELATIVE_MEDIA_RE.finditer(block):
+                candidate = urljoin(url, m.group(1).strip())
+                if candidate not in candidates:
+                    candidates.append(candidate)
+
+        return candidates
+
+    def _extract_json_config_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        candidates: list[str] = []
+
+        for json_url in self._config_json_urls(text, url):
+            try:
+                r = session.get(json_url, timeout=self.TIMEOUT)
+                if not r.ok:
+                    continue
+                data = r.json()
+            except Exception as exc:
+                logger.debug('[detector] config json fetch failed %s: %s', json_url[:80], exc)
+                continue
+
+            for c in self._media_urls_from_json(data, json_url):
+                if c not in candidates:
+                    candidates.append(c)
+
+        return candidates
+
+    @staticmethod
+    def _config_json_urls(text: str, base_url: str) -> list[str]:
+        urls: list[str] = []
+
+        for m in _JSON_URL_RE.finditer(text):
+            candidate = m.group(0).strip()
+            if candidate not in urls:
+                urls.append(candidate)
+
+        for block in _SCRIPT_BLOCK_RE.findall(text):
+            if not any(token in block.lower() for token in ('json', 'config', 'playlist', 'source', 'media')):
+                continue
+            for m in _JSON_REL_RE.finditer(block):
+                candidate = urljoin(base_url, m.group(1).strip())
+                if candidate not in urls:
+                    urls.append(candidate)
+
+        return urls
+
+    @staticmethod
+    def _media_urls_from_json(data, base_url: str) -> list[str]:
+        candidates: list[str] = []
+
+        def add_candidate(value: str):
+            value = (value or '').strip()
+            if not value:
+                return
+            lower = value.lower()
+            if not any(ext in lower for ext in ('.m3u8', '.mp4', '.webm')):
+                return
+            candidate = urljoin(base_url, value)
+            if candidate not in candidates:
+                candidates.append(candidate)
+
+        def walk(node):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if isinstance(value, str) and key.lower() in ('file', 'src', 'contenturl', 'url', 'stream'):
+                        add_candidate(value)
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+            elif isinstance(node, str):
+                add_candidate(node)
+
+        walk(data)
+        return candidates
 
     def _probe(
         self,

@@ -40,9 +40,27 @@ play_bp = Blueprint('play', __name__)
 # Key: channel.id  Value: (stream_url, headers, monotonic_timestamp)
 _CUSTOM_STREAM_CACHE: dict[int, tuple[str, dict, float]] = {}
 _REDETECT_TTL = 300  # seconds
+_REDETECT_TTL_LIVE = 60  # seconds for rolling direct-video clips behind a live wrapper
+
+# Tracks the synthetic live manifest sequence per custom channel so clients see
+# a new media sequence whenever the upstream clip URL rotates.
+_CUSTOM_LIVE_SEQ: dict[int, tuple[str, int]] = {}
 
 
-def _redetect_custom_stream(channel) -> tuple[str, dict]:
+def _get_custom_live_seq(channel_id: int, stream_url: str) -> int:
+    last_url, seq = _CUSTOM_LIVE_SEQ.get(channel_id, ('', 0))
+    if stream_url != last_url:
+        seq += 1
+        _CUSTOM_LIVE_SEQ[channel_id] = (stream_url, seq)
+    return seq
+
+
+def _url_is_hls(url: str) -> bool:
+    from urllib.parse import urlsplit
+    return '.m3u8' in urlsplit(url).path.lower()
+
+
+def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dict]:
     """
     Re-detect a custom channel's stream URL from its source page, caching the
     result for _REDETECT_TTL seconds.  Blocks in the request path, but the
@@ -55,7 +73,7 @@ def _redetect_custom_stream(channel) -> tuple[str, dict]:
     cached = _CUSTOM_STREAM_CACHE.get(channel_id)
     if cached:
         cached_url, cached_hdrs, fetched_at = cached
-        if now - fetched_at < _REDETECT_TTL:
+        if now - fetched_at < ttl:
             return cached_url, cached_hdrs
 
     from ..scrapers.stream_detector import StreamDetector
@@ -459,6 +477,52 @@ def custom_manifest_proxy(channel_id: str):
     )
 
 
+@play_bp.route('/play/custom/<channel_id>/live.m3u8')
+def custom_live_manifest(channel_id: str):
+    """
+    Synthetic live HLS manifest for custom channels that currently resolve to a
+    direct video URL instead of HLS.
+
+    The manifest contains a single segment entry pointing at the latest direct
+    video clip URL. Clients keep polling because there is no EXT-X-ENDLIST, and
+    the media sequence increments whenever the clip URL changes.
+    """
+    from urllib.parse import unquote as _unquote
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'custom', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    if channel.page_url:
+        stream_url, _ = _redetect_custom_stream(channel, ttl=_REDETECT_TTL_LIVE)
+    else:
+        stream_url = channel.stream_url or ''
+
+    if not stream_url:
+        abort(502)
+
+    seq = _get_custom_live_seq(channel.id, stream_url)
+    manifest = (
+        '#EXTM3U\n'
+        '#EXT-X-VERSION:3\n'
+        '#EXT-X-TARGETDURATION:65\n'
+        f'#EXT-X-MEDIA-SEQUENCE:{seq}\n'
+        '#EXTINF:60.0,\n'
+        f'{stream_url}\n'
+    )
+    return Response(
+        manifest,
+        mimetype='application/vnd.apple.mpegurl',
+        headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+    )
+
+
 @play_bp.route('/play/custom/segment')
 def custom_segment_proxy():
     """
@@ -610,6 +674,16 @@ def play(source_name: str, channel_id: str):
         fresh_url, _ = _redetect_custom_stream(channel)
         if fresh_url:
             resolved_url = fresh_url
+
+    # For custom channels that currently resolve to a direct video clip instead
+    # of HLS, return a tiny live manifest so HLS-oriented clients keep polling.
+    if source_name == 'custom' and channel.page_url and resolved_url and not _url_is_hls(resolved_url):
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/live.m3u8",
+            302,
+        )
 
     # Custom channels with segment proxying enabled: serve a manifest proxy
     # so the client never needs to send custom headers directly.
