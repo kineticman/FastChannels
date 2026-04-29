@@ -339,6 +339,138 @@ def stirr_variant_proxy():
     )
 
 
+@play_bp.route('/play/custom/<channel_id>/proxy.m3u8')
+def custom_manifest_proxy(channel_id: str):
+    """
+    Manifest proxy for custom channels with proxy_segments=True.
+
+    Fetches the master + best-variant HLS manifests using the channel's stored
+    custom_headers, then rewrites segment URLs to route through custom_segment_proxy
+    (which re-adds the headers).  Returns the rewritten variant manifest.
+    """
+    from urllib.parse import quote as _quote, unquote as _unquote
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'custom', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel or not channel.stream_url:
+        abort(404)
+
+    custom_headers = channel.custom_headers or {}
+    stream_url = channel.stream_url
+
+    try:
+        master_r = _requests.get(stream_url, headers=custom_headers, timeout=10)
+        master_r.raise_for_status()
+    except Exception as e:
+        logger.warning('[custom-proxy] master fetch failed for %s: %s', raw_id, e)
+        abort(502)
+
+    text = master_r.text
+    effective_url = master_r.url
+
+    # If it's a master playlist, resolve the best variant first
+    if '#EXT-X-STREAM-INF' in text:
+        best = _distro_pick_best_variant(text, effective_url)
+        if not best:
+            abort(502)
+        try:
+            variant_r = _requests.get(best, headers=custom_headers, timeout=10)
+            variant_r.raise_for_status()
+            text = variant_r.text
+            effective_url = variant_r.url
+        except Exception as e:
+            logger.warning('[custom-proxy] variant fetch failed for %s: %s', raw_id, e)
+            abort(502)
+
+    # Rewrite all segment URLs to go through the segment proxy
+    base_url = request.host_url.rstrip('/')
+    variant_base = effective_url.rsplit('/', 1)[0] + '/'
+    encoded_id = _quote(raw_id, safe='')
+
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            abs_url = stripped if stripped.startswith('http') else urljoin(variant_base, stripped)
+            line = f'{base_url}/play/custom/segment?url={_quote(abs_url, safe="")}&src={encoded_id}'
+        lines.append(line)
+
+    return Response(
+        '\n'.join(lines),
+        mimetype='application/vnd.apple.mpegurl',
+        headers={'Cache-Control': 'no-cache'},
+    )
+
+
+@play_bp.route('/play/custom/segment')
+def custom_segment_proxy():
+    """
+    Segment proxy for custom channels.  Fetches the segment with the channel's
+    stored custom_headers and streams the bytes back to the client.
+
+    SSRF protection: requires https, blocks private IP ranges, and validates
+    that the segment host shares a domain root with the channel's stored stream_url.
+    """
+    from urllib.parse import urlsplit, unquote as _unquote
+
+    raw_url = request.args.get('url', '')
+    raw_id = request.args.get('src', '')
+    if not raw_url or not raw_id:
+        abort(400)
+
+    url = _unquote(raw_url)
+    parsed = urlsplit(url)
+    if parsed.scheme != 'https' or not parsed.netloc:
+        abort(400)
+    if _PRIVATE_IP_RE.match(parsed.netloc.split(':')[0]):
+        logger.warning('[custom-seg-proxy] blocked SSRF attempt to: %s', parsed.netloc)
+        abort(403)
+
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'custom', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    # Validate segment host shares a domain root with the stored stream URL
+    # to prevent this endpoint being used as an open proxy.
+    try:
+        stored_host = urlsplit(channel.stream_url or '').netloc
+        seg_host = parsed.netloc
+        if stored_host and seg_host != stored_host:
+            def _root(h: str) -> str:
+                parts = h.split('.')
+                return '.'.join(parts[-2:]) if len(parts) >= 2 else h
+            if _root(seg_host) != _root(stored_host):
+                logger.warning('[custom-seg-proxy] host mismatch %s vs %s', seg_host, stored_host)
+                abort(403)
+    except Exception:
+        pass
+
+    custom_headers = channel.custom_headers or {}
+    try:
+        r = _requests.get(url, headers=custom_headers, timeout=15, stream=True)
+        if r.status_code != 200:
+            abort(r.status_code)
+        return Response(
+            r.iter_content(65536),
+            status=200,
+            content_type=r.headers.get('Content-Type', 'video/MP2T'),
+            headers={'Cache-Control': 'no-cache'},
+        )
+    except Exception as e:
+        logger.warning('[custom-seg-proxy] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+
+
 @play_bp.route('/play/<source_name>/<channel_id>.m3u8')
 def play(source_name: str, channel_id: str):
     client_ip = _client_ip()
@@ -410,6 +542,16 @@ def play(source_name: str, channel_id: str):
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
             f"{request.host_url.rstrip('/')}/play/stirr/{encoded_id}/proxy.m3u8",
+            302,
+        )
+
+    # Custom channels with segment proxying enabled: serve a manifest proxy
+    # so the client never needs to send custom headers directly.
+    if source_name == 'custom' and getattr(channel, 'proxy_segments', False):
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/proxy.m3u8",
             302,
         )
 

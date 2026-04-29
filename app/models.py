@@ -102,6 +102,8 @@ class Channel(db.Model):
     description       = db.Column(db.Text, nullable=True)         # optional channel description from scraper
     disable_reason    = db.Column(db.String(64), nullable=True)  # e.g. 'DRM'; set by play proxy
     stream_info       = db.Column(db.JSON, nullable=True)        # populated by audit/inspect: max_resolution, video_codec, has_4k, variants
+    custom_headers    = db.Column(db.JSON, nullable=True)       # headers required to access stream (custom channels)
+    proxy_segments    = db.Column(db.Boolean, default=False, nullable=False)  # route segments through FC proxy
     is_duplicate      = db.Column(db.Boolean, default=False)  # set by user — manual duplicate label (does not disable)
     is_active         = db.Column(db.Boolean, default=True)   # set by scraper — channel exists upstream
     is_enabled        = db.Column(db.Boolean, default=True)   # set by user — include in M3U/EPG
@@ -157,6 +159,8 @@ class Channel(db.Model):
             'disable_reason':   self.disable_reason,
             'is_duplicate':     self.is_duplicate,
             'is_enabled':       self.is_enabled,
+            'custom_headers':   self.custom_headers or {},
+            'proxy_segments':   bool(self.proxy_segments),
             'last_seen_at':     self.last_seen_at.isoformat() if self.last_seen_at else None,
             'missed_scrapes':   self.missed_scrapes or 0,
         }

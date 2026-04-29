@@ -1824,7 +1824,9 @@ def _schedule_due_scrapes():
 
         sources = Source.query.filter_by(is_enabled=True).all()
         for source in sources:
-            interval_secs = (source.scrape_interval or 360) * 60
+            if not source.scrape_interval:
+                continue  # scrape_interval=0 means never auto-scrape
+            interval_secs = source.scrape_interval * 60
 
             last_scraped = _utc_aware(source.last_scraped_at)
             last_queued = _utc_aware(_last_enqueued.get(source.name))
@@ -1850,6 +1852,17 @@ def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
         default_disabled_sources = {'amazon_prime_free', 'sling', 'localnow', 'pluto'}
+        # Custom Channels source: always seeded, always enabled, never auto-scraped
+        if not Source.query.filter_by(name='custom').first():
+            db.session.add(Source(
+                name='custom',
+                display_name='Custom Channels',
+                scrape_interval=0,
+                config={},
+                epg_only=False,
+                is_enabled=True,
+            ))
+            db.session.flush()
         seeded_names = set()
         for name, cls in scrapers.items():
             canonical_name = getattr(cls, 'source_name', None) or name

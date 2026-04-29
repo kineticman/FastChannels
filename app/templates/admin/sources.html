@@ -435,31 +435,41 @@
         <tbody>
           {% for source in sources %}
           {% set cfg_status = source_config_status.get(source.id, 'none') %}
+          {% set is_custom = source.name == 'custom' %}
 
-          <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}">
+          <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}"
+              {% if is_custom %}data-custom="true"{% endif %}>
             <td class="col-source">
               <div class="source-name-wrap">
                 <span class="source-name">{{ source.display_name }}</span>
-                {% if source.last_error %}<span class="err-pip" title="{{ source.last_error }}">⚠</span>{% endif %}
-                {% if cfg_status == 'configured' %}
-                  <span class="config-badge configured" id="config-badge-{{ source.id }}">Configured</span>
-                {% elif cfg_status == 'required' %}
-                  <span class="config-badge needs-config" id="config-badge-{{ source.id }}">⚠ Needs Config</span>
-                {% elif cfg_status == 'optional' %}
-                  <span class="config-badge anon" id="config-badge-{{ source.id }}">Optional</span>
+                {% if not is_custom %}
+                  {% if source.last_error %}<span class="err-pip" title="{{ source.last_error }}">⚠</span>{% endif %}
+                  {% if cfg_status == 'configured' %}
+                    <span class="config-badge configured" id="config-badge-{{ source.id }}">Configured</span>
+                  {% elif cfg_status == 'required' %}
+                    <span class="config-badge needs-config" id="config-badge-{{ source.id }}">⚠ Needs Config</span>
+                  {% elif cfg_status == 'optional' %}
+                    <span class="config-badge anon" id="config-badge-{{ source.id }}">Optional</span>
+                  {% else %}
+                    <span class="config-badge auto" id="config-badge-{{ source.id }}">Auto</span>
+                  {% endif %}
                 {% else %}
-                  <span class="config-badge auto" id="config-badge-{{ source.id }}">Auto</span>
+                  <span class="config-badge auto" style="font-style:italic">User-defined</span>
                 {% endif %}
               </div>
               <div class="source-meta" id="source-meta-{{ source.id }}">
                 <span id="ch-count-{{ source.id }}">{{ source.to_dict().channel_count }}</span> channels
+                {% if not is_custom %}
                 &nbsp;·&nbsp; Every <span id="scrape-interval-display-{{ source.id }}">{{ source.scrape_interval }}</span> min
                 &nbsp;·&nbsp; Last scraped: {{ source.last_scraped_at | localtime }}
                 {% if source.last_audited_at %}&nbsp;·&nbsp; Audited: {{ source.last_audited_at | localtime }}{% endif %}
+                {% endif %}
               </div>
+              {% if not is_custom %}
               <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
               <div class="audit-status" id="audit-status-{{ source.id }}"></div>
               <div class="audit-last-result" id="audit-last-result-{{ source.id }}"></div>
+              {% endif %}
             </td>
 
             <td class="col-toggle">
@@ -478,23 +488,29 @@
 
             <td class="col-actions">
               <div class="dash-actions">
-                <button class="btn btn-run btn-sm" data-label="Scrape" onclick="run({{ source.id }}, this)"
-                        {% if not source.is_enabled %}disabled{% endif %}>Scrape</button>
-                <button class="btn btn-run btn-sm" data-label="Force Full" style="opacity:0.75" onclick="forceRefreshSource({{ source.id }}, this)"
-                        {% if not source.is_enabled %}disabled{% endif %}
-                        title="Clear scrape state and force a full channel + guide refresh">Force Full</button>
-                {% if audit_enabled.get(source.name) %}
-                <button class="btn btn-audit btn-sm"
-                        onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
-                        {% if not source.is_enabled %}disabled{% endif %}>Audit</button>
+                {% if is_custom %}
+                  <button class="btn btn-run btn-sm" onclick="openCustomChannelModal()"
+                          {% if not source.is_enabled %}disabled{% endif %}>+ Add Channel</button>
+                {% else %}
+                  <button class="btn btn-run btn-sm" data-label="Scrape" onclick="run({{ source.id }}, this)"
+                          {% if not source.is_enabled %}disabled{% endif %}>Scrape</button>
+                  <button class="btn btn-run btn-sm" data-label="Force Full" style="opacity:0.75" onclick="forceRefreshSource({{ source.id }}, this)"
+                          {% if not source.is_enabled %}disabled{% endif %}
+                          title="Clear scrape state and force a full channel + guide refresh">Force Full</button>
+                  {% if audit_enabled.get(source.name) %}
+                  <button class="btn btn-audit btn-sm"
+                          onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
+                          {% if not source.is_enabled %}disabled{% endif %}>Audit</button>
+                  {% endif %}
+                  <button class="btn btn-configure btn-sm" id="configure-btn-{{ source.id }}"
+                          onclick="toggleConfigPanel({{ source.id }})">Configure ▾</button>
                 {% endif %}
-                <button class="btn btn-configure btn-sm" id="configure-btn-{{ source.id }}"
-                        onclick="toggleConfigPanel({{ source.id }})">Configure ▾</button>
               </div>
             </td>
           </tr>
 
-          <!-- Collapsible config panel row -->
+          <!-- Collapsible config panel row (not shown for custom source) -->
+          {% if not is_custom %}
           <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" style="display:none">
             <td colspan="3" class="config-panel-cell">
               <div class="config-panel" id="card-{{ source.id }}"
@@ -532,6 +548,7 @@
               </div>
             </td>
           </tr>
+          {% endif %}
           {% endfor %}
         </tbody>
       </table>
@@ -558,6 +575,79 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" onclick="cancelDisable()">Cancel</button>
         <button class="btn btn-confirm" onclick="confirmDisable()">Disable &amp; Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom Channel Modal -->
+  <div class="modal-overlay" id="custom-channel-modal" onclick="closeCustomChannelModal(event)">
+    <div class="modal-box" style="width:560px;max-width:95vw;max-height:90vh;overflow-y:auto;padding:1.5rem 1.75rem;">
+      <h2 id="custom-modal-title" style="font-size:1.05rem;font-weight:700;margin-bottom:1.25rem;">Add Custom Channel</h2>
+
+      <!-- Stream URL + Detect -->
+      <div style="margin-bottom:1.1rem;">
+        <label style="display:block;font-size:0.74rem;font-weight:700;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.35rem;">
+          Stream / Page URL <span style="color:var(--danger)">*</span>
+        </label>
+        <div style="display:flex;gap:.5rem;">
+          <input id="cc-input-url" type="text" placeholder="https://example.com/player  or  https://cdn.example.com/live.m3u8"
+                 style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:.5rem .7rem;color:var(--text);font-size:.84rem;outline:none;"
+                 oninput="onCustomUrlInput()">
+          <button class="btn btn-run btn-sm" id="cc-detect-btn" onclick="detectStream()" style="white-space:nowrap;min-width:72px;">Detect</button>
+        </div>
+        <div id="cc-detect-status" style="font-size:.76rem;margin-top:.4rem;min-height:1rem;"></div>
+      </div>
+
+      <!-- Detection result panel -->
+      <div id="cc-detect-result" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.85rem 1rem;margin-bottom:1.1rem;font-size:.82rem;">
+        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;">
+          <span id="cc-result-icon" style="font-size:1rem;"></span>
+          <strong id="cc-result-label" style="color:var(--text);"></strong>
+        </div>
+        <div id="cc-result-stream" style="word-break:break-all;color:var(--text-soft);font-size:.75rem;margin-bottom:.4rem;"></div>
+        <div id="cc-result-headers" style="color:var(--text-muted);font-size:.74rem;"></div>
+        <!-- Proxy segments toggle -->
+        <div id="cc-proxy-wrap" style="display:none;margin-top:.65rem;padding-top:.65rem;border-top:1px solid var(--border);">
+          <label style="display:inline-flex;align-items:center;gap:.5rem;cursor:pointer;font-size:.82rem;color:var(--text-soft);">
+            <input type="checkbox" id="cc-proxy-toggle" style="accent-color:var(--accent-strong);cursor:pointer;">
+            Proxy segments through FastChannels (required when headers are needed for segment access)
+          </label>
+        </div>
+      </div>
+
+      <!-- Channel metadata -->
+      <div class="fields-grid" style="margin-bottom:1rem;">
+        <div class="field field-full">
+          <label>Channel Name <span class="req">*</span></label>
+          <input id="cc-input-name" type="text" placeholder="My Custom Channel">
+        </div>
+        <div class="field field-full">
+          <label>Description</label>
+          <input id="cc-input-desc" type="text" placeholder="Shown as tvg-description in M3U output">
+        </div>
+        <div class="field">
+          <label>Logo URL</label>
+          <input id="cc-input-logo" type="text" placeholder="https://...">
+        </div>
+        <div class="field">
+          <label>Category</label>
+          <input id="cc-input-category" type="text" placeholder="News, Sports, Movies…">
+        </div>
+        <div class="field">
+          <label>Language</label>
+          <input id="cc-input-language" type="text" placeholder="en" value="en" style="width:100px;">
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding-top:.75rem;border-top:1px solid var(--border);">
+        <div>
+          <button id="cc-delete-btn" class="btn btn-danger btn-sm" style="display:none;" onclick="deleteCustomChannel()">Delete</button>
+        </div>
+        <div style="display:flex;gap:.75rem;align-items:center;">
+          <span id="cc-save-status" style="font-size:.78rem;font-weight:500;"></span>
+          <button class="btn btn-cancel btn-sm" onclick="closeCustomChannelModal()">Cancel</button>
+          <button class="btn btn-run btn-sm" id="cc-save-btn" onclick="saveCustomChannel()">Save Channel</button>
+        </div>
       </div>
     </div>
   </div>
@@ -685,14 +775,18 @@
 
     // ── Source enable/disable ─────────────────────────────────────────────
     function onSourceToggle(sourceId, sourceName, checkbox) {
-      if (!checkbox.checked) {
+      const row = document.getElementById(`dash-row-${sourceId}`);
+      const isCustom = row && row.dataset.custom === 'true';
+      if (!checkbox.checked && !isCustom) {
+        // Normal sources: show destructive confirm before disabling
         checkbox.checked = true;
         _pendingSourceId = sourceId;
         _pendingCheckbox = checkbox;
         document.getElementById('modal-source-name').textContent = sourceName;
         document.getElementById('confirm-modal').classList.add('open');
       } else {
-        setSourceEnabled(sourceId, true, checkbox);
+        // Custom source or re-enabling: no destructive action needed
+        setSourceEnabled(sourceId, checkbox.checked, checkbox);
       }
     }
 
@@ -1722,6 +1816,211 @@
         }
       } catch (e) {
         console.error('Failed to refresh overlap banner:', e);
+      }
+    }
+
+    // ── Custom Channel modal ─────────────────────────────────────────────────
+    let _ccEditId = null;   // null = create, number = editing channel id
+    let _ccDetectedUrl = null;
+    let _ccDetectedHeaders = {};
+
+    function openCustomChannelModal(channelData) {
+      _ccEditId = channelData ? channelData.id : null;
+      _ccDetectedUrl = channelData ? channelData.stream_url : null;
+      _ccDetectedHeaders = channelData ? (channelData.custom_headers || {}) : {};
+
+      document.getElementById('custom-modal-title').textContent =
+        _ccEditId ? 'Edit Custom Channel' : 'Add Custom Channel';
+      document.getElementById('cc-input-url').value =
+        channelData ? (channelData.stream_url || '') : '';
+      document.getElementById('cc-input-name').value  = channelData ? channelData.name || '' : '';
+      document.getElementById('cc-input-desc').value  = channelData ? channelData.description || '' : '';
+      document.getElementById('cc-input-logo').value  = channelData ? channelData.logo_url || '' : '';
+      document.getElementById('cc-input-category').value = channelData ? channelData.category || '' : '';
+      document.getElementById('cc-input-language').value = channelData ? (channelData.language || 'en') : 'en';
+      document.getElementById('cc-proxy-toggle').checked = channelData ? !!channelData.proxy_segments : false;
+      document.getElementById('cc-detect-status').textContent = '';
+      document.getElementById('cc-detect-status').style.color = '';
+      document.getElementById('cc-save-status').textContent = '';
+      document.getElementById('cc-delete-btn').style.display = _ccEditId ? 'inline-flex' : 'none';
+
+      if (channelData && channelData.stream_url) {
+        _showDetectResult(true, channelData.stream_url, channelData.custom_headers || {},
+                          !!channelData.proxy_segments);
+      } else {
+        document.getElementById('cc-detect-result').style.display = 'none';
+      }
+
+      document.getElementById('custom-channel-modal').classList.add('open');
+      document.getElementById('cc-input-url').focus();
+    }
+
+    function closeCustomChannelModal(evt) {
+      if (evt && evt.target !== document.getElementById('custom-channel-modal')) return;
+      document.getElementById('custom-channel-modal').classList.remove('open');
+      _ccEditId = null;
+      _ccDetectedUrl = null;
+      _ccDetectedHeaders = {};
+    }
+
+    function onCustomUrlInput() {
+      // Clear previous detection result when the URL is changed
+      document.getElementById('cc-detect-result').style.display = 'none';
+      document.getElementById('cc-detect-status').textContent = '';
+      _ccDetectedUrl = null;
+      _ccDetectedHeaders = {};
+    }
+
+    async function detectStream() {
+      const url = document.getElementById('cc-input-url').value.trim();
+      if (!url) { alert('Enter a URL first.'); return; }
+
+      const btn = document.getElementById('cc-detect-btn');
+      const statusEl = document.getElementById('cc-detect-status');
+      btn.disabled = true;
+      btn.textContent = '…';
+      statusEl.textContent = 'Detecting stream…';
+      statusEl.style.color = 'var(--text-muted)';
+      document.getElementById('cc-detect-result').style.display = 'none';
+
+      try {
+        const r = await fetch('/api/custom-channels/detect', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({url}),
+        });
+        const data = await r.json();
+
+        if (data.success && data.stream_url) {
+          _ccDetectedUrl = data.stream_url;
+          _ccDetectedHeaders = data.headers || {};
+          statusEl.textContent = '';
+          _showDetectResult(true, data.stream_url, data.headers, data.needs_proxy);
+          // Auto-fill name from URL if empty
+          if (!document.getElementById('cc-input-name').value.trim()) {
+            const urlParts = data.stream_url.split('/');
+            const guess = (urlParts[2] || '').replace(/^www\./, '');
+            document.getElementById('cc-input-name').value = guess;
+          }
+        } else {
+          _ccDetectedUrl = data.stream_url || null;
+          _ccDetectedHeaders = {};
+          statusEl.textContent = data.error || 'Detection failed';
+          statusEl.style.color = 'var(--danger)';
+          if (data.stream_url) {
+            _showDetectResult(false, data.stream_url, {}, false);
+          }
+        }
+      } catch (e) {
+        statusEl.textContent = 'Network error: ' + e.message;
+        statusEl.style.color = 'var(--danger)';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Detect';
+      }
+    }
+
+    function _showDetectResult(ok, streamUrl, headers, needsProxy) {
+      const panel = document.getElementById('cc-detect-result');
+      document.getElementById('cc-result-icon').textContent = ok ? '✅' : '⚠️';
+      document.getElementById('cc-result-label').textContent = ok ? 'Stream detected' : 'Stream found (unverified)';
+      document.getElementById('cc-result-stream').textContent = streamUrl || '';
+
+      const hdrEl = document.getElementById('cc-result-headers');
+      const hdrEntries = Object.entries(headers || {});
+      if (hdrEntries.length) {
+        hdrEl.textContent = 'Headers: ' + hdrEntries.map(([k, v]) => `${k}: ${v}`).join(' · ');
+      } else {
+        hdrEl.textContent = 'No special headers required';
+      }
+
+      const proxyWrap = document.getElementById('cc-proxy-wrap');
+      proxyWrap.style.display = needsProxy || hdrEntries.length ? '' : 'none';
+      if (needsProxy) {
+        document.getElementById('cc-proxy-toggle').checked = true;
+      }
+
+      panel.style.display = '';
+    }
+
+    async function saveCustomChannel() {
+      const name = document.getElementById('cc-input-name').value.trim();
+      const rawUrl = document.getElementById('cc-input-url').value.trim();
+      const streamUrl = _ccDetectedUrl || rawUrl;
+
+      if (!name) { alert('Channel name is required.'); return; }
+      if (!streamUrl || !streamUrl.startsWith('http')) {
+        alert('A valid stream URL is required. Use the Detect button or paste a direct .m3u8 URL.');
+        return;
+      }
+
+      const payload = {
+        name,
+        stream_url: streamUrl,
+        description: document.getElementById('cc-input-desc').value.trim() || null,
+        logo_url: document.getElementById('cc-input-logo').value.trim() || null,
+        category: document.getElementById('cc-input-category').value.trim() || null,
+        language: document.getElementById('cc-input-language').value.trim() || 'en',
+        custom_headers: _ccDetectedHeaders || {},
+        proxy_segments: document.getElementById('cc-proxy-toggle').checked,
+      };
+
+      const btn = document.getElementById('cc-save-btn');
+      const statusEl = document.getElementById('cc-save-status');
+      btn.disabled = true;
+      statusEl.textContent = 'Saving…';
+      statusEl.style.color = 'var(--text-muted)';
+
+      try {
+        const url = _ccEditId ? `/api/custom-channels/${_ccEditId}` : '/api/custom-channels';
+        const method = _ccEditId ? 'PUT' : 'POST';
+        const r = await fetch(url, {
+          method,
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+        statusEl.textContent = 'Saved!';
+        statusEl.style.color = 'var(--success-soft)';
+        // Update channel count on the custom source row
+        const countEl = document.querySelector('[id^="ch-count-"][id$=""]');
+        document.querySelectorAll('[id^="ch-count-"]').forEach(el => {
+          const srcId = el.id.replace('ch-count-', '');
+          const row = document.getElementById(`dash-row-${srcId}`);
+          if (row && row.dataset.custom === 'true') {
+            fetch(`/api/sources/${srcId}`).then(r => r.json()).then(d => {
+              el.textContent = d.channel_count ?? el.textContent;
+            }).catch(() => {});
+          }
+        });
+        setTimeout(() => {
+          document.getElementById('custom-channel-modal').classList.remove('open');
+          _ccEditId = null; _ccDetectedUrl = null; _ccDetectedHeaders = {};
+        }, 600);
+      } catch (e) {
+        statusEl.textContent = e.message;
+        statusEl.style.color = 'var(--danger)';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function deleteCustomChannel() {
+      if (!_ccEditId) return;
+      if (!confirm('Delete this custom channel? This cannot be undone.')) return;
+
+      const btn = document.getElementById('cc-delete-btn');
+      btn.disabled = true;
+      try {
+        const r = await fetch(`/api/custom-channels/${_ccEditId}`, {method: 'DELETE'});
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        document.getElementById('custom-channel-modal').classList.remove('open');
+        _ccEditId = null; _ccDetectedUrl = null; _ccDetectedHeaders = {};
+      } catch (e) {
+        alert('Delete failed: ' + e.message);
+        btn.disabled = false;
       }
     }
   </script>

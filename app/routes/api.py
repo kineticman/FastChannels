@@ -743,7 +743,7 @@ def update_source(source_id):
             return jsonify({'error': 'Channel number overlaps detected', 'warnings': new_warnings}), 409
     db.session.commit()
     _invalidate_and_refresh_xml()
-    if should_purge:
+    if should_purge and source.name != 'custom':
         trigger_source_channel_purge(source.id)
     return jsonify(source.to_dict())
 
@@ -755,6 +755,117 @@ def delete_source_channels(source_id):
     matched = source.channels.count()
     trigger_source_channel_purge(source.id)
     return jsonify({'status': 'queued', 'source': source.name, 'matched': matched})
+
+
+@api_bp.route('/custom-channels/detect', methods=['POST'])
+def detect_custom_stream():
+    """Probe a URL (web page or direct stream) and return the working HLS URL + headers."""
+    data = request.get_json() or {}
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'url is required'}), 400
+    if not url.startswith(('http://', 'https://')):
+        return jsonify({'error': 'URL must start with http:// or https://'}), 400
+
+    from ..scrapers.stream_detector import StreamDetector
+    result = StreamDetector().detect(url)
+
+    return jsonify({
+        'success': result.success,
+        'stream_url': result.stream_url,
+        'headers': result.headers,
+        'needs_proxy': result.needs_proxy,
+        'error': result.error,
+    })
+
+
+@api_bp.route('/custom-channels', methods=['POST'])
+def create_custom_channel():
+    """Create a user-defined custom channel under the 'custom' source."""
+    import uuid as _uuid
+    from datetime import datetime, timezone as _tz
+
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    stream_url = (data.get('stream_url') or '').strip()
+
+    if not name:
+        return jsonify({'error': 'name is required'}), 400
+    if not stream_url or not stream_url.startswith('http'):
+        return jsonify({'error': 'stream_url must be a valid HTTP(S) URL'}), 400
+
+    custom_source = Source.query.filter_by(name='custom').first()
+    if not custom_source:
+        return jsonify({'error': 'Custom source not found — restart the server to seed it'}), 500
+
+    channel = Channel(
+        source_id=custom_source.id,
+        source_channel_id=str(_uuid.uuid4()),
+        name=name,
+        description=(data.get('description') or '').strip() or None,
+        logo_url=(data.get('logo_url') or '').strip() or None,
+        category=(data.get('category') or '').strip() or None,
+        language=(data.get('language') or 'en').strip() or 'en',
+        stream_url=stream_url,
+        custom_headers=data.get('custom_headers') or {},
+        proxy_segments=bool(data.get('proxy_segments', False)),
+        is_active=True,
+        is_enabled=True,
+        last_seen_at=datetime.now(_tz.utc),
+    )
+    db.session.add(channel)
+    db.session.commit()
+    _invalidate_and_refresh_xml()
+    return jsonify(channel.to_dict()), 201
+
+
+@api_bp.route('/custom-channels/<int:channel_id>', methods=['PUT'])
+def update_custom_channel(channel_id):
+    """Update a custom channel's metadata or stream settings."""
+    channel = Channel.query.get_or_404(channel_id)
+    if not channel.source or channel.source.name != 'custom':
+        return jsonify({'error': 'Not a custom channel'}), 403
+
+    data = request.get_json() or {}
+
+    if 'name' in data:
+        name = (data['name'] or '').strip()
+        if not name:
+            return jsonify({'error': 'name cannot be empty'}), 400
+        channel.name = name
+    if 'description' in data:
+        channel.description = (data['description'] or '').strip() or None
+    if 'logo_url' in data:
+        channel.logo_url = (data['logo_url'] or '').strip() or None
+    if 'category' in data:
+        channel.category = (data['category'] or '').strip() or None
+    if 'language' in data:
+        channel.language = (data['language'] or 'en').strip() or 'en'
+    if 'stream_url' in data:
+        stream_url = (data['stream_url'] or '').strip()
+        if not stream_url.startswith('http'):
+            return jsonify({'error': 'stream_url must be a valid HTTP(S) URL'}), 400
+        channel.stream_url = stream_url
+    if 'custom_headers' in data:
+        channel.custom_headers = data['custom_headers'] or {}
+    if 'proxy_segments' in data:
+        channel.proxy_segments = bool(data['proxy_segments'])
+
+    db.session.commit()
+    _invalidate_and_refresh_xml()
+    return jsonify(channel.to_dict())
+
+
+@api_bp.route('/custom-channels/<int:channel_id>', methods=['DELETE'])
+def delete_custom_channel(channel_id):
+    """Permanently delete a custom channel."""
+    channel = Channel.query.get_or_404(channel_id)
+    if not channel.source or channel.source.name != 'custom':
+        return jsonify({'error': 'Not a custom channel'}), 403
+    db.session.delete(channel)
+    db.session.commit()
+    _invalidate_and_refresh_xml()
+    return jsonify({'status': 'deleted', 'id': channel_id})
 
 
 @api_bp.route('/sources/<int:source_id>/config', methods=['GET'])
