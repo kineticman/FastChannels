@@ -16,11 +16,12 @@ Detection flow:
   5. Return DetectionResult with the first working URL + headers combo.
 """
 from __future__ import annotations
+import json
 import logging
 import html
 import re
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit, urljoin
+from urllib.parse import urlsplit, urljoin, parse_qs, unquote
 
 import requests
 
@@ -60,6 +61,11 @@ _PLAYER_RELATIVE_MEDIA_RE = re.compile(
     r'''(?:file|src|contentUrl)\s*[:=]\s*['"]([^'"]+?\.(?:m3u8|mp4|webm)(?:\?[^'"]*)?)['"]''',
     re.IGNORECASE,
 )
+_OXBLUE_IFRAME_RE = re.compile(r'https?://app\.oxblue\.com/\?openlink=([^&"\']+)', re.IGNORECASE)
+_OXBLUE_OPENLINK_RE = re.compile(r'^https?://app\.oxblue\.com/\?openlink=([^&]+)', re.IGNORECASE)
+_STEAM_WATCH_RE = re.compile(r'^https?://steamcommunity\.com/broadcast/watch/(\d+)', re.IGNORECASE)
+_STEAM_BROADCASTSINFO_RE = re.compile(r'''data-broadcastsinfo="([^"]+)"''', re.IGNORECASE)
+_STEAM_SESSION_RE = re.compile(r'''g_sessionID\s*=\s*"([^"]+)"''', re.IGNORECASE)
 
 _YOUTUBE_RE = re.compile(
     r'^https?://(www\.)?(youtube\.com/(watch|live|embed/|@|channel|user|c/|shorts/)|youtu\.be/)',
@@ -69,6 +75,8 @@ _YT_PLAYER_CLIENTS = ('tv_embedded', 'web_safari', 'web', 'ios')
 
 # Content-types accepted for non-HLS direct video probing
 _VIDEO_CONTENT_TYPES = ('video/', 'audio/', 'application/octet-stream')
+_OXBLUE_APP_ID = 'fc18eb502cb52d060bd93897e21d9491'
+_OXBLUE_API_BASE = 'https://api.oxblue.com/v1'
 
 
 @dataclass
@@ -105,8 +113,9 @@ class StreamDetector:
             origin = self._origin_of(page_url)
 
             for candidate in candidates:
+                candidate = self._unwrap_stream_wrapper(html.unescape(candidate))
                 if _YOUTUBE_RE.match(candidate):
-                    result = self._resolve_youtube(html.unescape(candidate))
+                    result = self._resolve_youtube(candidate)
                     if result.success:
                         return result
                     continue
@@ -141,6 +150,26 @@ class StreamDetector:
     def _origin_of(url: str) -> str:
         p = urlsplit(url)
         return f'{p.scheme}://{p.netloc}'
+
+    @staticmethod
+    def _unwrap_stream_wrapper(url: str) -> str:
+        """
+        Some pages expose player wrapper URLs whose query params contain the real
+        stream URL. Prefer the nested stream when present.
+        """
+        try:
+            parsed = urlsplit(url)
+            params = parse_qs(parsed.query)
+        except Exception:
+            return url
+
+        for key in ('param', 'src', 'url', 'stream', 'file'):
+            values = params.get(key) or []
+            for value in values:
+                candidate = unquote((value or '').strip())
+                if candidate and StreamDetector._is_stream_url(candidate):
+                    return candidate
+        return url
 
     def _extract_from_page(self, session: requests.Session, url: str, depth: int) -> list[str]:
         if depth > self.MAX_IFRAME_DEPTH:
@@ -205,6 +234,8 @@ class StreamDetector:
 
         for extractor in (
             self._extract_brownrice_provider_candidates,
+            self._extract_oxblue_provider_candidates,
+            self._extract_steam_provider_candidates,
             self._extract_player_config_candidates,
             self._extract_json_config_candidates,
         ):
@@ -272,6 +303,148 @@ class StreamDetector:
                 logger.debug('[detector] brownrice script fetch failed %s: %s', script_url[:80], exc)
 
         return candidates
+
+    def _extract_oxblue_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        openlink = self._oxblue_openlink(url, text)
+        if not openlink:
+            return []
+
+        try:
+            api = requests.Session()
+            api.headers.update({
+                'User-Agent': _BROWSER_UA,
+                'X-APP-ID': _OXBLUE_APP_ID,
+            })
+            auth = api.post(
+                f'{_OXBLUE_API_BASE}/openlink-sessions',
+                json={'openLink': openlink},
+                timeout=self.TIMEOUT,
+            )
+            if auth.status_code not in (200, 201):
+                return []
+            session_id = (auth.json() or {}).get('sessionID')
+            if not session_id:
+                return []
+
+            api.headers['Authorization'] = f'Bearer {session_id}'
+            cameras = api.get(f'{_OXBLUE_API_BASE}/cameras', timeout=self.TIMEOUT)
+            if cameras.status_code != 200:
+                return []
+            camera_list = (cameras.json() or {}).get('cameras') or []
+        except Exception as exc:
+            logger.debug('[detector] oxblue lookup failed %s: %s', openlink, exc)
+            return []
+
+        candidates: list[str] = []
+        for camera in camera_list:
+            # OxBlue open links sometimes present a "live" view that is really a
+            # public recorded MP4 fallback; prefer the URL the player itself uses.
+            use_rec_video = camera.get('useRecVideo')
+            if use_rec_video in (True, 1, '1', 'true', 'True'):
+                candidate = (camera.get('videoPathMP4') or '').strip()
+                if candidate and candidate not in candidates:
+                    candidates.append(candidate)
+                continue
+
+            cam_id = (camera.get('id') or '').strip()
+            if cam_id:
+                hls_url = f'https://livestream.oxblue.com/hls/OxStreamer/{cam_id}/index.m3u8'
+                if hls_url not in candidates:
+                    candidates.append(hls_url)
+
+        return candidates
+
+    @staticmethod
+    def _oxblue_openlink(url: str, text: str) -> str | None:
+        parsed = urlsplit(url)
+        if parsed.netloc.lower() == 'app.oxblue.com':
+            params = parse_qs(parsed.query)
+            values = params.get('openlink') or params.get('openLink') or []
+            if values:
+                return unquote(values[0]).strip()
+
+        match = _OXBLUE_IFRAME_RE.search(text)
+        if match:
+            return unquote(match.group(1)).strip()
+        return None
+
+    def _extract_steam_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        steamid = self._steam_broadcast_steamid(url, text)
+        session_id = self._steam_page_session_id(text)
+        if not steamid or not session_id:
+            return []
+
+        try:
+            info = session.get(
+                'https://steamcommunity.com/broadcast/getbroadcastinfo/',
+                params={'steamid': steamid, 'broadcastid': 0},
+                timeout=self.TIMEOUT,
+            )
+            if info.status_code != 200:
+                return []
+            info_data = info.json() or {}
+            if not info_data.get('is_online'):
+                return []
+
+            mpd = session.get(
+                'https://steamcommunity.com/broadcast/getbroadcastmpd/',
+                params={
+                    'steamid': steamid,
+                    'broadcastid': 0,
+                    'viewertoken': 0,
+                    'sessionid': session_id,
+                    'watchlocation': 5,
+                },
+                timeout=self.TIMEOUT,
+            )
+            if mpd.status_code != 200:
+                return []
+            mpd_data = mpd.json() or {}
+        except Exception as exc:
+            logger.debug('[detector] steam broadcast lookup failed %s: %s', steamid, exc)
+            return []
+
+        candidates: list[str] = []
+        for key in ('hls_url', 'url'):
+            candidate = (mpd_data.get(key) or '').strip()
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+        return candidates
+
+    @staticmethod
+    def _steam_broadcast_steamid(url: str, text: str) -> str | None:
+        match = _STEAM_WATCH_RE.match(url)
+        if match:
+            return match.group(1)
+
+        info_match = _STEAM_BROADCASTSINFO_RE.search(text)
+        if not info_match:
+            return None
+        try:
+            raw = html.unescape(info_match.group(1))
+            data = json.loads(raw)
+        except Exception:
+            return None
+        steamid = (data.get('steamid') or '').strip()
+        return steamid or None
+
+    @staticmethod
+    def _steam_page_session_id(text: str) -> str | None:
+        match = _STEAM_SESSION_RE.search(text)
+        if not match:
+            return None
+        value = (match.group(1) or '').strip()
+        return value or None
 
     @staticmethod
     def _extract_brownrice_candidates(text: str) -> list[str]:
