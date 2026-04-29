@@ -757,6 +757,21 @@ def delete_source_channels(source_id):
     return jsonify({'status': 'queued', 'source': source.name, 'matched': matched})
 
 
+@api_bp.route('/custom-channels', methods=['GET'])
+def list_custom_channels():
+    """Return all channels belonging to the custom source."""
+    custom_source = Source.query.filter_by(name='custom').first()
+    if not custom_source:
+        return jsonify([])
+    channels = (
+        Channel.query
+        .filter_by(source_id=custom_source.id)
+        .order_by(Channel.name)
+        .all()
+    )
+    return jsonify([ch.to_dict() for ch in channels])
+
+
 @api_bp.route('/custom-channels/detect', methods=['POST'])
 def detect_custom_stream():
     """Probe a URL (web page or direct stream) and return the working HLS URL + headers."""
