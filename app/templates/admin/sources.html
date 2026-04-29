@@ -1859,6 +1859,8 @@
       }
     }
 
+    const _customChannelCache = {};
+
     async function loadCustomChannelList() {
       const listEl = document.getElementById('custom-channel-list');
       if (!listEl) return;
@@ -1870,6 +1872,7 @@
           listEl.innerHTML = '<div style="color:var(--text-muted);font-size:.83rem;">No custom channels yet. Click + Add Channel to create one.</div>';
           return;
         }
+        channels.forEach(ch => { _customChannelCache[ch.id] = ch; });
         listEl.innerHTML = channels.map(ch => `
           <div style="display:flex;align-items:center;gap:.75rem;padding:.6rem .75rem;background:var(--bg);border:1px solid var(--border);border-radius:7px;">
             <div style="flex:1;min-width:0;">
@@ -1882,7 +1885,7 @@
             <div style="display:flex;align-items:center;gap:.4rem;flex-shrink:0;">
               <span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:${ch.is_enabled ? 'var(--success-soft)' : 'var(--text-muted)'};border:1px solid var(--border);">${ch.is_enabled ? 'On' : 'Off'}</span>
               ${ch.proxy_segments ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--accent-soft);border:1px solid var(--border);">Proxied</span>' : ''}
-              <button class="btn btn-configure btn-sm" onclick='editCustomChannel(${JSON.stringify(ch)})'>Edit</button>
+              <button class="btn btn-configure btn-sm" onclick="editCustomChannel(${ch.id})">Edit</button>
             </div>
           </div>
         `).join('');
@@ -1895,7 +1898,9 @@
       return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
-    function editCustomChannel(channelData) {
+    function editCustomChannel(channelId) {
+      const channelData = _customChannelCache[channelId];
+      if (!channelData) return;
       openCustomChannelModal(channelData);
     }
 
