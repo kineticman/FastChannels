@@ -12,3 +12,4 @@ apscheduler==3.10.4
 playwright
 Pillow==11.1.0
 curl_cffi
+yt-dlp

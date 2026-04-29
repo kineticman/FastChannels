@@ -624,6 +624,7 @@
         </div>
         <div id="cc-result-stream" style="word-break:break-all;color:var(--text-soft);font-size:.75rem;margin-bottom:.4rem;"></div>
         <div id="cc-result-headers" style="color:var(--text-muted);font-size:.74rem;"></div>
+        <div id="cc-youtube-note" style="display:none;margin-top:.4rem;font-size:.74rem;color:var(--text-muted);">YouTube stream URLs expire — <em>Re-detect stream on play</em> is strongly recommended.</div>
         <!-- Proxy segments toggle -->
         <div id="cc-proxy-wrap" style="display:none;margin-top:.65rem;padding-top:.65rem;border-top:1px solid var(--border);">
           <label style="display:inline-flex;align-items:center;gap:.5rem;cursor:pointer;font-size:.82rem;color:var(--text-soft);">
@@ -1955,11 +1956,13 @@
       document.getElementById('cc-delete-btn').style.display = _ccEditId ? 'inline-flex' : 'none';
 
       if (channelData && channelData.stream_url) {
+        const _editIsYt = !!(channelData.page_url && /youtube\.com|youtu\.be/i.test(channelData.page_url));
         _showDetectResult(true, channelData.stream_url, channelData.custom_headers || {},
-                          !!channelData.proxy_segments, _ccIsPageUrl);
+                          !!channelData.proxy_segments, _ccIsPageUrl, _editIsYt);
       } else {
         document.getElementById('cc-detect-result').style.display = 'none';
         document.getElementById('cc-redetect-wrap').style.display = 'none';
+        document.getElementById('cc-youtube-note').style.display = 'none';
       }
 
       document.getElementById('custom-channel-modal').classList.add('open');
@@ -2006,16 +2009,21 @@
         });
         const data = await r.json();
 
+        const isYt = !!data.is_youtube;
         if (data.success && data.stream_url) {
           _ccDetectedUrl = data.stream_url;
           _ccDetectedHeaders = data.headers || {};
           _ccIsPageUrl = !!data.is_page_url;
           _ccPageUrl = _ccIsPageUrl ? url : null;
           statusEl.textContent = '';
-          _showDetectResult(true, data.stream_url, data.headers, data.needs_proxy, _ccIsPageUrl);
+          _showDetectResult(true, data.stream_url, data.headers, data.needs_proxy, _ccIsPageUrl, isYt);
+          if (isYt) {
+            // YouTube URLs expire — auto-enable re-detect
+            document.getElementById('cc-redetect-toggle').checked = true;
+          }
           // Auto-fill name from URL if empty
           if (!document.getElementById('cc-input-name').value.trim()) {
-            const urlParts = data.stream_url.split('/');
+            const urlParts = (isYt ? url : data.stream_url).split('/');
             const guess = (urlParts[2] || '').replace(/^www\./, '');
             document.getElementById('cc-input-name').value = guess;
           }
@@ -2027,7 +2035,9 @@
           statusEl.textContent = data.error || 'Detection failed';
           statusEl.style.color = 'var(--danger)';
           if (data.stream_url) {
-            _showDetectResult(false, data.stream_url, {}, false, _ccIsPageUrl);
+            _showDetectResult(false, data.stream_url, {}, false, _ccIsPageUrl, isYt);
+          } else if (isYt) {
+            _showDetectResult(false, null, {}, false, true, true);
           }
         }
       } catch (e) {
@@ -2039,10 +2049,12 @@
       }
     }
 
-    function _showDetectResult(ok, streamUrl, headers, needsProxy, isPageUrl) {
+    function _showDetectResult(ok, streamUrl, headers, needsProxy, isPageUrl, isYoutube) {
       const panel = document.getElementById('cc-detect-result');
       document.getElementById('cc-result-icon').textContent = ok ? '✅' : '⚠️';
-      document.getElementById('cc-result-label').textContent = ok ? 'Stream detected' : 'Stream found (unverified)';
+      document.getElementById('cc-result-label').textContent =
+        isYoutube ? (ok ? 'YouTube stream detected' : 'YouTube (extraction failed)')
+                  : (ok ? 'Stream detected' : 'Stream found (unverified)');
       document.getElementById('cc-result-stream').textContent = streamUrl || '';
 
       const hdrEl = document.getElementById('cc-result-headers');
@@ -2050,7 +2062,7 @@
       if (hdrEntries.length) {
         hdrEl.textContent = 'Headers: ' + hdrEntries.map(([k, v]) => k + ': ' + v).join(' · ');
       } else {
-        hdrEl.textContent = 'No special headers required';
+        hdrEl.textContent = isYoutube ? '' : 'No special headers required';
       }
 
       const proxyWrap = document.getElementById('cc-proxy-wrap');
@@ -2059,7 +2071,8 @@
         document.getElementById('cc-proxy-toggle').checked = true;
       }
 
-      document.getElementById('cc-redetect-wrap').style.display = isPageUrl ? '' : 'none';
+      document.getElementById('cc-redetect-wrap').style.display = isPageUrl || isYoutube ? '' : 'none';
+      document.getElementById('cc-youtube-note').style.display = isYoutube ? '' : 'none';
 
       panel.style.display = '';
     }

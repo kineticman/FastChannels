@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
+# Keep yt-dlp at GitHub master — YouTube extraction breaks on stale PyPI releases
+RUN pip install --force-reinstall "yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
 RUN playwright install-deps chromium && playwright install chromium
 
 COPY . .

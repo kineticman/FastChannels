@@ -40,6 +40,12 @@ _PROP_RE = re.compile(
 )
 _IFRAME_RE = re.compile(r'''<iframe[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
 
+_YOUTUBE_RE = re.compile(
+    r'^https?://(www\.)?(youtube\.com/(watch|live|@|channel|user|c/|shorts/)|youtu\.be/)',
+    re.IGNORECASE,
+)
+_YT_PLAYER_CLIENTS = ('tv_embedded', 'web_safari', 'web', 'ios')
+
 
 @dataclass
 class DetectionResult:
@@ -48,6 +54,7 @@ class DetectionResult:
     needs_proxy: bool = False   # True when segment access also requires headers
     success: bool = False
     error: str | None = None
+    is_youtube: bool = False
 
 
 class StreamDetector:
@@ -55,6 +62,9 @@ class StreamDetector:
     TIMEOUT = 12
 
     def detect(self, input_url: str) -> DetectionResult:
+        if _YOUTUBE_RE.match(input_url):
+            return self._resolve_youtube(input_url)
+
         session = requests.Session()
         session.headers.update({'User-Agent': _BROWSER_UA})
 
@@ -207,6 +217,84 @@ class StreamDetector:
                 return None
             return abs_url
         return None
+
+    def _resolve_youtube(self, url: str) -> DetectionResult:
+        """
+        Extract a playable stream URL from a YouTube page using yt-dlp.
+        Tries multiple player clients in order; prefers HLS (m3u8) formats.
+        YouTube URLs expire, so callers should set redetect_on_play=True.
+        """
+        try:
+            import yt_dlp
+        except ImportError:
+            return DetectionResult(
+                is_youtube=True,
+                error='yt-dlp is not installed — rebuild the container to enable YouTube support',
+            )
+
+        last_error = 'Extraction failed'
+        for client in _YT_PLAYER_CLIENTS:
+            try:
+                ydl_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                    'skip_download': True,
+                    # Prefer combined HLS (covers m3u8, m3u8_native, etc.), fall back to best
+                    'format': 'best[protocol~=m3u8]/best',
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': [client],
+                            # Include formats that lack a PO token (needed for server-side extraction)
+                            'formats': ['missing_pot'],
+                            'skip': ['dash', 'translated_subs'],
+                        }
+                    },
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+
+                if not info:
+                    continue
+
+                protocol = info.get('protocol', '')
+                # Prefer manifest_url for m3u8 protocols (HLS playlist), else url
+                if 'm3u8' in protocol:
+                    stream_url = info.get('manifest_url') or info.get('url')
+                else:
+                    stream_url = info.get('url') or info.get('manifest_url')
+
+                if not stream_url or not stream_url.startswith('http'):
+                    continue
+
+                if not self._yt_n_ok(stream_url):
+                    logger.debug('[youtube] client=%s n-param unsolved, skipping', client)
+                    last_error = 'Extracted URL appears throttled (n parameter too long)'
+                    continue
+
+                logger.info('[youtube] resolved via client=%s url=%s…', client, stream_url[:80])
+                return DetectionResult(
+                    stream_url=stream_url,
+                    headers={},
+                    needs_proxy=False,
+                    success=True,
+                    is_youtube=True,
+                )
+            except Exception as exc:
+                last_error = str(exc)
+                logger.debug('[youtube] client=%s failed: %s', client, exc)
+                continue
+
+        return DetectionResult(is_youtube=True, error=f'YouTube extraction failed: {last_error}')
+
+    @staticmethod
+    def _yt_n_ok(url: str) -> bool:
+        """Return False if the YouTube n parameter looks unsolved (throttled)."""
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(url).query)
+        n_vals = qs.get('n', [])
+        if not n_vals:
+            return True  # no n param — not a throttled CDN URL
+        return len(n_vals[0]) <= 20  # short = solved, long = failed
 
     @staticmethod
     def _segment_ok(session: requests.Session, seg_url: str, headers: dict) -> bool:
