@@ -291,6 +291,7 @@ def sources():
         if source_config_status.get(s.id) == 'required'
     ]
 
+    from ..scrapers.category_utils import CANONICAL_CATEGORIES
     return render_template('admin/sources.html',
                            sources=sources_list,
                            chnum_warnings=[],
@@ -298,7 +299,8 @@ def sources():
                            config_required=config_required,
                            source_interval_meta=source_interval_meta,
                            source_config_status=source_config_status,
-                           needs_config=needs_config)
+                           needs_config=needs_config,
+                           canonical_categories=CANONICAL_CATEGORIES)
 
 
 @admin_bp.route('/channels')

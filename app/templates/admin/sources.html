@@ -631,7 +631,12 @@
         </div>
         <div class="field">
           <label>Category</label>
-          <input id="cc-input-category" type="text" placeholder="News, Sports, Movies…">
+          <select id="cc-input-category" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:.5rem .7rem;color:var(--text);font-size:.84rem;outline:none;">
+            <option value="">— None —</option>
+            {% for cat in canonical_categories %}
+            <option value="{{ cat }}">{{ cat }}</option>
+            {% endfor %}
+          </select>
         </div>
         <div class="field">
           <label>Language</label>
