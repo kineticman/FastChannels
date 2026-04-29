@@ -1878,7 +1878,7 @@
             <div style="flex:1;min-width:0;">
               <div style="font-size:.88rem;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(ch.name)}</div>
               <div style="font-size:.74rem;color:var(--text-muted);margin-top:.1rem;">
-                ${ch.category ? `<span style="margin-right:.5rem;">${_esc(ch.category)}</span>` : ''}
+                ${ch.category ? '<span style="margin-right:.5rem;">' + _esc(ch.category) + '</span>' : ''}
                 <span style="opacity:.7;">${_esc((ch.stream_url || '').replace(/\?.*/, '').slice(0, 60))}${(ch.stream_url || '').length > 60 ? '…' : ''}</span>
               </div>
             </div>
