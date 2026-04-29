@@ -63,11 +63,14 @@ _SPANISH_LANGUAGE_MARKERS = (
     'cinepolis',     # Cinépolis (Mexican cinema chain)
     'crimen',        # Spanish for crime — "Crimen", "Todo Crimen"
     'filmex',        # FILMEX Spanish-language movie service
-    'historia',      # Spanish History Channel brand
     'lucha',         # Lucha Libre — "Lucha Plus", "Lucha Libre AAA"
     'saborear',      # "Saborear TV" (Mexican food/lifestyle)
     'sangre',        # Spanish for blood — "Runtime Sangre Fría"
     'sureno',        # fold of sureño — "FreeTV Sureño"
+    # Common unambiguous Spanish words
+    'miedo',         # Spanish for fear — "Mi Miedo Canal"
+    'pelicula',      # fold of película — Spanish for movie
+    'corazon',       # fold of corazón — Spanish for heart
 )
 
 
