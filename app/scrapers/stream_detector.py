@@ -52,6 +52,14 @@ _VIDEO_URL_RE = re.compile(
 _IFRAME_RE = re.compile(r'''<iframe[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
 _SCRIPT_SRC_RE = re.compile(r'''<script[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
 _SCRIPT_BLOCK_RE = re.compile(r'''<script\b[^>]*>(.*?)</script>''', re.IGNORECASE | re.DOTALL)
+_META_VIDEO_RE = re.compile(
+    r'''<meta[^>]+(?:property|name)\s*=\s*['"](og:video|twitter:video)['"][^>]+content\s*=\s*['"]([^'"]+)['"]''',
+    re.IGNORECASE,
+)
+_META_PLAYER_RE = re.compile(
+    r'''<meta[^>]+(?:property|name)\s*=\s*['"](twitter:player)['"][^>]+content\s*=\s*['"]([^'"]+)['"]''',
+    re.IGNORECASE,
+)
 _JSON_URL_RE = re.compile(r'''https?://[^\s"'<>()\[\]{}]+?\.json(?:\?[^\s"'<>()\[\]{}]*)?''', re.IGNORECASE)
 _JSON_REL_RE = re.compile(r'''['"]([^'"]+?\.json(?:\?[^'"]*)?)['"]''', re.IGNORECASE)
 _BROWNRICE_STREAMURL_RE = re.compile(r'''camera\[['"]streamurl['"]\]\s*=\s*['"]([^'"]+)['"]''')
@@ -66,6 +74,9 @@ _OXBLUE_OPENLINK_RE = re.compile(r'^https?://app\.oxblue\.com/\?openlink=([^&]+)
 _STEAM_WATCH_RE = re.compile(r'^https?://steamcommunity\.com/broadcast/watch/(\d+)', re.IGNORECASE)
 _STEAM_BROADCASTSINFO_RE = re.compile(r'''data-broadcastsinfo="([^"]+)"''', re.IGNORECASE)
 _STEAM_SESSION_RE = re.compile(r'''g_sessionID\s*=\s*"([^"]+)"''', re.IGNORECASE)
+_EXPLORE_LIVECAM_RE = re.compile(r'^https?://(www\.)?explore\.org/livecams(?:/|$)', re.IGNORECASE)
+_EARTHCAM_VIDEO_EMBED_RE = re.compile(r'''(?:https?:)?//[^'"\s>]+?/js/video/embed\.php\?[^'"\s>]+''', re.IGNORECASE)
+_TVPASS_CHANNEL_RE = re.compile(r'^https?://(www\.)?tvpass\.org/channel/([^/?#]+)', re.IGNORECASE)
 
 _YOUTUBE_RE = re.compile(
     r'^https?://(www\.)?(youtube\.com/(watch|live|embed/|@|channel|user|c/|shorts/)|youtu\.be/)',
@@ -271,6 +282,10 @@ class StreamDetector:
         candidates: list[str] = []
 
         for extractor in (
+            self._extract_explore_provider_candidates,
+            self._extract_tvpass_provider_candidates,
+            self._extract_twitter_player_candidates,
+            lambda _session, _url, page_text: self._extract_meta_video_candidates(page_text, url),
             self._extract_brownrice_provider_candidates,
             self._extract_oxblue_provider_candidates,
             self._extract_steam_provider_candidates,
@@ -280,6 +295,165 @@ class StreamDetector:
             for c in extractor(session, url, text):
                 if c not in candidates:
                     candidates.append(c)
+
+        return candidates
+
+    def _extract_explore_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        if not _EXPLORE_LIVECAM_RE.match(url):
+            return []
+
+        api = requests.Session()
+        api.headers.update({'User-Agent': _BROWSER_UA})
+        try:
+            r = api.get(
+                'https://omega.explore.org/api/initial',
+                params={'contenttype': 'livecams', 'pageType': 'livecams'},
+                timeout=self.TIMEOUT,
+            )
+            if r.status_code != 200:
+                return []
+            data = r.json() or {}
+            livecam = (data.get('data') or {}).get('default_livecam') or {}
+            video_id = (livecam.get('video_id') or '').strip()
+            if not video_id:
+                return []
+        except Exception as exc:
+            logger.debug('[detector] explore lookup failed %s: %s', url[:80], exc)
+            return []
+
+        candidates: list[str] = []
+        for candidate in (
+            f'https://www.youtube.com/live/{video_id}',
+            f'https://www.youtube.com/watch?v={video_id}',
+            f'https://www.youtube.com/embed/{video_id}',
+        ):
+            if candidate not in candidates:
+                candidates.append(candidate)
+        return candidates
+
+    def _extract_tvpass_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        match = _TVPASS_CHANNEL_RE.match(url)
+        if not match:
+            return []
+
+        slug = unquote(match.group(2)).strip()
+        if not slug:
+            return []
+
+        page_session = requests.Session()
+        page_session.headers.update({'User-Agent': _BROWSER_UA})
+        try:
+            page_resp = page_session.get(url, timeout=self.TIMEOUT)
+            stream_name = self._tvpass_stream_name(page_resp.text) or slug
+            token = page_session.get(
+                f'https://tvpass.org/token/{stream_name}',
+                headers={
+                    'Referer': url,
+                    'Origin': 'https://tvpass.org',
+                    'User-Agent': _BROWSER_UA,
+                },
+                timeout=self.TIMEOUT,
+            )
+            if token.status_code != 200:
+                return []
+            payload = token.json() or {}
+            stream_url = (payload.get('url') or '').strip()
+            if not stream_url:
+                return []
+        except Exception as exc:
+            logger.debug('[detector] tvpass lookup failed %s: %s', slug, exc)
+            return []
+
+        return [stream_url]
+
+    @staticmethod
+    def _tvpass_stream_name(text: str) -> str | None:
+        match = re.search(r'''id=["']stream_name["'][^>]+name=["']([^"']+)["']''', text, re.IGNORECASE)
+        if match:
+            value = html.unescape(match.group(1)).strip()
+            if value:
+                return value
+        return None
+
+    def _extract_twitter_player_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        candidates: list[str] = []
+
+        for m in _META_PLAYER_RE.finditer(text):
+            player_url = urljoin(url, html.unescape((m.group(2) or '').strip()))
+            if not player_url:
+                continue
+            try:
+                r = session.get(player_url, timeout=self.TIMEOUT)
+                if not r.ok:
+                    continue
+            except Exception as exc:
+                logger.debug('[detector] twitter player fetch failed %s: %s', player_url[:80], exc)
+                continue
+
+            player_scripts = [
+                urljoin(player_url, html.unescape((sm.group(1) or '').strip()))
+                for sm in _SCRIPT_SRC_RE.finditer(r.text)
+                if (sm.group(1) or '').strip()
+            ]
+
+            for script_url in player_scripts:
+                try:
+                    sr = session.get(script_url, timeout=self.TIMEOUT)
+                    if not sr.ok:
+                        continue
+                except Exception as exc:
+                    logger.debug('[detector] twitter player script fetch failed %s: %s', script_url[:80], exc)
+                    continue
+
+                script_text = sr.text.replace('\\/', '/')
+                final_embed_urls = _EARTHCAM_VIDEO_EMBED_RE.findall(script_text)
+                for final_embed_url in final_embed_urls:
+                    final_url = urljoin(script_url, html.unescape(final_embed_url))
+                    try:
+                        fr = session.get(final_url, timeout=self.TIMEOUT)
+                        if not fr.ok:
+                            continue
+                    except Exception as exc:
+                        logger.debug('[detector] earthcam final embed fetch failed %s: %s', final_url[:80], exc)
+                        continue
+
+                    final_text = fr.text.replace('\\/', '/')
+                    for c in self._extract_generic_candidates(final_text)[0] + self._extract_generic_candidates(final_text)[1]:
+                        if c not in candidates:
+                            candidates.append(c)
+                    for c in self._extract_provider_candidates(session, final_url, final_text):
+                        if c not in candidates:
+                            candidates.append(c)
+
+        return candidates
+
+    @staticmethod
+    def _extract_meta_video_candidates(text: str, base_url: str) -> list[str]:
+        candidates: list[str] = []
+
+        for m in _META_VIDEO_RE.finditer(text):
+            candidate = urljoin(base_url, html.unescape((m.group(2) or '').strip()))
+            if not candidate:
+                continue
+            if not (StreamDetector._is_stream_url(candidate) or _YOUTUBE_RE.match(candidate)):
+                continue
+            if candidate not in candidates:
+                candidates.append(candidate)
 
         return candidates
 
