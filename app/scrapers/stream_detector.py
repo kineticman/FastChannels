@@ -1,15 +1,19 @@
 """
-Stream detector: given a URL (web page or direct HLS link), discover the
+Stream detector: given a URL (web page or direct stream link), discover the
 working stream URL and the minimum HTTP headers the player needs.
 
 Detection flow:
-  1. If URL already looks like a stream (.m3u8), go straight to probe step.
-  2. Otherwise fetch the page, extract all .m3u8 candidates from JS/HTML,
+  1. YouTube URLs → resolved via yt-dlp (separate path).
+  2. If URL already looks like a stream (.m3u8, .mp4, .webm), go straight to probe.
+  3. Otherwise fetch the page, extract all stream candidates from JS/HTML,
      then follow <iframe src> chains up to MAX_IFRAME_DEPTH levels deep.
-  3. For each candidate, try four header combos in order:
+     HLS (.m3u8) candidates are collected first; direct video (.mp4, .webm)
+     candidates are appended as lower-priority fallbacks.
+  4. For each candidate, try four header combos in order:
        bare → User-Agent only → + Referer → + Origin
-     Both the playlist fetch and a sample segment must succeed.
-  4. Return DetectionResult with the first working URL + headers combo.
+     HLS: the playlist must contain #EXTM3U.
+     Direct video: a HEAD (or GET) must return a video/* content-type.
+  5. Return DetectionResult with the first working URL + headers combo.
 """
 from __future__ import annotations
 
@@ -34,8 +38,14 @@ _M3U8_RE = re.compile(
     re.IGNORECASE,
 )
 # Match JS object properties like src: "...", file: "...", url: "..."
+# Covers both HLS (.m3u8) and direct video (.mp4, .webm) values
 _PROP_RE = re.compile(
-    r'''(?:src|source|file|url|hls)\s*[:=]\s*['"]?(https?://[^\s'"<>()\[\]{}]+?\.m3u8(?:\?[^\s'"<>()\[\]{}]*)?)''',
+    r'''(?:src|source|file|url|hls|video|stream)\s*[:=]\s*['"]?(https?://[^\s'"<>()\[\]{}]+?\.(?:m3u8|mp4|webm)(?:\?[^\s'"<>()\[\]{}]*)?)''',
+    re.IGNORECASE,
+)
+# Match bare direct-video URLs (.mp4, .webm) — lower priority than HLS
+_VIDEO_URL_RE = re.compile(
+    r'https?://[^\s"\'<>()\[\]{}]+?\.(?:mp4|webm)(?:\?[^\s"\'<>()\[\]{}]*)?',
     re.IGNORECASE,
 )
 _IFRAME_RE = re.compile(r'''<iframe[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
@@ -45,6 +55,9 @@ _YOUTUBE_RE = re.compile(
     re.IGNORECASE,
 )
 _YT_PLAYER_CLIENTS = ('tv_embedded', 'web_safari', 'web', 'ios')
+
+# Content-types accepted for non-HLS direct video probing
+_VIDEO_CONTENT_TYPES = ('video/', 'audio/', 'application/octet-stream')
 
 
 @dataclass
@@ -76,7 +89,7 @@ class StreamDetector:
                 page_url = input_url
                 candidates = self._extract_from_page(session, input_url, depth=0)
                 if not candidates:
-                    return DetectionResult(error='No HLS stream URL found on page or in iframes')
+                    return DetectionResult(error='No stream URL found on page or in iframes')
 
             origin = self._origin_of(page_url)
 
@@ -90,7 +103,7 @@ class StreamDetector:
                     stream_url=candidates[0],
                     error='Stream URL found but no header combination allowed access',
                 )
-            return DetectionResult(error='No HLS stream found')
+            return DetectionResult(error='No stream found')
 
         except Exception as exc:
             logger.warning('[detector] unexpected error for %s: %s', input_url[:80], exc)
@@ -101,7 +114,12 @@ class StreamDetector:
     @staticmethod
     def _is_stream_url(url: str) -> bool:
         path = urlsplit(url).path.lower()
-        return '.m3u8' in path or path.endswith('.ts')
+        return any(ext in path for ext in ('.m3u8', '.mp4', '.webm')) or path.endswith('.ts')
+
+    @staticmethod
+    def _is_hls_url(url: str) -> bool:
+        path = urlsplit(url).path.lower()
+        return '.m3u8' in path
 
     @staticmethod
     def _origin_of(url: str) -> str:
@@ -120,28 +138,47 @@ class StreamDetector:
             logger.debug('[detector] page fetch failed %s: %s', url[:80], exc)
             return []
 
-        candidates: list[str] = []
+        hls_candidates: list[str] = []
+        video_candidates: list[str] = []
 
+        # HLS — highest priority
         for m in _M3U8_RE.finditer(text):
             c = m.group(0).rstrip('"\'\\')
-            if c not in candidates:
-                candidates.append(c)
+            if c not in hls_candidates:
+                hls_candidates.append(c)
 
         for m in _PROP_RE.finditer(text):
             c = m.group(1).rstrip('"\'\\')
-            if c not in candidates:
-                candidates.append(c)
+            if '.m3u8' in c.lower():
+                if c not in hls_candidates:
+                    hls_candidates.append(c)
+            else:
+                if c not in video_candidates:
+                    video_candidates.append(c)
 
+        # Direct video (mp4, webm) — lower priority
+        for m in _VIDEO_URL_RE.finditer(text):
+            c = m.group(0).rstrip('"\'\\')
+            if c not in hls_candidates and c not in video_candidates:
+                video_candidates.append(c)
+
+        # Recurse into iframes, keeping HLS-first ordering
+        iframe_hls: list[str] = []
+        iframe_video: list[str] = []
         for m in _IFRAME_RE.finditer(text):
             src = m.group(1).strip()
             if not src or src.startswith('javascript:') or src.startswith('about:'):
                 continue
             iframe_url = urljoin(url, src)
             for c in self._extract_from_page(session, iframe_url, depth + 1):
-                if c not in candidates:
-                    candidates.append(c)
+                if c in hls_candidates or c in video_candidates:
+                    continue
+                if '.m3u8' in c.lower():
+                    iframe_hls.append(c)
+                else:
+                    iframe_video.append(c)
 
-        return candidates
+        return hls_candidates + iframe_hls + video_candidates + iframe_video
 
     def _probe(
         self,
@@ -157,6 +194,18 @@ class StreamDetector:
             {'User-Agent': _BROWSER_UA, 'Referer': page_url, 'Origin': origin},
         ]
 
+        if self._is_hls_url(stream_url):
+            return self._probe_hls(session, stream_url, page_url, origin, combos)
+        return self._probe_direct(session, stream_url, combos)
+
+    def _probe_hls(
+        self,
+        session: requests.Session,
+        stream_url: str,
+        page_url: str,
+        origin: str,
+        combos: list[dict],
+    ) -> DetectionResult:
         for headers in combos:
             try:
                 r = session.get(stream_url, headers=headers, timeout=self.TIMEOUT)
@@ -178,11 +227,50 @@ class StreamDetector:
                     success=True,
                 )
             except Exception as exc:
-                logger.debug('[detector] probe error %s: %s', stream_url[:80], exc)
+                logger.debug('[detector] hls probe error %s: %s', stream_url[:80], exc)
                 continue
 
         return DetectionResult(
             error=f'Stream URL found but no header combination worked: {stream_url[:80]}'
+        )
+
+    def _probe_direct(
+        self,
+        session: requests.Session,
+        stream_url: str,
+        combos: list[dict],
+    ) -> DetectionResult:
+        """Probe a non-HLS direct video URL (mp4, webm, etc.)."""
+        for headers in combos:
+            try:
+                # Prefer HEAD to avoid downloading the file
+                r = session.head(stream_url, headers=headers, timeout=self.TIMEOUT,
+                                 allow_redirects=True)
+                if r.status_code == 405:
+                    # Server doesn't support HEAD — tiny range GET instead
+                    r = session.get(stream_url,
+                                    headers={**headers, 'Range': 'bytes=0-1023'},
+                                    timeout=self.TIMEOUT, stream=True)
+                    r.close()
+                if r.status_code not in (200, 206):
+                    continue
+                ct = r.headers.get('Content-Type', '').lower()
+                if not any(ct.startswith(t) for t in _VIDEO_CONTENT_TYPES):
+                    continue
+
+                logger.info('[detector] direct video probe OK %s ct=%s', stream_url[:80], ct)
+                return DetectionResult(
+                    stream_url=stream_url,
+                    headers=headers,
+                    needs_proxy=False,
+                    success=True,
+                )
+            except Exception as exc:
+                logger.debug('[detector] direct probe error %s: %s', stream_url[:80], exc)
+                continue
+
+        return DetectionResult(
+            error=f'Direct video URL found but not accessible: {stream_url[:80]}'
         )
 
     def _first_segment_url(
