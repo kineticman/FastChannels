@@ -70,6 +70,10 @@ _PLAYER_RELATIVE_MEDIA_RE = re.compile(
     r'''(?:file|src|contentUrl)\s*[:=]\s*['"]([^'"]+?\.(?:m3u8|mp4|webm|mjpg|mjpeg|jpg|jpeg)(?:\?[^'"]*)?)['"]''',
     re.IGNORECASE,
 )
+_STATE_URL_RE = re.compile(
+    r'''(?:["']?(?:streamingUrl|liveStreamingUrl|manifestUrl|masterUrl|hlsUrl|dashUrl|videoUrl|playerUrl|contentUrl|url|src|file|stream)["']?)\s*[:=]\s*['"]([^'"]+?\.(?:m3u8|mp4|webm|mjpg|mjpeg|jpg|jpeg)(?:\?[^'"]*)?)['"]''',
+    re.IGNORECASE,
+)
 _OXBLUE_IFRAME_RE = re.compile(r'https?://app\.oxblue\.com/\?openlink=([^&"\']+)', re.IGNORECASE)
 _OXBLUE_OPENLINK_RE = re.compile(r'^https?://app\.oxblue\.com/\?openlink=([^&]+)', re.IGNORECASE)
 _STEAM_WATCH_RE = re.compile(r'^https?://steamcommunity\.com/broadcast/watch/(\d+)', re.IGNORECASE)
@@ -77,10 +81,16 @@ _STEAM_BROADCASTSINFO_RE = re.compile(r'''data-broadcastsinfo="([^"]+)"''', re.I
 _STEAM_SESSION_RE = re.compile(r'''g_sessionID\s*=\s*"([^"]+)"''', re.IGNORECASE)
 _EXPLORE_LIVECAM_RE = re.compile(r'^https?://(www\.)?explore\.org/livecams(?:/|$)', re.IGNORECASE)
 _ABCNEWS_LIVE_RE = re.compile(r'^https?://(www\.)?abcnews\.com/(live|Live)(?:[?#].*)?$', re.IGNORECASE)
+_CBS_LIVE_STREAM_RE = re.compile(r'^https?://(www\.)?cbs\.com/live-tv/stream/[^/?#]+/?(?:[?#].*)?$', re.IGNORECASE)
+_SHOUT_TV_LIVE_RE = re.compile(r'^https?://(www\.)?watch\.shout-tv\.com/live/\d+(?:[?#].*)?$', re.IGNORECASE)
 _NBCNEWS_WATCH_RE = re.compile(r'^https?://(www\.)?nbcnews\.com/watch(?:[?#].*)?$', re.IGNORECASE)
 _NBCNEWS_CALLLETTERS_RE = re.compile(r'''callLetters":"([^"]+)''', re.IGNORECASE)
 _NBCNEWS_PLAYER_CALLLETTERS_RE = re.compile(
     r'''var\s+callletters\s*=\s*decodeURIComponent\(\s*'([^']+)'\s*\)''',
+    re.IGNORECASE,
+)
+_CBS_STREAMING_URL_RE = re.compile(
+    r'''"(?:streamingUrl|liveStreamingUrl)"\s*:\s*"?((?:https?:\\?/\\?/)[^"']+)''',
     re.IGNORECASE,
 )
 _NBCNEWS_FASTCHANNEL_ENTRY_RE = re.compile(
@@ -247,6 +257,13 @@ class StreamDetector:
             return []
 
         hls_candidates, video_candidates = self._extract_generic_candidates(text)
+        state_hls, state_video = self._extract_embedded_state_candidates(text, url)
+        for c in state_hls:
+            if c not in hls_candidates:
+                hls_candidates.append(c)
+        for c in state_video:
+            if c not in video_candidates:
+                video_candidates.append(c)
 
         # Provider-specific handlers run before iframe recursion so they can use
         # page-local bootstrap config without needing to brute-force every script.
@@ -297,6 +314,8 @@ class StreamDetector:
 
         for extractor in (
             self._extract_abcnews_provider_candidates,
+            self._extract_cbs_provider_candidates,
+            self._extract_shouttv_provider_candidates,
             self._extract_explore_provider_candidates,
             self._extract_nbcnews_provider_candidates,
             self._extract_tvpass_provider_candidates,
@@ -312,6 +331,23 @@ class StreamDetector:
                 if c not in candidates:
                     candidates.append(c)
 
+        return candidates
+
+    def _extract_cbs_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        if not _CBS_LIVE_STREAM_RE.match(url):
+            return []
+
+        candidates: list[str] = []
+        body = html.unescape(text).replace('\\/', '/')
+        for m in _CBS_STREAMING_URL_RE.finditer(body):
+            candidate = html.unescape((m.group(1) or '').strip()).replace('\\/', '/')
+            if candidate.startswith('http') and candidate not in candidates:
+                candidates.append(candidate)
         return candidates
 
     def _extract_abcnews_provider_candidates(
@@ -1008,6 +1044,109 @@ class StreamDetector:
                     candidates.append(candidate)
 
         return candidates
+
+    def _extract_embedded_state_candidates(
+        self,
+        text: str,
+        base_url: str,
+    ) -> tuple[list[str], list[str]]:
+        hls_candidates: list[str] = []
+        video_candidates: list[str] = []
+
+        blocks = list(_SCRIPT_BLOCK_RE.findall(text))
+        if not blocks:
+            blocks = [text]
+
+        for raw_block in blocks:
+            block = html.unescape(raw_block).replace('\\/', '/')
+
+            # Common page-state keys like streamingUrl/liveStreamingUrl often
+            # appear inside inline JS blobs rather than as stand-alone URLs.
+            for m in _STATE_URL_RE.finditer(block):
+                candidate = urljoin(base_url, html.unescape((m.group(1) or '').strip()))
+                if not candidate:
+                    continue
+                if not self._is_stream_url(candidate):
+                    continue
+                stream_type = self.infer_stream_type(candidate)
+                if stream_type == 'hls':
+                    if candidate not in hls_candidates:
+                        hls_candidates.append(candidate)
+                else:
+                    if candidate not in video_candidates:
+                        video_candidates.append(candidate)
+
+            # If a block looks like pure JSON, recurse through it directly.
+            stripped = block.strip()
+            if stripped.startswith('{') or stripped.startswith('['):
+                try:
+                    data = json.loads(stripped)
+                except Exception:
+                    continue
+                for candidate in self._media_urls_from_json(data, base_url):
+                    stream_type = self.infer_stream_type(candidate)
+                    if stream_type == 'hls':
+                        if candidate not in hls_candidates:
+                            hls_candidates.append(candidate)
+                    else:
+                        if candidate not in video_candidates:
+                            video_candidates.append(candidate)
+
+        return hls_candidates, video_candidates
+
+    def _extract_shouttv_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        if not _SHOUT_TV_LIVE_RE.match(url):
+            return []
+
+        candidates: list[str] = []
+        playwright_url = self._shouttv_playwright_hls_url(url)
+        if playwright_url:
+            candidates.append(playwright_url)
+        return candidates
+
+    def _shouttv_playwright_hls_url(self, live_url: str) -> str | None:
+        try:
+            from playwright.sync_api import sync_playwright
+        except Exception as exc:
+            logger.debug('[detector] playwright unavailable for Shout TV fallback: %s', exc)
+            return None
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                seen: list[str] = []
+                hls_json: list[str] = []
+
+                def on_response(resp):
+                    if 'dge-streaming.imggaming.com/api/v3/streaming/events/' not in resp.url:
+                        return
+                    try:
+                        data = resp.json()
+                    except Exception:
+                        return
+                    for key in ('hlsUrl',):
+                        candidate = (data.get(key) or '').strip()
+                        if candidate and candidate not in hls_json:
+                            hls_json.append(candidate)
+
+                page.on('response', on_response)
+                page.goto(live_url, wait_until='domcontentloaded', timeout=30000)
+                page.wait_for_timeout(12000)
+                browser.close()
+
+                if hls_json:
+                    return hls_json[0]
+        except Exception as exc:
+            logger.debug('[detector] playwright Shout TV fallback failed %s: %s', live_url[:80], exc)
+            return None
+
+        return None
 
     def _extract_json_config_candidates(
         self,
