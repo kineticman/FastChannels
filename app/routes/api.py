@@ -4,6 +4,7 @@ import re
 import time as _time
 import requests as _req
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 _APP_START = _time.time()
 from urllib.parse import urljoin as _urljoin, urlsplit
@@ -1332,6 +1333,70 @@ def inspect_channel(channel_id):
 def preview_channel(channel_id):
     ch = Channel.query.get_or_404(channel_id)
     now = datetime.now(timezone.utc)
+    stream_type = (ch.stream_type or '').strip().lower()
+    preview_url = None
+    preview_warning = None
+    preview_warning_kind = None
+
+    def _host_of(url: str | None) -> str:
+        return (urlsplit(url or '').netloc or '').lower()
+
+    def _is_youtube_host(url: str | None) -> bool:
+        host = _host_of(url)
+        return host.endswith('youtube.com') or host.endswith('youtu.be')
+
+    def _is_googlevideo_host(url: str | None) -> bool:
+        host = _host_of(url)
+        return (
+            'googlevideo.com' in host
+            or host.endswith('manifest.googlevideo.com')
+            or 'youtube.com' in host
+            or host.endswith('youtu.be')
+        )
+
+    if ch.source and ch.source.name == 'custom':
+        try:
+            from ..scrapers.stream_detector import StreamDetector
+            from .play import _redetect_custom_stream
+
+            resolved_url = None
+            if ch.page_url:
+                resolved_url, _ = _redetect_custom_stream(ch)
+            if resolved_url:
+                resolved_type = (StreamDetector.infer_stream_type(resolved_url) or stream_type or '').strip().lower()
+                stream_type = resolved_type
+                if resolved_type in {'mp4', 'webm', 'mov', 'mkv', 'direct'}:
+                    preview_url = resolved_url
+                elif resolved_type == 'hls':
+                    preview_url = f'/play/custom/{ch.source_channel_id}/proxy.m3u8'
+                    if _is_youtube_host(ch.page_url) or _is_googlevideo_host(resolved_url):
+                        preview_warning = (
+                            'This is a YouTube-style HLS stream. '
+                            'The built-in browser preview may not play reliably; use "Open Externally" if preview fails.'
+                        )
+                        preview_warning_kind = 'youtube-hls'
+            elif stream_type == 'hls':
+                preview_url = f'/play/custom/{ch.source_channel_id}/proxy.m3u8'
+                if _is_youtube_host(ch.page_url) or _is_googlevideo_host(ch.stream_url):
+                    preview_warning = (
+                        'This is a YouTube-style HLS stream. '
+                        'The built-in browser preview may not play reliably; use "Open Externally" if preview fails.'
+                    )
+                    preview_warning_kind = 'youtube-hls'
+            elif stream_type in {'mp4', 'webm', 'mov', 'mkv', 'direct'} and ch.stream_url:
+                preview_url = ch.stream_url
+        except Exception:
+            preview_url = None
+
+    if not preview_url and ch.source and ch.source.name == 'custom' and stream_type == 'hls':
+        preview_url = f'/play/custom/{ch.source_channel_id}/proxy.m3u8'
+
+    if stream_type in {'mp4', 'webm', 'mov', 'mkv', 'direct'}:
+        playback_mode = 'native'
+    elif stream_type in {'mjpeg', 'jpeg_snapshot'}:
+        playback_mode = 'unsupported'
+    else:
+        playback_mode = 'hls'
 
     current_program = (
         Program.query
@@ -1388,6 +1453,8 @@ def preview_channel(channel_id):
         and ch.source_channel_id
     ):
         play_url = f'/play/{ch.source.name}/{ch.source_channel_id}.m3u8'
+    if not preview_url:
+        preview_url = play_url
 
     future_count = Program.query.filter(
         Program.channel_id == ch.id,
@@ -1409,6 +1476,8 @@ def preview_channel(channel_id):
             'source_name': ch.source.name if ch.source else None,
             'source_display_name': ch.source.display_name if ch.source else None,
             'source_channel_id': ch.source_channel_id,
+            'stream_type': stream_type or None,
+            'playback_mode': playback_mode,
             'category': ch.category,
             'language': ch.language,
             'country': ch.country,
@@ -1422,6 +1491,9 @@ def preview_channel(channel_id):
         'current_program': _program_dict(current_program),
         'next_program': _program_dict(next_program),
         'play_url': play_url,
+        'preview_url': preview_url,
+        'preview_warning': preview_warning,
+        'preview_warning_kind': preview_warning_kind,
         'epg_programs': future_count,
         'epg_hours': epg_hours,
     })

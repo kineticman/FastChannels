@@ -680,6 +680,12 @@
       background: var(--bg); border: 1px solid var(--accent-bg); border-radius: 6px;
       padding: 0.65rem 0.85rem; font-size: 0.8rem; color: var(--accent-soft); margin-bottom: 1.25rem;
     }
+    .modal-preview.modal-preview--warning {
+      background: var(--warning-bg);
+      border-color: var(--warning-border);
+      color: var(--warning-soft);
+      font-weight: 600;
+    }
     .modal-actions { display: flex; gap: 0.6rem; justify-content: flex-end; }
     .modal-actions .btn-cancel-modal {
       background: transparent; color: var(--text-muted); border: 1px solid var(--border);
@@ -717,7 +723,8 @@
 
     /* Toggle switch */
     .toggle-wrap { display: flex; align-items: center; }
-    .inactive-warn { font-size: 0.7rem; color: var(--warning); margin-top: 0.25rem; white-space: nowrap; }
+    .inactive-warn { font-size: 0.7rem; color: var(--warning); margin-top: 0.25rem; white-space: nowrap; cursor: pointer; }
+    .inactive-warn:hover { text-decoration: underline; }
     .toggle {
       position: relative; display: inline-block; width: 36px; height: 20px; cursor: pointer;
     }
@@ -1591,7 +1598,7 @@
                 </label>
               </div>
               {% if ch.is_enabled and not ch.is_active %}
-              <div class="inactive-warn" title="Enabled by you, but missing from recent scrapes — not currently in output">not in output</div>
+              <div class="inactive-warn" id="inactive-warn-{{ ch.id }}" onclick="forceReactivate({{ ch.id }})" title="Missing from recent scrapes — not currently in output. Click to force back into output until the next scrape.">not in output</div>
               {% endif %}
             </td>
           </tr>
@@ -1788,8 +1795,19 @@
 
         const ch = data.channel || {};
         const playUrl = data.play_url;
+        const previewUrl = data.preview_url || data.play_url;
+        const previewWarning = data.preview_warning || '';
+        const playbackMode = String(ch.playback_mode || 'hls').toLowerCase();
+        const streamType = String(ch.stream_type || '').toLowerCase();
+        const useNativeVideo = playbackMode === 'native' || ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(streamType);
         const warning = ch.disable_reason
           ? `<div class="modal-preview">This channel is currently flagged <strong>${escapeHtml(ch.disable_reason)}</strong>. Preview playback may fail or may have been disabled for a reason.</div>`
+          : '';
+        const previewHint = previewWarning
+          ? `<div class="modal-preview modal-preview--warning">${escapeHtml(previewWarning)}</div>`
+          : '';
+        const unsupportedNote = playbackMode === 'unsupported'
+          ? `<div class="modal-preview">This stream type is not supported by the built-in browser preview. Use <strong>Open Externally</strong> or VLC for playback.</div>`
           : '';
         const playbackNote = !playUrl
           ? `<div class="modal-preview">Browser preview is not available for this source or channel. You can still use the program details here for quick guide verification.</div>`
@@ -1814,7 +1832,9 @@
               ? `📅 Channel has <strong>${data.epg_programs}</strong> program${data.epg_programs !== 1 ? 's' : ''} and <strong>${data.epg_hours}h</strong> of program data available from source`
               : '📅 No program data available from source'}
           </div>
+          ${previewHint}
           ${warning}
+          ${unsupportedNote}
           ${playbackNote}
           <div class="preview-grid">
             ${renderProgramCard('Now Playing', data.current_program, ch.category)}
@@ -1824,7 +1844,7 @@
             Guide details shown here come from the FastChannels scraper for this source, not from Gracenote.
           </div>
           <div class="preview-actions">
-            ${playUrl ? `<button class="preview-action-btn primary" onclick="loadPreviewPlayer('${escapeHtml(playUrl)}')">Play Here</button>` : ''}
+            ${previewUrl ? `<button class="preview-action-btn primary" onclick="loadPreviewPlayer('${escapeHtml(previewUrl)}', '${escapeHtml(playbackMode)}', '${escapeHtml(streamType)}')">Play Here</button>` : ''}
             ${playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open Externally</a>` : ''}
             ${playUrl ? `<a class="preview-action-btn neutral" href="${escapeHtml(playUrl.replace('.m3u8', '.m3u'))}" title="Download playlist and open in VLC">Open in VLC</a>` : ''}
             <button class="preview-action-btn neutral" onclick="closePreviewModal()">Close</button>
@@ -1858,7 +1878,7 @@
       }
     }
 
-    function loadPreviewPlayer(playUrl) {
+    function loadPreviewPlayer(playUrl, playbackMode = 'hls', streamType = '') {
       const wrap = document.getElementById('preview-player-wrap');
       const video = document.getElementById('preview-player');
       const status = document.getElementById('preview-player-status');
@@ -1877,6 +1897,17 @@
       video.load();
       wrap.classList.add('open');
       if (status) status.textContent = 'Loading stream…';
+
+      const normalizedMode = String(playbackMode || '').toLowerCase();
+      const normalizedType = String(streamType || '').toLowerCase();
+      const useNativeVideo = normalizedMode === 'native' || ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(normalizedType);
+      if (useNativeVideo) {
+        video.src = playUrl;
+        video.load();
+        if (status) status.textContent = 'Using native video playback for this stream type.';
+        video.play().catch(() => {});
+        return;
+      }
 
       if (window.Hls && window.Hls.isSupported()) {
         _previewHls = new window.Hls({
@@ -2873,6 +2904,23 @@
         btn.textContent = 'Error';
         btn.disabled = false;
         console.error('Re-enable failed:', e);
+      }
+    }
+
+    async function forceReactivate(channelId) {
+      const warn = document.getElementById(`inactive-warn-${channelId}`);
+      if (warn) warn.textContent = '…';
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method:  'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body:    JSON.stringify({is_enabled: true}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (warn) warn.remove();
+      } catch (e) {
+        if (warn) warn.textContent = 'not in output';
+        console.error('Force reactivate failed:', e);
       }
     }
 

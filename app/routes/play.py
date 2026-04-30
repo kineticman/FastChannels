@@ -60,6 +60,35 @@ def _url_is_hls(url: str) -> bool:
     return '.m3u8' in urlsplit(url).path.lower()
 
 
+def _custom_proxy_headers(channel, extra_headers: dict | None = None) -> dict:
+    """
+    Build request headers for custom-channel proxy fetches.
+
+    Custom channels often need the original page context for segment requests
+    (notably YouTube/googlevideo).  Start with a browser UA, layer stored
+    custom headers on top, and synthesize Referer/Origin from page_url when
+    the channel doesn't already define them.
+    """
+    from urllib.parse import urlsplit
+
+    _BROWSER_UA = (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/145.0.0.0 Safari/537.36'
+    )
+    headers = {'User-Agent': _BROWSER_UA, **(channel.custom_headers or {})}
+    if extra_headers:
+        headers.update({k: v for k, v in extra_headers.items() if v})
+    page_url = getattr(channel, 'page_url', None) or ''
+    if page_url:
+        parsed = urlsplit(page_url)
+        origin = f'{parsed.scheme}://{parsed.netloc}' if parsed.scheme and parsed.netloc else ''
+        headers.setdefault('Referer', page_url)
+        if origin:
+            headers.setdefault('Origin', origin)
+    return headers
+
+
 def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dict]:
     """
     Re-detect a custom channel's stream URL from its source page, caching the
@@ -440,7 +469,7 @@ def custom_manifest_proxy(channel_id: str):
         stream_url = channel.stream_url
 
     try:
-        master_r = _requests.get(stream_url, headers=custom_headers, timeout=10)
+        master_r = _requests.get(stream_url, headers=_custom_proxy_headers(channel, custom_headers), timeout=10)
         master_r.raise_for_status()
     except Exception as e:
         logger.warning('[custom-proxy] master fetch failed for %s: %s', raw_id, e)
@@ -455,7 +484,7 @@ def custom_manifest_proxy(channel_id: str):
         if not best:
             abort(502)
         try:
-            variant_r = _requests.get(best, headers=custom_headers, timeout=10)
+            variant_r = _requests.get(best, headers=_custom_proxy_headers(channel, custom_headers), timeout=10)
             variant_r.raise_for_status()
             text = variant_r.text
             effective_url = variant_r.url
@@ -463,17 +492,23 @@ def custom_manifest_proxy(channel_id: str):
             logger.warning('[custom-proxy] variant fetch failed for %s: %s', raw_id, e)
             abort(502)
 
-    # Rewrite all segment URLs to go through the segment proxy
+    # Unless the channel explicitly requested segment proxying, leave segments
+    # as direct absolute URLs.  YouTube/googlevideo HLS segment URLs already
+    # work when fetched directly and the extra proxy hop can introduce 403s.
     base_url = request.host_url.rstrip('/')
     variant_base = effective_url.rsplit('/', 1)[0] + '/'
     encoded_id = _quote(raw_id, safe='')
+    proxy_segments = bool(getattr(channel, 'proxy_segments', False))
 
     lines = []
     for line in text.splitlines():
         stripped = line.strip()
         if stripped and not stripped.startswith('#'):
             abs_url = stripped if stripped.startswith('http') else urljoin(variant_base, stripped)
-            line = f'{base_url}/play/custom/segment?url={_quote(abs_url, safe="")}&src={encoded_id}'
+            if proxy_segments:
+                line = f'{base_url}/play/custom/segment?url={_quote(abs_url, safe="")}&src={encoded_id}'
+            else:
+                line = abs_url
         lines.append(line)
 
     return Response(
@@ -577,16 +612,8 @@ def custom_segment_proxy():
     except Exception:
         pass
 
-    _BROWSER_UA = (
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-        'AppleWebKit/537.36 (KHTML, like Gecko) '
-        'Chrome/145.0.0.0 Safari/537.36'
-    )
-    # Start with a browser UA so servers that require one don't reject us.
-    # channel.custom_headers overlays on top (may override UA if needed).
-    fetch_headers = {'User-Agent': _BROWSER_UA, **(channel.custom_headers or {})}
     try:
-        r = _requests.get(url, headers=fetch_headers, timeout=15, stream=True)
+        r = _requests.get(url, headers=_custom_proxy_headers(channel), timeout=15, stream=True)
         if r.status_code != 200:
             abort(r.status_code)
         return Response(
