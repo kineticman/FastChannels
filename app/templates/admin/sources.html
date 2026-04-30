@@ -1507,6 +1507,48 @@
         </div>`;
     }
 
+    function renderPlutoConfig(sourceId, schema, values) {
+      const regionField = schema.find(f => f.key === 'country_codes') || {
+        key: 'country_codes',
+        label: 'Country/Region Feeds',
+        default: 'us_east',
+        help_text: 'Choose one or more Pluto regions.',
+        options: [
+          { value: 'us_east', label: 'United States (East)' },
+          { value: 'us_west', label: 'United States (West)' },
+          { value: 'ca', label: 'Canada' },
+          { value: 'uk', label: 'United Kingdom' },
+          { value: 'fr', label: 'France' },
+          { value: 'de', label: 'Germany' },
+        ],
+      };
+      const selected = new Set(String(values.country_codes || regionField.default || 'us_east')
+        .split(/[,\s|/]+/)
+        .map(v => v.trim().toLowerCase())
+        .map(v => v === 'gb' ? 'uk' : v)
+        .filter(Boolean));
+      const options = (regionField.options || []).map(opt => {
+        const checked = selected.has(String(opt.value));
+        return `<option value="${escapeHtml(String(opt.value))}" ${checked ? 'selected' : ''}>${escapeHtml(opt.label)}</option>`;
+      }).join('');
+
+      return `
+        <div class="config-title">Source Settings</div>
+        <div class="config-note">Choose one or more Pluto regions. The selector is limited to the live regions we verified.</div>
+        <div class="field field-full">
+          <label for="cfg-${sourceId}-country_codes">${escapeHtml(regionField.label)}</label>
+          <select id="cfg-${sourceId}-country_codes" class="region-select" data-key="country_codes" multiple size="6">
+            ${options}
+          </select>
+          <div class="help">${escapeHtml(regionField.help_text || '')}</div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
+    }
+
     function debounceCitySearch(sourceId, query) {
       clearTimeout(_citySearchTimers[sourceId]);
       const resultsEl = document.getElementById(`city-results-${sourceId}`);
@@ -1635,6 +1677,8 @@
         return renderDistroConfig(sourceId, schema, values);
       } else if (sourceName === 'vidaa') {
         return renderVidaaConfig(sourceId, schema, values);
+      } else if (sourceName === 'pluto') {
+        return renderPlutoConfig(sourceId, schema, values);
       }
 
       const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {
@@ -1644,10 +1688,13 @@
         const cls = fieldSchema.length === 1 ? 'field field-full' : 'field';
         let control;
         if (f.field_type === 'select' && Array.isArray(f.options) && f.options.length) {
+          const selected = new Set(String(val).split(/[,\s|/]+/).map(v => v.trim()).filter(Boolean));
           const opts = f.options.map(o =>
-            `<option value="${escapeHtml(String(o.value))}" ${String(val) === String(o.value) ? 'selected' : ''}>${escapeHtml(o.label)}</option>`
+            `<option value="${escapeHtml(String(o.value))}" ${selected.has(String(o.value)) ? 'selected' : ''}>${escapeHtml(o.label)}</option>`
           ).join('');
-          control = `<select id="cfg-${sourceId}-${f.key}" data-key="${f.key}">${opts}</select>`;
+          const multiple = f.multiple ? ' multiple' : '';
+          const size = f.multiple ? ` size="${Math.min(Math.max(f.options.length, 4), 8)}"` : '';
+          control = `<select id="cfg-${sourceId}-${f.key}" data-key="${f.key}"${multiple}${size}>${opts}</select>`;
         } else {
           const inputType = f.field_type === 'password' ? 'password' : (f.field_type === 'number' ? 'number' : 'text');
           const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : '';
@@ -1725,7 +1772,7 @@
         if (keyFields.some(el => el.tagName === 'SELECT' && el.multiple)) {
           const selected = keyFields
             .filter(el => el.tagName === 'SELECT')
-            .flatMap(el => [...el.selectedOptions].map(opt => opt.value.trim().toUpperCase()))
+            .flatMap(el => [...el.selectedOptions].map(opt => opt.value.trim()))
             .filter(Boolean);
           const custom = keyFields
             .filter(el => el.dataset.geoCustom === 'true')

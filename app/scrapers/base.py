@@ -173,7 +173,7 @@ class ConfigField:
     def __init__(self, key: str, label: str, field_type: str = 'text',
                  required: bool = False, secret: bool = False,
                  placeholder: str = '', help_text: str = '', default=None,
-                 options: list | None = None):
+                 options: list | None = None, multiple: bool = False):
         self.key         = key          # key in source.config JSON
         self.label       = label        # human label in UI
         self.field_type  = field_type   # 'text' | 'password' | 'select' | 'toggle' | 'number'
@@ -183,6 +183,7 @@ class ConfigField:
         self.help_text   = help_text
         self.default     = default
         self.options     = options or []  # [{'value': ..., 'label': ...}] for select fields
+        self.multiple    = multiple
 
     def to_dict(self):
         d = {
@@ -197,6 +198,8 @@ class ConfigField:
         }
         if self.options:
             d['options'] = self.options
+        if self.multiple:
+            d['multiple'] = self.multiple
         return d
 
 

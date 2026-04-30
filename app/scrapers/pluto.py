@@ -26,6 +26,11 @@ STITCHER = "https://cfd-v4-service-channel-stitcher-use1-1.prd.pluto.tv"
 
 ALLOWED_COUNTRY_CODES = ['local', 'us_east', 'us_west', 'ca', 'uk', 'fr', 'de']
 
+_COUNTRY_CODE_ALIASES = {
+    'gb': 'uk',
+    'uk': 'uk',
+}
+
 # Map Pluto region code → ISO 3166-1 alpha-2 country code
 REGION_COUNTRY = {
     'us_east': 'US',
@@ -197,9 +202,16 @@ class PlutoScraper(BaseScraper):
         ),
         ConfigField(
             key='country_codes', label='Country/Region Feeds',
-            field_type='text', default='us_east',
-            placeholder='us_east,us_west,ca,uk,fr,de',
-            help_text=f'Comma-separated list. Available: {", ".join(ALLOWED_COUNTRY_CODES)}',
+            field_type='select', default='us_east', multiple=True,
+            help_text='Choose one or more Pluto regions. GB is accepted in legacy configs, but the selector only shows supported live regions.',
+            options=[
+                {'value': 'us_east', 'label': 'United States (East)'},
+                {'value': 'us_west', 'label': 'United States (West)'},
+                {'value': 'ca', 'label': 'Canada'},
+                {'value': 'uk', 'label': 'United Kingdom'},
+                {'value': 'fr', 'label': 'France'},
+                {'value': 'de', 'label': 'Germany'},
+            ],
         ),
         ConfigField(
             key='pool_size', label='Session Pool Size',
@@ -215,10 +227,12 @@ class PlutoScraper(BaseScraper):
         password = self.config.get('password') or None
 
         raw_codes = self.config.get('country_codes', 'us_east')
-        self.country_codes = [
-            c.strip() for c in raw_codes.split(',')
-            if c.strip() in ALLOWED_COUNTRY_CODES
-        ] or ['us_east']
+        country_codes: list[str] = []
+        for raw_code in raw_codes.split(','):
+            code = _COUNTRY_CODE_ALIASES.get(raw_code.strip().lower(), raw_code.strip().lower())
+            if code in ALLOWED_COUNTRY_CODES and code not in country_codes:
+                country_codes.append(code)
+        self.country_codes = country_codes or ['us_east']
 
         try:
             pool_size = max(1, int(self.config.get('pool_size') or STREAM_POOL_SIZE))
