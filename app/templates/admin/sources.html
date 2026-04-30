@@ -623,6 +623,9 @@
           <strong id="cc-result-label" style="color:var(--text);"></strong>
         </div>
         <div id="cc-result-type" style="color:var(--accent-soft);font-size:.75rem;font-weight:600;margin-bottom:.35rem;"></div>
+        <div id="cc-mp4-warning" style="display:none;margin-bottom:.45rem;padding:.55rem .65rem;border-radius:6px;background:color-mix(in srgb, var(--danger) 10%, transparent);border:1px solid color-mix(in srgb, var(--danger) 35%, transparent);color:var(--danger);font-size:.75rem;line-height:1.35;">
+          MP4 custom channels are supported, but they are brittle in Channels DVR. If possible, prefer HLS or MPEG-TS. Use MP4 only if HLS is not available.
+        </div>
         <div id="cc-result-stream" style="word-break:break-all;color:var(--text-soft);font-size:.75rem;margin-bottom:.4rem;"></div>
         <div id="cc-result-headers" style="color:var(--text-muted);font-size:.74rem;"></div>
         <div id="cc-youtube-note" style="display:none;margin-top:.4rem;font-size:.74rem;color:var(--text-muted);">YouTube stream URLs expire quickly, so this is usually best left on.</div>
@@ -1894,6 +1897,7 @@
             <div style="display:flex;align-items:center;gap:.4rem;flex-shrink:0;">
               <span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:${ch.is_enabled ? 'var(--success-soft)' : 'var(--text-muted)'};border:1px solid var(--border);">${ch.is_enabled ? 'On' : 'Off'}</span>
               ${ch.stream_type ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--text-soft);border:1px solid var(--border);">' + _esc(_streamTypeLabel(ch.stream_type)) + '</span>' : ''}
+              ${_looksLikeMp4Channel(ch) ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:color-mix(in srgb, var(--danger) 10%, transparent);color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 30%, transparent);">MP4 fragile</span>' : ''}
               ${ch.proxy_segments ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--accent-soft);border:1px solid var(--border);">Proxied</span>' : ''}
               ${ch.redetect_on_play ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--text-muted);border:1px solid var(--border);">Re-detect</span>' : ''}
               <button class="btn btn-configure btn-sm" onclick="editCustomChannel(${ch.id})">Edit</button>
@@ -2074,13 +2078,25 @@
       return labels[raw] || (raw ? raw.toUpperCase() : 'Unknown');
     }
 
+    function _looksLikeMp4Url(url) {
+      return /\\.mp4(?:[?#]|$)/i.test(String(url || ''));
+    }
+
+    function _looksLikeMp4Channel(channel) {
+      return String(channel?.stream_type || '').toLowerCase() === 'mp4' || _looksLikeMp4Url(channel?.stream_url);
+    }
+
     function _showDetectResult(ok, streamUrl, streamType, headers, needsProxy, isPageUrl, isYoutube) {
       const panel = document.getElementById('cc-detect-result');
+      const effectiveType = String(streamType || '').toLowerCase() === 'mp4' || _looksLikeMp4Url(streamUrl)
+        ? 'mp4'
+        : String(streamType || '').toLowerCase();
       document.getElementById('cc-result-icon').textContent = ok ? '✅' : '⚠️';
       document.getElementById('cc-result-label').textContent =
         isYoutube ? (ok ? 'YouTube stream detected' : 'YouTube (extraction failed)')
                   : (ok ? 'Stream detected' : 'Stream found (unverified)');
-      document.getElementById('cc-result-type').textContent = streamType ? `Type: ${_streamTypeLabel(streamType)}` : 'Type: Unknown';
+      document.getElementById('cc-result-type').textContent = effectiveType ? `Type: ${_streamTypeLabel(effectiveType)}` : 'Type: Unknown';
+      document.getElementById('cc-mp4-warning').style.display = effectiveType === 'mp4' ? '' : 'none';
       document.getElementById('cc-result-stream').textContent = streamUrl || '';
 
       const hdrEl = document.getElementById('cc-result-headers');
