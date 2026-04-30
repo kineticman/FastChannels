@@ -705,7 +705,7 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                     continue
 
                 if r.status_code != 200:
-                    logger.debug('[audit] %d for %s', r.status_code, ch.name)
+                    logger.warning('[audit] error: %s (HTTP %d)', ch.name, r.status_code)
                     errors += 1
                     consecutive_errors += 1
                     report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'error', 'reason': f'HTTP {r.status_code}'})
@@ -812,7 +812,7 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                     logger.warning('[audit] transient audit failure for %s: %s', ch.name, e)
                     errors += 1
                     continue
-                logger.debug('[audit] error for %s: %s', ch.name, e)
+                logger.warning('[audit] error for %s: %s', ch.name, e)
                 errors += 1
                 consecutive_errors += 1
 
