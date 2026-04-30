@@ -76,6 +76,7 @@ _STEAM_WATCH_RE = re.compile(r'^https?://steamcommunity\.com/broadcast/watch/(\d
 _STEAM_BROADCASTSINFO_RE = re.compile(r'''data-broadcastsinfo="([^"]+)"''', re.IGNORECASE)
 _STEAM_SESSION_RE = re.compile(r'''g_sessionID\s*=\s*"([^"]+)"''', re.IGNORECASE)
 _EXPLORE_LIVECAM_RE = re.compile(r'^https?://(www\.)?explore\.org/livecams(?:/|$)', re.IGNORECASE)
+_ABCNEWS_LIVE_RE = re.compile(r'^https?://(www\.)?abcnews\.com/(live|Live)(?:[?#].*)?$', re.IGNORECASE)
 _NBCNEWS_WATCH_RE = re.compile(r'^https?://(www\.)?nbcnews\.com/watch(?:[?#].*)?$', re.IGNORECASE)
 _NBCNEWS_CALLLETTERS_RE = re.compile(r'''callLetters":"([^"]+)''', re.IGNORECASE)
 _NBCNEWS_PLAYER_CALLLETTERS_RE = re.compile(
@@ -295,6 +296,7 @@ class StreamDetector:
         candidates: list[str] = []
 
         for extractor in (
+            self._extract_abcnews_provider_candidates,
             self._extract_explore_provider_candidates,
             self._extract_nbcnews_provider_candidates,
             self._extract_tvpass_provider_candidates,
@@ -309,6 +311,27 @@ class StreamDetector:
             for c in extractor(session, url, text):
                 if c not in candidates:
                     candidates.append(c)
+
+        return candidates
+
+    def _extract_abcnews_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        url_l = url.lower()
+        if not (
+            _ABCNEWS_LIVE_RE.match(url)
+            or '/live/video/special-live-' in url_l
+            or 'abcnews.com/live' in url_l
+        ):
+            return []
+
+        candidates: list[str] = []
+        playwright_url = self._abcnews_playwright_manifest_url(url)
+        if playwright_url:
+            candidates.append(playwright_url)
 
         return candidates
 
@@ -349,6 +372,46 @@ class StreamDetector:
             candidates.extend(self._nbc_media_candidates_from_layout(session, url))
 
         return candidates
+
+    def _abcnews_playwright_manifest_url(self, live_url: str) -> str | None:
+        try:
+            from playwright.sync_api import sync_playwright
+        except Exception as exc:
+            logger.debug('[detector] playwright unavailable for ABC News fallback: %s', exc)
+            return None
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                seen: list[str] = []
+
+                def on_request(req):
+                    req_url = req.url
+                    parsed = urlsplit(req_url)
+                    if '.m3u8' not in parsed.path.lower():
+                        return
+                    if 'linear-abcnews' not in parsed.netloc.lower() and 'media.dssott.com' not in parsed.netloc.lower():
+                        return
+                    seen.append(req_url)
+
+                page.on('request', on_request)
+                page.goto(live_url, wait_until='domcontentloaded', timeout=30000)
+                page.wait_for_timeout(10000)
+                browser.close()
+
+            for candidate in reversed(seen):
+                parsed = urlsplit(candidate)
+                if '.m3u8' not in parsed.path.lower():
+                    continue
+                if 'media.dssott.com' not in parsed.netloc.lower():
+                    continue
+                return candidate
+        except Exception as exc:
+            logger.debug('[detector] playwright ABC News fallback failed %s: %s', live_url[:80], exc)
+            return None
+
+        return None
 
     def _nbc_media_candidates_from_layout(
         self,
