@@ -253,6 +253,10 @@
       cursor: pointer; border-bottom: 1px dotted var(--text-dim);
       display: inline; white-space: nowrap;
     }
+    .cat-label.cat-empty {
+      color: var(--text-dim);
+      font-style: italic;
+    }
     .cat-label.has-override { border-bottom-color: var(--warning-strong); color: var(--warning-strong) !important; }
     .lang-label {
       cursor: pointer; border-bottom: 1px dotted var(--text-dim);
@@ -1512,13 +1516,9 @@
             <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
             <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.stream_info %}{% if ch.stream_info.has_4k %}<span class="badge-4k" title="4K stream ({{ ch.stream_info.max_resolution }})">4K</span>{% elif ch.stream_info.has_hd %}<span class="badge-hd" title="HD stream ({{ ch.stream_info.max_resolution }})">HD</span>{% endif %}{% if ch.stream_info.video_codec == 'hevc' %}<span class="badge-hevc" title="H.265/HEVC — may not play in all clients">HEVC</span>{% endif %}{% endif %}</td>
             <td data-channel-id="{{ ch.id }}">
-              {% if ch.category %}
-                <span class="cat-label{% if ch.category_override %} has-override{% endif %}"
-                      style="color:var(--text-soft)"
-                      onclick="openCatModal({{ ch.id }})">{{ ch.category }}</span>
-              {% else %}
-                <span style="color:var(--text-dim)">—</span>
-              {% endif %}
+              <span class="cat-label{% if ch.category_override %} has-override{% endif %}{% if not ch.category %} cat-empty{% endif %}"
+                    style="color:{% if ch.category %}var(--text-soft){% else %}var(--text-dim){% endif %}"
+                    onclick="openCatModal({{ ch.id }})">{{ ch.category or '--' }}</span>
             </td>
             <td data-lang-channel-id="{{ ch.id }}">
               <span class="lang-label{% if ch.language_override %} has-override{% endif %}"
@@ -3834,6 +3834,9 @@
       const cats = (d.canonical_categories || []);
       const currentOverride = d.category_override || '';
 
+      const blankOpt = (!currentOverride && !d.category)
+        ? `<option value="" selected>-- choose category --</option>`
+        : '';
       const opts = cats.map(c =>
         `<option value="${escapeHtml(c)}"${c === (currentOverride || d.category) ? ' selected' : ''}>${escapeHtml(c)}</option>`
       ).join('');
@@ -3849,6 +3852,7 @@
         <div style="margin-bottom:1rem">
           <label style="font-size:0.8rem;color:var(--text-soft);display:block;margin-bottom:0.3rem">Set category override:</label>
           <select id="catOverrideSel" style="width:100%;padding:0.45rem 0.6rem;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.9rem">
+            ${blankOpt}
             ${opts}
           </select>
         </div>
@@ -3864,6 +3868,10 @@
       const sel = document.getElementById('catOverrideSel');
       if (!sel) return;
       const val = sel.value;
+      if (!val) {
+        alert('Choose a category before saving.');
+        return;
+      }
       const r = await fetch(`/api/channels/${chId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

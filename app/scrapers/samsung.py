@@ -38,6 +38,20 @@ logger = logging.getLogger(__name__)
 _CHANNELS_URL = 'https://i.mjh.nz/SamsungTVPlus/.channels.json.gz'
 _EPG_URL      = 'https://i.mjh.nz/SamsungTVPlus/{region}.xml.gz'
 _STREAM_URL   = 'https://jmp2.uk/stvp-{id}'
+ALLOWED_REGIONS = ('us', 'ca', 'gb', 'de', 'fr', 'es', 'it', 'kr', 'in', 'at', 'ch')
+REGION_LABELS = {
+    'us': 'United States',
+    'ca': 'Canada',
+    'gb': 'United Kingdom',
+    'de': 'Germany',
+    'fr': 'France',
+    'es': 'Spain',
+    'it': 'Italy',
+    'kr': 'South Korea',
+    'in': 'India',
+    'at': 'Austria',
+    'ch': 'Switzerland',
+}
 
 # XMLTV datetime format used by this EPG source
 _XMLTV_TS_FMT = '%Y%m%d%H%M%S %z'
@@ -76,11 +90,12 @@ class SamsungScraper(BaseScraper):
         ConfigField(
             'region',
             'Region',
-            field_type='text',
+            field_type='select',
             required=False,
             default='us',
-            placeholder='us',
-            help_text='One or more region codes separated by commas: us, ca, gb, de, fr, es, it, au, kr, in, at, ch',
+            multiple=True,
+            help_text='Choose one or more Samsung regions. Channels and EPG from the selected regions are merged into one source.',
+            options=[{'value': code, 'label': REGION_LABELS.get(code, code.upper())} for code in ALLOWED_REGIONS],
         ),
     ]
 
@@ -88,9 +103,12 @@ class SamsungScraper(BaseScraper):
 
     def _regions(self) -> list[str]:
         """Return a list of normalised region codes from config (supports comma/pipe/space separators)."""
-        import re
         raw = self.config.get('region') or 'us'
-        codes = [c.strip().lower() for c in re.split(r'[,|/\s]+', raw) if c.strip()]
+        codes = []
+        for code in re.split(r'[,|/\s]+', raw):
+            code = code.strip().lower()
+            if code in ALLOWED_REGIONS and code not in codes:
+                codes.append(code)
         return codes or ['us']
 
     def _fetch_gz_json(self, url: str) -> dict:

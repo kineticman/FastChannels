@@ -16,6 +16,7 @@ import pytz
 import requests
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
+from .category_utils import category_for_channel, infer_category_from_name
 from ..gracenote_map import resolve_gracenote
 
 import logging
@@ -336,7 +337,7 @@ class PlutoScraper(BaseScraper):
                 stream_type       = 'hls',
                 logo_url          = logo,
                 slug              = elem.get('slug') or name.lower().replace(' ', '-'),
-                category          = cat_map.get(ch_id),
+                category          = category_for_channel(name, cat_map.get(ch_id)) or infer_category_from_name(name),
                 language          = REGION_LANGUAGE.get(country_code) or infer_language_from_metadata(name, cat_map.get(ch_id)),
                 country           = REGION_COUNTRY.get(country_code, 'US'),
                 number            = number,

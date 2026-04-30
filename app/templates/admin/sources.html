@@ -1430,6 +1430,20 @@
       { code: 'ZA', label: 'South Africa' },
     ];
 
+    const SAMSUNG_REGION_OPTIONS = [
+      { code: 'us', label: 'United States' },
+      { code: 'ca', label: 'Canada' },
+      { code: 'gb', label: 'United Kingdom' },
+      { code: 'de', label: 'Germany' },
+      { code: 'fr', label: 'France' },
+      { code: 'es', label: 'Spain' },
+      { code: 'it', label: 'Italy' },
+      { code: 'kr', label: 'South Korea' },
+      { code: 'in', label: 'India' },
+      { code: 'at', label: 'Austria' },
+      { code: 'ch', label: 'Switzerland' },
+    ];
+
     function renderDistroConfig(sourceId, schema, values) {
       const geoField = schema.find(f => f.key === 'geo') || {
         key: 'geo',
@@ -1499,6 +1513,40 @@
             ${options}
           </select>
           <div class="region-summary">Use this if you want more than the default US and Canada lineup. Regions are merged into one source.</div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
+    }
+
+    function renderSamsungConfig(sourceId, schema, values) {
+      const regionField = schema.find(f => f.key === 'region') || {
+        key: 'region',
+        label: 'Region',
+        default: 'us',
+        help_text: 'Choose one or more Samsung regions. Channels and EPG from the selected regions are merged into one source.',
+        options: SAMSUNG_REGION_OPTIONS.map(opt => ({ value: opt.code, label: opt.label })),
+      };
+      const selected = new Set(String(values.region || regionField.default || 'us')
+        .split(/[,\s|/]+/)
+        .map(v => v.trim().toLowerCase())
+        .filter(Boolean));
+      const options = (regionField.options || []).map(opt => {
+        const checked = selected.has(String(opt.value));
+        return `<option value="${escapeHtml(String(opt.value))}" ${checked ? 'selected' : ''}>${escapeHtml(opt.label)} (${escapeHtml(String(opt.value).toUpperCase())})</option>`;
+      }).join('');
+
+      return `
+        <div class="config-title">Source Settings</div>
+        <div class="config-note">Choose one or more Samsung regions to include. Channels and EPG from the selected regions are merged into one source.</div>
+        <div class="field field-full">
+          <label>${escapeHtml(regionField.label)}</label>
+          <select id="cfg-${sourceId}-region-select" class="region-select" data-key="region" multiple size="7">
+            ${options}
+          </select>
+          <div class="region-summary">The list above covers the live Samsung regions we verified. Pick multiple regions if you want them combined into one lineup.</div>
         </div>
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
@@ -1677,6 +1725,8 @@
         return renderDistroConfig(sourceId, schema, values);
       } else if (sourceName === 'vidaa') {
         return renderVidaaConfig(sourceId, schema, values);
+      } else if (sourceName === 'samsung') {
+        return renderSamsungConfig(sourceId, schema, values);
       } else if (sourceName === 'pluto') {
         return renderPlutoConfig(sourceId, schema, values);
       }
