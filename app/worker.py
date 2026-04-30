@@ -1664,6 +1664,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 language          = cd.language,
                 country           = cd.country,
                 tags              = ','.join(cd.tags) if getattr(cd, 'tags', None) else None,
+                description       = _sanitize_description(cd.description) if getattr(cd, 'description', None) else None,
                 number            = None,
                 gracenote_id      = gracenote_id if gracenote_auto_fill else None,
                 gracenote_locked  = False,

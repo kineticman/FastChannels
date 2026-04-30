@@ -21,6 +21,7 @@ import logging
 import html
 import re
 import secrets
+from functools import lru_cache
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urljoin, parse_qs, unquote, quote
 
@@ -99,6 +100,30 @@ _NBCNEWS_FASTCHANNEL_ENTRY_RE = re.compile(
 _NBCNEWS_PORTABLEPLAYER_RE = re.compile(
     r'''([A-Z0-9_]+):"(https?://[^"]+/portableplayer/[^"]+)"'''
 )
+_NEWSON_STATION_RE = re.compile(
+    r'''^https?://(www\.)?newson\.us/stationDetails/(\d+)(?:[?#].*)?/?$''',
+    re.IGNORECASE,
+)
+_OZOLIO_IFRAME_RE = re.compile(
+    r'''https?://relay\.ozolio\.com/pub\.api\?[^"'<> ]*cmd=iframe[^"'<> ]*oid=([^&"'<> ]+)''',
+    re.IGNORECASE,
+)
+_OZOLIO_CAMERA_DOC_RE = re.compile(
+    r'''camera_doc\s*:\s*["']([^"']+)["']''',
+    re.IGNORECASE,
+)
+_ANTMEDIA_PLAY_RE = re.compile(
+    r'^https?://([^/]+)/(?:[^/?#]+)/play\.html(?:[?#].*)?$',
+    re.IGNORECASE,
+)
+_BALTIC_AUTH_TOKEN_RE = re.compile(
+    r'''action\s*:\s*['"]auth_token['"][^{}]{0,200}?id\s*:\s*(\d+)''',
+    re.IGNORECASE | re.DOTALL,
+)
+_SKYLINE_SOURCE_RE = re.compile(
+    r'''source\s*:\s*['"]([^'"]+?m3u8\?a=[^'"]+)['"]''',
+    re.IGNORECASE,
+)
 _EARTHCAM_VIDEO_EMBED_RE = re.compile(r'''(?:https?:)?//[^'"\s>]+?/js/video/embed\.php\?[^'"\s>]+''', re.IGNORECASE)
 _TVPASS_CHANNEL_RE = re.compile(r'^https?://(www\.)?tvpass\.org/channel/([^/?#]+)', re.IGNORECASE)
 
@@ -106,10 +131,15 @@ _YOUTUBE_RE = re.compile(
     r'^https?://(www\.)?(youtube\.com/(watch|live|embed/|@|channel|user|c/|shorts/)|youtu\.be/)',
     re.IGNORECASE,
 )
+_TWITCH_RE = re.compile(
+    r'^https?://(www\.)?(twitch\.tv/(?:videos/|clip/|[^/?#]+)|player\.twitch\.tv/[^?#]+)',
+    re.IGNORECASE,
+)
 _YT_PLAYER_CLIENTS = ('tv_embedded', 'web_safari', 'web', 'ios')
 
 # Content-types accepted for non-HLS direct video probing
 _VIDEO_CONTENT_TYPES = ('video/', 'audio/', 'application/octet-stream')
+_BLOCKED_STATUS_CODES = {401, 403, 429, 451, 503}
 _OXBLUE_APP_ID = 'fc18eb502cb52d060bd93897e21d9491'
 _OXBLUE_API_BASE = 'https://api.oxblue.com/v1'
 
@@ -130,8 +160,18 @@ class StreamDetector:
     TIMEOUT = 12
 
     def detect(self, input_url: str) -> DetectionResult:
+        # Fast path for yt-dlp-native sites we know it can own cleanly.
         if _YOUTUBE_RE.match(input_url):
             return self._resolve_youtube(input_url)
+        if _TWITCH_RE.match(input_url):
+            return self._resolve_twitch(input_url)
+        best_failure: DetectionResult | None = None
+        if self._yt_dlp_has_dedicated_extractor(input_url):
+            result = self._resolve_yt_dlp_url(input_url)
+            if result.success:
+                return result
+            if result.stream_type or result.error:
+                best_failure = result
 
         session = requests.Session()
         session.headers.update({'User-Agent': _BROWSER_UA})
@@ -144,10 +184,9 @@ class StreamDetector:
                 page_url = input_url
                 candidates = self._extract_from_page(session, input_url, depth=0)
                 if not candidates:
-                    return DetectionResult(error='No stream URL found on page or in iframes')
+                    return best_failure or DetectionResult(error='No stream URL found on page or in iframes')
 
             origin = self._origin_of(page_url)
-            best_failure: DetectionResult | None = None
 
             for candidate in candidates:
                 candidate = self._unwrap_stream_wrapper(html.unescape(candidate))
@@ -156,12 +195,34 @@ class StreamDetector:
                     if result.success:
                         return result
                     if result.stream_type or result.error:
+                        if self._is_blocked_failure(best_failure) and not self._is_blocked_failure(result):
+                            continue
+                        if self._is_blocked_failure(result):
+                            best_failure = result
+                            continue
+                        best_failure = result
+                    continue
+                if _TWITCH_RE.match(candidate):
+                    result = self._resolve_twitch(candidate)
+                    if result.success:
+                        return result
+                    if result.stream_type or result.error:
+                        if self._is_blocked_failure(best_failure) and not self._is_blocked_failure(result):
+                            continue
+                        if self._is_blocked_failure(result):
+                            best_failure = result
+                            continue
                         best_failure = result
                     continue
                 result = self._probe(session, candidate, page_url, origin)
                 if result.success:
                     return result
                 if result.stream_type or result.error:
+                    if self._is_blocked_failure(best_failure) and not self._is_blocked_failure(result):
+                        continue
+                    if self._is_blocked_failure(result):
+                        best_failure = result
+                        continue
                     best_failure = result
 
             if best_failure:
@@ -225,6 +286,18 @@ class StreamDetector:
         return f'{p.scheme}://{p.netloc}'
 
     @staticmethod
+    def _is_blocked_failure(result: DetectionResult | None) -> bool:
+        if not result or result.success:
+            return False
+        err = (result.error or '').lower()
+        return (
+            result.error == 'Unauthorized'
+            or 'blocked or restricted' in err
+            or 'access denied' in err
+            or 'auth required' in err
+        )
+
+    @staticmethod
     def _unwrap_stream_wrapper(url: str) -> str:
         """
         Some pages expose player wrapper URLs whose query params contain the real
@@ -265,9 +338,9 @@ class StreamDetector:
             if c not in video_candidates:
                 video_candidates.append(c)
 
-        # Provider-specific handlers run before iframe recursion so they can use
-        # page-local bootstrap config without needing to brute-force every script.
-        for c in self._extract_provider_candidates(session, url, text):
+        # Custom provider APIs run before iframe recursion so they can use
+        # page-local bootstrap config without brute-forcing every nested document.
+        for c in self._extract_custom_api_candidates(session, url, text):
             if '.m3u8' in c.lower():
                 if c not in hls_candidates:
                     hls_candidates.append(c)
@@ -304,7 +377,7 @@ class StreamDetector:
 
         return hls_candidates, video_candidates
 
-    def _extract_provider_candidates(
+    def _extract_custom_api_candidates(
         self,
         session: requests.Session,
         url: str,
@@ -315,6 +388,11 @@ class StreamDetector:
         for extractor in (
             self._extract_abcnews_provider_candidates,
             self._extract_cbs_provider_candidates,
+            self._extract_newson_provider_candidates,
+            self._extract_ozolio_provider_candidates,
+            self._extract_antmedia_provider_candidates,
+            self._extract_balticlivecam_provider_candidates,
+            self._extract_skyline_provider_candidates,
             self._extract_shouttv_provider_candidates,
             self._extract_explore_provider_candidates,
             self._extract_nbcnews_provider_candidates,
@@ -349,6 +427,262 @@ class StreamDetector:
             if candidate.startswith('http') and candidate not in candidates:
                 candidates.append(candidate)
         return candidates
+
+    def _extract_newson_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        match = _NEWSON_STATION_RE.match(url)
+        if not match:
+            return []
+
+        station_id = (match.group(2) or '').strip()
+        if not station_id:
+            return []
+
+        try:
+            api = requests.Session()
+            api.headers.update({'User-Agent': _BROWSER_UA})
+            detail_resp = api.get(
+                f'https://newson-api.triple-it.nl/v5api/detail/station/{station_id}',
+                params={'platformType': 'website'},
+                timeout=self.TIMEOUT,
+            )
+            if not detail_resp.ok:
+                return []
+
+            detail = detail_resp.json() or {}
+            item = detail.get('item') or {}
+            playables = item.get('playables') or {}
+
+            ordered_playables = [
+                playables.get('live'),
+                playables.get('alwayson'),
+                playables.get('vod'),
+            ]
+            candidates: list[str] = []
+            for playable in ordered_playables:
+                if not isinstance(playable, dict):
+                    continue
+                playable_id = (playable.get('id') or '').strip()
+                playable_type = (playable.get('videoType') or '').strip()
+                if not playable_id or not playable_type:
+                    continue
+
+                item_resp = api.get(
+                    f'https://newson-api.triple-it.nl/v5api/item/{playable_type}/{playable_id}',
+                    params={'platformType': 'website'},
+                    timeout=self.TIMEOUT,
+                )
+                if not item_resp.ok:
+                    continue
+
+                item_data = item_resp.json() or {}
+                sources = item_data.get('sources') or []
+                if not sources:
+                    continue
+
+                source = (sources[0].get('file') or '').strip()
+                if source and source not in candidates:
+                    candidates.append(source)
+
+            return candidates
+        except Exception as exc:
+            logger.debug('[detector] newson lookup failed %s: %s', station_id, exc)
+            return []
+
+    def _extract_ozolio_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        oid = self._ozolio_camera_oid(url, text)
+        if not oid:
+            return []
+
+        try:
+            api = requests.Session()
+            api.headers.update({'User-Agent': _BROWSER_UA})
+            init = api.get(
+                'https://relay.ozolio.com/ses.api',
+                params={
+                    'cmd': 'init',
+                    'oid': oid,
+                    'ver': '5',
+                    'channel': '0',
+                    'control': '0',
+                    'document': url,
+                },
+                timeout=self.TIMEOUT,
+            )
+            if init.status_code != 200:
+                return []
+            init_data = init.json() or {}
+            session_data = init_data.get('session') or {}
+            session_id = (session_data.get('id') or '').strip()
+            outputs = init_data.get('outputs') or []
+            if not session_id or not outputs:
+                return []
+
+            output = next(
+                (
+                    item for item in outputs
+                    if str(item.get('media') or '').upper() == 'LIVE'
+                    and str(item.get('type') or '').lower() != 'preroll'
+                ),
+                outputs[0],
+            )
+            output_id = (output.get('id') or '').strip()
+            formats = [f.strip().upper() for f in (output.get('formats') or '').split(';') if f.strip()]
+            output_format = next(
+                (fmt for fmt in ('M3U8', 'MJPEG', 'IMAGE', 'VAST') if fmt in formats),
+                formats[0] if formats else 'M3U8',
+            )
+            if not output_id:
+                return []
+
+            open_resp = api.get(
+                'https://relay.ozolio.com/ses.api',
+                params={
+                    'cmd': 'open',
+                    'oid': session_id,
+                    'output': output_id,
+                    'format': output_format,
+                    'profile': 'AUTO',
+                },
+                timeout=self.TIMEOUT,
+            )
+            if open_resp.status_code != 200:
+                return []
+            open_data = open_resp.json() or {}
+            source = ((open_data.get('output') or {}).get('source') or '').strip()
+            if source:
+                return [source]
+        except Exception as exc:
+            logger.debug('[detector] ozolio lookup failed %s: %s', oid, exc)
+            return []
+
+        return []
+
+    def _extract_antmedia_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        parsed = urlsplit(url)
+        if 'antmedia.cloud' not in parsed.netloc.lower():
+            return []
+
+        params = parse_qs(parsed.query)
+        stream_id = (params.get('id') or [''])[0].strip()
+        play_order = (params.get('playOrder') or [''])[0].strip().lower()
+        if not stream_id or 'hls' not in play_order:
+            return []
+
+        parts = [p for p in parsed.path.split('/') if p]
+        if not parts:
+            return []
+
+        app = parts[0]
+        manifest = f'{parsed.scheme}://{parsed.netloc}/{app}/streams/{stream_id}.m3u8'
+        return [manifest]
+
+    def _extract_balticlivecam_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        parsed = urlsplit(url)
+        if not parsed.netloc.lower().endswith('balticlivecam.com'):
+            return []
+
+        match = _BALTIC_AUTH_TOKEN_RE.search(text)
+        if not match:
+            return []
+
+        camera_id = (match.group(1) or '').strip()
+        if not camera_id:
+            return []
+
+        try:
+            ajax = requests.Session()
+            ajax.headers.update({
+                'User-Agent': _BROWSER_UA,
+                'Referer': url,
+                'X-Requested-With': 'XMLHttpRequest',
+            })
+            resp = ajax.post(
+                urljoin(url, '/wp-admin/admin-ajax.php'),
+                data={
+                    'action': 'auth_token',
+                    'id': camera_id,
+                    'embed': '0',
+                    'main_referer': url,
+                },
+                timeout=self.TIMEOUT,
+            )
+            if not resp.ok:
+                return []
+
+            body = html.unescape(resp.text)
+            m = _M3U8_RE.search(body)
+            if m:
+                return [m.group(0).rstrip('"\'\\')]
+        except Exception as exc:
+            logger.debug('[detector] balticlivecam lookup failed %s: %s', camera_id, exc)
+            return []
+
+        return []
+
+    def _extract_skyline_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        if 'skylinewebcams.com' not in urlsplit(url).netloc.lower():
+            return []
+
+        m = _SKYLINE_SOURCE_RE.search(text)
+        if not m:
+            return []
+
+        source = html.unescape((m.group(1) or '').strip())
+        if not source:
+            return []
+
+        source = source.replace('livee.', 'live.')
+        if source.startswith('http'):
+            return [source]
+
+        return [f'https://hd-auth.skylinewebcams.com/{source.lstrip("/")}']
+
+    @staticmethod
+    def _ozolio_camera_oid(url: str, text: str) -> str | None:
+        parsed = urlsplit(url)
+        if parsed.netloc.lower().endswith('ozolio.com'):
+            params = parse_qs(parsed.query)
+            for key in ('oid', 'camera_doc', 'cameraDoc'):
+                values = params.get(key) or []
+                for value in values:
+                    v = unquote((value or '').strip())
+                    if v:
+                        return v
+
+        match = _OZOLIO_IFRAME_RE.search(text)
+        if match:
+            return html.unescape(match.group(1)).strip() or None
+
+        match = _OZOLIO_CAMERA_DOC_RE.search(text)
+        if match:
+            return html.unescape(match.group(1)).strip() or None
+
+        return None
 
     def _extract_abcnews_provider_candidates(
         self,
@@ -765,7 +1099,7 @@ class StreamDetector:
                     for c in self._extract_generic_candidates(final_text)[0] + self._extract_generic_candidates(final_text)[1]:
                         if c not in candidates:
                             candidates.append(c)
-                    for c in self._extract_provider_candidates(session, final_url, final_text):
+                    for c in self._extract_custom_api_candidates(session, final_url, final_text):
                         if c not in candidates:
                             candidates.append(c)
 
@@ -1247,10 +1581,12 @@ class StreamDetector:
         origin: str,
         combos: list[dict],
     ) -> DetectionResult:
+        seen_statuses: set[int] = set()
         for headers in combos:
             try:
                 r = session.get(stream_url, headers=headers, timeout=self.TIMEOUT)
                 if r.status_code != 200:
+                    seen_statuses.add(r.status_code)
                     continue
                 text = r.text
                 if '#EXTM3U' not in text:
@@ -1272,6 +1608,18 @@ class StreamDetector:
                 logger.debug('[detector] hls probe error %s: %s', stream_url[:80], exc)
                 continue
 
+        if 401 in seen_statuses:
+            return DetectionResult(
+                stream_url=stream_url,
+                stream_type='hls',
+                error='Unauthorized',
+            )
+        if seen_statuses & _BLOCKED_STATUS_CODES:
+            return DetectionResult(
+                stream_url=stream_url,
+                stream_type='hls',
+                error='Blocked or restricted',
+            )
         return DetectionResult(
             error=f'Stream URL found but no header combination worked: {stream_url[:80]}'
         )
@@ -1283,6 +1631,7 @@ class StreamDetector:
         combos: list[dict],
     ) -> DetectionResult:
         """Probe a non-HLS direct video URL (mp4, webm, etc.)."""
+        seen_statuses: set[int] = set()
         for headers in combos:
             try:
                 # Prefer HEAD to avoid downloading the file
@@ -1295,6 +1644,7 @@ class StreamDetector:
                                     timeout=self.TIMEOUT, stream=True)
                     r.close()
                 if r.status_code not in (200, 206):
+                    seen_statuses.add(r.status_code)
                     continue
                 ct = r.headers.get('Content-Type', '').lower()
                 stream_type = self.infer_stream_type(r.url or stream_url, ct)
@@ -1332,9 +1682,147 @@ class StreamDetector:
                 logger.debug('[detector] direct probe error %s: %s', stream_url[:80], exc)
                 continue
 
+        if 401 in seen_statuses:
+            return DetectionResult(
+                stream_url=stream_url,
+                stream_type=self.infer_stream_type(stream_url) or 'direct',
+                error='Unauthorized',
+            )
+        if seen_statuses & _BLOCKED_STATUS_CODES:
+            return DetectionResult(
+                stream_url=stream_url,
+                stream_type=self.infer_stream_type(stream_url) or 'direct',
+                error='Blocked or restricted',
+            )
         return DetectionResult(
             error=f'Direct video URL found but not accessible: {stream_url[:80]}'
         )
+
+    def _resolve_twitch(self, url: str) -> DetectionResult:
+        """
+        Extract a playable stream URL from a Twitch channel/page using yt-dlp.
+        Twitch URLs can resolve to live HLS, clips, or archived VODs depending
+        on what the channel exposes at the moment.
+        """
+        try:
+            import yt_dlp
+        except ImportError:
+            return DetectionResult(
+                error='yt-dlp is not installed — rebuild the container to enable Twitch support',
+            )
+
+        last_error = 'Extraction failed'
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'skip_download': True,
+                'format': 'best[protocol~=m3u8]/best',
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+            if not info:
+                return DetectionResult(error=last_error)
+
+            protocol = str(info.get('protocol') or '')
+            stream_url = info.get('manifest_url') if 'm3u8' in protocol else info.get('url') or info.get('manifest_url')
+            if not stream_url or not str(stream_url).startswith('http'):
+                return DetectionResult(error=last_error)
+
+            stream_url = str(stream_url)
+            if not self._yt_n_ok(stream_url):
+                logger.debug('[twitch] n-param unsolved, skipping')
+                return DetectionResult(
+                    stream_url=stream_url,
+                    stream_type='hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct'),
+                    error='Extracted URL appears throttled (n parameter too long)',
+                )
+
+            logger.info('[twitch] resolved url=%s…', stream_url[:80])
+            return DetectionResult(
+                stream_url=stream_url,
+                stream_type='hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct'),
+                headers={},
+                needs_proxy=False,
+                success=True,
+            )
+        except Exception as exc:
+            last_error = str(exc)
+            logger.debug('[twitch] failed: %s', exc)
+            return DetectionResult(error=last_error)
+
+    @staticmethod
+    @lru_cache(maxsize=2048)
+    def _yt_dlp_has_dedicated_extractor(url: str) -> bool:
+        try:
+            from yt_dlp.extractor import gen_extractors
+        except Exception:
+            return False
+
+        for ie in gen_extractors():
+            try:
+                ie_name = getattr(ie, 'IE_NAME', '') or type(ie).__name__
+                if ie_name.lower() == 'generic':
+                    continue
+                if ie.suitable(url):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _resolve_yt_dlp_url(self, url: str) -> DetectionResult:
+        """
+        Generic yt-dlp fallback for sites yt-dlp already has a dedicated extractor for.
+        This is used before the page scraper so we don't re-implement common video hosts.
+        """
+        try:
+            import yt_dlp
+        except ImportError:
+            return DetectionResult(
+                error='yt-dlp is not installed — rebuild the container to enable yt-dlp support',
+            )
+
+        last_error = 'Extraction failed'
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'skip_download': True,
+                'format': 'best[protocol~=m3u8]/best',
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+            if not info:
+                return DetectionResult(error=last_error)
+
+            protocol = str(info.get('protocol') or '')
+            stream_url = info.get('manifest_url') if 'm3u8' in protocol else info.get('url') or info.get('manifest_url')
+            if not stream_url or not str(stream_url).startswith('http'):
+                return DetectionResult(error=last_error)
+
+            stream_url = str(stream_url)
+            if not self._yt_n_ok(stream_url):
+                logger.debug('[ytdlp] n-param unsolved for %s', url[:80])
+                return DetectionResult(
+                    stream_url=stream_url,
+                    stream_type='hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct'),
+                    error='Extracted URL appears throttled (n parameter too long)',
+                )
+
+            logger.info('[ytdlp] resolved url=%s…', stream_url[:80])
+            return DetectionResult(
+                stream_url=stream_url,
+                stream_type='hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct'),
+                headers={},
+                needs_proxy=False,
+                success=True,
+            )
+        except Exception as exc:
+            last_error = str(exc)
+            logger.debug('[ytdlp] failed for %s: %s', url[:80], exc)
+            return DetectionResult(error=last_error)
 
     def _first_segment_url(
         self,
