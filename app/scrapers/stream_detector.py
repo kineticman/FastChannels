@@ -20,8 +20,9 @@ import json
 import logging
 import html
 import re
+import secrets
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit, urljoin, parse_qs, unquote
+from urllib.parse import urlsplit, urljoin, parse_qs, unquote, quote
 
 import requests
 
@@ -75,6 +76,18 @@ _STEAM_WATCH_RE = re.compile(r'^https?://steamcommunity\.com/broadcast/watch/(\d
 _STEAM_BROADCASTSINFO_RE = re.compile(r'''data-broadcastsinfo="([^"]+)"''', re.IGNORECASE)
 _STEAM_SESSION_RE = re.compile(r'''g_sessionID\s*=\s*"([^"]+)"''', re.IGNORECASE)
 _EXPLORE_LIVECAM_RE = re.compile(r'^https?://(www\.)?explore\.org/livecams(?:/|$)', re.IGNORECASE)
+_NBCNEWS_WATCH_RE = re.compile(r'^https?://(www\.)?nbcnews\.com/watch(?:[?#].*)?$', re.IGNORECASE)
+_NBCNEWS_CALLLETTERS_RE = re.compile(r'''callLetters":"([^"]+)''', re.IGNORECASE)
+_NBCNEWS_PLAYER_CALLLETTERS_RE = re.compile(
+    r'''var\s+callletters\s*=\s*decodeURIComponent\(\s*'([^']+)'\s*\)''',
+    re.IGNORECASE,
+)
+_NBCNEWS_FASTCHANNEL_ENTRY_RE = re.compile(
+    r'''([A-Za-z0-9_]+):\{streamKey:.*?,hashUrl:"([^"]*)",scheduleKey:"([^"]+)"\}'''
+)
+_NBCNEWS_PORTABLEPLAYER_RE = re.compile(
+    r'''([A-Z0-9_]+):"(https?://[^"]+/portableplayer/[^"]+)"'''
+)
 _EARTHCAM_VIDEO_EMBED_RE = re.compile(r'''(?:https?:)?//[^'"\s>]+?/js/video/embed\.php\?[^'"\s>]+''', re.IGNORECASE)
 _TVPASS_CHANNEL_RE = re.compile(r'^https?://(www\.)?tvpass\.org/channel/([^/?#]+)', re.IGNORECASE)
 
@@ -283,6 +296,7 @@ class StreamDetector:
 
         for extractor in (
             self._extract_explore_provider_candidates,
+            self._extract_nbcnews_provider_candidates,
             self._extract_tvpass_provider_candidates,
             self._extract_twitter_player_candidates,
             lambda _session, _url, page_text: self._extract_meta_video_candidates(page_text, url),
@@ -297,6 +311,222 @@ class StreamDetector:
                     candidates.append(c)
 
         return candidates
+
+    def _extract_nbcnews_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        url_l = url.lower()
+        if not (
+            _NBCNEWS_WATCH_RE.match(url)
+            or '/video-layout/amp_video/' in url_l
+            or '/portableplayer/' in url_l
+        ):
+            return []
+
+        candidates: list[str] = []
+        if _NBCNEWS_WATCH_RE.match(url):
+            hash_fragment = (urlsplit(url).fragment or '').strip()
+            if hash_fragment:
+                schedule_key = self._nbc_schedule_key_for_hash(session, url, text, hash_fragment)
+                if schedule_key:
+                    portableplayer_url = self._nbc_portableplayer_url_for_schedule(session, url, text, schedule_key)
+                    if portableplayer_url:
+                        layout_url = self._nbc_video_layout_url(session, portableplayer_url, url)
+                        if layout_url:
+                            candidates.extend(self._nbc_media_candidates_from_layout(session, layout_url))
+
+                # The local NBC fast-channel pages are assembled client-side and can
+                # still need one browser pass to resolve the fully interpolated HLS
+                # URL. Use Playwright only as a last-mile fallback.
+                playwright_url = self._nbc_playwright_manifest_url(url)
+                if playwright_url and playwright_url not in candidates:
+                    candidates.insert(0, playwright_url)
+
+        if '/video-layout/amp_video/' in url_l:
+            candidates.extend(self._nbc_media_candidates_from_layout(session, url))
+
+        return candidates
+
+    def _nbc_media_candidates_from_layout(
+        self,
+        session: requests.Session,
+        layout_url: str,
+    ) -> list[str]:
+        try:
+            r = session.get(layout_url, timeout=self.TIMEOUT)
+            if not r.ok:
+                return []
+        except Exception as exc:
+            logger.debug('[detector] nbcnews layout fetch failed %s: %s', layout_url[:80], exc)
+            return []
+
+        body = html.unescape(r.text).replace('\\/', '/')
+        hls_candidates, video_candidates = self._extract_generic_candidates(body)
+        return hls_candidates + video_candidates
+
+    def _nbc_schedule_key_for_hash(
+        self,
+        session: requests.Session,
+        page_url: str,
+        text: str,
+        hash_fragment: str,
+    ) -> str | None:
+        hash_url = hash_fragment if hash_fragment.startswith('#') else f'#{hash_fragment}'
+        for script_url in self._page_script_urls(text, page_url):
+            try:
+                r = session.get(script_url, timeout=self.TIMEOUT)
+                if not r.ok:
+                    continue
+            except Exception as exc:
+                logger.debug('[detector] nbcnews fastchannel fetch failed %s: %s', script_url[:80], exc)
+                continue
+
+            for m in _NBCNEWS_FASTCHANNEL_ENTRY_RE.finditer(r.text):
+                if (m.group(2) or '').strip() == hash_url:
+                    return (m.group(3) or '').strip() or None
+        return None
+
+    def _nbc_portableplayer_url_for_schedule(
+        self,
+        session: requests.Session,
+        page_url: str,
+        text: str,
+        schedule_key: str,
+    ) -> str | None:
+        for script_url in self._page_script_urls(text, page_url):
+            try:
+                r = session.get(script_url, timeout=self.TIMEOUT)
+                if not r.ok:
+                    continue
+            except Exception as exc:
+                logger.debug('[detector] nbcnews player map fetch failed %s: %s', script_url[:80], exc)
+                continue
+
+            if 'portableplayer' not in r.text or schedule_key not in r.text:
+                continue
+
+            m = re.search(
+                rf'{re.escape(schedule_key)}:"(https?://[^"]+/portableplayer/[^"]+)"',
+                r.text,
+            )
+            if m:
+                return html.unescape(m.group(1)).strip()
+
+        return None
+
+    @staticmethod
+    def _nbc_callletters(text: str) -> str | None:
+        match = _NBCNEWS_CALLLETTERS_RE.search(text)
+        if not match:
+            return None
+        value = (match.group(1) or '').strip()
+        return value or None
+
+    def _nbc_video_layout_url(
+        self,
+        session: requests.Session,
+        portableplayer_url: str,
+        page_url: str,
+    ) -> str | None:
+        parsed_player = urlsplit(portableplayer_url)
+        if not parsed_player.scheme or not parsed_player.netloc:
+            return None
+
+        query = (parsed_player.query or '').replace('CID=', 'noid=').replace('cmsID=', 'noid=')
+        if not query:
+            return None
+
+        callletters = self._nbc_callletters_from_player(session, portableplayer_url)
+        callletters = (callletters or '').lower()
+        if not callletters:
+            return None
+
+        watch_url = page_url.split('#', 1)[0]
+        watch_origin = self._origin_of(watch_url)
+        random_token = secrets.token_hex(4)
+        return (
+            f'{parsed_player.scheme}://{parsed_player.netloc}/video-layout/amp_video/?'
+            f'{query}'
+            f'&turl={quote(watch_url, safe="")}'
+            f'&ourl={quote(watch_origin, safe="")}'
+            f'&lp=5&fullWidth=y'
+            f'&random={random_token}'
+            f'&callletters={quote(callletters, safe="")}'
+            f'&embedded=true&autoplay=true'
+        )
+
+    def _nbc_callletters_from_player(
+        self,
+        session: requests.Session,
+        portableplayer_url: str,
+    ) -> str | None:
+        try:
+            r = session.get(portableplayer_url, timeout=self.TIMEOUT)
+            if not r.ok:
+                return None
+        except Exception as exc:
+            logger.debug('[detector] nbcnews player fetch failed %s: %s', portableplayer_url[:80], exc)
+            return None
+
+        match = _NBCNEWS_PLAYER_CALLLETTERS_RE.search(r.text)
+        if match:
+            value = html.unescape((match.group(1) or '').strip())
+            return value or None
+
+        return None
+
+    def _nbc_playwright_manifest_url(self, watch_url: str) -> str | None:
+        try:
+            from playwright.sync_api import sync_playwright
+        except Exception as exc:
+            logger.debug('[detector] playwright unavailable for NBC fallback: %s', exc)
+            return None
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                seen: list[str] = []
+
+                page.on(
+                    'request',
+                    lambda req: seen.append(req.url)
+                    if ('m3u8' in req.url or 'cloudfront' in req.url or 'freewheel' in req.url.lower())
+                    else None,
+                )
+                page.goto(watch_url, wait_until='domcontentloaded', timeout=30000)
+                page.wait_for_timeout(8000)
+                browser.close()
+
+            for candidate in reversed(seen):
+                parsed = urlsplit(candidate)
+                if '.m3u8' not in parsed.path.lower():
+                    continue
+                if 'scorecardresearch.com' in parsed.netloc.lower():
+                    continue
+                if 'cloudfront' not in parsed.netloc.lower() and 'freewheel' not in parsed.netloc.lower():
+                    continue
+                return candidate
+        except Exception as exc:
+            logger.debug('[detector] playwright NBC fallback failed %s: %s', watch_url[:80], exc)
+            return None
+
+        return None
+
+    @staticmethod
+    def _page_script_urls(text: str, base_url: str) -> list[str]:
+        urls: list[str] = []
+        for m in _SCRIPT_SRC_RE.finditer(text):
+            src = html.unescape((m.group(1) or '').strip())
+            if not src:
+                continue
+            abs_url = urljoin(base_url, src)
+            if abs_url not in urls:
+                urls.append(abs_url)
+        return urls
 
     def _extract_explore_provider_candidates(
         self,
