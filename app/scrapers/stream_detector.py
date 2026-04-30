@@ -16,11 +16,15 @@ Detection flow:
   5. Return DetectionResult with the first working URL + headers combo.
 """
 from __future__ import annotations
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import html
 import re
 import secrets
+import time
 from functools import lru_cache
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urljoin, parse_qs, unquote, quote
@@ -103,6 +107,23 @@ _NBCNEWS_PORTABLEPLAYER_RE = re.compile(
 _NEWSON_STATION_RE = re.compile(
     r'''^https?://(www\.)?newson\.us/stationDetails/(\d+)(?:[?#].*)?/?$''',
     re.IGNORECASE,
+)
+_THETVAPP_RE = re.compile(
+    r'''^https?://(www\.)?thetvapp\.to/tv/([^/?#]+?)(?:-live-stream)?/?(?:[?#].*)?$''',
+    re.IGNORECASE,
+)
+_THETVAPP_STREAM_NAME_RE = re.compile(
+    r'''<div[^>]+id=["']stream_name["'][^>]+name=["']([^"']+)["']''',
+    re.IGNORECASE,
+)
+_GRAY_QUICKPLAY_PLAYER_RE = re.compile(
+    r'''<meta[^>]+(?:property|name)\s*=\s*['"](player)['"][^>]+content\s*=\s*['"]quickplay['"]''',
+    re.IGNORECASE,
+)
+_GRAY_QUICKPLAY_FEATURE_RE = re.compile(r'VisualMedia/QuickplayLivePlayer', re.IGNORECASE)
+_GRAY_QUICKPLAY_LIVE_CARD_RE = re.compile(
+    r'''qp-live-card.*?quickplay\.com/image/([A-Z0-9-]+)/0-16x9\.jpg\?width=250''',
+    re.IGNORECASE | re.DOTALL,
 )
 _OZOLIO_IFRAME_RE = re.compile(
     r'''https?://relay\.ozolio\.com/pub\.api\?[^"'<> ]*cmd=iframe[^"'<> ]*oid=([^&"'<> ]+)''',
@@ -390,9 +411,11 @@ class StreamDetector:
         candidates: list[str] = []
 
         for extractor in (
+            self._extract_gray_quickplay_provider_candidates,
             self._extract_abcnews_provider_candidates,
             self._extract_cbs_provider_candidates,
             self._extract_newson_provider_candidates,
+            self._extract_thetvapp_provider_candidates,
             self._extract_ozolio_provider_candidates,
             self._extract_antmedia_provider_candidates,
             self._extract_balticlivecam_provider_candidates,
@@ -416,6 +439,208 @@ class StreamDetector:
 
         return candidates
 
+    def _extract_gray_quickplay_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        parsed = urlsplit(url)
+        host = parsed.netloc.lower()
+        if 'gray' not in host and not (
+            _GRAY_QUICKPLAY_PLAYER_RE.search(text)
+            or _GRAY_QUICKPLAY_FEATURE_RE.search(text)
+        ):
+            return []
+
+        if not parsed.scheme or not parsed.netloc:
+            return []
+
+        site_parts = [part for part in host.split('.') if part and part != 'www']
+        site = site_parts[0] if site_parts else ''
+        if not site:
+            return []
+
+        live_match = _GRAY_QUICKPLAY_LIVE_CARD_RE.search(text)
+        if not live_match:
+            return []
+
+        content_id = (live_match.group(1) or '').strip()
+        if not content_id:
+            return []
+
+        try:
+            api = requests.Session()
+            api.headers.update({'User-Agent': _BROWSER_UA})
+            access_resp = api.get(
+                urljoin(f'{parsed.scheme}://{parsed.netloc}', '/pf/api/v3/content/fetch/quickplay-platform-auth-iam'),
+                params={'query': '{}'},
+                timeout=self.TIMEOUT,
+            )
+            if not access_resp.ok:
+                return []
+            access_data = access_resp.json() or {}
+            access_token = (access_data.get('access_token') or '').strip()
+            if not access_token:
+                return []
+
+            device_id = str(secrets.token_hex(16))
+            auth_resp = api.post(
+                'https://auth-gw.api.gray.quickplay.com/platform/access/token',
+                headers={
+                    'Authorization': f'Bearer {access_token}',
+                    'Content-Type': 'application/json',
+                    'Referer': f'{parsed.scheme}://{parsed.netloc}/',
+                    'X-Client-Id': 'gray-gm-web',
+                    'User-Agent': _BROWSER_UA,
+                },
+                json={'deviceId': device_id},
+                timeout=self.TIMEOUT,
+            )
+            if not auth_resp.ok:
+                return []
+            auth_data = auth_resp.json() or {}
+            auth_token = ((auth_data.get('data') or {}).get('token') or '').strip()
+            if not auth_token:
+                return []
+
+            reg_resp = api.post(
+                'https://device-register-service.api.gray.quickplay.com/device/app/register',
+                headers={
+                    'Authorization': f'Bearer {access_token}',
+                    'Content-Type': 'application/json',
+                    'Referer': f'{parsed.scheme}://{parsed.netloc}/',
+                    'X-Authorization': auth_token,
+                    'X-Client-Id': 'gray-gm-web',
+                    'User-Agent': _BROWSER_UA,
+                },
+                json={'uniqueId': device_id},
+                timeout=self.TIMEOUT,
+            )
+            if not reg_resp.ok:
+                return []
+            reg_data = reg_resp.json() or {}
+            reg_payload = reg_data.get('data') or {}
+            secret_b64 = (reg_payload.get('secret') or '').strip()
+            if not secret_b64:
+                return []
+
+            try:
+                device_secret = base64.b64decode(secret_b64)
+            except Exception:
+                device_secret = secret_b64.encode('utf-8')
+            now = int(time.time())
+            device_jwt = self._gray_quickplay_jwt(
+                {
+                    'deviceId': device_id,
+                    'aud': 'playback-auth-service',
+                    'iat': now,
+                    'exp': now + 86400 * 100,
+                },
+                device_secret,
+            )
+
+            play_resp = api.post(
+                'https://playback-auth-service.api.gray.quickplay.com/media/content/authorize',
+                headers={
+                    'Authorization': f'Bearer {access_token}',
+                    'Content-Type': 'application/json',
+                    'Referer': f'{parsed.scheme}://{parsed.netloc}/',
+                    'X-Authorization': auth_token,
+                    'X-Client-Id': 'gray-gm-web',
+                    'X-Device-Id': device_jwt,
+                    'X-Property-Id': f'gm|{site}|{site}',
+                    'User-Agent': _BROWSER_UA,
+                },
+                json={
+                    'deviceName': 'web',
+                    'deviceId': device_id,
+                    'contentId': content_id,
+                    'contentTypeId': 'live',
+                    'catalogType': 'channel',
+                    'mediaFormat': 'hls',
+                    'drm': 'none',
+                    'delivery': 'streaming',
+                    'disableSsai': 'false',
+                    'urlParameters': {
+                        'ads.npa': '1',
+                        'ads.url': url,
+                        'ads.vpos': 'midroll',
+                    },
+                    'playbackMode': 'live',
+                    'quality': 'medium',
+                    'supportedResolution': 'FHD',
+                },
+                timeout=self.TIMEOUT,
+            )
+            if not play_resp.ok:
+                return []
+
+            play_data = play_resp.json() or {}
+            content_url = ((play_data.get('data') or {}).get('contentUrl') or '').strip()
+            if content_url:
+                self._candidate_resolvers.setdefault(content_url, 'gray quickplay')
+                return [content_url]
+        except Exception as exc:
+            logger.debug('[detector] gray quickplay lookup failed %s: %s', url[:80], exc)
+            return []
+
+        return []
+
+    def _extract_thetvapp_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        match = _THETVAPP_RE.match(url)
+        if not match:
+            return []
+
+        stream_name = self._thetvapp_stream_name(text)
+        if not stream_name:
+            return []
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except Exception as exc:
+            logger.debug('[detector] playwright unavailable for thetvapp fallback: %s', exc)
+            return []
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                page.wait_for_timeout(5000)
+                result = page.evaluate(
+                    """async (name) => {
+                      const resp = await fetch('/token/' + name, { credentials: 'same-origin' });
+                      const text = await resp.text();
+                      return { ok: resp.ok, status: resp.status, text };
+                    }""",
+                    stream_name,
+                )
+                browser.close()
+
+            if not result or not result.get('ok'):
+                return []
+
+            try:
+                data = json.loads(result.get('text') or '{}')
+            except Exception:
+                return []
+
+            stream_url = (data.get('url') or '').strip()
+            if stream_url:
+                self._candidate_resolvers.setdefault(stream_url, 'thetvapp')
+                return [stream_url]
+        except Exception as exc:
+            logger.debug('[detector] thetvapp lookup failed %s: %s', url[:80], exc)
+            return []
+
+        return []
+
     def _extract_cbs_provider_candidates(
         self,
         session: requests.Session,
@@ -432,6 +657,28 @@ class StreamDetector:
             if candidate.startswith('http') and candidate not in candidates:
                 candidates.append(candidate)
         return candidates
+
+    @staticmethod
+    def _gray_quickplay_jwt(payload: dict, secret: bytes) -> str:
+        header = {'alg': 'HS256', 'typ': 'JWT'}
+        header_b64 = base64.urlsafe_b64encode(
+            json.dumps(header, separators=(',', ':'), sort_keys=True).encode('utf-8')
+        ).rstrip(b'=')
+        payload_b64 = base64.urlsafe_b64encode(
+            json.dumps(payload, separators=(',', ':'), sort_keys=True).encode('utf-8')
+        ).rstrip(b'=')
+        signing_input = b'.'.join((header_b64, payload_b64))
+        signature = hmac.new(secret, signing_input, hashlib.sha256).digest()
+        signature_b64 = base64.urlsafe_b64encode(signature).rstrip(b'=')
+        return b'.'.join((header_b64, payload_b64, signature_b64)).decode('ascii')
+
+    @staticmethod
+    def _thetvapp_stream_name(text: str) -> str | None:
+        match = _THETVAPP_STREAM_NAME_RE.search(text)
+        if not match:
+            return None
+        value = html.unescape((match.group(1) or '').strip())
+        return value or None
 
     def _extract_newson_provider_candidates(
         self,
