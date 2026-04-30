@@ -210,6 +210,9 @@ def run_scraper(source_name: str, force_full: bool = False):
         if not source:
             logger.error(f'Source not found: {source_name}')
             return
+        if not source.is_enabled:
+            logger.info('[%s] Scrape skipped: source disabled', source_name)
+            return
 
         outage_reason = _active_network_outage()
         if outage_reason:
@@ -511,6 +514,9 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
         source = Source.query.filter_by(name=source_name).first()
         if not source:
             logger.error('[audit] source not found: %s', source_name)
+            return
+        if not source.is_enabled:
+            logger.info('[audit] %s: source disabled, skipping', source_name)
             return
 
         scraper_cls = registry.get(source_name)
@@ -853,6 +859,9 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
         source = Source.query.filter_by(name=source_name).first()
         if not source:
             logger.warning('[audit-recheck] %s: source not found', source_name)
+            return
+        if not source.is_enabled:
+            logger.info('[audit-recheck] %s: source disabled, skipping', source_name)
             return
 
         scraper_cls = registry.get(source_name)

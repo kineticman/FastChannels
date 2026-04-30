@@ -129,6 +129,43 @@ def _bulk_job_id(filters: dict, enable: bool) -> str:
     return f'channel-bulk-{digest}'
 
 
+def cancel_source_jobs(source_name: str) -> list[str]:
+    """Cancel queued/scheduled scraper jobs for a source.
+
+    This is used when a source is disabled so a pending scrape/audit cannot
+    run later and repopulate data.
+    """
+    try:
+        q = get_queue()
+    except Exception as e:
+        logger.warning('RQ unavailable while cancelling jobs for %s: %s', source_name, e)
+        return []
+
+    canceled: list[str] = []
+    for job_id in (
+        f'scrape-{source_name}',
+        f'audit-{source_name}',
+        f'audit-recheck-{source_name}',
+    ):
+        try:
+            job = Job.fetch(job_id, connection=q.connection)
+        except Exception:
+            continue
+
+        status = job.get_status(refresh=False)
+        if status not in {'queued', 'deferred', 'scheduled'}:
+            continue
+
+        try:
+            job.delete()
+            canceled.append(job_id)
+            logger.info('Canceled %s job for disabled source %s', job_id, source_name)
+        except Exception as e:
+            logger.warning('Failed to cancel %s for disabled source %s: %s', job_id, source_name, e)
+
+    return canceled
+
+
 def trigger_scrape(source_name: str, *, force_full: bool = False):
     try:
         q = get_queue()

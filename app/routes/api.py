@@ -25,6 +25,7 @@ from ..source_config import is_source_config_complete
 from ..url import public_base_url
 from .tasks import (
     trigger_bulk_channel_update,
+    cancel_source_jobs,
     trigger_scrape,
     trigger_source_channel_purge,
     trigger_stream_audit,
@@ -491,6 +492,8 @@ def list_sources():
 @api_bp.route('/sources/<int:source_id>/run', methods=['POST'])
 def run_source(source_id):
     source = Source.query.get_or_404(source_id)
+    if not source.is_enabled:
+        return jsonify({'error': 'Source is disabled'}), 409
     trigger_scrape(source.name, force_full=True)
     return jsonify({'status': 'queued', 'source': source.name})
 
@@ -498,6 +501,8 @@ def run_source(source_id):
 @api_bp.route('/sources/<int:source_id>/force-full', methods=['POST'])
 def force_refresh_source(source_id):
     source = Source.query.get_or_404(source_id)
+    if not source.is_enabled:
+        return jsonify({'error': 'Source is disabled'}), 409
     source.last_scraped_at = None
     source.last_error = None
     db.session.commit()
@@ -567,6 +572,8 @@ def scrape_status(source_id):
 @api_bp.route('/sources/<int:source_id>/stream-audit', methods=['POST'])
 def stream_audit_source(source_id):
     source = Source.query.get_or_404(source_id)
+    if not source.is_enabled:
+        return jsonify({'error': 'Source is disabled'}), 409
     data = request.get_json() or {}
     include_inactive = bool(data.get('include_inactive', False))
     trigger_stream_audit(source.name, include_inactive=include_inactive)
@@ -589,6 +596,8 @@ def stream_audit_all():
 @api_bp.route('/sources/<int:source_id>/stream-audit-recheck', methods=['POST'])
 def stream_audit_recheck(source_id):
     source = Source.query.get_or_404(source_id)
+    if not source.is_enabled:
+        return jsonify({'error': 'Source is disabled'}), 409
     data = request.get_json() or {}
     channel_ids = [int(i) for i in (data.get('channel_ids') or []) if str(i).isdigit()]
     if not channel_ids:
@@ -755,6 +764,8 @@ def update_source(source_id):
             db.session.rollback()
             return jsonify({'error': 'Channel number overlaps detected', 'warnings': new_warnings}), 409
     db.session.commit()
+    if should_purge:
+        cancel_source_jobs(source.name)
     _invalidate_and_refresh_xml()
     if should_purge and source.name != 'custom':
         trigger_source_channel_purge(source.id)
