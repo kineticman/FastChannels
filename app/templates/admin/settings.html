@@ -546,7 +546,10 @@
         Downloads a gzip-compressed copy of <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">fastchannels.db</code> — includes all channels, sources, feeds, settings, and Gracenote assignments.
         Store it somewhere safe. To restore, decompress the file and replace <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">/data/fastchannels.db</code> with it, then restart the container.
       </div>
-      <a class="btn btn-audit" href="/api/settings/backup-db" download>Download DB Backup</a>
+      <div class="field-actions" style="justify-content:flex-start;margin-top:0.5rem;padding-top:0;border-top:none">
+        <button class="btn btn-audit" id="backup-db-btn" onclick="downloadDbBackup()">Download DB Backup</button>
+        <span class="save-status" id="backup-db-status"></span>
+      </div>
     </div>
   </div>
 
@@ -758,6 +761,53 @@ async function saveTimezoneSettings() {
   if (ok) {
     settingsNeedsConfigState.timezone_name = !timezoneName;
     refreshSettingsNeedsConfigBanner();
+  }
+}
+
+async function downloadDbBackup() {
+  const btn = document.getElementById('backup-db-btn');
+  const status = document.getElementById('backup-db-status');
+  if (!btn || !status) return;
+  if (btn.disabled) return;
+
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Compressing…';
+  status.className = 'save-status';
+  status.textContent = 'Preparing backup…';
+
+  try {
+    const r = await fetch('/api/settings/backup-db');
+    if (!r.ok) {
+      let message = `HTTP ${r.status}`;
+      try {
+        const payload = await r.json();
+        if (payload?.error) message = payload.error;
+      } catch (_) {}
+      throw new Error(message);
+    }
+
+    const blob = await r.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    const disposition = r.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+    link.download = match ? match[1] : 'fastchannels_backup.db.gz';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
+
+    status.className = 'save-status ok';
+    status.textContent = '✓ Backup ready';
+    setTimeout(() => { status.textContent = ''; }, 3000);
+  } catch (e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
 }
 

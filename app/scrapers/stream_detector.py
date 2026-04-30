@@ -2058,6 +2058,31 @@ class StreamDetector:
                         _merge(fmt.get('http_headers'))
         return headers
 
+    @staticmethod
+    def _yt_dlp_no_stream_error(info, fallback: str = 'Extraction failed') -> str:
+        """
+        Build a more informative yt-dlp failure message when the extractor
+        matched a page but did not return a playable stream URL.
+        """
+        if not isinstance(info, dict):
+            return fallback
+
+        extractor = (
+            info.get('extractor_key')
+            or info.get('ie_key')
+            or info.get('extractor')
+            or ''
+        )
+        title = (info.get('title') or '').strip()
+        kind = 'playlist/page'
+        if title and extractor:
+            return f'yt-dlp matched {extractor} for {title!r}, but no playable stream was returned'
+        if extractor:
+            return f'yt-dlp matched {extractor}, but no playable stream was returned'
+        if info.get('entries'):
+            return 'yt-dlp extracted a playlist/page, but no playable stream was returned'
+        return fallback
+
     def _probe_without_extra_headers(
         self,
         session: requests.Session,
@@ -2154,7 +2179,10 @@ class StreamDetector:
             protocol = str(info.get('protocol') or '')
             stream_url = info.get('manifest_url') if 'm3u8' in protocol else info.get('url') or info.get('manifest_url')
             if not stream_url or not str(stream_url).startswith('http'):
-                return DetectionResult(error=last_error, resolver='yt-dlp')
+                return DetectionResult(
+                    error=self._yt_dlp_no_stream_error(info, last_error),
+                    resolver='yt-dlp',
+                )
 
             stream_url = str(stream_url)
             if not self._yt_n_ok(stream_url):

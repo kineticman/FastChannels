@@ -2148,8 +2148,9 @@
           _ccResolver = data.resolver || null;
           _ccIsPageUrl = !!data.is_page_url;
           _ccPageUrl = _ccIsPageUrl ? url : null;
-          statusEl.textContent = data.error || 'Detection failed';
-          const resolverLabel = _resolverLabel(_ccResolver || data.resolver);
+          const failureDetail = data.error ? String(data.error).trim() : 'Detection failed';
+          statusEl.textContent = failureDetail;
+          const resolverLabel = _resolverLabel(_ccResolver || data.resolver, false);
           if (resolverLabel) {
             statusEl.textContent += ` · ${resolverLabel}`;
           }
@@ -2186,11 +2187,15 @@
       return labels[raw] || (raw ? raw.toUpperCase() : 'Unknown');
     }
 
-    function _resolverLabel(resolver) {
-      const labels = {
+    function _resolverLabel(resolver, ok) {
+      const labels = ok ? {
         'yt-dlp': 'Resolved via yt-dlp',
         'custom api': 'Resolved via custom API',
         'page scrape': 'Resolved via page scrape',
+      } : {
+        'yt-dlp': 'Tried via yt-dlp',
+        'custom api': 'Tried via custom API',
+        'page scrape': 'Tried via page scrape',
       };
       return labels[String(resolver || '').toLowerCase()] || '';
     }
@@ -2224,7 +2229,7 @@
         hdrEl.textContent = isYoutube ? '' : 'No special headers required';
       }
       const resolverEl = document.getElementById('cc-result-resolver');
-      const resolverLabel = _resolverLabel(resolver);
+      const resolverLabel = _resolverLabel(resolver, ok);
       resolverEl.textContent = resolverLabel;
       resolverEl.style.display = resolverLabel ? '' : 'none';
 
