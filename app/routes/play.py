@@ -682,8 +682,15 @@ def play(source_name: str, channel_id: str):
             resolved_url = fresh_url
 
     # For custom channels that currently resolve to a direct video clip instead
-    # of HLS, return a tiny live manifest so HLS-oriented clients keep polling.
+    # of HLS, either hand the client the raw MP4 directly or fall back to the
+    # synthetic live manifest for other direct-video types.
     if source_name == 'custom' and channel.page_url and resolved_url and not _url_is_hls(resolved_url):
+        if (channel.stream_type or '').lower() == 'mp4':
+            logger.info(
+                '[play] direct mp4 passthrough ip=%s source=%s channel_id=%s channel_name=%s → %s',
+                client_ip, source_name, channel_id, channel.name, resolved_url[:80],
+            )
+            return redirect(resolved_url, 302)
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
