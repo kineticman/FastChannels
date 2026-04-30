@@ -820,6 +820,7 @@ def detect_custom_stream():
         'headers': result.headers,
         'needs_proxy': result.needs_proxy,
         'error': result.error,
+        'resolver': result.resolver,
         'is_page_url': is_page_url or result.is_youtube,
         'is_youtube': result.is_youtube,
     })

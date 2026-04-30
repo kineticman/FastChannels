@@ -628,6 +628,7 @@
         </div>
         <div id="cc-result-stream" style="word-break:break-all;color:var(--text-soft);font-size:.75rem;margin-bottom:.4rem;"></div>
         <div id="cc-result-headers" style="color:var(--text-muted);font-size:.74rem;"></div>
+        <div id="cc-result-resolver" style="color:var(--text-muted);font-size:.72rem;margin-top:.2rem;"></div>
         <div id="cc-youtube-note" style="display:none;margin-top:.4rem;font-size:.74rem;color:var(--text-muted);">YouTube stream URLs expire quickly, so this is usually best left on.</div>
         <!-- Proxy segments toggle -->
         <div id="cc-proxy-wrap" style="display:none;margin-top:.65rem;padding-top:.65rem;border-top:1px solid var(--border);">
@@ -2033,6 +2034,7 @@
     let _ccDetectedUrl = null;
     let _ccDetectedType = null;
     let _ccDetectedHeaders = {};
+    let _ccResolver = null;
     let _ccPageUrl = null;      // original input URL when it was a page (not direct stream)
     let _ccIsPageUrl = false;   // true when input was a page URL
 
@@ -2041,6 +2043,7 @@
       _ccDetectedUrl = channelData ? channelData.stream_url : null;
       _ccDetectedType = channelData ? (channelData.stream_type || null) : null;
       _ccDetectedHeaders = channelData ? (channelData.custom_headers || {}) : {};
+      _ccResolver = channelData ? (channelData.resolver || null) : null;
       _ccPageUrl = channelData ? (channelData.page_url || null) : null;
       _ccIsPageUrl = !!_ccPageUrl;
 
@@ -2063,7 +2066,7 @@
       if (channelData && channelData.stream_url) {
         const _editIsYt = !!(channelData.page_url && /youtube\.com|youtu\.be/i.test(channelData.page_url));
         _showDetectResult(true, channelData.stream_url, channelData.stream_type || null, channelData.custom_headers || {},
-                          !!channelData.proxy_segments, _ccIsPageUrl, _editIsYt);
+                          !!channelData.proxy_segments, _ccIsPageUrl, _editIsYt, _ccResolver);
       } else {
         document.getElementById('cc-detect-result').style.display = 'none';
         document.getElementById('cc-redetect-wrap').style.display = 'none';
@@ -2081,6 +2084,7 @@
       _ccDetectedUrl = null;
       _ccDetectedType = null;
       _ccDetectedHeaders = {};
+      _ccResolver = null;
       _ccPageUrl = null;
       _ccIsPageUrl = false;
     }
@@ -2092,6 +2096,7 @@
       _ccDetectedUrl = null;
       _ccDetectedType = null;
       _ccDetectedHeaders = {};
+      _ccResolver = null;
       _ccPageUrl = null;
       _ccIsPageUrl = false;
     }
@@ -2121,10 +2126,11 @@
           _ccDetectedUrl = data.stream_url;
           _ccDetectedType = data.stream_type || null;
           _ccDetectedHeaders = data.headers || {};
+          _ccResolver = data.resolver || null;
           _ccIsPageUrl = !!data.is_page_url;
           _ccPageUrl = _ccIsPageUrl ? url : null;
           statusEl.textContent = '';
-          _showDetectResult(true, data.stream_url, data.stream_type || null, data.headers, data.needs_proxy, _ccIsPageUrl, isYt);
+          _showDetectResult(true, data.stream_url, data.stream_type || null, data.headers, data.needs_proxy, _ccIsPageUrl, isYt, _ccResolver);
           if (!_ccEditId && (_ccIsPageUrl || isYt)) {
             // Page-based sources often issue short-lived or rotating URLs.
             document.getElementById('cc-redetect-toggle').checked = true;
@@ -2139,14 +2145,19 @@
           _ccDetectedUrl = data.stream_url || null;
           _ccDetectedType = data.stream_type || null;
           _ccDetectedHeaders = {};
+          _ccResolver = data.resolver || null;
           _ccIsPageUrl = !!data.is_page_url;
           _ccPageUrl = _ccIsPageUrl ? url : null;
           statusEl.textContent = data.error || 'Detection failed';
+          const resolverLabel = _resolverLabel(_ccResolver || data.resolver);
+          if (resolverLabel) {
+            statusEl.textContent += ` · ${resolverLabel}`;
+          }
           statusEl.style.color = 'var(--danger)';
           if (data.stream_url) {
-            _showDetectResult(false, data.stream_url, data.stream_type || null, {}, false, _ccIsPageUrl, isYt);
+            _showDetectResult(false, data.stream_url, data.stream_type || null, {}, false, _ccIsPageUrl, isYt, _ccResolver);
           } else if (isYt) {
-            _showDetectResult(false, null, data.stream_type || null, {}, false, true, true);
+            _showDetectResult(false, null, data.stream_type || null, {}, false, true, true, _ccResolver);
           }
         }
       } catch (e) {
@@ -2175,6 +2186,15 @@
       return labels[raw] || (raw ? raw.toUpperCase() : 'Unknown');
     }
 
+    function _resolverLabel(resolver) {
+      const labels = {
+        'yt-dlp': 'Resolved via yt-dlp',
+        'custom api': 'Resolved via custom API',
+        'page scrape': 'Resolved via page scrape',
+      };
+      return labels[String(resolver || '').toLowerCase()] || '';
+    }
+
     function _looksLikeMp4Url(url) {
       return /\\.mp4(?:[?#]|$)/i.test(String(url || ''));
     }
@@ -2183,7 +2203,7 @@
       return String(channel?.stream_type || '').toLowerCase() === 'mp4' || _looksLikeMp4Url(channel?.stream_url);
     }
 
-    function _showDetectResult(ok, streamUrl, streamType, headers, needsProxy, isPageUrl, isYoutube) {
+    function _showDetectResult(ok, streamUrl, streamType, headers, needsProxy, isPageUrl, isYoutube, resolver) {
       const panel = document.getElementById('cc-detect-result');
       const effectiveType = String(streamType || '').toLowerCase() === 'mp4' || _looksLikeMp4Url(streamUrl)
         ? 'mp4'
@@ -2203,6 +2223,10 @@
       } else {
         hdrEl.textContent = isYoutube ? '' : 'No special headers required';
       }
+      const resolverEl = document.getElementById('cc-result-resolver');
+      const resolverLabel = _resolverLabel(resolver);
+      resolverEl.textContent = resolverLabel;
+      resolverEl.style.display = resolverLabel ? '' : 'none';
 
       const proxyWrap = document.getElementById('cc-proxy-wrap');
       proxyWrap.style.display = needsProxy || hdrEntries.length ? '' : 'none';

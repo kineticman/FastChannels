@@ -153,6 +153,7 @@ class DetectionResult:
     success: bool = False
     error: str | None = None
     is_youtube: bool = False
+    resolver: str | None = None
 
 
 class StreamDetector:
@@ -165,6 +166,7 @@ class StreamDetector:
             return self._resolve_youtube(input_url)
         if _TWITCH_RE.match(input_url):
             return self._resolve_twitch(input_url)
+        self._candidate_resolvers: dict[str, str] = {}
         best_failure: DetectionResult | None = None
         if self._yt_dlp_has_dedicated_extractor(input_url):
             result = self._resolve_yt_dlp_url(input_url)
@@ -216,6 +218,8 @@ class StreamDetector:
                     continue
                 result = self._probe(session, candidate, page_url, origin)
                 if result.success:
+                    if not result.resolver:
+                        result.resolver = self._candidate_resolvers.get(candidate) or 'page scrape'
                     return result
                 if result.stream_type or result.error:
                     if self._is_blocked_failure(best_failure) and not self._is_blocked_failure(result):
@@ -408,6 +412,7 @@ class StreamDetector:
             for c in extractor(session, url, text):
                 if c not in candidates:
                     candidates.append(c)
+                    self._candidate_resolvers.setdefault(c, 'custom api')
 
         return candidates
 
@@ -1603,6 +1608,7 @@ class StreamDetector:
                     headers=headers,
                     needs_proxy=needs_proxy,
                     success=True,
+                    resolver=self._candidate_resolvers.get(stream_url) or 'page scrape',
                 )
             except Exception as exc:
                 logger.debug('[detector] hls probe error %s: %s', stream_url[:80], exc)
@@ -1659,6 +1665,7 @@ class StreamDetector:
                         needs_proxy=False,
                         success=False,
                         error='MJPEG stream detected, but MJPEG custom channels are not supported',
+                        resolver=self._candidate_resolvers.get(stream_url) or 'page scrape',
                     )
                 if stream_type == 'jpeg_snapshot':
                     return DetectionResult(
@@ -1668,6 +1675,7 @@ class StreamDetector:
                         needs_proxy=False,
                         success=False,
                         error='JPEG snapshot feed detected, but JPEG snapshot custom channels are not supported',
+                        resolver=self._candidate_resolvers.get(stream_url) or 'page scrape',
                     )
 
                 logger.info('[detector] direct video probe OK %s ct=%s', stream_url[:80], ct)
@@ -1677,6 +1685,7 @@ class StreamDetector:
                     headers=headers,
                     needs_proxy=False,
                     success=True,
+                    resolver=self._candidate_resolvers.get(stream_url) or 'page scrape',
                 )
             except Exception as exc:
                 logger.debug('[detector] direct probe error %s: %s', stream_url[:80], exc)
@@ -1709,6 +1718,7 @@ class StreamDetector:
         except ImportError:
             return DetectionResult(
                 error='yt-dlp is not installed — rebuild the container to enable Twitch support',
+                resolver='yt-dlp',
             )
 
         last_error = 'Extraction failed'
@@ -1723,12 +1733,13 @@ class StreamDetector:
                 info = ydl.extract_info(url, download=False)
 
             if not info:
-                return DetectionResult(error=last_error)
+                return DetectionResult(error=last_error, resolver='yt-dlp')
 
+            headers = self._extract_http_headers(info)
             protocol = str(info.get('protocol') or '')
             stream_url = info.get('manifest_url') if 'm3u8' in protocol else info.get('url') or info.get('manifest_url')
             if not stream_url or not str(stream_url).startswith('http'):
-                return DetectionResult(error=last_error)
+                return DetectionResult(error=last_error, resolver='yt-dlp')
 
             stream_url = str(stream_url)
             if not self._yt_n_ok(stream_url):
@@ -1737,20 +1748,18 @@ class StreamDetector:
                     stream_url=stream_url,
                     stream_type='hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct'),
                     error='Extracted URL appears throttled (n parameter too long)',
+                    headers=headers,
+                    needs_proxy=bool(headers),
+                    resolver='yt-dlp',
                 )
 
             logger.info('[twitch] resolved url=%s…', stream_url[:80])
-            return DetectionResult(
-                stream_url=stream_url,
-                stream_type='hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct'),
-                headers={},
-                needs_proxy=False,
-                success=True,
-            )
+            stream_type = 'hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct')
+            return self._finalize_extracted_stream(stream_url, stream_type, headers, 'yt-dlp')
         except Exception as exc:
             last_error = str(exc)
             logger.debug('[twitch] failed: %s', exc)
-            return DetectionResult(error=last_error)
+            return DetectionResult(error=last_error, resolver='yt-dlp')
 
     @staticmethod
     @lru_cache(maxsize=2048)
@@ -1771,6 +1780,102 @@ class StreamDetector:
                 continue
         return False
 
+    @staticmethod
+    def _extract_http_headers(info) -> dict[str, str]:
+        """
+        Collect playback-relevant HTTP headers from yt-dlp info objects.
+
+        We keep Referer/Origin/User-Agent style headers, but intentionally drop
+        Cookie so we do not forward extractor auth as a browser cookie.
+        """
+        headers: dict[str, str] = {}
+
+        def _merge(candidate):
+            if not isinstance(candidate, dict):
+                return
+            for key, value in candidate.items():
+                if not value:
+                    continue
+                if str(key).lower() == 'cookie':
+                    continue
+                headers[str(key)] = str(value)
+
+        if isinstance(info, dict):
+            _merge(info.get('http_headers'))
+            for fmt in info.get('requested_formats') or []:
+                if isinstance(fmt, dict):
+                    _merge(fmt.get('http_headers'))
+            if not headers:
+                for fmt in info.get('formats') or []:
+                    if isinstance(fmt, dict):
+                        _merge(fmt.get('http_headers'))
+        return headers
+
+    def _probe_without_extra_headers(
+        self,
+        session: requests.Session,
+        stream_url: str,
+        stream_type: str,
+    ) -> DetectionResult:
+        """
+        Second-stage probe using only the session defaults.
+
+        This tells us whether extractor-returned headers are actually required
+        or were just incidental metadata from yt-dlp.
+        """
+        origin = self._origin_of(stream_url)
+        if stream_type == 'hls' or self._is_hls_url(stream_url):
+            return self._probe_hls(session, stream_url, stream_url, origin, [{}])
+        return self._probe_direct(session, stream_url, [{}])
+
+    def _finalize_extracted_stream(
+        self,
+        stream_url: str,
+        stream_type: str,
+        headers: dict[str, str],
+        resolver: str,
+        *,
+        is_youtube: bool = False,
+    ) -> DetectionResult:
+        """
+        Normalize extracted streams so we only keep headers when they are
+        actually required for playback.
+        """
+        if not headers:
+            return DetectionResult(
+                stream_url=stream_url,
+                stream_type=stream_type,
+                headers={},
+                needs_proxy=False,
+                success=True,
+                is_youtube=is_youtube,
+                resolver=resolver,
+            )
+
+        session = requests.Session()
+        session.headers.update({'User-Agent': _BROWSER_UA})
+        bare = self._probe_without_extra_headers(session, stream_url, stream_type)
+        if bare.success and not bare.needs_proxy:
+            return DetectionResult(
+                stream_url=stream_url,
+                stream_type=stream_type,
+                headers={},
+                needs_proxy=False,
+                success=True,
+                is_youtube=is_youtube,
+                resolver=resolver,
+            )
+
+        return DetectionResult(
+            stream_url=stream_url,
+            stream_type=stream_type,
+            headers=headers,
+            needs_proxy=True,
+            success=True,
+            is_youtube=is_youtube,
+            resolver=resolver,
+        )
+
     def _resolve_yt_dlp_url(self, url: str) -> DetectionResult:
         """
         Generic yt-dlp fallback for sites yt-dlp already has a dedicated extractor for.
@@ -1781,6 +1886,7 @@ class StreamDetector:
         except ImportError:
             return DetectionResult(
                 error='yt-dlp is not installed — rebuild the container to enable yt-dlp support',
+                resolver='yt-dlp',
             )
 
         last_error = 'Extraction failed'
@@ -1795,12 +1901,13 @@ class StreamDetector:
                 info = ydl.extract_info(url, download=False)
 
             if not info:
-                return DetectionResult(error=last_error)
+                return DetectionResult(error=last_error, resolver='yt-dlp')
 
+            headers = self._extract_http_headers(info)
             protocol = str(info.get('protocol') or '')
             stream_url = info.get('manifest_url') if 'm3u8' in protocol else info.get('url') or info.get('manifest_url')
             if not stream_url or not str(stream_url).startswith('http'):
-                return DetectionResult(error=last_error)
+                return DetectionResult(error=last_error, resolver='yt-dlp')
 
             stream_url = str(stream_url)
             if not self._yt_n_ok(stream_url):
@@ -1809,20 +1916,18 @@ class StreamDetector:
                     stream_url=stream_url,
                     stream_type='hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct'),
                     error='Extracted URL appears throttled (n parameter too long)',
+                    headers=headers,
+                    needs_proxy=bool(headers),
+                    resolver='yt-dlp',
                 )
 
             logger.info('[ytdlp] resolved url=%s…', stream_url[:80])
-            return DetectionResult(
-                stream_url=stream_url,
-                stream_type='hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct'),
-                headers={},
-                needs_proxy=False,
-                success=True,
-            )
+            stream_type = 'hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct')
+            return self._finalize_extracted_stream(stream_url, stream_type, headers, 'yt-dlp')
         except Exception as exc:
             last_error = str(exc)
             logger.debug('[ytdlp] failed for %s: %s', url[:80], exc)
-            return DetectionResult(error=last_error)
+            return DetectionResult(error=last_error, resolver='yt-dlp')
 
     def _first_segment_url(
         self,
@@ -1869,6 +1974,7 @@ class StreamDetector:
             return DetectionResult(
                 is_youtube=True,
                 error='yt-dlp is not installed — rebuild the container to enable YouTube support',
+                resolver='yt-dlp',
             )
 
         last_error = 'Extraction failed'
@@ -1895,6 +2001,7 @@ class StreamDetector:
                 if not info:
                     continue
 
+                headers = self._extract_http_headers(info)
                 protocol = info.get('protocol', '')
                 # Prefer manifest_url for m3u8 protocols (HLS playlist), else url
                 if 'm3u8' in protocol:
@@ -1912,12 +2019,11 @@ class StreamDetector:
 
                 logger.info('[youtube] resolved via client=%s url=%s…', client, stream_url[:80])
                 stream_type = 'hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct')
-                return DetectionResult(
-                    stream_url=stream_url,
-                    stream_type=stream_type,
-                    headers={},
-                    needs_proxy=False,
-                    success=True,
+                return self._finalize_extracted_stream(
+                    stream_url,
+                    stream_type,
+                    headers,
+                    'yt-dlp',
                     is_youtube=True,
                 )
             except Exception as exc:
@@ -1925,7 +2031,7 @@ class StreamDetector:
                 logger.debug('[youtube] client=%s failed: %s', client, exc)
                 continue
 
-        return DetectionResult(is_youtube=True, error=f'YouTube extraction failed: {last_error}')
+        return DetectionResult(is_youtube=True, error=f'YouTube extraction failed: {last_error}', resolver='yt-dlp')
 
     @staticmethod
     def _yt_n_ok(url: str) -> bool:

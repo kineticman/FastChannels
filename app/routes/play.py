@@ -518,6 +518,60 @@ def custom_manifest_proxy(channel_id: str):
     )
 
 
+@play_bp.route('/play/custom/<channel_id>/direct')
+def custom_direct_proxy(channel_id: str):
+    """
+    Direct-media proxy for custom channels that need request headers.
+
+    This is used for non-HLS streams where yt-dlp returned playback headers
+    that the client cannot send on a raw redirect.
+    """
+    from urllib.parse import unquote as _unquote
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'custom', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel or not channel.stream_url:
+        abort(404)
+
+    if getattr(channel, 'redetect_on_play', False) and channel.page_url:
+        stream_url, custom_headers = _redetect_custom_stream(channel)
+        if not stream_url:
+            abort(502)
+    else:
+        custom_headers = channel.custom_headers or {}
+        stream_url = channel.stream_url
+
+    headers = _custom_proxy_headers(channel, custom_headers)
+    range_header = request.headers.get('Range')
+    if range_header:
+        headers['Range'] = range_header
+
+    try:
+        r = _requests.get(stream_url, headers=headers, timeout=15, stream=True)
+        if r.status_code not in (200, 206):
+            abort(r.status_code)
+
+        response_headers = {'Cache-Control': 'no-cache'}
+        for key in ('Content-Type', 'Content-Length', 'Accept-Ranges', 'Content-Range', 'Last-Modified', 'ETag'):
+            value = r.headers.get(key)
+            if value:
+                response_headers[key] = value
+
+        return Response(
+            r.iter_content(65536),
+            status=r.status_code,
+            headers=response_headers,
+        )
+    except Exception as e:
+        logger.warning('[custom-direct] fetch failed for %s: %s', raw_id, e)
+        abort(502)
+
+
 @play_bp.route('/play/custom/<channel_id>/live.m3u8')
 def custom_live_manifest(channel_id: str):
     """
@@ -541,14 +595,20 @@ def custom_live_manifest(channel_id: str):
         abort(404)
 
     if channel.page_url:
-        stream_url, _ = _redetect_custom_stream(channel, ttl=_REDETECT_TTL_LIVE)
+        stream_url, custom_headers = _redetect_custom_stream(channel, ttl=_REDETECT_TTL_LIVE)
     else:
         stream_url = channel.stream_url or ''
+        custom_headers = channel.custom_headers or {}
 
     if not stream_url:
         abort(502)
 
     seq = _get_custom_live_seq(channel.id, stream_url)
+    use_proxy = bool(custom_headers)
+    if use_proxy:
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(raw_id, safe='')
+        stream_url = f'{request.host_url.rstrip("/")}/play/custom/{encoded_id}/direct'
     manifest = (
         '#EXTM3U\n'
         '#EXT-X-VERSION:3\n'
@@ -704,30 +764,56 @@ def play(source_name: str, channel_id: str):
     # Custom channels with a page_url: re-detect the stream URL at play time
     # (TTL-cached so the page fetch only runs once per 5 minutes).
     if source_name == 'custom' and channel.page_url:
-        fresh_url, _ = _redetect_custom_stream(channel)
+        fresh_url, custom_headers = _redetect_custom_stream(channel)
         if fresh_url:
             resolved_url = fresh_url
+    else:
+        custom_headers = channel.custom_headers or {}
 
     # For custom channels that currently resolve to a direct video clip instead
     # of HLS, either hand the client the raw MP4 directly or fall back to the
     # synthetic live manifest for other direct-video types.
-    if source_name == 'custom' and channel.page_url and resolved_url and not _url_is_hls(resolved_url):
-        if (channel.stream_type or '').lower() == 'mp4':
+    if source_name == 'custom' and channel.page_url and resolved_url:
+        has_proxy_headers = bool(custom_headers)
+        if _url_is_hls(resolved_url):
+            if getattr(channel, 'proxy_segments', False) or has_proxy_headers:
+                from urllib.parse import quote as _quote
+                encoded_id = _quote(channel.source_channel_id, safe='')
+                return redirect(
+                    f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/proxy.m3u8",
+                    302,
+                )
+        elif (channel.stream_type or '').lower() == 'mp4':
+            if has_proxy_headers:
+                from urllib.parse import quote as _quote
+                encoded_id = _quote(channel.source_channel_id, safe='')
+                return redirect(
+                    f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/direct",
+                    302,
+                )
             logger.info(
                 '[play] direct mp4 passthrough ip=%s source=%s channel_id=%s channel_name=%s → %s',
                 client_ip, source_name, channel_id, channel.name, resolved_url[:80],
             )
             return redirect(resolved_url, 302)
-        from urllib.parse import quote as _quote
-        encoded_id = _quote(channel.source_channel_id, safe='')
-        return redirect(
-            f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/live.m3u8",
-            302,
-        )
+        elif has_proxy_headers or getattr(channel, 'proxy_segments', False):
+            from urllib.parse import quote as _quote
+            encoded_id = _quote(channel.source_channel_id, safe='')
+            return redirect(
+                f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/live.m3u8",
+                302,
+            )
+        else:
+            from urllib.parse import quote as _quote
+            encoded_id = _quote(channel.source_channel_id, safe='')
+            return redirect(
+                f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/live.m3u8",
+                302,
+            )
 
     # Custom channels with segment proxying enabled: serve a manifest proxy
     # so the client never needs to send custom headers directly.
-    if source_name == 'custom' and getattr(channel, 'proxy_segments', False):
+    if source_name == 'custom' and (getattr(channel, 'proxy_segments', False) or custom_headers):
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(

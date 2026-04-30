@@ -9,6 +9,7 @@ _SUPPRESS_PATTERNS = (
     '/images/proxy',           # per-image cache hits — too noisy
     '/logos/',                 # cached logo file hits — too noisy
     '/posters/',               # cached poster file hits — too noisy
+    '/play/custom/segment',    # segment proxy is high-volume by design
     '/api/sources/chnum',      # overlap-banner polling
     'GET /api/sources HTTP',   # sources list fetched on every poll cycle finish
     '"GET /admin/',            # admin page navigation GETs (POSTs still logged)
