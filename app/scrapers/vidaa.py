@@ -184,8 +184,10 @@ def _pick_logo(station: dict[str, Any]) -> str | None:
 class VidaaScraper(BaseScraper):
     source_name          = "vidaa"
     display_name         = "Vidaa Free TV"
-    scrape_interval      = 720   # 12 hours; EPG horizon is ~5 days
-    stream_audit_enabled = True
+    scrape_interval         = 720   # 12 hours; EPG horizon is ~5 days
+    stream_audit_enabled    = True
+    channel_miss_threshold  = 5    # Vidaa rotates channel content with new UUIDs; allow 60h before deactivating
+    rehome_by_guide_key     = True  # migrate existing rows when UUID changes but tva-stationId is stable
     config_schema        = [
         ConfigField(
             "geo",

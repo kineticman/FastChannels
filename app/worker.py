@@ -374,7 +374,12 @@ def run_scraper(source_name: str, force_full: bool = False):
                         _active_geos = None
                         if hasattr(scraper, '_geos'):
                             _active_geos = {g.upper() for g in scraper._geos()}
-                        _upsert_channels(source, channels, _gracenote_auto_fill, active_geos=_active_geos)
+                        _upsert_channels(
+                            source, channels, _gracenote_auto_fill,
+                            active_geos=_active_geos,
+                            miss_threshold=getattr(scraper, 'channel_miss_threshold', _CHANNEL_MISS_THRESHOLD),
+                            rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
+                        )
                         _upsert_programs(source, programs)
                         _apply_scraper_config_updates(source, scraper)
                         source.last_scraped_at = datetime.now(timezone.utc)
@@ -1536,8 +1541,27 @@ def _refresh_auto_channel_numbers() -> None:
                 db.session.delete(fcn)
 
 
-def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None):
+def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None,
+                     miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
+
+    # Build a guide_key → channel index so we can re-use an existing DB row
+    # when a scraper assigns a new uuid to the same content (e.g. Vidaa rotating
+    # a channel slot).  Only channels with a guide_key participate; if two DB rows
+    # share the same guide_key the slot is ambiguous and rehoming is skipped.
+    gk_index: dict[str, object] = {}
+    gk_ambiguous: set[str] = set()
+    if rehome_by_guide_key:
+        for _src_id, _ch in existing.items():
+            _gk = _ch.guide_key or ''
+            if not _gk:
+                continue
+            if _gk in gk_index:
+                gk_ambiguous.add(_gk)
+            else:
+                gk_index[_gk] = _ch
+    incoming_ids = {cd.source_channel_id for cd in channel_data_list} if rehome_by_guide_key else set()
+
     logo_validation_cache: dict[str, bool] = {}
     seen_at = datetime.now(timezone.utc)
     for cd in channel_data_list:
@@ -1548,6 +1572,27 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 pass
             cd.name = cd.name.replace(',', '')
         ch = existing.get(cd.source_channel_id)
+
+        # Secondary lookup: when the uuid changed but guide_key is stable, migrate
+        # the existing DB row to the new uuid so user settings are preserved.
+        if ch is None and rehome_by_guide_key:
+            _gk = getattr(cd, 'guide_key', None) or ''
+            if _gk and _gk not in gk_ambiguous:
+                _candidate = gk_index.get(_gk)
+                if (_candidate is not None
+                        and _candidate.missed_scrapes > 0
+                        and _candidate.source_channel_id not in incoming_ids):
+                    logger.info(
+                        '[%s] rehoming channel by guide_key %r: %s → %s (%r → %r)',
+                        source.name, _gk,
+                        _candidate.source_channel_id, cd.source_channel_id,
+                        _candidate.name, cd.name,
+                    )
+                    del existing[_candidate.source_channel_id]
+                    _candidate.source_channel_id = cd.source_channel_id
+                    existing[cd.source_channel_id] = _candidate
+                    del gk_index[_gk]  # prevent double-rehoming the same slot
+                    ch = _candidate
 
         # Extract gracenote_id from ChannelData if the scraper set it directly,
         # or fall back to the "{play_id}|{gracenote_id}" slug encoding (Roku).
@@ -1680,7 +1725,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             if ch_id not in seen and ch_id not in region_removed_ids:
                 next_missed = (ch.missed_scrapes or 0) + 1
                 ch.missed_scrapes = next_missed
-                if ch.is_active and next_missed >= _CHANNEL_MISS_THRESHOLD:
+                if ch.is_active and next_missed >= miss_threshold:
                     ch.is_active = False
                     logger.info(
                         '[%s] marking inactive after %d missed channel scrapes: %s (%s)',
