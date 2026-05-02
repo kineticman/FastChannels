@@ -363,11 +363,19 @@
       background: color-mix(in srgb, var(--warning-bg) 70%, var(--surface));
       border: 1px solid var(--warning-border); border-radius: 8px;
       padding: 0.85rem 1.25rem; margin: 0 0 1rem; color: var(--warning-soft);
+      transition: background 0.4s, border-color 0.4s, color 0.4s, opacity 0.5s;
     }
     .needs-config-banner strong { display: block; margin-bottom: 0.4rem; font-size: 0.9rem; }
     .needs-config-banner ul { margin: 0; padding-left: 1.25rem; font-size: 0.82rem; line-height: 1.7; }
     .needs-config-banner a { color: var(--warning-soft); font-weight: 600; }
     .needs-config-banner a:hover { text-decoration: underline; }
+    .needs-config-banner.all-configured {
+      background: color-mix(in srgb, var(--success-bg-2) 20%, transparent);
+      border-color: color-mix(in srgb, var(--success-fill) 28%, transparent);
+      color: var(--success-soft);
+    }
+    .needs-config-banner li.item-configured { color: var(--success-soft); }
+    .needs-config-banner li.item-configured a { color: var(--success-soft); }
     @media (max-width: 760px) {
       html { font-size: 16px; }
       nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
@@ -409,7 +417,7 @@
       {% for item in settings_needs_config %}
       <li id="settings-needs-config-item-{{ item.key }}">
         <a href="#{{ item.anchor }}" onclick="scrollToSettingCard('{{ item.anchor }}'); return false;">{{ item.label }}</a>
-        — click to configure
+        <span class="config-note"> — click to configure</span>
       </li>
       {% endfor %}
     </ul>
@@ -690,16 +698,27 @@ function refreshSettingsNeedsConfigBanner() {
 
   Object.entries(settingsNeedsConfigState).forEach(([key, needsConfig]) => {
     const item = document.getElementById(`settings-needs-config-item-${key}`);
-    if (item) item.style.display = needsConfig ? '' : 'none';
+    if (!item) return;
+    if (needsConfig) {
+      item.classList.remove('item-configured');
+      const note = item.querySelector('.config-note');
+      if (note) note.textContent = ' — click to configure';
+    } else {
+      item.classList.add('item-configured');
+      const note = item.querySelector('.config-note');
+      if (note) note.textContent = ' — configured';
+    }
   });
 
   const remaining = Object.values(settingsNeedsConfigState).filter(Boolean).length;
+  const strong = banner.querySelector('strong');
   if (remaining === 0) {
-    banner.remove();
+    if (strong) strong.textContent = '✓ All settings configured';
+    banner.classList.add('all-configured');
+    setTimeout(() => banner.remove(), 3000);
     return;
   }
 
-  const strong = banner.querySelector('strong');
   if (strong) {
     strong.textContent = `⚠ ${remaining} setting${remaining === 1 ? '' : 's'} should be configured on new installs`;
   }

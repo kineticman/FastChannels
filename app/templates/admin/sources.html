@@ -33,11 +33,19 @@
       background: color-mix(in srgb, var(--warning-bg) 70%, var(--surface));
       border: 1px solid var(--warning-border); border-radius: 8px;
       padding: 0.85rem 1.25rem; margin-bottom: 1rem; color: var(--warning-soft);
+      transition: background 0.4s, border-color 0.4s, color 0.4s, opacity 0.5s;
     }
     .needs-config-banner strong { display: block; margin-bottom: 0.4rem; font-size: 0.9rem; }
     .needs-config-banner ul { margin: 0; padding-left: 1.25rem; font-size: 0.82rem; line-height: 1.7; }
     .needs-config-banner a { color: var(--warning-soft); font-weight: 600; }
     .needs-config-banner a:hover { text-decoration: underline; }
+    .needs-config-banner.all-configured {
+      background: color-mix(in srgb, var(--success-bg-2) 20%, transparent);
+      border-color: color-mix(in srgb, var(--success-fill) 28%, transparent);
+      color: var(--success-soft);
+    }
+    .needs-config-banner li.item-configured { color: var(--success-soft); }
+    .needs-config-banner li.item-configured a { color: var(--success-soft); }
 
     /* Overlap banner */
     .overlap-banner {
@@ -395,7 +403,7 @@
         {% for s in needs_config %}
         <li id="needs-config-item-{{ s.id }}">
           <a href="#" onclick="scrollToConfig({{ s.id }}); return false;">{{ s.display_name }}</a>
-          — click to configure
+          <span class="banner-config-note"> — click to configure</span>
         </li>
         {% endfor %}
       </ul>
@@ -1861,10 +1869,15 @@
         if (data.config_status === 'configured') {
           const bannerItem = document.getElementById(`needs-config-item-${sourceId}`);
           if (bannerItem) {
-            bannerItem.remove();
+            bannerItem.classList.add('item-configured');
+            const note = bannerItem.querySelector('.banner-config-note');
+            if (note) note.textContent = ' — configured';
             const banner = document.getElementById('needs-config-banner');
-            if (banner && banner.querySelectorAll('li').length === 0) {
-              banner.remove();
+            if (banner && banner.querySelectorAll('li:not(.item-configured)').length === 0) {
+              const strong = banner.querySelector('strong');
+              if (strong) strong.textContent = '✓ All sources configured';
+              banner.classList.add('all-configured');
+              setTimeout(() => banner.remove(), 3000);
             }
           }
         }
