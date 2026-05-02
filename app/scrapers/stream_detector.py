@@ -27,7 +27,7 @@ import secrets
 import time
 from functools import lru_cache
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit, urljoin, parse_qs, unquote, quote
+from urllib.parse import urlsplit, urlunsplit, urljoin, parse_qs, unquote, quote
 
 import requests
 
@@ -189,7 +189,9 @@ class StreamDetector:
         if _TWITCH_RE.match(input_url):
             return self._resolve_twitch(input_url)
         best_failure: DetectionResult | None = None
-        if self._yt_dlp_has_dedicated_extractor(input_url):
+        _p = urlsplit(input_url)
+        _url_for_extractor_check = urlunsplit((_p.scheme, _p.netloc, _p.path, '', ''))
+        if self._yt_dlp_has_dedicated_extractor(_url_for_extractor_check):
             result = self._resolve_yt_dlp_url(input_url)
             if result.success:
                 return result
@@ -2031,18 +2033,23 @@ class StreamDetector:
             return DetectionResult(error=last_error, resolver='yt-dlp')
 
     @staticmethod
-    @lru_cache(maxsize=2048)
-    def _yt_dlp_has_dedicated_extractor(url: str) -> bool:
+    @lru_cache(maxsize=1)
+    def _yt_dlp_extractor_list() -> list:
+        """Build the non-generic yt-dlp extractor list once per process."""
         try:
             from yt_dlp.extractor import gen_extractors
+            return [
+                ie for ie in gen_extractors()
+                if (getattr(ie, 'IE_NAME', '') or type(ie).__name__).lower() != 'generic'
+            ]
         except Exception:
-            return False
+            return []
 
-        for ie in gen_extractors():
+    @staticmethod
+    @lru_cache(maxsize=512)
+    def _yt_dlp_has_dedicated_extractor(url: str) -> bool:
+        for ie in StreamDetector._yt_dlp_extractor_list():
             try:
-                ie_name = getattr(ie, 'IE_NAME', '') or type(ie).__name__
-                if ie_name.lower() == 'generic':
-                    continue
                 if ie.suitable(url):
                     return True
             except Exception:
@@ -2135,7 +2142,9 @@ class StreamDetector:
         Normalize extracted streams so we only keep headers when they are
         actually required for playback.
         """
-        if not headers:
+        if not headers or is_youtube:
+            # YouTube CDN URLs (googlevideo.com) are always publicly accessible —
+            # the yt-dlp headers are informational, not required for playback.
             return DetectionResult(
                 stream_url=stream_url,
                 stream_type=stream_type,
