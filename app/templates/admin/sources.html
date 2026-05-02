@@ -1589,9 +1589,29 @@
         return `<option value="${escapeHtml(String(opt.value))}" ${checked ? 'selected' : ''}>${escapeHtml(opt.label)}</option>`;
       }).join('');
 
+      const usernameField = schema.find(f => f.key === 'username');
+      const passwordField = schema.find(f => f.key === 'password');
+      const credentialsHtml = (usernameField && passwordField) ? `
+        <div class="fields-grid">
+          <div class="field">
+            <label for="cfg-${sourceId}-username">${escapeHtml(usernameField.label)}<span class="req">*</span></label>
+            <input type="text" id="cfg-${sourceId}-username" data-key="username"
+                   data-secret="false" value="${escapeHtml(String(values.username || ''))}"
+                   placeholder="${escapeHtml(usernameField.placeholder || '')}" autocomplete="off">
+            <div class="help">${escapeHtml(usernameField.help_text || '')}</div>
+          </div>
+          <div class="field">
+            <label for="cfg-${sourceId}-password">${escapeHtml(passwordField.label)}<span class="req">*</span></label>
+            <input type="password" id="cfg-${sourceId}-password" data-key="password"
+                   data-secret="true" value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
+            <div class="help">${escapeHtml(passwordField.help_text || '')}</div>
+          </div>
+        </div>` : '';
+
       return `
         <div class="config-title">Source Settings</div>
         <div class="config-note">Choose one or more Pluto regions. The selector is limited to the live regions we verified.</div>
+        ${credentialsHtml}
         <div class="field field-full">
           <label for="cfg-${sourceId}-country_codes">${escapeHtml(regionField.label)}</label>
           <select id="cfg-${sourceId}-country_codes" class="region-select" data-key="country_codes" multiple size="6">
