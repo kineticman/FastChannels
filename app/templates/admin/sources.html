@@ -2313,6 +2313,7 @@
       try {
         const r = await fetch(`/api/custom-channels/${_ccEditId}`, {method: 'DELETE'});
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        btn.disabled = false;
         document.getElementById('custom-channel-modal').classList.remove('open');
         _ccEditId = null; _ccDetectedUrl = null; _ccDetectedHeaders = {};
         _ccPageUrl = null; _ccIsPageUrl = false;
