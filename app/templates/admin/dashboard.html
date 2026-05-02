@@ -179,8 +179,10 @@
             {% set nxt = source.next_scrape_at() %}
             <td style="color:{% if not source.is_enabled %}var(--text-dim){% elif nxt and nxt < now %}var(--warning){% else %}var(--text-muted){% endif %}" id="next-scrape-{{ source.id }}">{% if not source.is_enabled %}Disabled{% else %}{{ nxt | localtime }}{% endif %}</td>
             <td>
+              {% if source.name != 'custom' %}
               <button class="btn btn-sm" onclick="run({{ source.id }}, this)">Scrape Now</button>
               <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
