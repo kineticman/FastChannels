@@ -796,13 +796,6 @@ def play(source_name: str, channel_id: str):
                 client_ip, source_name, channel_id, channel.name, resolved_url[:80],
             )
             return redirect(resolved_url, 302)
-        elif has_proxy_headers or getattr(channel, 'proxy_segments', False):
-            from urllib.parse import quote as _quote
-            encoded_id = _quote(channel.source_channel_id, safe='')
-            return redirect(
-                f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/live.m3u8",
-                302,
-            )
         else:
             from urllib.parse import quote as _quote
             encoded_id = _quote(channel.source_channel_id, safe='')

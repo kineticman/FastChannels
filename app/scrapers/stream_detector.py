@@ -182,12 +182,12 @@ class StreamDetector:
     TIMEOUT = 12
 
     def detect(self, input_url: str) -> DetectionResult:
+        self._candidate_resolvers: dict[str, str] = {}
         # Fast path for yt-dlp-native sites we know it can own cleanly.
         if _YOUTUBE_RE.match(input_url):
             return self._resolve_youtube(input_url)
         if _TWITCH_RE.match(input_url):
             return self._resolve_twitch(input_url)
-        self._candidate_resolvers: dict[str, str] = {}
         best_failure: DetectionResult | None = None
         if self._yt_dlp_has_dedicated_extractor(input_url):
             result = self._resolve_yt_dlp_url(input_url)
@@ -601,6 +601,15 @@ class StreamDetector:
         if not stream_name:
             return []
 
+        # Fast path: the session already fetched the page (server-set cookies in jar).
+        # The /token/ endpoint often works without JS-set auth cookies.
+        stream_url = self._thetvapp_fetch_token(session, url, stream_name)
+        if stream_url:
+            self._candidate_resolvers.setdefault(stream_url, 'thetvapp')
+            return [stream_url]
+
+        # Slow path: JS on the page sets auth cookies before /token/ will respond.
+        # Use Playwright and wait for network activity to settle instead of a fixed sleep.
         try:
             from playwright.sync_api import sync_playwright
         except Exception as exc:
@@ -611,8 +620,7 @@ class StreamDetector:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 page = browser.new_page()
-                page.goto(url, wait_until='domcontentloaded', timeout=30000)
-                page.wait_for_timeout(5000)
+                page.goto(url, wait_until='networkidle', timeout=30000)
                 result = page.evaluate(
                     """async (name) => {
                       const resp = await fetch('/token/' + name, { credentials: 'same-origin' });
@@ -640,6 +648,20 @@ class StreamDetector:
             return []
 
         return []
+
+    @staticmethod
+    def _thetvapp_fetch_token(session: requests.Session, url: str, stream_name: str) -> str | None:
+        """Call the /token/ endpoint directly using the existing requests session."""
+        try:
+            parsed = urlsplit(url)
+            token_url = f'{parsed.scheme}://{parsed.netloc}/token/{stream_name}'
+            resp = session.get(token_url, timeout=10)
+            if not resp.ok:
+                return None
+            data = resp.json()
+            return (data.get('url') or '').strip() or None
+        except Exception:
+            return None
 
     def _extract_cbs_provider_candidates(
         self,
