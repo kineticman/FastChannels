@@ -208,6 +208,40 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
 
         last_id = programs[-1].id
 
+    # ── Synthetic hourly blocks for custom channels ───────────────────────
+    # Custom channels have no scraped Program rows.  Emit repeating 1-hour
+    # slots so EPG clients show the channel name instead of a blank grid.
+    custom_channels = [ch for ch in channels if ch.source.name == 'custom']
+    if custom_channels:
+        block_start = epg_start.replace(minute=0, second=0, microsecond=0)
+        for ch in custom_channels:
+            tvg_id = tvg_map.get(ch.id)
+            if not tvg_id:
+                continue
+            t = block_start
+            while t < epg_end:
+                slot_end = t + timedelta(hours=1)
+                el = Element('programme', attrib={
+                    'start':   _dt(t),
+                    'stop':    _dt(slot_end),
+                    'channel': tvg_id,
+                })
+                SubElement(el, 'title', lang='en').text = ch.name
+                if ch.description:
+                    SubElement(el, 'desc', lang='en').text = _sanitize(ch.description)
+                channel_cat = ch_cat_map.get(ch.id) or ''
+                if channel_cat:
+                    SubElement(el, 'category', lang='en').text = _XMLTV_CAT_NORM.get(channel_cat.casefold(), channel_cat)
+                src_name = ch_src_map.get(ch.id)
+                if src_name:
+                    SubElement(el, 'category', lang='en').text = src_name
+                if feed_name:
+                    SubElement(el, 'category', lang='en').text = feed_name
+                if ch.logo_url:
+                    SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url)
+                yield tostring(el, encoding='unicode') + '\n'
+                t = slot_end
+
     yield '</tv>\n'
 
 
