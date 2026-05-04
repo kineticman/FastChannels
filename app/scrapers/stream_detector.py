@@ -344,11 +344,18 @@ class StreamDetector:
                     return candidate
         return url
 
-    def _extract_from_page(self, session: requests.Session, url: str, depth: int) -> list[str]:
+    def _extract_from_page(
+        self,
+        session: requests.Session,
+        url: str,
+        depth: int,
+        referer: str | None = None,
+    ) -> list[str]:
         if depth > self.MAX_IFRAME_DEPTH:
             return []
         try:
-            r = session.get(url, timeout=self.TIMEOUT)
+            headers = {'Referer': referer} if referer else None
+            r = session.get(url, timeout=self.TIMEOUT, headers=headers)
             if not r.ok:
                 return []
             text = r.text
@@ -374,7 +381,14 @@ class StreamDetector:
             elif c not in video_candidates:
                 video_candidates.append(c)
 
-        return self._merge_with_iframe_candidates(session, url, depth, text, hls_candidates, video_candidates)
+        return self._merge_with_iframe_candidates(
+            session,
+            url,
+            depth,
+            text,
+            hls_candidates,
+            video_candidates,
+        )
 
     @staticmethod
     def _extract_generic_candidates(text: str) -> tuple[list[str], list[str]]:
@@ -1417,7 +1431,7 @@ class StreamDetector:
             if _YOUTUBE_RE.match(iframe_url):
                 iframe_hls.append(iframe_url)
                 continue
-            for c in self._extract_from_page(session, iframe_url, depth + 1):
+            for c in self._extract_from_page(session, iframe_url, depth + 1, referer=url):
                 if c in hls_candidates or c in video_candidates:
                     continue
                 if '.m3u8' in c.lower():
