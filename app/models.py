@@ -106,6 +106,7 @@ class Channel(db.Model):
     proxy_segments    = db.Column(db.Boolean, default=False, nullable=False)  # route segments through FC proxy
     page_url          = db.Column(db.Text, nullable=True)                     # original page URL for re-detection
     redetect_on_play  = db.Column(db.Boolean, default=False, nullable=False)  # re-scrape page_url at play time (TTL 5 min)
+    guide_block_minutes = db.Column(db.Integer, nullable=True)               # EPG placeholder block size for custom channels (None = 60)
     is_duplicate      = db.Column(db.Boolean, default=False)  # set by user — manual duplicate label (does not disable)
     is_active         = db.Column(db.Boolean, default=True)   # set by scraper — channel exists upstream
     is_enabled        = db.Column(db.Boolean, default=True)   # set by user — include in M3U/EPG
@@ -165,6 +166,7 @@ class Channel(db.Model):
             'proxy_segments':    bool(self.proxy_segments),
             'page_url':          self.page_url,
             'redetect_on_play':  bool(self.redetect_on_play),
+            'guide_block_minutes': self.guide_block_minutes,
             'last_seen_at':     self.last_seen_at.isoformat() if self.last_seen_at else None,
             'missed_scrapes':   self.missed_scrapes or 0,
         }

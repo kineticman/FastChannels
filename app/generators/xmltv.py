@@ -218,9 +218,10 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             tvg_id = tvg_map.get(ch.id)
             if not tvg_id:
                 continue
+            block_delta = timedelta(minutes=ch.guide_block_minutes or 60)
             t = block_start
             while t < epg_end:
-                slot_end = t + timedelta(hours=1)
+                slot_end = t + block_delta
                 el = Element('programme', attrib={
                     'start':   _dt(t),
                     'stop':    _dt(slot_end),

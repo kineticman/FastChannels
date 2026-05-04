@@ -859,6 +859,7 @@ def create_custom_channel():
         proxy_segments=bool(data.get('proxy_segments', False)),
         page_url=(data.get('page_url') or '').strip() or None,
         redetect_on_play=bool(data.get('redetect_on_play', False)),
+        guide_block_minutes=data.get('guide_block_minutes') or None,
         is_active=True,
         is_enabled=True,
         last_seen_at=datetime.now(_tz.utc),
@@ -908,6 +909,8 @@ def update_custom_channel(channel_id):
         channel.page_url = (data['page_url'] or '').strip() or None
     if 'redetect_on_play' in data:
         channel.redetect_on_play = bool(data['redetect_on_play'])
+    if 'guide_block_minutes' in data:
+        channel.guide_block_minutes = data['guide_block_minutes'] or None
 
     db.session.commit()
     _invalidate_and_refresh_xml()

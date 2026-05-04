@@ -681,6 +681,15 @@
           <label>Language</label>
           <input id="cc-input-language" type="text" placeholder="en" value="en" style="width:100px;">
         </div>
+        <div class="field">
+          <label>Guide Block Size</label>
+          <select id="cc-input-guide-block" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:.5rem .7rem;color:var(--text);font-size:.84rem;outline:none;">
+            <option value="30">30 min</option>
+            <option value="60" selected>1 hour</option>
+            <option value="120">2 hours</option>
+            <option value="240">4 hours</option>
+          </select>
+        </div>
       </div>
 
       <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding-top:.75rem;border-top:1px solid var(--border);">
@@ -2091,6 +2100,7 @@
       document.getElementById('cc-input-language').value = channelData ? (channelData.language || 'en') : 'en';
       document.getElementById('cc-proxy-toggle').checked = channelData ? !!channelData.proxy_segments : false;
       document.getElementById('cc-redetect-toggle').checked = channelData ? !!channelData.redetect_on_play : false;
+      document.getElementById('cc-input-guide-block').value = channelData ? String(channelData.guide_block_minutes || 60) : '60';
       document.getElementById('cc-detect-status').textContent = '';
       document.getElementById('cc-detect-status').style.color = '';
       document.getElementById('cc-save-status').textContent = '';
@@ -2301,6 +2311,7 @@
         proxy_segments: document.getElementById('cc-proxy-toggle').checked,
         page_url: _ccPageUrl || null,
         redetect_on_play: document.getElementById('cc-redetect-toggle').checked,
+        guide_block_minutes: parseInt(document.getElementById('cc-input-guide-block').value, 10) || 60,
       };
 
       const btn = document.getElementById('cc-save-btn');
