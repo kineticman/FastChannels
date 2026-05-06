@@ -733,7 +733,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         guide_cat = _tvc_guide_category(ch)
         if guide_cat:
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
-        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{display_name}')
+        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
 
     return '\n'.join(lines)
@@ -798,7 +798,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
         guide_cat = _tvc_guide_category(ch)
         if guide_cat:
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
-        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{display_name}')
+        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
 
     return '\n'.join(lines)
