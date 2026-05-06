@@ -165,6 +165,11 @@ _OXBLUE_APP_ID = 'fc18eb502cb52d060bd93897e21d9491'
 _OXBLUE_API_BASE = 'https://api.oxblue.com/v1'
 
 
+def _sync_playwright():
+    from playwright.sync_api import sync_playwright
+    return sync_playwright
+
+
 @dataclass
 class DetectionResult:
     stream_url: str | None = None
@@ -381,6 +386,14 @@ class StreamDetector:
             elif c not in video_candidates:
                 video_candidates.append(c)
 
+        if not hls_candidates and not video_candidates:
+            for c in self._extract_playwright_fallback_candidates(url, text):
+                if '.m3u8' in c.lower():
+                    if c not in hls_candidates:
+                        hls_candidates.append(c)
+                elif c not in video_candidates:
+                    video_candidates.append(c)
+
         return self._merge_with_iframe_candidates(
             session,
             url,
@@ -441,6 +454,7 @@ class StreamDetector:
             self._extract_nbcnews_provider_candidates,
             self._extract_tvpass_provider_candidates,
             self._extract_twitter_player_candidates,
+            self._extract_pooembed_provider_candidates,
             lambda _session, _url, page_text: self._extract_meta_video_candidates(page_text, url),
             self._extract_brownrice_provider_candidates,
             self._extract_oxblue_provider_candidates,
@@ -1735,7 +1749,7 @@ class StreamDetector:
 
     def _shouttv_playwright_hls_url(self, live_url: str) -> str | None:
         try:
-            from playwright.sync_api import sync_playwright
+            sync_playwright = _sync_playwright()
         except Exception as exc:
             logger.debug('[detector] playwright unavailable for Shout TV fallback: %s', exc)
             return None
@@ -1771,6 +1785,100 @@ class StreamDetector:
             return None
 
         return None
+
+    def _extract_pooembed_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        parsed = urlsplit(url)
+        if parsed.netloc.lower() != 'pooembed.eu' or not parsed.path.startswith('/embed-noads/'):
+            return []
+
+        try:
+            sync_playwright = _sync_playwright()
+        except Exception as exc:
+            logger.debug('[detector] playwright unavailable for pooembed fallback: %s', exc)
+            return []
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                seen: list[str] = []
+
+                def on_request(req):
+                    req_url = req.url
+                    if '.m3u8' not in urlsplit(req_url).path.lower():
+                        return
+                    if req_url not in seen:
+                        seen.append(req_url)
+
+                page.on('request', on_request)
+                page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                page.wait_for_timeout(12000)
+                browser.close()
+
+            for candidate in seen:
+                self._candidate_resolvers.setdefault(candidate, 'pooembed')
+                return [candidate]
+        except Exception as exc:
+            logger.debug('[detector] pooembed lookup failed %s: %s', url[:80], exc)
+            return []
+
+        return []
+
+    @staticmethod
+    def _page_likely_needs_playwright_fallback(text: str) -> bool:
+        lower = text.lower()
+        return (
+            'jwplayer' in lower
+            or 'videojs' in lower
+            or 'hls.js' in lower
+            or 'hlsjs' in lower
+            or 'm3u8' in lower
+            or ('iframe' in lower and 'src=' in lower)
+            or ('player' in lower and 'embed' in lower)
+            or ('video' in lower and 'source' in lower)
+        )
+
+    def _extract_playwright_fallback_candidates(self, url: str, text: str) -> list[str]:
+        if not self._page_likely_needs_playwright_fallback(text):
+            return []
+
+        try:
+            sync_playwright = _sync_playwright()
+        except Exception as exc:
+            logger.debug('[detector] playwright unavailable for generic fallback: %s', exc)
+            return []
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                seen: list[str] = []
+
+                def on_request(req):
+                    req_url = req.url
+                    if '.m3u8' not in urlsplit(req_url).path.lower():
+                        return
+                    if req_url not in seen:
+                        seen.append(req_url)
+
+                page.on('request', on_request)
+                page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                page.wait_for_timeout(12000)
+                browser.close()
+
+            for candidate in seen:
+                self._candidate_resolvers.setdefault(candidate, 'playwright fallback')
+                return [candidate]
+        except Exception as exc:
+            logger.debug('[detector] generic playwright fallback failed %s: %s', url[:80], exc)
+            return []
+
+        return []
 
     def _extract_json_config_candidates(
         self,

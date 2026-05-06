@@ -15,10 +15,10 @@ from urllib.parse import parse_qsl, quote, urlparse
 import requests
 
 try:
-    from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, ScrapeSkipError, infer_language_from_metadata
+    from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, ScrapeSkipError, format_http_reason, infer_language_from_metadata
     from .category_utils import infer_category_from_name
 except ImportError:  # pragma: no cover - local staging outside FastChannels package
-    from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, ScrapeSkipError, infer_language_from_metadata
+    from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, ScrapeSkipError, format_http_reason, infer_language_from_metadata
     from app.scrapers.category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
@@ -355,7 +355,7 @@ class SlingScraper(BaseScraper):
             payload = self._get_json(self._channel_schedule_url(channel_guid))
         except requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 404:
-                raise StreamDeadError(f"[sling] channel not found (404): {channel_guid}") from exc
+                raise StreamDeadError(format_http_reason("[sling] channel not found", 404, channel_guid)) from exc
             raise
 
         playback = payload.get("playback_info") or {}

@@ -73,6 +73,19 @@ class ScrapePhaseTimeoutError(Exception):
     pass
 
 
+def _audit_reason_from_exception(exc: Exception) -> str:
+    message = str(exc).strip()
+    name = type(exc).__name__
+    if not message:
+        return name
+    if message == name or message.startswith(f'{name}:'):
+        return message
+    http_match = re.search(r'\bHTTP\s+(\d{3})\b', message)
+    if http_match:
+        return f'HTTP {http_match.group(1)}: {message}'
+    return f'{name}: {message}'
+
+
 def _enqueue_xml_refresh_job() -> None:
     try:
         r = redis.from_url(flask_app.config['REDIS_URL'])
@@ -599,13 +612,18 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                 _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
                 try:
                     resolved_url = _resolve(ch.stream_url)
-                except StreamDeadError:
+                except StreamDeadError as dead_exc:
                     ch.is_active      = False
                     ch.is_enabled     = False
                     ch.disable_reason = 'Dead'
                     dead += 1
                     consecutive_errors = 0
-                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'dead', 'reason': 'Resolve error'})
+                    report_channels.append({
+                        'id': ch.id,
+                        'name': ch.name,
+                        'status': 'dead',
+                        'reason': _audit_reason_from_exception(dead_exc),
+                    })
                     logger.info('[audit] dead stream: %s  (confirmed by scraper)', ch.name)
                     continue
                 except Exception as re_exc:
@@ -628,7 +646,12 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                     logger.warning('[audit] resolve failed for %s: %s', ch.name, re_exc)
                     errors += 1
                     consecutive_errors += 1
-                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'error', 'reason': type(re_exc).__name__})
+                    report_channels.append({
+                        'id': ch.id,
+                        'name': ch.name,
+                        'status': 'error',
+                        'reason': _audit_reason_from_exception(re_exc),
+                    })
                     if consecutive_errors >= 20:
                         logger.error('[audit] %s: 20 consecutive errors — aborting.', source_name)
                         break
@@ -911,22 +934,31 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                 _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
                 try:
                     resolved_url = _resolve(ch.stream_url)
-                except StreamDeadError:
+                except StreamDeadError as dead_exc:
                     ch.is_active = False
                     ch.is_enabled = False
                     ch.disable_reason = 'Dead'
-                    recheck_results[ch.id] = {'status': 'dead', 'reason': 'Resolve error'}
+                    recheck_results[ch.id] = {
+                        'status': 'dead',
+                        'reason': _audit_reason_from_exception(dead_exc),
+                    }
                     _rc_progress(i, total)
                     continue
-                except Exception:
-                    recheck_results[ch.id] = {'status': 'rate-limited', 'reason': 'Resolve failed'}
+                except Exception as re_exc:
+                    recheck_results[ch.id] = {
+                        'status': 'rate-limited',
+                        'reason': f'Resolve failed: {_audit_reason_from_exception(re_exc)}',
+                    }
                     _rc_progress(i, total)
                     continue
 
                 try:
                     r = sess.get(resolved_url, timeout=15, allow_redirects=True)
-                except Exception:
-                    recheck_results[ch.id] = {'status': 'rate-limited', 'reason': 'Network error'}
+                except Exception as req_exc:
+                    recheck_results[ch.id] = {
+                        'status': 'rate-limited',
+                        'reason': f'Network error: {_audit_reason_from_exception(req_exc)}',
+                    }
                     _rc_progress(i, total)
                     continue
 
@@ -960,7 +992,7 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
 
             except Exception as e:
                 logger.warning('[audit-recheck] unexpected error for %s: %s', ch.name, e)
-                recheck_results[ch.id] = {'status': 'rate-limited', 'reason': 'Error'}
+                recheck_results[ch.id] = {'status': 'rate-limited', 'reason': _audit_reason_from_exception(e)}
 
             _rc_progress(i, total)
             _time.sleep(0.3)

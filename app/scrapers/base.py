@@ -160,6 +160,13 @@ def merge_config_updates(existing: dict | None, updates: dict | None) -> dict:
     return merged
 
 
+def format_http_reason(prefix: str, status_code: int, detail: str | None = None) -> str:
+    reason = f"{prefix} (HTTP {status_code})"
+    if detail:
+        return f"{reason}: {detail}"
+    return reason
+
+
 class StreamDeadError(Exception):
     """Raised by audit_resolve() when a channel is confirmed dead (not a transient error)."""
 

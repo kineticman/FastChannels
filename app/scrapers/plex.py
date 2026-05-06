@@ -30,7 +30,7 @@ from uuid import uuid4
 
 import requests
 
-from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
 from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
@@ -821,6 +821,8 @@ class PlexScraper(BaseScraper):
                 if r2.status_code == 200:
                     return r2.url
 
+        if r.status_code in (400, 404, 410, 422):
+            raise StreamDeadError(format_http_reason("[plex] channel not playable", r.status_code, channel_id))
         raise RuntimeError(f"[plex] manifest HTTP {r.status_code} for {channel_id}")
 
     def audit_resolve(self, raw_url: str) -> str:
@@ -862,6 +864,6 @@ class PlexScraper(BaseScraper):
                 if r2.status_code == 200:
                     return r2.url
 
-        if r.status_code == 400:
-            raise StreamDeadError(f"[plex] channel not playable: {channel_id}")
+        if r.status_code in (400, 404, 410, 422):
+            raise StreamDeadError(format_http_reason("[plex] channel not playable", r.status_code, channel_id))
         raise RuntimeError(f"[plex] audit manifest HTTP {r.status_code} for {channel_id}")

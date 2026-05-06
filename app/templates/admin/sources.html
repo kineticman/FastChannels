@@ -316,12 +316,20 @@
       text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.35rem;
     }
     .audit-report-row {
-      display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 0.6rem;
+      display: grid; grid-template-columns: minmax(0, 1fr) minmax(7rem, 1.2fr) auto; align-items: center; gap: 0.6rem;
       padding: 0.45rem 0.75rem; background: var(--bg); border: 1px solid var(--surface);
       border-radius: 6px; margin-bottom: 0.25rem;
     }
-    .audit-row-name { font-size: 0.84rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .audit-row-reason { font-size: 0.74rem; font-weight: 600; white-space: nowrap; }
+    .audit-row-name { font-size: 0.84rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .audit-row-reason {
+      font-size: 0.74rem;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      cursor: help;
+    }
     .audit-row-reason.dead         { color: var(--danger); }
     .audit-row-reason.drm          { color: var(--warning); }
     .audit-row-reason.rate-limited { color: var(--warning); }
@@ -1042,12 +1050,28 @@
           const limited = report.channels.filter(c => c.status === 'rate-limited');
           const errors  = report.channels.filter(c => c.status === 'error');
 
+          const formatReasonText = (reason, status) => {
+            const text = String(reason || '').trim();
+            if (!text) return status === 'dead' ? 'Dead' : '';
+            if (status === 'dead') return 'Dead';
+            if (status === 'drm') return 'DRM';
+            if (status === 'rate-limited') {
+              const codeMatch = text.match(/\bHTTP\s+(\d{3})\b/i);
+              return codeMatch ? `HTTP ${codeMatch[1]}` : 'Rate-limited';
+            }
+            const httpMatch = text.match(/^HTTP\s+(\d{3})(?::\s*(.*))?$/i);
+            if (httpMatch) return `HTTP ${httpMatch[1]}`;
+            const embeddedHttp = text.match(/\bHTTP\s+(\d{3})\b/i);
+            if (embeddedHttp) return `HTTP ${embeddedHttp[1]}`;
+            return text.replace(/^[A-Za-z_][A-Za-z0-9_]*Error:\s*/, '').replace(/^[A-Za-z_][A-Za-z0-9_]*:\s*/, '');
+          };
+
           const renderGroup = (title, chans, showReEnable) => {
             if (!chans.length) return '';
             const rows = chans.map(c => `
               <div class="audit-report-row">
                 <div class="audit-row-name" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</div>
-                <div class="audit-row-reason ${escapeHtml(c.status)}">${escapeHtml(c.reason || '')}</div>
+                <div class="audit-row-reason ${escapeHtml(c.status)}" title="${escapeHtml(c.reason || '')}">${escapeHtml(formatReasonText(c.reason || '', c.status))}</div>
                 ${showReEnable ? `<button class="btn-audit-reenable" onclick="auditReEnableChannel(${Number(c.id)}, this)">Re-enable</button>` : '<div></div>'}
               </div>`).join('');
             return `<div class="audit-report-group"><div class="audit-report-group-title">${escapeHtml(title)} (${chans.length})</div>${rows}</div>`;

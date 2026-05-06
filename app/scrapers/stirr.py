@@ -13,7 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 import requests
 from requests.adapters import HTTPAdapter
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, format_http_reason
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +288,7 @@ class StirrScraper(BaseScraper):
             return raw_url  # treat as transient; don't mark dead
 
         if r.status_code in (404, 410):
-            raise StreamDeadError(f"Stirr channel {videoid} returned {r.status_code} — removed from catalogue")
+            raise StreamDeadError(format_http_reason(f"Stirr channel {videoid} returned", r.status_code, "removed from catalogue"))
 
         if r.status_code != 200:
             return raw_url  # 5xx or other transient — leave alone
@@ -312,9 +312,7 @@ class StirrScraper(BaseScraper):
             try:
                 body = probe.json()
                 if body.get('error') == 'CON':
-                    raise StreamDeadError(
-                        f"Stirr channel {videoid} aniview config deleted (422 CON)"
-                    )
+                    raise StreamDeadError(format_http_reason(f"Stirr channel {videoid} aniview config deleted", 422, "CON"))
             except StreamDeadError:
                 raise
             except Exception:

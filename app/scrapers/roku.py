@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
-from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, ScrapeSkipError, infer_language_from_metadata, is_transient_network_error
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, ScrapeSkipError, format_http_reason, infer_language_from_metadata, is_transient_network_error
 from .category_utils import infer_category_from_name
 from ..gracenote_map import resolve_gracenote
 
@@ -829,7 +829,7 @@ class RokuScraper(BaseScraper):
             if r.status_code == 200:
                 return r.json()
             if _raise_on_404 and r.status_code == 404:
-                raise StreamDeadError(f"[roku] channel not found (404): {station_id}")
+                raise StreamDeadError(format_http_reason("[roku] channel not found", 404, station_id))
         except StreamDeadError:
             raise
         except Exception as exc:
