@@ -157,7 +157,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                 'stop':    _dt(prog.end_time),
                 'channel': tvg_id,
             })
-            SubElement(el, 'title', lang='en').text = prog.title or ''
+            SubElement(el, 'title', lang='en').text = _sanitize(prog.title)
             if prog.description:
                 SubElement(el, 'desc', lang='en').text = _sanitize(prog.description)
             channel_cat = ch_cat_map.get(prog.channel_id) or ''
@@ -197,7 +197,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             cats = [c.casefold() for c in combined_cats]
             is_movie = 'movie' in cats or 'movies' in cats
             if prog.episode_title and not is_movie:
-                SubElement(el, 'sub-title', lang='en').text = prog.episode_title
+                SubElement(el, 'sub-title', lang='en').text = _sanitize(prog.episode_title)
             if prog.season and prog.episode and not is_movie:
                 SubElement(el, 'episode-num', system='xmltv_ns').text = \
                     f'{prog.season - 1}.{prog.episode - 1}.'
@@ -227,7 +227,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                     'stop':    _dt(slot_end),
                     'channel': tvg_id,
                 })
-                SubElement(el, 'title', lang='en').text = ch.name
+                SubElement(el, 'title', lang='en').text = _sanitize(ch.name)
                 if ch.description:
                     SubElement(el, 'desc', lang='en').text = _sanitize(ch.description)
                 channel_cat = ch_cat_map.get(ch.id) or ''
