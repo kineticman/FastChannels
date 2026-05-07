@@ -2440,11 +2440,14 @@ class StreamDetector:
                     'skip_download': True,
                     # Prefer combined HLS (covers m3u8, m3u8_native, etc.), fall back to best
                     'format': 'best[protocol~=m3u8]/best',
+                    'js_runtimes': {'node': {'exe': 'node'}},
                     'extractor_args': {
                         'youtube': {
                             'player_client': [client],
                             # Include formats that lack a PO token (needed for server-side extraction)
                             'formats': ['missing_pot'],
+                            # Skip fetching player config + webpage — fewer bot-trigger requests
+                            'player_skip': ['configs', 'webpage'],
                             'skip': ['dash', 'translated_subs'],
                         }
                     },
