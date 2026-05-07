@@ -729,6 +729,9 @@
     .toggle-wrap { display: flex; align-items: center; }
     .inactive-warn { font-size: 0.7rem; color: var(--warning); margin-top: 0.25rem; white-space: nowrap; cursor: pointer; }
     .inactive-warn:hover { text-decoration: underline; }
+    .btn-delete-missed { font-size: 0.65rem; padding: 0.1rem 0.35rem; margin-top: 0.2rem; background: none; border: 1px solid var(--danger, #c0392b); color: var(--danger, #c0392b); border-radius: 3px; cursor: pointer; white-space: nowrap; }
+    .btn-delete-missed:hover:not(:disabled) { background: var(--danger, #c0392b); color: #fff; }
+    .btn-delete-missed:disabled { opacity: 0.5; cursor: default; }
     .toggle {
       position: relative; display: inline-block; width: 36px; height: 20px; cursor: pointer;
     }
@@ -1599,6 +1602,9 @@
               </div>
               {% if ch.is_enabled and not ch.is_active %}
               <div class="inactive-warn" id="inactive-warn-{{ ch.id }}" onclick="forceReactivate({{ ch.id }})" title="Missing from recent scrapes — not currently in output. Click to force back into output until the next scrape.">not in output</div>
+              {% if ch.missed_scrapes >= 3 %}
+              <button class="btn-delete-missed" id="delete-missed-{{ ch.id }}" onclick="deleteMissedChannel({{ ch.id }}, event)" title="Permanently delete this channel — it has been absent from {{ ch.missed_scrapes }} consecutive scrapes.">Delete</button>
+              {% endif %}
               {% endif %}
             </td>
           </tr>
@@ -2918,9 +2924,27 @@
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         if (warn) warn.remove();
+        const btn = document.getElementById(`delete-missed-${channelId}`);
+        if (btn) btn.remove();
       } catch (e) {
         if (warn) warn.textContent = 'not in output';
         console.error('Force reactivate failed:', e);
+      }
+    }
+
+    async function deleteMissedChannel(channelId, event) {
+      event.stopPropagation();
+      const btn = document.getElementById(`delete-missed-${channelId}`);
+      if (!confirm('Permanently delete this channel from the database?')) return;
+      if (btn) { btn.disabled = true; btn.textContent = '…'; }
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const row = document.getElementById(`row-${channelId}`);
+        if (row) row.remove();
+      } catch (e) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Delete'; }
+        console.error('Delete channel failed:', e);
       }
     }
 

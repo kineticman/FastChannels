@@ -1121,6 +1121,20 @@ def update_channel(channel_id):
     return jsonify(ch.to_dict())
 
 
+@api_bp.route('/channels/<int:channel_id>', methods=['DELETE'])
+def delete_channel(channel_id):
+    """Permanently delete a channel that has been marked inactive due to missed scrapes."""
+    ch = Channel.query.get_or_404(channel_id)
+    if ch.is_active:
+        return jsonify({'error': 'Cannot delete an active channel'}), 409
+    if (ch.missed_scrapes or 0) < 3:
+        return jsonify({'error': 'Channel has not exceeded the missed-scrape threshold'}), 409
+    db.session.delete(ch)
+    db.session.commit()
+    _invalidate_and_refresh_xml()
+    return jsonify({'status': 'deleted', 'id': channel_id})
+
+
 @api_bp.route('/channels/<int:channel_id>/category-explain', methods=['GET'])
 def channel_category_explain(channel_id):
     from ..scrapers.category_utils import explain_category, CANONICAL_CATEGORIES, category_for_channel
