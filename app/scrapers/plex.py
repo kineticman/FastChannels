@@ -79,6 +79,7 @@ _PLEX_CATEGORY_MAP = {
     "food-home":        "Food",
     "lifestyle":        "Lifestyle",
     "kids-family":      "Kids",
+    "en-espanol":       "En Español",
     "international":    "International",
     "gaming-anime":     "Anime",
     "music":            "Music",
@@ -371,9 +372,18 @@ class PlexScraper(BaseScraper):
             headers["X-Plex-Version"] = "4.145.1"
         return headers
 
-    def _fetch_lineup_grid_keys(self) -> dict[str, str]:
-        if not self._ensure_auth():
-            return {}
+    def _fetch_genre_maps(self) -> tuple[dict[str, str], dict[str, list[str]], set[str]]:
+        """
+        Fetch per-genre channel lists to build category/tag/language metadata.
+        Returns:
+          cat_map     — channel_id → primary category label
+          tags_map    — channel_id → list of all category labels
+          spanish_ids — channel_ids in the 'en-espanol' genre bucket
+        Returns empty collections if the genre endpoint is unavailable.
+        """
+        cat_map:     dict[str, str]       = {}
+        tags_map:    dict[str, list[str]] = {}
+        spanish_ids: set[str]             = set()
 
         try:
             root = self.session.get(
@@ -384,8 +394,8 @@ class PlexScraper(BaseScraper):
             )
             root.raise_for_status()
         except Exception as exc:
-            logger.warning("[plex] lineup root fetch failed: %s", exc)
-            return {}
+            logger.warning("[plex] genre root fetch failed: %s", exc)
+            return cat_map, tags_map, spanish_ids
 
         genre_slugs: list[str] = []
         for elem in root.json().get("MediaProvider", {}).get("Feature", []):
@@ -398,12 +408,11 @@ class PlexScraper(BaseScraper):
                 break
 
         if not genre_slugs:
-            return {}
+            return cat_map, tags_map, spanish_ids
 
-        grid_keys: dict[str, str] = {}
-        desc_map: dict[str, str] = {}
         headers = self._provider_headers()
         for genre_slug in genre_slugs:
+            label = _PLEX_CATEGORY_MAP.get(genre_slug)
             try:
                 r = self.session.get(
                     f"{_EPG_HOST}/lineups/plex/channels",
@@ -413,21 +422,26 @@ class PlexScraper(BaseScraper):
                 )
                 r.raise_for_status()
             except Exception as exc:
-                logger.warning("[plex] lineup fetch failed for genre=%s: %s", genre_slug, exc)
+                logger.warning("[plex] genre fetch failed for %s: %s", genre_slug, exc)
                 continue
 
             for channel in r.json().get("MediaContainer", {}).get("Channel", []):
-                channel_id = channel.get("id")
-                grid_key = channel.get("gridKey")
-                if channel_id and grid_key and channel_id not in grid_keys:
-                    grid_keys[channel_id] = grid_key
-                if channel_id and channel_id not in desc_map:
-                    raw = (channel.get("summary") or "").strip()
-                    if raw:
-                        desc_map[channel_id] = raw
+                cid = channel.get("id")
+                if not cid:
+                    continue
+                if genre_slug == "en-espanol":
+                    spanish_ids.add(cid)
+                if label:
+                    if cid not in cat_map:
+                        cat_map[cid] = label
+                    if label not in tags_map.get(cid, []):
+                        tags_map.setdefault(cid, []).append(label)
 
-        logger.info("[plex] lineup gridKey map built for %d channels (%d with descriptions)", len(grid_keys), len(desc_map))
-        return grid_keys, desc_map
+        logger.info(
+            "[plex] genre map: %d categorised, %d with tags, %d Spanish",
+            len(cat_map), len(tags_map), len(spanish_ids),
+        )
+        return cat_map, tags_map, spanish_ids
 
     # ── fetch_channels ─────────────────────────────────────────────────────────
 
@@ -449,6 +463,8 @@ class PlexScraper(BaseScraper):
             logger.error("[plex] channel list fetch failed: %s", exc)
             return []
 
+        cat_map, tags_map, spanish_ids = self._fetch_genre_maps()
+
         channels: dict[str, ChannelData] = {}
         for ch in root.findall(".//Channel"):
             channel_id = ch.get("id")
@@ -461,7 +477,7 @@ class PlexScraper(BaseScraper):
             summary  = (ch.get("summary") or "").strip() or None
             grid_key = ch.get("gridKey")
 
-            lang = "es" if "espanol" in slug.lower() or "latino" in slug.lower() else infer_language_from_metadata(name, None)
+            lang = "es" if channel_id in spanish_ids else infer_language_from_metadata(name, cat_map.get(channel_id))
 
             channels[channel_id] = ChannelData(
                 source_channel_id = channel_id,
@@ -469,19 +485,19 @@ class PlexScraper(BaseScraper):
                 stream_url        = f"plex://{channel_id}",
                 logo_url          = logo,
                 slug              = slug,
-                category          = None,
+                category          = cat_map.get(channel_id),
                 language          = lang,
                 country           = "US",
                 stream_type       = "hls",
                 gracenote_id      = resolve_gracenote("plex", lookup_key=channel_id),
                 guide_key         = grid_key,
-                tags              = [],
+                tags              = tags_map.get(channel_id, []),
                 description       = summary,
             )
 
         result = sorted(channels.values(), key=lambda c: (c.name or "").lower())
         logger.info(
-            "[plex] %d channels fetched from lineups API in %.1fs",
+            "[plex] %d channels fetched in %.1fs",
             len(result),
             time.monotonic() - t0,
         )
