@@ -160,7 +160,7 @@ _YT_PLAYER_CLIENTS = ('tv_embedded', 'web_safari', 'web', 'ios')
 
 # Content-types accepted for non-HLS direct video probing
 _VIDEO_CONTENT_TYPES = ('video/', 'audio/', 'application/octet-stream')
-_BLOCKED_STATUS_CODES = {401, 403, 429, 451, 503}
+_BLOCKED_STATUS_CODES = {403, 429, 451, 503}
 _OXBLUE_APP_ID = 'fc18eb502cb52d060bd93897e21d9491'
 _OXBLUE_API_BASE = 'https://api.oxblue.com/v1'
 
