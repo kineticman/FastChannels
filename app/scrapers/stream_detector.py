@@ -203,8 +203,14 @@ class StreamDetector:
             if result.stream_type or result.error:
                 best_failure = result
 
-        session = requests.Session()
-        session.headers.update({'User-Agent': _BROWSER_UA})
+        try:
+            from curl_cffi import requests as _cffi
+            session = _cffi.Session(impersonate='chrome120')
+            # curl_cffi sets the correct matching UA for the impersonated browser;
+            # overriding it with a mismatched version defeats fingerprint spoofing.
+        except Exception:
+            session = requests.Session()
+            session.headers.update({'User-Agent': _BROWSER_UA})
 
         try:
             if self._is_stream_url(input_url):
@@ -362,6 +368,11 @@ class StreamDetector:
             headers = {'Referer': referer} if referer else None
             r = session.get(url, timeout=self.TIMEOUT, headers=headers)
             if not r.ok:
+                # Pages behind bot-protection (Cloudflare JS challenge, etc.) block
+                # plain HTTP requests but a real browser can still load them.  Fall
+                # through to Playwright so we still capture the HLS manifest request.
+                if r.status_code in _BLOCKED_STATUS_CODES:
+                    return self._run_playwright_candidates(url)
                 return []
             text = r.text
         except Exception as exc:
@@ -376,6 +387,19 @@ class StreamDetector:
         for c in state_video:
             if c not in video_candidates:
                 video_candidates.append(c)
+
+        # URLs in data-* attributes are HTML-entity-encoded with backslash-escaped
+        # slashes (e.g. data-playlist-config="...https:\/\/...m3u8...").  Decode
+        # the full page and re-run generic extraction to surface those URLs.
+        decoded_text = html.unescape(text).replace('\\/', '/')
+        if decoded_text != text:
+            dec_hls, dec_video = self._extract_generic_candidates(decoded_text)
+            for c in dec_hls:
+                if c not in hls_candidates:
+                    hls_candidates.append(c)
+            for c in dec_video:
+                if c not in video_candidates:
+                    video_candidates.append(c)
 
         # Custom provider APIs run before iframe recursion so they can use
         # page-local bootstrap config without brute-forcing every nested document.
@@ -1843,10 +1867,8 @@ class StreamDetector:
             or ('video' in lower and 'source' in lower)
         )
 
-    def _extract_playwright_fallback_candidates(self, url: str, text: str) -> list[str]:
-        if not self._page_likely_needs_playwright_fallback(text):
-            return []
-
+    def _run_playwright_candidates(self, url: str) -> list[str]:
+        """Launch a headless browser for *url* and intercept any .m3u8 requests."""
         try:
             sync_playwright = _sync_playwright()
         except Exception as exc:
@@ -1876,9 +1898,13 @@ class StreamDetector:
                 return [candidate]
         except Exception as exc:
             logger.debug('[detector] generic playwright fallback failed %s: %s', url[:80], exc)
-            return []
 
         return []
+
+    def _extract_playwright_fallback_candidates(self, url: str, text: str) -> list[str]:
+        if not self._page_likely_needs_playwright_fallback(text):
+            return []
+        return self._run_playwright_candidates(url)
 
     def _extract_json_config_candidates(
         self,
