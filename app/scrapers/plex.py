@@ -293,12 +293,17 @@ class PlexScraper(BaseScraper):
 
     def pre_run_setup(self) -> None:
         """Acquire anonymous token early so it can be persisted before EPG."""
-        self._ensure_auth()  # token for provider API; RSC cookies seeded in _fetch_rsc
+        self._ensure_auth()
 
     def _ensure_auth(self, force: bool = False) -> bool:
         if self._auth_token and not force:
             return True
         t0 = time.monotonic()
+        try:
+            # Seed watch.plex.tv session cookies — required for anonymous auth to succeed
+            self.session.get("https://watch.plex.tv/", timeout=15)
+        except Exception as exc:
+            logger.warning("[plex] watch.plex.tv cookie seed failed: %s", exc)
         try:
             r = self.session.post(
                 "https://plex.tv/api/v2/users/anonymous",
@@ -428,64 +433,56 @@ class PlexScraper(BaseScraper):
 
     def fetch_channels(self) -> list[ChannelData]:
         t0 = time.monotonic()
-        text = self._fetch_rsc()
-        if not text:
+        if not self._ensure_auth():
             return []
 
-        rsc_objects = _extract_rsc_objects(text)
-        cat_map, spanish_ids, tags_map = _build_category_map(rsc_objects)
-        grid_keys, lineup_descs = self._fetch_lineup_grid_keys()
+        try:
+            r = self.session.get(
+                f"{_EPG_HOST}/lineups/plex/channels",
+                params={"X-Plex-Token": self._auth_token},
+                headers=self._provider_headers(accept="application/xml"),
+                timeout=30,
+            )
+            r.raise_for_status()
+            root = ET.fromstring(r.text)
+        except Exception as exc:
+            logger.error("[plex] channel list fetch failed: %s", exc)
+            return []
 
         channels: dict[str, ChannelData] = {}
-        for obj in rsc_objects:
-            for node in _walk(obj):
-                if not isinstance(node, dict):
-                    continue
-                if not _CHANNEL_KEYS <= node.keys():
-                    continue
-                channel_id = node.get("id")
-                if not channel_id or channel_id in channels:
-                    continue
+        for ch in root.findall(".//Channel"):
+            channel_id = ch.get("id")
+            if not channel_id or channel_id in channels:
+                continue
 
-                data  = node.get("data") or {}
-                logo  = node.get("thumb") or (
-                    ((data.get("cast") or {}).get("image") or {}).get("url")
-                )
-                category = cat_map.get(channel_id)
-                lang = "es" if channel_id in spanish_ids else infer_language_from_metadata(
-                    node.get("title"),
-                    category,
-                )
-                description = (
-                    node.get("summary") or data.get("summary")
-                    or node.get("description") or data.get("description")
-                    or lineup_descs.get(channel_id)
-                    or None
-                )
-                if description:
-                    description = str(description).strip() or None
+            name     = ch.get("title") or ch.get("callSign") or channel_id
+            slug     = ch.get("slug") or channel_id
+            logo     = ch.get("thumb")
+            summary  = (ch.get("summary") or "").strip() or None
+            grid_key = ch.get("gridKey")
 
-                channels[channel_id] = ChannelData(
-                    source_channel_id = channel_id,
-                    name              = node.get("title") or node.get("slug") or channel_id,
-                    stream_url        = f"plex://{channel_id}",
-                    logo_url          = logo,
-                    slug              = node.get("slug") or channel_id,
-                    category          = category,
-                    language          = lang,
-                    country           = "US",
-                    stream_type       = "hls",
-                    gracenote_id      = resolve_gracenote("plex", lookup_key=channel_id),
-                    guide_key         = grid_keys.get(channel_id),
-                    tags              = tags_map.get(channel_id, []),
-                    description       = description,
-                )
+            lang = "es" if "espanol" in slug.lower() or "latino" in slug.lower() else infer_language_from_metadata(name, None)
+
+            channels[channel_id] = ChannelData(
+                source_channel_id = channel_id,
+                name              = name,
+                stream_url        = f"plex://{channel_id}",
+                logo_url          = logo,
+                slug              = slug,
+                category          = None,
+                language          = lang,
+                country           = "US",
+                stream_type       = "hls",
+                gracenote_id      = resolve_gracenote("plex", lookup_key=channel_id),
+                guide_key         = grid_key,
+                tags              = [],
+                description       = summary,
+            )
 
         result = sorted(channels.values(), key=lambda c: (c.name or "").lower())
         logger.info(
-            "[plex] %d channels fetched from %d RSC objects in %.1fs",
+            "[plex] %d channels fetched from lineups API in %.1fs",
             len(result),
-            len(rsc_objects),
             time.monotonic() - t0,
         )
         return result
