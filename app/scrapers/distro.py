@@ -327,19 +327,26 @@ def _iter_shows(feed: object):
         yield from (s for s in feed if isinstance(s, dict))
 
 
-def _resolve_from_feed(scraper: "DistroScraper", geo: str, raw_id: str) -> str | None:
+def _resolve_from_feed(scraper: "DistroScraper", geo: str, raw_id: str, force_refresh: bool = False) -> str | None:
     """Return a fresh stream URL for a Distro channel, using a cached feed if available."""
     now = time.time()
     cached = _feed_cache.get(geo)
-    if cached and (now - cached[0]) < _FEED_CACHE_TTL:
+    if not force_refresh and cached and (now - cached[0]) < _FEED_CACHE_TTL:
         return cached[1].get(raw_id)
 
     r = scraper.get(scraper._feed_url(geo))
     if not r:
+        # Fall back to stale cache rather than failing hard
+        if cached:
+            logger.warning("[distro] feed refresh failed for geo=%s, using stale cache", geo)
+            return cached[1].get(raw_id)
         return None
     try:
         feed = r.json()
     except Exception:
+        if cached:
+            logger.warning("[distro] feed JSON decode failed for geo=%s, using stale cache", geo)
+            return cached[1].get(raw_id)
         return None
 
     url_map: dict[str, str] = {}

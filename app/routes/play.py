@@ -29,6 +29,46 @@ from ..scrapers.distro import (
     _pick_best_variant as _distro_pick_best_variant,
     DistroScraper,
 )
+
+# Persistent session for Distro CDN fetches (manifest proxy + segment proxy).
+# Reuses TCP/TLS connections across the ~5s manifest poll interval, cutting
+# per-poll latency by avoiding repeated handshakes to the same CloudFront host.
+_DISTRO_PROXY_SESSION = _requests.Session()
+_DISTRO_PROXY_SESSION.headers.update(_DISTRO_HLS_HEADERS)
+
+# Variant URL stored in Redis so ALL gunicorn workers share a single CloudFront
+# session per channel. Each master fetch creates a new session token
+# (e.g. /hls/WLFH5KA/...) whose EXT-X-MEDIA-SEQUENCE restarts from 1.
+# If workers hold different sessions, the client sees the sequence alternate
+# between two independent counters → backward jumps → stutter. Redis ensures
+# every worker serves the same session, so MEDIA-SEQUENCE advances monotonically.
+_DISTRO_REDIS_KEY_PREFIX = 'distro_variant:'
+_DISTRO_REDIS: 'redis.Redis | None' = None  # lazily initialised per worker
+
+
+def _distro_redis() -> 'redis.Redis | None':
+    """Return a lazily-initialised Redis client, or None if unavailable."""
+    global _DISTRO_REDIS
+    if _DISTRO_REDIS is None:
+        try:
+            import redis as _r
+            from flask import current_app
+            _DISTRO_REDIS = _r.from_url(
+                current_app.config['REDIS_URL'],
+                decode_responses=True,
+                socket_timeout=1,
+                socket_connect_timeout=1,
+            )
+        except Exception:
+            pass
+    return _DISTRO_REDIS
+
+
+def _distro_variant_key(upstream_url: str) -> str:
+    import hashlib
+    return _DISTRO_REDIS_KEY_PREFIX + hashlib.md5(upstream_url.encode()).hexdigest()
+
+
 from ..scrapers.base import StreamDeadError
 from .tasks import trigger_channel_auto_disable
 
@@ -242,7 +282,7 @@ def distro_segment_proxy():
         logger.warning('[distro-seg-proxy] blocked SSRF attempt to: %s', parsed.netloc)
         abort(403)
     try:
-        r = _requests.get(url, headers=_DISTRO_HLS_HEADERS, timeout=15, stream=True)
+        r = _DISTRO_PROXY_SESSION.get(url, timeout=15, stream=True)
         if r.status_code != 200:
             abort(r.status_code)
         return Response(
@@ -256,6 +296,61 @@ def distro_segment_proxy():
         abort(502)
 
 
+def _distro_fetch_variant(upstream_url: str, channel_id: str) -> tuple[str, _requests.Response] | None:
+    """
+    Resolve master URL → best variant URL → fetch variant content.
+
+    The variant URL is stored in Redis so all gunicorn workers share the same
+    CloudFront session. Only evicted on actual fetch failure (CDN session expired).
+    Falls back to per-request master fetch if Redis is unavailable.
+    """
+    rdb = _distro_redis()
+    rkey = _distro_variant_key(upstream_url)
+
+    variant_url = rdb.get(rkey) if rdb else None
+    if variant_url:
+        try:
+            variant_r = _DISTRO_PROXY_SESSION.get(variant_url, timeout=8)
+            if variant_r.status_code == 200:
+                return variant_url, variant_r
+        except Exception:
+            pass
+        logger.debug('[distro-proxy] cached variant expired for %s, re-resolving', channel_id)
+        try:
+            if rdb:
+                rdb.delete(rkey)
+        except Exception:
+            pass
+
+    # Fetch master to get a fresh session and best variant URL
+    try:
+        master_r = _DISTRO_PROXY_SESSION.get(upstream_url, timeout=8)
+        master_r.raise_for_status()
+    except Exception as e:
+        logger.warning('[distro-proxy] master fetch failed for %s: %s', channel_id, e)
+        return None
+
+    effective_master_url = master_r.url
+    best_variant = _distro_pick_best_variant(master_r.text, effective_master_url)
+    if not best_variant:
+        logger.warning('[distro-proxy] no variants in master for %s', channel_id)
+        return None
+
+    try:
+        variant_r = _DISTRO_PROXY_SESSION.get(best_variant, timeout=8)
+        variant_r.raise_for_status()
+    except Exception as e:
+        logger.warning('[distro-proxy] variant fetch failed for %s: %s', channel_id, e)
+        return None
+
+    try:
+        if rdb:
+            rdb.set(rkey, best_variant)
+    except Exception:
+        pass
+    return best_variant, variant_r
+
+
 @play_bp.route('/play/distro/<channel_id>/proxy.m3u8')
 def distro_manifest_proxy(channel_id: str):
     """
@@ -264,33 +359,29 @@ def distro_manifest_proxy(channel_id: str):
     Fetches master + best-variant manifests using correct Origin/Referer headers,
     rewrites segment URLs to go through distro_segment_proxy (which adds the
     required headers), then returns the rewritten manifest to the client.
+
+    Variant URLs are cached per upstream URL to avoid re-fetching the master on
+    every ~5s manifest poll — a fresh session is only obtained when the cache
+    misses or the variant fetch fails (session expired).
     """
     from urllib.parse import urlsplit, unquote, quote as _quote
+
     geo, raw_id = _distro_split_id(unquote(channel_id))
     scraper = DistroScraper()
     upstream_url = _distro_resolve_from_feed(scraper, geo, raw_id)
     if not upstream_url:
         abort(502)
 
-    try:
-        master_r = _requests.get(upstream_url, headers=_DISTRO_HLS_HEADERS, timeout=10)
-        master_r.raise_for_status()
-    except Exception as e:
-        logger.warning('[distro-proxy] master fetch failed for %s: %s', channel_id, e)
+    result = _distro_fetch_variant(upstream_url, channel_id)
+    if result is None:
+        # One retry with a forced feed refresh in case the upstream URL itself changed
+        upstream_url = _distro_resolve_from_feed(scraper, geo, raw_id, force_refresh=True)
+        if upstream_url:
+            result = _distro_fetch_variant(upstream_url, channel_id)
+    if result is None:
         abort(502)
 
-    # Use the final URL after any redirects as the base for resolving variant paths.
-    effective_master_url = master_r.url
-    best_variant = _distro_pick_best_variant(master_r.text, effective_master_url)
-    if not best_variant:
-        abort(502)
-
-    try:
-        variant_r = _requests.get(best_variant, headers=_DISTRO_HLS_HEADERS, timeout=10)
-        variant_r.raise_for_status()
-    except Exception as e:
-        logger.warning('[distro-proxy] variant fetch failed for %s: %s', channel_id, e)
-        abort(502)
+    best_variant, variant_r = result
 
     # Only proxy segments whose CDN host requires Origin/Referer headers.
     # Segments on other hosts (e.g. b.jsrdn.com) are publicly accessible and
@@ -315,10 +406,16 @@ def distro_manifest_proxy(channel_id: str):
     )
 
 
+_STIRR_PROXY_SESSION: _requests.Session | None = None
+
+
 def _stirr_session() -> _requests.Session:
-    """Lax-TLS session for Stirr CDN fetches — delegates to the scraper's factory."""
-    from ..scrapers.stirr import StirrScraper
-    return StirrScraper._make_cdn_session()
+    """Persistent lax-TLS session for Stirr CDN fetches. Created once, reused per worker."""
+    global _STIRR_PROXY_SESSION
+    if _STIRR_PROXY_SESSION is None:
+        from ..scrapers.stirr import StirrScraper
+        _STIRR_PROXY_SESSION = StirrScraper._make_cdn_session()
+    return _STIRR_PROXY_SESSION
 
 
 @play_bp.route('/play/stirr/<channel_id>/proxy.m3u8')
