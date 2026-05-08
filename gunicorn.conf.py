@@ -11,6 +11,7 @@ _SUPPRESS_PATTERNS = (
     '/posters/',               # cached poster file hits — too noisy
     '/play/custom/segment',    # segment proxy is high-volume by design
     '/api/sources/chnum',      # overlap-banner polling
+    '/api/feeds/chnum-ranges', # feed page chnum conflict checker
     'GET /api/sources HTTP',   # sources list fetched on every poll cycle finish
     '"GET /admin/',            # admin page navigation GETs (POSTs still logged)
     'GET /api/logs',           # log viewer polling

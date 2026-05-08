@@ -779,6 +779,17 @@ function closeModal() {
 let _chnumRanges = [];
 const _inlineRangeCache = {};  // keyed by excludeId
 
+// Single shared promise so all concurrent page-load calls share one fetch.
+let _allRangesPromise = null;
+function _fetchAllRanges() {
+  if (!_allRangesPromise) {
+    _allRangesPromise = fetch('/api/feeds/chnum-ranges')
+      .then(r => r.json())
+      .catch(() => []);
+  }
+  return _allRangesPromise;
+}
+
 async function checkInlineChnumConflict(feedId) {
   const input = document.getElementById(`chnum-${feedId}`);
   const el    = document.getElementById(`chnum-conflict-${feedId}`);
@@ -795,10 +806,10 @@ async function checkInlineChnumConflict(feedId) {
   const val = parseInt(input.value, 10);
   if (isNaN(val)) { el.innerHTML = ''; return; }
 
-  // Use the feed's actual channel count from the full ranges list (fetched without exclude_id)
+  // Use the feed's actual channel count from the full ranges list (shared fetch).
   let myCount = 100; // fallback if we can't determine actual count
   try {
-    const allRanges = await fetch('/api/feeds/chnum-ranges').then(r => r.json());
+    const allRanges = await _fetchAllRanges();
     const mine = allRanges.find(r => r.feed_id === feedId);
     if (mine) myCount = (mine.count || 0) + (mine.gn_count || 0);
   } catch { /* keep fallback */ }

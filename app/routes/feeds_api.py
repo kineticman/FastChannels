@@ -6,7 +6,7 @@ import re
 from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import OperationalError
 from ..extensions import db
-from ..generators.m3u import get_global_chnum_overlaps, _selected_channels, feed_to_query_filters
+from ..generators.m3u import get_global_chnum_overlaps, _selected_channel_stubs, feed_to_query_filters
 from ..models import Channel, Feed, FeedChannelNumber, Source
 from ..url import public_base_url
 from ..xml_cache import delete_xml_artifact, invalidate_xml_cache
@@ -53,11 +53,7 @@ def _slugify(text: str) -> str:
 
 @feeds_api_bp.route('/chnum-ranges', methods=['GET'])
 def chnum_ranges():
-    """Return the occupied channel number ranges for the master M3U and every enabled feed.
-
-    Uses COUNT queries instead of loading all channel objects so this stays fast
-    even with thousands of channels.
-    """
+    """Return the occupied channel number ranges for the master M3U and every enabled feed."""
     from ..generators.m3u import _build_channel_query, feed_namespace_start
     ranges = []
     exclude_id = request.args.get('exclude_id', type=int)
@@ -69,8 +65,8 @@ def chnum_ranges():
         if exclude_id and feed.id == exclude_id:
             continue
         filters = feed_to_query_filters(feed.filters or {})
-        std_count = len(_selected_channels(filters, gracenote=False))
-        gn_count  = len(_selected_channels(filters, gracenote=True))
+        std_count = len(_selected_channel_stubs(filters, gracenote=False))
+        gn_count  = len(_selected_channel_stubs(filters, gracenote=True))
         total_count = std_count + gn_count
         if total_count == 0:
             continue
