@@ -235,6 +235,7 @@ class DetectionResult:
     error: str | None = None
     is_youtube: bool = False
     resolver: str | None = None
+    opaque_id: str | None = None  # e.g. 'videolinq://<id>' for fast re-resolution
 
 
 class StreamDetector:
@@ -262,6 +263,8 @@ class StreamDetector:
     def detect(self, input_url: str) -> DetectionResult:
         self._candidate_resolvers: dict[str, str] = {}
         self._candidate_page_urls: dict[str, str] = {}
+        self._videolinq_id_map: dict[str, str] = {}  # HLS URL → VideoLinq channel ID
+        self._trusted_hls: set[str] = set()          # URLs from provider APIs (skip segment probe)
         self._detect_deadline = time.perf_counter() + self.DETECT_BUDGET_SECONDS
         self._detect_budget_hit = False
         self._set_stage('starting', urlsplit(input_url).netloc or None)
@@ -346,6 +349,9 @@ class StreamDetector:
                 if result.success:
                     if not result.resolver:
                         result.resolver = self._candidate_resolvers.get(candidate) or 'page scrape'
+                    vl_id = self._videolinq_id_map.get(candidate)
+                    if vl_id:
+                        result.opaque_id = f'videolinq://{vl_id}'
                     return result
                 if result.stream_type or result.error:
                     if self._is_blocked_failure(best_failure) and not self._is_blocked_failure(result):
@@ -1895,6 +1901,8 @@ class StreamDetector:
                 hls = (data.get('hlsPath') or '').strip()
                 if hls and hls not in candidates:
                     candidates.append(hls)
+                    self._videolinq_id_map[hls] = vid
+                    self._trusted_hls.add(hls)
             except Exception as exc:
                 logger.debug('[detector] videolinq api failed %s: %s', api_url, exc)
 
@@ -2494,10 +2502,12 @@ class StreamDetector:
                 if '#EXTM3U' not in text:
                     continue
 
-                seg_url = self._first_segment_url(session, text, stream_url, headers)
                 needs_proxy = False
-                if seg_url:
-                    needs_proxy = not self._segment_ok(session, seg_url, headers)
+                # Skip segment probing for provider API URLs — we trust the source.
+                if stream_url not in getattr(self, '_trusted_hls', set()):
+                    seg_url = self._first_segment_url(session, text, stream_url, headers)
+                    if seg_url:
+                        needs_proxy = not self._segment_ok(session, seg_url, headers)
 
                 return DetectionResult(
                     stream_url=stream_url,

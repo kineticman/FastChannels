@@ -76,6 +76,12 @@ logger = logging.getLogger(__name__)
 
 play_bp = Blueprint('play', __name__)
 
+_BROWSER_UA = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) '
+    'Chrome/145.0.0.0 Safari/537.36'
+)
+
 # TTL-cache for custom channel re-detection results.
 # Key: channel.id  Value: (stream_url, headers, monotonic_timestamp)
 _CUSTOM_STREAM_CACHE: dict[int, tuple[str, dict, float]] = {}
@@ -108,15 +114,14 @@ def _custom_proxy_headers(channel, extra_headers: dict | None = None) -> dict:
     (notably YouTube/googlevideo).  Start with a browser UA, layer stored
     custom headers on top, and synthesize Referer/Origin from page_url when
     the channel doesn't already define them.
+
+    Keys starting with '_' in custom_headers are internal metadata, not HTTP
+    headers — they are stripped here before being sent upstream.
     """
     from urllib.parse import urlsplit
 
-    _BROWSER_UA = (
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-        'AppleWebKit/537.36 (KHTML, like Gecko) '
-        'Chrome/145.0.0.0 Safari/537.36'
-    )
-    headers = {'User-Agent': _BROWSER_UA, **(channel.custom_headers or {})}
+    stored = channel.custom_headers or {}
+    headers = {'User-Agent': _BROWSER_UA, **{k: v for k, v in stored.items() if not k.startswith('_')}}
     if extra_headers:
         headers.update({k: v for k, v in extra_headers.items() if v})
     page_url = getattr(channel, 'page_url', None) or ''
@@ -127,6 +132,22 @@ def _custom_proxy_headers(channel, extra_headers: dict | None = None) -> dict:
         if origin:
             headers.setdefault('Origin', origin)
     return headers
+
+
+def _resolve_videolinq_fast(vl_id: str, page_url: str) -> str | None:
+    """Call the VideoLinq public API directly to get a live HLS URL (~300ms)."""
+    try:
+        r = _requests.get(
+            f'https://control.videolinq.com/playerwizard/public/{vl_id}',
+            headers={'Referer': page_url, 'User-Agent': _BROWSER_UA},
+            timeout=5,
+        )
+        if r.ok:
+            hls = (r.json().get('hlsPath') or '').strip()
+            return hls or None
+    except Exception:
+        pass
+    return None
 
 
 def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dict]:
@@ -145,8 +166,22 @@ def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dic
         if now - fetched_at < ttl:
             return cached_url, cached_hdrs
 
-    from ..scrapers.stream_detector import StreamDetector
     from ..extensions import db as _db
+
+    # Fast path: if we previously identified a VideoLinq source (ID stored in
+    # custom_headers['_videolinq_id']), skip the full page re-fetch and call the
+    # VideoLinq API directly (~300ms vs. 5-15s for PerimeterX page + probe).
+    stored_hdrs = channel.custom_headers or {}
+    vl_id = stored_hdrs.get('_videolinq_id')
+    if vl_id and channel.page_url:
+        hls_url = _resolve_videolinq_fast(vl_id, channel.page_url)
+        if hls_url:
+            _CUSTOM_STREAM_CACHE[channel_id] = (hls_url, {}, now)
+            logger.info('[custom-redetect] videolinq fast path for %s → %s…', vl_id, hls_url[:60])
+            return hls_url, {}
+        logger.warning('[custom-redetect] videolinq fast path failed for %s, falling back to full detect', vl_id)
+
+    from ..scrapers.stream_detector import StreamDetector
 
     page_url = channel.page_url or channel.stream_url
     result = StreamDetector().detect(page_url)
@@ -155,14 +190,19 @@ def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dic
         headers = result.headers or {}
         _CUSTOM_STREAM_CACHE[channel_id] = (stream_url, headers, now)
         detected_type = result.stream_type or channel.stream_type
+        # Persist provider metadata alongside headers; _-prefixed keys are
+        # internal only and stripped before any upstream HTTP request.
+        stored_new = dict(headers)
+        if result.opaque_id and result.opaque_id.startswith('videolinq://'):
+            stored_new['_videolinq_id'] = result.opaque_id[len('videolinq://'):]
         if (
             stream_url != channel.stream_url
-            or headers != (channel.custom_headers or {})
+            or stored_new != stored_hdrs
             or detected_type != channel.stream_type
         ):
             try:
                 channel.stream_url = stream_url
-                channel.custom_headers = headers
+                channel.custom_headers = stored_new
                 channel.stream_type = detected_type
                 _db.session.commit()
             except Exception as e:
@@ -172,7 +212,7 @@ def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dic
 
     logger.warning('[custom-redetect] detection failed for channel %d (%s): %s',
                    channel_id, (page_url or '')[:80], result.error)
-    return channel.stream_url or '', channel.custom_headers or {}
+    return channel.stream_url or '', stored_hdrs
 
 def _client_ip() -> str:
     forwarded = (request.headers.get('X-Forwarded-For') or '').strip()
