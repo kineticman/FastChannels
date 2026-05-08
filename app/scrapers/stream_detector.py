@@ -116,6 +116,23 @@ _THETVAPP_STREAM_NAME_RE = re.compile(
     r'''<div[^>]+id=["']stream_name["'][^>]+name=["']([^"']+)["']''',
     re.IGNORECASE,
 )
+_VIDEASY_PLAYER_RE = re.compile(
+    r'''^https?://(www\.)?player\.videasy\.net/(?:movie|tv)/[^/?#]+(?:[?#].*)?$''',
+    re.IGNORECASE,
+)
+_VIDEASY_IFRAME_RE = re.compile(
+    r'''https?://(www\.)?player\.videasy\.net/(?:movie|tv)/[^"'\s<>]+''',
+    re.IGNORECASE,
+)
+_VIDEASY_TITLE_RE = re.compile(
+    r'''(?:id=["']playerTitle["'][^>]*>([^<]+)</span>|class=["'][^"']*\bmedia-title\b[^"']*["'][^>]*>([^<]+)</h1>)''',
+    re.IGNORECASE,
+)
+_VIDEASY_YEAR_RE = re.compile(
+    r'''(?:Movie|TV)\s*•\s*(\d{4})''',
+    re.IGNORECASE,
+)
+_VIDEASY_IMDB_RE = re.compile(r'''tt\d{7,9}''', re.IGNORECASE)
 _GRAY_QUICKPLAY_PLAYER_RE = re.compile(
     r'''<meta[^>]+(?:property|name)\s*=\s*['"](player)['"][^>]+content\s*=\s*['"]quickplay['"]''',
     re.IGNORECASE,
@@ -188,6 +205,7 @@ class StreamDetector:
 
     def detect(self, input_url: str) -> DetectionResult:
         self._candidate_resolvers: dict[str, str] = {}
+        self._candidate_page_urls: dict[str, str] = {}
         # Fast path for yt-dlp-native sites we know it can own cleanly.
         if _YOUTUBE_RE.match(input_url):
             return self._resolve_youtube(input_url)
@@ -250,7 +268,9 @@ class StreamDetector:
                             continue
                         best_failure = result
                     continue
-                result = self._probe(session, candidate, page_url, origin)
+                candidate_page_url = self._candidate_page_urls.get(candidate) or page_url
+                candidate_origin = self._origin_of(candidate_page_url)
+                result = self._probe(session, candidate, candidate_page_url, candidate_origin)
                 if result.success:
                     if not result.resolver:
                         result.resolver = self._candidate_resolvers.get(candidate) or 'page scrape'
@@ -372,6 +392,9 @@ class StreamDetector:
                 # plain HTTP requests but a real browser can still load them.  Fall
                 # through to Playwright so we still capture the HLS manifest request.
                 if r.status_code in _BLOCKED_STATUS_CODES:
+                    videasy_candidates = self._extract_videasy_provider_candidates(session, url, '')
+                    if videasy_candidates:
+                        return videasy_candidates
                     return self._run_playwright_candidates(url)
                 return []
             text = r.text
@@ -469,6 +492,7 @@ class StreamDetector:
             self._extract_cbs_provider_candidates,
             self._extract_newson_provider_candidates,
             self._extract_thetvapp_provider_candidates,
+            self._extract_videasy_provider_candidates,
             self._extract_ozolio_provider_candidates,
             self._extract_antmedia_provider_candidates,
             self._extract_balticlivecam_provider_candidates,
@@ -755,6 +779,197 @@ class StreamDetector:
             return None
         value = html.unescape((match.group(1) or '').strip())
         return value or None
+
+    @staticmethod
+    def _videasy_player_url(url: str, text: str) -> str | None:
+        parsed = urlsplit(url)
+        if _VIDEASY_PLAYER_RE.match(url):
+            return url
+        if parsed.netloc.lower() == 'anixtv.us.cc':
+            params = parse_qs(parsed.query)
+            tmdb_id = (params.get('id', [''])[0] or '').strip()
+            if not tmdb_id:
+                return None
+            media_type = (params.get('type', ['movie'])[0] or 'movie').strip().lower()
+            color = (params.get('color', ['00A8E1'])[0] or '00A8E1').strip()
+            if media_type == 'tv':
+                season = (params.get('season', ['1'])[0] or '1').strip()
+                episode = (params.get('episode', ['1'])[0] or '1').strip()
+                return (
+                    f'https://player.videasy.net/tv/{tmdb_id}/{season}/{episode}'
+                    f'?color={color}&nextEpisode=true&autoplayNextEpisode=true'
+                )
+            return (
+                f'https://player.videasy.net/movie/{tmdb_id}'
+                f'?color={color}&nextEpisode=true&autoplayNextEpisode=true'
+            )
+
+        if 'player.videasy.net' in text:
+            for match in _VIDEASY_IFRAME_RE.finditer(text):
+                candidate = html.unescape(match.group(0)).strip()
+                if candidate:
+                    return candidate
+        return None
+
+    @staticmethod
+    def _videasy_title(text: str) -> str | None:
+        match = _VIDEASY_TITLE_RE.search(text)
+        if not match:
+            return None
+        value = html.unescape((match.group(1) or match.group(2) or '').strip())
+        return value or None
+
+    @staticmethod
+    def _videasy_year(text: str) -> int | None:
+        match = _VIDEASY_YEAR_RE.search(text)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _videasy_imdb_id(text: str) -> str | None:
+        match = _VIDEASY_IMDB_RE.search(text)
+        if not match:
+            return None
+        value = (match.group(0) or '').strip()
+        return value or None
+
+    @staticmethod
+    def _videasy_media_context(url: str) -> tuple[str | None, str | None, int, int]:
+        parsed = urlsplit(url)
+        params = parse_qs(parsed.query)
+        media_type = (params.get('type', ['movie'])[0] or 'movie').strip().lower()
+        if media_type not in ('movie', 'tv'):
+            media_type = 'movie'
+
+        tmdb_id = (params.get('id', [''])[0] or '').strip()
+        if not tmdb_id:
+            player_match = re.search(r'''/([0-9]+)(?:[?#]|$)''', parsed.path)
+            if player_match:
+                tmdb_id = player_match.group(1)
+
+        season_id = 1
+        episode_id = 1
+        if media_type == 'tv':
+            try:
+                season_id = int((params.get('season', ['1'])[0] or '1').strip())
+            except Exception:
+                season_id = 1
+            try:
+                episode_id = int((params.get('episode', ['1'])[0] or '1').strip())
+            except Exception:
+                episode_id = 1
+
+        return tmdb_id or None, media_type, season_id, episode_id
+
+    def _extract_videasy_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        player_url = self._videasy_player_url(url, text)
+        tmdb_id, media_type, season_id, episode_id = self._videasy_media_context(url)
+        if not tmdb_id or not media_type:
+            return []
+
+        try:
+            sync_playwright = _sync_playwright()
+        except Exception as exc:
+            logger.debug('[detector] playwright unavailable for videasy fallback: %s', exc)
+            return []
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                if not player_url:
+                    page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                    page.wait_for_timeout(1500)
+                    page_html = page.content()
+                    player_url = self._videasy_player_url(page.url, page_html) or self._videasy_player_url(url, page_html)
+                    if not player_url:
+                        browser.close()
+                        return []
+
+                page.goto(player_url, wait_until='domcontentloaded', timeout=30000)
+                page.wait_for_timeout(1500)
+                body_text = page.evaluate("() => document.body ? document.body.innerText || '' : ''")
+                lines = [line.strip() for line in body_text.splitlines() if line.strip()]
+                title = lines[0] if lines else None
+                year = next((int(line) for line in lines if re.fullmatch(r'(?:19|20)\d{2}', line)), None)
+                imdb_id = self._videasy_imdb_id(page.content()) or self._videasy_imdb_id(text)
+                if not title or not year:
+                    browser.close()
+                    return []
+                result = page.evaluate(
+                    """async (payload) => {
+                      let req;
+                      window.webpackChunk_N_E = window.webpackChunk_N_E || [];
+                      window.webpackChunk_N_E.push([[Math.random()], {}, function(r){ req = r; }]);
+                      if (!req) return null;
+                      const mod = req(1520) || {};
+                      const providers = mod.i || [];
+                      for (const provider of providers) {
+                        try {
+                          const ret = await provider.get(payload);
+                          const sources = Array.isArray(ret && ret.sources) ? ret.sources : [];
+                          if (sources.length) {
+                            return {
+                              provider: provider.name || null,
+                              sources,
+                              subtitles: Array.isArray(ret && ret.subtitles) ? ret.subtitles : [],
+                            };
+                          }
+                        } catch (e) {}
+                      }
+                      return null;
+                    }""",
+                    {
+                        'title': title,
+                        'extraData': {
+                            'tmdbId': tmdb_id,
+                            'imdbId': imdb_id,
+                            'mediaType': media_type,
+                            'titleEnglish': title,
+                            'titlePortuguese': title,
+                            'titleSpanish': title,
+                            'titleFrench': title,
+                            'titleGerman': title,
+                            'year': year,
+                            'seasonId': season_id,
+                            'episodeId': episode_id,
+                            'b35ebba4': '',
+                        },
+                    },
+                )
+                browser.close()
+        except Exception as exc:
+            logger.debug('[detector] videasy lookup failed %s: %s', player_url[:80], exc)
+            return []
+
+        if not result:
+            return []
+
+        candidates: list[str] = []
+        resolvers = getattr(self, '_candidate_resolvers', None)
+        page_urls = getattr(self, '_candidate_page_urls', None)
+        for source in result.get('sources') or []:
+            if not isinstance(source, dict):
+                continue
+            candidate = (source.get('url') or source.get('src') or source.get('file') or '').strip()
+            if not candidate or candidate in candidates:
+                continue
+            candidates.append(candidate)
+            if resolvers is not None:
+                resolvers.setdefault(candidate, 'videasy')
+            if page_urls is not None:
+                page_urls.setdefault(candidate, player_url)
+
+        return candidates
 
     def _extract_newson_provider_candidates(
         self,
