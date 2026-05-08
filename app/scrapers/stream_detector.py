@@ -164,6 +164,8 @@ _SKYLINE_SOURCE_RE = re.compile(
 )
 _EARTHCAM_VIDEO_EMBED_RE = re.compile(r'''(?:https?:)?//[^'"\s>]+?/js/video/embed\.php\?[^'"\s>]+''', re.IGNORECASE)
 _TVPASS_CHANNEL_RE = re.compile(r'^https?://(www\.)?tvpass\.org/channel/([^/?#]+)', re.IGNORECASE)
+_VIDEOLINQ_PAGE_RE = re.compile(r'^https?://control\.videolinq\.com/public/([A-Za-z0-9_-]+)', re.IGNORECASE)
+_VIDEOLINQ_IFRAME_RE = re.compile(r'''https?://control\.videolinq\.com/public/([A-Za-z0-9_-]+)''', re.IGNORECASE)
 
 _YOUTUBE_RE = re.compile(
     r'^https?://(www\.)?(youtube\.com/(watch|live|embed/|@|channel|user|c/|shorts/)|youtu\.be/)',
@@ -187,6 +189,42 @@ def _sync_playwright():
     return sync_playwright
 
 
+_STEALTH_INIT_SCRIPT = """
+(function () {
+    // Remove the automation flag all fingerprinters check first.
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+
+    // Ensure plugins array is non-empty (empty = headless giveaway).
+    try {
+        if (!navigator.plugins || !navigator.plugins.length) {
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => { const a = [1,2,3,4,5]; a.__proto__ = navigator.plugins.__proto__; return a; }
+            });
+        }
+    } catch(e) {}
+
+    // Natural language list.
+    try {
+        Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+    } catch(e) {}
+
+    // Chrome runtime object expected by many fingerprinters.
+    if (!window.chrome) {
+        window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}, app: {}};
+    }
+
+    // Fix permissions query so 'notifications' check doesn't expose automation.
+    try {
+        const _origQuery = window.navigator.permissions.query.bind(navigator.permissions);
+        window.navigator.permissions.query = (p) =>
+            p.name === 'notifications'
+                ? Promise.resolve({state: Notification.permission})
+                : _origQuery(p);
+    } catch(e) {}
+})();
+"""
+
+
 @dataclass
 class DetectionResult:
     stream_url: str | None = None
@@ -202,7 +240,7 @@ class DetectionResult:
 class StreamDetector:
     MAX_IFRAME_DEPTH = 3
     TIMEOUT = 12
-    DETECT_BUDGET_SECONDS = 30
+    DETECT_BUDGET_SECONDS = 45
     PLAYWRIGHT_MIN_REMAINING_SECONDS = 13
 
     def __init__(self, stage_callback=None):
@@ -441,6 +479,18 @@ class StreamDetector:
             self._set_stage('fetching page', urlsplit(url).netloc or None)
             headers = {'Referer': referer} if referer else None
             r = session.get(url, timeout=self.TIMEOUT, headers=headers)
+            if not r.ok and r.status_code in _BLOCKED_STATUS_CODES:
+                # PerimeterX and similar WAFs fingerprint the TLS handshake; a
+                # single retry with a different impersonation often gets through.
+                try:
+                    from curl_cffi import requests as _cffi_retry
+                    _alt_r = _cffi_retry.Session(impersonate='safari17_0').get(
+                        url, timeout=8, headers=headers,
+                    )
+                    if _alt_r.ok:
+                        r = _alt_r
+                except Exception:
+                    pass
             if not r.ok:
                 # Pages behind bot-protection (Cloudflare JS challenge, etc.) block
                 # plain HTTP requests but a real browser can still load them.  Fall
@@ -449,14 +499,32 @@ class StreamDetector:
                     videasy_candidates = self._extract_videasy_provider_candidates(session, url, '')
                     if videasy_candidates:
                         return videasy_candidates
-                    return self._run_playwright_candidates(url)
+                    # Bot-protected page: give Playwright extra time for the challenge to
+                    # resolve and the real page + video player to initialise.
+                    return self._run_playwright_candidates(url, max_wait_ms=25000)
                 return []
             text = r.text
         except Exception as exc:
             logger.debug('[detector] page fetch failed %s: %s', url[:80], exc)
             return []
 
+        # Priority extractors: known live-cam / embed providers whose stream URL
+        # should take precedence over generic m3u8 URLs baked into the page HTML
+        # (e.g. related-story clips that are VOD, not the actual live feed).
+        _priority_hls: list[str] = []
+        for _c in self._extract_videolinq_provider_candidates(session, url, text):
+            if _c not in _priority_hls:
+                _priority_hls.append(_c)
+                self._candidate_resolvers.setdefault(_c, 'videolinq')
+                self._candidate_page_urls.setdefault(_c, url)
+
         hls_candidates, video_candidates = self._extract_generic_candidates(text)
+
+        # Prepend so priority candidates are probed before generic page-level m3u8s.
+        for _c in reversed(_priority_hls):
+            if _c not in hls_candidates:
+                hls_candidates.insert(0, _c)
+
         state_hls, state_video = self._extract_embedded_state_candidates(text, url)
         for c in state_hls:
             if c not in hls_candidates:
@@ -1792,6 +1860,46 @@ class StreamDetector:
 
         return candidates
 
+    def _extract_videolinq_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        """
+        VideoLinq embeds (control.videolinq.com/public/{id}) expose a JSON API at
+        /playerwizard/public/{id} that returns the live HLS URL directly, without
+        needing to render the SPA.  We detect the embed ID either from the page URL
+        (when we're recursing into the iframe itself) or from iframe src attributes
+        in the parent page HTML.
+        """
+        ids: list[str] = []
+        m = _VIDEOLINQ_PAGE_RE.match(url)
+        if m:
+            ids.append(m.group(1))
+        for m in _VIDEOLINQ_IFRAME_RE.finditer(text):
+            vid = m.group(1)
+            if vid not in ids:
+                ids.append(vid)
+        if not ids:
+            return []
+
+        candidates: list[str] = []
+        for vid in ids:
+            api_url = f'https://control.videolinq.com/playerwizard/public/{vid}'
+            try:
+                r = session.get(api_url, timeout=self.TIMEOUT, headers={'Referer': url})
+                if not r.ok:
+                    continue
+                data = r.json()
+                hls = (data.get('hlsPath') or '').strip()
+                if hls and hls not in candidates:
+                    candidates.append(hls)
+            except Exception as exc:
+                logger.debug('[detector] videolinq api failed %s: %s', api_url, exc)
+
+        return candidates
+
     def _extract_oxblue_provider_candidates(
         self,
         session: requests.Session,
@@ -2152,8 +2260,17 @@ class StreamDetector:
             or ('video' in lower and 'source' in lower)
         )
 
-    def _run_playwright_candidates(self, url: str) -> list[str]:
-        """Launch a headless browser for *url* and intercept any .m3u8 requests."""
+    def _run_playwright_candidates(self, url: str, max_wait_ms: int = 12000) -> list[str]:
+        """
+        Launch a stealthy headless browser for *url* and collect .m3u8 URLs via:
+          - network request interception (catches HLS manifest requests)
+          - network response body scan (catches m3u8 URLs embedded in JSON API responses)
+          - rendered DOM scan (catches m3u8 URLs baked into script tags / data attrs)
+
+        max_wait_ms controls how long we wait after goto() for the player to initialise.
+        Use a higher value (e.g. 25000) for bot-protected pages that need challenge resolution
+        time before the real page and video player load.
+        """
         if self._detect_budget_exhausted():
             return []
 
@@ -2171,30 +2288,91 @@ class StreamDetector:
 
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                page = browser.new_page()
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--disable-blink-features=AutomationControlled',
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                    ],
+                )
+                context = browser.new_context(
+                    viewport={'width': 1920, 'height': 1080},
+                    user_agent=_BROWSER_UA,
+                    locale='en-US',
+                    timezone_id='America/New_York',
+                )
+                page = context.new_page()
+                page.add_init_script(_STEALTH_INIT_SCRIPT)
                 seen: list[str] = []
 
+                def _add_candidate(candidate_url: str) -> None:
+                    c = candidate_url.rstrip('"\'\\')
+                    if c and c not in seen:
+                        seen.append(c)
+
                 def on_request(req):
-                    req_url = req.url
-                    if '.m3u8' not in urlsplit(req_url).path.lower():
+                    if '.m3u8' in urlsplit(req.url).path.lower():
+                        _add_candidate(req.url)
+
+                def on_response(resp):
+                    resp_url = resp.url
+                    if '.m3u8' in urlsplit(resp_url).path.lower():
+                        _add_candidate(resp_url)
                         return
-                    if req_url not in seen:
-                        seen.append(req_url)
+                    ct = (resp.headers.get('content-type') or '').lower()
+                    if 'json' not in ct and 'javascript' not in ct:
+                        return
+                    # Skip large bundles (JS frameworks etc.) to avoid blocking.
+                    try:
+                        cl = int(resp.headers.get('content-length') or 0)
+                        if cl > 500_000:
+                            return
+                    except Exception:
+                        pass
+                    try:
+                        body = resp.text()
+                        for m in _M3U8_RE.finditer(body):
+                            _add_candidate(m.group(0))
+                    except Exception:
+                        pass
 
                 page.on('request', on_request)
+                page.on('response', on_response)
+
                 page.goto(url, wait_until='domcontentloaded', timeout=30000)
-                wait_ms = 12000
+
                 remaining_after_goto = self._detect_budget_remaining()
-                if remaining_after_goto is not None:
-                    wait_ms = min(wait_ms, max(0, int(remaining_after_goto * 1000)))
-                if wait_ms > 0:
-                    page.wait_for_timeout(wait_ms)
+                budget_ms = int(remaining_after_goto * 1000) if remaining_after_goto is not None else max_wait_ms
+                wait_budget = min(max_wait_ms, budget_ms)
+
+                # Poll in 1-second ticks so we can exit early once a candidate appears.
+                elapsed = 0
+                poll_ms = 1000
+                while elapsed < wait_budget and not self._detect_budget_exhausted():
+                    page.wait_for_timeout(poll_ms)
+                    elapsed += poll_ms
+                    if seen:
+                        break
+
+                # Final fallback: scan the fully-rendered DOM for baked-in m3u8 URLs.
+                if not seen:
+                    try:
+                        content = page.content()
+                        for m in _M3U8_RE.finditer(content):
+                            _add_candidate(m.group(0))
+                    except Exception:
+                        pass
+
                 browser.close()
 
-            for candidate in seen:
-                self._candidate_resolvers.setdefault(candidate, 'playwright fallback')
-                return [candidate]
+            resolvers = getattr(self, '_candidate_resolvers', {})
+            page_urls = getattr(self, '_candidate_page_urls', {})
+            for c in seen:
+                resolvers.setdefault(c, 'playwright fallback')
+                page_urls.setdefault(c, url)
+            if seen:
+                return [seen[0]]
         except Exception as exc:
             logger.debug('[detector] generic playwright fallback failed %s: %s', url[:80], exc)
 
