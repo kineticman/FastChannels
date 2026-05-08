@@ -27,6 +27,10 @@
     .global-status { font-size: 0.78rem; min-height: 1rem; color: var(--text-soft); }
     .global-status.ok { color: var(--success-soft); }
     .global-status.error { color: var(--danger); }
+    @keyframes cc-detect-indeterminate {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(320%); }
+    }
 
     /* Needs-config banner */
     .needs-config-banner {
@@ -629,7 +633,12 @@
                  oninput="onCustomUrlInput()">
           <button class="btn btn-run btn-sm" id="cc-detect-btn" onclick="detectStream()" style="white-space:nowrap;min-width:72px;">Detect</button>
         </div>
-        <div id="cc-detect-status" style="font-size:.76rem;margin-top:.4rem;min-height:1rem;"></div>
+        <div id="cc-detect-status" style="font-size:.76rem;margin-top:.4rem;min-height:1rem;display:flex;flex-direction:column;gap:.3rem;">
+          <div id="cc-detect-status-text"></div>
+          <div id="cc-detect-progress" style="display:none;height:4px;border-radius:999px;background:color-mix(in srgb, var(--border) 70%, transparent);overflow:hidden;">
+            <div id="cc-detect-progress-bar" style="height:100%;width:35%;border-radius:999px;background:linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--accent) 80%, white) 35%, var(--accent) 50%, color-mix(in srgb, var(--accent) 80%, white) 65%, transparent 100%);animation:cc-detect-indeterminate 1.35s linear infinite;"></div>
+          </div>
+        </div>
       </div>
 
       <!-- Detection result panel -->
@@ -652,6 +661,7 @@
             <input type="checkbox" id="cc-proxy-toggle" style="accent-color:var(--accent-strong);cursor:pointer;">
             Proxy segments through FastChannels (required when headers are needed for segment access)
           </label>
+          <div id="cc-proxy-note" style="margin-left:1.35rem;margin-top:.3rem;font-size:.74rem;color:var(--text-muted);line-height:1.35;"></div>
         </div>
         <!-- Re-detect on play toggle (shown for page-based sources) -->
         <div id="cc-redetect-wrap" style="display:none;margin-top:.5rem;">
@@ -2103,6 +2113,147 @@
     let _ccResolver = null;
     let _ccPageUrl = null;      // original input URL when it was a page (not direct stream)
     let _ccIsPageUrl = false;   // true when input was a page URL
+    let _ccDetectPollTimer = null;
+    let _ccDetectJobId = null;
+
+    function _clearDetectPolling() {
+      if (_ccDetectPollTimer) {
+        clearInterval(_ccDetectPollTimer);
+        _ccDetectPollTimer = null;
+      }
+      _ccDetectJobId = null;
+    }
+
+    function _formatDetectElapsed(ms) {
+      const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+      if (totalSeconds < 60) return `${totalSeconds}s`;
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${minutes}m ${seconds}s`;
+    }
+
+    function _setDetectStatus(message, color = 'var(--text-muted)', showProgress = false) {
+      const statusEl = document.getElementById('cc-detect-status');
+      const statusTextEl = document.getElementById('cc-detect-status-text');
+      const progressEl = document.getElementById('cc-detect-progress');
+      if (statusTextEl) statusTextEl.textContent = message || '';
+      if (statusEl) statusEl.style.color = color;
+      if (progressEl) progressEl.style.display = showProgress ? '' : 'none';
+    }
+
+    function _detectStageText(data) {
+      if (data.stage_text) return data.stage_text;
+      const stage = String(data.stage || '').trim().toLowerCase();
+      const labels = {
+        queued: 'Queued',
+        starting: 'Starting detection…',
+        fetching_page: 'Fetching page…',
+        checking_embedded_apis: 'Checking embedded APIs…',
+        following_iframe: 'Following iframe…',
+        trying_browser_fallback: 'Trying browser fallback…',
+        probing_candidate: 'Probing candidate stream…',
+        yt_dlp: 'Resolving via yt-dlp…',
+        twitch: 'Resolving Twitch…',
+        done: 'Complete',
+        error: 'Detection error',
+      };
+      const base = labels[stage] || stage.replace(/_/g, ' ');
+      if (data.detail) return `${base} · ${data.detail}`;
+      return base || 'Running…';
+    }
+
+    function _renderDetectStatus(data) {
+      const elapsedLabel = data.elapsed_ms != null ? ` ${_formatDetectElapsed(data.elapsed_ms)}` : '';
+      const stageText = _detectStageText(data);
+      if (data.status === 'queued') {
+        _setDetectStatus(`Queued…${elapsedLabel}`, 'var(--text-muted)', true);
+        return;
+      }
+      if (data.status === 'running') {
+        _setDetectStatus(`Detecting stream…${elapsedLabel}${stageText ? ` · ${stageText}` : ''}`, 'var(--text-muted)', true);
+        return;
+      }
+      if (data.status === 'done' && data.success) {
+        _setDetectStatus('', '');
+        return;
+      }
+      const failureDetail = data.error ? String(data.error).trim() : 'Detection failed';
+      _setDetectStatus(`${failureDetail}${elapsedLabel}`, 'var(--danger)', false);
+      const resolverLabel = _resolverLabel(data.resolver || null, false);
+      if (resolverLabel) {
+        document.getElementById('cc-detect-status-text').textContent += ` · ${resolverLabel}`;
+      }
+    }
+
+    async function _pollDetectStatus() {
+      if (!_ccDetectJobId) return;
+      const btn = document.getElementById('cc-detect-btn');
+      try {
+        const r = await fetch(`/api/custom-channels/detect/${_ccDetectJobId}`);
+        const data = await r.json();
+        if (data.status === 'running' || data.status === 'queued') {
+          _renderDetectStatus(data);
+          return;
+        }
+
+        _clearDetectPolling();
+        if (data.success && data.stream_url) {
+          _ccDetectedUrl = data.stream_url;
+          _ccDetectedType = data.stream_type || null;
+          _ccDetectedHeaders = data.headers || {};
+          _ccResolver = data.resolver || null;
+          _ccIsPageUrl = !!data.is_page_url;
+          _ccPageUrl = _ccIsPageUrl ? document.getElementById('cc-input-url').value.trim() : null;
+          _setDetectStatus('', '');
+          _showDetectResult(true, data.stream_url, data.stream_type || null, data.headers, data.needs_proxy, _ccIsPageUrl, !!data.is_youtube, _ccResolver);
+          if (!_ccEditId && (_ccIsPageUrl || data.is_youtube)) {
+            document.getElementById('cc-redetect-toggle').checked = true;
+          }
+          if (!document.getElementById('cc-input-name').value.trim()) {
+            const guessSource = data.is_youtube ? (document.getElementById('cc-input-url').value.trim() || '') : data.stream_url;
+            const urlParts = guessSource.split('/');
+            const guess = (urlParts[2] || '').replace(/^www\./, '');
+            document.getElementById('cc-input-name').value = guess;
+          }
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Detect';
+          }
+          return;
+        }
+
+        _ccDetectedUrl = data.stream_url || null;
+        _ccDetectedType = data.stream_type || null;
+        _ccDetectedHeaders = {};
+        _ccResolver = data.resolver || null;
+        _ccIsPageUrl = !!data.is_page_url;
+        _ccPageUrl = _ccIsPageUrl ? document.getElementById('cc-input-url').value.trim() : null;
+        _renderDetectStatus(data);
+        if (data.stream_url) {
+          _showDetectResult(false, data.stream_url, data.stream_type || null, {}, false, _ccIsPageUrl, !!data.is_youtube, _ccResolver);
+        } else if (data.is_youtube) {
+          _showDetectResult(false, null, data.stream_type || null, {}, false, true, true, _ccResolver);
+        }
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Detect';
+        }
+      } catch (e) {
+        _clearDetectPolling();
+        _setDetectStatus('Network error: ' + e.message, 'var(--danger)', false);
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Detect';
+        }
+      }
+    }
+
+    function _startDetectPolling(jobId) {
+      _clearDetectPolling();
+      _ccDetectJobId = jobId;
+      _pollDetectStatus();
+      _ccDetectPollTimer = setInterval(_pollDetectStatus, 1000);
+    }
 
     function openCustomChannelModal(channelData) {
       _ccEditId = channelData ? channelData.id : null;
@@ -2125,8 +2276,8 @@
       document.getElementById('cc-proxy-toggle').checked = channelData ? !!channelData.proxy_segments : false;
       document.getElementById('cc-redetect-toggle').checked = channelData ? !!channelData.redetect_on_play : false;
       document.getElementById('cc-input-guide-block').value = channelData ? String(channelData.guide_block_minutes || 60) : '60';
-      document.getElementById('cc-detect-status').textContent = '';
-      document.getElementById('cc-detect-status').style.color = '';
+      _clearDetectPolling();
+      _setDetectStatus('', '');
       document.getElementById('cc-save-status').textContent = '';
       document.getElementById('cc-delete-btn').style.display = _ccEditId ? 'inline-flex' : 'none';
 
@@ -2147,6 +2298,7 @@
     function closeCustomChannelModal(evt) {
       if (evt && evt.target !== document.getElementById('custom-channel-modal')) return;
       document.getElementById('custom-channel-modal').classList.remove('open');
+      _clearDetectPolling();
       _ccEditId = null;
       _ccDetectedUrl = null;
       _ccDetectedType = null;
@@ -2158,7 +2310,8 @@
 
     function onCustomUrlInput() {
       document.getElementById('cc-detect-result').style.display = 'none';
-      document.getElementById('cc-detect-status').textContent = '';
+      _clearDetectPolling();
+      _setDetectStatus('', '');
       document.getElementById('cc-redetect-wrap').style.display = 'none';
       _ccDetectedUrl = null;
       _ccDetectedType = null;
@@ -2173,65 +2326,34 @@
       if (!url) { alert('Enter a URL first.'); return; }
 
       const btn = document.getElementById('cc-detect-btn');
-      const statusEl = document.getElementById('cc-detect-status');
       btn.disabled = true;
       btn.textContent = '…';
-      statusEl.textContent = 'Detecting stream…';
-      statusEl.style.color = 'var(--text-muted)';
+      _clearDetectPolling();
+      _ccDetectedUrl = null;
+      _ccDetectedType = null;
+      _ccDetectedHeaders = {};
+      _ccResolver = null;
+      _ccPageUrl = null;
+      _ccIsPageUrl = false;
+      _setDetectStatus('Starting detection…', 'var(--text-muted)', true);
       document.getElementById('cc-detect-result').style.display = 'none';
 
       try {
-        const r = await fetch('/api/custom-channels/detect', {
+        const r = await fetch('/api/custom-channels/detect/start', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({url}),
         });
         const data = await r.json();
-
-        const isYt = !!data.is_youtube;
-        if (data.success && data.stream_url) {
-          _ccDetectedUrl = data.stream_url;
-          _ccDetectedType = data.stream_type || null;
-          _ccDetectedHeaders = data.headers || {};
-          _ccResolver = data.resolver || null;
-          _ccIsPageUrl = !!data.is_page_url;
-          _ccPageUrl = _ccIsPageUrl ? url : null;
-          statusEl.textContent = '';
-          _showDetectResult(true, data.stream_url, data.stream_type || null, data.headers, data.needs_proxy, _ccIsPageUrl, isYt, _ccResolver);
-          if (!_ccEditId && (_ccIsPageUrl || isYt)) {
-            // Page-based sources often issue short-lived or rotating URLs.
-            document.getElementById('cc-redetect-toggle').checked = true;
-          }
-          // Auto-fill name from URL if empty
-          if (!document.getElementById('cc-input-name').value.trim()) {
-            const urlParts = (isYt ? url : data.stream_url).split('/');
-            const guess = (urlParts[2] || '').replace(/^www\./, '');
-            document.getElementById('cc-input-name').value = guess;
-          }
-        } else {
-          _ccDetectedUrl = data.stream_url || null;
-          _ccDetectedType = data.stream_type || null;
-          _ccDetectedHeaders = {};
-          _ccResolver = data.resolver || null;
-          _ccIsPageUrl = !!data.is_page_url;
-          _ccPageUrl = _ccIsPageUrl ? url : null;
-          const failureDetail = data.error ? String(data.error).trim() : 'Detection failed';
-          statusEl.textContent = failureDetail;
-          const resolverLabel = _resolverLabel(_ccResolver || data.resolver, false);
-          if (resolverLabel) {
-            statusEl.textContent += ` · ${resolverLabel}`;
-          }
-          statusEl.style.color = 'var(--danger)';
-          if (data.stream_url) {
-            _showDetectResult(false, data.stream_url, data.stream_type || null, {}, false, _ccIsPageUrl, isYt, _ccResolver);
-          } else if (isYt) {
-            _showDetectResult(false, null, data.stream_type || null, {}, false, true, true, _ccResolver);
-          }
+        if (!r.ok || !data.detect_id) {
+          throw new Error(data.error || `Detect start failed (${r.status})`);
         }
+        _ccDetectJobId = data.detect_id;
+        _pollDetectStatus();
+        _ccDetectPollTimer = setInterval(_pollDetectStatus, 1000);
       } catch (e) {
-        statusEl.textContent = 'Network error: ' + e.message;
-        statusEl.style.color = 'var(--danger)';
-      } finally {
+        _clearDetectPolling();
+        _setDetectStatus('Network error: ' + e.message, 'var(--danger)', false);
         btn.disabled = false;
         btn.textContent = 'Detect';
       }
@@ -2301,9 +2423,19 @@
       resolverEl.style.display = resolverLabel ? '' : 'none';
 
       const proxyWrap = document.getElementById('cc-proxy-wrap');
+      const proxyNote = document.getElementById('cc-proxy-note');
       proxyWrap.style.display = needsProxy || hdrEntries.length ? '' : 'none';
       if (needsProxy) {
         document.getElementById('cc-proxy-toggle').checked = true;
+        if (proxyNote) {
+          proxyNote.textContent = 'This stream needed proxying for segment access in testing, so leaving this on is the safest choice.';
+        }
+      } else if (hdrEntries.length) {
+        if (proxyNote) {
+          proxyNote.textContent = 'Headers were needed for the manifest, but segment access tested without proxying. Leave this off unless playback later fails.';
+        }
+      } else if (proxyNote) {
+        proxyNote.textContent = '';
       }
 
       document.getElementById('cc-redetect-wrap').style.display = isPageUrl || isYoutube ? '' : 'none';

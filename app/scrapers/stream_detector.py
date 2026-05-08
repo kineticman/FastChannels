@@ -202,19 +202,49 @@ class DetectionResult:
 class StreamDetector:
     MAX_IFRAME_DEPTH = 3
     TIMEOUT = 12
+    DETECT_BUDGET_SECONDS = 30
+    PLAYWRIGHT_MIN_REMAINING_SECONDS = 13
+
+    def __init__(self, stage_callback=None):
+        self._stage_callback = stage_callback
+        self._last_stage: tuple[str, str | None] | None = None
+
+    def _set_stage(self, stage: str, detail: str | None = None) -> None:
+        if not self._stage_callback:
+            return
+        key = (stage, detail)
+        if key == self._last_stage:
+            return
+        self._last_stage = key
+        try:
+            self._stage_callback(stage, detail)
+        except Exception:
+            pass
 
     def detect(self, input_url: str) -> DetectionResult:
         self._candidate_resolvers: dict[str, str] = {}
         self._candidate_page_urls: dict[str, str] = {}
+        self._detect_deadline = time.perf_counter() + self.DETECT_BUDGET_SECONDS
+        self._detect_budget_hit = False
+        self._set_stage('starting', urlsplit(input_url).netloc or None)
         # Fast path for yt-dlp-native sites we know it can own cleanly.
         if _YOUTUBE_RE.match(input_url):
-            return self._resolve_youtube(input_url)
+            self._set_stage('yt-dlp', urlsplit(input_url).netloc or None)
+            try:
+                return self._resolve_youtube(input_url)
+            finally:
+                self._detect_deadline = None
         if _TWITCH_RE.match(input_url):
-            return self._resolve_twitch(input_url)
+            self._set_stage('twitch', urlsplit(input_url).netloc or None)
+            try:
+                return self._resolve_twitch(input_url)
+            finally:
+                self._detect_deadline = None
         best_failure: DetectionResult | None = None
         _p = urlsplit(input_url)
         _url_for_extractor_check = urlunsplit((_p.scheme, _p.netloc, _p.path, '', ''))
         if self._yt_dlp_has_dedicated_extractor(_url_for_extractor_check):
+            self._set_stage('yt-dlp', _url_for_extractor_check)
             result = self._resolve_yt_dlp_url(input_url)
             if result.success:
                 return result
@@ -236,11 +266,15 @@ class StreamDetector:
                 page_url = input_url
             else:
                 page_url = input_url
+                self._set_stage('fetching page', urlsplit(input_url).netloc or None)
                 candidates = self._extract_from_page(session, input_url, depth=0)
                 if not candidates:
+                    if self._detect_budget_hit:
+                        return DetectionResult(error=f'Detection timed out after {self.DETECT_BUDGET_SECONDS}s')
                     return best_failure or DetectionResult(error='No stream URL found on page or in iframes')
 
             origin = self._origin_of(page_url)
+            self._set_stage('probing candidates', urlsplit(page_url).netloc or None)
 
             for candidate in candidates:
                 candidate = self._unwrap_stream_wrapper(html.unescape(candidate))
@@ -283,6 +317,8 @@ class StreamDetector:
                         continue
                     best_failure = result
 
+            if self._detect_budget_hit:
+                return DetectionResult(error=f'Detection timed out after {self.DETECT_BUDGET_SECONDS}s')
             if best_failure:
                 if not best_failure.stream_url and candidates:
                     best_failure.stream_url = self._unwrap_stream_wrapper(html.unescape(candidates[0]))
@@ -298,8 +334,25 @@ class StreamDetector:
         except Exception as exc:
             logger.warning('[detector] unexpected error for %s: %s', input_url[:80], exc)
             return DetectionResult(error=str(exc))
+        finally:
+            self._detect_deadline = None
 
     # ------------------------------------------------------------------ helpers
+
+    def _detect_budget_remaining(self) -> float | None:
+        deadline = getattr(self, '_detect_deadline', None)
+        if deadline is None:
+            return None
+        return deadline - time.perf_counter()
+
+    def _detect_budget_exhausted(self) -> bool:
+        remaining = self._detect_budget_remaining()
+        if remaining is None:
+            return False
+        if remaining <= 0:
+            self._detect_budget_hit = True
+            return True
+        return False
 
     @staticmethod
     def _is_stream_url(url: str) -> bool:
@@ -382,9 +435,10 @@ class StreamDetector:
         depth: int,
         referer: str | None = None,
     ) -> list[str]:
-        if depth > self.MAX_IFRAME_DEPTH:
+        if depth > self.MAX_IFRAME_DEPTH or self._detect_budget_exhausted():
             return []
         try:
+            self._set_stage('fetching page', urlsplit(url).netloc or None)
             headers = {'Referer': referer} if referer else None
             r = session.get(url, timeout=self.TIMEOUT, headers=headers)
             if not r.ok:
@@ -426,6 +480,16 @@ class StreamDetector:
 
         # Custom provider APIs run before iframe recursion so they can use
         # page-local bootstrap config without brute-forcing every nested document.
+        self._set_stage('checking embedded APIs', urlsplit(url).netloc or None)
+        if self._detect_budget_exhausted():
+            return self._merge_with_iframe_candidates(
+                session,
+                url,
+                depth,
+                text,
+                hls_candidates,
+                video_candidates,
+            )
         for c in self._extract_custom_api_candidates(session, url, text):
             if '.m3u8' in c.lower():
                 if c not in hls_candidates:
@@ -433,7 +497,8 @@ class StreamDetector:
             elif c not in video_candidates:
                 video_candidates.append(c)
 
-        if not hls_candidates and not video_candidates:
+        if not hls_candidates and not video_candidates and not self._detect_budget_exhausted():
+            self._set_stage('trying browser fallback', urlsplit(url).netloc or None)
             for c in self._extract_playwright_fallback_candidates(url, text):
                 if '.m3u8' in c.lower():
                     if c not in hls_candidates:
@@ -1677,14 +1742,19 @@ class StreamDetector:
         iframe_hls: list[str] = []
         iframe_video: list[str] = []
         for m in _IFRAME_RE.finditer(text):
+            if self._detect_budget_exhausted():
+                break
             src = m.group(1).strip()
             if not src or src.startswith('javascript:') or src.startswith('about:'):
                 continue
             iframe_url = urljoin(url, html.unescape(src))
+            self._set_stage('following iframe', urlsplit(iframe_url).netloc or None)
             if _YOUTUBE_RE.match(iframe_url):
                 iframe_hls.append(iframe_url)
                 continue
             for c in self._extract_from_page(session, iframe_url, depth + 1, referer=url):
+                if self._detect_budget_exhausted():
+                    break
                 if c in hls_candidates or c in video_candidates:
                     continue
                 if '.m3u8' in c.lower():
@@ -2084,7 +2154,16 @@ class StreamDetector:
 
     def _run_playwright_candidates(self, url: str) -> list[str]:
         """Launch a headless browser for *url* and intercept any .m3u8 requests."""
+        if self._detect_budget_exhausted():
+            return []
+
+        remaining = self._detect_budget_remaining()
+        if remaining is not None and remaining < self.PLAYWRIGHT_MIN_REMAINING_SECONDS:
+            self._detect_budget_hit = True
+            return []
+
         try:
+            self._set_stage('trying browser fallback', urlsplit(url).netloc or None)
             sync_playwright = _sync_playwright()
         except Exception as exc:
             logger.debug('[detector] playwright unavailable for generic fallback: %s', exc)
@@ -2105,7 +2184,12 @@ class StreamDetector:
 
                 page.on('request', on_request)
                 page.goto(url, wait_until='domcontentloaded', timeout=30000)
-                page.wait_for_timeout(12000)
+                wait_ms = 12000
+                remaining_after_goto = self._detect_budget_remaining()
+                if remaining_after_goto is not None:
+                    wait_ms = min(wait_ms, max(0, int(remaining_after_goto * 1000)))
+                if wait_ms > 0:
+                    page.wait_for_timeout(wait_ms)
                 browser.close()
 
             for candidate in seen:
@@ -2201,6 +2285,7 @@ class StreamDetector:
         page_url: str,
         origin: str,
     ) -> DetectionResult:
+        self._set_stage('probing candidate', urlsplit(stream_url).netloc or None)
         combos: list[dict[str, str]] = [
             {},
             {'User-Agent': _BROWSER_UA},

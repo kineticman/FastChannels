@@ -55,6 +55,9 @@ _localnow_city_scraper: dict = {}  # {'scraper': LocalNowScraper, 'expires': flo
 _GRACENOTE_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$', re.I)
 _GRACENOTE_MODES = {'auto', 'manual', 'off'}
 _CUSTOM_DIRECT_SUFFIXES = ('.m3u8', '.mpd', '.mp4', '.webm', '.ts')
+_CUSTOM_DETECT_KEY_PREFIX = 'custom-detect:'
+_CUSTOM_DETECT_TTL_SECONDS = 600
+_CUSTOM_DETECT_DONE_TTL_SECONDS = 180
 
 
 def _normalize_custom_stream_type(raw_type, stream_url: str | None = None) -> str:
@@ -796,6 +799,184 @@ def list_custom_channels():
     return jsonify([ch.to_dict() for ch in channels])
 
 
+def _custom_detect_key(detect_id: str) -> str:
+    return f'{_CUSTOM_DETECT_KEY_PREFIX}{detect_id}'
+
+
+def _custom_detect_stage_text(stage: str, detail: str | None = None) -> str:
+    labels = {
+        'queued': 'Queued',
+        'starting': 'Starting detection…',
+        'yt-dlp': 'Resolving via yt-dlp…',
+        'twitch': 'Resolving Twitch…',
+        'fetching page': 'Fetching page…',
+        'checking embedded APIs': 'Checking embedded APIs…',
+        'following iframe': 'Following iframe…',
+        'trying browser fallback': 'Trying browser fallback…',
+        'probing candidate': 'Probing candidate stream…',
+        'done': 'Complete',
+        'error': 'Detection error',
+    }
+    text = labels.get(stage, stage.replace('_', ' ').strip().capitalize() if stage else 'Running…')
+    if detail:
+        return f'{text} · {detail}'
+    return text
+
+
+def _custom_detect_payload(result, elapsed_ms: int, is_page_url: bool) -> dict:
+    return {
+        'success': result.success,
+        'stream_url': result.stream_url,
+        'stream_type': result.stream_type,
+        'headers': result.headers,
+        'needs_proxy': result.needs_proxy,
+        'error': result.error,
+        'resolver': result.resolver,
+        'is_page_url': is_page_url or result.is_youtube,
+        'is_youtube': result.is_youtube,
+        'elapsed_ms': elapsed_ms,
+    }
+
+
+def _custom_detect_write_state(redis_client, detect_id: str, state: dict, ttl: int) -> None:
+    state['updated_ms'] = int(_time.time() * 1000)
+    redis_client.set(_custom_detect_key(detect_id), json.dumps(state), ex=ttl)
+
+
+def _custom_detect_run_job(redis_url: str, detect_id: str, url: str, is_page_url: bool) -> None:
+    import redis as _redis
+    from ..scrapers.stream_detector import StreamDetector
+
+    r = _redis.from_url(redis_url)
+    started_ms = int(_time.time() * 1000)
+    state = {
+        'detect_id': detect_id,
+        'status': 'running',
+        'stage': 'starting',
+        'stage_text': 'Starting detection…',
+        'detail': None,
+        'url': url,
+        'started_ms': started_ms,
+        'elapsed_ms': 0,
+        'success': False,
+        'stream_url': None,
+        'stream_type': None,
+        'headers': {},
+        'needs_proxy': False,
+        'error': None,
+        'resolver': None,
+        'is_page_url': is_page_url,
+        'is_youtube': False,
+    }
+    _custom_detect_write_state(r, detect_id, state, _CUSTOM_DETECT_TTL_SECONDS)
+
+    def report(stage: str, detail: str | None = None) -> None:
+        state['stage'] = stage
+        state['detail'] = detail
+        state['stage_text'] = _custom_detect_stage_text(stage, detail)
+        _custom_detect_write_state(r, detect_id, state, _CUSTOM_DETECT_TTL_SECONDS)
+
+    try:
+        result = StreamDetector(stage_callback=report).detect(url)
+        elapsed_ms = int(_time.time() * 1000) - started_ms
+        state.update(_custom_detect_payload(result, elapsed_ms, is_page_url))
+        state['status'] = 'done'
+        state['stage'] = 'done'
+        state['detail'] = None
+        state['stage_text'] = 'Complete' if result.success else (_custom_detect_stage_text('error') if result.error else 'Done')
+        _custom_detect_write_state(r, detect_id, state, _CUSTOM_DETECT_DONE_TTL_SECONDS)
+    except Exception as exc:
+        elapsed_ms = int(_time.time() * 1000) - started_ms
+        state.update({
+            'status': 'done',
+            'stage': 'error',
+            'stage_text': 'Detection error',
+            'detail': None,
+            'success': False,
+            'stream_url': None,
+            'stream_type': None,
+            'headers': {},
+            'needs_proxy': False,
+            'error': str(exc),
+            'resolver': None,
+            'is_youtube': False,
+            'elapsed_ms': elapsed_ms,
+        })
+        _custom_detect_write_state(r, detect_id, state, _CUSTOM_DETECT_DONE_TTL_SECONDS)
+
+
+@api_bp.route('/custom-channels/detect/start', methods=['POST'])
+def start_custom_stream_detect():
+    data = request.get_json() or {}
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'url is required'}), 400
+    if not url.startswith(('http://', 'https://')):
+        return jsonify({'error': 'URL must start with http:// or https://'}), 400
+
+    import threading
+    import uuid as _uuid
+    import redis as _redis
+    from urllib.parse import urlsplit as _us
+
+    _path = _us(url).path.lower()
+    is_page_url = not any(suffix in _path for suffix in _CUSTOM_DIRECT_SUFFIXES)
+    detect_id = _uuid.uuid4().hex
+    started_ms = int(_time.time() * 1000)
+    redis_url = current_app.config['REDIS_URL']
+    r = _redis.from_url(redis_url)
+    state = {
+        'detect_id': detect_id,
+        'status': 'queued',
+        'stage': 'queued',
+        'stage_text': 'Queued',
+        'detail': None,
+        'url': url,
+        'started_ms': started_ms,
+        'elapsed_ms': 0,
+        'success': False,
+        'stream_url': None,
+        'stream_type': None,
+        'headers': {},
+        'needs_proxy': False,
+        'error': None,
+        'resolver': None,
+        'is_page_url': is_page_url,
+        'is_youtube': False,
+    }
+    _custom_detect_write_state(r, detect_id, state, _CUSTOM_DETECT_TTL_SECONDS)
+
+    t = threading.Thread(
+        target=_custom_detect_run_job,
+        args=(redis_url, detect_id, url, is_page_url),
+        daemon=True,
+    )
+    t.start()
+    return jsonify({
+        'detect_id': detect_id,
+        'status': 'queued',
+        'status_url': f'/api/custom-channels/detect/{detect_id}',
+    })
+
+
+@api_bp.route('/custom-channels/detect/<detect_id>', methods=['GET'])
+def custom_stream_detect_status(detect_id):
+    import redis as _redis
+
+    try:
+        r = _redis.from_url(current_app.config['REDIS_URL'])
+        raw = r.get(_custom_detect_key(detect_id))
+        if not raw:
+            return jsonify({'status': 'expired', 'error': 'Detection session expired'}), 404
+        data = json.loads(raw)
+        started_ms = int(data.get('started_ms') or 0)
+        if data.get('status') == 'running' and started_ms:
+            data['elapsed_ms'] = max(0, int(_time.time() * 1000) - started_ms)
+        return jsonify(data)
+    except Exception as exc:
+        return jsonify({'status': 'error', 'error': str(exc)}), 500
+
+
 @api_bp.route('/custom-channels/detect', methods=['POST'])
 def detect_custom_stream():
     """Probe a URL (web page or direct stream) and return the working stream URL + type + headers."""
@@ -807,11 +988,14 @@ def detect_custom_stream():
         return jsonify({'error': 'URL must start with http:// or https://'}), 400
 
     from ..scrapers.stream_detector import StreamDetector
+    import time
     from urllib.parse import urlsplit as _us
     _path = _us(url).path.lower()
     is_page_url = not any(suffix in _path for suffix in _CUSTOM_DIRECT_SUFFIXES)
 
+    started_at = time.perf_counter()
     result = StreamDetector().detect(url)
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
 
     return jsonify({
         'success': result.success,
@@ -823,6 +1007,7 @@ def detect_custom_stream():
         'resolver': result.resolver,
         'is_page_url': is_page_url or result.is_youtube,
         'is_youtube': result.is_youtube,
+        'elapsed_ms': elapsed_ms,
     })
 
 
