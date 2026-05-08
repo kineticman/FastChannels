@@ -1305,12 +1305,12 @@ class RokuScraper(BaseScraper):
 
     # ── resolve ────────────────────────────────────────────────────────────────
 
-    def resolve(self, raw_url: str) -> str:
-        """
-        raw_url format: roku://{station_id}
-        Returns a live osm.sr.roku.com HLS/DASH stream URL.
-        Calls /api/v3/playback with a fresh session each time.
-        The JWT in the stream URL is short-lived so we always fetch fresh.
+    def _resolve_stream_url(self, raw_url: str, *, allow_cached_stream_url: bool) -> str:
+        """Resolve a Roku channel URL to a fresh stream URL.
+
+        Normal playback may reuse a recently cached OSM URL, but audit-time
+        checks should force a fresh playback lookup so we do not classify
+        channels as dead because an older cached URL expired.
         """
         if not raw_url.startswith("roku://"):
             return raw_url
@@ -1322,7 +1322,7 @@ class RokuScraper(BaseScraper):
         failure_stage = "cache"
 
         try:
-            cached_stream_url = self._cached_stream_url(station_id)
+            cached_stream_url = self._cached_stream_url(station_id) if allow_cached_stream_url else None
             if cached_stream_url:
                 logger.info("[roku] resolve %s via stream_url cache", station_id)
                 return cached_stream_url
@@ -1448,6 +1448,24 @@ class RokuScraper(BaseScraper):
                 need_content_details,
             )
             raise RuntimeError(f"[roku] playback request failed for {station_id}: {exc}") from exc
+
+    def audit_resolve(self, raw_url: str) -> str:
+        """Force a fresh Roku playback lookup during stream audits.
+
+        Roku stream URLs are cached for playback convenience, but audit runs
+        need to bypass that cache so an expired OSM URL does not look like a
+        dead channel.
+        """
+        return self._resolve_stream_url(raw_url, allow_cached_stream_url=False)
+
+    def resolve(self, raw_url: str) -> str:
+        """
+        raw_url format: roku://{station_id}
+        Returns a live osm.sr.roku.com HLS/DASH stream URL.
+        Calls /api/v3/playback with a fresh session each time.
+        The JWT in the stream URL is short-lived so we always fetch fresh.
+        """
+        return self._resolve_stream_url(raw_url, allow_cached_stream_url=True)
 
     # ── M3U extras ─────────────────────────────────────────────────────────────
     # FastChannels calls generate_m3u() which uses ChannelData fields.
