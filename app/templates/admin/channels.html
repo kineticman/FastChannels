@@ -729,9 +729,17 @@
     .toggle-wrap { display: flex; align-items: center; }
     .inactive-warn { font-size: 0.7rem; color: var(--warning); margin-top: 0.25rem; white-space: nowrap; cursor: pointer; }
     .inactive-warn:hover { text-decoration: underline; }
-    .btn-delete-missed { font-size: 0.65rem; padding: 0.1rem 0.35rem; margin-top: 0.2rem; background: none; border: 1px solid var(--danger, #c0392b); color: var(--danger, #c0392b); border-radius: 3px; cursor: pointer; white-space: nowrap; }
-    .btn-delete-missed:hover:not(:disabled) { background: var(--danger, #c0392b); color: #fff; }
-    .btn-delete-missed:disabled { opacity: 0.5; cursor: default; }
+    .scrape-pinned-badge { font-size: 0.7rem; color: var(--accent, #5b9bd5); margin-top: 0.25rem; white-space: nowrap; cursor: pointer; }
+    .scrape-pinned-badge:hover { text-decoration: underline; }
+    /* Missed-scrapes modal option buttons */
+    .miss-opts { display: flex; flex-direction: column; gap: 0.5rem; margin: 1rem 0 1.25rem; }
+    .miss-opt-btn { display: flex; flex-direction: column; align-items: flex-start; padding: 0.65rem 0.85rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; text-align: left; width: 100%; transition: border-color 0.15s, background 0.15s; }
+    .miss-opt-btn:hover { border-color: var(--accent-soft); background: var(--surface-3, var(--surface-2)); }
+    .miss-opt-btn .miss-opt-title { font-weight: 600; font-size: 0.9rem; color: var(--text-strong); }
+    .miss-opt-btn .miss-opt-desc { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem; }
+    .miss-opt-btn.danger { border-color: var(--danger, #c0392b); }
+    .miss-opt-btn.danger .miss-opt-title { color: var(--danger, #c0392b); }
+    .miss-opt-btn.danger:hover { background: rgba(192,57,43,0.08); }
     .toggle {
       position: relative; display: inline-block; width: 36px; height: 20px; cursor: pointer;
     }
@@ -1255,10 +1263,11 @@
           <div class="filter-group">
             <label class="filter-label" for="presence-filter">Scraper Presence</label>
             <select id="presence-filter" name="presence">
-              <option value="" {% if presence_filter not in ('active', 'inactive', 'missed', 'enabled_inactive') %}selected{% endif %}>All channels</option>
+              <option value="" {% if presence_filter not in ('active', 'inactive', 'missed', 'enabled_inactive', 'pinned') %}selected{% endif %}>All channels</option>
               <option value="active" {% if presence_filter == 'active' %}selected{% endif %}>Active (seen last scrape)</option>
               <option value="inactive" {% if presence_filter == 'inactive' %}selected{% endif %}>Inactive (missing from scrapes)</option>
               <option value="missed" {% if presence_filter == 'missed' %}selected{% endif %}>At risk (1+ missed scrapes)</option>
+              <option value="pinned" {% if presence_filter == 'pinned' %}selected{% endif %}>Pinned (scrape override)</option>
               <option value="enabled_inactive" {% if presence_filter == 'enabled_inactive' %}selected{% endif %}>Enabled but inactive</option>
             </select>
           </div>
@@ -1368,7 +1377,7 @@
       <span class="filter-chip"><strong>State</strong>{% if enabled_filter == '1' %}Enabled only{% elif enabled_filter == '0' %}Disabled only{% endif %}</span>
       {% endif %}
       {% if presence_filter %}
-      <span class="filter-chip"><strong>Presence</strong>{% if presence_filter == 'active' %}Active only{% elif presence_filter == 'inactive' %}Inactive only{% elif presence_filter == 'enabled_inactive' %}Enabled but inactive{% elif presence_filter == 'missed' %}Missed recently{% else %}{{ presence_filter }}{% endif %}</span>
+      <span class="filter-chip"><strong>Presence</strong>{% if presence_filter == 'active' %}Active only{% elif presence_filter == 'inactive' %}Inactive only{% elif presence_filter == 'enabled_inactive' %}Enabled but inactive{% elif presence_filter == 'missed' %}Missed recently{% elif presence_filter == 'pinned' %}Pinned{% else %}{{ presence_filter }}{% endif %}</span>
       {% endif %}
       {% if drm_filter %}
       <span class="filter-chip"><strong>Health</strong>{% if drm_filter == '1' %}DRM only{% elif drm_filter == 'dead' %}Dead only{% elif drm_filter == '0' %}No DRM / Dead flag{% endif %}</span>
@@ -1601,10 +1610,9 @@
                 </label>
               </div>
               {% if ch.is_enabled and not ch.is_active %}
-              <div class="inactive-warn" id="inactive-warn-{{ ch.id }}" onclick="forceReactivate({{ ch.id }})" title="Missing from recent scrapes — not currently in output. Click to force back into output until the next scrape.">not in output</div>
-              {% if ch.missed_scrapes >= 3 %}
-              <button class="btn-delete-missed" id="delete-missed-{{ ch.id }}" onclick="deleteMissedChannel({{ ch.id }}, event)" title="Permanently delete this channel — it has been absent from {{ ch.missed_scrapes }} consecutive scrapes.">Delete</button>
-              {% endif %}
+              <div class="inactive-warn" id="inactive-warn-{{ ch.id }}" onclick="openMissedModal({{ ch.id }}, '{{ ch.name|e }}', {{ ch.missed_scrapes or 0 }}, {{ 'true' if ch.scrape_pinned else 'false' }})" title="Missing from recent scrapes — click for options.">scraper lost</div>
+              {% elif ch.scrape_pinned and ch.missed_scrapes %}
+              <div class="scrape-pinned-badge" id="inactive-warn-{{ ch.id }}" onclick="openMissedModal({{ ch.id }}, '{{ ch.name|e }}', {{ ch.missed_scrapes or 0 }}, true)" title="Pinned — staying active despite {{ ch.missed_scrapes }} missed scrape{{ 's' if ch.missed_scrapes != 1 else '' }}. Click for options.">pinned ⚑</div>
               {% endif %}
             </td>
           </tr>
@@ -2913,37 +2921,103 @@
       }
     }
 
-    async function forceReactivate(channelId) {
-      const warn = document.getElementById(`inactive-warn-${channelId}`);
+    // ── Missed-scrapes modal ───────────────────────────────────────────────
+    let _missedChannelId = null;
+
+    function openMissedModal(channelId, channelName, missedCount, isPinned) {
+      _missedChannelId = channelId;
+      const modal = document.getElementById('missed-modal');
+      document.getElementById('missed-modal-title').textContent = isPinned
+        ? `${channelName} — pinned`
+        : `${channelName} — scraper lost`;
+      document.getElementById('missed-modal-sub').textContent = missedCount === 1
+        ? `Missing from 1 scrape.`
+        : `Missing from ${missedCount} consecutive scrapes.`;
+
+      const opts = document.getElementById('missed-modal-opts');
+      opts.innerHTML = '';
+
+      if (!isPinned) {
+        opts.appendChild(_missOpt(
+          'Reset',
+          'Clear miss count and restore to active. Will deactivate again if missed next scrape.',
+          false,
+          () => _missedAction({ is_enabled: true }),
+        ));
+        opts.appendChild(_missOpt(
+          'Pin (keep alive)',
+          'Keep this channel in output even if the scraper can\'t find it. Won\'t auto-remove until you unpin.',
+          false,
+          () => _missedAction({ scrape_pinned: true }),
+        ));
+      } else {
+        opts.appendChild(_missOpt(
+          'Unpin',
+          'Remove the pin. Channel will deactivate normally if missed in future scrapes.',
+          false,
+          () => _missedAction({ scrape_pinned: false }),
+        ));
+      }
+      if (missedCount >= 3) {
+        opts.appendChild(_missOpt(
+          'Delete',
+          'Permanently remove this channel from the database.',
+          true,
+          () => _missedDelete(),
+        ));
+      }
+
+      modal.classList.add('open');
+    }
+
+    function closeMissedModal() {
+      document.getElementById('missed-modal').classList.remove('open');
+      _missedChannelId = null;
+    }
+
+    function _missOpt(title, desc, isDanger, onClick) {
+      const btn = document.createElement('button');
+      btn.className = 'miss-opt-btn' + (isDanger ? ' danger' : '');
+      btn.innerHTML = `<span class="miss-opt-title">${title}</span><span class="miss-opt-desc">${desc}</span>`;
+      btn.addEventListener('click', onClick);
+      return btn;
+    }
+
+    async function _missedAction(patch) {
+      const id = _missedChannelId;
+      closeMissedModal();
+      if (!id) return;
+      const warn = document.getElementById(`inactive-warn-${id}`);
       if (warn) warn.textContent = '…';
       try {
-        const r = await fetch(`/api/channels/${channelId}`, {
+        const r = await fetch(`/api/channels/${id}`, {
           method:  'PATCH',
           headers: {'Content-Type': 'application/json'},
-          body:    JSON.stringify({is_enabled: true}),
+          body:    JSON.stringify(patch),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        if (warn) warn.remove();
-        const btn = document.getElementById(`delete-missed-${channelId}`);
-        if (btn) btn.remove();
+        const ch = await r.json();
+        if (ch.scrape_pinned && ch.missed_scrapes) {
+          if (warn) { warn.className = 'scrape-pinned-badge'; warn.textContent = 'pinned ⚑'; warn.title = `Pinned — staying active despite ${ch.missed_scrapes} missed scrape${ch.missed_scrapes !== 1 ? 's' : ''}. Click for options.`; warn.onclick = () => openMissedModal(id, ch.name, ch.missed_scrapes, true); }
+        } else {
+          if (warn) warn.remove();
+        }
       } catch (e) {
-        if (warn) warn.textContent = 'not in output';
-        console.error('Force reactivate failed:', e);
+        if (warn) warn.textContent = 'scraper lost';
+        console.error('Missed-modal action failed:', e);
       }
     }
 
-    async function deleteMissedChannel(channelId, event) {
-      event.stopPropagation();
-      const btn = document.getElementById(`delete-missed-${channelId}`);
-      if (!confirm('Permanently delete this channel from the database?')) return;
-      if (btn) { btn.disabled = true; btn.textContent = '…'; }
+    async function _missedDelete() {
+      const id = _missedChannelId;
+      closeMissedModal();
+      if (!id) return;
       try {
-        const r = await fetch(`/api/channels/${channelId}`, { method: 'DELETE' });
+        const r = await fetch(`/api/channels/${id}`, { method: 'DELETE' });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const row = document.getElementById(`row-${channelId}`);
+        const row = document.getElementById(`row-${id}`);
         if (row) row.remove();
       } catch (e) {
-        if (btn) { btn.disabled = false; btn.textContent = 'Delete'; }
         console.error('Delete channel failed:', e);
       }
     }
@@ -3291,6 +3365,17 @@
       <div style="display:flex;gap:0.75rem;justify-content:flex-end">
         <button style="padding:0.4rem 1rem;border-radius:4px;border:1px solid #555;background:#333;color:#ccc;cursor:pointer" onclick="closeReenableModal()">Cancel</button>
         <button id="reenable-confirm-btn" style="padding:0.4rem 1rem;border-radius:4px;border:none;background:#c0392b;color:#fff;cursor:pointer;font-weight:600" onclick="confirmReenable()">Re-enable</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="missed-modal" onclick="if(event.target===this)closeMissedModal()">
+    <div class="modal-box" style="max-width:400px">
+      <h2 id="missed-modal-title">Channel missing from scrapes</h2>
+      <p id="missed-modal-sub" class="modal-sub"></p>
+      <div class="miss-opts" id="missed-modal-opts"></div>
+      <div style="display:flex;justify-content:flex-end">
+        <button style="padding:0.4rem 1rem;border-radius:4px;border:1px solid #555;background:#333;color:#ccc;cursor:pointer" onclick="closeMissedModal()">Cancel</button>
       </div>
     </div>
   </div>

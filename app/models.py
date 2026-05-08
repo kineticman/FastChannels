@@ -110,6 +110,7 @@ class Channel(db.Model):
     is_duplicate      = db.Column(db.Boolean, default=False)  # set by user — manual duplicate label (does not disable)
     is_active         = db.Column(db.Boolean, default=True)   # set by scraper — channel exists upstream
     is_enabled        = db.Column(db.Boolean, default=True)   # set by user — include in M3U/EPG
+    scrape_pinned     = db.Column(db.Boolean, default=False, nullable=False)  # user override: stay active even if missed by scraper
     last_seen_at      = db.Column(db.DateTime(timezone=True), nullable=True)
     missed_scrapes    = db.Column(db.Integer, default=0, nullable=False)
     created_at        = db.Column(db.DateTime(timezone=True),
@@ -159,6 +160,7 @@ class Channel(db.Model):
             'guide_key':        self.guide_key,
             'description':      self.description,
             'is_active':        self.is_active,
+            'scrape_pinned':    bool(self.scrape_pinned),
             'disable_reason':   self.disable_reason,
             'is_duplicate':     self.is_duplicate,
             'is_enabled':       self.is_enabled,

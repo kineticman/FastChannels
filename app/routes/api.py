@@ -147,6 +147,8 @@ def _apply_channel_filters(q, filters: dict | None = None):
             q = q.filter(Channel.is_enabled == True, Channel.is_active == False)
         elif pf == 'missed':
             q = q.filter(Channel.missed_scrapes >= 1)
+        elif pf == 'pinned':
+            q = q.filter(Channel.scrape_pinned == True)
         elif pf == 'active':
             q = q.filter(Channel.is_active == True)
     if gf := filters.get('gracenote'):
@@ -1274,7 +1276,7 @@ def bulk_update_channel_gracenote():
 def update_channel(channel_id):
     ch   = Channel.query.get_or_404(channel_id)
     data = request.get_json()
-    for field in ('name', 'logo_url', 'logo_url_pinned', 'category', 'category_override', 'language', 'language_override', 'is_active', 'is_enabled', 'number', 'number_pinned', 'disable_reason', 'is_duplicate'):
+    for field in ('name', 'logo_url', 'logo_url_pinned', 'category', 'category_override', 'language', 'language_override', 'is_active', 'is_enabled', 'scrape_pinned', 'number', 'number_pinned', 'disable_reason', 'is_duplicate'):
         if field in data:
             setattr(ch, field, data[field])
     # Setting a number without explicitly managing the pin auto-pins it.
@@ -1286,6 +1288,9 @@ def update_channel(channel_id):
             ch.disable_reason = None
         ch.last_seen_at = datetime.now(timezone.utc)
         ch.missed_scrapes = 0
+    if data.get('scrape_pinned') is True and not ch.is_active:
+        ch.is_active = True
+        ch.last_seen_at = datetime.now(timezone.utc)
     if 'gracenote_id' in data or 'gracenote_mode' in data:
         try:
             _apply_gracenote_update(ch, data.get('gracenote_id'), data.get('gracenote_mode'))
@@ -1308,9 +1313,9 @@ def update_channel(channel_id):
 
 @api_bp.route('/channels/<int:channel_id>', methods=['DELETE'])
 def delete_channel(channel_id):
-    """Permanently delete a channel that has been marked inactive due to missed scrapes."""
+    """Permanently delete a channel that has been marked inactive or pinned due to missed scrapes."""
     ch = Channel.query.get_or_404(channel_id)
-    if ch.is_active:
+    if ch.is_active and not ch.scrape_pinned:
         return jsonify({'error': 'Cannot delete an active channel'}), 409
     if (ch.missed_scrapes or 0) < 3:
         return jsonify({'error': 'Channel has not exceeded the missed-scrape threshold'}), 409
@@ -2267,6 +2272,7 @@ def channel_duplicates(channel_id):
             'is_duplicate':   c.is_duplicate,
             'is_enabled':     c.is_enabled,
             'is_active':      c.is_active,
+            'scrape_pinned':  bool(c.scrape_pinned),
             'disable_reason': c.disable_reason,
             'missed_scrapes': c.missed_scrapes or 0,
             'category':       c.category,

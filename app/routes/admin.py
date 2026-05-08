@@ -365,6 +365,8 @@ def channels():
         q = q.filter(Channel.is_enabled == True, Channel.is_active == False)
     elif presence_filter == 'missed':
         q = q.filter(Channel.missed_scrapes >= 1)
+    elif presence_filter == 'pinned':
+        q = q.filter(Channel.scrape_pinned == True)
     elif presence_filter == 'active':
         q = q.filter(Channel.is_active == True)
 

@@ -1769,14 +1769,23 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 next_missed = (ch.missed_scrapes or 0) + 1
                 ch.missed_scrapes = next_missed
                 if ch.is_active and next_missed >= miss_threshold:
-                    ch.is_active = False
-                    logger.info(
-                        '[%s] marking inactive after %d missed channel scrapes: %s (%s)',
-                        source.name,
-                        next_missed,
-                        ch.name,
-                        ch.source_channel_id,
-                    )
+                    if ch.scrape_pinned:
+                        logger.info(
+                            '[%s] missed %d scrapes but scrape_pinned — keeping active: %s (%s)',
+                            source.name,
+                            next_missed,
+                            ch.name,
+                            ch.source_channel_id,
+                        )
+                    else:
+                        ch.is_active = False
+                        logger.info(
+                            '[%s] marking inactive after %d missed channel scrapes: %s (%s)',
+                            source.name,
+                            next_missed,
+                            ch.name,
+                            ch.source_channel_id,
+                        )
     db.session.flush()
     _refresh_auto_channel_numbers()
 
