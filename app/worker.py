@@ -1,6 +1,7 @@
 """
 Background worker — run with: python -m app.worker
 """
+import ctypes as _ctypes
 import logging
 import multiprocessing
 import gc
@@ -2229,6 +2230,15 @@ if __name__ == '__main__':
 
         def _install_signal_handlers(self):
             pass
+
+        def perform_job(self, job, queue, **kwargs):
+            result = super().perform_job(job, queue, **kwargs)
+            gc.collect()
+            try:
+                _ctypes.CDLL('libc.so.6').malloc_trim(0)
+            except Exception:
+                pass
+            return result
 
     def _run_fast_worker():
         r_fast = redis.from_url(flask_app.config['REDIS_URL'])
