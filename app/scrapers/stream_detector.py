@@ -104,6 +104,10 @@ _STEAM_SESSION_RE = re.compile(r'''g_sessionID\s*=\s*"([^"]+)"''', re.IGNORECASE
 _EXPLORE_LIVECAM_RE = re.compile(r'^https?://(www\.)?explore\.org/livecams(?:/|$)', re.IGNORECASE)
 _ABCNEWS_LIVE_RE = re.compile(r'^https?://(www\.)?abcnews\.com/(live|Live)(?:[?#].*)?$', re.IGNORECASE)
 _CBS_LIVE_STREAM_RE = re.compile(r'^https?://(www\.)?cbs\.com/live-tv/stream/[^/?#]+/?(?:[?#].*)?$', re.IGNORECASE)
+_STREAMSPORTS99_LIVE_RE = re.compile(
+    r'''^https?://(www\.)?streamsports99\.(?:su|tv)/live-tv/([^/?#]+?)__([^/?#]+)(?:[?#].*)?$''',
+    re.IGNORECASE,
+)
 _SHOUT_TV_LIVE_RE = re.compile(r'^https?://(www\.)?watch\.shout-tv\.com/live/\d+(?:[?#].*)?$', re.IGNORECASE)
 _NBCNEWS_WATCH_RE = re.compile(r'^https?://(www\.)?nbcnews\.com/watch(?:[?#].*)?$', re.IGNORECASE)
 _NBCNEWS_CALLLETTERS_RE = re.compile(r'''callLetters":"([^"]+)''', re.IGNORECASE)
@@ -646,6 +650,7 @@ class StreamDetector:
             self._extract_gray_quickplay_provider_candidates,
             self._extract_abcnews_provider_candidates,
             self._extract_cbs_provider_candidates,
+            self._extract_streamsports99_provider_candidates,
             self._extract_newson_provider_candidates,
             self._extract_thetvapp_provider_candidates,
             self._extract_videasy_provider_candidates,
@@ -913,6 +918,101 @@ class StreamDetector:
             if candidate.startswith('http') and candidate not in candidates:
                 candidates.append(candidate)
         return candidates
+
+    def _extract_streamsports99_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        match = _STREAMSPORTS99_LIVE_RE.match(url)
+        if not match:
+            return []
+
+        name = unquote((match.group(2) or '').strip())
+        code = unquote((match.group(3) or '').strip())
+        if not name or not code:
+            return []
+
+        player_url = (
+            'https://cdnlivetv.tv/api/v1/channels/player/'
+            f'?name={quote(name, safe="")}'
+            f'&code={quote(code, safe="")}'
+            '&user=cdnlivetv&plan=free'
+        )
+
+        stream_url = self._resolve_cdnlivetv_player_stream(player_url, url)
+        if not stream_url:
+            return []
+
+        resolvers = getattr(self, '_candidate_resolvers', None)
+        page_urls = getattr(self, '_candidate_page_urls', None)
+        if resolvers is not None:
+            resolvers.setdefault(stream_url, 'streamsports99')
+        if page_urls is not None:
+            page_urls.setdefault(stream_url, player_url)
+        return [stream_url]
+
+    def _resolve_cdnlivetv_player_stream(self, player_url: str, referer_url: str) -> str | None:
+        """
+        cdnlivetv's player page obfuscates the HLS URL behind a browser-only
+        OPlayer bootstrap. Use Playwright to intercept the player config and
+        return the actual manifest URL.
+        """
+        try:
+            sync_playwright = _sync_playwright()
+        except Exception as exc:
+            logger.debug('[detector] playwright unavailable for cdnlivetv fallback: %s', exc)
+            return None
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    extra_http_headers={
+                        'Referer': referer_url,
+                        'Origin': 'https://cdnlivetv.tv',
+                        'User-Agent': _BROWSER_UA,
+                    },
+                )
+                page = context.new_page()
+                page.add_init_script(
+                    """
+                    let __oplayer;
+                    Object.defineProperty(window, 'OPlayer', {
+                      configurable: true,
+                      get() { return __oplayer; },
+                      set(v) {
+                        __oplayer = v;
+                        try {
+                          if (v && typeof v.make === 'function') {
+                            const orig = v.make.bind(v);
+                            v.make = function(sel, cfg) {
+                              try {
+                                window.__stream_src = cfg && cfg.source && cfg.source.src ? String(cfg.source.src) : null;
+                              } catch (e) {}
+                              return orig(sel, cfg);
+                            };
+                          }
+                        } catch (e) {}
+                      },
+                    });
+                    """
+                )
+                page.goto(player_url, wait_until='load', timeout=30000)
+                try:
+                    page.wait_for_function("window.__stream_src", timeout=10000)
+                except Exception:
+                    pass
+                stream_url = page.evaluate("window.__stream_src || null")
+                browser.close()
+            if stream_url:
+                return html.unescape(str(stream_url).strip()) or None
+        except Exception as exc:
+            logger.debug('[detector] cdnlivetv player lookup failed %s: %s', player_url[:80], exc)
+            return None
+
+        return None
 
     @staticmethod
     def _gray_quickplay_jwt(payload: dict, secret: bytes) -> str:
