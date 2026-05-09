@@ -6,6 +6,7 @@ import re
 _SUPPRESS_PATTERNS = (
     'scrape-status',           # admin UI polls every 2s during scrape
     'audit-status',            # admin UI polls every 2s during audit
+    '/api/custom-channels/detect/', # stream detection status polling
     '/images/proxy',           # per-image cache hits — too noisy
     '/logos/',                 # cached logo file hits — too noisy
     '/posters/',               # cached poster file hits — too noisy

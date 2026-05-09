@@ -58,6 +58,19 @@ _VIDEO_URL_RE = re.compile(
 _IFRAME_RE = re.compile(r'''<iframe[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
 # Third-party domains that only serve ads, analytics, or tracking — never video.
 # Skipping them avoids wasting the detection budget on GTM noscript iframes etc.
+# HLS candidates intercepted by Playwright that are never the target stream —
+# typically news-ticker widgets or ad pre-rolls on pirate sports pages.
+# Each entry is (host_pattern, network_key): the candidate is suppressed only
+# when its host matches the pattern AND network_key is absent from the page host
+# (so detecting abcnews.go.com itself still works).
+_PLAYWRIGHT_FALSE_POSITIVE_HOSTS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r'^abcnews-streams\.', re.IGNORECASE), 'abcnews'),
+    (re.compile(r'^cbsn[-.]', re.IGNORECASE), 'cbsn'),
+    (re.compile(r'^nbcnews-streams\.', re.IGNORECASE), 'nbcnews'),
+    (re.compile(r'^foxnews-streams\.', re.IGNORECASE), 'foxnews'),
+    (re.compile(r'^msnbc-streams\.', re.IGNORECASE), 'msnbc'),
+]
+
 _IFRAME_SKIP_HOSTS = frozenset({
     'www.googletagmanager.com', 'googletagmanager.com',
     'www.google-analytics.com', 'google-analytics.com',
@@ -2433,10 +2446,17 @@ class StreamDetector:
                 page.add_init_script(_STEALTH_INIT_SCRIPT)
                 seen: list[str] = []
 
+                page_netloc = urlsplit(url).netloc.lower()
+
                 def _add_candidate(candidate_url: str) -> None:
                     c = candidate_url.rstrip('"\'\\')
-                    if c and c not in seen:
-                        seen.append(c)
+                    if not c or c in seen:
+                        return
+                    netloc = urlsplit(c).netloc.lower()
+                    for _pat, _key in _PLAYWRIGHT_FALSE_POSITIVE_HOSTS:
+                        if _pat.search(netloc) and _key not in page_netloc:
+                            return
+                    seen.append(c)
 
                 def on_request(req):
                     if '.m3u8' in urlsplit(req.url).path.lower():
@@ -2499,7 +2519,7 @@ class StreamDetector:
                 resolvers.setdefault(c, 'playwright fallback')
                 page_urls.setdefault(c, url)
             if seen:
-                return [seen[0]]
+                return seen
         except Exception as exc:
             logger.debug('[detector] generic playwright fallback failed %s: %s', url[:80], exc)
 
