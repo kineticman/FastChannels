@@ -56,6 +56,23 @@ _VIDEO_URL_RE = re.compile(
     re.IGNORECASE,
 )
 _IFRAME_RE = re.compile(r'''<iframe[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
+# Third-party domains that only serve ads, analytics, or tracking — never video.
+# Skipping them avoids wasting the detection budget on GTM noscript iframes etc.
+_IFRAME_SKIP_HOSTS = frozenset({
+    'www.googletagmanager.com', 'googletagmanager.com',
+    'www.google-analytics.com', 'google-analytics.com',
+    'www.googleadservices.com', 'googleadservices.com',
+    'imasdk.googleapis.com',
+    'www.doubleclick.net', 'doubleclick.net',
+    'tpc.googlesyndication.com', 'pagead2.googlesyndication.com',
+    'securepubads.g.doubleclick.net',
+    'connect.facebook.net', 'www.facebook.com',
+    'bat.bing.com',
+    'www.clarity.ms',
+    'cdn.heapanalytics.com',
+    'cdn.segment.com',
+    'cdn.amplitude.com',
+})
 _SCRIPT_SRC_RE = re.compile(r'''<script[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
 _SCRIPT_BLOCK_RE = re.compile(r'''<script\b[^>]*>(.*?)</script>''', re.IGNORECASE | re.DOTALL)
 _META_VIDEO_RE = re.compile(
@@ -1822,6 +1839,8 @@ class StreamDetector:
             if not src or src.startswith('javascript:') or src.startswith('about:'):
                 continue
             iframe_url = urljoin(url, html.unescape(src))
+            if urlsplit(iframe_url).netloc.lower() in _IFRAME_SKIP_HOSTS:
+                continue
             self._set_stage('following iframe', urlsplit(iframe_url).netloc or None)
             if _YOUTUBE_RE.match(iframe_url):
                 iframe_hls.append(iframe_url)
