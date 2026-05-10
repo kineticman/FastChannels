@@ -586,9 +586,9 @@ class PlexScraper(BaseScraper):
         today = datetime.now(timezone.utc).date()
         results: list[ProgramData] = []
         logger.info(
-            "[plex] targeted extra-day fetch starting: channels=%d days=%d workers=%d",
+            "[plex] targeted guide fetch starting: channels=%d days=%d workers=%d",
             len(guide_channels),
-            _PLEX_EXTRA_DAYS,
+            _PLEX_EXTRA_DAYS + 1,
             _PLEX_GUIDE_WORKERS,
         )
 
@@ -609,10 +609,11 @@ class PlexScraper(BaseScraper):
 
         start_t = time.monotonic()
         futures = []
-        total_tasks = len(guide_channels) * _PLEX_EXTRA_DAYS
+        n_days = _PLEX_EXTRA_DAYS + 1  # today (0) + extra days
+        total_tasks = len(guide_channels) * n_days
         done_tasks = 0
         with ThreadPoolExecutor(max_workers=_PLEX_GUIDE_WORKERS) as pool:
-            for day_offset in range(1, _PLEX_EXTRA_DAYS + 1):
+            for day_offset in range(0, _PLEX_EXTRA_DAYS + 1):
                 for ch in guide_channels:
                     futures.append(pool.submit(_fetch_one, ch, day_offset))
             for future in as_completed(futures):
@@ -625,9 +626,9 @@ class PlexScraper(BaseScraper):
                     self._progress_cb('epg', done_tasks, total_tasks)
 
         logger.info(
-            "[plex] targeted extra-day fetch complete: channels=%d days=%d programs=%d in %.1fs",
+            "[plex] targeted guide fetch complete: channels=%d days=%d programs=%d in %.1fs",
             len(guide_channels),
-            _PLEX_EXTRA_DAYS,
+            n_days,
             len(results),
             time.monotonic() - start_t,
         )
