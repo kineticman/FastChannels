@@ -83,8 +83,8 @@ _BROWSER_UA = (
 )
 
 # TTL-cache for custom channel re-detection results.
-# Key: channel.id  Value: (stream_url, headers, monotonic_timestamp)
-_CUSTOM_STREAM_CACHE: dict[int, tuple[str, dict, float]] = {}
+# Key: channel.id  Value: (stream_url, headers, monotonic_timestamp, resolver)
+_CUSTOM_STREAM_CACHE: dict[int, tuple[str, dict, float, str]] = {}
 _REDETECT_TTL = 300  # seconds
 _REDETECT_TTL_LIVE = 60  # seconds for rolling direct-video clips behind a live wrapper
 
@@ -150,7 +150,7 @@ def _resolve_videolinq_fast(vl_id: str, page_url: str) -> str | None:
     return None
 
 
-def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dict]:
+def _redetect_custom_stream_with_info(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dict, dict]:
     """
     Re-detect a custom channel's stream URL from its source page, caching the
     result for _REDETECT_TTL seconds.  Blocks in the request path, but the
@@ -160,11 +160,18 @@ def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dic
     """
     channel_id = channel.id
     now = _time.monotonic()
+    started = now
     cached = _CUSTOM_STREAM_CACHE.get(channel_id)
     if cached:
-        cached_url, cached_hdrs, fetched_at = cached
+        cached_url, cached_hdrs, fetched_at = cached[:3]
+        cached_resolver = cached[3] if len(cached) > 3 else 'unknown'
         if now - fetched_at < ttl:
-            return cached_url, cached_hdrs
+            return cached_url, cached_hdrs, {
+                'path': 'cache',
+                'resolver': cached_resolver,
+                'elapsed_ms': int((_time.monotonic() - started) * 1000),
+                'cache_age_s': int(now - fetched_at),
+            }
 
     from ..extensions import db as _db
 
@@ -176,9 +183,13 @@ def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dic
     if vl_id and channel.page_url:
         hls_url = _resolve_videolinq_fast(vl_id, channel.page_url)
         if hls_url:
-            _CUSTOM_STREAM_CACHE[channel_id] = (hls_url, {}, now)
+            _CUSTOM_STREAM_CACHE[channel_id] = (hls_url, {}, now, 'videolinq')
             logger.info('[custom-redetect] videolinq fast path for %s → %s…', vl_id, hls_url[:60])
-            return hls_url, {}
+            return hls_url, {}, {
+                'path': 'provider-fast',
+                'resolver': 'videolinq',
+                'elapsed_ms': int((_time.monotonic() - started) * 1000),
+            }
         logger.warning('[custom-redetect] videolinq fast path failed for %s, falling back to full detect', vl_id)
 
     from ..scrapers.stream_detector import StreamDetector
@@ -188,7 +199,8 @@ def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dic
     if result.success and result.stream_url:
         stream_url = result.stream_url
         headers = result.headers or {}
-        _CUSTOM_STREAM_CACHE[channel_id] = (stream_url, headers, now)
+        resolver = result.resolver or 'detector'
+        _CUSTOM_STREAM_CACHE[channel_id] = (stream_url, headers, now, resolver)
         detected_type = result.stream_type or channel.stream_type
         # Persist provider metadata alongside headers; _-prefixed keys are
         # internal only and stripped before any upstream HTTP request.
@@ -208,11 +220,53 @@ def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dic
             except Exception as e:
                 logger.warning('[custom-redetect] DB update failed for channel %d: %s', channel_id, e)
                 _db.session.rollback()
-        return stream_url, headers
+        return stream_url, headers, {
+            'path': 'detect',
+            'resolver': resolver,
+            'elapsed_ms': int((_time.monotonic() - started) * 1000),
+            'stream_type': detected_type,
+        }
 
     logger.warning('[custom-redetect] detection failed for channel %d (%s): %s',
                    channel_id, (page_url or '')[:80], result.error)
-    return channel.stream_url or '', stored_hdrs
+    return channel.stream_url or '', stored_hdrs, {
+        'path': 'detect-failed',
+        'resolver': result.resolver or 'detector',
+        'elapsed_ms': int((_time.monotonic() - started) * 1000),
+        'error': result.error,
+    }
+
+
+def _redetect_custom_stream(channel, ttl: int = _REDETECT_TTL) -> tuple[str, dict]:
+    stream_url, headers, _info = _redetect_custom_stream_with_info(channel, ttl=ttl)
+    return stream_url, headers
+
+
+def _log_custom_play_path(
+    *,
+    client_ip: str,
+    channel,
+    channel_id: str,
+    lookup: dict,
+    resolved_url: str,
+    redirect_kind: str,
+) -> None:
+    logger.info(
+        '[play] custom path ip=%s channel_id=%s channel_name=%s lookup=%s resolver=%s elapsed_ms=%s '
+        'cache_age_s=%s stream_type=%s headers=%s proxy_segments=%s redirect=%s url=%s',
+        client_ip,
+        channel_id,
+        channel.name,
+        lookup.get('path') or 'stored',
+        lookup.get('resolver') or '-',
+        lookup.get('elapsed_ms'),
+        lookup.get('cache_age_s'),
+        (channel.stream_type or '-'),
+        bool(channel.custom_headers),
+        bool(getattr(channel, 'proxy_segments', False)),
+        redirect_kind,
+        (resolved_url or '')[:80],
+    )
 
 def _client_ip() -> str:
     forwarded = (request.headers.get('X-Forwarded-For') or '').strip()
@@ -900,8 +954,9 @@ def play(source_name: str, channel_id: str):
 
     # Custom channels with a page_url: re-detect the stream URL at play time
     # (TTL-cached so the page fetch only runs once per 5 minutes).
+    custom_lookup = {'path': 'stored', 'resolver': '-', 'elapsed_ms': 0}
     if source_name == 'custom' and channel.page_url:
-        fresh_url, custom_headers = _redetect_custom_stream(channel)
+        fresh_url, custom_headers, custom_lookup = _redetect_custom_stream_with_info(channel)
         if fresh_url:
             resolved_url = fresh_url
     else:
@@ -916,6 +971,14 @@ def play(source_name: str, channel_id: str):
             if getattr(channel, 'proxy_segments', False) or has_proxy_headers:
                 from urllib.parse import quote as _quote
                 encoded_id = _quote(channel.source_channel_id, safe='')
+                _log_custom_play_path(
+                    client_ip=client_ip,
+                    channel=channel,
+                    channel_id=channel_id,
+                    lookup=custom_lookup,
+                    resolved_url=resolved_url,
+                    redirect_kind='hls-proxy',
+                )
                 return redirect(
                     f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/proxy.m3u8",
                     302,
@@ -924,18 +987,38 @@ def play(source_name: str, channel_id: str):
             if has_proxy_headers:
                 from urllib.parse import quote as _quote
                 encoded_id = _quote(channel.source_channel_id, safe='')
+                _log_custom_play_path(
+                    client_ip=client_ip,
+                    channel=channel,
+                    channel_id=channel_id,
+                    lookup=custom_lookup,
+                    resolved_url=resolved_url,
+                    redirect_kind='direct-proxy',
+                )
                 return redirect(
                     f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/direct",
                     302,
                 )
-            logger.info(
-                '[play] direct mp4 passthrough ip=%s source=%s channel_id=%s channel_name=%s → %s',
-                client_ip, source_name, channel_id, channel.name, resolved_url[:80],
+            _log_custom_play_path(
+                client_ip=client_ip,
+                channel=channel,
+                channel_id=channel_id,
+                lookup=custom_lookup,
+                resolved_url=resolved_url,
+                redirect_kind='direct-mp4',
             )
             return redirect(resolved_url, 302)
         else:
             from urllib.parse import quote as _quote
             encoded_id = _quote(channel.source_channel_id, safe='')
+            _log_custom_play_path(
+                client_ip=client_ip,
+                channel=channel,
+                channel_id=channel_id,
+                lookup=custom_lookup,
+                resolved_url=resolved_url,
+                redirect_kind='synthetic-live',
+            )
             return redirect(
                 f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/live.m3u8",
                 302,
@@ -946,6 +1029,14 @@ def play(source_name: str, channel_id: str):
     if source_name == 'custom' and (getattr(channel, 'proxy_segments', False) or custom_headers):
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
+        _log_custom_play_path(
+            client_ip=client_ip,
+            channel=channel,
+            channel_id=channel_id,
+            lookup=custom_lookup,
+            resolved_url=resolved_url,
+            redirect_kind='proxy',
+        )
         return redirect(
             f"{request.host_url.rstrip('/')}/play/custom/{encoded_id}/proxy.m3u8",
             302,
@@ -1005,4 +1096,13 @@ def play(source_name: str, channel_id: str):
         '[play] redirect ip=%s source=%s channel_id=%s channel_name=%s → %s',
         client_ip, source_name, channel_id, channel.name, resolved_url[:80],
     )
+    if source_name == 'custom':
+        _log_custom_play_path(
+            client_ip=client_ip,
+            channel=channel,
+            channel_id=channel_id,
+            lookup=custom_lookup,
+            resolved_url=resolved_url,
+            redirect_kind='direct',
+        )
     return redirect(resolved_url, 302)
