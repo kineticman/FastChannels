@@ -200,6 +200,13 @@ _EARTHCAM_VIDEO_EMBED_RE = re.compile(r'''(?:https?:)?//[^'"\s>]+?/js/video/embe
 _TVPASS_CHANNEL_RE = re.compile(r'^https?://(www\.)?tvpass\.org/channel/([^/?#]+)', re.IGNORECASE)
 _VIDEOLINQ_PAGE_RE = re.compile(r'^https?://control\.videolinq\.com/public/([A-Za-z0-9_-]+)', re.IGNORECASE)
 _VIDEOLINQ_IFRAME_RE = re.compile(r'''https?://control\.videolinq\.com/public/([A-Za-z0-9_-]+)''', re.IGNORECASE)
+_LIGHTCAST_PLAYER_PAGE_RE = re.compile(r'''/player/(\d+)(?:/(\d+))?''', re.IGNORECASE)
+_LIGHTCAST_PLAYER_URL_RE = re.compile(
+    r'''https?:\\?/\\?/www\.lightcast\.com\\?/embed\\?/player\.php[^"'<>\s]+''',
+    re.IGNORECASE,
+)
+_LIGHTCAST_CONFIG_URL_RE = re.compile(r'''var\s+configUrl\s*=\s*['"]([^'"]+)['"]''', re.IGNORECASE)
+_LIGHTCAST_FILE_RE = re.compile(r'''file\s*:\s*["']([^"']+)["']''', re.IGNORECASE)
 
 _YOUTUBE_RE = re.compile(
     r'^https?://(www\.)?(youtube\.com/(watch|live|embed/|@|channel|user|c/|shorts/)|youtu\.be/)',
@@ -341,8 +348,11 @@ class StreamDetector:
                 page_url = input_url
             else:
                 page_url = input_url
-                self._set_stage('fetching page', urlsplit(input_url).netloc or None)
-                candidates = self._extract_from_page(session, input_url, depth=0)
+                self._set_stage('checking embedded APIs', urlsplit(input_url).netloc or None)
+                candidates = self._extract_lightcast_provider_candidates(session, input_url, '')
+                if not candidates:
+                    self._set_stage('fetching page', urlsplit(input_url).netloc or None)
+                    candidates = self._extract_from_page(session, input_url, depth=0)
                 if not candidates:
                     if self._detect_budget_hit:
                         return DetectionResult(error=f'Detection timed out after {self.DETECT_BUDGET_SECONDS}s')
@@ -598,12 +608,16 @@ class StreamDetector:
                 hls_candidates,
                 video_candidates,
             )
-        for c in self._extract_custom_api_candidates(session, url, text):
+        custom_candidates = self._extract_custom_api_candidates(session, url, text)
+        for c in custom_candidates:
             if '.m3u8' in c.lower():
                 if c not in hls_candidates:
                     hls_candidates.append(c)
             elif c not in video_candidates:
                 video_candidates.append(c)
+
+        if any(self._is_playable_provider_candidate(c) for c in custom_candidates):
+            return hls_candidates + video_candidates
 
         if not hls_candidates and not video_candidates and not self._detect_budget_exhausted():
             self._set_stage('trying browser fallback', urlsplit(url).netloc or None)
@@ -660,6 +674,7 @@ class StreamDetector:
         candidates: list[str] = []
 
         for extractor in (
+            self._extract_lightcast_provider_candidates,
             self._extract_gray_quickplay_provider_candidates,
             self._extract_abcnews_provider_candidates,
             self._extract_cbs_provider_candidates,
@@ -688,6 +703,142 @@ class StreamDetector:
                 if c not in candidates:
                     candidates.append(c)
                     self._candidate_resolvers.setdefault(c, 'custom api')
+
+        return candidates
+
+    @staticmethod
+    def _is_playable_provider_candidate(candidate: str) -> bool:
+        if _YOUTUBE_RE.match(candidate) or _TWITCH_RE.match(candidate):
+            return True
+        stream_type = StreamDetector.infer_stream_type(candidate)
+        return stream_type in {'hls', 'dash', 'mpegts', 'mp4', 'webm', 'mov', 'mkv', 'direct'}
+
+    def _extract_lightcast_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        player_urls = self._lightcast_player_urls(url, text)
+        if not player_urls:
+            return []
+
+        candidates: list[str] = []
+        headers = {'User-Agent': _BROWSER_UA}
+
+        for player_url in player_urls:
+            try:
+                player_resp = session.get(
+                    player_url,
+                    timeout=self.TIMEOUT,
+                    headers={**headers, 'Referer': url},
+                )
+                if not player_resp.ok:
+                    continue
+
+                config_match = _LIGHTCAST_CONFIG_URL_RE.search(player_resp.text)
+                if not config_match:
+                    continue
+                config_url = urljoin(player_url, html.unescape(config_match.group(1)))
+                config_resp = session.get(
+                    config_url,
+                    timeout=self.TIMEOUT,
+                    headers={**headers, 'Referer': player_url},
+                )
+                if not config_resp.ok:
+                    continue
+
+                for candidate in self._lightcast_candidates_from_config(
+                    session,
+                    config_url,
+                    player_url,
+                    config_resp.text,
+                ):
+                    if candidate not in candidates:
+                        candidates.append(candidate)
+                        self._candidate_resolvers.setdefault(candidate, 'lightcast')
+                        self._candidate_page_urls.setdefault(candidate, player_url)
+            except Exception as exc:
+                logger.debug('[detector] lightcast lookup failed %s: %s', player_url[:80], exc)
+
+        return candidates
+
+    def _lightcast_player_urls(self, url: str, text: str) -> list[str]:
+        urls: list[str] = []
+        parsed = urlsplit(url)
+
+        if parsed.netloc.lower() == 'www.lightcast.com' and parsed.path == '/embed/player.php':
+            urls.append(url)
+
+        target_ids: set[str] = set()
+        page_match = _LIGHTCAST_PLAYER_PAGE_RE.search(parsed.path)
+        if page_match:
+            target_ids.update(part for part in page_match.groups() if part)
+
+        if target_ids and parsed.netloc.lower() != 'www.lightcast.com':
+            for target_id in sorted(target_ids):
+                urls.append(
+                    'https://www.lightcast.com/embed/player.php?'
+                    f'id={target_id}&type=live&multiBitrate=1&from_site=WebApp&site=webapp'
+                )
+
+        decoded_text = html.unescape(text).replace('\\/', '/')
+        for match in _LIGHTCAST_PLAYER_URL_RE.finditer(decoded_text):
+            player_url = match.group(0).rstrip('"\'\\')
+            try:
+                player_id = (parse_qs(urlsplit(player_url).query).get('id') or [''])[0]
+            except Exception:
+                player_id = ''
+            if target_ids and player_id not in target_ids:
+                continue
+            if player_url not in urls:
+                urls.append(player_url)
+
+        return urls[:6]
+
+    def _lightcast_candidates_from_config(
+        self,
+        session: requests.Session,
+        config_url: str,
+        player_url: str,
+        text: str,
+    ) -> list[str]:
+        candidates: list[str] = []
+        decoded_text = html.unescape(text).replace('\\/', '/')
+
+        for match in _M3U8_RE.finditer(decoded_text):
+            candidate = match.group(0).rstrip('"\'\\')
+            if candidate not in candidates:
+                candidates.append(candidate)
+
+        for match in _LIGHTCAST_FILE_RE.finditer(decoded_text):
+            file_url = html.unescape(match.group(1)).replace('\\/', '/').rstrip('"\'\\')
+            if not file_url:
+                continue
+            if '.m3u8' in urlsplit(file_url).path.lower():
+                candidate = urljoin(config_url, file_url)
+                if candidate not in candidates:
+                    candidates.append(candidate)
+                continue
+            if 'playlist_m3u8' not in file_url.lower():
+                continue
+
+            wrapper_url = urljoin(config_url, file_url)
+            try:
+                wrapper_resp = session.get(
+                    wrapper_url,
+                    timeout=self.TIMEOUT,
+                    headers={'User-Agent': _BROWSER_UA, 'Referer': player_url},
+                )
+                if not wrapper_resp.ok or '#EXTM3U' not in wrapper_resp.text:
+                    continue
+                wrapper_text = html.unescape(wrapper_resp.text).replace('\\/', '/')
+                for m3u8_match in _M3U8_RE.finditer(wrapper_text):
+                    candidate = m3u8_match.group(0).rstrip('"\'\\')
+                    if candidate not in candidates:
+                        candidates.append(candidate)
+            except Exception as exc:
+                logger.debug('[detector] lightcast playlist fetch failed %s: %s', wrapper_url[:80], exc)
 
         return candidates
 
