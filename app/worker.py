@@ -1367,6 +1367,9 @@ def run_channel_auto_disable(channel_id: int, reason: str):
             return
         if not ch.is_active and not ch.is_enabled and ch.disable_reason == reason:  # exact match is fine; reason already includes DRM type
             return
+        ch_name = ch.name
+        ch_source_name = ch.source.name if ch.source else '?'
+        ch_source_channel_id = ch.source_channel_id
         ch.is_active = False
         ch.is_enabled = False
         ch.disable_reason = reason
@@ -1383,9 +1386,9 @@ def run_channel_auto_disable(channel_id: int, reason: str):
         logger.warning(
             '[play] %s detected — auto-disabled channel %s (%s/%s)',
             reason,
-            ch.name,
-            ch.source.name if ch.source else '?',
-            ch.source_channel_id,
+            ch_name,
+            ch_source_name,
+            ch_source_channel_id,
         )
 
 
