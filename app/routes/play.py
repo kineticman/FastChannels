@@ -251,7 +251,8 @@ def _log_custom_play_path(
     resolved_url: str,
     redirect_kind: str,
 ) -> None:
-    logger.info(
+    log = logger.debug if lookup.get('path') == 'cache' else logger.info
+    log(
         '[play] custom path ip=%s channel_id=%s channel_name=%s lookup=%s resolver=%s elapsed_ms=%s '
         'cache_age_s=%s stream_type=%s headers=%s proxy_segments=%s redirect=%s url=%s',
         client_ip,
@@ -901,7 +902,9 @@ def play(source_name: str, channel_id: str):
         logger.warning('[play] request ip=%s unknown channel %s/%s', client_ip, source_name, channel_id)
         abort(404)
 
-    logger.info(
+    # Custom channels log full detail (incl. cache/resolver) via _log_custom_play_path
+    _log_play_req = logger.debug if source_name == 'custom' else logger.info
+    _log_play_req(
         '[play] request ip=%s source=%s channel_id=%s channel_name=%s',
         client_ip, source_name, channel_id, channel.name,
     )
