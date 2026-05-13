@@ -337,17 +337,6 @@ class StreamDetector:
                 if not result.resolver:
                     result.resolver = 'bigo'
                 return result
-        if _NIMO_PAGE_RE.match(input_url):
-            self._set_stage('trying browser fallback', urlsplit(input_url).netloc or None)
-            nimo_candidates = self._extract_nimo_provider_candidates(input_url)
-            if nimo_candidates:
-                with requests.Session() as _s:
-                    _s.headers.update({'User-Agent': _BROWSER_UA})
-                    result = self._probe(_s, nimo_candidates[0], input_url, self._origin_of(input_url))
-                if not result.resolver:
-                    result.resolver = 'nimo'
-                return result
-            return DetectionResult(error='No live stream found on nimo.tv page (stream may be offline)')
         if _TWITCH_RE.match(input_url):
             self._set_stage('twitch', urlsplit(input_url).netloc or None)
             try:
@@ -957,6 +946,24 @@ class StreamDetector:
 
                 page.on('request', on_request)
                 page.goto(url, wait_until='domcontentloaded', timeout=30000)
+
+                # Give the SPA time to mount and initialise the player.
+                page.wait_for_timeout(4000)
+
+                if not slice_url:
+                    # Force-play all video elements with muted=true so the
+                    # browser's autoplay policy allows it without a user gesture.
+                    try:
+                        page.evaluate(
+                            """() => {
+                                document.querySelectorAll('video').forEach(v => {
+                                    v.muted = true;
+                                    v.play().catch(() => {});
+                                });
+                            }"""
+                        )
+                    except Exception:
+                        pass
 
                 # Poll up to 20s for the player to start fetching slice segments.
                 for _ in range(20):
