@@ -200,10 +200,16 @@ _EARTHCAM_VIDEO_EMBED_RE = re.compile(r'''(?:https?:)?//[^'"\s>]+?/js/video/embe
 _TVPASS_CHANNEL_RE = re.compile(r'^https?://(www\.)?tvpass\.org/channel/([^/?#]+)', re.IGNORECASE)
 _BIGO_PAGE_RE = re.compile(r'^https?://(?:www\.)?bigo\.tv/(?:[a-z]{2}/)?(\d+)(?:[/?#]|$)', re.IGNORECASE)
 _NIMO_PAGE_RE = re.compile(r'^https?://(?:www\.)?nimo\.tv/([^/?#]+)(?:[/?#]|$)', re.IGNORECASE)
-# Matches al-slice.nimo.tv, tx-slice.nimo.tv, ws-slice.nimo.tv → prefix for HLS host substitution
-_NIMO_SLICE_HOST_RE = re.compile(r'^([a-z]+)-slice\.nimo\.tv$', re.IGNORECASE)
-# Strips the quality/uid/seqid suffix (_410_0_81) and .slice extension from the CDN path
-_NIMO_SLICE_PATH_RE = re.compile(r'^(/live/.+?)(?:_\d+){2,4}\.slice$', re.IGNORECASE)
+# anchorId and roomId embedded as SSR JSON in the nimo.tv room page HTML
+_NIMO_ANCHOR_ID_RE = re.compile(r'"anchorId"\s*:\s*(\d{10,})')
+_NIMO_ROOM_ID_RE = re.compile(r'"roomId"\s*:\s*(\d{6,})')
+# Stream name pattern: su{anchorId}r{32-char-hex} — appears in liveScreenshot URLs
+_NIMO_WS_STREAM_NAME_RE = re.compile(rb'su\d{10,}r[a-f0-9]{20,}')
+# Static signing fm key for ctype=nimo_web/appid=81 (from hysdkd.js — DWq8BcJ3h6DJt6TY_$0_$1_$2_$3)
+_NIMO_FM_ENCODED = 'RFdxOEJjSjNoNkRKdDZUWV8kMF8kMV8kMl8kMw=='
+_NIMO_FM_DECODED = base64.b64decode(_NIMO_FM_ENCODED).decode()  # DWq8BcJ3h6DJt6TY_$0_$1_$2_$3
+# AES-128-CBC key/IV for api.nimo.tv encrypted endpoints (keyType=2)
+_NIMO_AES_KEY = b'cuFxxDSU9MCv8qdH'
 _VIDEOLINQ_PAGE_RE = re.compile(r'^https?://control\.videolinq\.com/public/([A-Za-z0-9_-]+)', re.IGNORECASE)
 _VIDEOLINQ_IFRAME_RE = re.compile(r'''https?://control\.videolinq\.com/public/([A-Za-z0-9_-]+)''', re.IGNORECASE)
 _LIGHTCAST_PLAYER_PAGE_RE = re.compile(r'''/player/(\d+)(?:/(\d+))?''', re.IGNORECASE)
@@ -287,6 +293,23 @@ class DetectionResult:
     opaque_id: str | None = None  # e.g. 'videolinq://<id>' for fast re-resolution
 
 
+def _nimo_aes_encrypt(plaintext: str) -> str | None:
+    """AES-128-CBC encrypt plaintext with nimo.tv's keyType=2 key, return uppercase hex."""
+    try:
+        try:
+            from Cryptodome.Cipher import AES as _AES
+            from Cryptodome.Util.Padding import pad as _pad
+        except ImportError:
+            from Crypto.Cipher import AES as _AES  # type: ignore[no-redef]
+            from Crypto.Util.Padding import pad as _pad  # type: ignore[no-redef]
+        ct = _AES.new(_NIMO_AES_KEY, _AES.MODE_CBC, _NIMO_AES_KEY).encrypt(
+            _pad(plaintext.encode(), 16)
+        )
+        return ct.hex().upper()
+    except Exception:
+        return None
+
+
 class StreamDetector:
     MAX_IFRAME_DEPTH = 3
     TIMEOUT = 12
@@ -337,6 +360,17 @@ class StreamDetector:
                 if not result.resolver:
                     result.resolver = 'bigo'
                 return result
+        if _NIMO_PAGE_RE.match(input_url):
+            self._set_stage('checking embedded APIs', urlsplit(input_url).netloc or None)
+            nimo_candidates = self._extract_nimo_provider_candidates(input_url)
+            if nimo_candidates:
+                with requests.Session() as _s:
+                    _s.headers.update({'User-Agent': _BROWSER_UA})
+                    result = self._probe(_s, nimo_candidates[0], input_url, self._origin_of(input_url))
+                if not result.resolver:
+                    result.resolver = 'nimo'
+                return result
+            return DetectionResult(error='No live stream found on nimo.tv page (stream may be offline)')
         if _TWITCH_RE.match(input_url):
             self._set_stage('twitch', urlsplit(input_url).netloc or None)
             try:
@@ -902,99 +936,102 @@ class StreamDetector:
 
     def _extract_nimo_provider_candidates(self, url: str) -> list[str]:
         """
-        Nimo.tv serves video via a proprietary binary .slice CDN format (not HLS).
-        The site also has HLS CDN endpoints (al.hls.nimo.tv) that use the same
-        wsSecret auth as the slice CDN.  We use Playwright to intercept a live
-        .slice request, then swap the host and strip the quality suffix to build
-        the matching HLS URL.
+        Nimo.tv (Huya's international platform).
+
+        Flow:
+        1. Fetch the channel page SSR JSON to get anchorId, roomId, liveStreamStatus.
+        2. POST to api.nimo.tv batchLiveRoomInfo (AES-128-CBC encrypted body) with
+           the roomId.  The response liveRoomViewList[0].liveScreenshot URL embeds
+           the stream name: su{anchorId}r{32-char-hex}.
+        3. Compute a fresh wsSecret using the static nimo_web signing key discovered
+           in hysdkd.js:
+             fm_decoded = base64("DWq8BcJ3h6DJt6TY_$0_$1_$2_$3")
+             seqid = uid + Date.now()    [uid = random uint32 for anonymous viewer]
+             wsSecret = MD5(fm_decoded.replace($0→uid, $1→stream_name, $2→seqid, $3→wsTime))
+        4. Return HLS URL: https://al.hls.nimo.tv/live/{stream_name}.m3u8?{anti_code}
         """
         if not _NIMO_PAGE_RE.match(url):
             return []
+
+        # --- Step 1: page SSR JSON → anchorId, roomId, live status ---
         try:
-            sync_playwright = _sync_playwright()
+            r = requests.get(url, headers={'User-Agent': _BROWSER_UA}, timeout=self.TIMEOUT)
+            if not r.ok:
+                return []
+            html_text = r.text
+            anchor_m = _NIMO_ANCHOR_ID_RE.search(html_text)
+            room_m = _NIMO_ROOM_ID_RE.search(html_text)
+            if not anchor_m or not room_m:
+                logger.debug('[detector] nimo: anchorId/roomId not found for %s', url[:60])
+                return []
+            room_id = room_m.group(1)
+            status_m = re.search(r'"liveStreamStatus"\s*:\s*(\d+)', html_text)
+            if status_m and status_m.group(1) != '1':
+                logger.debug('[detector] nimo: stream offline (status=%s) for %s',
+                             status_m.group(1), url[:60])
+                return []
         except Exception as exc:
-            logger.debug('[detector] playwright unavailable for nimo: %s', exc)
+            logger.debug('[detector] nimo: page fetch failed for %s: %s', url[:60], exc)
             return []
 
-        slice_url: str | None = None
+        # --- Step 2: batchLiveRoomInfo → stream name from liveScreenshot ---
         try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=[
-                        '--disable-blink-features=AutomationControlled',
-                        '--no-sandbox',
-                        '--disable-setuid-sandbox',
-                    ],
-                )
-                context = browser.new_context(
-                    viewport={'width': 1920, 'height': 1080},
-                    user_agent=_BROWSER_UA,
-                    locale='en-US',
-                    timezone_id='America/New_York',
-                )
-                page = context.new_page()
-                page.add_init_script(_STEALTH_INIT_SCRIPT)
-
-                def on_request(req):
-                    nonlocal slice_url
-                    if slice_url:
-                        return
-                    parsed = urlsplit(req.url)
-                    if _NIMO_SLICE_HOST_RE.match(parsed.netloc) and parsed.path.endswith('.slice'):
-                        slice_url = req.url
-
-                page.on('request', on_request)
-                page.goto(url, wait_until='domcontentloaded', timeout=30000)
-
-                # Give the SPA time to mount and initialise the player.
-                page.wait_for_timeout(4000)
-
-                if not slice_url:
-                    # Force-play all video elements with muted=true so the
-                    # browser's autoplay policy allows it without a user gesture.
-                    try:
-                        page.evaluate(
-                            """() => {
-                                document.querySelectorAll('video').forEach(v => {
-                                    v.muted = true;
-                                    v.play().catch(() => {});
-                                });
-                            }"""
-                        )
-                    except Exception:
-                        pass
-
-                # Poll up to 20s for the player to start fetching slice segments.
-                for _ in range(20):
-                    page.wait_for_timeout(1000)
-                    if slice_url:
-                        break
-
-                browser.close()
+            body_enc = _nimo_aes_encrypt(
+                '{"requestSource":"WEB","udbDeviceType":"WEB","deviceType":7,'
+                '"version":"1.0.5","userId":0}'
+            )
+            if body_enc is None:
+                logger.debug('[detector] nimo: AES unavailable')
+                return []
+            api_url = (f'https://api.nimo.tv/oversea/nimo/api/v2/liveRoom'
+                       f'/batchLiveRoomInfo/US/{room_id}/1033')
+            r2 = requests.post(
+                api_url,
+                data={'keyType': '2', 'body': body_enc},
+                headers={'User-Agent': _BROWSER_UA,
+                         'Origin': 'https://www.nimo.tv',
+                         'Referer': 'https://www.nimo.tv/'},
+                timeout=self.TIMEOUT,
+            )
+            if not r2.ok:
+                logger.debug('[detector] nimo: batchLiveRoomInfo HTTP %s', r2.status_code)
+                return []
+            views = (r2.json().get('data') or {}).get('result', {}).get('liveRoomViewList', [])
+            if not views:
+                logger.debug('[detector] nimo: no live room data for roomId=%s', room_id)
+                return []
+            screenshot = views[0].get('liveScreenshot', '')
+            stream_m = _NIMO_WS_STREAM_NAME_RE.search(screenshot.encode())
+            if not stream_m:
+                logger.debug('[detector] nimo: stream name not in liveScreenshot for %s', url[:60])
+                return []
+            stream_name = stream_m.group(0).decode()
         except Exception as exc:
-            logger.debug('[detector] nimo playwright failed for %s: %s', url[:80], exc)
+            logger.debug('[detector] nimo: batchLiveRoomInfo error for %s: %s', url[:60], exc)
             return []
 
-        if not slice_url:
-            logger.debug('[detector] nimo: no slice URL captured for %s', url[:80])
+        # --- Step 3: compute fresh anti-code ---
+        try:
+            import random as _random
+            uid = _random.randint(0, 0xffffffff)
+            ts_ms = int(time.time() * 1000)
+            seqid = uid + ts_ms
+            ws_time = format(int(time.time()), 'x')
+            fm_input = (_NIMO_FM_DECODED
+                        .replace('$0', str(uid))
+                        .replace('$1', stream_name)
+                        .replace('$2', str(seqid))
+                        .replace('$3', ws_time))
+            ws_secret = hashlib.md5(fm_input.encode()).hexdigest()
+            anti_code = (f'wsSecret={ws_secret}&wsTime={ws_time}&seqid={seqid}'
+                         f'&ctype=nimo_web&appid=81&u={uid}&t=110&sv=2601201125'
+                         f'&fm={_NIMO_FM_ENCODED}')
+        except Exception as exc:
+            logger.debug('[detector] nimo: anti-code computation failed: %s', exc)
             return []
 
-        # Convert slice URL → HLS URL.
-        # al-slice.nimo.tv/live/suIDhash_410_0_81.slice
-        #   → al.hls.nimo.tv/live/suIDhash.m3u8  (same query params)
-        parsed = urlsplit(slice_url)
-        m_host = _NIMO_SLICE_HOST_RE.match(parsed.netloc)
-        m_path = _NIMO_SLICE_PATH_RE.match(parsed.path)
-        if not m_host or not m_path:
-            logger.debug('[detector] nimo: unexpected slice URL format: %s', slice_url[:120])
-            return []
-
-        hls_host = f"{m_host.group(1)}.hls.nimo.tv"
-        hls_path = f"{m_path.group(1)}.m3u8"
-        hls_url = urlunsplit((parsed.scheme, hls_host, hls_path, parsed.query, ''))
-
-        logger.debug('[detector] nimo: converted slice → HLS: %s', hls_url[:120])
+        hls_url = f'https://al.hls.nimo.tv/live/{stream_name}.m3u8?{anti_code}'
+        logger.info('[detector] nimo: stream %s → %s', stream_name, hls_url[:100])
         self._candidate_resolvers.setdefault(hls_url, 'nimo')
         self._candidate_page_urls.setdefault(hls_url, url)
         return [hls_url]
