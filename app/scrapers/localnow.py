@@ -187,16 +187,24 @@ class LocalNowScraper(BaseScraper):
         channels: List[ChannelData] = []
         self._channels_by_id = {}
         seen_ids: set[str] = set()
+        skipped_dupes: List[str] = []
+        skipped_locked: List[str] = []
 
         for ch in payload_channels:
             source_channel_id = str(ch.get("video_id") or ch.get("_id") or "").strip()
-            if not source_channel_id or source_channel_id in seen_ids:
+            if not source_channel_id:
+                continue
+            if source_channel_id in seen_ids:
+                name = (ch.get("name") or "").strip() or source_channel_id
+                skipped_dupes.append(name)
                 continue
             seen_ids.add(source_channel_id)
 
             # Skip channels that require a subscription (not free to watch)
             sub_access = ch.get("subscription_access") or {}
             if isinstance(sub_access, dict) and sub_access.get("unlocked") is False:
+                name = (ch.get("name") or "").strip() or source_channel_id
+                skipped_locked.append(name)
                 continue
 
             slug = (ch.get("slug") or "").strip()
@@ -246,6 +254,10 @@ class LocalNowScraper(BaseScraper):
             )
             self._channels_by_id[source_channel_id] = ch
 
+        if skipped_dupes:
+            logger.debug("[localnow] skipped %d duplicate-ID channels: %s", len(skipped_dupes), ", ".join(skipped_dupes))
+        if skipped_locked:
+            logger.debug("[localnow] skipped %d subscription-locked channels: %s", len(skipped_locked), ", ".join(skipped_locked))
         logger.info("[localnow] %d channels fetched", len(channels))
         return channels
 
