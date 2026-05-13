@@ -973,7 +973,20 @@ def custom_stream_detect_status(detect_id):
         data = json.loads(raw)
         started_ms = int(data.get('started_ms') or 0)
         if data.get('status') == 'running' and started_ms:
-            data['elapsed_ms'] = max(0, int(_time.time() * 1000) - started_ms)
+            elapsed_ms = max(0, int(_time.time() * 1000) - started_ms)
+            data['elapsed_ms'] = elapsed_ms
+            # If the job has been running longer than the detection budget + a
+            # generous slack, the worker thread was killed (gunicorn recycle,
+            # OOM, etc.) and will never write a done state.  Synthesize a
+            # timeout so the UI doesn't spin indefinitely.
+            from ..scrapers.stream_detector import StreamDetector
+            timeout_ms = (StreamDetector.DETECT_BUDGET_SECONDS + 30) * 1000
+            if elapsed_ms > timeout_ms:
+                data['status'] = 'done'
+                data['stage'] = 'error'
+                data['stage_text'] = 'Detection timed out'
+                data['success'] = False
+                data['error'] = 'Detection timed out (worker may have been recycled)'
         return jsonify(data)
     except Exception as exc:
         return jsonify({'status': 'error', 'error': str(exc)}), 500

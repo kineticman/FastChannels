@@ -439,7 +439,7 @@ def _distro_fetch_variant(upstream_url: str, channel_id: str) -> tuple[str, _req
 
     try:
         if rdb:
-            rdb.set(rkey, best_variant)
+            rdb.set(rkey, best_variant, ex=7200)  # 2h — matches Distro CDN session lifetime
     except Exception:
         pass
     return best_variant, variant_r
