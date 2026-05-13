@@ -198,13 +198,21 @@ _SKYLINE_SOURCE_RE = re.compile(
 )
 _EARTHCAM_VIDEO_EMBED_RE = re.compile(r'''(?:https?:)?//[^'"\s>]+?/js/video/embed\.php\?[^'"\s>]+''', re.IGNORECASE)
 _TVPASS_CHANNEL_RE = re.compile(r'^https?://(www\.)?tvpass\.org/channel/([^/?#]+)', re.IGNORECASE)
+_BIGO_PAGE_RE = re.compile(r'^https?://(?:www\.)?bigo\.tv/(?:[a-z]{2}/)?(\d+)(?:[/?#]|$)', re.IGNORECASE)
+_NIMO_PAGE_RE = re.compile(r'^https?://(?:www\.)?nimo\.tv/([^/?#]+)(?:[/?#]|$)', re.IGNORECASE)
+# Matches al-slice.nimo.tv, tx-slice.nimo.tv, ws-slice.nimo.tv → prefix for HLS host substitution
+_NIMO_SLICE_HOST_RE = re.compile(r'^([a-z]+)-slice\.nimo\.tv$', re.IGNORECASE)
+# Strips the quality/uid/seqid suffix (_410_0_81) and .slice extension from the CDN path
+_NIMO_SLICE_PATH_RE = re.compile(r'^(/live/.+?)(?:_\d+){2,4}\.slice$', re.IGNORECASE)
 _VIDEOLINQ_PAGE_RE = re.compile(r'^https?://control\.videolinq\.com/public/([A-Za-z0-9_-]+)', re.IGNORECASE)
 _VIDEOLINQ_IFRAME_RE = re.compile(r'''https?://control\.videolinq\.com/public/([A-Za-z0-9_-]+)''', re.IGNORECASE)
 _LIGHTCAST_PLAYER_PAGE_RE = re.compile(r'''/player/(\d+)(?:/(\d+))?''', re.IGNORECASE)
 _LIGHTCAST_PLAYER_URL_RE = re.compile(
-    r'''https?:\\?/\\?/www\.lightcast\.com\\?/embed\\?/player\.php[^"'<>\s]+''',
+    r'''https?:\\?/\\?/(?:www\.lightcast\.com\\?/embed|embed\.cdn01\.net)\\?/player\.php[^"'<>\s]+''',
     re.IGNORECASE,
 )
+# cdn01.net is Lightcast's CDN domain — player.php and config2.php are the same API
+_LIGHTCAST_PLAYER_HOSTS = frozenset({'www.lightcast.com', 'embed.cdn01.net'})
 _LIGHTCAST_CONFIG_URL_RE = re.compile(r'''var\s+configUrl\s*=\s*['"]([^'"]+)['"]''', re.IGNORECASE)
 _LIGHTCAST_FILE_RE = re.compile(r'''file\s*:\s*["']([^"']+)["']''', re.IGNORECASE)
 
@@ -316,6 +324,30 @@ class StreamDetector:
                 return self._resolve_youtube(input_url)
             finally:
                 self._detect_deadline = None
+        # Bigo fast path — direct API call is faster and more reliable than yt-dlp's extractor.
+        if _BIGO_PAGE_RE.match(input_url):
+            self._set_stage('checking embedded APIs', urlsplit(input_url).netloc or None)
+            with requests.Session() as _s:
+                _s.headers.update({'User-Agent': _BROWSER_UA})
+                bigo_candidates = self._extract_bigo_provider_candidates(_s, input_url, '')
+            if bigo_candidates:
+                with requests.Session() as _s:
+                    _s.headers.update({'User-Agent': _BROWSER_UA})
+                    result = self._probe(_s, bigo_candidates[0], input_url, self._origin_of(input_url))
+                if not result.resolver:
+                    result.resolver = 'bigo'
+                return result
+        if _NIMO_PAGE_RE.match(input_url):
+            self._set_stage('trying browser fallback', urlsplit(input_url).netloc or None)
+            nimo_candidates = self._extract_nimo_provider_candidates(input_url)
+            if nimo_candidates:
+                with requests.Session() as _s:
+                    _s.headers.update({'User-Agent': _BROWSER_UA})
+                    result = self._probe(_s, nimo_candidates[0], input_url, self._origin_of(input_url))
+                if not result.resolver:
+                    result.resolver = 'nimo'
+                return result
+            return DetectionResult(error='No live stream found on nimo.tv page (stream may be offline)')
         if _TWITCH_RE.match(input_url):
             self._set_stage('twitch', urlsplit(input_url).netloc or None)
             try:
@@ -350,6 +382,8 @@ class StreamDetector:
                 page_url = input_url
                 self._set_stage('checking embedded APIs', urlsplit(input_url).netloc or None)
                 candidates = self._extract_lightcast_provider_candidates(session, input_url, '')
+                if not candidates:
+                    candidates = self._extract_bigo_provider_candidates(session, input_url, '')
                 if not candidates:
                     self._set_stage('fetching page', urlsplit(input_url).netloc or None)
                     candidates = self._extract_from_page(session, input_url, depth=0)
@@ -675,6 +709,7 @@ class StreamDetector:
 
         for extractor in (
             self._extract_lightcast_provider_candidates,
+            self._extract_bigo_provider_candidates,
             self._extract_gray_quickplay_provider_candidates,
             self._extract_abcnews_provider_candidates,
             self._extract_cbs_provider_candidates,
@@ -766,8 +801,9 @@ class StreamDetector:
     def _lightcast_player_urls(self, url: str, text: str) -> list[str]:
         urls: list[str] = []
         parsed = urlsplit(url)
+        netloc = parsed.netloc.lower()
 
-        if parsed.netloc.lower() == 'www.lightcast.com' and parsed.path == '/embed/player.php':
+        if netloc in _LIGHTCAST_PLAYER_HOSTS and parsed.path.rstrip('/').endswith('/player.php'):
             urls.append(url)
 
         target_ids: set[str] = set()
@@ -775,7 +811,7 @@ class StreamDetector:
         if page_match:
             target_ids.update(part for part in page_match.groups() if part)
 
-        if target_ids and parsed.netloc.lower() != 'www.lightcast.com':
+        if target_ids and netloc not in _LIGHTCAST_PLAYER_HOSTS:
             for target_id in sorted(target_ids):
                 urls.append(
                     'https://www.lightcast.com/embed/player.php?'
@@ -841,6 +877,120 @@ class StreamDetector:
                 logger.debug('[detector] lightcast playlist fetch failed %s: %s', wrapper_url[:80], exc)
 
         return candidates
+
+    def _extract_bigo_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        m = _BIGO_PAGE_RE.match(url)
+        if not m:
+            return []
+        site_id = m.group(1)
+        try:
+            r = session.post(
+                'https://ta.bigo.tv/official_website/studio/getInternalStudioInfo',
+                data={'siteId': site_id},
+                timeout=self.TIMEOUT,
+                headers={'Referer': 'https://www.bigo.tv/', 'Origin': 'https://www.bigo.tv'},
+            )
+            if not r.ok:
+                return []
+            data = r.json().get('data') or {}
+            if not data.get('alive'):
+                logger.debug('[detector] bigo siteId=%s is offline', site_id)
+                return []
+            hls = (data.get('hls_src') or '').strip()
+            if not hls:
+                return []
+            self._candidate_resolvers.setdefault(hls, 'bigo')
+            self._candidate_page_urls.setdefault(hls, url)
+            return [hls]
+        except Exception as exc:
+            logger.debug('[detector] bigo api failed for %s: %s', site_id, exc)
+            return []
+
+    def _extract_nimo_provider_candidates(self, url: str) -> list[str]:
+        """
+        Nimo.tv serves video via a proprietary binary .slice CDN format (not HLS).
+        The site also has HLS CDN endpoints (al.hls.nimo.tv) that use the same
+        wsSecret auth as the slice CDN.  We use Playwright to intercept a live
+        .slice request, then swap the host and strip the quality suffix to build
+        the matching HLS URL.
+        """
+        if not _NIMO_PAGE_RE.match(url):
+            return []
+        try:
+            sync_playwright = _sync_playwright()
+        except Exception as exc:
+            logger.debug('[detector] playwright unavailable for nimo: %s', exc)
+            return []
+
+        slice_url: str | None = None
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--disable-blink-features=AutomationControlled',
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                    ],
+                )
+                context = browser.new_context(
+                    viewport={'width': 1920, 'height': 1080},
+                    user_agent=_BROWSER_UA,
+                    locale='en-US',
+                    timezone_id='America/New_York',
+                )
+                page = context.new_page()
+                page.add_init_script(_STEALTH_INIT_SCRIPT)
+
+                def on_request(req):
+                    nonlocal slice_url
+                    if slice_url:
+                        return
+                    parsed = urlsplit(req.url)
+                    if _NIMO_SLICE_HOST_RE.match(parsed.netloc) and parsed.path.endswith('.slice'):
+                        slice_url = req.url
+
+                page.on('request', on_request)
+                page.goto(url, wait_until='domcontentloaded', timeout=30000)
+
+                # Poll up to 20s for the player to start fetching slice segments.
+                for _ in range(20):
+                    page.wait_for_timeout(1000)
+                    if slice_url:
+                        break
+
+                browser.close()
+        except Exception as exc:
+            logger.debug('[detector] nimo playwright failed for %s: %s', url[:80], exc)
+            return []
+
+        if not slice_url:
+            logger.debug('[detector] nimo: no slice URL captured for %s', url[:80])
+            return []
+
+        # Convert slice URL → HLS URL.
+        # al-slice.nimo.tv/live/suIDhash_410_0_81.slice
+        #   → al.hls.nimo.tv/live/suIDhash.m3u8  (same query params)
+        parsed = urlsplit(slice_url)
+        m_host = _NIMO_SLICE_HOST_RE.match(parsed.netloc)
+        m_path = _NIMO_SLICE_PATH_RE.match(parsed.path)
+        if not m_host or not m_path:
+            logger.debug('[detector] nimo: unexpected slice URL format: %s', slice_url[:120])
+            return []
+
+        hls_host = f"{m_host.group(1)}.hls.nimo.tv"
+        hls_path = f"{m_path.group(1)}.m3u8"
+        hls_url = urlunsplit((parsed.scheme, hls_host, hls_path, parsed.query, ''))
+
+        logger.debug('[detector] nimo: converted slice → HLS: %s', hls_url[:120])
+        self._candidate_resolvers.setdefault(hls_url, 'nimo')
+        self._candidate_page_urls.setdefault(hls_url, url)
+        return [hls_url]
 
     def _extract_gray_quickplay_provider_candidates(
         self,
