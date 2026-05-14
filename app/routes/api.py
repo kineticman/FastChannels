@@ -1525,6 +1525,20 @@ def inspect_channel(channel_id):
     if not resolved_url:
         return jsonify({'status': 'error', 'detail': 'No stream URL'})
 
+    # For channels that re-detect at play time, run the stream detector here too
+    # so the inspector sees the real error (e.g. yt-dlp "stream not available")
+    # instead of a stale CDN URL returning an opaque HTTP 403.
+    if getattr(ch, 'redetect_on_play', False) and ch.page_url:
+        from ..scrapers.stream_detector import StreamDetector as _SD
+        _dr = _SD().detect(ch.page_url)
+        if _dr.error and not _dr.stream_url:
+            return jsonify({'status': 'error', 'detail': _dr.error})
+        if _dr.stream_url:
+            resolved_url = _dr.stream_url
+            if _dr.headers:
+                sess = _req.Session()
+                sess.headers.update(_dr.headers)
+
     # For session-based CDNs (e.g. Broadpeak) that return intermittent 404s
     # when fetched server-side, verify via the scraper's audit_resolve() instead.
     # audit_resolve() checks feed/catalogue presence and raises StreamDeadError
