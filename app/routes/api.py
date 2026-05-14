@@ -1068,6 +1068,13 @@ def create_custom_channel():
     if not custom_source:
         return jsonify({'error': 'Custom source not found — restart the server to seed it'}), 500
 
+    redetect = bool(data.get('redetect_on_play', False))
+    explicit_page_url = (data.get('page_url') or '').strip() or None
+    # When redetect_on_play is set but no page_url is provided, treat the
+    # stream_url as a player page — the play route uses page_url to decide
+    # whether to run the stream detector.
+    page_url = explicit_page_url or (stream_url if redetect else None)
+
     channel = Channel(
         source_id=custom_source.id,
         source_channel_id=str(_uuid.uuid4()),
@@ -1080,8 +1087,8 @@ def create_custom_channel():
         stream_type=_normalize_custom_stream_type(data.get('stream_type'), stream_url),
         custom_headers=data.get('custom_headers') or {},
         proxy_segments=bool(data.get('proxy_segments', False)),
-        page_url=(data.get('page_url') or '').strip() or None,
-        redetect_on_play=bool(data.get('redetect_on_play', False)),
+        page_url=page_url,
+        redetect_on_play=redetect,
         guide_block_minutes=data.get('guide_block_minutes') or None,
         is_active=True,
         is_enabled=True,
@@ -1119,6 +1126,9 @@ def create_custom_channels_batch():
         stream_url = (data.get('stream_url') or '').strip()
         if not name or not stream_url or not stream_url.startswith('http'):
             continue
+        redetect = bool(data.get('redetect_on_play', False))
+        explicit_page_url = (data.get('page_url') or '').strip() or None
+        page_url = explicit_page_url or (stream_url if redetect else None)
         channel = Channel(
             source_id=custom_source.id,
             source_channel_id=str(_uuid.uuid4()),
@@ -1131,8 +1141,8 @@ def create_custom_channels_batch():
             stream_type=_normalize_custom_stream_type(data.get('stream_type'), stream_url),
             custom_headers=data.get('custom_headers') or {},
             proxy_segments=bool(data.get('proxy_segments', False)),
-            page_url=(data.get('page_url') or '').strip() or None,
-            redetect_on_play=bool(data.get('redetect_on_play', False)),
+            page_url=page_url,
+            redetect_on_play=redetect,
             guide_block_minutes=data.get('guide_block_minutes') or None,
             is_active=True,
             is_enabled=True,
