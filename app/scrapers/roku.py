@@ -1191,7 +1191,8 @@ class RokuScraper(BaseScraper):
         if cid_to_progs:
             uncached_cids = [cid for cid in cid_to_progs if cid not in self._description_cache]
             if uncached_cids:
-                new_descs = self._fetch_descriptions(uncached_cids, headers_snapshot, cookies_snapshot)
+                new_descs = self._fetch_descriptions(uncached_cids, headers_snapshot, cookies_snapshot,
+                                                     progress_cb=self._progress_cb)
                 self._cache_descriptions(new_descs)
             filled = 0
             for cid, progs in cid_to_progs.items():
@@ -1240,13 +1241,15 @@ class RokuScraper(BaseScraper):
         content_ids: list[str],
         headers_snapshot: dict,
         cookies_snapshot: dict,
+        progress_cb=None,
     ) -> dict[str, str]:
         """Fetch program descriptions in parallel via the content proxy."""
         import requests as _req
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor
 
         desc_map: dict[str, str] = {}
         lock = __import__('threading').Lock()
+        total = len(content_ids)
 
         def fetch_desc(cid: str):
             sess = _req.Session()
@@ -1273,11 +1276,15 @@ class RokuScraper(BaseScraper):
                 pass
             return cid, None
 
+        done = 0
         with ThreadPoolExecutor(max_workers=_DESC_WORKERS) as executor:
             for cid, desc in executor.map(fetch_desc, content_ids):
                 if desc:
                     with lock:
                         desc_map[cid] = desc
+                done += 1
+                if progress_cb:
+                    progress_cb('desc', done, total)
 
         return desc_map
 
