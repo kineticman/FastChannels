@@ -92,9 +92,9 @@ _OSM_BASE = "https://osm.sr.roku.com"
 _OSM_STREAM_RE = re.compile(r"/osm/v1/hls/master/([0-9a-f-]{36})/([0-9a-f]+)/index\.m3u8")
 _SELECTOR_UUID_RE = re.compile(r"/v1/([0-9a-f-]{36})$")
 _LIVE_TV_403_RETRIES = 3
-_CACHE_WARM_RETRY_WORKERS = 4
-_EPG_WORKERS = 5
-_DESC_WORKERS = 5
+_CACHE_WARM_RETRY_WORKERS = 2
+_EPG_WORKERS = 2
+_DESC_WORKERS = 2
 _ROKU_403_COOLDOWN = 5 * 60
 _DESC_CACHE_TTL = 14 * 24 * 60 * 60  # keep descriptions for 14 days; content doesn't change
 
@@ -948,6 +948,11 @@ class RokuScraper(BaseScraper):
         """Add a channel parsed from an EPG features.station object."""
         seen.add(station_id)
 
+        view_opts = station.get("viewOptions") or []
+        if view_opts:
+            self._cache_play_id(station_id, view_opts[0].get("playId") if view_opts else None)
+            self._cache_selector_url(station_id, self._extract_selector_url(view_opts))
+
         title  = station.get("title") or station.get("shortName") or "Unknown"
         number = station.get("displayNumber")
 
@@ -1047,6 +1052,9 @@ class RokuScraper(BaseScraper):
         # the threaded content-proxy fanout. Otherwise an upstream-expired
         # session can yield a misleading "0 programs" success on EPG-only runs.
         # Skip probe if fetch_channels() already confirmed the session within 60s.
+        # When the probe succeeds, mine its response to batch-warm play_id/selector
+        # caches and identify channels that don't carry schedule data.
+        no_schedule_ids: set[str] = set()
         if (time.time() - self._last_epg_ok) > 60:
             epg_probe = self._api_get(_EPG_URL, timeout=20, label="epg")
             if not epg_probe or epg_probe.status_code != 200:
@@ -1056,11 +1064,36 @@ class RokuScraper(BaseScraper):
                                getattr(epg_probe, "status_code", "no response"))
                 raise ScrapeSkipError("[roku] session rejected before EPG fetch; keeping previous EPG data")
             self._last_epg_ok = time.time()
+            now = time.time()
+            warmed_from_epg = 0
+            for col in epg_probe.json().get("collections", []):
+                station = col.get("features", {}).get("station") or {}
+                sid = (station.get("meta") or {}).get("id")
+                if not sid:
+                    continue
+                if not station.get("shouldRequestSchedule", True):
+                    no_schedule_ids.add(sid)
+                view_opts = station.get("viewOptions") or []
+                if view_opts and not self._cached_play_id(sid):
+                    play_id = view_opts[0].get("playId") if view_opts else None
+                    selector_url = self._extract_selector_url(view_opts)
+                    if play_id:
+                        self._play_id_cache[sid] = {"play_id": play_id, "cached_at": now}
+                        warmed_from_epg += 1
+                    if selector_url:
+                        self._selector_url_cache[sid] = {"selector_url": selector_url, "cached_at": now}
+            if warmed_from_epg:
+                self._persist_play_id_cache()
+                self._persist_selector_url_cache()
+                logger.debug("[roku] warmed %d play_id/selector entries from EPG probe", warmed_from_epg)
+            if no_schedule_ids:
+                logger.debug("[roku] %d stations have shouldRequestSchedule=False, skipping content proxy for those", len(no_schedule_ids))
 
+        effective_skip = (skip_ids or set()) | no_schedule_ids
         total = len(channels)
-        skipped = len(skip_ids & {ch.source_channel_id for ch in channels}) if skip_ids else 0
+        skipped = len(effective_skip & {ch.source_channel_id for ch in channels}) if effective_skip else 0
         if skipped:
-            logger.info("[roku] EPG skip: %d/%d channels have fresh programs, skipping content proxy", skipped, total)
+            logger.info("[roku] EPG skip: %d/%d channels (fresh programs or no-schedule flag), skipping content proxy", skipped, total)
         # Snapshot merged headers (session defaults + API-specific) and cookies
         # so each worker thread can reuse its own independent session without
         # mutating the shared scraper session or opening a fresh pool per task.
@@ -1083,7 +1116,7 @@ class RokuScraper(BaseScraper):
                 thread_local.session = sess
             sess.cookies.update(cookies_snapshot)
             sid = ch.source_channel_id
-            if skip_ids and sid in skip_ids:
+            if sid in effective_skip:
                 return [], {}, self._cached_play_id(sid), self._cached_selector_url(sid)
             try:
                 qs = "?featureInclude=linearSchedule"
