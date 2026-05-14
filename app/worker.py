@@ -281,9 +281,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                         new_remaining = max(1, parent_remaining - phase_elapsed)
                         signal.setitimer(signal.ITIMER_REAL, new_remaining)
 
-            logger.info('[%s] scraper init starting', source_name)
             scraper = _run_phase('init', scraper_cls, config=source.config or {})
-            logger.info('[%s] scraper init complete', source_name)
             scraper._progress_cb = _progress
             refresh_hours = getattr(scraper_cls, 'channel_refresh_hours', 0)
 
@@ -302,9 +300,7 @@ def run_scraper(source_name: str, force_full: bool = False):
             # updates (like tokens) immediately — before the long scrape starts —
             # so they survive even if the job times out mid-EPG.
             _progress('bootstrap')
-            logger.info('[%s] bootstrap starting', source_name)
             _run_phase('bootstrap', scraper.pre_run_setup)
-            logger.info('[%s] bootstrap complete', source_name)
             _apply_scraper_config_updates(source, scraper)
             for _pre_attempt in range(3):
                 try:
@@ -330,7 +326,6 @@ def run_scraper(source_name: str, force_full: bool = False):
                     if ch.is_enabled and ch.source_channel_id
                 }
                 _progress('epg', 0, len(epg_input))
-                logger.info('[%s] EPG fetch starting', source_name)
                 programs = _run_phase(
                     'epg',
                     scraper.fetch_epg,
@@ -338,7 +333,6 @@ def run_scraper(source_name: str, force_full: bool = False):
                     skip_ids=_fresh_epg_sids(source),
                     enabled_ids=enabled_ids,
                 )
-                logger.info('[%s] EPG fetch complete', source_name)
                 for _attempt in range(3):
                     try:
                         _upsert_programs(source, programs)
@@ -362,11 +356,8 @@ def run_scraper(source_name: str, force_full: bool = False):
                             source_name, len(db_channels), len(programs), elapsed)
             else:
                 _progress('channels')
-                logger.info('[%s] channel fetch starting', source_name)
                 channels = _run_phase('channels', scraper.fetch_channels)
-                logger.info('[%s] channel fetch complete', source_name)
                 _progress('epg', 0, len(channels))
-                logger.info('[%s] EPG fetch starting', source_name)
                 enabled_ids = {
                     sid for (sid,) in (
                         db.session.query(Channel.source_channel_id)
@@ -385,7 +376,6 @@ def run_scraper(source_name: str, force_full: bool = False):
                     skip_ids=_fresh_epg_sids(source),
                     enabled_ids=enabled_ids,
                 )
-                logger.info('[%s] EPG fetch complete', source_name)
                 for _attempt in range(3):
                     try:
                         _active_geos = None

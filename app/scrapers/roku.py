@@ -1201,7 +1201,7 @@ class RokuScraper(BaseScraper):
                         if not prog.description:
                             prog.description = desc
                             filled += 1
-            logger.info(
+            logger.debug(
                 "[roku] description backfill: %d unique IDs (%d cached, %d fetched) → %d programs filled",
                 len(cid_to_progs),
                 len(cid_to_progs) - len(uncached_cids),
@@ -1221,7 +1221,7 @@ class RokuScraper(BaseScraper):
                 stream_cached += 1
         if not self._cached_osm_session():
             self._seed_osm_session(channels)
-        logger.info(
+        logger.debug(
             "[roku] cache warm summary: play_id=%d/%d selector=%d/%d stream_url=%d/%d retry_play=%d retry_selector=%d",
             play_cached,
             total,
@@ -1232,7 +1232,7 @@ class RokuScraper(BaseScraper):
             retried_play,
             retried_selector,
         )
-        logger.info("[roku] %d EPG entries fetched for %d channels", len(programs), total)
+        logger.debug("[roku] %d EPG entries fetched for %d channels", len(programs), total)
         return programs
 
     def _fetch_descriptions(
