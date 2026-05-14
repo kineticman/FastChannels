@@ -877,6 +877,8 @@ class RokuScraper(BaseScraper):
                             continue
                         self._add_channel_from_station(channels, seen, sid, station)
                 elif r is not None:
+                    if r.status_code == 403:
+                        self._clear_cached_session()
                     logger.warning("[roku] EPG returned %d", r.status_code)
             except Exception as exc:
                 logger.warning("[roku] EPG fetch failed: %s", exc)
