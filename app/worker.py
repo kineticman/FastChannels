@@ -1063,14 +1063,8 @@ def _apply_scraper_config_updates(source, scraper) -> None:
 
 
 def _epg_channels_for_source(source) -> list[Channel]:
-    """Return DB channels that should participate in EPG refreshes.
-
-    DRM-marked channels stay disabled for playback, but keeping them in the
-    EPG refresh set preserves guide data in case support improves later.
-    """
-    return source.channels.filter(
-        (Channel.is_active == True) | (Channel.disable_reason.like('DRM%'))
-    ).all()
+    """Return DB channels that should participate in EPG refreshes."""
+    return source.channels.filter(Channel.is_active == True).all()
 
 
 def _prewarm_logos(source_name: str, logo_urls: list[str], progress_cb=None) -> None:
