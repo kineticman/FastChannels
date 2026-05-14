@@ -193,7 +193,7 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
         return {'standard_count': 0, 'gracenote_count': 0, 'total_count': 0}
 
     gn_rows = (
-        query.with_entities(Channel.gracenote_id, Channel.slug)
+        query.with_entities(Channel.gracenote_id, Channel.slug, Channel.gracenote_mode)
         .filter(
             ((Channel.gracenote_id != None) & (Channel.gracenote_id != ''))
             | Channel.slug.like('%|%')
@@ -203,7 +203,11 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
     gn_count = sum(
         1
         for row in gn_rows
-        if _parse_gracenote_id(SimpleNamespace(gracenote_id=row.gracenote_id, slug=row.slug))
+        if _parse_gracenote_id(SimpleNamespace(
+            gracenote_id=row.gracenote_id,
+            slug=row.slug,
+            gracenote_mode=row.gracenote_mode,
+        ))
     )
     return {
         'standard_count': max(total - gn_count, 0),

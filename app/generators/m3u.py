@@ -107,6 +107,22 @@ def _parse_gracenote_id(ch) -> str | None:
     return None
 
 
+def _has_gracenote_claim(ch) -> bool:
+    """
+    True if a channel should be excluded from the standard M3U partition.
+
+    Uses a broader check than _parse_gracenote_id: any non-empty gracenote_id
+    (even one that fails the format regex) or a slug with '|' counts as a
+    Gracenote claim.  This prevents channels with malformed gracenote_id values
+    from bleeding into the standard M3U while they wait to be corrected.
+    """
+    if getattr(ch, 'gracenote_mode', None) == 'off':
+        return False
+    if (getattr(ch, 'gracenote_id', None) or '').strip():
+        return True
+    return '|' in (getattr(ch, 'slug', None) or '')
+
+
 def _format_region_label(country: str | None) -> str:
     raw = (country or '').strip()
     if not raw:
@@ -254,7 +270,7 @@ def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | No
     if gracenote is True:
         channels = [ch for ch in channels if _parse_gracenote_id(ch)]
     elif gracenote is False:
-        channels = [ch for ch in channels if not _parse_gracenote_id(ch)]
+        channels = [ch for ch in channels if not _has_gracenote_claim(ch)]
 
     max_ch = filters.get('max_channels')
     if max_ch:
@@ -284,7 +300,7 @@ def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = 
     if gracenote is True:
         channels = [ch for ch in channels if _parse_gracenote_id(ch)]
     elif gracenote is False:
-        channels = [ch for ch in channels if not _parse_gracenote_id(ch)]
+        channels = [ch for ch in channels if not _has_gracenote_claim(ch)]
 
     max_ch = filters.get('max_channels')
     if max_ch:
