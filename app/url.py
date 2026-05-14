@@ -76,6 +76,9 @@ def proxy_logo_url(url: str | None, base_url: str, img_type: str = 'logo', image
     """
     if not url or not base_url:
         return url
+    # Server-relative paths (e.g. bundled static assets) — just prepend base_url.
+    if url.startswith("/"):
+        return base_url.rstrip("/") + url
     if not image_proxy_enabled:
         return url
 
