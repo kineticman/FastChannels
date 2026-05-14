@@ -92,9 +92,9 @@ _OSM_BASE = "https://osm.sr.roku.com"
 _OSM_STREAM_RE = re.compile(r"/osm/v1/hls/master/([0-9a-f-]{36})/([0-9a-f]+)/index\.m3u8")
 _SELECTOR_UUID_RE = re.compile(r"/v1/([0-9a-f-]{36})$")
 _LIVE_TV_403_RETRIES = 3
-_CACHE_WARM_RETRY_WORKERS = 2
-_EPG_WORKERS = 2
-_DESC_WORKERS = 2
+_CACHE_WARM_RETRY_WORKERS = 3
+_EPG_WORKERS = 3
+_DESC_WORKERS = 3
 _ROKU_403_COOLDOWN = 5 * 60
 _DESC_CACHE_TTL = 14 * 24 * 60 * 60  # keep descriptions for 14 days; content doesn't change
 
