@@ -1642,13 +1642,14 @@ def inspect_channel(channel_id):
             detail += ')'
             return jsonify({'status': 'drm', 'detail': detail})
 
-        # Find the first media segment and try to pull a chunk to confirm data flows
+        # Use the last media segment — live streams with rolling windows purge old
+        # segments from the CDN even when still listed in the manifest, so the first
+        # segment may already be 404 while the most recent one is always available.
         segment_url = None
         for line in manifest_text.splitlines():
             line = line.strip()
             if line and not line.startswith('#'):
                 segment_url = _urljoin(manifest_url, line)
-                break
 
         if not segment_url:
             return jsonify({'status': 'live', 'detail': 'Manifest OK (no segments listed yet)',
