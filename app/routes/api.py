@@ -801,6 +801,29 @@ def list_custom_channels():
     return jsonify([ch.to_dict() for ch in channels])
 
 
+@api_bp.route('/custom-channels/catalog', methods=['GET'])
+def list_channel_catalog():
+    """Return the pre-configured channel catalog with already_added flags."""
+    from .channel_catalog import CHANNEL_CATALOG
+
+    custom_source = Source.query.filter_by(name='custom').first()
+    existing_urls = set()
+    if custom_source:
+        existing_urls = {
+            ch.stream_url
+            for ch in Channel.query.filter_by(source_id=custom_source.id).all()
+            if ch.stream_url
+        }
+
+    result = []
+    for group in CHANNEL_CATALOG:
+        channels = []
+        for ch in group["channels"]:
+            channels.append({**ch, "already_added": ch["stream_url"] in existing_urls})
+        result.append({**group, "channels": channels})
+    return jsonify(result)
+
+
 def _custom_detect_key(detect_id: str) -> str:
     return f'{_CUSTOM_DETECT_KEY_PREFIX}{detect_id}'
 
@@ -1065,9 +1088,72 @@ def create_custom_channel():
         last_seen_at=datetime.now(_tz.utc),
     )
     db.session.add(channel)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        if 'database is locked' in str(exc).lower():
+            return jsonify({'error': 'Database busy — a scrape job is running. Try again in a moment.'}), 503
+        raise
     _invalidate_and_refresh_xml()
     return jsonify(channel.to_dict()), 201
+
+
+@api_bp.route('/custom-channels/batch', methods=['POST'])
+def create_custom_channels_batch():
+    """Create multiple custom channels in a single transaction."""
+    import uuid as _uuid
+    from datetime import datetime, timezone as _tz
+
+    items = request.get_json() or []
+    if not isinstance(items, list) or not items:
+        return jsonify({'error': 'expected a non-empty list'}), 400
+
+    custom_source = Source.query.filter_by(name='custom').first()
+    if not custom_source:
+        return jsonify({'error': 'Custom source not found'}), 500
+
+    created = []
+    for data in items:
+        name = (data.get('name') or '').strip()
+        stream_url = (data.get('stream_url') or '').strip()
+        if not name or not stream_url or not stream_url.startswith('http'):
+            continue
+        channel = Channel(
+            source_id=custom_source.id,
+            source_channel_id=str(_uuid.uuid4()),
+            name=name,
+            description=(data.get('description') or '').strip() or None,
+            logo_url=(data.get('logo_url') or '').strip() or None,
+            category=(data.get('category') or '').strip() or None,
+            language=(data.get('language') or 'en').strip() or 'en',
+            stream_url=stream_url,
+            stream_type=_normalize_custom_stream_type(data.get('stream_type'), stream_url),
+            custom_headers=data.get('custom_headers') or {},
+            proxy_segments=bool(data.get('proxy_segments', False)),
+            page_url=(data.get('page_url') or '').strip() or None,
+            redetect_on_play=bool(data.get('redetect_on_play', False)),
+            guide_block_minutes=data.get('guide_block_minutes') or None,
+            is_active=True,
+            is_enabled=True,
+            last_seen_at=datetime.now(_tz.utc),
+        )
+        db.session.add(channel)
+        created.append(channel)
+
+    if not created:
+        return jsonify({'error': 'no valid channels in request'}), 400
+
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        if 'database is locked' in str(exc).lower():
+            return jsonify({'error': 'Database busy — a scrape job is running. Try again in a moment.'}), 503
+        raise
+
+    _invalidate_and_refresh_xml()
+    return jsonify([ch.to_dict() for ch in created]), 201
 
 
 @api_bp.route('/custom-channels/<int:channel_id>', methods=['PUT'])
@@ -1124,7 +1210,13 @@ def delete_custom_channel(channel_id):
     if not channel.source or channel.source.name != 'custom':
         return jsonify({'error': 'Not a custom channel'}), 403
     db.session.delete(channel)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        if 'database is locked' in str(exc).lower():
+            return jsonify({'error': 'Database busy — a scrape job is running. Try again in a moment.'}), 503
+        raise
     _invalidate_and_refresh_xml()
     return jsonify({'status': 'deleted', 'id': channel_id})
 

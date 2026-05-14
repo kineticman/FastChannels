@@ -537,7 +537,10 @@
               <div class="config-panel" id="card-{{ source.id }}">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
                   <span style="font-size:0.78rem;font-weight:700;color:var(--text-soft);text-transform:uppercase;letter-spacing:.06em;">Custom Channels</span>
-                  <button class="btn btn-run btn-sm" onclick="openCustomChannelModal()">+ Add Channel</button>
+                  <div style="display:flex;gap:.5rem;">
+                    <button class="btn btn-cancel btn-sm" onclick="openChannelCatalog()">Browse Catalog</button>
+                    <button class="btn btn-run btn-sm" onclick="openCustomChannelModal()">+ Add Channel</button>
+                  </div>
                 </div>
                 <div id="custom-channel-list" style="display:flex;flex-direction:column;gap:.5rem;">
                   <div style="color:var(--text-muted);font-size:.83rem;">Loading…</div>
@@ -613,6 +616,26 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" onclick="cancelDisable()">Cancel</button>
         <button class="btn btn-confirm" onclick="confirmDisable()">Disable &amp; Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Channel Catalog Modal -->
+  <div class="modal-overlay" id="channel-catalog-modal">
+    <div class="modal-box" style="width:620px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;padding:1.5rem 1.75rem;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;">
+        <h2 style="font-size:1.05rem;font-weight:700;margin:0;">Channel Catalog</h2>
+        <button class="btn btn-cancel btn-sm" onclick="closeChannelCatalog()">✕</button>
+      </div>
+      <div id="catalog-body" style="flex:1;overflow-y:auto;min-height:0;">
+        <div style="color:var(--text-muted);font-size:.84rem;">Loading…</div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding-top:.75rem;margin-top:.75rem;border-top:1px solid var(--border);">
+        <span id="catalog-status" style="font-size:.78rem;font-weight:500;color:var(--text-soft);"></span>
+        <div style="display:flex;gap:.75rem;">
+          <button class="btn btn-cancel btn-sm" onclick="closeChannelCatalog()">Cancel</button>
+          <button class="btn btn-run btn-sm" id="catalog-add-btn" onclick="addCatalogSelected()" disabled>Add Selected</button>
+        </div>
       </div>
     </div>
   </div>
@@ -2516,6 +2539,12 @@
       btn.disabled = true;
       try {
         const r = await fetch(`/api/custom-channels/${_ccEditId}`, {method: 'DELETE'});
+        if (r.status === 503) {
+          const err = await r.json().catch(() => ({}));
+          alert(err.error || 'Database busy — a scrape is running. Try again in a moment.');
+          btn.disabled = false;
+          return;
+        }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         btn.disabled = false;
         document.getElementById('custom-channel-modal').classList.remove('open');
@@ -2527,6 +2556,143 @@
         alert('Delete failed: ' + e.message);
         btn.disabled = false;
       }
+    }
+
+    // ── Channel Catalog ──────────────────────────────────────────────────────
+
+    let _catalogData = null;
+
+    async function openChannelCatalog() {
+      document.getElementById('channel-catalog-modal').classList.add('open');
+      document.getElementById('catalog-status').textContent = '';
+      document.getElementById('catalog-add-btn').disabled = true;
+      const body = document.getElementById('catalog-body');
+      body.innerHTML = '<div style="color:var(--text-muted);font-size:.84rem;">Loading…</div>';
+
+      try {
+        const r = await fetch('/api/custom-channels/catalog', {cache: 'no-store'});
+        _catalogData = await r.json();
+        renderCatalog(_catalogData);
+      } catch (e) {
+        body.innerHTML = `<div style="color:var(--danger);font-size:.84rem;">Failed to load catalog: ${e.message}</div>`;
+      }
+    }
+
+    function closeChannelCatalog() {
+      document.getElementById('channel-catalog-modal').classList.remove('open');
+    }
+
+    function renderCatalog(groups) {
+      const body = document.getElementById('catalog-body');
+      if (!groups.length) {
+        body.innerHTML = '<div style="color:var(--text-muted);font-size:.84rem;">No channels in catalog.</div>';
+        return;
+      }
+
+      let html = '';
+      groups.forEach(group => {
+        html += `<div style="margin-bottom:1.25rem;">
+          <div style="font-size:.72rem;font-weight:700;color:var(--text-soft);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.6rem;">${group.network}</div>`;
+
+        group.channels.forEach((ch, i) => {
+          const key = `${group.network}__${i}`;
+          const disabled = ch.already_added ? 'disabled' : '';
+          const opacity = ch.already_added ? 'opacity:.45;' : '';
+          html += `
+          <label style="display:flex;align-items:center;gap:.85rem;padding:.6rem .5rem;border-radius:7px;cursor:${ch.already_added ? 'default' : 'pointer'};${opacity}transition:background .12s;"
+                 onmouseover="if(!${ch.already_added}) this.style.background='color-mix(in srgb, var(--border) 50%, transparent)'"
+                 onmouseout="this.style.background=''">
+            <input type="checkbox" data-catalog-key="${key}" ${disabled}
+                   style="accent-color:var(--accent-strong);cursor:${ch.already_added ? 'default' : 'pointer'};flex-shrink:0;"
+                   onchange="updateCatalogAddBtn()">
+            <img src="${ch.logo_url || ''}" alt="" style="width:40px;height:40px;object-fit:contain;border-radius:5px;flex-shrink:0;background:var(--bg);"
+                 onerror="this.style.display='none'">
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:.87rem;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${ch.name}</div>
+              <div style="font-size:.74rem;color:var(--text-muted);">${ch.category || ''}${ch.redetect_on_play ? ' · live stream' : ''}</div>
+            </div>
+            ${ch.already_added ? '<span style="font-size:.72rem;font-weight:600;color:var(--text-muted);white-space:nowrap;">Already added</span>' : ''}
+          </label>`;
+        });
+
+        html += '</div>';
+      });
+
+      body.innerHTML = html;
+    }
+
+    function updateCatalogAddBtn() {
+      const checked = document.querySelectorAll('#catalog-body input[type=checkbox]:checked').length;
+      const btn = document.getElementById('catalog-add-btn');
+      btn.disabled = checked === 0;
+      btn.textContent = checked > 0 ? `Add ${checked} Channel${checked > 1 ? 's' : ''}` : 'Add Selected';
+    }
+
+    async function addCatalogSelected() {
+      const checkboxes = document.querySelectorAll('#catalog-body input[type=checkbox]:checked');
+      if (!checkboxes.length) return;
+
+      const btn = document.getElementById('catalog-add-btn');
+      const status = document.getElementById('catalog-status');
+      btn.disabled = true;
+      status.textContent = 'Adding…';
+      status.style.color = 'var(--text-soft)';
+
+      // Build a flat lookup: key → channel object
+      const lookup = {};
+      (_catalogData || []).forEach(group => {
+        group.channels.forEach((ch, i) => {
+          lookup[`${group.network}__${i}`] = ch;
+        });
+      });
+
+      const payload = [];
+      for (const cb of checkboxes) {
+        const ch = lookup[cb.dataset.catalogKey];
+        if (ch) payload.push({
+          name: ch.name,
+          stream_url: ch.stream_url,
+          logo_url: ch.logo_url || null,
+          category: ch.category || null,
+          language: ch.language || 'en',
+          redetect_on_play: ch.redetect_on_play || false,
+        });
+      }
+
+      let added = 0;
+      try {
+        const r = await fetch('/api/custom-channels/batch', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        if (r.status === 503) {
+          const err = await r.json().catch(() => ({}));
+          status.textContent = err.error || 'Database busy — try again in a moment.';
+          status.style.color = 'var(--danger)';
+          btn.disabled = false;
+          return;
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const created = await r.json();
+        added = created.length;
+      } catch (e) {
+        status.textContent = `Failed: ${e.message}`;
+        status.style.color = 'var(--danger)';
+        btn.disabled = false;
+        return;
+      }
+
+      status.textContent = `${added} channel${added > 1 ? 's' : ''} added`;
+      status.style.color = 'var(--accent)';
+      setTimeout(closeChannelCatalog, 800);
+
+      _refreshCustomSourceCount();
+      loadCustomChannelList();
+      // Re-render with updated already_added state
+      const r2 = await fetch('/api/custom-channels/catalog', {cache: 'no-store'}).catch(() => null);
+      if (r2) { _catalogData = await r2.json(); renderCatalog(_catalogData); }
+      btn.disabled = false;
     }
   </script>
 <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>

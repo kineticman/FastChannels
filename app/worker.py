@@ -1815,17 +1815,52 @@ def _prune_old_programs(batch_size: int = 2000):
         logger.info('[worker] pruned %d expired EPG entries', total_deleted)
 
 
-def _cleanup_orphans():
-    """Delete rows whose parent records no longer exist."""
-    deleted_programs = db.session.execute(text("""
-        DELETE FROM programs
-        WHERE channel_id NOT IN (SELECT id FROM channels)
-    """)).rowcount or 0
-    deleted_channels = db.session.execute(text("""
-        DELETE FROM channels
-        WHERE source_id NOT IN (SELECT id FROM sources)
-    """)).rowcount or 0
-    db.session.commit()
+def _cleanup_orphans(batch_size: int = 2000):
+    """Delete rows whose parent records no longer exist, in small batches.
+
+    Each batch is committed immediately so the write lock is held only briefly.
+    Avoids locking contention with gunicorn workers during startup cleanup.
+    """
+    import sqlalchemy as _sa
+
+    deleted_programs = 0
+    while True:
+        ids = [
+            row[0] for row in db.session.execute(text(
+                "SELECT p.id FROM programs p "
+                "LEFT JOIN channels c ON p.channel_id = c.id "
+                "WHERE c.id IS NULL LIMIT :n"
+            ), {"n": batch_size}).fetchall()
+        ]
+        if not ids:
+            break
+        db.session.execute(
+            _sa.delete(Program).where(Program.id.in_(ids))
+        )
+        deleted_programs += len(ids)
+        db.session.commit()
+        if len(ids) < batch_size:
+            break
+
+    deleted_channels = 0
+    while True:
+        ids = [
+            row[0] for row in db.session.execute(text(
+                "SELECT c.id FROM channels c "
+                "LEFT JOIN sources s ON c.source_id = s.id "
+                "WHERE s.id IS NULL LIMIT :n"
+            ), {"n": batch_size}).fetchall()
+        ]
+        if not ids:
+            break
+        db.session.execute(
+            _sa.delete(Channel).where(Channel.id.in_(ids))
+        )
+        deleted_channels += len(ids)
+        db.session.commit()
+        if len(ids) < batch_size:
+            break
+
     if deleted_programs or deleted_channels:
         logger.info(
             '[worker] cleaned %d orphan programs and %d orphan channels',
@@ -2152,7 +2187,12 @@ if __name__ == '__main__':
         scheduler.start()
         logger.info('Scheduler started — checking sources every 60s')
         with flask_app.app_context():
-            _cleanup_orphans()
+            try:
+                _r = redis.from_url(flask_app.config['REDIS_URL'])
+                _q = Queue('maintenance', connection=_r)
+                _q.enqueue('app.worker._rq_integrity_cleanup', job_timeout=300)
+            except Exception as _e:
+                logger.warning('[scheduler] could not enqueue startup integrity cleanup: %s', _e)
             enabled_sources = Source.query.filter_by(is_enabled=True).count()
             total_sources = Source.query.count()
             from app.models import Feed
