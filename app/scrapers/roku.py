@@ -1092,10 +1092,13 @@ class RokuScraper(BaseScraper):
                 logger.debug("[roku] %d stations have shouldRequestSchedule=False, skipping content proxy for those", len(no_schedule_ids))
 
         effective_skip = (skip_ids or set()) | no_schedule_ids
-        total = len(channels)
-        skipped = len(effective_skip & {ch.source_channel_id for ch in channels}) if effective_skip else 0
+        channel_ids = {ch.source_channel_id for ch in channels}
+        skipped = len(effective_skip & channel_ids) if effective_skip else 0
+        total = len(channels) - skipped  # only count channels that will hit the network
         if skipped:
-            logger.info("[roku] EPG skip: %d/%d channels (fresh programs or no-schedule flag), skipping content proxy", skipped, total)
+            logger.info("[roku] EPG skip: %d/%d channels (fresh programs or no-schedule flag), skipping content proxy", skipped, len(channels))
+        if self._progress_cb:
+            self._progress_cb('epg', 0, total)
         # Snapshot merged headers (session defaults + API-specific) and cookies
         # so each worker thread can reuse its own independent session without
         # mutating the shared scraper session or opening a fresh pool per task.
@@ -1164,15 +1167,17 @@ class RokuScraper(BaseScraper):
                     executor.shutdown(wait=False, cancel_futures=True)
                     raise exc
                 result, local_cid_map, play_id, selector_url = future.result() if not exc else ([], {}, None, None)
+                sid = futures[future].source_channel_id
                 with lock:
                     programs.extend(result)
                     for cid, progs in local_cid_map.items():
                         cid_to_progs.setdefault(cid, []).extend(progs)
-                    self._cache_play_id(futures[future].source_channel_id, play_id)
-                    self._cache_selector_url(futures[future].source_channel_id, selector_url)
-                    done[0] += 1
-                    if self._progress_cb:
-                        self._progress_cb('epg', done[0], total)
+                    self._cache_play_id(sid, play_id)
+                    self._cache_selector_url(sid, selector_url)
+                    if sid not in effective_skip:
+                        done[0] += 1
+                        if self._progress_cb:
+                            self._progress_cb('epg', done[0], total)
 
         missing_channels = [
             ch for ch in channels
@@ -1222,18 +1227,19 @@ class RokuScraper(BaseScraper):
                 stream_cached += 1
         if not self._cached_osm_session():
             self._seed_osm_session(channels)
+        n_channels = len(channels)
         logger.debug(
             "[roku] cache warm summary: play_id=%d/%d selector=%d/%d stream_url=%d/%d retry_play=%d retry_selector=%d",
             play_cached,
-            total,
+            n_channels,
             selector_cached,
-            total,
+            n_channels,
             stream_cached,
             total,
             retried_play,
             retried_selector,
         )
-        logger.debug("[roku] %d EPG entries fetched for %d channels", len(programs), total)
+        logger.debug("[roku] %d EPG entries fetched for %d channels", len(programs), n_channels)
         return programs
 
     def _fetch_descriptions(
