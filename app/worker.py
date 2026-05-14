@@ -1921,8 +1921,13 @@ def _upsert_programs(source, program_data_list):
             'episode':       pd.episode,
             'original_air_date': pd.original_air_date,
         })
-    if rows:
-        db.session.execute(Program.__table__.insert(), rows)
+    # Commit in chunks so the write lock isn't held for the full batch.
+    # A single 10k-row executemany can hold the lock long enough to starve
+    # other workers past their busy_timeout.
+    _CHUNK = 500
+    for i in range(0, len(rows), _CHUNK):
+        db.session.execute(Program.__table__.insert(), rows[i:i + _CHUNK])
+        db.session.commit()
 
 
 # In-memory record of when each source was last enqueued, so we don't
