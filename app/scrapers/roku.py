@@ -1050,6 +1050,8 @@ class RokuScraper(BaseScraper):
         if (time.time() - self._last_epg_ok) > 60:
             epg_probe = self._api_get(_EPG_URL, timeout=20, label="epg")
             if not epg_probe or epg_probe.status_code != 200:
+                if epg_probe and epg_probe.status_code == 403:
+                    self._clear_cached_session()
                 logger.warning("[roku] EPG validation returned %s before threaded fetch",
                                getattr(epg_probe, "status_code", "no response"))
                 raise ScrapeSkipError("[roku] session rejected before EPG fetch; keeping previous EPG data")
