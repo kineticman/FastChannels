@@ -410,7 +410,9 @@ def channels():
         q = q.filter(Channel.language == language_filter)
     if country_filter:
         q = q.filter(Channel.country == country_filter)
-    if category_filter:
+    if category_filter == '__none__':
+        q = q.filter(Channel.category == None)
+    elif category_filter:
         q = q.filter(Channel.category == category_filter)
     if search:
         q = q.filter(Channel.name.ilike(f'%{search}%'))
@@ -507,6 +509,9 @@ def channels():
         .group_by(Channel.category)\
         .order_by(Channel.category).all()
     categories = [(cat, count) for cat, count in cat_rows]
+    missing_category_count = db.session.query(db.func.count(Channel.id))\
+        .filter(Channel.id.in_(filtered_ids), Channel.category == None)\
+        .scalar() or 0
 
     country_rows = db.session.query(Channel.country, db.func.count(Channel.id))\
         .filter(Channel.id.in_(filtered_ids), Channel.country != None, Channel.country != '')\
@@ -578,6 +583,7 @@ def channels():
                            language_filter=language_filter, languages=languages,
                            country_filter=country_filter, countries=countries,
                            category_filter=category_filter, categories=categories,
+                           missing_category_count=missing_category_count,
                            duplicates_filter=duplicates_filter,
                            new_filter=new_filter,
                            epg_filter=epg_filter,

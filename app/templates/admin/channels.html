@@ -1248,6 +1248,7 @@
             <label class="filter-label" for="category-filter">Category</label>
             <select id="category-filter" name="category">
               <option value="">All Categories</option>
+              {% if missing_category_count %}<option value="__none__" {% if category_filter == '__none__' %}selected{% endif %}>Missing category ({{ missing_category_count }})</option>{% endif %}
               {% for cat, count in categories %}
               <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }} ({{ count }})</option>
               {% endfor %}
@@ -1471,6 +1472,7 @@
             <th>
               <select class="col-filter-select{% if category_filter %} col-filter-active{% endif %}" onchange="filterBy('category', this.value)" title="Filter by category">
                 <option value="">Category</option>
+                {% if missing_category_count %}<option value="__none__" {% if category_filter == '__none__' %}selected{% endif %}>Missing category</option>{% endif %}
                 {% for cat, count in categories %}
                 <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }}</option>
                 {% endfor %}

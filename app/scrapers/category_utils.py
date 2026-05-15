@@ -294,6 +294,7 @@ _CANONICAL_MAP: dict[str, str] = {
     # True Crime
     'crime':                        'True Crime',
     'crime tv':                     'True Crime',
+    'just in crime':                'True Crime',
     'mystery':                      'True Crime',
     'thriller':                     'True Crime',
 

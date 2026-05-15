@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata
+from .category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ class XumoScraper(BaseScraper):
             name = str(item.get("title") or "").strip()
             if not channel_id or not name:
                 continue
-            category = self._extract_genre(item)
+            category = self._extract_genre(item) or infer_category_from_name(name)
 
             descs = item.get("descriptions") or {}
             description = (
