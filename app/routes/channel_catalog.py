@@ -7,6 +7,18 @@
 
 CHANNEL_CATALOG = [
     {
+        "network": "myAEW",
+        "channels": [
+            {
+                "name": "AEW FAST Channel",
+                "stream_url": "https://amg16221-amg16221c1-amgplt0795.playout.now3.amagi.tv/ts-us-e2-n2/playlist/amg16221-amg16221c1-amgplt0795/playlist.m3u8",
+                "logo_url": "https://d31l2nn7dlh4li.cloudfront.net/Images/f8fc6e5f-39af-4378-b68a-73f02c2227c7.jpg",
+                "category": "Sports",
+                "language": "en",
+            },
+        ],
+    },
+    {
         "network": "ItsRealGoodTV",
         "channels": [
             {
