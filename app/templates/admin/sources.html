@@ -1281,10 +1281,15 @@
     async function runAuditFromModal(sourceId) {
       const content = document.getElementById('audit-modal-content');
       if (!content) return;
+      if (_auditModalPollTimer) { clearTimeout(_auditModalPollTimer); _auditModalPollTimer = null; }
       content.innerHTML = _renderAuditModalContent(sourceId, _auditModalSourceName,
         {status: 'queued', last_result: null, last_report: null});
       try {
-        const r = await fetch(`/api/sources/${sourceId}/stream-audit`, {method: 'POST'});
+        const r = await fetch(`/api/sources/${sourceId}/stream-audit`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({include_inactive: false}),
+        });
         const d = await r.json();
         if (d.status === 'queued') {
           _auditGrace[sourceId] = Date.now() + 12000;
@@ -1300,6 +1305,7 @@
     async function runAuditIncludeDead(sourceId) {
       const content = document.getElementById('audit-modal-content');
       if (!content) return;
+      if (_auditModalPollTimer) { clearTimeout(_auditModalPollTimer); _auditModalPollTimer = null; }
       content.innerHTML = _renderAuditModalContent(sourceId, _auditModalSourceName,
         {status: 'queued', last_result: null, last_report: null});
       try {
@@ -1325,6 +1331,7 @@
       if (!ids.length) return;
       const content = document.getElementById('audit-modal-content');
       if (!content) return;
+      if (_auditModalPollTimer) { clearTimeout(_auditModalPollTimer); _auditModalPollTimer = null; }
       content.innerHTML = _renderAuditModalContent(sourceId, _auditModalSourceName,
         {status: 'queued', phase: 'recheck', last_result: null, last_report: null});
       try {
