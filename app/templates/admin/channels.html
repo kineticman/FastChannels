@@ -407,6 +407,7 @@
     .dc-badge-on   { background: var(--success-bg); color: var(--success); border-color: var(--success-border); }
     .dc-badge-off  { background: var(--danger-bg);  color: var(--danger);  border-color: var(--danger-border); }
     .dc-badge-dead { background: var(--danger-bg-2); color: var(--danger-soft); border-color: var(--danger-border); }
+    .dc-badge-vod  { background: var(--info-bg, #1e3a5f); color: var(--info-soft, #7eb8f7); border-color: var(--info-border, #2a5080); }
     .dc-badge-inact{ background: var(--surface-4);  color: var(--text-muted); border-color: var(--border); }
     .dc-badge-dupl { background: var(--purple-panel); color: var(--purple); border-color: var(--purple-panel-border-soft); }
     /* Stats grid */
@@ -1277,7 +1278,8 @@
               <option value="">All stream states</option>
               <option value="1" {% if drm_filter == '1' %}selected{% endif %}>🔒 DRM only</option>
               <option value="dead" {% if drm_filter == 'dead' %}selected{% endif %}>💀 Dead only</option>
-              <option value="0" {% if drm_filter == '0' %}selected{% endif %}>No DRM / Dead flag</option>
+              <option value="vod" {% if drm_filter == 'vod' %}selected{% endif %}>📼 VOD only</option>
+              <option value="0" {% if drm_filter == '0' %}selected{% endif %}>No DRM / Dead / VOD flag</option>
             </select>
           </div>
           <div class="filter-group">
@@ -1380,7 +1382,7 @@
       <span class="filter-chip"><strong>Presence</strong>{% if presence_filter == 'active' %}Active only{% elif presence_filter == 'inactive' %}Inactive only{% elif presence_filter == 'enabled_inactive' %}Enabled but inactive{% elif presence_filter == 'missed' %}Missed recently{% elif presence_filter == 'pinned' %}Pinned{% else %}{{ presence_filter }}{% endif %}</span>
       {% endif %}
       {% if drm_filter %}
-      <span class="filter-chip"><strong>Health</strong>{% if drm_filter == '1' %}DRM only{% elif drm_filter == 'dead' %}Dead only{% elif drm_filter == '0' %}No DRM / Dead flag{% endif %}</span>
+      <span class="filter-chip"><strong>Health</strong>{% if drm_filter == '1' %}DRM only{% elif drm_filter == 'dead' %}Dead only{% elif drm_filter == 'vod' %}VOD only{% elif drm_filter == '0' %}No DRM / Dead / VOD flag{% endif %}</span>
       {% endif %}
       {% if language_filter %}
       <span class="filter-chip"><strong>Language</strong>{{ language_filter }}</span>
@@ -1588,6 +1590,8 @@
                   <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'DRM')" title="{{ ch.disable_reason }} — stream is protected, not playable in generic IPTV clients. Click to re-enable.">🔒</span>
                   {% elif ch.disable_reason == 'Dead' %}
                   <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'Dead')" title="Dead — stream audit found this channel not currently playable. Click to re-enable.">💀</span>
+                  {% elif ch.disable_reason == 'VOD' %}
+                  <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'VOD')" title="VOD — this channel serves on-demand content, not a live stream. Click to re-enable.">📼</span>
                   {% endif %}
                   {% if ch.is_duplicate %}
                   <button class="btn-clear-dup" id="cleardup-{{ ch.id }}" onclick="clearManualDup({{ ch.id }}, this)" title="Remove duplicate label">⊘</button>
@@ -2626,7 +2630,8 @@
         badges.push(`<span class="dc-badge dc-badge-inact">Inactive</span>`);
       }
       if (ch.disable_reason) {
-        badges.push(`<span class="dc-badge dc-badge-dead">${escapeHtml(ch.disable_reason)}</span>`);
+        const badgeClass = ch.disable_reason === 'VOD' ? 'dc-badge-vod' : 'dc-badge-dead';
+        badges.push(`<span class="dc-badge ${badgeClass}">${escapeHtml(ch.disable_reason)}</span>`);
       } else if (ch.is_enabled) {
         badges.push(`<span class="dc-badge dc-badge-on dc-status-chip">On</span>`);
       } else {
@@ -2880,11 +2885,22 @@
 
     function openReenableModal(channelId, flagType) {
       _reenableChannelId = channelId;
-      const icon = flagType === 'DRM' ? '🔒' : '💀';
-      const label = flagType === 'DRM' ? 'DRM-protected' : 'Dead';
-      document.getElementById('reenable-modal-title').textContent = `Re-enable ${icon} ${label} Channel`;
-      document.getElementById('reenable-modal-body').textContent =
-        `Clear the "${label}" flag and re-enable this channel? It will be included in outputs again until the next stream audit.`;
+      let icon, title, body;
+      if (flagType === 'DRM') {
+        icon  = '🔒';
+        title = 'Re-enable DRM-protected Channel';
+        body  = 'Clear the "DRM" flag and re-enable this channel? It will be included in outputs again, but may not play on clients that don\'t support DRM.';
+      } else if (flagType === 'VOD') {
+        icon  = '📼';
+        title = 'Re-enable VOD Channel';
+        body  = 'This channel was detected as VOD (on-demand content), not a live stream. If re-enabled, it will play through its content once and then stop — it won\'t loop or update like a live FAST channel. Re-enable anyway?';
+      } else {
+        icon  = '💀';
+        title = 'Re-enable Dead Channel';
+        body  = 'Clear the "Dead" flag and re-enable this channel? It will be included in outputs again until the next stream audit.';
+      }
+      document.getElementById('reenable-modal-title').textContent = `${icon} ${title}`;
+      document.getElementById('reenable-modal-body').textContent = body;
       document.getElementById('reenable-modal').classList.add('open');
     }
 

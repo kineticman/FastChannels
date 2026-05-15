@@ -150,6 +150,7 @@
     .audit-last-result { font-size: 0.72rem; color: var(--text-soft); margin-top: 0.1rem; }
     .audit-last-result:empty { display: none; }
     .audit-last-result .aud-dead    { color: var(--danger); }
+    .audit-last-result .aud-vod     { color: var(--info-soft, #7eb8f7); }
     .audit-last-result .aud-drm     { color: var(--warning); }
     .audit-last-result .aud-403     { color: var(--warning); }
     .audit-last-result .aud-ok      { color: var(--success-soft); }
@@ -1183,6 +1184,7 @@
         const bits  = [];
         if (total) bits.push(`${done}/${total} checked`);
         if (data.dead)        bits.push(`<span class="aud-dead">${data.dead} dead</span>`);
+        if (data.vod)         bits.push(`<span class="aud-vod">${data.vod} VOD</span>`);
         if (data.flagged)     bits.push(`<span class="aud-drm">${data.flagged} DRM</span>`);
         if (data.skipped_403) bits.push(`<span class="aud-403">${data.skipped_403} rate-limited</span>`);
         const phaseLabel = data.phase === 'recheck' ? 'Rechecking…' : 'Running…';
@@ -1197,13 +1199,14 @@
 
       if (result && !isRunning) {
         const ts  = result.ts ? new Date(result.ts).toLocaleString() : '';
-        const ok  = Math.max(0, (result.checked || 0) - (result.dead || 0) - (result.flagged || 0));
+        const ok  = Math.max(0, (result.checked || 0) - (result.dead || 0) - (result.vod || 0) - (result.flagged || 0));
         const bits = [
           `<span class="aud-ok">${ok} ok</span>`,
-          result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`          : null,
-          result.flagged     ? `<span class="aud-drm">${result.flagged} DRM</span>`         : null,
+          result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`               : null,
+          result.vod         ? `<span class="aud-vod">${result.vod} VOD</span>`                  : null,
+          result.flagged     ? `<span class="aud-drm">${result.flagged} DRM</span>`              : null,
           result.skipped_403 ? `<span class="aud-403">${result.skipped_403} rate-limited</span>` : null,
-          result.errors      ? `${result.errors} errors`                                    : null,
+          result.errors      ? `${result.errors} errors`                                         : null,
         ].filter(Boolean);
         html += `
           <div class="audit-summary">
@@ -1215,14 +1218,16 @@
       if (!isRunning) {
         if (report && report.channels && report.channels.length) {
           const dead    = report.channels.filter(c => c.status === 'dead');
+          const vod     = report.channels.filter(c => c.status === 'vod');
           const drm     = report.channels.filter(c => c.status === 'drm');
           const limited = report.channels.filter(c => c.status === 'rate-limited');
           const errors  = report.channels.filter(c => c.status === 'error');
 
           const formatReasonText = (reason, status) => {
             const text = String(reason || '').trim();
-            if (!text) return status === 'dead' ? 'Dead' : '';
+            if (!text) return status === 'dead' ? 'Dead' : status === 'vod' ? 'VOD' : '';
             if (status === 'dead') return 'Dead';
+            if (status === 'vod') return 'VOD';
             if (status === 'drm') return 'DRM';
             if (status === 'rate-limited') {
               const codeMatch = text.match(/\bHTTP\s+(\d{3})\b/i);
@@ -1248,6 +1253,7 @@
 
           html += `<div class="audit-report">`;
           html += renderGroup('Dead', dead, true);
+          html += renderGroup('VOD', vod, true);
           html += renderGroup('DRM', drm, false);
           html += renderGroup('Rate-limited', limited, false);
           html += renderGroup('Errors', errors, false);
@@ -1495,11 +1501,12 @@
     function _renderLastAuditResult(sourceId, r) {
       const el = document.getElementById(`audit-last-result-${sourceId}`);
       if (!el || !r) return;
-      const ok    = r.checked - (r.flagged || 0) - (r.dead || 0);
+      const ok    = (r.checked || 0) - (r.flagged || 0) - (r.dead || 0) - (r.vod || 0);
       const ts    = r.ts ? new Date(r.ts).toLocaleString() : '';
       const bits  = [];
-      if (r.checked != null) bits.push(`<span class="aud-ok">${r.checked} ok</span>`);
+      if (r.checked != null) bits.push(`<span class="aud-ok">${ok} ok</span>`);
       if (r.dead)             bits.push(`<span class="aud-dead">${r.dead} dead</span>`);
+      if (r.vod)              bits.push(`<span class="aud-vod">${r.vod} VOD</span>`);
       if (r.flagged)          bits.push(`<span class="aud-drm">${r.flagged} DRM</span>`);
       if (r.skipped_403)      bits.push(`<span class="aud-403">${r.skipped_403} rate-limited</span>`);
       if (r.errors)           bits.push(`${r.errors} errors`);

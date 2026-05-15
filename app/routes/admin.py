@@ -355,6 +355,8 @@ def channels():
         q = q.filter(Channel.disable_reason.like('DRM%'))
     elif drm_filter == 'dead':
         q = q.filter(Channel.disable_reason == 'Dead')
+    elif drm_filter == 'vod':
+        q = q.filter(Channel.disable_reason == 'VOD')
     elif drm_filter == '0':
         q = q.filter(Channel.disable_reason == None)
 

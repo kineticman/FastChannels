@@ -547,7 +547,7 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
 
         if include_inactive:
             channels = source.channels.filter(
-                db.or_(Channel.is_active == True, Channel.disable_reason == 'Dead')
+                db.or_(Channel.is_active == True, Channel.disable_reason.in_(['Dead', 'VOD']))
             ).all()
         else:
             channels = source.channels.filter(Channel.is_active == True).all()
@@ -555,6 +555,7 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
         checked  = 0
         flagged  = 0
         dead     = 0
+        vod      = 0
         errors   = 0
         skipped_403 = 0
         consecutive_errors = 0
@@ -571,7 +572,7 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
             _redis_audit = None
 
         import json as _json_audit
-        def _audit_progress(done, total_, flagged_=0, dead_=0, errors_=0, skipped_403_=0, phase='checking'):
+        def _audit_progress(done, total_, flagged_=0, dead_=0, vod_=0, errors_=0, skipped_403_=0, phase='checking'):
             if not _redis_audit:
                 return
             try:
@@ -580,7 +581,7 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                 else:
                     _redis_audit.setex(_audit_key, 600, _json_audit.dumps({
                         'phase': phase, 'done': done, 'total': total_,
-                        'flagged': flagged_, 'dead': dead_, 'errors': errors_,
+                        'flagged': flagged_, 'dead': dead_, 'vod': vod_, 'errors': errors_,
                         'skipped_403': skipped_403_,
                         'ts': _time.time(),
                     }))
@@ -746,9 +747,9 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                     if 'type="static"' in manifest_text:
                         ch.is_active      = False
                         ch.is_enabled     = False
-                        ch.disable_reason = 'Dead'
-                        dead += 1
-                        report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'dead', 'reason': 'VOD'})
+                        ch.disable_reason = 'VOD'
+                        vod += 1
+                        report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'vod', 'reason': 'VOD'})
                         logger.info('[audit] DASH VOD (not live): %s', ch.name)
                         continue
                     _widevine  = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
@@ -806,9 +807,9 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                 ):
                     ch.is_active      = False
                     ch.is_enabled     = False
-                    ch.disable_reason = 'Dead'
-                    dead += 1
-                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'dead', 'reason': 'VOD'})
+                    ch.disable_reason = 'VOD'
+                    vod += 1
+                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'vod', 'reason': 'VOD'})
                     logger.info('[audit] finished VOD (not live): %s', ch.name)
                     continue
 
@@ -838,9 +839,9 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
 
             if i % 25 == 0:
                 db.session.commit()
-                _audit_progress(i, total, flagged, dead, errors, skipped_403)
-                logger.info('[audit] %s: %d/%d — checked=%d flagged=%d dead=%d errors=%d skipped_403=%d',
-                            source_name, i, total, checked, flagged, dead, errors, skipped_403)
+                _audit_progress(i, total, flagged, dead, vod, errors, skipped_403)
+                logger.info('[audit] %s: %d/%d — checked=%d flagged=%d dead=%d vod=%d errors=%d skipped_403=%d',
+                            source_name, i, total, checked, flagged, dead, vod, errors, skipped_403)
 
             _time.sleep(0.3)
 
@@ -848,7 +849,7 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
         cfg = dict(source.config or {})
         cfg['last_audit_result'] = {
             'total': total, 'checked': checked, 'flagged': flagged,
-            'dead': dead, 'errors': errors, 'skipped_403': skipped_403,
+            'dead': dead, 'vod': vod, 'errors': errors, 'skipped_403': skipped_403,
             'ts': datetime.now(timezone.utc).isoformat(),
         }
         cfg['last_audit_report'] = {
@@ -858,8 +859,8 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
         source.config = cfg
         db.session.commit()
         _audit_progress(0, 0, phase='done')
-        logger.info('[audit] %s: done — total=%d checked=%d flagged=%d dead=%d errors=%d skipped_403=%d',
-                    source_name, total, checked, flagged, dead, errors, skipped_403)
+        logger.info('[audit] %s: done — total=%d checked=%d flagged=%d dead=%d vod=%d errors=%d skipped_403=%d',
+                    source_name, total, checked, flagged, dead, vod, errors, skipped_403)
 
 
 def run_stream_audit_recheck(source_name: str, channel_ids: list):
@@ -1655,14 +1656,15 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 ch.description = _sanitize_description(cd.description)
             if getattr(cd, 'guide_key', None):
                 ch.guide_key = cd.guide_key
-            # Don't resurrect channels the stream audit flagged as Dead or DRM
+            # Don't resurrect channels the stream audit flagged as Dead, VOD, or DRM
             # unless the stream URL changed (source may have fixed the channel).
-            if (ch.disable_reason == 'Dead' or (ch.disable_reason or '').startswith('DRM')) and not stream_url_changed:
+            _flagged = ch.disable_reason in ('Dead', 'VOD') or (ch.disable_reason or '').startswith('DRM')
+            if _flagged and not stream_url_changed:
                 ch.is_active  = False  # re-enforce — a prior scrape may have revived it
                 ch.is_enabled = False
             else:
                 ch.is_active = True
-                if stream_url_changed and (ch.disable_reason == 'Dead' or (ch.disable_reason or '').startswith('DRM')):
+                if stream_url_changed and _flagged:
                     ch.disable_reason = None  # clear flag; let next audit re-check
             ch.last_seen_at = seen_at
             ch.missed_scrapes = 0
