@@ -428,9 +428,12 @@
 
     <div class="page-actions">
       <div class="actions-buttons">
-        <button class="btn btn-run actions-btn" id="force-refresh-btn" onclick="forceCompleteRefresh()">Force Complete Refresh</button>
-        <button class="btn btn-run actions-btn" id="audit-all-btn" onclick="auditAll()">Audit All Sources</button>
-        <button class="btn btn-run actions-btn" id="cleanup-inactive-btn" onclick="openCleanupModal()">Clean Up Inactive Channels</button>
+        <button class="btn btn-run actions-btn" id="force-refresh-btn" onclick="forceCompleteRefresh()"
+                title="Clears saved scrape times and queues a full channel + guide refresh for every enabled source.">Force Complete Refresh</button>
+        <button class="btn btn-run actions-btn" id="audit-all-btn" onclick="auditAll()"
+                title="Tests every active channel across all sources for stream health and DRM. Can take several minutes per source.">Audit All Sources</button>
+        <button class="btn btn-run actions-btn" id="cleanup-inactive-btn" onclick="openCleanupModal()"
+                title="Permanently delete channels that have been missing from scrapes for a configurable number of days.">Clean Up Inactive Channels</button>
       </div>
       <div class="global-status" id="global-status"></div>
     </div>
@@ -863,6 +866,7 @@
     }
 
     async function auditAll() {
+      if (!confirm('Run a stream audit for all sources? This tests every active channel for stream health and DRM, and can take several minutes per source.')) return;
       const btn = document.getElementById('audit-all-btn');
       const status = document.getElementById('global-status');
       btn.disabled = true;
