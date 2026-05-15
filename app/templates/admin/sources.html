@@ -17,13 +17,12 @@
 
     /* Page-level actions panel */
     .page-actions {
-      display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+      display: flex; flex-direction: column; gap: 0.6rem;
       margin-bottom: 1rem; padding: 1rem 1.25rem; background: var(--surface);
       border: 1px solid var(--border); border-radius: 10px;
     }
-    .page-actions h2 { font-size: 1rem; font-weight: 700; }
-    .page-actions p { color: var(--text-soft); font-size: 0.82rem; line-height: 1.45; margin-top: 0.35rem; }
-    .page-actions .right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.45rem; }
+    .actions-buttons { display: flex; flex-direction: row; gap: 0.6rem; flex-wrap: wrap; }
+    .actions-btn { flex: 1 1 0; text-align: center; min-width: 10rem; }
     .global-status { font-size: 0.78rem; min-height: 1rem; color: var(--text-soft); }
     .global-status.ok { color: var(--success-soft); }
     .global-status.error { color: var(--danger); }
@@ -217,6 +216,11 @@
     }
     .interval-control .unit { font-size: 0.76rem; color: var(--text-soft); }
     .interval-control .help { width: 100%; font-size: 0.74rem; color: var(--text-muted); line-height: 1.4; }
+    .cleanup-source-row { display: grid; grid-template-columns: 1.2rem 2rem 1fr; align-items: center; gap: 0.4rem; padding: 0.22rem 0.35rem; border-radius: 4px; cursor: pointer; user-select: none; }
+    .cleanup-source-row:hover { background: var(--bg); }
+    .cleanup-chevron { color: var(--text-muted); font-size: 0.65rem; transition: transform 0.15s; line-height: 1; }
+    .cleanup-detail { display: none; padding: 0.2rem 0.5rem 0.45rem 3.6rem; }
+    .cleanup-channel-grid { display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 1.25rem; }
     .delete-inactive-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
     .btn-delete-inactive { background: none; border: none; padding: 0; font-size: 0.74rem; color: var(--text-muted); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
     .btn-delete-inactive:hover { color: var(--danger); }
@@ -377,8 +381,8 @@
       nav h1 { width: 100%; }
       nav .version { margin-left: 0; width: 100%; order: 99; }
       .container { margin: 1rem auto; padding: 0 1rem; }
-      .page-actions { padding: 1rem; flex-direction: column; align-items: stretch; }
-      .page-actions .right { align-items: stretch; }
+      .page-actions { padding: 1rem; }
+      .actions-btn { flex: 1 1 100%; }
       .col-toggle { display: none; }
       .dashboard-table th.col-toggle { display: none; }
       .col-actions { width: auto; }
@@ -423,15 +427,12 @@
     {% endif %}
 
     <div class="page-actions">
-      <div>
-        <h2>Source Actions</h2>
-        <p>Force a full channel and guide refresh for every enabled source. This clears saved scrape times so the next run bypasses EPG-only shortcuts.</p>
+      <div class="actions-buttons">
+        <button class="btn btn-run actions-btn" id="force-refresh-btn" onclick="forceCompleteRefresh()">Force Complete Refresh</button>
+        <button class="btn btn-run actions-btn" id="audit-all-btn" onclick="auditAll()">Audit All Sources</button>
+        <button class="btn btn-run actions-btn" id="cleanup-inactive-btn" onclick="openCleanupModal()">Clean Up Inactive Channels</button>
       </div>
-      <div class="right">
-        <button class="btn btn-run" id="force-refresh-btn" onclick="forceCompleteRefresh()">Force Complete Refresh</button>
-        <button class="btn btn-audit" id="audit-all-btn" onclick="auditAll()">Audit All Sources</button>
-        <div class="global-status" id="global-status"></div>
-      </div>
+      <div class="global-status" id="global-status"></div>
     </div>
 
     {% if chnum_warnings %}
@@ -616,6 +617,27 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" onclick="cancelDisable()">Cancel</button>
         <button class="btn btn-confirm" onclick="confirmDisable()">Disable &amp; Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Clean Up Inactive Channels Modal -->
+  <div class="modal-overlay" id="cleanup-modal" onclick="closeCleanupModal(event)">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:460px">
+      <h2>Clean Up Inactive Channels</h2>
+      <p style="margin-bottom:1rem">Delete inactive channels that have not been seen in a scrape for at least the specified number of days. Pinned channels are never removed.</p>
+      <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:1rem">
+        <label style="font-size:0.85rem;color:var(--text-soft);white-space:nowrap" for="cleanup-days-input">Not seen in</label>
+        <input id="cleanup-days-input" type="number" min="1" max="365" value="30"
+               style="width:70px;padding:0.3rem 0.5rem;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:0.85rem;text-align:center"
+               oninput="clearCleanupPreview()">
+        <span style="font-size:0.85rem;color:var(--text-soft)">days</span>
+        <button class="btn btn-cancel btn-sm" onclick="previewCleanup()" style="margin-left:0.25rem">Preview</button>
+      </div>
+      <div id="cleanup-preview" style="font-size:0.83rem;min-height:1.4rem;margin-bottom:1.25rem;max-height:260px;overflow-y:auto;color:var(--text-soft)"></div>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" onclick="closeCleanupModal()">Cancel</button>
+        <button class="btn btn-confirm" id="cleanup-confirm-btn" onclick="confirmCleanup()" disabled>Delete Channels</button>
       </div>
     </div>
   </div>
@@ -864,6 +886,116 @@
       } finally {
         btn.textContent = 'Audit All Sources';
         btn.disabled = false;
+      }
+    }
+
+    // ── Clean up inactive channels ────────────────────────────────────────
+    let _cleanupPreviewCount = null;
+
+    function openCleanupModal() {
+      _cleanupPreviewCount = null;
+      document.getElementById('cleanup-days-input').value = '30';
+      document.getElementById('cleanup-preview').textContent = '';
+      document.getElementById('cleanup-confirm-btn').disabled = true;
+      document.getElementById('cleanup-modal').classList.add('open');
+    }
+
+    function closeCleanupModal(e) {
+      if (e && e.target !== document.getElementById('cleanup-modal')) return;
+      document.getElementById('cleanup-modal').classList.remove('open');
+    }
+
+    function clearCleanupPreview() {
+      _cleanupPreviewCount = null;
+      document.getElementById('cleanup-preview').textContent = '';
+      document.getElementById('cleanup-confirm-btn').disabled = true;
+    }
+
+    function _daysAgo(isoStr) {
+      if (!isoStr) return 'never';
+      const days = Math.floor((Date.now() - new Date(isoStr).getTime()) / 86400000);
+      if (days === 0) return 'today';
+      if (days === 1) return '1 day ago';
+      return `${days} days ago`;
+    }
+
+    function toggleCleanupSource(i) {
+      const detail = document.getElementById(`cld-${i}`);
+      const chevron = document.getElementById(`clc-${i}`);
+      const open = detail.style.display === 'none';
+      detail.style.display = open ? 'block' : 'none';
+      chevron.style.transform = open ? 'rotate(90deg)' : '';
+    }
+
+    async function previewCleanup() {
+      const days = parseInt(document.getElementById('cleanup-days-input').value) || 30;
+      const preview = document.getElementById('cleanup-preview');
+      const confirmBtn = document.getElementById('cleanup-confirm-btn');
+      preview.innerHTML = '<span style="color:var(--text-soft)">Checking…</span>';
+      confirmBtn.disabled = true;
+      try {
+        const r = await fetch(`/api/channels/inactive-count?days=${days}`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        _cleanupPreviewCount = d.count;
+        if (d.count === 0) {
+          preview.innerHTML = `<span style="color:var(--text-soft)">No inactive channels older than ${days} days found.</span>`;
+          confirmBtn.disabled = true;
+          return;
+        }
+        const LIMIT = 100;
+        let html = `<div style="margin-bottom:0.5rem;color:var(--text);font-weight:500">${d.count} channel${d.count === 1 ? '' : 's'} would be deleted:</div>`;
+        d.by_source.forEach((s, i) => {
+          html += `<div class="cleanup-source-row" onclick="toggleCleanupSource(${i})">`;
+          html += `<span id="clc-${i}" class="cleanup-chevron">▶</span>`;
+          html += `<span style="color:var(--text-muted);text-align:right;font-size:0.8rem">${s.count}</span>`;
+          html += `<span style="color:var(--text)">${s.source}</span>`;
+          html += `</div>`;
+          const shown = s.channels.slice(0, LIMIT);
+          const overflow = s.channels.length - shown.length;
+          html += `<div id="cld-${i}" class="cleanup-detail">`;
+          html += `<div class="cleanup-channel-grid">`;
+          shown.forEach(ch => {
+            html += `<span style="color:var(--text-soft)">${ch.name}</span>`;
+            html += `<span style="color:var(--text-muted);font-size:0.78rem;white-space:nowrap">${_daysAgo(ch.last_seen_at)}</span>`;
+          });
+          html += `</div>`;
+          if (overflow > 0) {
+            html += `<div style="color:var(--text-muted);font-size:0.78rem;margin-top:0.3rem">…and ${overflow} more</div>`;
+          }
+          html += `</div>`;
+        });
+        preview.innerHTML = html;
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = `Delete ${d.count} Channel${d.count === 1 ? '' : 's'}`;
+      } catch (e) {
+        preview.innerHTML = '<span style="color:var(--danger)">Failed to fetch preview.</span>';
+      }
+    }
+
+    async function confirmCleanup() {
+      const days = parseInt(document.getElementById('cleanup-days-input').value) || 30;
+      const confirmBtn = document.getElementById('cleanup-confirm-btn');
+      const preview = document.getElementById('cleanup-preview');
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Deleting…';
+      try {
+        const r = await fetch('/api/channels/delete-inactive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ days }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        document.getElementById('cleanup-modal').classList.remove('open');
+        const status = document.getElementById('global-status');
+        status.textContent = `Deleted ${d.deleted} inactive channel${d.deleted === 1 ? '' : 's'}.`;
+        status.className = 'global-status ok';
+      } catch (e) {
+        preview.style.color = 'var(--danger)';
+        preview.textContent = 'Delete failed.';
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = `Delete ${_cleanupPreviewCount} Channel${_cleanupPreviewCount === 1 ? '' : 's'}`;
       }
     }
 

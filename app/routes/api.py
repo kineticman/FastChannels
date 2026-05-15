@@ -670,6 +670,55 @@ def delete_inactive_channels(source_id):
     return jsonify({'deleted': count, 'source': source.name})
 
 
+@api_bp.route('/channels/inactive-count')
+def inactive_channel_count_global():
+    from datetime import timedelta
+    from collections import defaultdict
+    days = int(request.args.get('days', 30))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = (
+        Channel.query
+        .join(Source, Channel.source_id == Source.id)
+        .add_columns(Source.name.label('source_name'))
+        .filter(
+            Channel.is_active == False,
+            Channel.scrape_pinned == False,
+            db.or_(Channel.last_seen_at == None, Channel.last_seen_at < cutoff),
+        )
+        .order_by(Source.name, Channel.name)
+        .all()
+    )
+    total = len(rows)
+    by_source = defaultdict(list)
+    for ch, source_name in rows:
+        by_source[source_name].append({
+            'name': ch.name,
+            'last_seen_at': ch.last_seen_at.isoformat() if ch.last_seen_at else None,
+        })
+    breakdown = [
+        {'source': src, 'count': len(chs), 'channels': chs}
+        for src, chs in sorted(by_source.items(), key=lambda x: -len(x[1]))
+    ]
+    return jsonify({'count': total, 'days': days, 'by_source': breakdown})
+
+
+@api_bp.route('/channels/delete-inactive', methods=['POST'])
+def delete_inactive_channels_global():
+    from datetime import timedelta
+    days = int((request.get_json() or {}).get('days', 30))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    orphans = Channel.query.filter(
+        Channel.is_active == False,
+        Channel.scrape_pinned == False,
+        db.or_(Channel.last_seen_at == None, Channel.last_seen_at < cutoff),
+    ).all()
+    count = len(orphans)
+    for ch in orphans:
+        db.session.delete(ch)
+    db.session.commit()
+    return jsonify({'deleted': count, 'days': days})
+
+
 @api_bp.route('/sources/<int:source_id>/audit-status')
 def audit_status(source_id):
     import time as _time
