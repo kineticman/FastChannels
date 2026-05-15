@@ -109,6 +109,11 @@ _STATE_URL_RE = re.compile(
     r'''(?:["']?(?:streamingUrl|liveStreamingUrl|manifestUrl|masterUrl|hlsUrl|dashUrl|videoUrl|playerUrl|contentUrl|url|src|file|stream)["']?)\s*[:=]\s*['"]([^'"]+?\.(?:m3u8|mp4|webm|mjpg|mjpeg|jpg|jpeg)(?:\?[^'"]*)?)['"]''',
     re.IGNORECASE,
 )
+_IPCAMLIVE_IFRAME_RE = re.compile(
+    r'https?://[a-z0-9]+\.ipcamlive\.com/player/player\.php\?[^"\'<>\s]*?alias=([A-Za-z0-9_-]+)',
+    re.IGNORECASE,
+)
+_IPCAMLIVE_STREAMSTATE_URL = 'https://g1.ipcamlive.com/player/getcamerastreamstate.php'
 _OXBLUE_IFRAME_RE = re.compile(r'https?://app\.oxblue\.com/\?openlink=([^&"\']+)', re.IGNORECASE)
 _OXBLUE_OPENLINK_RE = re.compile(r'^https?://app\.oxblue\.com/\?openlink=([^&]+)', re.IGNORECASE)
 _STEAM_WATCH_RE = re.compile(r'^https?://steamcommunity\.com/broadcast/watch/(\d+)', re.IGNORECASE)
@@ -336,6 +341,7 @@ class StreamDetector:
         self._candidate_resolvers: dict[str, str] = {}
         self._candidate_page_urls: dict[str, str] = {}
         self._videolinq_id_map: dict[str, str] = {}  # HLS URL → VideoLinq channel ID
+        self._ipcamlive_id_map: dict[str, str] = {}  # HLS URL → ipcamlive alias
         self._trusted_hls: set[str] = set()          # URLs from provider APIs (skip segment probe)
         self._detect_deadline = time.perf_counter() + self.DETECT_BUDGET_SECONDS
         self._detect_budget_hit = False
@@ -453,6 +459,9 @@ class StreamDetector:
                     vl_id = self._videolinq_id_map.get(candidate)
                     if vl_id:
                         result.opaque_id = f'videolinq://{vl_id}'
+                    ipc_alias = self._ipcamlive_id_map.get(candidate)
+                    if ipc_alias:
+                        result.opaque_id = f'ipcamlive://{ipc_alias}'
                     return result
                 if result.stream_type or result.error:
                     if self._is_blocked_failure(best_failure) and not self._is_blocked_failure(result):
@@ -624,6 +633,26 @@ class StreamDetector:
                 _priority_hls.append(_c)
                 self._candidate_resolvers.setdefault(_c, 'videolinq')
                 self._candidate_page_urls.setdefault(_c, url)
+        for _c in self._extract_ipcamlive_provider_candidates(session, url, text):
+            if _c not in _priority_hls:
+                _priority_hls.append(_c)
+                self._candidate_resolvers.setdefault(_c, 'ipcamlive')
+                self._candidate_page_urls.setdefault(_c, url)
+
+        # Track whether a recognised live-cam embed is the primary player on this page.
+        # Used below to suppress lura.live/JPEG false positives from article carousels.
+        _known_cam_embed_found = (
+            bool(_VIDEOLINQ_IFRAME_RE.search(text)) or bool(_VIDEOLINQ_PAGE_RE.match(url))
+            or bool(_IPCAMLIVE_IFRAME_RE.search(html.unescape(text)))
+        )
+
+        # Fast path: this page has a recognised cam embed (VideoLinq / ipcamlive).
+        # Skip generic extraction, custom-API extractors, and iframe recursion — they
+        # add ~20 s of overhead and can only produce false positives here.  If the
+        # priority extractor found a stream it's in _priority_hls; if the cam is
+        # offline, _priority_hls is empty and detect() returns "no stream found".
+        if _known_cam_embed_found:
+            return _priority_hls
 
         hls_candidates, video_candidates = self._extract_generic_candidates(text)
 
@@ -652,6 +681,19 @@ class StreamDetector:
             for c in dec_video:
                 if c not in video_candidates:
                     video_candidates.append(c)
+
+        # When a recognised live-cam embed (VideoLinq, ipcamlive) is the primary player,
+        # suppress generic-scrape false positives.  News station pages (e.g. Nexstar/WPRI)
+        # embed alongside the cam:
+        #   • Anvato VOD news clips in article carousels → lura.live m3u8 URLs that pass
+        #     #EXTM3U validation but are entirely unrelated to the live cam
+        #   • CMS banner images (WordPress /wp-content/uploads/*.jpg) that look like
+        #     JPEG snapshot feeds to the generic regex
+        # Both cam providers always serve HLS, so neither category is a valid fallback.
+        if _known_cam_embed_found:
+            hls_candidates = [c for c in hls_candidates
+                              if 'lura.live' not in urlsplit(c).netloc.lower()]
+            video_candidates = []
 
         # Custom provider APIs run before iframe recursion so they can use
         # page-local bootstrap config without brute-forcing every nested document.
@@ -2382,6 +2424,59 @@ class StreamDetector:
                     self._trusted_hls.add(hls)
             except Exception as exc:
                 logger.debug('[detector] videolinq api failed %s: %s', api_url, exc)
+
+        return candidates
+
+    def _extract_ipcamlive_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        """
+        ipcamlive embeds (g1.ipcamlive.com/player/player.php?alias={alias}) expose a
+        JSON API at getcamerastreamstate.php that returns the live CDN address and a
+        stream ID.  The HLS playlist is at {address}streams/{streamid}/stream.m3u8.
+        """
+        decoded = html.unescape(text)
+        aliases: list[str] = []
+        for m in _IPCAMLIVE_IFRAME_RE.finditer(decoded):
+            alias = m.group(1)
+            if alias not in aliases:
+                aliases.append(alias)
+        if not aliases:
+            return []
+
+        candidates: list[str] = []
+        for alias in aliases:
+            try:
+                r = session.get(
+                    _IPCAMLIVE_STREAMSTATE_URL,
+                    params={
+                        'alias': alias,
+                        'type': 'hls',
+                        'browser': 'Chrome',
+                        'browser_ver': '120',
+                        'os': 'Windows 10',
+                    },
+                    timeout=self.TIMEOUT,
+                    headers={'Referer': f'https://g1.ipcamlive.com/player/player.php?alias={alias}'},
+                )
+                if not r.ok:
+                    continue
+                details = (r.json() or {}).get('details') or {}
+                if str(details.get('streamavailable', '0')) != '1':
+                    continue
+                address = (details.get('address') or '').rstrip('/')
+                streamid = (details.get('streamid') or '').strip()
+                if not address or not streamid:
+                    continue
+                hls = f'{address}/streams/{streamid}/stream.m3u8'
+                if hls not in candidates:
+                    candidates.append(hls)
+                    self._ipcamlive_id_map[hls] = alias
+            except Exception as exc:
+                logger.debug('[detector] ipcamlive api failed %s: %s', alias, exc)
 
         return candidates
 
