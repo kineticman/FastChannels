@@ -335,7 +335,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                 )
                 for _attempt in range(3):
                     try:
-                        _upsert_programs(source, programs)
+                        _upsert_programs(source, programs, progress_cb=_progress)
                         _apply_scraper_config_updates(source, scraper)
                         source.last_scraped_at = datetime.now(timezone.utc)
                         source.last_error      = None
@@ -387,7 +387,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                             miss_threshold=getattr(scraper, 'channel_miss_threshold', _CHANNEL_MISS_THRESHOLD),
                             rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
                         )
-                        _upsert_programs(source, programs)
+                        _upsert_programs(source, programs, progress_cb=_progress)
                         _apply_scraper_config_updates(source, scraper)
                         source.last_scraped_at = datetime.now(timezone.utc)
                         source.last_error      = None
@@ -1887,7 +1887,7 @@ def _cleanup_orphans(batch_size: int = 2000):
         )
 
 
-def _upsert_programs(source, program_data_list):
+def _upsert_programs(source, program_data_list, progress_cb=None):
     if not program_data_list:
         return
     channels = {ch.source_channel_id: ch for ch in source.channels.all()}
@@ -1952,9 +1952,12 @@ def _upsert_programs(source, program_data_list):
         })
     # Commit in chunks so the write lock isn't held for the full batch.
     _CHUNK = 2000
-    for i in range(0, len(rows), _CHUNK):
+    total_rows = len(rows)
+    for i in range(0, total_rows, _CHUNK):
         db.session.execute(Program.__table__.insert(), rows[i:i + _CHUNK])
         db.session.commit()
+        if progress_cb:
+            progress_cb('db', min(i + _CHUNK, total_rows), total_rows)
 
 
 # In-memory record of when each source was last enqueued, so we don't

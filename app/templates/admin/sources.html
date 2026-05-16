@@ -1393,6 +1393,10 @@
           const pct = Math.round(data.done / data.total * 100);
           return { cls: 'status-running', text: `Caching logos ${data.done} / ${data.total} (${pct}%)` };
         }
+        if (data.phase === 'db' && data.total > 0) {
+          const pct = Math.round(data.done / data.total * 100);
+          return { cls: 'status-running', text: `Saving programs ${data.done} / ${data.total} (${pct}%)` };
+        }
         return { cls: 'status-running', text: _phaseLabel[data.phase] || 'Running…' };
       }
       return { cls: 'status-running', text: 'Running…' };
