@@ -328,29 +328,52 @@ class TCLScraper(BaseScraper):
         for the API call; results are keyed by content_id so callers use
         _detail_lookup_id(prog_id) to look up.
         """
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         # Dedupe by content_id — multiple slots may share the same content
         unique_lookup_ids = list(dict.fromkeys(self._detail_lookup_id(pid) for pid in prog_ids))
 
         details: Dict[str, dict] = {}
-        batch_size = 25
+        details_lock = threading.Lock()
+        batch_size = 50
         base_params = self._common_params()
         total = len(unique_lookup_ids)
+        completed = 0
 
-        for i in range(0, total, batch_size):
-            batch = unique_lookup_ids[i:i + batch_size]
+        batches = [
+            (i, unique_lookup_ids[i:i + batch_size])
+            for i in range(0, total, batch_size)
+        ]
+
+        def _fetch_batch(batch_start: int, batch: list) -> list:
             qs = urlencode(list(base_params.items()) + [("ids", lid) for lid in batch])
             url = f"{self.BASE}/api/metadata/v1/epg/program/detail?{qs}"
+            # Each thread needs its own session to avoid sharing state
+            import requests as _requests
+            s = _requests.Session()
+            s.headers.update(self.session.headers)
             try:
-                resp = self.session.get(url, timeout=self.timeout)
+                resp = s.get(url, timeout=self.timeout)
                 resp.raise_for_status()
-                for item in resp.json():
-                    lid = str(item.get("id") or "")
-                    if lid:
-                        details[lid] = item
+                return resp.json()
             except Exception as e:
-                logger.warning("[tcl] program detail batch %d failed: %s", i // batch_size, e)
-            if self._progress_cb:
-                self._progress_cb('epg', min(i + batch_size, total), total)
+                logger.warning("[tcl] program detail batch %d failed: %s", batch_start // batch_size, e)
+                return []
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(_fetch_batch, i, batch): len(batch) for i, batch in batches}
+            for future in as_completed(futures):
+                items = future.result()
+                batch_len = futures[future]
+                with details_lock:
+                    for item in items:
+                        lid = str(item.get("id") or "")
+                        if lid:
+                            details[lid] = item
+                    completed += batch_len
+                    if self._progress_cb:
+                        self._progress_cb('epg', min(completed, total), total)
 
         logger.info("[tcl] program details fetched: %d/%d", len(details), len(unique_lookup_ids))
         return details
