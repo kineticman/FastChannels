@@ -293,6 +293,22 @@ def trigger_gracenote_auto_clear():
         threading.Thread(target=run_gracenote_auto_clear, daemon=True).start()
 
 
+def trigger_gracenote_clear_all():
+    try:
+        q = get_maintenance_queue()
+        job_id = 'gracenote-clear-all'
+        if _job_already_active(q, job_id):
+            logger.info('Gracenote clear-all already queued/running')
+            return
+        q.enqueue('app.worker.run_gracenote_clear_all', job_timeout=300, job_id=job_id)
+        logger.info('Enqueued gracenote clear-all')
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for gracenote clear-all')
+        import threading
+        from app.worker import run_gracenote_clear_all
+        threading.Thread(target=run_gracenote_clear_all, daemon=True).start()
+
+
 def trigger_channel_auto_disable(channel_id: int, reason: str):
     try:
         q = get_fast_queue()

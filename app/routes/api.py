@@ -2993,6 +2993,17 @@ def gracenote_auto_clear():
     return jsonify({'status': 'queued'})
 
 
+@api_bp.route('/settings/gracenote-clear-all', methods=['POST'])
+def gracenote_clear_all():
+    """Disable auto-fill, clear ALL Gracenote IDs, and set all channels to mode='off'."""
+    from .tasks import trigger_gracenote_clear_all
+    row = AppSettings.get()
+    row.gracenote_auto_fill = False
+    db.session.commit()
+    trigger_gracenote_clear_all()
+    return jsonify({'status': 'queued'})
+
+
 @api_bp.route('/settings/backup-db')
 def backup_db():
     """Download a gzip-compressed copy of the live SQLite database."""

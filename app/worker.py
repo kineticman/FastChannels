@@ -1299,6 +1299,22 @@ def run_gracenote_auto_clear():
         logger.info('[gracenote-clear] cleared gracenote_id from %d auto-mode channels', cleared)
 
 
+def run_gracenote_clear_all():
+    """Clear ALL Gracenote IDs and set all channels to mode='off'.
+    Used by the settings-page 'Disable & Clear All' action."""
+    with flask_app.app_context():
+        rows = Channel.query.filter(Channel.gracenote_mode != 'off').all()
+        count = 0
+        for ch in rows:
+            ch.gracenote_id = None
+            ch.gracenote_mode = 'off'
+            ch.gracenote_locked = False
+            count += 1
+        db.session.commit()
+        _invalidate_and_refresh_xml()
+        logger.info('[gracenote-clear-all] set %d channels to off mode', count)
+
+
 def run_source_channel_purge(source_id: int):
     with flask_app.app_context():
         source = Source.query.get(source_id)
