@@ -1905,6 +1905,11 @@ def _upsert_programs(source, program_data_list):
     # beyond that window (fetched in earlier runs) are preserved.  This lets
     # sources like Roku — which return a short lookahead per request — build
     # up a rolling horizon across repeated fetches.
+    #
+    # Group channels by their (win_start, win_end) so scrapers that return the
+    # same range for every channel (e.g. TCL's 426 channels) collapse to a
+    # single DELETE rather than one per channel.
+    window_to_ids: dict[tuple, list[int]] = {}
     for channel_id, incoming_rows in incoming_by_channel_id.items():
         active_rows = [row for row in incoming_rows if _utc_aware(row.end_time) > cutoff]
         if not active_rows:
@@ -1914,11 +1919,17 @@ def _upsert_programs(source, program_data_list):
         # cutoff between the scrape and the upsert, leaving stale rows permanently.
         win_start = min(_utc_aware(row.start_time) for row in incoming_rows)
         win_end   = max(_utc_aware(row.end_time)   for row in incoming_rows)
-        Program.query.filter(
-            Program.channel_id == channel_id,
-            Program.end_time   >  win_start,
-            Program.start_time <  win_end,
-        ).delete(synchronize_session=False)
+        window_to_ids.setdefault((win_start, win_end), []).append(channel_id)
+
+    _ID_BATCH = 900  # stay under SQLite's default variable limit
+    for (win_start, win_end), ch_ids in window_to_ids.items():
+        for i in range(0, len(ch_ids), _ID_BATCH):
+            Program.query.filter(
+                Program.channel_id.in_(ch_ids[i:i + _ID_BATCH]),
+                Program.end_time   >  win_start,
+                Program.start_time <  win_end,
+            ).delete(synchronize_session=False)
+    db.session.commit()
 
     rows = []
     for pd in program_data_list:
@@ -1940,9 +1951,7 @@ def _upsert_programs(source, program_data_list):
             'original_air_date': pd.original_air_date,
         })
     # Commit in chunks so the write lock isn't held for the full batch.
-    # A single 10k-row executemany can hold the lock long enough to starve
-    # other workers past their busy_timeout.
-    _CHUNK = 500
+    _CHUNK = 2000
     for i in range(0, len(rows), _CHUNK):
         db.session.execute(Program.__table__.insert(), rows[i:i + _CHUNK])
         db.session.commit()

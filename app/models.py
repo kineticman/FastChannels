@@ -195,6 +195,7 @@ class Program(db.Model):
         db.Index('idx_programs_channel_id', 'channel_id'),
         db.Index('idx_programs_end_time', 'end_time'),
         db.Index('idx_programs_start_time', 'start_time'),
+        db.Index('idx_programs_channel_end_start', 'channel_id', 'end_time', 'start_time'),
     )
 
     def __repr__(self):

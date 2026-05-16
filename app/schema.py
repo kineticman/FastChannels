@@ -331,6 +331,11 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "CREATE INDEX idx_programs_end_time ON programs (end_time)"
                 ))
+            if "idx_programs_channel_end_start" not in existing_indexes:
+                conn.execute(text(
+                    "CREATE INDEX idx_programs_channel_end_start"
+                    " ON programs (channel_id, end_time, start_time)"
+                ))
 
         # Normalize the one hyphenated internal source id to snake_case so
         # source naming stays consistent across code paths and fresh installs.
