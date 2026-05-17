@@ -818,6 +818,23 @@ function _fetchAllRanges() {
   return _allRangesPromise;
 }
 
+function buildRangeHint(explicitRanges, myStart, myEnd, conflictIds) {
+  if (!explicitRanges.length) return '';
+
+  const parts = explicitRanges.map(r => {
+    const isConflict = conflictIds.has(r.feed_id);
+    const totalEnd = r.end + (r.gn_count || 0);
+    const range    = `${r.start.toLocaleString()} to ${totalEnd.toLocaleString()}`;
+    const color    = isConflict ? 'var(--danger)' : 'var(--text-soft)';
+    return `<span style="color:${color}">${isConflict ? '⚠ ' : ''}${r.feed_name} – ${range}${isConflict ? ' (overlaps)' : ''}</span>`;
+  });
+
+  const sep = `<span style="color:var(--text-dim)"> · </span>`;
+  return `<div style="font-size:0.75rem;margin-top:0.35rem;line-height:1.6">` +
+    `<span style="color:var(--text-dim)">Other feeds: </span>` +
+    parts.join(sep) + `</div>`;
+}
+
 async function checkInlineChnumConflict(feedId) {
   const input = document.getElementById(`chnum-${feedId}`);
   const el    = document.getElementById(`chnum-conflict-${feedId}`);
@@ -830,42 +847,25 @@ async function checkInlineChnumConflict(feedId) {
     } catch { _inlineRangeCache[feedId] = []; }
   }
 
-  const ranges = _inlineRangeCache[feedId];
-  const val = parseInt(input.value, 10);
-  if (isNaN(val)) { el.innerHTML = ''; return; }
+  const ranges   = _inlineRangeCache[feedId];
+  const val      = parseInt(input.value, 10);
+  const explicit = ranges.filter(r => r.explicit);
 
-  // Use the feed's actual channel count from the full ranges list (shared fetch).
-  let myCount = 100; // fallback if we can't determine actual count
+  if (isNaN(val)) {
+    el.innerHTML = buildRangeHint(explicit, NaN, NaN, new Set());
+    return;
+  }
+
+  let myCount = 100;
   try {
     const allRanges = await _fetchAllRanges();
     const mine = allRanges.find(r => r.feed_id === feedId);
     if (mine) myCount = (mine.count || 0) + (mine.gn_count || 0);
   } catch { /* keep fallback */ }
-  const myEnd = val + Math.max(myCount, 1) - 1;
+  const myEnd       = val + Math.max(myCount, 1) - 1;
+  const conflictIds = new Set(explicit.filter(r => val <= r.end && myEnd >= r.start).map(r => r.feed_id));
 
-  const conflicts = ranges.filter(r => val <= r.end && myEnd >= r.start && r.explicit);
-  const shown     = ranges.filter(r => r.explicit && !conflicts.find(c => c.feed_id === r.feed_id));
-
-  const chip = (r, conflict) => {
-    const gnBadge = r.gn_count
-      ? `<span style="font-size:0.68rem;background:color-mix(in srgb,var(--teal) 20%,transparent);color:var(--teal-soft);border-radius:3px;padding:0.05rem 0.3rem;margin-left:0.25rem">+${r.gn_count} gn</span>`
-      : '';
-    const border = conflict ? 'var(--danger)' : 'var(--surface-5)';
-    const nameColor = conflict ? 'var(--danger)' : 'var(--text-soft)';
-    return `<div style="display:inline-flex;flex-direction:column;border:1px solid ${border};border-radius:6px;padding:0.2rem 0.5rem;background:var(--bg)">
-      <span style="font-size:0.78rem;font-weight:600;color:${nameColor}">${conflict ? '⚠ ' : ''}${r.feed_name}</span>
-      <span style="font-size:0.7rem;color:var(--text-muted)">${r.start.toLocaleString()}–${r.end.toLocaleString()}${gnBadge}</span>
-    </div>`;
-  };
-
-  let html = '';
-  if (conflicts.length > 0 || shown.length > 0) {
-    html += `<div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.35rem">`;
-    html += conflicts.map(r => chip(r, true)).join('');
-    html += shown.map(r => chip(r, false)).join('');
-    html += `</div>`;
-  }
-  el.innerHTML = html;
+  el.innerHTML = buildRangeHint(explicit, val, myEnd, conflictIds);
 }
 
 async function loadChnumRanges(excludeId) {
@@ -877,47 +877,27 @@ async function loadChnumRanges(excludeId) {
 }
 
 function checkChnumConflict() {
-  const el = document.getElementById('f-chnum-ranges');
+  const el    = document.getElementById('f-chnum-ranges');
   const input = document.getElementById('f-chnum');
   if (!el) return;
 
-  const val = parseInt(input.value, 10);
-  let conflicts = [];
+  const val    = parseInt(input.value, 10);
+  const shown  = _chnumRanges.filter(r => r.explicit);
+  let myStart  = NaN, myEnd = NaN;
+  const conflictIds = new Set();
 
   if (!isNaN(val)) {
-    // Estimate end of THIS feed's range from count preview, fallback to 500
-    const countEl = document.getElementById('count-preview');
+    const countEl    = document.getElementById('count-preview');
     const countMatch = countEl ? countEl.textContent.match(/(\d+)\s+channel/) : null;
-    const myCount = countMatch ? parseInt(countMatch[1], 10) : 500;
-    const myEnd = val + myCount - 1;
-
+    const myCount    = countMatch ? parseInt(countMatch[1], 10) : 500;
+    myStart = val;
+    myEnd   = val + myCount - 1;
     for (const r of _chnumRanges) {
-      if (val <= r.end && myEnd >= r.start) {
-        conflicts.push(r);
-      }
+      if (val <= r.end && myEnd >= r.start) conflictIds.add(r.feed_id);
     }
   }
 
-  // Show all explicit ranges as a reference
-  const shown = _chnumRanges.filter(r => r.explicit);
-  const conflictIds = new Set(conflicts.map(r => r.feed_id));
-
-  let html = '';
-  if (conflicts.length > 0) {
-    html += conflicts.map(r =>
-      `<div style="color:var(--danger);font-weight:600">⚠ Overlaps with "${r.feed_name}" (${r.start.toLocaleString()}–${r.end.toLocaleString()})</div>`
-    ).join('');
-  }
-  if (shown.length > 0) {
-    const nonConflict = shown.filter(r => !conflictIds.has(r.feed_id));
-    if (nonConflict.length > 0) {
-      html += '<span style="color:var(--text-muted)">In use: </span>';
-      html += nonConflict.map(r =>
-        `<span style="color:var(--text-soft)">${r.feed_name} (${r.start.toLocaleString()}–${r.end.toLocaleString()})</span>`
-      ).join(' &nbsp;·&nbsp; ');
-    }
-  }
-  el.innerHTML = html;
+  el.innerHTML = buildRangeHint(shown, myStart, myEnd, conflictIds);
 }
 
 // ── Live channel count preview ────────────────────────────────────────────
@@ -1225,10 +1205,10 @@ document.getElementById('modal-overlay').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeModal();
 });
 
-// Run conflict check on page load for inline inputs that already have a value
+// Run conflict check on page load to show range bars for all feeds
 document.querySelectorAll('[id^="chnum-"]').forEach(input => {
   const m = input.id.match(/^chnum-(\d+)$/);
-  if (m && input.value) checkInlineChnumConflict(parseInt(m[1], 10));
+  if (m) checkInlineChnumConflict(parseInt(m[1], 10));
 });
 if (document.getElementById('default-global-chnum-start')?.value) checkDefaultChnumConflict();
 </script>
