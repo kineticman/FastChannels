@@ -1574,7 +1574,14 @@ def _refresh_auto_channel_numbers() -> None:
     for feed in feeds_with_chnum:
         filters = feed_to_query_filters(feed.filters or {})
         with db.session.no_autoflush:
-            all_stubs = _selected_channel_stubs(filters, gracenote=None)
+            std_stubs = _selected_channel_stubs(filters, gracenote=False)
+            gn_stubs  = _selected_channel_stubs(filters, gracenote=True)
+        # Sort the combined list by master number so GN and non-GN interleave
+        # by position rather than arriving as two separate blocks.
+        all_stubs = sorted(
+            std_stubs + gn_stubs,
+            key=lambda ch: (ch.number is None, ch.number or 0, (ch.name or '').lower()),
+        )
         feed_channel_ids = {s.id for s in all_stubs}
 
         # Load existing stored numbers for stickiness.
