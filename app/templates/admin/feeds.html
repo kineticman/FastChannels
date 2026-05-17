@@ -77,6 +77,15 @@
     .url-chip .copy-btn:hover { background: var(--border); color: var(--text); border-color: var(--text-muted); }
     .url-chip .copy-btn.ok { background: var(--success-bg-2); border-color: var(--success-strong); color: var(--success-strong); }
     .feed-actions { display: flex; gap: 0.5rem; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+    .native-endpoints { margin-top: 0.6rem; }
+    .native-endpoints summary {
+      font-size: 0.72rem; color: var(--text-dim); cursor: pointer; list-style: none;
+      display: flex; align-items: center; gap: 0.3rem; user-select: none;
+    }
+    .native-endpoints summary::-webkit-details-marker { display: none; }
+    .native-endpoints summary::before { content: '▶'; font-size: 0.6rem; transition: transform 0.15s; display: inline-block; }
+    .native-endpoints[open] summary::before { transform: rotate(90deg); }
+    .native-endpoints summary:hover { color: var(--text-muted); }
     .badge-pill {
       display: inline-block; padding: 0.15rem 0.55rem; border-radius: 9999px;
       font-size: 0.7rem; font-weight: 600;
@@ -443,6 +452,25 @@
         </div>
         {% endif %}
       </div>
+
+      <details class="native-endpoints">
+        <summary>Native (scraped-only) endpoints — advanced</summary>
+        <div class="feed-urls" style="margin-top:0.5rem">
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/native/m3u')">
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Native M3U ({{ feed.channel_count() }})</span>
+            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/native/m3u</span>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/native/m3u" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/native/m3u')">Copy</button>
+          </div>
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/native/epg.xml')">
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Native EPG</span>
+            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/native/epg.xml</span>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/native/epg.xml" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/native/epg.xml')">Copy</button>
+          </div>
+        </div>
+        <p class="help" style="margin-top:0.5rem">All {{ feed.channel_count() }} channels in this feed with scraped EPG data only — Gracenote assignments are ignored. Use these together as a single source for clients that prefer one EPG backend.</p>
+      </details>
     </div>
     {% endfor %}
   </div>

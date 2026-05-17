@@ -1081,7 +1081,7 @@ def _prewarm_logos(source_name: str, logo_urls: list[str], progress_cb=None) -> 
 
 def _refresh_xml_artifacts() -> None:
     """Refresh master/feed XML and M3U artifacts after scrape commits land."""
-    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app.generators.xmltv import write_xmltv
 
     for attempt in range(2):
@@ -1113,6 +1113,16 @@ def _refresh_xml_artifacts() -> None:
                     feed_name=feed_name,
                 ),
             ))
+            xml_artifacts.append((
+                f'feed-{feed.slug}-native',
+                lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
+                    fp,
+                    filters,
+                    base_url=base_url,
+                    feed_name=feed_name,
+                    native=True,
+                ),
+            ))
             if feed.chnum_start is not None:
                 std_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
             else:
@@ -1121,6 +1131,12 @@ def _refresh_xml_artifacts() -> None:
                 f'feed-{feed.slug}-m3u',
                 lambda fp, filters=filters, std_kw=std_kw: fp.write(
                     generate_m3u(filters, base_url=base_url, **std_kw)
+                ),
+            ))
+            m3u_artifacts.append((
+                f'feed-{feed.slug}-native-m3u',
+                lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                    generate_native_m3u(filters, base_url=base_url, **std_kw)
                 ),
             ))
             if feed.chnum_start is not None:

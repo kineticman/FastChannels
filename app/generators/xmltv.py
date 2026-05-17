@@ -49,9 +49,10 @@ def generate_xmltv(filters: dict = None, base_url: str = None, feed_name: str = 
     return ''.join(generate_xmltv_stream(filters, base_url, feed_name=feed_name))
 
 
-def write_xmltv(fp, filters: dict = None, base_url: str = None, feed_name: str = None) -> None:
+def write_xmltv(fp, filters: dict = None, base_url: str = None, feed_name: str = None,
+                native: bool = False) -> None:
     """Write XMLTV directly to a text file-like object."""
-    for chunk in generate_xmltv_stream(filters, base_url, feed_name=feed_name):
+    for chunk in generate_xmltv_stream(filters, base_url, feed_name=feed_name, native=native):
         fp.write(chunk)
 
 
@@ -64,7 +65,8 @@ def generate_xmltv_gz(filters: dict = None, base_url: str = None, feed_name: str
     return buf.getvalue()
 
 
-def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name: str = None):
+def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name: str = None,
+                          native: bool = False):
     """
     Generator — yields UTF-8 text chunks of the XMLTV document.
 
@@ -79,10 +81,11 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     _s = AppSettings.get()
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
 
-    # Standard XMLTV must expose the same channel identity set as the standard
-    # XMLTV-backed M3U; otherwise clients that join on tvg-id see orphaned or
-    # shifted channels. Gracenote-backed channels are intentionally excluded.
-    channels = _selected_channels(filters, gracenote=False)
+    # Standard XMLTV excludes Gracenote-backed channels (those belong to the
+    # Gracenote M3U source and must not be mixed with XMLTV-backed channels).
+    # Native mode includes all channels and uses scraped EPG for everything.
+    gracenote_filter = None if native else False
+    channels = _selected_channels(filters, gracenote=gracenote_filter)
     multi_country_map = _source_multi_country_map(channels)
 
     tvg_map      = {ch.id: _tvg_id(ch) for ch in channels}

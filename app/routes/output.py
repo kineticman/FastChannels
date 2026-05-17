@@ -238,3 +238,40 @@ def feed_epg(slug):
         mimetype='application/xml',
         download_name=f'{slug}.xml',
     )
+
+
+@output_bp.route('/feeds/<slug>/native/m3u')
+def feed_native_m3u(slug):
+    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    path = get_artifact(f'feed-{slug}-native-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            f'Feed native M3U artifact for {feed.slug} is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name=f'{slug}-native.m3u',
+    )
+
+
+@output_bp.route('/feeds/<slug>/native/epg.xml')
+def feed_native_epg(slug):
+    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    path, stale = get_xml_artifact(f'feed-{feed.slug}-native')
+    _log_epg_request(f'feed-{feed.slug}-native', path, stale)
+    if path is None:
+        return Response(
+            f'Feed native XML artifact for {feed.slug} is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/xml',
+        download_name=f'{slug}-native.xml',
+    )

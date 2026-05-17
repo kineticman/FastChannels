@@ -755,6 +755,68 @@ def generate_m3u(filters: dict = None, base_url: str = None,
     return '\n'.join(lines)
 
 
+def generate_native_m3u(filters: dict = None, base_url: str = None,
+                        feed_chnum_start: int = None, namespace_start: int = None,
+                        feed_id: int = None) -> str:
+    """
+    Native (scraped-only) playlist — all feed channels, standard play URLs.
+
+    Includes channels regardless of Gracenote status; uses scraped EPG data.
+    Intended to be paired with the native XMLTV endpoint, not the Gracenote
+    or standard split variants.
+    """
+    filters  = filters or {}
+    base_url = (base_url or '').rstrip('/')
+
+    _s = AppSettings.get()
+    _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
+
+    channels = _selected_channels(filters, gracenote=None)
+
+    chnum_map, warnings = _resolve_chnum_map(
+        channels,
+        feed_chnum_start=feed_chnum_start,
+        namespace_start=namespace_start,
+        feed_id=feed_id if feed_chnum_start is not None else None,
+    )
+    if feed_chnum_start is None and namespace_start is None:
+        for w in warnings:
+            log.warning('chnum overlap (native): %s', w)
+
+    multi_country_map = _source_multi_country_map(channels)
+    lines = ['#EXTM3U']
+    for ch in channels:
+        tvg_id = _tvg_id(ch)
+        display_name = _channel_display_name(ch, multi_country_map)
+        attrs = [
+            f'channel-id="{tvg_id}"',
+            f'tvg-id="{tvg_id}"',
+            f'tvg-name="{_esc(display_name)}"',
+            f'group-title="{_esc(ch.category or ch.source.display_name)}"',
+        ]
+        if ch.logo_url:
+            attrs.append(f'tvg-logo="{proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url}"')
+        chnum = chnum_map.get(ch.id)
+        if chnum:
+            attrs.append(f'tvg-chno="{chnum}"')
+        if ch.description:
+            attrs.append(f'tvg-description="{_esc(ch.description)}"')
+            attrs.append(f'tvc-guide-description="{_esc(ch.description)}"')
+        if ch.stream_info:
+            vcodec, acodec = _tvc_stream_codecs(ch.stream_info)
+            if vcodec:
+                attrs.append(f'tvc-stream-vcodec="{vcodec}"')
+            if acodec:
+                attrs.append(f'tvc-stream-acodec="{acodec}"')
+        guide_cat = _tvc_guide_category(ch)
+        if guide_cat:
+            attrs.append(f'tvc-guide-categories="{guide_cat}"')
+        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
+        lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
+
+    return '\n'.join(lines)
+
+
 def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
                             feed_chnum_start: int = None, namespace_start: int = None,
                             feed_id: int = None) -> str:
