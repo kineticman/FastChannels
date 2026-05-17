@@ -1199,8 +1199,9 @@
 
       if (result && !isRunning) {
         const ts  = result.ts ? new Date(result.ts).toLocaleString() : '';
-        const ok  = Math.max(0, (result.checked || 0) - (result.dead || 0) - (result.vod || 0) - (result.flagged || 0));
+        const ok  = Math.max(0, (result.checked || 0) - (result.vod || 0) - (result.flagged || 0));
         const bits = [
+          result.total       ? `${result.total} scanned`                                         : null,
           `<span class="aud-ok">${ok} ok</span>`,
           result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`               : null,
           result.vod         ? `<span class="aud-vod">${result.vod} VOD</span>`                  : null,
@@ -1262,7 +1263,7 @@
         } else if (!result) {
           html += `<div class="audit-no-results">No audit has been run yet. Run an audit to check all channels for dead streams, DRM, and VOD-only content.</div>`;
         } else if (result && result.checked > 0) {
-          html += `<div class="audit-no-results" style="color:var(--success-soft)">✓ All ${result.checked} checked channels are healthy.</div>`;
+          html += `<div class="audit-no-results" style="color:var(--success-soft)">✓ All ${result.total || result.checked} channels are healthy.</div>`;
         }
       }
 
@@ -1512,10 +1513,11 @@
     function _renderLastAuditResult(sourceId, r) {
       const el = document.getElementById(`audit-last-result-${sourceId}`);
       if (!el || !r) return;
-      const ok    = (r.checked || 0) - (r.flagged || 0) - (r.dead || 0) - (r.vod || 0);
+      const ok    = (r.checked || 0) - (r.flagged || 0) - (r.vod || 0);
       const ts    = r.ts ? new Date(r.ts).toLocaleString() : '';
       const bits  = [];
-      if (r.checked != null) bits.push(`<span class="aud-ok">${ok} ok</span>`);
+      if (r.total)            bits.push(`${r.total} scanned`);
+      if (r.checked != null)  bits.push(`<span class="aud-ok">${ok} ok</span>`);
       if (r.dead)             bits.push(`<span class="aud-dead">${r.dead} dead</span>`);
       if (r.vod)              bits.push(`<span class="aud-vod">${r.vod} VOD</span>`);
       if (r.flagged)          bits.push(`<span class="aud-drm">${r.flagged} DRM</span>`);
