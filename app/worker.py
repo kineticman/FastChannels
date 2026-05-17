@@ -1574,18 +1574,14 @@ def _refresh_auto_channel_numbers() -> None:
     for feed in feeds_with_chnum:
         filters = feed_to_query_filters(feed.filters or {})
         with db.session.no_autoflush:
-            std_stubs = _selected_channel_stubs(filters, gracenote=False)
-            gn_stubs  = _selected_channel_stubs(filters, gracenote=True)
-        feed_channel_ids = {s.id for s in std_stubs} | {s.id for s in gn_stubs}
+            all_stubs = _selected_channel_stubs(filters, gracenote=None)
+        feed_channel_ids = {s.id for s in all_stubs}
 
         # Load existing stored numbers for stickiness.
         stored = {
             fcn.channel_id: fcn.number
             for fcn in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
         }
-        # All channels (std + GN) share one unified number pool so that a channel
-        # keeps its assigned number when its Gracenote status changes.
-        all_stubs = std_stubs + gn_stubs
         new_map   = _build_feed_chnum_map(all_stubs, feed.chnum_start, stored_numbers=stored)
 
         # Upsert new assignments.
