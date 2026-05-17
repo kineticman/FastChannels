@@ -860,11 +860,14 @@ def list_channel_catalog():
     custom_source = Source.query.filter_by(name='custom').first()
     existing_urls = set()
     if custom_source:
-        existing_urls = {
-            ch.stream_url
-            for ch in Channel.query.filter_by(source_id=custom_source.id).all()
-            if ch.stream_url
-        }
+        for ch in Channel.query.filter_by(source_id=custom_source.id).all():
+            # page_url holds the original player URL for redetect channels;
+            # stream_url may have been overwritten with the resolved CDN URL
+            # after first play, so check both.
+            if ch.stream_url:
+                existing_urls.add(ch.stream_url)
+            if ch.page_url:
+                existing_urls.add(ch.page_url)
 
     result = []
     for group in CHANNEL_CATALOG:
