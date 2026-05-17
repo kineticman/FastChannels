@@ -450,13 +450,22 @@ class PlexScraper(BaseScraper):
         if not self._ensure_auth():
             return []
 
-        try:
-            r = self.session.get(
+        def _do_channel_fetch():
+            return self.session.get(
                 f"{_EPG_HOST}/lineups/plex/channels",
                 params={"X-Plex-Token": self._auth_token},
                 headers=self._provider_headers(accept="application/xml"),
                 timeout=30,
             )
+
+        try:
+            r = _do_channel_fetch()
+            if r.status_code in (401, 403):
+                logger.info("[plex] channel list %d — refreshing token and retrying", r.status_code)
+                self._auth_token = None
+                if not self._ensure_auth(force=True):
+                    return []
+                r = _do_channel_fetch()
             r.raise_for_status()
             root = ET.fromstring(r.text)
         except Exception as exc:
@@ -671,6 +680,7 @@ class PlexScraper(BaseScraper):
         n_windows    = 3   # 24 h total
 
         t_start = int(_time.time())
+        token_refreshed = False
         logger.info(
             "[plex] grid fetch starting: channels=%d windows=%d span_hours=%d",
             len(known_ids),
@@ -688,6 +698,18 @@ class PlexScraper(BaseScraper):
                     headers=headers,
                     timeout=30,
                 )
+                if r.status_code in (401, 403) and not token_refreshed:
+                    logger.info("[plex] grid %d — refreshing token and retrying", r.status_code)
+                    self._auth_token = None
+                    token_refreshed = True
+                    if self._ensure_auth(force=True):
+                        headers["X-Plex-Token"] = self._auth_token
+                        r = self.session.get(
+                            f"{_EPG_HOST}/grid",
+                            params={"beginningAt": begins_at, "endingAt": ends_at},
+                            headers=headers,
+                            timeout=30,
+                        )
                 r.raise_for_status()
                 entries = r.json().get("MediaContainer", {}).get("Metadata", [])
             except Exception as exc:
