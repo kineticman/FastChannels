@@ -526,7 +526,7 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int,
 
     # First pass: honour pinned channels and preserve valid stored assignments.
     for ch in channels:
-        if getattr(ch, 'number_pinned', False) and ch.number is not None:
+        if getattr(ch, 'number_pinned', False) and ch.number is not None and ch.number not in used_numbers:
             result[ch.id] = ch.number
             used_numbers.add(ch.number)
         else:
