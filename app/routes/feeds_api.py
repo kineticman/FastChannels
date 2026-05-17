@@ -51,6 +51,36 @@ def _slugify(text: str) -> str:
     return s.strip('-')[:64]
 
 
+@feeds_api_bp.route('/channel-membership', methods=['GET'])
+def channel_membership():
+    """Return {channel_id: [feed_name, ...]} for all non-default enabled feeds."""
+    from ..generators.m3u import _build_channel_query, feed_to_query_filters
+
+    exclude_id = request.args.get('exclude_id', type=int)
+    feeds = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
+    result: dict[int, list[str]] = {}
+
+    for feed in feeds:
+        if feed.slug == 'default':
+            continue
+        if exclude_id and feed.id == exclude_id:
+            continue
+
+        f_filters = feed.filters or {}
+        pinned = set(int(i) for i in (f_filters.get('pinned_channel_ids') or []))
+        q_filters = feed_to_query_filters(f_filters)
+        matched_ids = set(
+            r[0] for r in _build_channel_query(q_filters)
+            .with_entities(Channel.id)
+            .all()
+        )
+
+        for ch_id in pinned | matched_ids:
+            result.setdefault(ch_id, []).append(feed.name)
+
+    return jsonify(result)
+
+
 @feeds_api_bp.route('/chnum-ranges', methods=['GET'])
 def chnum_ranges():
     """Return the occupied channel number ranges for the master M3U and every enabled feed."""

@@ -109,7 +109,7 @@
     .overlay.open { display: flex; }
     .modal {
       background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-      width: 100%; max-width: 700px; padding: 1.75rem;
+      width: 100%; max-width: 960px; padding: 1.75rem;
       margin: auto;
     }
     .modal h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 1.25rem; }
@@ -174,6 +174,12 @@
     .ch-item input { accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
     .ch-item.selected { background: var(--accent-bg-soft); }
     .ch-item .ch-source { color: var(--text-dim); font-size: 0.72rem; margin-left: auto; flex-shrink: 0; }
+    .ch-item .ch-feeds {
+      font-size: 0.68rem; color: var(--accent-soft); flex-shrink: 0;
+      background: var(--accent-bg); border: 1px solid var(--accent-border);
+      border-radius: 4px; padding: 0.05rem 0.35rem; white-space: nowrap;
+      max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+    }
     .ch-bar {
       display: flex; align-items: center; justify-content: space-between;
       margin-bottom: 0.4rem; font-size: 0.78rem; color: var(--text-muted);
@@ -268,7 +274,8 @@
         flex-wrap: wrap;
       }
       .ch-item .ch-source,
-      .ch-pinned-item .ch-source {
+      .ch-pinned-item .ch-source,
+      .ch-item .ch-feeds {
         width: 100%;
         margin-left: 1.65rem;
       }
@@ -584,6 +591,19 @@ let _selectedChannelIds = new Set();
 let _excludedChannelIds = new Set();
 let _pinnedChannelIds   = new Set();
 
+// _feedMembership: {channel_id -> [feed_name, ...]} for all other custom feeds
+let _feedMembership = {};
+
+async function ensureFeedMembershipLoaded(excludeId) {
+  const qs = excludeId ? `?exclude_id=${excludeId}` : '';
+  try {
+    const r = await fetch(`/api/feeds/channel-membership${qs}`);
+    _feedMembership = await r.json();
+  } catch(e) {
+    _feedMembership = {};
+  }
+}
+
 async function ensureChannelsLoaded() {
   if (_allChannels.length > 0) return;
   document.getElementById('ch-selected-count').textContent = 'loading…';
@@ -668,9 +688,13 @@ function renderChannelList() {
       const checked    = explicitMode ? _selectedChannelIds.has(ch.id)
                        : excludeMode  ? !isExcluded
                        : false;
+      const otherFeeds = _feedMembership[ch.id];
+      const feedPill = otherFeeds?.length
+        ? `<span class="ch-feeds" title="${otherFeeds.join(', ')}">${otherFeeds.join(', ')}</span>`
+        : '';
       const label = document.createElement('label');
       label.className = 'ch-item' + (checked && !isExcluded ? ' selected' : '') + (isExcluded ? ' excluded' : '');
-      label.innerHTML = `<input type="checkbox" value="${ch.id}" ${checked ? 'checked' : ''}><span class="ch-name">${ch.name}</span>`;
+      label.innerHTML = `<input type="checkbox" value="${ch.id}" ${checked ? 'checked' : ''}><span class="ch-name">${ch.name}</span>${feedPill}`;
       label.querySelector('input').addEventListener('change', e => {
         if (excludeMode) {
           if (e.target.checked) _excludedChannelIds.delete(ch.id);
@@ -791,7 +815,10 @@ async function openModal(feed = null) {
   document.getElementById('modal-overlay').classList.add('open');
   document.getElementById('f-name').focus();
 
-  await ensureChannelsLoaded();
+  await Promise.all([
+    ensureChannelsLoaded(),
+    ensureFeedMembershipLoaded(feed ? feed.id : null),
+  ]);
   renderChannelList();
   updateCountPreview();
   await loadChnumRanges(feed ? feed.id : null);
