@@ -273,6 +273,7 @@ def delete_feed(feed_id):
         return err
     delete_xml_artifact(f'feed-{slug}')
     delete_xml_artifact(f'feed-{slug}-native')
+    delete_xml_artifact(f'feed-{slug}-native-m3u')
     _invalidate_and_refresh_xml()
     return jsonify({'status': 'deleted', 'slug': slug})
 
