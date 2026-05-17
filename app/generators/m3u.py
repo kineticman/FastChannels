@@ -120,7 +120,10 @@ def _has_gracenote_claim(ch) -> bool:
         return False
     if (getattr(ch, 'gracenote_id', None) or '').strip():
         return True
-    return '|' in (getattr(ch, 'slug', None) or '')
+    slug = (getattr(ch, 'slug', None) or '')
+    if '|' in slug:
+        return bool(slug.split('|', 1)[1].strip())
+    return False
 
 
 def _format_region_label(country: str | None) -> str:

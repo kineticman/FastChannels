@@ -981,7 +981,7 @@ class RokuScraper(BaseScraper):
             country           = "US",
             stream_type       = "hls",
             number            = number,
-            slug              = f"|{resolve_gracenote('roku', lookup_key=station_id) or ''}",
+            slug              = (f"|{_gn}" if (_gn := resolve_gracenote('roku', lookup_key=station_id) or '') else None),
         ))
 
     def _add_channel_from_content(
@@ -1032,7 +1032,7 @@ class RokuScraper(BaseScraper):
             language          = _language_from_metadata(title, category),
             country           = "US",
             stream_type       = "hls",
-            slug              = f"{play_id or ''}|{gracenote_id}",
+            slug              = (f"{play_id or ''}|{gracenote_id}" if gracenote_id else None),
         ))
 
     # ── fetch_epg ──────────────────────────────────────────────────────────────
