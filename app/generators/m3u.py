@@ -321,15 +321,11 @@ def feed_namespace_start(feed: Feed, *, gracenote: bool) -> int:
 
 def feed_gracenote_start(feed: Feed) -> int:
     """
-    Starting channel number for a feed's gracenote M3U.
+    Starting channel number for a feed's Gracenote namespace M3U.
 
-    Gracenote channels are placed immediately after the standard (non-gracenote)
-    channels so the entire feed shares one contiguous numeric pool with no gaps
-    or overlaps between the two M3U variants.
-
-    For feeds with an explicit chnum_start this is a simple COUNT query.
-    For the default feed (source-based numbering) we build the full chnum map
-    to find the actual highest number in use.
+    Only used for feeds without an explicit chnum_start (namespace-based numbering).
+    Feeds with chnum_start use a unified pool (FeedChannelNumber) shared by both
+    the standard and Gracenote M3Us, so this function is not called for them.
     """
     filters = feed_to_query_filters(feed.filters or {})
 
@@ -341,9 +337,6 @@ def feed_gracenote_start(feed: Feed) -> int:
         if not chnum_map:
             return AppSettings.get().effective_global_chnum_start() or 1
         return max(chnum_map.values()) + 1
-    elif feed.chnum_start is not None:
-        std_count = len(_selected_channel_stubs(filters, gracenote=False))
-        return feed.chnum_start + std_count
     else:
         return feed_namespace_start(feed, gracenote=True)
 
@@ -654,7 +647,7 @@ def get_global_chnum_overlaps() -> list[str]:
         gn_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=True)
         gn_map, _ = _resolve_chnum_map(
             gn_channels,
-            feed_chnum_start=feed_gracenote_start(feed) if feed.chnum_start is not None else None,
+            feed_chnum_start=feed.chnum_start if feed.chnum_start is not None else None,
             namespace_start=gn_ns,
             feed_id=feed.id if feed.chnum_start is not None else None,
         )

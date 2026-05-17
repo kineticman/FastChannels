@@ -1140,7 +1140,7 @@ def _refresh_xml_artifacts() -> None:
                 ),
             ))
             if feed.chnum_start is not None:
-                gn_kw = {'feed_chnum_start': feed_gracenote_start(feed), 'feed_id': feed.id}
+                gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
             else:
                 gn_kw = {'namespace_start': feed_gracenote_start(feed)}
             m3u_artifacts.append((
@@ -1516,12 +1516,14 @@ def _refresh_auto_channel_numbers() -> None:
     numbers are ignored; this allocator preserves existing non-pinned numbers
     where possible and only fills gaps for channels that are new or invalid.
 
-    Standard and Gracenote channels are numbered in separate contiguous blocks:
-    standard channels first (source-based), then Gracenote channels starting
-    immediately after the highest standard number.  Both blocks are sticky.
+    Standard and Gracenote channels share a single contiguous block for the
+    master (source-based) numbering: standard channels first, then Gracenote
+    channels starting immediately after the highest standard number.
 
-    For feeds with an explicit chnum_start, feed-specific numbers are persisted
-    in FeedChannelNumber so they remain stable across scrapes (sticky).
+    For feeds with an explicit chnum_start, all channels (standard and Gracenote)
+    share one unified number pool persisted in FeedChannelNumber.  A channel keeps
+    its assigned number when its Gracenote status changes — it just moves between
+    the standard and Gracenote M3U files without being renumbered.
     """
     from app.generators.m3u import (
         _build_source_chnum_map, _build_sticky_gn_chnum_map,
@@ -1581,12 +1583,10 @@ def _refresh_auto_channel_numbers() -> None:
             fcn.channel_id: fcn.number
             for fcn in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
         }
-        # Standard channels occupy feed.chnum_start .. (chnum_start + len(std_stubs) - 1).
-        # Gracenote channels start immediately after so the two sources never overlap.
-        std_map = _build_feed_chnum_map(std_stubs, feed.chnum_start, stored_numbers=stored)
-        gn_start = feed.chnum_start + len(std_stubs)
-        gn_map   = _build_feed_chnum_map(gn_stubs, gn_start, stored_numbers=stored)
-        new_map  = {**std_map, **gn_map}
+        # All channels (std + GN) share one unified number pool so that a channel
+        # keeps its assigned number when its Gracenote status changes.
+        all_stubs = std_stubs + gn_stubs
+        new_map   = _build_feed_chnum_map(all_stubs, feed.chnum_start, stored_numbers=stored)
 
         # Upsert new assignments.
         existing_fcn = {fcn.channel_id: fcn for fcn in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
