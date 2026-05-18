@@ -228,6 +228,18 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN scrape_pinned BOOLEAN NOT NULL DEFAULT 0"
                 ))
+            if "went_inactive_at" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN went_inactive_at DATETIME"
+                ))
+                conn.execute(text(
+                    "UPDATE channels SET went_inactive_at = last_seen_at "
+                    "WHERE is_active = 0 AND last_seen_at IS NOT NULL"
+                ))
+            if "returned_at" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN returned_at DATETIME"
+                ))
             conn.execute(text(
                 "UPDATE channels SET missed_scrapes = 0 WHERE missed_scrapes IS NULL"
             ))

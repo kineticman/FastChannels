@@ -1387,9 +1387,12 @@ def run_channel_auto_disable(channel_id: int, reason: str):
         ch_name = ch.name
         ch_source_name = ch.source.name if ch.source else '?'
         ch_source_channel_id = ch.source_channel_id
+        was_active = ch.is_active
         ch.is_active = False
         ch.is_enabled = False
         ch.disable_reason = reason
+        if was_active:
+            ch.went_inactive_at = datetime.now(timezone.utc)
         for _attempt in range(3):
             try:
                 db.session.commit()
@@ -1698,6 +1701,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 ch.is_active  = False  # re-enforce — a prior scrape may have revived it
                 ch.is_enabled = False
             else:
+                if (ch.missed_scrapes or 0) > 0:
+                    ch.returned_at = seen_at
                 ch.is_active = True
                 if stream_url_changed and _flagged:
                     ch.disable_reason = None  # clear flag; let next audit re-check
@@ -1769,6 +1774,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     for ch_id in region_removed_ids:
         ch = existing[ch_id]
         ch.missed_scrapes = (ch.missed_scrapes or 0) + 1
+        if ch.is_active:
+            ch.went_inactive_at = seen_at
         ch.is_active = False
         ch.last_seen_at = None
         logger.info(
@@ -1790,9 +1797,11 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     else:
         for ch_id, ch in existing.items():
             if ch_id not in seen and ch_id not in region_removed_ids:
+                if not ch.is_active:
+                    continue  # already inactive — don't touch to avoid bumping updated_at
                 next_missed = (ch.missed_scrapes or 0) + 1
                 ch.missed_scrapes = next_missed
-                if ch.is_active and next_missed >= miss_threshold:
+                if next_missed >= miss_threshold:
                     if ch.scrape_pinned:
                         logger.info(
                             '[%s] missed %d scrapes but scrape_pinned — keeping active: %s (%s)',
@@ -1803,6 +1812,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                         )
                     else:
                         ch.is_active = False
+                        ch.went_inactive_at = seen_at
                         logger.info(
                             '[%s] marking inactive after %d missed channel scrapes: %s (%s)',
                             source.name,

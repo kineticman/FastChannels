@@ -248,7 +248,7 @@
       <div class="stat">
         <div class="stat-label">Now Inactive{% if window_days == 1 %} Today{% else %} in Window{% endif %}</div>
         <div class="stat-value">{{ inferred_lost_rows|length }}</div>
-        <div class="stat-sub">Inactive rows updated since {{ window_start|localtime }}, not guaranteed exact loss time</div>
+        <div class="stat-sub">Channels that went inactive since {{ window_start|localtime }}</div>
       </div>
       <div class="stat">
         <div class="stat-label">At Risk</div>
@@ -334,13 +334,9 @@
               <div class="row-source">{{ source.display_name }}</div>
             </div>
             <div class="row-meta">
-              Updated {{ channel.updated_at|localtime }} ·
-              Last seen {% if channel.last_seen_at %}{{ channel.last_seen_at|localtime }}{% else %}unknown{% endif %} ·
-              Missed scrapes {{ channel.missed_scrapes or 0 }}
+              Went inactive {% if channel.went_inactive_at %}{{ channel.went_inactive_at|localtime }}{% else %}unknown{% endif %} ·
+              Last seen {% if channel.last_seen_at %}{{ channel.last_seen_at|localtime }}{% else %}unknown{% endif %}
             </div>
-            {% if not channel.last_seen_at or (channel.missed_scrapes or 0) >= 3 %}
-            <div class="row-note">Loss time is an estimate — this channel may have been gone longer than the window suggests.</div>
-            {% endif %}
           </div>
           {% else %}
           <div class="empty">No inactive channel rows were updated in this window.</div>
@@ -397,7 +393,7 @@
               <div class="row-source">{{ source.display_name }}</div>
             </div>
             <div class="row-meta">
-              Last updated {{ channel.updated_at|localtime }} ·
+              Returned {{ channel.returned_at|localtime }} ·
               Last seen {% if channel.last_seen_at %}{{ channel.last_seen_at|localtime }}{% else %}unknown{% endif %}
             </div>
           </div>

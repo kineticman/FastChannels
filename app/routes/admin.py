@@ -763,9 +763,9 @@ def channel_changes_report():
         .join(Source, Source.id == Channel.source_id)
         .filter(
             Channel.is_active == False,
-            Channel.updated_at >= window_start,
+            Channel.went_inactive_at >= window_start,
         )
-        .order_by(Channel.updated_at.desc(), Source.display_name.asc(), Channel.name.asc())
+        .order_by(Channel.went_inactive_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
     )
 
@@ -780,23 +780,16 @@ def channel_changes_report():
         .all()
     )
 
-    # Channels that came back — active, updated in window, existed before window
     returned_rows = (
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
         .filter(
             Channel.is_active == True,
-            Channel.updated_at >= window_start,
-            Channel.created_at < window_start,
-            Channel.missed_scrapes == 0,
+            Channel.returned_at >= window_start,
         )
-        .order_by(Channel.updated_at.desc(), Source.display_name.asc(), Channel.name.asc())
+        .order_by(Channel.returned_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
     )
-    # Exclude channels that were simply scraped normally — only include ones
-    # that had missed_scrapes > 0 recently (approximate proxy for "returned")
-    # Since missed_scrapes is reset to 0 on return, we can't filter perfectly,
-    # but updated_at in window + active + pre-existing is a reasonable signal.
 
     def _group_counts(rows):
         counts: dict[str, int] = defaultdict(int)
@@ -844,7 +837,7 @@ def channel_changes_report():
         new_daily_counts=_daily_counts(new_rows, 'created_at'),
         inferred_lost_rows=inferred_lost_rows,
         inferred_lost_counts=_group_counts(inferred_lost_rows),
-        inferred_lost_daily_counts=_daily_counts(inferred_lost_rows, 'updated_at'),
+        inferred_lost_daily_counts=_daily_counts(inferred_lost_rows, 'went_inactive_at'),
         at_risk_rows=at_risk_rows,
         at_risk_counts=_group_counts(at_risk_rows),
         returned_rows=returned_rows,

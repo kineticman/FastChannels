@@ -112,6 +112,8 @@ class Channel(db.Model):
     is_enabled        = db.Column(db.Boolean, default=True)   # set by user — include in M3U/EPG
     scrape_pinned     = db.Column(db.Boolean, default=False, nullable=False)  # user override: stay active even if missed by scraper
     last_seen_at      = db.Column(db.DateTime(timezone=True), nullable=True)
+    went_inactive_at  = db.Column(db.DateTime(timezone=True), nullable=True)
+    returned_at       = db.Column(db.DateTime(timezone=True), nullable=True)
     missed_scrapes    = db.Column(db.Integer, default=0, nullable=False)
     created_at        = db.Column(db.DateTime(timezone=True),
                                   default=lambda: datetime.now(timezone.utc))
