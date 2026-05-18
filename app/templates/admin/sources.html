@@ -2245,7 +2245,7 @@
         listEl.innerHTML = channels.map(ch => `
           <div style="display:flex;align-items:center;gap:.75rem;padding:.6rem .75rem;background:var(--bg);border:1px solid var(--border);border-radius:7px;">
             <div style="flex:1;min-width:0;">
-              <div style="font-size:.88rem;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(ch.name)}</div>
+              <div style="font-size:.88rem;font-weight:600;color:var(--text);" title="${_esc(ch.name)}">${_esc(ch.name.length > 60 ? ch.name.slice(0, 57) + '…' : ch.name)}</div>
               <div style="font-size:.74rem;color:var(--text-muted);margin-top:.1rem;">
                 ${ch.category ? '<span style="margin-right:.5rem;">' + _esc(ch.category) + '</span>' : ''}
                 <span style="opacity:.7;">${_esc((ch.stream_url || '').replace(/\?.*/, '').slice(0, 60))}${(ch.stream_url || '').length > 60 ? '…' : ''}</span>
