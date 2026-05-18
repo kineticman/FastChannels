@@ -882,10 +882,10 @@ class PlexScraper(BaseScraper):
             f"&X-Plex-Product={quote_plus(_PRODUCT)}"
             f"&X-Plex-Token={quote_plus(self._auth_token)}"
         )
-        r = self.session.get(manifest_url, timeout=10, allow_redirects=True)
+        r = self.session.get(manifest_url, timeout=10, allow_redirects=False)
 
-        if r.status_code == 200:
-            return r.url
+        if r.status_code in (301, 302, 303, 307, 308):
+            return raw_url
 
         if r.status_code in (401, 403):
             self._auth_token = None
@@ -896,9 +896,9 @@ class PlexScraper(BaseScraper):
                     f"&X-Plex-Product={quote_plus(_PRODUCT)}"
                     f"&X-Plex-Token={quote_plus(self._auth_token)}"
                 )
-                r2 = self.session.get(manifest_url, timeout=10, allow_redirects=True)
-                if r2.status_code == 200:
-                    return r2.url
+                r2 = self.session.get(manifest_url, timeout=10, allow_redirects=False)
+                if r2.status_code in (301, 302, 303, 307, 308):
+                    return raw_url
 
         if r.status_code in (400, 404, 410, 422):
             raise StreamDeadError(format_http_reason("[plex] channel not playable", r.status_code, channel_id))
