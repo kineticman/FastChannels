@@ -430,7 +430,7 @@ def channels():
             Channel.is_duplicate == False,
         )
 
-    if new_filter in ('3', '7', '14'):
+    if new_filter in ('1', '3', '7', '14'):
         cutoff = datetime.now(timezone.utc) - timedelta(days=int(new_filter))
         q = q.filter(Channel.created_at >= cutoff)
 
