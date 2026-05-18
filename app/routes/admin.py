@@ -733,7 +733,10 @@ def logs():
 
 @admin_bp.route('/reports/channel-changes')
 def channel_changes_report():
-    now = datetime.now(timezone.utc)
+    from ..timezone_utils import current_zoneinfo
+    settings = AppSettings.get()
+    local_tz = current_zoneinfo(settings.effective_timezone_name())
+    now = datetime.now(local_tz)
     window_options = {
         '1d': 1,
         '3d': 3,
