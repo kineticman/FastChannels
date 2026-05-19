@@ -722,12 +722,8 @@
     tr:hover td { background: var(--accent-row-hover); }
 
     .ch-name-wrap { max-width: 264px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .ch-name-td { cursor: pointer; position: relative; }
+    .ch-name-td { cursor: pointer; }
     .ch-name-td:hover .ch-name-wrap strong { text-decoration: underline; text-underline-offset: 2px; }
-    .ch-note-slot { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); font-size: 0.8rem; line-height: 1; opacity: 0; transition: opacity 0.12s; pointer-events: none; }
-    .ch-note-slot.has-note { opacity: 1; }
-    .ch-name-td:hover .ch-note-slot { opacity: 0.6; }
-    .ch-name-td:hover .ch-note-slot.has-note { opacity: 1; }
     .logo { width: 32px; height: 32px; object-fit: contain; border-radius: 4px; background: var(--bg); }
     .logo-wrap { position: relative; display: inline-block; cursor: pointer; }
     .logo-wrap:hover .logo { outline: 2px solid var(--accent-soft); border-radius: 4px; }
@@ -880,6 +876,14 @@
       font-size: 0.8rem; line-height: 1; transition: border-color 0.15s, color 0.15s, background 0.15s;
     }
     .btn-preview:hover { border-color: var(--accent-soft); background: var(--accent-bg); color: #fff; }
+    .btn-notes {
+      background: none; border: 1px solid transparent; color: var(--text-dim);
+      padding: 0.2rem 0.3rem; border-radius: 4px; cursor: pointer;
+      font-size: 0.8rem; line-height: 1; opacity: 0.35;
+      transition: border-color 0.15s, color 0.15s, background 0.15s, opacity 0.15s;
+    }
+    .btn-notes:hover { border-color: var(--text-subtle); background: var(--surface-4); opacity: 1; }
+    .btn-notes.has-note { border-color: var(--warning-border); background: var(--warning-bg); opacity: 1; }
     .preview-modal { width: 940px; max-width: min(97vw, 940px); }
     .preview-header { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
     .preview-logo {
@@ -1551,12 +1555,8 @@
             {% endif %}
             <td class="ch-name-td"
                 title="{{ ch.name }}{% if hover_parts %} · {{ hover_parts|join(' · ') }}{% endif %}"
-                data-note-id="{{ ch.id }}"
-                data-note-name="{{ ch.name|e }}"
-                data-note-value="{{ ch.user_note|e if ch.user_note else '' }}"
-                onclick="openNoteModal(this)">
+                onclick="openPreview({{ ch.id }})">
               <div class="ch-name-wrap"><strong>{{ ch.name }}</strong></div>
-              <span class="ch-note-slot{% if ch.user_note %} has-note{% endif %}" title="{{ ch.user_note|e if ch.user_note else '' }}">📝</span>
             </td>
             <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.name in duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Duplicate match found — click to see matches">DUP</span>{% elif ch.name in possible_duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Possible duplicate — click to see matches">DUP?</span>{% elif ch.id in gn_duplicate_ids %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Same Gracenote ID found on another source — click to see matches">GN DUP</span>{% endif %}{% if ch.is_duplicate %}<span class="badge-manual-dup badge-dup-clickable" data-channel-id="{{ ch.id }}" title="Click to see potential duplicates" style="cursor:pointer">DUPL</span>{% endif %}</td>
             <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
@@ -1626,7 +1626,7 @@
                   <button class="btn-clear-dup" id="cleardup-{{ ch.id }}" onclick="clearManualDup({{ ch.id }}, this)" title="Remove duplicate label">⊘</button>
                   {% endif %}
                 </div>
-                <button class="btn-preview btn-icon" data-channel-id="{{ ch.id }}" onclick="openPreview({{ ch.id }})" title="Preview: view current and next program, preview playback">📺</button>
+                <button class="btn-notes btn-icon{% if ch.user_note %} has-note{% endif %}" data-channel-id="{{ ch.id }}" data-channel-name="{{ ch.name }}" data-user-note="{{ ch.user_note or '' }}" onclick="openNoteModal({{ ch.id }}, this.dataset.channelName, this.dataset.userNote)" title="{% if ch.user_note %}Edit note: {{ ch.user_note|e }}{% else %}Add a note{% endif %}">✏️</button>
                 <button class="btn-inspect" onclick="inspectChannel({{ ch.id }}, this)" title="Test stream: check DRM, liveness, and segment data">&#128269;</button>
                 <button class="btn-pin-feed{% if ch.id not in in_any_feed_ids %} not-in-feed{% endif %}" onclick="openPinFeedMenu({{ ch.id }}, this)" title="{% if ch.id in in_any_feed_ids %}Manage feed membership{% else %}Not in any feed — add to one{% endif %}">🗂️</button>
                 {% if not ch.is_duplicate %}
@@ -1837,8 +1837,8 @@
     }
 
     function _buildPreviewList() {
-      return Array.from(document.querySelectorAll('button.btn-preview[data-channel-id]'))
-        .map(btn => parseInt(btn.dataset.channelId, 10))
+      return Array.from(document.querySelectorAll('tr[id^="row-"][data-channel-id]'))
+        .map(tr => parseInt(tr.dataset.channelId, 10))
         .filter(id => !isNaN(id));
     }
 
@@ -4147,12 +4147,12 @@
     // ── Channel Notes ─────────────────────────────────────────────────────────
     let _noteChannelId = null;
 
-    function openNoteModal(td) {
-      _noteChannelId = parseInt(td.dataset.noteId);
-      document.getElementById('note-modal-title').textContent = td.dataset.noteName;
+    function openNoteModal(id, name, value) {
+      _noteChannelId = parseInt(id);
+      document.getElementById('note-modal-title').textContent = name;
       document.getElementById('note-modal-sub').textContent = 'Add a personal note — visible only in the admin.';
       const ta = document.getElementById('note-modal-textarea');
-      ta.value = td.dataset.noteValue || '';
+      ta.value = value || '';
       document.getElementById('note-modal').classList.add('open');
       ta.focus();
     }
@@ -4175,12 +4175,17 @@
         if (!resp.ok) { alert('Failed to save note'); return; }
         const row = document.getElementById(`row-${_noteChannelId}`);
         if (row) {
-          const td = row.querySelector('.ch-name-td');
-          if (td) td.dataset.noteValue = note || '';
-          const slot = row.querySelector('.ch-note-slot');
-          if (slot) {
-            slot.title = note || '';
-            if (note) { slot.classList.add('has-note'); } else { slot.classList.remove('has-note'); }
+          const noteBtn = row.querySelector('.btn-notes');
+          if (noteBtn) {
+            if (note) {
+              noteBtn.classList.add('has-note');
+              noteBtn.title = `Edit note: ${note}`;
+            } else {
+              noteBtn.classList.remove('has-note');
+              noteBtn.title = 'Add a note';
+            }
+            const chName = document.getElementById('note-modal-title').textContent;
+            noteBtn.setAttribute('onclick', `openNoteModal(${_noteChannelId}, ${JSON.stringify(chName)}, ${JSON.stringify(note || '')})`);
           }
         }
         closeNoteModal();
