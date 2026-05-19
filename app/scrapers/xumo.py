@@ -31,7 +31,6 @@ class XumoScraper(BaseScraper):
     scrape_interval = 720
     stream_audit_enabled  = True
     audit_ignore_4xx      = True  # CDN URLs expire per program window; 4xx = between programs, not dead
-    audit_ignore_vod      = True  # per-episode HLS always looks VOD at manifest level; normal for this source
     config_schema = []
 
     BASE_URL = "https://valencia-app-mds.xumo.com"
@@ -282,9 +281,10 @@ class XumoScraper(BaseScraper):
         API returns no assets the channel is genuinely gone (StreamDeadError).
         API failure is treated as transient (returns opaque URL → skips manifest).
         Otherwise resolves to the current CDN URL so the audit can check for DRM.
-        4xx and VOD results from the manifest fetch are handled leniently by the
-        audit loop (audit_ignore_4xx / audit_ignore_vod flags) since CDN URLs
-        expire per program window.
+        4xx results are handled leniently (audit_ignore_4xx) since CDN URLs
+        expire per program window. VOD results are NOT ignored — channels that
+        consistently serve a finished VOD manifest are genuinely episode-only
+        and should be flagged (e.g. game-show-catalog channels like 25 Words or Less).
         """
         if not raw_url.startswith(self.CHANNEL_SCHEME):
             return raw_url
