@@ -1067,8 +1067,6 @@ def play(source_name: str, channel_id: str):
         _channel_id = channel.id
         _source_name = source_name
         _source_id = channel.source_id
-        _scraper_cls = registry.get(source_name)
-        _play_ignore_vod = getattr(_scraper_cls, 'audit_ignore_vod', False)
         def _bg_check():
             import requests
             # Use a plain session without retry adapters — this is a one-shot
@@ -1076,8 +1074,6 @@ def play(source_name: str, channel_id: str):
             s = requests.Session()
             reason = _check_manifest(resolved_url, s)
             if not reason:
-                return
-            if reason == 'VOD' and _play_ignore_vod:
                 return
             if reason == 'Unauthorized' and _source_name == 'roku':
                 # OSM session token has expired. Clear both osm_session AND
