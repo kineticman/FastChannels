@@ -909,6 +909,19 @@
       margin-bottom: 1rem;
     }
     .preview-actions .preview-action-btn { width: 100%; min-width: 0; }
+    .preview-nav-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 0.85rem; padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .preview-nav-btn {
+      background: none; border: 1px solid var(--border); color: var(--text-soft);
+      padding: 0.25rem 0.7rem; border-radius: 5px; cursor: pointer; font-size: 0.82rem;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .preview-nav-btn:hover:not(:disabled) { border-color: var(--accent-soft); color: var(--accent-soft); background: var(--accent-bg); }
+    .preview-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .preview-nav-pos { font-size: 0.78rem; color: var(--text-muted); }
     .preview-conf {
       display: inline-flex; align-items: center; justify-content: center;
       border-radius: 999px; padding: 0.18rem 0.45rem; font-size: 0.66rem; font-weight: 700;
@@ -1601,7 +1614,7 @@
                   <button class="btn-clear-dup" id="cleardup-{{ ch.id }}" onclick="clearManualDup({{ ch.id }}, this)" title="Remove duplicate label">⊘</button>
                   {% endif %}
                 </div>
-                <button class="btn-preview btn-icon" onclick="openPreview({{ ch.id }})" title="Preview: view current and next program, preview playback">📺</button>
+                <button class="btn-preview btn-icon" data-channel-id="{{ ch.id }}" onclick="openPreview({{ ch.id }})" title="Preview: view current and next program, preview playback">📺</button>
                 <button class="btn-inspect" onclick="inspectChannel({{ ch.id }}, this)" title="Test stream: check DRM, liveness, and segment data">&#128269;</button>
                 <button class="btn-pin-feed{% if ch.id not in in_any_feed_ids %} not-in-feed{% endif %}" onclick="openPinFeedMenu({{ ch.id }}, this)" title="{% if ch.id in in_any_feed_ids %}Manage feed membership{% else %}Not in any feed — add to one{% endif %}">🗂️</button>
                 {% if not ch.is_duplicate %}
@@ -1721,6 +1734,9 @@
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
   <script>
     let _previewHls = null;
+    let _previewList = null;
+    let _previewIndex = -1;
+    const _allChannelIds = {{ all_channel_ids | tojson }};
     const APP_TIME_ZONE = {{ app_timezone_name|tojson }};
 
     function jumpToPage(event, totalPages, qs) {
@@ -1804,12 +1820,50 @@
       }
     }
 
+    function _buildPreviewList() {
+      return Array.from(document.querySelectorAll('button.btn-preview[data-channel-id]'))
+        .map(btn => parseInt(btn.dataset.channelId, 10))
+        .filter(id => !isNaN(id));
+    }
+
+    function _teardownPreviewPlayer() {
+      const video = document.getElementById('preview-player');
+      _stopStatsLoop();
+      _statsVisible = false;
+      _lastFrag = null;
+      if (_previewHls) {
+        _previewHls.destroy();
+        _previewHls = null;
+      }
+      if (video) {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      }
+    }
+
     async function openPreview(channelId) {
+      _previewList = _allChannelIds.length ? _allChannelIds : _buildPreviewList();
+      _previewIndex = _previewList.indexOf(channelId);
       const modal = document.getElementById('preview-modal');
       const content = document.getElementById('preview-content');
       content.innerHTML = '<div class="modal-loading">Loading preview…</div>';
       modal.classList.add('open');
+      await _loadPreviewContent(channelId, content);
+    }
 
+    async function navigatePreview(delta) {
+      if (!_previewList || _previewList.length === 0) return;
+      const newIndex = _previewIndex + delta;
+      if (newIndex < 0 || newIndex >= _previewList.length) return;
+      _previewIndex = newIndex;
+      _teardownPreviewPlayer();
+      const content = document.getElementById('preview-content');
+      content.innerHTML = '<div class="modal-loading">Loading preview…</div>';
+      await _loadPreviewContent(_previewList[_previewIndex], content);
+    }
+
+    async function _loadPreviewContent(channelId, content) {
       try {
         const r = await fetch(`/api/channels/${channelId}/preview`);
         const data = await r.json();
@@ -1834,7 +1888,15 @@
         const playbackNote = !playUrl
           ? `<div class="modal-preview">Browser preview is not available for this source or channel. You can still use the program details here for quick guide verification.</div>`
           : '';
+        const navRow = _previewList && _previewList.length > 1 ? `
+          <div class="preview-nav-row">
+            <button class="preview-nav-btn" onclick="navigatePreview(-1)" ${_previewIndex <= 0 ? 'disabled' : ''}>&#8249; Prev</button>
+            <span class="preview-nav-pos">${_previewIndex + 1} of ${_previewList.length}</span>
+            <button class="preview-nav-btn" onclick="navigatePreview(1)" ${_previewIndex >= _previewList.length - 1 ? 'disabled' : ''}>Next &#8250;</button>
+          </div>
+        ` : '';
         content.innerHTML = `
+          ${navRow}
           <div class="preview-header">
             ${ch.logo_url ? `<img class="preview-logo" src="${escapeHtml(ch.logo_display_url || ch.logo_url)}" alt="">` : '<div class="preview-logo"></div>'}
             <div>
@@ -2106,23 +2168,12 @@
 
     function closePreviewModal(event) {
       if (event && event.target !== event.currentTarget) return;
-      const modal = document.getElementById('preview-modal');
-      const video = document.getElementById('preview-player');
+      _teardownPreviewPlayer();
       const status = document.getElementById('preview-player-status');
-      _stopStatsLoop();
-      _statsVisible = false;
-      _lastFrag = null;
-      if (_previewHls) {
-        _previewHls.destroy();
-        _previewHls = null;
-      }
-      if (video) {
-        video.pause();
-        video.removeAttribute('src');
-        video.load();
-      }
       if (status) status.textContent = '';
-      modal.classList.remove('open');
+      _previewList = null;
+      _previewIndex = -1;
+      document.getElementById('preview-modal').classList.remove('open');
     }
 
     // ── Channel inspector ─────────────────────────────────────────────────

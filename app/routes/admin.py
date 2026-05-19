@@ -483,7 +483,9 @@ def channels():
     else:
         _order = [c.asc() for c in _cols]
 
-    channels = q.order_by(*_order).paginate(page=page, per_page=50, error_out=False)
+    ordered_q = q.order_by(*_order)
+    all_channel_ids = [r[0] for r in ordered_q.with_entities(Channel.id).all()]
+    channels = ordered_q.paginate(page=page, per_page=50, error_out=False)
     feeds_q = Feed.query.filter(Feed.is_enabled == True)
     if feed_filter:
         feeds_q = feeds_q.union(Feed.query.filter(Feed.slug == feed_filter))
@@ -573,7 +575,8 @@ def channels():
     }.items() if v})
 
     return render_template('admin/channels.html',
-                           channels=channels, sources=sources, feeds=feeds,
+                           channels=channels, all_channel_ids=all_channel_ids,
+                           sources=sources, feeds=feeds,
                            feed_filter=feed_filter, selected_feed=selected_feed,
                            source_filter=source_filter, search=search,
                            enabled_filter=enabled_filter, drm_filter=drm_filter,
