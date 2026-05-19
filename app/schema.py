@@ -240,6 +240,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN returned_at DATETIME"
                 ))
+            if "user_note" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN user_note TEXT"
+                ))
             conn.execute(text(
                 "UPDATE channels SET missed_scrapes = 0 WHERE missed_scrapes IS NULL"
             ))

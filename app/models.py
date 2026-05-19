@@ -100,6 +100,7 @@ class Channel(db.Model):
     gracenote_mode    = db.Column(db.String(16), default='auto', nullable=False)  # auto | manual | off
     guide_key         = db.Column(db.String(256), nullable=True)  # provider-specific guide lookup key (e.g. Plex gridKey)
     description       = db.Column(db.Text, nullable=True)         # optional channel description from scraper
+    user_note         = db.Column(db.Text, nullable=True)         # free-form note set by user
     disable_reason    = db.Column(db.String(64), nullable=True)  # e.g. 'DRM'; set by play proxy
     stream_info       = db.Column(db.JSON, nullable=True)        # populated by audit/inspect: max_resolution, video_codec, has_4k, variants
     custom_headers    = db.Column(db.JSON, nullable=True)       # headers required to access stream (custom channels)
@@ -161,6 +162,7 @@ class Channel(db.Model):
             'gracenote_mode':   self.gracenote_mode or 'auto',
             'guide_key':        self.guide_key,
             'description':      self.description,
+            'user_note':        self.user_note,
             'is_active':        self.is_active,
             'scrape_pinned':    bool(self.scrape_pinned),
             'disable_reason':   self.disable_reason,

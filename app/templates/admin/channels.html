@@ -262,7 +262,7 @@
       cursor: pointer; border-bottom: 1px dotted var(--text-dim);
       display: inline; white-space: nowrap; color: var(--text-muted);
     }
-    td[data-lang-channel-id] { max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.78rem; }
+    td[data-lang-channel-id] { max-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.78rem; }
     .lang-label.has-override { border-bottom-color: var(--warning-strong); color: var(--warning-strong) !important; }
     #catModal .source-badge {
       display: inline-block; font-size: 0.68rem; font-weight: 700;
@@ -721,7 +721,13 @@
     tr.disabled td:not(.toggle-col) { opacity: 0.4; }
     tr:hover td { background: var(--accent-row-hover); }
 
-    .ch-name-wrap { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ch-name-wrap { max-width: 264px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ch-name-td { cursor: pointer; position: relative; }
+    .ch-name-td:hover .ch-name-wrap strong { text-decoration: underline; text-underline-offset: 2px; }
+    .ch-note-slot { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); font-size: 0.8rem; line-height: 1; opacity: 0; transition: opacity 0.12s; pointer-events: none; }
+    .ch-note-slot.has-note { opacity: 1; }
+    .ch-name-td:hover .ch-note-slot { opacity: 0.6; }
+    .ch-name-td:hover .ch-note-slot.has-note { opacity: 1; }
     .logo { width: 32px; height: 32px; object-fit: contain; border-radius: 4px; background: var(--bg); }
     .logo-wrap { position: relative; display: inline-block; cursor: pointer; }
     .logo-wrap:hover .logo { outline: 2px solid var(--accent-soft); border-radius: 4px; }
@@ -787,21 +793,17 @@
       position: relative;
     }
 
-    .gn-mode {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 5px;
-      color: var(--text-subtle);
-      font-size: 0.68rem;
-      padding: 0.22rem 0.25rem;
-      max-width: 52px;
-      outline: none;
+    .gn-mode-btn {
+      width: 20px; flex-shrink: 0;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+      color: var(--text-subtle); font-size: 0.68rem; font-weight: 700;
+      padding: 0.22rem 0; cursor: pointer; text-align: center; outline: none;
     }
-    .gn-mode.gn-mode-manual { border-color: var(--success-fill); color: var(--success-soft); }
-    .gn-mode.gn-mode-off { border-color: var(--text-muted); color: var(--text-soft); }
+    .gn-mode-btn.gn-mode-manual { border-color: var(--success-fill); color: var(--success-soft); }
+    .gn-mode-btn.gn-mode-off { border-color: var(--text-muted); color: var(--text-soft); }
 
     .gn-input {
-      width: 60px;
+      width: 56px;
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: 5px;
@@ -944,7 +946,7 @@
     .btn-apply-gn:disabled { opacity: 0.5; cursor: not-allowed; }
     .gs-open-btn {
       background: none; border: 1px solid var(--border); color: var(--accent-soft);
-      padding: 0.2rem 0.45rem; border-radius: 4px; cursor: pointer;
+      padding: 0.2rem 0.28rem; border-radius: 4px; cursor: pointer;
       font-size: 0.72rem; line-height: 1; transition: border-color 0.15s, color 0.15s, background 0.15s;
       white-space: nowrap;
     }
@@ -1499,7 +1501,7 @@
               </select>
             </th>
             <th style="width:1px;white-space:nowrap">
-              <select class="col-filter-select{% if language_filter %} col-filter-active{% endif %}" onchange="filterBy('language', this.value)" title="Filter by language">
+              <select class="col-filter-select{% if language_filter %} col-filter-active{% endif %}" onchange="filterBy('language', this.value)" title="Filter by language" style="width:46px">
                 <option value="">LAN</option>
                 {% for lang, count in languages %}
                 <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }}</option>
@@ -1547,7 +1549,15 @@
             {% if ch.last_seen_at %}
               {% set _ = hover_parts.append('Last seen: ' ~ (ch.last_seen_at | localtime)) %}
             {% endif %}
-            <td title="{{ ch.name }}{% if hover_parts %} · {{ hover_parts|join(' · ') }}{% endif %}"><div class="ch-name-wrap"><strong>{{ ch.name }}</strong></div></td>
+            <td class="ch-name-td"
+                title="{{ ch.name }}{% if hover_parts %} · {{ hover_parts|join(' · ') }}{% endif %}"
+                data-note-id="{{ ch.id }}"
+                data-note-name="{{ ch.name|e }}"
+                data-note-value="{{ ch.user_note|e if ch.user_note else '' }}"
+                onclick="openNoteModal(this)">
+              <div class="ch-name-wrap"><strong>{{ ch.name }}</strong></div>
+              <span class="ch-note-slot{% if ch.user_note %} has-note{% endif %}" title="{{ ch.user_note|e if ch.user_note else '' }}">📝</span>
+            </td>
             <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.name in duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Duplicate match found — click to see matches">DUP</span>{% elif ch.name in possible_duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Possible duplicate — click to see matches">DUP?</span>{% elif ch.id in gn_duplicate_ids %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Same Gracenote ID found on another source — click to see matches">GN DUP</span>{% endif %}{% if ch.is_duplicate %}<span class="badge-manual-dup badge-dup-clickable" data-channel-id="{{ ch.id }}" title="Click to see potential duplicates" style="cursor:pointer">DUPL</span>{% endif %}</td>
             <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
             <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.stream_info %}{% if ch.stream_info.has_4k %}<span class="badge-4k" title="4K stream ({{ ch.stream_info.max_resolution }})">4K</span>{% elif ch.stream_info.has_hd %}<span class="badge-hd" title="HD stream ({{ ch.stream_info.max_resolution }})">HD</span>{% endif %}{% if ch.stream_info.video_codec == 'hevc' %}<span class="badge-hevc" title="H.265/HEVC — may not play in all clients">HEVC</span>{% endif %}{% endif %}</td>
@@ -1573,18 +1583,15 @@
             <td class="gn-cell">
               {% set gn_mode = ch.gracenote_mode or ('manual' if ch.gracenote_locked and ch.gracenote_id else 'auto') %}
               <div class="gn-wrap">
-                <select
-                  class="gn-mode {% if gn_mode == 'manual' %}gn-mode-manual{% elif gn_mode == 'off' %}gn-mode-off{% endif %}"
-                  id="gn-mode-{{ ch.id }}"
-                  data-channel-id="{{ ch.id }}"
-                  data-original-mode="{{ gn_mode }}"
-                  onchange="gnModeChanged(this)"
-                  title="Auto = scraper-managed (if cleared, ID will repopulate on next scrape), Manual = lock this ID, Off = never use Gracenote for this channel."
-                >
+                <select class="gn-mode" id="gn-mode-{{ ch.id }}" data-channel-id="{{ ch.id }}" data-original-mode="{{ gn_mode }}" onchange="gnModeChanged(this)" style="display:none">
                   <option value="auto" {% if gn_mode == 'auto' %}selected{% endif %}>Auto</option>
                   <option value="manual" {% if gn_mode == 'manual' %}selected{% endif %}>Manual</option>
                   <option value="off" {% if gn_mode == 'off' %}selected{% endif %}>Off</option>
                 </select>
+                <button class="gn-mode-btn{% if gn_mode == 'manual' %} gn-mode-manual{% elif gn_mode == 'off' %} gn-mode-off{% endif %}"
+                        id="gn-mode-btn-{{ ch.id }}" data-channel-id="{{ ch.id }}" type="button"
+                        onclick="gnModeBtnCycle({{ ch.id }})"
+                        title="Gracenote mode: {% if gn_mode == 'manual' %}Manual — locked{% elif gn_mode == 'off' %}Off — disabled{% else %}Auto — scraper-managed{% endif %}. Click to cycle A→M→O.">{% if gn_mode == 'manual' %}M{% elif gn_mode == 'off' %}O{% else %}A{% endif %}</button>
                 <input
                   type="text"
                   class="gn-input {% if ch.gracenote_id %}gn-set{% endif %}{% if gn_mode == 'off' %} gn-disabled{% endif %}"
@@ -2296,6 +2303,25 @@
       } else if (inp.value.trim()) {
         inp.classList.add('gn-set');
       }
+      _gnSyncModeBtn(sel.dataset.channelId, sel.value);
+    }
+
+    function _gnSyncModeBtn(channelId, mode) {
+      const btn = document.getElementById(`gn-mode-btn-${channelId}`);
+      if (!btn) return;
+      btn.textContent = {auto:'A', manual:'M', off:'O'}[mode] || 'A';
+      btn.classList.toggle('gn-mode-manual', mode === 'manual');
+      btn.classList.toggle('gn-mode-off', mode === 'off');
+      const titles = {auto:'Auto — scraper-managed', manual:'Manual — locked', off:'Off — disabled'};
+      btn.title = (titles[mode] || 'Auto') + '. Click to cycle A→M→O.';
+    }
+
+    function gnModeBtnCycle(channelId) {
+      const sel = document.getElementById(`gn-mode-${channelId}`);
+      if (!sel) return;
+      const modes = ['auto', 'manual', 'off'];
+      sel.value = modes[(modes.indexOf(sel.value) + 1) % 3];
+      gnModeChanged(sel);
     }
 
     function gnModeChanged(sel) {
@@ -2308,7 +2334,7 @@
         return;
       }
       if (sel.value === 'manual' && !inp.value.trim()) {
-        gnSetStatus(inp, 'err', 'ID');
+        gnSetStatus(inp, 'err', '!');
         inp.classList.add('gn-err');
         inp.title = 'Manual mode requires a Gracenote ID.';
         inp.focus();
@@ -2329,7 +2355,7 @@
       if (!opts.force && raw === original && mode === originalMode) return;
 
       if (mode === 'manual' && raw === '') {
-        gnSetStatus(inp, 'err', 'ID');
+        gnSetStatus(inp, 'err', '!');
         inp.classList.add('gn-err');
         inp.classList.remove('gn-set');
         inp.title = 'Manual mode requires a Gracenote ID.';
@@ -4103,6 +4129,71 @@
       closeCatModal();
     }
   </script>
+  <div class="modal-overlay" id="note-modal" onclick="if(event.target===this)closeNoteModal()">
+    <div class="modal-box" style="max-width:440px">
+      <h2 id="note-modal-title">Channel Note</h2>
+      <p class="modal-sub" id="note-modal-sub"></p>
+      <textarea id="note-modal-textarea"
+        style="width:100%;box-sizing:border-box;height:100px;background:var(--bg-input,#2a2a2a);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.5rem;font-size:0.9rem;resize:vertical;font-family:inherit"
+        placeholder="Why did you disable this? Anything worth remembering…"></textarea>
+      <div style="display:flex;gap:0.75rem;justify-content:flex-end;margin-top:1rem">
+        <button style="padding:0.4rem 1rem;border-radius:4px;border:1px solid #555;background:#333;color:#ccc;cursor:pointer" onclick="closeNoteModal()">Cancel</button>
+        <button id="note-save-btn" style="padding:0.4rem 1rem;border-radius:4px;border:none;background:var(--accent-strong,#2980b9);color:#fff;cursor:pointer;font-weight:600" onclick="saveNote()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── Channel Notes ─────────────────────────────────────────────────────────
+    let _noteChannelId = null;
+
+    function openNoteModal(td) {
+      _noteChannelId = parseInt(td.dataset.noteId);
+      document.getElementById('note-modal-title').textContent = td.dataset.noteName;
+      document.getElementById('note-modal-sub').textContent = 'Add a personal note — visible only in the admin.';
+      const ta = document.getElementById('note-modal-textarea');
+      ta.value = td.dataset.noteValue || '';
+      document.getElementById('note-modal').classList.add('open');
+      ta.focus();
+    }
+
+    function closeNoteModal() {
+      document.getElementById('note-modal').classList.remove('open');
+      _noteChannelId = null;
+    }
+
+    async function saveNote() {
+      const note = document.getElementById('note-modal-textarea').value.trim() || null;
+      const btn = document.getElementById('note-save-btn');
+      btn.disabled = true;
+      try {
+        const resp = await fetch(`/api/channels/${_noteChannelId}`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({user_note: note})
+        });
+        if (!resp.ok) { alert('Failed to save note'); return; }
+        const row = document.getElementById(`row-${_noteChannelId}`);
+        if (row) {
+          const td = row.querySelector('.ch-name-td');
+          if (td) td.dataset.noteValue = note || '';
+          const slot = row.querySelector('.ch-note-slot');
+          if (slot) {
+            slot.title = note || '';
+            if (note) { slot.classList.add('has-note'); } else { slot.classList.remove('has-note'); }
+          }
+        }
+        closeNoteModal();
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('note-modal').addEventListener('keydown', e => {
+      if (e.key === 'Escape') closeNoteModal();
+    });
+  </script>
+
   {% include 'admin/_update_modal.html' %}
 </body>
 </html>
