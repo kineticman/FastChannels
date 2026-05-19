@@ -922,6 +922,11 @@
     .preview-nav-btn:hover:not(:disabled) { border-color: var(--accent-soft); color: var(--accent-soft); background: var(--accent-bg); }
     .preview-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
     .preview-nav-pos { font-size: 0.78rem; color: var(--text-muted); }
+    .preview-card-poster {
+      float: right; margin: 0 0 0.4rem 0.65rem;
+      width: 68px; height: 68px; border-radius: 5px;
+      object-fit: cover; background: var(--bg); flex-shrink: 0;
+    }
     .preview-conf {
       display: inline-flex; align-items: center; justify-content: center;
       border-radius: 999px; padding: 0.18rem 0.45rem; font-size: 0.66rem; font-weight: 700;
@@ -1789,9 +1794,13 @@
       if (!isMovie && program.season && program.episode) episodeBits.push(`S${program.season} E${program.episode}`);
       const episodeLine = episodeBits.length ? `<div class="preview-program-time">${episodeBits.join(' · ')}</div>` : '';
 
+      const poster = program.poster_url
+        ? `<img class="preview-card-poster" src="${escapeHtml(program.poster_url)}" alt="" loading="lazy" onerror="this.remove()">`
+        : '';
       return `
         <div class="preview-card">
           <h3>${title}</h3>
+          ${poster}
           <div class="preview-program-title">${escapeHtml(program.title || 'Untitled')}</div>
           <div class="preview-program-time">${formatPreviewTime(program.start_time)} – ${formatPreviewTime(program.end_time)}</div>
           ${episodeLine}
