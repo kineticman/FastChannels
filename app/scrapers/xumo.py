@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, infer_language_from_metadata
 from .category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,9 @@ class XumoScraper(BaseScraper):
     source_name = "xumo"
     display_name = "Xumo Play"
     scrape_interval = 720
-    stream_audit_enabled = True
+    stream_audit_enabled  = True
+    audit_ignore_4xx      = True  # CDN URLs expire per program window; 4xx = between programs, not dead
+    audit_ignore_vod      = True  # per-episode HLS always looks VOD at manifest level; normal for this source
     config_schema = []
 
     BASE_URL = "https://valencia-app-mds.xumo.com"
@@ -272,6 +274,37 @@ class XumoScraper(BaseScraper):
 
         logger.info("[xumo] %d EPG entries", len(programmes))
         return programmes
+
+    def audit_resolve(self, raw_url: str) -> str:
+        """
+        Catalog check + CDN URL resolution for stream audits.
+        First confirms the channel exists in Xumo's broadcast catalog.  If the
+        API returns no assets the channel is genuinely gone (StreamDeadError).
+        API failure is treated as transient (returns opaque URL → skips manifest).
+        Otherwise resolves to the current CDN URL so the audit can check for DRM.
+        4xx and VOD results from the manifest fetch are handled leniently by the
+        audit loop (audit_ignore_4xx / audit_ignore_vod flags) since CDN URLs
+        expire per program window.
+        """
+        if not raw_url.startswith(self.CHANNEL_SCHEME):
+            return raw_url
+
+        channel_id = raw_url.split(self.CHANNEL_SCHEME, 1)[1].strip()
+        if not channel_id:
+            return raw_url
+
+        hour = datetime.now(timezone.utc).hour
+        broadcast_url = self.BASE_URL + self.BROADCAST_URL.format(channel_id=channel_id, hour=hour)
+        broadcast = self._get_json(broadcast_url)
+        if broadcast is None:
+            return raw_url  # API failure — transient, count as alive
+
+        assets = broadcast.get("assets") or []
+        if not assets:
+            raise StreamDeadError(f"[xumo] channel removed from catalog: {channel_id}")
+
+        # Resolve to CDN URL so the audit can still detect DRM
+        return self.resolve(raw_url)
 
     def resolve(self, raw_url: str) -> str:
         if not raw_url.startswith(self.CHANNEL_SCHEME):

@@ -560,6 +560,8 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
         skipped_403 = 0
         consecutive_errors = 0
         report_channels = []
+        _audit_ignore_4xx = getattr(scraper_cls, 'audit_ignore_4xx', False)
+        _audit_ignore_vod = getattr(scraper_cls, 'audit_ignore_vod', False)
 
         logger.info('[audit] %s: checking %d channels…', source_name, total)
 
@@ -705,6 +707,10 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                     r = sess.get(resolved_url, timeout=15, allow_redirects=True)
 
                 if r.status_code in (400, 404, 410, 422):
+                    if _audit_ignore_4xx:
+                        checked += 1
+                        consecutive_errors = 0
+                        continue
                     ch.is_active      = False
                     ch.is_enabled     = False
                     ch.disable_reason = 'Dead'
@@ -745,6 +751,8 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                 if '<MPD ' in manifest_text or (manifest_text.lstrip().startswith('<?xml')
                                                 and '<MPD' in manifest_text):
                     if 'type="static"' in manifest_text:
+                        if _audit_ignore_vod:
+                            continue
                         ch.is_active      = False
                         ch.is_enabled     = False
                         ch.disable_reason = 'VOD'
@@ -805,6 +813,8 @@ def run_stream_audit(source_name: str, include_inactive: bool = False):
                     'EXT-X-PLAYLIST-TYPE:VOD' in manifest_text
                     and '#EXT-X-ENDLIST' in manifest_text
                 ):
+                    if _audit_ignore_vod:
+                        continue
                     ch.is_active      = False
                     ch.is_enabled     = False
                     ch.disable_reason = 'VOD'
