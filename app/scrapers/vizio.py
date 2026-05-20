@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata
 from .category_utils import category_for_channel
@@ -55,6 +56,17 @@ _DEFAULT_MACROS: dict[str, str] = {
 }
 
 _UA = 'okhttp/4.12.0'
+
+
+def _rewrite_icon_aspect(url: str, width: int, height: int) -> str:
+    """Rewrite width/height query params on a Vizio image URL."""
+    if not url:
+        return url
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query, keep_blank_values=True)
+    qs['width'] = [str(width)]
+    qs['height'] = [str(height)]
+    return urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
 
 
 def _expand_macros(url: str, macros: dict[str, str]) -> str:
@@ -227,13 +239,41 @@ class VizioScraper(BaseScraper):
             raw_rating = airing.get('rating')
             rating = (raw_rating.get('code') if isinstance(raw_rating, dict) else raw_rating) or None
 
+            is_movie = (airing.get('airingType') or '').lower() == 'movie'
+
+            season  = airing.get('seasonNumber') or None
+            episode = airing.get('episodeNumber') or None
+            if season == 0:  season = None
+            if episode == 0: episode = None
+
+            series_title = (airing.get('seriesTitle') or '').strip() or None
+            sub_title    = (airing.get('subTitle') or '').strip() or None
+            raw_title    = (airing.get('title') or '').strip() or 'Unknown'
+
+            # Use seriesTitle as the programme title when it differs from title
+            # (indicates an episode); treat subTitle as the episode title.
+            if series_title and series_title.lower() != raw_title.lower():
+                title     = series_title
+                ep_title  = sub_title if sub_title and sub_title.lower() != series_title.lower() else None
+            else:
+                title    = raw_title
+                ep_title = None
+
+            # Channels DVR expects 2:3 portrait for movies, 4:3 for TV shows.
+            icon = airing.get('airingIcon') or None
+            if icon:
+                icon = _rewrite_icon_aspect(icon, 200, 300) if is_movie else _rewrite_icon_aspect(icon, 267, 200)
+
             programs.append(ProgramData(
                 source_channel_id = source_channel_id,
-                title             = (airing.get('title') or '').strip() or 'Unknown',
+                title             = title,
                 start_time        = start,
                 end_time          = end,
                 description       = (airing.get('description') or '').strip() or None,
-                poster_url        = airing.get('airingIcon') or None,
+                poster_url        = icon,
                 rating            = rating,
+                season            = season,
+                episode           = episode,
+                episode_title     = ep_title,
             ))
         return programs
