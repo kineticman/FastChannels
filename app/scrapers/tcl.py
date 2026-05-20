@@ -285,15 +285,25 @@ class TCLScraper(BaseScraper):
                 continue
 
             d = details.get(self._detail_lookup_id(str(prog_id)), {})
-            poster_url = self._fix_url(
-                d.get("poster_h_large") or d.get("poster_h_medium") or
-                d.get("poster_v_large") or d.get("poster_v_medium") or ch_poster_url
-            )
             series = d.get("series") or {}
             raw_title = d.get("title") or list_title or "No Title"
             title, season, episode, ep_title = _parse_tcl_title(
                 raw_title, series.get("season"), series.get("episode")
             )
+            # Channels DVR expects 2:3 portrait art for movies and 4:3 for TV.
+            # Use vertical poster variants for content without season/episode info
+            # (likely movies), horizontal variants for everything else.
+            is_likely_movie = season is None and ep_title is None
+            if is_likely_movie:
+                poster_url = self._fix_url(
+                    d.get("poster_v_large") or d.get("poster_v_medium") or
+                    d.get("poster_h_large") or d.get("poster_h_medium") or ch_poster_url
+                )
+            else:
+                poster_url = self._fix_url(
+                    d.get("poster_h_large") or d.get("poster_h_medium") or
+                    d.get("poster_v_large") or d.get("poster_v_medium") or ch_poster_url
+                )
 
             all_programs.append(ProgramData(
                 source_channel_id=bundle_id,
