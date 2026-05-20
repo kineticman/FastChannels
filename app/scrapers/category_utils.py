@@ -173,6 +173,16 @@ _CANONICAL_MAP: dict[str, str] = {
     '예능':                          'Entertainment',
     '음악':                          'Music',
 
+    # Pluto TV UK-specific buckets
+    'bingeable drama':              'Drama',
+    'crime drama':                  'Drama',
+    'how to use pluto tv':          'Entertainment',
+    'living':                       'Lifestyle',
+    'new on pluto tv':              'Entertainment',
+    'paranormal':                   'Horror',
+    'real life adventure':          'Reality TV',
+    'sci-fi & fantasy':             'Sci-Fi',
+
     # Entertainment — misc catch-alls and source artifacts
     'tv':                           'Entertainment',   # Vizio WatchFree+ generic bucket
     'general':                      'Entertainment',
@@ -597,6 +607,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'universal action':                     'Action & Adventure',
     'xena':                                 'Action & Adventure',
     'xena warrior princess':               'Action & Adventure',
+    'xena: warrior princess':              'Action & Adventure',
     'the outpost':                          'Action & Adventure',
     'action packed!':                       'Action & Adventure',
     'electric now':                         'Action & Adventure',
