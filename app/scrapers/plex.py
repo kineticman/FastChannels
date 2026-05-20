@@ -549,15 +549,27 @@ class PlexScraper(BaseScraper):
                 title = raw_title
                 ep_title = None
 
-            poster = (
-                video.attrib.get("thumb")
-                or video.attrib.get("grandparentThumb")
-                or next(
-                    (img.attrib.get("url") for img in video.findall("Image")
-                     if img.attrib.get("type") == "coverArt"),
-                    None,
+            # For TV episodes prefer show art (grandparentThumb) over the 16:9
+            # episode still (thumb). For movies thumb is already portrait.
+            if gp_title:
+                poster = (
+                    video.attrib.get("grandparentThumb")
+                    or video.attrib.get("thumb")
+                    or next(
+                        (img.attrib.get("url") for img in video.findall("Image")
+                         if img.attrib.get("type") == "coverArt"),
+                        None,
+                    )
                 )
-            )
+            else:
+                poster = (
+                    video.attrib.get("thumb")
+                    or next(
+                        (img.attrib.get("url") for img in video.findall("Image")
+                         if img.attrib.get("type") == "coverArt"),
+                        None,
+                    )
+                )
             category = next(
                 (genre.attrib.get("tag") for genre in video.findall("Genre") if genre.attrib.get("tag")),
                 None,
@@ -750,16 +762,27 @@ class PlexScraper(BaseScraper):
                         title = raw_title
                         ep_title = None
 
-                    # Prefer episode thumb; fall back to grandparent art
-                    poster = (
-                        entry.get("thumb")
-                        or entry.get("grandparentThumb")
-                        or next(
-                            (img["url"] for img in entry.get("Image", [])
-                             if img.get("type") == "coverArt"),
-                            None,
+                    # For TV episodes prefer show art (grandparentThumb) over
+                    # the 16:9 episode still (thumb). For movies thumb is portrait.
+                    if gp_title:
+                        poster = (
+                            entry.get("grandparentThumb")
+                            or entry.get("thumb")
+                            or next(
+                                (img["url"] for img in entry.get("Image", [])
+                                 if img.get("type") == "coverArt"),
+                                None,
+                            )
                         )
-                    )
+                    else:
+                        poster = (
+                            entry.get("thumb")
+                            or next(
+                                (img["url"] for img in entry.get("Image", [])
+                                 if img.get("type") == "coverArt"),
+                                None,
+                            )
+                        )
 
                     programs.append(ProgramData(
                         source_channel_id = ch_id,
