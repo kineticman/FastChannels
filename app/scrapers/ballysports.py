@@ -17,8 +17,11 @@ class BallysScraper(BaseScraper):
     All channels are free / unauthenticated. Channel metadata and EPG are
     embedded in the Next.js RSC payload of any channel page.  The public CDN
     stream URL (linear{NN}.channels.ballys.tv) requires no auth tokens and is
-    stable per channel UUID, so resolve() simply derives it from the stored
-    opaque URI.
+    stable per channel, so resolve() derives it from the stored opaque URI.
+
+    The opaque URI stores the CDN host number as it appears in the API response
+    (e.g. "2", not "02") so resolve() can reconstruct it verbatim without any
+    zero-padding assumptions.
     """
 
     source_name = "ballysports"
@@ -63,15 +66,17 @@ class BallysScraper(BaseScraper):
             if not uuid_val or not name or not cdn_url:
                 continue
 
-            if not cdn_url.startswith("https://linear"):
+            m = re.match(r'https://linear(\d+)\.channels\.ballys\.tv/', cdn_url)
+            if not m:
                 continue
+            linear_num = m.group(1)  # preserve as-is ("2", not "02")
 
             manifest = cdn_url.rsplit("/", 1)[-1] or "index_dvr.m3u8"
 
             channels.append(ChannelData(
                 source_channel_id=str(uuid_val),
                 name=name,
-                stream_url=f"bally://channel/{uuid_val}/{manifest}",
+                stream_url=f"bally://channel/{linear_num}/{manifest}",
                 logo_url=entry.get("logo") or None,
                 category="Sports",
                 number=entry.get("order"),
@@ -123,11 +128,13 @@ class BallysScraper(BaseScraper):
             return raw_url
         try:
             parts = raw_url[len("bally://channel/"):].split("/", 1)
-            uuid_val = int(parts[0])
+            linear_num = parts[0]
+            if not linear_num.isdigit():
+                return raw_url
             manifest = parts[1] if len(parts) == 2 else "index_dvr.m3u8"
-        except (ValueError, IndexError):
+        except IndexError:
             return raw_url
-        return f"https://linear{uuid_val:02d}.channels.ballys.tv/abr_default/{manifest}"
+        return f"https://linear{linear_num}.channels.ballys.tv/abr_default/{manifest}"
 
     # ── Internals ─────────────────────────────────────────────
 
