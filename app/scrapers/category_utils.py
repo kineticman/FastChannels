@@ -661,6 +661,9 @@ _NAME_OVERRIDES: dict[str, str] = {
     'torque presented by history':          'Automotive',
     'pluto tv petrolheads':                 'Automotive',
     'xtreme outdoor by history':            'Outdoors',
+    'powernation spanish':                  'Automotive',
+    'automotions':                          'Automotive',
+    'test my ride':                         'Automotive',
 
     # ── Classic TV ───────────────────────────────────────────────────────────
     'shout! tv':                            'Classic TV',
@@ -743,6 +746,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'silent witness & new tricks':          'Drama',
     'silent witness|new tricks':            'Drama',
     "mcleod's daughters":                   'Drama',
+    'mcleods daughters':                    'Drama',
     'britbox mysteries':                    'Drama',
     'series k edge':                        'Drama',
     'series k heart':                       'Drama',
@@ -805,6 +809,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'saborear tv':                          'Food',
     'filmrise concursos de cocina':         'Food',
     'pluto tv food':                        'Food',
+    'filmrise food':                        'Food',
+    'the great british baking channel':     'Food',
 
     # ── Game Shows ───────────────────────────────────────────────────────────
     'deal or no deal':                      'Game Shows',
@@ -861,6 +867,10 @@ _NAME_OVERRIDES: dict[str, str] = {
     'homeful':                              'Home & DIY',
     'ideas en 5 minutos':                   'Home & DIY',
     'homes under hammer':                   'Home & DIY',
+    'garden with monty don':               'Home & DIY',
+    'million dollar dream home':           'Home & DIY',
+    'how to':                              'Home & DIY',
+    'how-to':                              'Home & DIY',
 
     # ── Horror ───────────────────────────────────────────────────────────────
     'ghost dimension':                      'Horror',
@@ -930,9 +940,15 @@ _NAME_OVERRIDES: dict[str, str] = {
     'antiques roadshow':                    'Lifestyle',
     'the bob ross channel':                 'Lifestyle',
     'the martha stewart channel':           'Lifestyle',
-    'zenlife by stingray':                  'Lifestyle',
+    'zenlife by stingray':                  'Ambiance',
     'the hotel inspector':                  'Lifestyle',
     'escape to the country':                'Lifestyle',
+    "women's wellness by commune":          'Lifestyle',
+    'outdoor channel':                      'Outdoors',
+    'latv':                                 'Latino',
+    'wwe superstar central':               'Sports',
+    'journy tv':                            'Travel',
+    'amazon live':                          'Shopping',
 
     # ── Latino ───────────────────────────────────────────────────────────────
     'box cinema':                           'Latino',
@@ -970,6 +986,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'wine watches & whiskey':               'Lifestyle',
     'witz comedy tv':                       'Comedy',
     'witz-comedy tv':                       'Comedy',
+    'wild oceans':                          'Nature',
+    'witz comedy':                          'Comedy',
     # Stations that don't match the call-sign or network patterns above
     '9&10 news northern michigan':          'Local News',
     '12 news beaumont tx':                  'Local News',
@@ -1045,6 +1063,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'circle country':                       'Music',
     'billboard tv':                         'Music',
     'revolt mixtape':                       'Music',
+    'circle':                               'Music',
 
     # ── Nature ───────────────────────────────────────────────────────────────
     'bbc travel':                           'Travel',
@@ -1074,6 +1093,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'love nature spanish':                  'Nature',
     'curiosity animales':                   'Nature',
     'river monsters':                       'Nature',
+    'people are awesome':                   'Entertainment',
+    'space live powered by sen':            'Science',
 
     # ── News ─────────────────────────────────────────────────────────────────
     'cna':                                  'News',
@@ -1190,6 +1211,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'shop lc':                              'Shopping',
     'shoplc':                               'Shopping',
     'jtv jewelry love':                     'Shopping',
+    'shop tv':                              'Shopping',
 
     # ── Sports ───────────────────────────────────────────────────────────────
     'formula 1 tv':                         'Sports',
@@ -1270,6 +1292,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     # ── Travel ───────────────────────────────────────────────────────────────
     'journy':                               'Travel',
     'travel + adventure':                   'Travel',
+    'travel and adventure':                 'Travel',
     'tastemade travel':                     'Travel',
     'gotraveler':                           'Travel',
     'intravel':                             'Travel',
@@ -1291,6 +1314,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     "sheriffs: el dorado county":           'True Crime',
     'i  (almost) got away with it':         'True Crime',
     'introuble':                            'True Crime',
+    'introuble hd':                         'True Crime',
     'locked up abroad':                     'True Crime',
     'forensic files':                       'True Crime',
     'xumo free crime tv':                   'True Crime',
