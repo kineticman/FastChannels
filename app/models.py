@@ -253,9 +253,11 @@ class Feed(db.Model):
             'created_at':  self.created_at.isoformat() if self.created_at else None,
             'updated_at':  self.updated_at.isoformat() if self.updated_at else None,
             # Convenience URLs for the client / admin UI
-            'm3u_url':     f'{base_url}/feeds/{self.slug}/m3u',
-            'epg_url':     f'{base_url}/feeds/{self.slug}/epg.xml',
-            'gracenote_url': f'{base_url}/feeds/{self.slug}/m3u/gracenote',
+            'm3u_url':        f'{base_url}/feeds/{self.slug}/m3u',
+            'epg_url':        f'{base_url}/feeds/{self.slug}/epg.xml',
+            'gracenote_url':  f'{base_url}/feeds/{self.slug}/m3u/gracenote',
+            'native_m3u_url': f'{base_url}/feeds/{self.slug}/native/m3u',
+            'native_epg_url': f'{base_url}/feeds/{self.slug}/native/epg.xml',
         }
 
 
