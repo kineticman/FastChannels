@@ -126,6 +126,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN migration_012_done BOOLEAN NOT NULL DEFAULT 0"
                 ))
+            if "migration_025_done" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN migration_025_done BOOLEAN NOT NULL DEFAULT 0"
+                ))
             if "gracenote_contribution_url" not in cols:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN gracenote_contribution_url TEXT"
@@ -323,6 +327,73 @@ def ensure_runtime_schema() -> None:
                         [{'id': rid} for rid in to_clear],
                     )
                 conn.execute(text("UPDATE app_settings SET migration_012_done = 1 WHERE id = 1"))
+
+        # Migration 025: collapse legacy bare-UUID Vidaa channel IDs into their
+        # region-qualified US: counterparts.  Before multi-region support, channels
+        # were stored without a region prefix; each scrape since then has been
+        # creating a US:-prefixed twin while the old bare row stagnated inactive.
+        if "channels" in tables and "sources" in tables and "app_settings" in tables:
+            _m025_done = conn.execute(
+                text("SELECT migration_025_done FROM app_settings WHERE id = 1")
+            ).fetchone()
+            if not _m025_done or not _m025_done[0]:
+                vidaa_sources = conn.execute(
+                    text("SELECT id FROM sources WHERE name = 'vidaa'")
+                ).fetchall()
+                _m025_merged = 0
+                _m025_renamed = 0
+                for (_vsrc_id,) in vidaa_sources:
+                    legacy_rows = conn.execute(text(
+                        "SELECT id, source_channel_id FROM channels "
+                        "WHERE source_id = :sid AND instr(source_channel_id, ':') = 0"
+                    ), {"sid": _vsrc_id}).fetchall()
+                    for _leg_id, _raw_id in legacy_rows:
+                        _prefixed_sid = f"US:{_raw_id}"
+                        _twin = conn.execute(text(
+                            "SELECT id FROM channels WHERE source_id = :sid AND source_channel_id = :scid"
+                        ), {"sid": _vsrc_id, "scid": _prefixed_sid}).fetchone()
+                        if _twin and _twin[0] != _leg_id:
+                            _twin_id = _twin[0]
+                            # Merge user-set fields from the legacy row into the live twin,
+                            # then repoint any programs and delete the stale bare-UUID row.
+                            _leg = conn.execute(text(
+                                "SELECT number, number_pinned, gracenote_id, gracenote_locked,"
+                                "       gracenote_mode, is_enabled, missed_scrapes"
+                                " FROM channels WHERE id = :lid"
+                            ), {"lid": _leg_id}).fetchone()
+                            if _leg:
+                                conn.execute(text(
+                                    "UPDATE channels SET"
+                                    "  number = COALESCE(number, :num),"
+                                    "  number_pinned = COALESCE(number_pinned, 0) OR COALESCE(:np, 0),"
+                                    "  gracenote_id = COALESCE(NULLIF(gracenote_id,''), :gid),"
+                                    "  gracenote_locked = COALESCE(gracenote_locked,0) OR COALESCE(:gl,0),"
+                                    "  gracenote_mode = COALESCE(NULLIF(gracenote_mode,''), :gm),"
+                                    "  is_enabled = COALESCE(is_enabled, 0) OR COALESCE(:en, 0),"
+                                    "  missed_scrapes = MIN(COALESCE(missed_scrapes,0), COALESCE(:ms,0))"
+                                    " WHERE id = :tid"
+                                ), {
+                                    "num": _leg[0], "np": _leg[1], "gid": _leg[2],
+                                    "gl": _leg[3], "gm": _leg[4], "en": _leg[5],
+                                    "ms": _leg[6], "tid": _twin_id,
+                                })
+                            conn.execute(text(
+                                "UPDATE programs SET channel_id = :tid WHERE channel_id = :lid"
+                            ), {"tid": _twin_id, "lid": _leg_id})
+                            conn.execute(text("DELETE FROM channels WHERE id = :lid"), {"lid": _leg_id})
+                            _m025_merged += 1
+                        elif not _twin:
+                            conn.execute(text(
+                                "UPDATE channels SET source_channel_id = :scid WHERE id = :lid"
+                            ), {"scid": _prefixed_sid, "lid": _leg_id})
+                            _m025_renamed += 1
+                if _m025_merged or _m025_renamed:
+                    import logging as _logging
+                    _logging.getLogger(__name__).info(
+                        "Migration 025: merged %d / renamed %d Vidaa channel ID(s)",
+                        _m025_merged, _m025_renamed,
+                    )
+                conn.execute(text("UPDATE app_settings SET migration_025_done = 1 WHERE id = 1"))
 
         if "tvtv_program_cache" in tables:
             tvtv_cols = {
