@@ -533,7 +533,10 @@ class XumoScraper(BaseScraper):
         prefix = asset_id[:2]
         if prefix not in self._IMAGE_CDN_PREFIXES or asset_id.startswith("XMP"):
             return None
-        return f"{self.IMAGE_BASE}/{asset_id}/600x336.jpg"
+        # Channels DVR expects 2:3 portrait for movies, 4:3 for TV shows.
+        # MV = Movie, XM = Xumo Movie, XT = Xumo movie-type content; SH = Show.
+        size = "720x1080" if prefix in ("MV", "XM", "XT") else "800x600"
+        return f"{self.IMAGE_BASE}/{asset_id}/{size}.jpg"
 
     @staticmethod
     def _extract_genre(item: dict[str, Any]) -> str | None:
