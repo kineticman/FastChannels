@@ -245,6 +245,10 @@ def ensure_runtime_schema() -> None:
                     "ALTER TABLE channels ADD COLUMN user_note TEXT"
                 ))
             conn.execute(text(
+                "UPDATE channels SET went_inactive_at = last_seen_at "
+                "WHERE is_active = 0 AND last_seen_at IS NOT NULL AND went_inactive_at IS NULL"
+            ))
+            conn.execute(text(
                 "UPDATE channels SET missed_scrapes = 0 WHERE missed_scrapes IS NULL"
             ))
             conn.execute(text(
