@@ -19,9 +19,9 @@ class BallysScraper(BaseScraper):
     stream URL (linear{NN}.channels.ballys.tv) requires no auth tokens and is
     stable per channel, so resolve() derives it from the stored opaque URI.
 
-    The opaque URI stores the CDN host number as it appears in the API response
-    (e.g. "2", not "02") so resolve() can reconstruct it verbatim without any
-    zero-padding assumptions.
+    The CDN uses zero-padded two-digit host numbers (e.g. "linear06"), so
+    resolve() pads the stored number to at least 2 digits.  Old DB rows that
+    stored unpadded numbers ("6") are handled transparently by zfill(2).
     """
 
     source_name = "ballysports"
@@ -69,7 +69,7 @@ class BallysScraper(BaseScraper):
             m = re.match(r'https://linear(\d+)\.channels\.ballys\.tv/', cdn_url)
             if not m:
                 continue
-            linear_num = m.group(1)  # preserve as-is ("2", not "02")
+            linear_num = m.group(1)  # preserve verbatim (API returns zero-padded, e.g. "06")
 
             manifest = cdn_url.rsplit("/", 1)[-1] or "index_dvr.m3u8"
 
@@ -134,7 +134,7 @@ class BallysScraper(BaseScraper):
             manifest = parts[1] if len(parts) == 2 else "index_dvr.m3u8"
         except IndexError:
             return raw_url
-        return f"https://linear{linear_num}.channels.ballys.tv/abr_default/{manifest}"
+        return f"https://linear{linear_num.zfill(2)}.channels.ballys.tv/abr_default/{manifest}"
 
     # ── Internals ─────────────────────────────────────────────
 
