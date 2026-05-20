@@ -111,9 +111,9 @@
     {% endif %}
 
     <div class="stats">
-      <div class="stat-card"><div class="value">{{ total_channels }}</div><div class="label">Output Channels</div></div>
+      <div class="stat-card" title="Channels that are active upstream and enabled for output — these appear in your M3U/EPG feeds. The Channels page shows all records in the database, including inactive and manually disabled channels."><div class="value">{{ total_channels }}</div><div class="label">Output Channels</div><div class="sub-label">active &amp; enabled for M3U/EPG</div></div>
       <div class="stat-card"><div class="value">{{ sources|length }}</div><div class="label">Sources</div></div>
-      <div class="stat-card"><div class="value">{{ feeds|length }}</div><div class="label">Output Feeds</div></div>
+      <div class="stat-card" title="Total enabled feeds, including the built-in default feed. The default feed outputs all active &amp; enabled channels with no filters applied."><div class="value">{{ feeds|length }}</div><div class="label">Output Feeds</div><div class="sub-label">includes built-in default</div></div>
       <div class="stat-card clickable" onclick="openCommunityMap()" id="cm-stat-card" title="Open Community Gracenote Map">
         <div class="value" id="cm-stat-value" style="font-size:1.5rem;color:var(--accent-soft)">…</div>
         <div class="label">Community IDs Available</div>
