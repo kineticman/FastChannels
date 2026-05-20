@@ -404,6 +404,9 @@ class DistroScraper(BaseScraper):
             "User-Agent": ANDROID_UA,
             "Accept":     "application/json,*/*",
         })
+        # Populated during fetch_channels(); keyed by raw tvg_id (str).
+        # EPG slots only carry img_thumbh (often null) so fetch_epg falls back here.
+        self._show_poster_v: dict[str, str] = {}
 
     def _geos(self) -> list[str]:
         raw = self.config.get("geo") or DEFAULT_GEO
@@ -452,6 +455,10 @@ class DistroScraper(BaseScraper):
                 if source_channel_id in seen_ids:
                     continue
                 seen_ids.add(source_channel_id)
+
+                poster_v = (show.get("img_thumbv") or "").strip()
+                if poster_v:
+                    self._show_poster_v[str(tvg_id)] = poster_v
 
                 raw_genre      = (show.get("genre") or "").strip()
                 category, lang = _parse_distro_tags(raw_genre)
@@ -523,7 +530,7 @@ class DistroScraper(BaseScraper):
                         description       = _unescape((slot.get("description") or "").strip()) or None,
                         start_time        = start,
                         end_time          = end,
-                        poster_url        = slot.get("img_thumbh") or None,
+                        poster_url        = slot.get("img_thumbh") or self._show_poster_v.get(ch_id) or None,
                         episode_title     = episode_title,
                         season            = season,
                         episode           = episode,
