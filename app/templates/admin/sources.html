@@ -484,13 +484,12 @@
                 {% else %}
                   <span class="config-badge auto" style="font-style:italic">User-defined</span>
                 {% endif %}
+                <span class="config-badge auto"><span id="ch-count-{{ source.id }}">{{ source.to_dict().channel_count }}</span> channels</span>
               </div>
               <div class="source-meta" id="source-meta-{{ source.id }}">
-                <span id="ch-count-{{ source.id }}">{{ source.to_dict().channel_count }}</span> channels
                 {% if not is_custom %}
-                &nbsp;·&nbsp; Every <span id="scrape-interval-display-{{ source.id }}">{{ source.scrape_interval }}</span> min
+                Every <span id="scrape-interval-display-{{ source.id }}">{{ source.scrape_interval }}</span> min
                 &nbsp;·&nbsp; Last scraped: {{ source.last_scraped_at | localtime }}
-                {% if source.last_audited_at %}&nbsp;·&nbsp; Audited: {{ source.last_audited_at | localtime }}{% endif %}
                 {% endif %}
               </div>
               {% if not is_custom %}

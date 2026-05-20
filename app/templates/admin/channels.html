@@ -1591,7 +1591,7 @@
                 <button class="gn-mode-btn{% if gn_mode == 'manual' %} gn-mode-manual{% elif gn_mode == 'off' %} gn-mode-off{% endif %}"
                         id="gn-mode-btn-{{ ch.id }}" data-channel-id="{{ ch.id }}" type="button"
                         onclick="gnModeBtnCycle({{ ch.id }})"
-                        title="Gracenote mode: {% if gn_mode == 'manual' %}Manual — locked{% elif gn_mode == 'off' %}Off — disabled{% else %}Auto — scraper-managed{% endif %}. Click to cycle A→M→O.">{% if gn_mode == 'manual' %}M{% elif gn_mode == 'off' %}O{% else %}A{% endif %}</button>
+                        title="{% if gn_mode == 'manual' %}M = Manual: ID is user-locked; scraper will not overwrite it.{% elif gn_mode == 'off' %}O = Off: channel excluded from Gracenote routing entirely.{% else %}A = Auto: scraper or community CSV may assign a Gracenote ID; updates on each scrape.{% endif %} Click to cycle A→M→O.">{% if gn_mode == 'manual' %}M{% elif gn_mode == 'off' %}O{% else %}A{% endif %}</button>
                 <input
                   type="text"
                   class="gn-input {% if ch.gracenote_id %}gn-set{% endif %}{% if gn_mode == 'off' %} gn-disabled{% endif %}"
