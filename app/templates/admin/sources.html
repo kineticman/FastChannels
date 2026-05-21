@@ -200,7 +200,8 @@
     .btn-confirm { background: var(--danger-border); color: white; }
     .btn-confirm:hover { background: var(--danger-border); }
 
-    .dash-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+    .dash-actions { display: flex; gap: 0.4rem; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+    .dash-actions .btn-run, .dash-actions .btn-audit { min-width: 76px; text-align: center; }
 
     /* ── Config panel (inline table row) ──────────────────────────── */
     .config-panel-row { background: var(--bg); }
@@ -390,7 +391,7 @@
       .col-toggle { display: none; }
       .dashboard-table th.col-toggle { display: none; }
       .col-actions { width: auto; }
-      .dash-actions { grid-template-columns: 1fr 1fr; }
+      .dash-actions { justify-content: flex-start; }
       .config-panel { padding: 1rem; }
       .config-actions, .modal-actions { flex-wrap: wrap; }
       .config-actions { justify-content: flex-start; }
@@ -533,7 +534,6 @@
                           title="Test each channel's stream URL to check if it's live, DRM-protected, or dead. Flags problem channels automatically.">Audit</button>
                   {% endif %}
                   <button class="btn btn-configure btn-sm" id="configure-btn-{{ source.id }}"
-                          {% if not audit_enabled.get(source.name) %}style="grid-column: 1 / -1"{% endif %}
                           onclick="toggleConfigPanel({{ source.id }})">Configure ▾</button>
                 {% endif %}
               </div>
