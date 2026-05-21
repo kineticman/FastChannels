@@ -278,6 +278,7 @@ class StirrScraper(BaseScraper):
         if not videoid:
             return raw_url
 
+        logger.debug("[stirr] audit_resolve start for %s", videoid)
         playable_url = self.PLAYABLE_URL_TEMPLATE.format(videoid=videoid)
         try:
             # Use the no-retry session so a RemoteDisconnected/timeout doesn't
@@ -287,10 +288,13 @@ class StirrScraper(BaseScraper):
             logger.warning("[stirr] audit_resolve network error for %s: %s", videoid, exc)
             return raw_url  # treat as transient; don't mark dead
 
+        logger.debug("[stirr] audit_resolve playable status for %s: %s", videoid, r.status_code)
         if r.status_code in (404, 410):
+            logger.debug("[stirr] audit_resolve dead for %s at stage=playable status=%s", videoid, r.status_code)
             raise StreamDeadError(format_http_reason(f"Stirr channel {videoid} returned", r.status_code, "removed from catalogue"))
 
         if r.status_code != 200:
+            logger.debug("[stirr] audit_resolve transient playable failure for %s: status=%s", videoid, r.status_code)
             return raw_url  # 5xx or other transient — leave alone
 
         # Probe the SSAI/CDN URL to catch channels whose aniview config has been
@@ -299,6 +303,7 @@ class StirrScraper(BaseScraper):
         # non-standard cert chains that fail Python's default verification.
         media_url = self._extract_media_url_from_payload(r.json())
         if not media_url or not media_url.startswith('http'):
+            logger.debug("[stirr] audit_resolve no probeable media URL for %s", videoid)
             return raw_url
 
         media_url = media_url.replace('[vx_nonce]', secrets.token_hex(16))
@@ -308,16 +313,21 @@ class StirrScraper(BaseScraper):
             logger.debug("[stirr] audit SSAI probe network error for %s: %s", videoid, exc)
             return raw_url  # transient network issue — don't mark dead
 
+        logger.debug("[stirr] audit_resolve ssai probe status for %s: %s", videoid, probe.status_code)
         if probe.status_code == 422:
             try:
                 body = probe.json()
                 if body.get('error') == 'CON':
+                    logger.debug("[stirr] audit_resolve dead for %s at stage=ssai status=422 error=CON", videoid)
                     raise StreamDeadError(format_http_reason(f"Stirr channel {videoid} aniview config deleted", 422, "CON"))
+                logger.debug("[stirr] audit_resolve transient 422 for %s: body=%s", videoid, body)
             except StreamDeadError:
                 raise
             except Exception:
+                logger.debug("[stirr] audit_resolve transient 422 for %s: unparseable body", videoid)
                 pass  # unparseable 422 body — treat as transient
 
+        logger.debug("[stirr] audit_resolve pass for %s", videoid)
         return raw_url
 
     # ── CDN session ──────────────────────────────────────────

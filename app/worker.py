@@ -571,7 +571,11 @@ def run_stream_audit(source_name: str):
                 logger.warning('[audit] %s: pre-audit refresh failed (non-fatal): %s', source_name, _refresh_exc)
 
         channels = source.channels.filter(
-            db.or_(Channel.is_active == True, Channel.disable_reason.in_(['Dead', 'VOD']))
+            db.or_(
+                Channel.is_active == True,
+                Channel.disable_reason.in_(['Dead', 'VOD']),
+                Channel.disable_reason.like('AuditError:%'),
+            )
         ).all()
         total    = len(channels)
         checked  = 0
@@ -615,6 +619,11 @@ def run_stream_audit(source_name: str):
                 pass
 
         _audit_progress(0, total)
+
+        def _mark_audit_error_inactive(channel, reason):
+            channel.is_active = False
+            channel.is_enabled = True
+            channel.disable_reason = reason
 
         # Brief warmup pause — gives any residual rate-limit ban time to clear
         _time.sleep(5)
@@ -784,7 +793,8 @@ def run_stream_audit(source_name: str):
                     continue
 
                 if r.status_code != 200:
-                    logger.warning('[audit] error: %s (HTTP %d)', ch.name, r.status_code)
+                    _mark_audit_error_inactive(ch, f'AuditError: HTTP {r.status_code}')
+                    logger.warning('[audit] error: %s (HTTP %d) — marked inactive', ch.name, r.status_code)
                     errors += 1
                     consecutive_errors += 1
                     report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'error', 'reason': f'HTTP {r.status_code}'})
