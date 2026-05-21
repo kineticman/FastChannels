@@ -581,9 +581,7 @@ def stream_audit_source(source_id):
     source = Source.query.get_or_404(source_id)
     if not source.is_enabled:
         return jsonify({'error': 'Source is disabled'}), 409
-    data = request.get_json() or {}
-    include_inactive = bool(data.get('include_inactive', False))
-    trigger_stream_audit(source.name, include_inactive=include_inactive)
+    trigger_stream_audit(source.name)
     return jsonify({'status': 'queued', 'source': source.name})
 
 
@@ -595,7 +593,7 @@ def stream_audit_all():
     for src in sources:
         cls = registry.get(src.name)
         if cls and getattr(cls, 'stream_audit_enabled', False):
-            trigger_stream_audit(src.name, include_inactive=False)
+            trigger_stream_audit(src.name)
             queued.append({'id': src.id, 'name': src.name})
     return jsonify({'status': 'queued', 'sources': queued, 'count': len(queued)})
 
