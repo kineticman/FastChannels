@@ -628,7 +628,7 @@ def run_stream_audit(source_name: str):
                 _audit_item_t0 = _time.monotonic()
                 _audit_verbose = source_name == 'plex'
                 if _audit_verbose:
-                    logger.info('[audit-debug] %s %d/%d start id=%s name=%s url=%s',
+                    logger.debug('[audit-debug] %s %d/%d start id=%s name=%s url=%s',
                                 source_name, i, total, ch.source_channel_id, ch.name, (ch.stream_url or '')[:120])
                 _audit_progress._current_index = i
                 _audit_progress._current_channel = ch.name
@@ -644,7 +644,7 @@ def run_stream_audit(source_name: str):
                         lambda: _resolve(ch.stream_url),
                     )
                     if _audit_verbose:
-                        logger.info('[audit-debug] %s %d/%d resolved in %.2fs -> %s',
+                        logger.debug('[audit-debug] %s %d/%d resolved in %.2fs -> %s',
                                     source_name, i, total, _time.monotonic() - _resolve_t0, (resolved_url or '')[:160])
                 except StreamDeadError as dead_exc:
                     ch.is_active      = False
@@ -711,7 +711,7 @@ def run_stream_audit(source_name: str):
                         lambda: sess.get(resolved_url, timeout=15, allow_redirects=True),
                     )
                     if _audit_verbose:
-                        logger.info('[audit-debug] %s %d/%d manifest in %.2fs status=%s bytes=%s final=%s',
+                        logger.debug('[audit-debug] %s %d/%d manifest in %.2fs status=%s bytes=%s final=%s',
                                     source_name, i, total, _time.monotonic() - _manifest_t0, r.status_code, len(r.content), (r.url or '')[:160])
                 except Exception as req_exc:
                     if _is_ssl_handshake_failure(req_exc):
@@ -907,7 +907,7 @@ def run_stream_audit(source_name: str):
                                 source_name, i, total, checked, flagged, dead, vod, errors, skipped_403)
 
                 if source_name == 'plex':
-                    logger.info('[audit-debug] %s %d/%d finish elapsed=%.2fs checked=%d dead=%d flagged=%d vod=%d errors=%d',
+                    logger.debug('[audit-debug] %s %d/%d finish elapsed=%.2fs checked=%d dead=%d flagged=%d vod=%d errors=%d',
                                 source_name, i, total, _time.monotonic() - locals().get('_audit_item_t0', _time.monotonic()),
                                 checked, dead, flagged, vod, errors)
 
