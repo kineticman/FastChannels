@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import re
 from types import SimpleNamespace
 import unicodedata
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case
 from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings, Program
@@ -700,7 +700,7 @@ def settings():
     app_settings = AppSettings.get()
     request_base_url = request.host_url.rstrip('/')
     settings_needs_config = []
-    if not (app_settings.public_base_url or '').strip() and app_settings.env_public_base_url() is None:
+    if not (app_settings.public_base_url or '').strip() and app_settings.env_public_base_url() is None and not (current_app.config.get('PUBLIC_BASE_URL') or '').strip():
         settings_needs_config.append({
             'key': 'public_base_url',
             'label': 'FastChannels Server URL',
@@ -720,12 +720,12 @@ def settings():
         })
     return render_template('admin/settings.html',
                            channels_dvr_url=app_settings.effective_channels_dvr_url() or '',
-                           public_base_url=app_settings.effective_public_base_url() or '',
+                           public_base_url=app_settings.effective_public_base_url() or (current_app.config.get('PUBLIC_BASE_URL') or '').strip().rstrip('/'),
                            timezone_name=app_settings.effective_timezone_name(),
                            timezone_name_from_db=(app_settings.timezone_name or '').strip(),
                            timezone_choices=timezone_choices(),
                            channels_dvr_url_from_env=(not (app_settings.channels_dvr_url or '').strip()) and app_settings.env_channels_dvr_url() is not None,
-                           public_base_url_from_env=(not (app_settings.public_base_url or '').strip()) and app_settings.env_public_base_url() is not None,
+                           public_base_url_from_env=(not (app_settings.public_base_url or '').strip()) and (app_settings.env_public_base_url() is not None or bool((current_app.config.get('PUBLIC_BASE_URL') or '').strip())),
                            settings_needs_config=settings_needs_config,
                            request_base_url=request_base_url,
                            detected_base_url=detected_base_url(),
