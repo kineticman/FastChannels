@@ -201,7 +201,15 @@ _SKYLINE_SOURCE_RE = re.compile(
     r'''source\s*:\s*['"]([^'"]+?m3u8\?a=[^'"]+)['"]''',
     re.IGNORECASE,
 )
+_EARTHCAM_EMBED_RE = re.compile(
+    r'''https?://share\.earthcam\.net/embed/([^"'<>/\s]+)!/([^"'<>/\s]+)!''',
+    re.IGNORECASE,
+)
 _EARTHCAM_VIDEO_EMBED_RE = re.compile(r'''(?:https?:)?//[^'"\s>]+?/js/video/embed\.php\?[^'"\s>]+''', re.IGNORECASE)
+_EARTHCAM_PLAYER_PAGE_RE = re.compile(
+    r'''^https?://share\.earthcam\.net/([^/?#]+)\.([^/?#]+)!?(?:[/?#]|$)''',
+    re.IGNORECASE,
+)
 _TVPASS_CHANNEL_RE = re.compile(r'^https?://(www\.)?tvpass\.org/channel/([^/?#]+)', re.IGNORECASE)
 _BIGO_PAGE_RE = re.compile(r'^https?://(?:www\.)?bigo\.tv/(?:[a-z]{2}/)?(\d+)(?:[/?#]|$)', re.IGNORECASE)
 _NIMO_PAGE_RE = re.compile(r'^https?://(?:www\.)?nimo\.tv/([^/?#]+)(?:[/?#]|$)', re.IGNORECASE)
@@ -638,15 +646,21 @@ class StreamDetector:
                 _priority_hls.append(_c)
                 self._candidate_resolvers.setdefault(_c, 'ipcamlive')
                 self._candidate_page_urls.setdefault(_c, url)
+        for _c in self._extract_earthcam_provider_candidates(session, url, text):
+            if _c not in _priority_hls:
+                _priority_hls.append(_c)
+                self._candidate_resolvers.setdefault(_c, 'earthcam')
 
         # Track whether a recognised live-cam embed is the primary player on this page.
         # Used below to suppress lura.live/JPEG false positives from article carousels.
         _known_cam_embed_found = (
             bool(_VIDEOLINQ_IFRAME_RE.search(text)) or bool(_VIDEOLINQ_PAGE_RE.match(url))
             or bool(_IPCAMLIVE_IFRAME_RE.search(html.unescape(text)))
+            or bool(_EARTHCAM_EMBED_RE.search(html.unescape(text)))
+            or bool(_EARTHCAM_PLAYER_PAGE_RE.match(url))
         )
 
-        # Fast path: this page has a recognised cam embed (VideoLinq / ipcamlive).
+        # Fast path: this page has a recognised cam embed (VideoLinq / ipcamlive / EarthCam).
         # Skip generic extraction, custom-API extractors, and iframe recursion — they
         # add ~20 s of overhead and can only produce false positives here.  If the
         # priority extractor found a stream it's in _priority_hls; if the cam is
@@ -790,6 +804,7 @@ class StreamDetector:
             self._extract_explore_provider_candidates,
             self._extract_nbcnews_provider_candidates,
             self._extract_tvpass_provider_candidates,
+            self._extract_earthcam_provider_candidates,
             self._extract_twitter_player_candidates,
             self._extract_pooembed_provider_candidates,
             lambda _session, _url, page_text: self._extract_meta_video_candidates(page_text, url),
@@ -2246,6 +2261,47 @@ class StreamDetector:
             if value:
                 return value
         return None
+
+    @staticmethod
+    def _earthcam_player_urls(url: str, text: str) -> list[str]:
+        urls: list[str] = []
+
+        page_match = _EARTHCAM_PLAYER_PAGE_RE.match(url)
+        if page_match:
+            left = (page_match.group(1) or '').strip()
+            right = (page_match.group(2) or '').strip().rstrip('!')
+            if left and right:
+                urls.append(f'https://share.earthcam.net/{left}.{right}!')
+
+        decoded_text = html.unescape(text).replace('\\/', '/')
+        for match in _EARTHCAM_EMBED_RE.finditer(decoded_text):
+            left = (match.group(1) or '').strip()
+            right = (match.group(2) or '').strip()
+            if not left or not right:
+                continue
+            player_url = f'https://share.earthcam.net/{left}.{right}!'
+            if player_url not in urls:
+                urls.append(player_url)
+
+        return urls[:4]
+
+    def _extract_earthcam_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        del session  # EarthCam's final HLS URL is easier to capture from the player runtime.
+        candidates: list[str] = []
+
+        for player_url in self._earthcam_player_urls(url, text):
+            for candidate in self._run_playwright_candidates(player_url, max_wait_ms=15000):
+                if candidate not in candidates:
+                    candidates.append(candidate)
+                    self._candidate_resolvers[candidate] = 'earthcam'
+                    self._candidate_page_urls.setdefault(candidate, player_url)
+
+        return candidates
 
     def _extract_twitter_player_candidates(
         self,

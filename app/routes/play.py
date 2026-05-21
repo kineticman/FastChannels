@@ -121,15 +121,19 @@ def _custom_proxy_headers(channel, extra_headers: dict | None = None) -> dict:
     from urllib.parse import urlsplit
 
     stored = channel.custom_headers or {}
-    headers = {'User-Agent': _BROWSER_UA, **{k: v for k, v in stored.items() if not k.startswith('_')}}
+    explicit_headers = {k: v for k, v in stored.items() if not k.startswith('_')}
+    headers = {'User-Agent': _BROWSER_UA, **explicit_headers}
     if extra_headers:
         headers.update({k: v for k, v in extra_headers.items() if v})
     page_url = getattr(channel, 'page_url', None) or ''
     if page_url:
         parsed = urlsplit(page_url)
         origin = f'{parsed.scheme}://{parsed.netloc}' if parsed.scheme and parsed.netloc else ''
-        headers.setdefault('Referer', page_url)
-        if origin:
+        explicit_referer = bool(explicit_headers.get('Referer')) or bool((extra_headers or {}).get('Referer'))
+        explicit_origin = bool(explicit_headers.get('Origin')) or bool((extra_headers or {}).get('Origin'))
+        if not explicit_referer:
+            headers.setdefault('Referer', page_url)
+        if origin and not explicit_origin and not explicit_referer:
             headers.setdefault('Origin', origin)
     return headers
 
@@ -662,6 +666,18 @@ def custom_manifest_proxy(channel_id: str):
 
     try:
         master_r = _requests.get(stream_url, headers=_custom_proxy_headers(channel, custom_headers), timeout=10)
+        if master_r.status_code in (401, 403) and channel.page_url:
+            fresh_url, fresh_headers, retry_info = _redetect_custom_stream_with_info(channel, ttl=0)
+            if fresh_url:
+                logger.info(
+                    '[custom-proxy] retrying master fetch for %s after %s using resolver=%s',
+                    raw_id,
+                    master_r.status_code,
+                    retry_info.get('resolver') or '-',
+                )
+                stream_url = fresh_url
+                custom_headers = fresh_headers
+                master_r = _requests.get(stream_url, headers=_custom_proxy_headers(channel, custom_headers), timeout=10)
         master_r.raise_for_status()
     except Exception as e:
         logger.warning('[custom-proxy] master fetch failed for %s: %s', raw_id, e)
