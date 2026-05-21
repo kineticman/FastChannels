@@ -184,8 +184,8 @@
     .btn-run { background: var(--accent-strong); color: white; }
     .btn-run:hover:not(:disabled) { background: var(--accent-strong-hover); }
     .btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-audit { background: var(--warning-bg-2); color: var(--warning-soft); }
-    .btn-audit:hover:not(:disabled) { background: var(--warning-border); }
+    .btn-audit { background: var(--accent-strong); color: white; }
+    .btn-audit:hover:not(:disabled) { background: var(--accent-strong-hover); }
     .btn-audit:disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-configure {
       background: transparent; color: var(--text-soft);
@@ -521,14 +521,16 @@
                           {% if not source.is_enabled %}disabled{% endif %}>Manage ▾</button>
                 {% else %}
                   <button class="btn btn-run btn-sm" data-label="Scrape" onclick="run({{ source.id }}, this)"
-                          {% if not source.is_enabled %}disabled{% endif %}>Scrape</button>
+                          {% if not source.is_enabled %}disabled{% endif %}
+                          title="Fetch the latest channel list and guide data. If channels were scraped recently, may skip the channel list and only update guide data.">Scrape</button>
                   <button class="btn btn-run btn-sm" data-label="Force Full" style="opacity:0.75" onclick="forceRefreshSource({{ source.id }}, this)"
                           {% if not source.is_enabled %}disabled{% endif %}
-                          title="Clear scrape state and force a full channel + guide refresh">Force Full</button>
+                          title="Force a complete refresh — always fetches the full channel list and guide data, even if scraped recently.">Force Full</button>
                   {% if audit_enabled.get(source.name) %}
                   <button class="btn btn-audit btn-sm"
                           onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
-                          {% if not source.is_enabled %}disabled{% endif %}>Audit</button>
+                          {% if not source.is_enabled %}disabled{% endif %}
+                          title="Test each channel's stream URL to check if it's live, DRM-protected, or dead. Flags problem channels automatically.">Audit</button>
                   {% endif %}
                   <button class="btn btn-configure btn-sm" id="configure-btn-{{ source.id }}"
                           onclick="toggleConfigPanel({{ source.id }})">Configure ▾</button>
