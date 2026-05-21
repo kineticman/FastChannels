@@ -19,9 +19,11 @@ from __future__ import annotations
 import json
 import logging
 import random
+import subprocess
 import string
 import time
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -240,6 +242,102 @@ def _build_category_map(rsc_objects: list[dict]) -> tuple[dict[str, str], set[st
         break  # categories list only appears once
 
     return cat_map, spanish, tags_map
+
+
+def _parse_luma_fragment(content: str, source_channel_id: str) -> list[ProgramData]:
+    """Parse a luma.plex.tv RSC text/x-component payload into ProgramData objects."""
+    programs: list[ProgramData] = []
+    for m in _re.finditer(r'\{"id":"[^"]+","title":"[^"]*","data":\{"guid":', content):
+        pos = m.start()
+        depth = 0
+        for i in range(pos, min(pos + 8000, len(content))):
+            c = content[i]
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth == 0:
+                    try:
+                        obj = json.loads(content[pos:i + 1])
+                    except json.JSONDecodeError:
+                        break
+                    data    = obj.get("data", {})
+                    preview = obj.get("previewData", {})
+                    begins_at = data.get("beginsAt")
+                    ends_at   = data.get("endsAt")
+                    if not begins_at or not ends_at:
+                        break
+                    start_dt = _parse_ts(begins_at)
+                    end_dt   = _parse_ts(ends_at)
+                    if not start_dt or not end_dt:
+                        break
+                    title    = preview.get("title") or obj.get("title") or "Unknown"
+                    ep_title = preview.get("subtitle") or None
+                    if ep_title and _re.match(r'^\d+:\d+ [AP]M', ep_title):
+                        ep_title = None
+                    summary = preview.get("summary") or None
+                    poster  = (preview.get("poster") or {}).get("image", {}).get("url") or None
+                    rating  = None
+                    for badge in (preview.get("badges") or []):
+                        if badge.get("_component") == "Badge":
+                            rating = badge.get("label")
+                            break
+                    season = episode = None
+                    for fact in (preview.get("facts") or []):
+                        fact_m = _re.match(r'S(\d+)\s*[·•]\s*E(\d+)', fact.get("content", ""))
+                        if fact_m:
+                            season  = int(fact_m.group(1))
+                            episode = int(fact_m.group(2))
+                            break
+                    programs.append(ProgramData(
+                        source_channel_id = source_channel_id,
+                        title             = title,
+                        episode_title     = ep_title,
+                        description       = summary,
+                        start_time        = start_dt,
+                        end_time          = end_dt,
+                        poster_url        = poster,
+                        rating            = rating,
+                        season            = season,
+                        episode           = episode,
+                    ))
+                    break
+    return programs
+
+
+def _find_gaps(
+    programs: list[ProgramData],
+    horizon_hours: int = 24,
+) -> list[tuple[datetime, datetime]]:
+    """Return (start, end) gap windows > 30 min within the next horizon_hours."""
+    now     = datetime.now(tz=timezone.utc)
+    horizon = now + timedelta(hours=horizon_hours)
+    windows = sorted(
+        (max(p.start_time, now), min(p.end_time, horizon))
+        for p in programs
+        if p.end_time > now and p.start_time < horizon
+    )
+    gaps: list[tuple[datetime, datetime]] = []
+    cursor = now
+    for s, e in windows:
+        if s - cursor > timedelta(minutes=30):
+            gaps.append((cursor, s))
+        cursor = max(cursor, e)
+    if horizon - cursor > timedelta(minutes=30):
+        gaps.append((cursor, horizon))
+    return gaps
+
+
+def _merge_luma_into_gaps(
+    existing: list[ProgramData],
+    luma_programs: list[ProgramData],
+) -> list[ProgramData]:
+    """Return luma airings that don't overlap any existing program."""
+    covered = [(p.start_time, p.end_time) for p in existing]
+    return [
+        lp for lp in luma_programs
+        if not any(lp.start_time < e and lp.end_time > s for s, e in covered)
+    ]
 
 
 # ── Scraper ────────────────────────────────────────────────────────────────────
@@ -655,6 +753,119 @@ class PlexScraper(BaseScraper):
         )
         return results
 
+    # ── Luma gap-fill helpers ──────────────────────────────────────────────────
+
+    def _build_luma_map(self, rsc_text: str) -> dict[str, str]:
+        """Extract guide_key → luma URL map from the RSC blob (no extra HTTP call)."""
+        luma_map: dict[str, str] = {}
+        for m in _re.finditer(
+            r'luma\.plex\.tv/api/fragment/live-tv/airings/([a-f0-9]+)(\?[^"]+)?',
+            rsc_text,
+        ):
+            gk = m.group(1)
+            if gk not in luma_map:
+                luma_map[gk] = "https://" + m.group(0)
+        return luma_map
+
+    def _fetch_luma_programs(
+        self,
+        guide_key: str,
+        url: str,
+        source_channel_id: str,
+    ) -> list[ProgramData]:
+        """Fetch and parse one channel's schedule from the luma fragment endpoint."""
+        try:
+            r = self.session.get(
+                url,
+                headers={
+                    "Accept":                 "text/x-component, */*",
+                    "RSC":                    "1",
+                    "Next-Url":               "/en/live-tv",
+                    "Next-Router-State-Tree": "%5B%22%22%2C%7B%7D%5D",
+                    "X-Plex-Token":           self._auth_token,
+                },
+                timeout=15,
+            )
+        except Exception as exc:
+            logger.warning("[plex] luma fetch failed for %s: %s", guide_key, exc)
+            return []
+        if r.status_code == 401:
+            logger.warning("[plex] luma 401 for %s — RSC token may be stale", guide_key)
+            return []
+        if r.status_code != 200:
+            logger.debug("[plex] luma HTTP %d for %s", r.status_code, guide_key)
+            return []
+        return _parse_luma_fragment(r.text, source_channel_id)
+
+    def _luma_gap_fill(
+        self,
+        channels: list[ChannelData],
+        enabled_ids: set[str],
+        programs: list[ProgramData],
+    ) -> list[ProgramData]:
+        """
+        For channels whose grid/targeted schedules have gaps > 30 min, fetch
+        from luma.plex.tv and merge in only the airings that fill those holes.
+        """
+        rsc_text = self._fetch_rsc()
+        if not rsc_text:
+            return []
+        luma_map = self._build_luma_map(rsc_text)
+        if not luma_map:
+            logger.warning("[plex] luma gap-fill: no luma URLs found in RSC")
+            return []
+
+        by_channel: dict[str, list[ProgramData]] = defaultdict(list)
+        for p in programs:
+            by_channel[p.source_channel_id].append(p)
+
+        gapped: list[tuple[ChannelData, list]] = []
+        for ch in channels:
+            if ch.source_channel_id not in enabled_ids:
+                continue
+            guide_key = getattr(ch, "guide_key", None)
+            if not guide_key or guide_key not in luma_map:
+                continue
+            gaps = _find_gaps(by_channel.get(ch.source_channel_id, []))
+            if gaps:
+                gapped.append((ch, gaps))
+
+        if not gapped:
+            return []
+
+        logger.info("[plex] luma gap-fill: %d channels have schedule gaps", len(gapped))
+
+        import threading
+        extras: list[ProgramData] = []
+        lock = threading.Lock()
+
+        def _fetch_one(ch: ChannelData, gaps: list) -> None:
+            luma_progs = self._fetch_luma_programs(
+                ch.guide_key, luma_map[ch.guide_key], ch.source_channel_id
+            )
+            if not luma_progs:
+                return
+            filled = _merge_luma_into_gaps(by_channel.get(ch.source_channel_id, []), luma_progs)
+            if filled:
+                logger.info(
+                    "[plex] luma gap-fill %s: +%d airings (had %d gaps)",
+                    ch.name, len(filled), len(gaps),
+                )
+                with lock:
+                    extras.extend(filled)
+
+        with ThreadPoolExecutor(max_workers=_PLEX_GUIDE_WORKERS) as pool:
+            futs = [pool.submit(_fetch_one, ch, gaps) for ch, gaps in gapped]
+            for fut in as_completed(futs):
+                try:
+                    fut.result()
+                except Exception:
+                    logger.debug("[plex] luma gap-fill future failed", exc_info=True)
+
+        if extras:
+            logger.info("[plex] luma gap-fill total: +%d programs", len(extras))
+        return extras
+
     # ── fetch_epg ──────────────────────────────────────────────────────────────
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -818,6 +1029,12 @@ class PlexScraper(BaseScraper):
         if extra_programs:
             programs.extend(extra_programs)
             logger.info("[plex] %d total EPG entries after targeted extension", len(programs))
+
+        luma_extras = self._luma_gap_fill(channels, enabled_ids, programs)
+        if luma_extras:
+            programs.extend(luma_extras)
+            logger.info("[plex] %d total EPG entries after luma gap-fill", len(programs))
+
         return programs
 
     # ── resolve ────────────────────────────────────────────────────────────────
@@ -831,6 +1048,7 @@ class PlexScraper(BaseScraper):
             return raw_url
 
         channel_id = raw_url[len("plex://"):]
+
 
         if not self._ensure_auth():
             raise RuntimeError("[plex] cannot resolve — auth failed")
@@ -880,15 +1098,38 @@ class PlexScraper(BaseScraper):
                 if r2.status_code == 200:
                     return r2.url
 
-        if r.status_code in (400, 404, 410, 422):
+        if r.status_code in (400, 404, 410, 422, 504):
             raise StreamDeadError(format_http_reason("[plex] channel not playable", r.status_code, channel_id))
         raise RuntimeError(f"[plex] manifest HTTP {r.status_code} for {channel_id}")
+
+    def _audit_manifest_status(self, manifest_url: str) -> int:
+        try:
+            proc = subprocess.run(
+                [
+                    "curl", "-skI", "--max-time", "8",
+                    "-o", "/dev/null", "-w", "%{http_code}",
+                    manifest_url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            code_text = (proc.stdout or "").strip()
+            if len(code_text) >= 3 and code_text[-3:].isdigit():
+                return int(code_text[-3:])
+            logger.debug("[plex] audit curl status failed: rc=%s stderr=%s", proc.returncode, (proc.stderr or "").strip()[:200])
+        except Exception as exc:
+            logger.debug("[plex] audit curl status failed: %s", exc)
+
+        r = self.session.get(manifest_url, timeout=(3, 7), allow_redirects=False)
+        return r.status_code
 
     def audit_resolve(self, raw_url: str) -> str:
         """
         Lightweight health check for stream audits.
-        Skips the tune POST and does not follow the MediaTailor redirect —
-        just confirms the manifest endpoint returns 302 (channel is live).
+        Skips the tune POST and does not follow the MediaTailor redirect.
+        Plex may either redirect to MediaTailor or return the playlist directly;
+        either response confirms the channel is live.
         Returns raw_url on success so the audit knows the channel is alive.
         """
         if not raw_url.startswith("plex://"):
@@ -905,12 +1146,12 @@ class PlexScraper(BaseScraper):
             f"&X-Plex-Product={quote_plus(_PRODUCT)}"
             f"&X-Plex-Token={quote_plus(self._auth_token)}"
         )
-        r = self.session.get(manifest_url, timeout=10, allow_redirects=False)
+        status_code = self._audit_manifest_status(manifest_url)
 
-        if r.status_code in (301, 302, 303, 307, 308):
+        if status_code == 200 or status_code in (301, 302, 303, 307, 308):
             return raw_url
 
-        if r.status_code in (401, 403):
+        if status_code in (401, 403):
             self._auth_token = None
             if self._ensure_auth(force=True):
                 manifest_url = (
@@ -919,10 +1160,10 @@ class PlexScraper(BaseScraper):
                     f"&X-Plex-Product={quote_plus(_PRODUCT)}"
                     f"&X-Plex-Token={quote_plus(self._auth_token)}"
                 )
-                r2 = self.session.get(manifest_url, timeout=10, allow_redirects=False)
-                if r2.status_code in (301, 302, 303, 307, 308):
+                status_code = self._audit_manifest_status(manifest_url)
+                if status_code == 200 or status_code in (301, 302, 303, 307, 308):
                     return raw_url
 
-        if r.status_code in (400, 404, 410, 422):
-            raise StreamDeadError(format_http_reason("[plex] channel not playable", r.status_code, channel_id))
-        raise RuntimeError(f"[plex] audit manifest HTTP {r.status_code} for {channel_id}")
+        if status_code in (400, 404, 410, 422, 504):
+            raise StreamDeadError(format_http_reason("[plex] channel not playable", status_code, channel_id))
+        raise RuntimeError(f"[plex] audit manifest HTTP {status_code} for {channel_id}")

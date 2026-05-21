@@ -74,6 +74,32 @@ class ScrapePhaseTimeoutError(Exception):
     pass
 
 
+class AuditChannelTimeoutError(TimeoutError):
+    pass
+
+
+def _run_with_signal_timeout(label: str, timeout_seconds: int | None, fn):
+    if not timeout_seconds:
+        return fn()
+
+    def _alarm_handler(_signum, _frame):
+        raise AuditChannelTimeoutError(f"{label} timed out after {timeout_seconds}s")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    parent_remaining, _ = signal.getitimer(signal.ITIMER_REAL)
+    signal.signal(signal.SIGALRM, _alarm_handler)
+    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    step_start = _time.monotonic()
+    try:
+        return fn()
+    finally:
+        step_elapsed = _time.monotonic() - step_start
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if parent_remaining > 0:
+            signal.setitimer(signal.ITIMER_REAL, max(1, parent_remaining - step_elapsed))
+
+
 def _audit_reason_from_exception(exc: Exception) -> str:
     message = str(exc).strip()
     name = type(exc).__name__
@@ -581,6 +607,8 @@ def run_stream_audit(source_name: str):
                         'phase': phase, 'done': done, 'total': total_,
                         'flagged': flagged_, 'dead': dead_, 'vod': vod_, 'errors': errors_,
                         'skipped_403': skipped_403_,
+                        'current_index': getattr(_audit_progress, '_current_index', None),
+                        'current_channel': getattr(_audit_progress, '_current_channel', None),
                         'ts': _time.time(),
                     }))
             except Exception:
@@ -594,14 +622,30 @@ def run_stream_audit(source_name: str):
         # Use the scraper's own session so source-specific headers (Origin, Referer,
         # auth tokens, etc.) are included in every CDN request.
         sess = scraper.session
-
+        _audit_channel_timeout = int(getattr(scraper_cls, "audit_channel_timeout_seconds", 20 if source_name == "plex" else 0) or 0)
         for i, ch in enumerate(channels, 1):
             try:
+                _audit_item_t0 = _time.monotonic()
+                _audit_verbose = source_name == 'plex'
+                if _audit_verbose:
+                    logger.info('[audit-debug] %s %d/%d start id=%s name=%s url=%s',
+                                source_name, i, total, ch.source_channel_id, ch.name, (ch.stream_url or '')[:120])
+                _audit_progress._current_index = i
+                _audit_progress._current_channel = ch.name
+                _audit_progress(i - 1, total, flagged, dead, vod, errors, skipped_403)
                 # Resolve the raw stream URL. Use audit_resolve() if the scraper
                 # provides a lighter-weight bulk-check variant (e.g. Plex skips tune).
                 _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
+                _resolve_t0 = _time.monotonic()
                 try:
-                    resolved_url = _resolve(ch.stream_url)
+                    resolved_url = _run_with_signal_timeout(
+                        f"[audit] {source_name} {i}/{total} resolve {ch.name}",
+                        _audit_channel_timeout,
+                        lambda: _resolve(ch.stream_url),
+                    )
+                    if _audit_verbose:
+                        logger.info('[audit-debug] %s %d/%d resolved in %.2fs -> %s',
+                                    source_name, i, total, _time.monotonic() - _resolve_t0, (resolved_url or '')[:160])
                 except StreamDeadError as dead_exc:
                     ch.is_active      = False
                     ch.is_enabled     = False
@@ -659,8 +703,16 @@ def run_stream_audit(source_name: str):
                     logger.debug('[audit] %s: opaque URL — existence confirmed by scraper, skipping manifest fetch', ch.name)
                     continue
 
+                _manifest_t0 = _time.monotonic()
                 try:
-                    r = sess.get(resolved_url, timeout=15, allow_redirects=True)
+                    r = _run_with_signal_timeout(
+                        f"[audit] {source_name} {i}/{total} manifest {ch.name}",
+                        _audit_channel_timeout,
+                        lambda: sess.get(resolved_url, timeout=15, allow_redirects=True),
+                    )
+                    if _audit_verbose:
+                        logger.info('[audit-debug] %s %d/%d manifest in %.2fs status=%s bytes=%s final=%s',
+                                    source_name, i, total, _time.monotonic() - _manifest_t0, r.status_code, len(r.content), (r.url or '')[:160])
                 except Exception as req_exc:
                     if _is_ssl_handshake_failure(req_exc):
                         ch.is_active      = False
@@ -700,7 +752,11 @@ def run_stream_audit(source_name: str):
                     logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
                                    source_name, r.status_code, wait)
                     _time.sleep(min(wait, 120))
-                    r = sess.get(resolved_url, timeout=15, allow_redirects=True)
+                    r = _run_with_signal_timeout(
+                        f"[audit] {source_name} {i}/{total} manifest-retry {ch.name}",
+                        _audit_channel_timeout,
+                        lambda: sess.get(resolved_url, timeout=15, allow_redirects=True),
+                    )
 
                 if r.status_code in (400, 404, 410, 422):
                     if _audit_ignore_4xx:
@@ -843,13 +899,19 @@ def run_stream_audit(source_name: str):
                 errors += 1
                 consecutive_errors += 1
 
-            if i % 25 == 0:
-                db.session.commit()
-                _audit_progress(i, total, flagged, dead, vod, errors, skipped_403)
-                logger.info('[audit] %s: %d/%d — checked=%d flagged=%d dead=%d vod=%d errors=%d skipped_403=%d',
-                            source_name, i, total, checked, flagged, dead, vod, errors, skipped_403)
+            finally:
+                if i % 25 == 0:
+                    db.session.commit()
+                    _audit_progress(i, total, flagged, dead, vod, errors, skipped_403)
+                    logger.info('[audit] %s: %d/%d — checked=%d flagged=%d dead=%d vod=%d errors=%d skipped_403=%d',
+                                source_name, i, total, checked, flagged, dead, vod, errors, skipped_403)
 
-            _time.sleep(0.3)
+                if source_name == 'plex':
+                    logger.info('[audit-debug] %s %d/%d finish elapsed=%.2fs checked=%d dead=%d flagged=%d vod=%d errors=%d',
+                                source_name, i, total, _time.monotonic() - locals().get('_audit_item_t0', _time.monotonic()),
+                                checked, dead, flagged, vod, errors)
+
+                _time.sleep(0.3)
 
         source.last_audited_at = datetime.now(timezone.utc)
         cfg = dict(source.config or {})
