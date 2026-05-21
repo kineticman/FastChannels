@@ -112,12 +112,14 @@ class BallysScraper(BaseScraper):
             if not title or not since or not till:
                 continue
 
+            is_live = event.get("is_live")
             programs.append(ProgramData(
                 source_channel_id=ch_id,
                 title=title,
                 start_time=since,
                 end_time=till,
                 description=event.get("comment") or None,
+                is_live=is_live if isinstance(is_live, bool) else None,
             ))
 
         logger.info("[%s] %d EPG events fetched", self.source_name, len(programs))

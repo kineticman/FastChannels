@@ -197,6 +197,8 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             if prog.rating:
                 r = SubElement(el, 'rating', system='MPAA')
                 SubElement(r, 'value').text = prog.rating
+            if prog.is_live:
+                SubElement(el, 'live')
             cats = [c.casefold() for c in combined_cats]
             is_movie = 'movie' in cats or 'movies' in cats
             if prog.episode_title and not is_movie:
