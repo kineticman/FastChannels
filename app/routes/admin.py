@@ -406,10 +406,13 @@ def channels():
 
     if source_filter:
         q = q.filter(Source.name == source_filter)
+    q_before_language = q  # snapshot for language facet (exclude own filter)
     if language_filter:
         q = q.filter(Channel.language == language_filter)
+    q_before_country = q  # snapshot for country facet (exclude own filter)
     if country_filter:
         q = q.filter(Channel.country == country_filter)
+    q_before_category = q  # snapshot for category facet (exclude own filter)
     if category_filter == '__none__':
         q = q.filter(Channel.category == None)
     elif category_filter:
@@ -500,23 +503,26 @@ def channels():
     # Drive facet counts from the current filtered set so counts reflect active filters.
     filtered_ids = q.with_entities(Channel.id).scalar_subquery()
 
+    lang_facet_ids = q_before_language.with_entities(Channel.id).scalar_subquery()
     lang_rows = db.session.query(Channel.language, db.func.count(Channel.id))\
-        .filter(Channel.id.in_(filtered_ids), Channel.language != None)\
+        .filter(Channel.id.in_(lang_facet_ids), Channel.language != None)\
         .group_by(Channel.language)\
         .order_by(Channel.language).all()
     languages = [(lang, count) for lang, count in lang_rows]
 
+    cat_facet_ids = q_before_category.with_entities(Channel.id).scalar_subquery()
     cat_rows = db.session.query(Channel.category, db.func.count(Channel.id))\
-        .filter(Channel.id.in_(filtered_ids), Channel.category != None)\
+        .filter(Channel.id.in_(cat_facet_ids), Channel.category != None)\
         .group_by(Channel.category)\
         .order_by(Channel.category).all()
     categories = [(cat, count) for cat, count in cat_rows]
     missing_category_count = db.session.query(db.func.count(Channel.id))\
-        .filter(Channel.id.in_(filtered_ids), Channel.category == None)\
+        .filter(Channel.id.in_(cat_facet_ids), Channel.category == None)\
         .scalar() or 0
 
+    country_facet_ids = q_before_country.with_entities(Channel.id).scalar_subquery()
     country_rows = db.session.query(Channel.country, db.func.count(Channel.id))\
-        .filter(Channel.id.in_(filtered_ids), Channel.country != None, Channel.country != '')\
+        .filter(Channel.id.in_(country_facet_ids), Channel.country != None, Channel.country != '')\
         .group_by(Channel.country)\
         .order_by(Channel.country).all()
     countries = [(c, cnt) for c, cnt in country_rows]
