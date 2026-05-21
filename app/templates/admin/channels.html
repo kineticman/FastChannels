@@ -1104,7 +1104,81 @@
     }
     #bulk-toast.show { opacity: 1; }
 
-    @media (max-width: 760px) {
+    /* ── Mobile channel cards ─────────────────────────────────────────── */
+    .mobile-cards {
+      display: none;
+      flex-direction: column;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .mcard {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      border-bottom: 1px solid var(--bg);
+    }
+    .mcard:last-child { border-bottom: none; }
+    .mcard.mcard-disabled .mcard-main { opacity: 0.4; }
+    .mcard-main {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.7rem 0.75rem;
+      cursor: pointer;
+      min-width: 0;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    .mcard-main:active { background: var(--accent-row-hover); }
+    .mcard-logo {
+      width: 38px; height: 38px;
+      object-fit: contain; border-radius: 4px;
+      background: var(--bg); flex-shrink: 0;
+    }
+    .mcard-logo-empty {
+      width: 38px; height: 38px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .mcard-body { flex: 1; min-width: 0; }
+    .mcard-name {
+      font-size: 0.92rem; font-weight: 600; color: var(--text-strong);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3;
+    }
+    .mcard-meta {
+      font-size: 0.76rem; color: var(--text-muted); margin-top: 0.15rem;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .mcard-badges {
+      display: flex; gap: 0.3rem; flex-wrap: wrap;
+      margin-top: 0.28rem; align-items: center;
+    }
+    .mcard-flag { font-size: 0.85rem; line-height: 1; }
+    .mcard-badge {
+      display: inline-block; font-size: 0.58rem; font-weight: 700;
+      letter-spacing: 0.04em; padding: 1px 4px; border-radius: 20px;
+      text-transform: uppercase; border: 1px solid transparent;
+    }
+    .mcard-badge-hd   { background: #001a2d; color: #5bb8f5; border-color: #004470; }
+    .mcard-badge-4k   { background: #2d2000; color: #f5c518; border-color: #5a4200; }
+    .mcard-badge-hevc { background: #1a0d2e; color: #b48ef5; border-color: #4a2a7a; }
+    .mcard-badge-dup  { background: var(--warning-bg-2); color: var(--warning); }
+    .mcard-badge-inactive {
+      font-size: 0.65rem; font-weight: 600; padding: 1px 5px; border-radius: 4px;
+      background: var(--warning-bg); color: var(--warning);
+    }
+    .mcard-toggle-wrap {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 0.7rem 0.75rem 0.7rem 0;
+      gap: 0.28rem; flex-shrink: 0;
+    }
+
+    @media (max-width: 768px) {
       html { font-size: 16px; }
       nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
       nav h1 { width: 100%; }
@@ -1112,26 +1186,16 @@
       .container { padding: 0 1rem; }
       .toolbar-primary { grid-template-columns: 1fr; }
       .toolbar-secondary { grid-template-columns: 1fr; }
-      .bulk-bar { flex-wrap: wrap; }
-      table { min-width: 1120px; }
-      .pagination {
-        justify-content: center;
-        gap: 0.6rem;
-      }
-      .pagination .page-info {
-        width: 100%;
-        text-align: center;
-      }
-      .page-jump {
-        width: 100%;
-        justify-content: center;
-      }
-      .page-jump label {
-        display: none;
-      }
-      .page-jump input {
-        width: 5.5rem;
-      }
+      /* Swap table → cards */
+      .section { display: none; }
+      .mobile-cards { display: flex; }
+      .bulk-bar { display: none !important; }
+      .btn-resolve-dupes { display: none; }
+      .pagination { justify-content: center; gap: 0.6rem; }
+      .pagination .page-info { width: 100%; text-align: center; }
+      .page-jump { width: 100%; justify-content: center; }
+      .page-jump label { display: none; }
+      .page-jump input { width: 5.5rem; }
     }
 
     @media (max-width: 600px) {
@@ -1652,6 +1716,46 @@
           {% endfor %}
         </tbody>
       </table>
+    </div>
+
+    <!-- Mobile card list — shown at ≤768px instead of the table -->
+    <div class="mobile-cards" id="mobile-cards">
+      {% for ch in channels.items %}
+      <div class="mcard{% if not ch.is_enabled %} mcard-disabled{% endif %}" id="mcard-{{ ch.id }}" data-channel-id="{{ ch.id }}">
+        <div class="mcard-main" onclick="openPreview({{ ch.id }})">
+          {% if ch.logo_url %}
+          <img src="{{ ch.logo_display_url or ch.logo_url }}" class="mcard-logo" loading="lazy" onerror="this.style.display='none'">
+          {% else %}
+          <div class="mcard-logo-empty"></div>
+          {% endif %}
+          <div class="mcard-body">
+            <div class="mcard-name">{{ ch.name }}</div>
+            <div class="mcard-meta">{{ ch.source.display_name }}{% if ch.category %} · {{ ch.category }}{% endif %}{% if ch.language_override or ch.language %} · {{ ch.language_override or ch.language }}{% endif %}</div>
+            {% set _has_b = ch.disable_reason or (ch.stream_info and (ch.stream_info.has_4k or ch.stream_info.has_hd or ch.stream_info.video_codec == 'hevc')) or ch.name in duplicate_names or ch.name in possible_duplicate_names or ch.id in gn_duplicate_ids or (ch.is_enabled and not ch.is_active) %}
+            {% if _has_b %}
+            <div class="mcard-badges">
+              {% if ch.disable_reason and ch.disable_reason.startswith('DRM') %}<span class="mcard-flag" title="{{ ch.disable_reason }}">🔒</span>{% endif %}
+              {% if ch.disable_reason == 'Dead' %}<span class="mcard-flag" title="Stream dead">💀</span>{% endif %}
+              {% if ch.disable_reason == 'VOD' %}<span class="mcard-flag" title="VOD only">📼</span>{% endif %}
+              {% if ch.stream_info %}
+                {% if ch.stream_info.has_4k %}<span class="mcard-badge mcard-badge-4k">4K</span>{% elif ch.stream_info.has_hd %}<span class="mcard-badge mcard-badge-hd">HD</span>{% endif %}
+                {% if ch.stream_info.video_codec == 'hevc' %}<span class="mcard-badge mcard-badge-hevc">HEVC</span>{% endif %}
+              {% endif %}
+              {% if ch.name in duplicate_names or ch.name in possible_duplicate_names or ch.id in gn_duplicate_ids %}<span class="mcard-badge mcard-badge-dup">DUP</span>{% endif %}
+              {% if ch.is_enabled and not ch.is_active %}<span class="mcard-badge-inactive">scraper lost</span>{% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </div>
+        <div class="mcard-toggle-wrap">
+          <label class="toggle" id="mtoggle-{{ ch.id }}">
+            <input type="checkbox" {% if ch.is_enabled %}checked{% endif %}
+                   onchange="toggle({{ ch.id }}, this)">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+      {% endfor %}
     </div>
 
     {% if channels.pages > 1 %}
@@ -2445,9 +2549,12 @@
 
     // ── Single M3U toggle ──────────────────────────────────────────────────
     async function toggle(channelId, checkbox) {
-      const label = document.getElementById(`toggle-${channelId}`);
-      const row   = document.getElementById(`row-${channelId}`);
-      label.classList.add('saving');
+      const label  = document.getElementById(`toggle-${channelId}`);
+      const mlabel = document.getElementById(`mtoggle-${channelId}`);
+      const row    = document.getElementById(`row-${channelId}`);
+      const mcard  = document.getElementById(`mcard-${channelId}`);
+      if (label)  label.classList.add('saving');
+      if (mlabel) mlabel.classList.add('saving');
       checkbox.disabled = true;
 
       try {
@@ -2457,13 +2564,20 @@
           body:    JSON.stringify({is_enabled: checkbox.checked}),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        row.classList.toggle('disabled', !checkbox.checked);
+        if (row)   row.classList.toggle('disabled', !checkbox.checked);
+        if (mcard) mcard.classList.toggle('mcard-disabled', !checkbox.checked);
+        // Sync whichever toggle wasn't the one clicked
+        const deskCheck = label?.querySelector('input[type=checkbox]');
+        const mobCheck  = mlabel?.querySelector('input[type=checkbox]');
+        if (deskCheck && deskCheck !== checkbox) deskCheck.checked = checkbox.checked;
+        if (mobCheck  && mobCheck  !== checkbox) mobCheck.checked  = checkbox.checked;
         await refreshVisibleChnums();
       } catch (e) {
         checkbox.checked = !checkbox.checked;
         console.error('Toggle failed:', e);
       } finally {
-        label.classList.remove('saving');
+        if (label)  label.classList.remove('saving');
+        if (mlabel) mlabel.classList.remove('saving');
         checkbox.disabled = false;
       }
     }
