@@ -22,6 +22,7 @@ from ..gracenote_suggest import SuggestionChannel, suggest_gracenote_matches
 from ..gracenote_map import lookup_gracenote, fetch_remote_gracenote_map, remote_map_status
 from ..hls import inspect_hls_drm, parse_stream_info as _parse_stream_info
 from ..source_config import is_source_config_complete
+from croniter import croniter as _croniter
 from ..url import public_base_url
 from .tasks import (
     trigger_bulk_channel_update,
@@ -796,6 +797,15 @@ def update_source(source_id):
                 'max': maximum,
             }), 422
         source.scrape_interval = interval
+    if 'scrape_cron' in data:
+        cron = data['scrape_cron'] or None
+        if cron:
+            try:
+                _croniter(cron)
+            except Exception:
+                return jsonify({'error': 'Invalid cron expression'}), 422
+        source.scrape_cron = cron
+        changed = True
     if 'chnum_start' in data:
         val = data['chnum_start']
         if val is None or val == '':

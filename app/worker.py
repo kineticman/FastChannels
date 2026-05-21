@@ -21,6 +21,7 @@ from rq.worker import SimpleWorker as _SimpleWorker
 from rq.timeouts import BaseDeathPenalty as _BaseDeathPenalty
 from rq.registry import StartedJobRegistry
 from apscheduler.schedulers.background import BackgroundScheduler
+from croniter import croniter as _croniter
 from sqlalchemy import and_, not_, or_, text
 from sqlalchemy.exc import OperationalError as _SAOperationalError
 from app import create_app
@@ -2073,6 +2074,20 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
 _last_enqueued: dict[str, datetime] = {}
 
 
+def _is_source_due(source, now, last):
+    """Return True if this source should be enqueued for a scrape right now."""
+    if source.scrape_cron:
+        try:
+            prev = _croniter(source.scrape_cron, now).get_prev(datetime)
+            return last is None or prev >= last
+        except Exception:
+            logger.warning('[scheduler] Invalid cron expression for %s: %r', source.name, source.scrape_cron)
+            return False
+    if not source.scrape_interval:
+        return False  # scrape_interval=0 means never auto-scrape
+    return last is None or (now - last).total_seconds() >= source.scrape_interval * 60
+
+
 def _schedule_due_scrapes():
     """Enqueue scrapes for enabled sources whose interval has elapsed."""
     now = datetime.now(timezone.utc)
@@ -2086,16 +2101,12 @@ def _schedule_due_scrapes():
 
         sources = Source.query.filter_by(is_enabled=True).all()
         for source in sources:
-            if not source.scrape_interval:
-                continue  # scrape_interval=0 means never auto-scrape
-            interval_secs = source.scrape_interval * 60
-
             last_scraped = _utc_aware(source.last_scraped_at)
             last_queued = _utc_aware(_last_enqueued.get(source.name))
             candidates = [t for t in (last_scraped, last_queued) if t is not None]
             last = max(candidates) if candidates else None
 
-            if last is None or (now - last).total_seconds() >= interval_secs:
+            if _is_source_due(source, now, last):
                 try:
                     if _scrape_job_already_active(q, source.name):
                         logger.info('[scheduler] %s already queued/running; skipping duplicate enqueue', source.name)
@@ -2103,9 +2114,12 @@ def _schedule_due_scrapes():
                         continue
                     q.enqueue('app.worker.run_scraper', source.name, job_timeout=600, job_id=f'scrape-{source.name}')
                     _last_enqueued[source.name] = now
-                    logger.info('[scheduler] Enqueued %s (interval=%dm, age=%s)',
-                                source.name, source.scrape_interval,
-                                f'{(now - last).total_seconds() / 60:.0f}m' if last else 'never')
+                    if source.scrape_cron:
+                        logger.info('[scheduler] Enqueued %s (cron=%s)', source.name, source.scrape_cron)
+                    else:
+                        logger.info('[scheduler] Enqueued %s (interval=%dm, age=%s)',
+                                    source.name, source.scrape_interval,
+                                    f'{(now - last).total_seconds() / 60:.0f}m' if last else 'never')
                 except Exception as e:
                     logger.error('[scheduler] Failed to enqueue %s: %s', source.name, e)
 

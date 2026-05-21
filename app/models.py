@@ -36,6 +36,7 @@ class Source(db.Model):
     name            = db.Column(db.String(64), unique=True, nullable=False)
     display_name    = db.Column(db.String(128), nullable=False)
     scrape_interval = db.Column(db.Integer, default=360)
+    scrape_cron     = db.Column(db.Text, nullable=True)
     is_enabled      = db.Column(db.Boolean, default=True)
     last_scraped_at = db.Column(db.DateTime(timezone=True))
     last_audited_at = db.Column(db.DateTime(timezone=True))
@@ -49,6 +50,12 @@ class Source(db.Model):
 
     def next_scrape_at(self):
         """Return the datetime when this source is next due to be scraped, or None if never scraped."""
+        if self.scrape_cron:
+            try:
+                from croniter import croniter
+                return croniter(self.scrape_cron, datetime.now(timezone.utc)).get_next(datetime)
+            except Exception:
+                return None
         if self.last_scraped_at is None:
             return None
         last = self.last_scraped_at
@@ -65,6 +72,7 @@ class Source(db.Model):
             'name':           self.name,
             'display_name':   self.display_name,
             'scrape_interval': self.scrape_interval,
+            'scrape_cron':    self.scrape_cron,
             'is_enabled':     self.is_enabled,
             'last_scraped_at': self.last_scraped_at.isoformat() if self.last_scraped_at else None,
             'last_audited_at': self.last_audited_at.isoformat() if self.last_audited_at else None,

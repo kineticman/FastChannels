@@ -156,6 +156,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE sources ADD COLUMN last_audited_at DATETIME"
                 ))
+            if "scrape_cron" not in src_cols:
+                conn.execute(text(
+                    "ALTER TABLE sources ADD COLUMN scrape_cron TEXT"
+                ))
 
         if "channels" in tables:
             ch_cols = {

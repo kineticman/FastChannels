@@ -217,15 +217,19 @@
     .config-panel { padding: 1.25rem 1.5rem; }
     .drm-note { color: var(--warning-strong); font-size: 0.8rem; margin-bottom: 0.75rem; }
 
-    /* Interval control */
+    /* Interval / schedule control */
     .interval-control { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
     .interval-control label { font-size: 0.76rem; color: var(--text-soft); font-weight: 600; }
-    .interval-control input {
-      width: 84px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    .interval-control input,
+    .interval-control select {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
       padding: 0.35rem 0.5rem; color: var(--text); font-size: 0.8rem;
     }
+    .interval-control input[type="number"] { width: 84px; }
+    .interval-control .cron-offset { width: 48px; }
     .interval-control .unit { font-size: 0.76rem; color: var(--text-soft); }
     .interval-control .help { width: 100%; font-size: 0.74rem; color: var(--text-muted); line-height: 1.4; }
+    .sched-sub { display: flex; align-items: center; gap: 0.45rem; }
     .cleanup-source-row { display: grid; grid-template-columns: 1.2rem 2rem 1fr; align-items: center; gap: 0.4rem; padding: 0.22rem 0.35rem; border-radius: 4px; cursor: pointer; user-select: none; }
     .cleanup-source-row:hover { background: var(--bg); }
     .cleanup-chevron { color: var(--text-muted); font-size: 0.65rem; transition: transform 0.15s; line-height: 1; }
@@ -550,7 +554,7 @@
               </div>
               <div class="source-meta" id="source-meta-{{ source.id }}">
                 {% if not is_custom %}
-                Every <span id="scrape-interval-display-{{ source.id }}">{{ source.scrape_interval }}</span> min
+                <span id="scrape-schedule-part-{{ source.id }}">{% if source.scrape_cron %}Clock-aligned{% else %}Every <span id="scrape-interval-display-{{ source.id }}">{{ source.scrape_interval }}</span> min{% endif %}</span>
                 &nbsp;·&nbsp; Last scraped: {{ source.last_scraped_at | localtime }}
                 {% endif %}
               </div>
@@ -651,21 +655,59 @@
                 {% endif %}
 
                 {% set interval_meta = source_interval_meta.get(source.name, {'recommended': source.scrape_interval, 'min': 30, 'max': 10080}) %}
-                <div class="interval-control">
-                  <label for="scrape-interval-{{ source.id }}">Scrape every</label>
-                  <input type="number"
-                         id="scrape-interval-{{ source.id }}"
-                         min="{{ interval_meta.min }}"
-                         max="{{ interval_meta.max }}"
-                         value="{{ source.scrape_interval }}"
-                         {% if not source.is_enabled %}disabled{% endif %}
-                         onkeydown="if (event.key === 'Enter') saveScrapeInterval({{ source.id }})">
-                  <span class="unit">min</span>
+                {% if source.scrape_cron %}
+                  {% set _cp = source.scrape_cron.split(' ') %}
+                  {% set cron_offset = _cp[0] %}
+                  {% set cron_template = _cp[1:] | join(' ') %}
+                {% else %}
+                  {% set cron_offset = '0' %}
+                  {% set cron_template = '*/6 * * *' %}
+                {% endif %}
+                <div class="interval-control" id="schedule-control-{{ source.id }}"
+                     data-interval-help="Recommended {{ interval_meta.recommended }} min · allowed {{ interval_meta.min }}–{{ interval_meta.max }} min.">
+                  <label>Scrape schedule</label>
+                  <select id="schedule-mode-{{ source.id }}"
+                          onchange="onScheduleModeChange({{ source.id }})"
+                          {% if not source.is_enabled %}disabled{% endif %}>
+                    <option value="interval" {% if not source.scrape_cron %}selected{% endif %}>Every N minutes</option>
+                    <option value="cron"     {% if source.scrape_cron %}selected{% endif %}>Clock-aligned</option>
+                  </select>
+                  <span class="sched-sub" id="interval-sub-{{ source.id }}"{% if source.scrape_cron %} style="display:none"{% endif %}>
+                    <input type="number"
+                           id="scrape-interval-{{ source.id }}"
+                           min="{{ interval_meta.min }}"
+                           max="{{ interval_meta.max }}"
+                           value="{{ source.scrape_interval }}"
+                           {% if not source.is_enabled %}disabled{% endif %}
+                           onkeydown="if (event.key === 'Enter') saveSchedule({{ source.id }})">
+                    <span class="unit">min</span>
+                  </span>
+                  <span class="sched-sub" id="cron-sub-{{ source.id }}"{% if not source.scrape_cron %} style="display:none"{% endif %}>
+                    <select id="cron-preset-{{ source.id }}"
+                            {% if not source.is_enabled %}disabled{% endif %}>
+                      <option value="* * * *"    {% if cron_template == '* * * *'    %}selected{% endif %}>Every 1 hour</option>
+                      <option value="*/2 * * *"  {% if cron_template == '*/2 * * *'  %}selected{% endif %}>Every 2 hours</option>
+                      <option value="*/3 * * *"  {% if cron_template == '*/3 * * *'  %}selected{% endif %}>Every 3 hours</option>
+                      <option value="*/4 * * *"  {% if cron_template == '*/4 * * *'  %}selected{% endif %}>Every 4 hours</option>
+                      <option value="*/6 * * *"  {% if cron_template == '*/6 * * *'  %}selected{% endif %}>Every 6 hours</option>
+                      <option value="*/8 * * *"  {% if cron_template == '*/8 * * *'  %}selected{% endif %}>Every 8 hours</option>
+                      <option value="*/12 * * *" {% if cron_template == '*/12 * * *' %}selected{% endif %}>Every 12 hours</option>
+                      <option value="0 * * *"    {% if cron_template == '0 * * *'    %}selected{% endif %}>Daily (midnight UTC)</option>
+                    </select>
+                    <span class="unit">at :</span>
+                    <input type="number" class="cron-offset"
+                           id="cron-offset-{{ source.id }}"
+                           min="0" max="59" value="{{ cron_offset }}"
+                           {% if not source.is_enabled %}disabled{% endif %}>
+                    <span class="unit">min</span>
+                  </span>
                   <button class="btn btn-cancel btn-sm" type="button"
-                          id="scrape-interval-save-{{ source.id }}"
-                          onclick="saveScrapeInterval({{ source.id }})"
+                          id="schedule-save-{{ source.id }}"
+                          onclick="saveSchedule({{ source.id }})"
                           {% if not source.is_enabled %}disabled{% endif %}>Save</button>
-                  <div class="help">Recommended {{ interval_meta.recommended }} min · allowed {{ interval_meta.min }}–{{ interval_meta.max }} min.</div>
+                  <div class="help" id="sched-help-{{ source.id }}">
+                    {% if source.scrape_cron %}Fires at :{{ cron_offset }} past the hour, UTC. Predictable across restarts.{% else %}Recommended {{ interval_meta.recommended }} min · allowed {{ interval_meta.min }}–{{ interval_meta.max }} min.{% endif %}
+                  </div>
                 </div>
 
                 <div class="delete-inactive-row">
@@ -886,34 +928,81 @@
       toggleConfigPanel(sourceId);
     }
 
-    // ── Scrape interval ──────────────────────────────────────────────────
-    async function saveScrapeInterval(sourceId) {
-      const input = document.getElementById(`scrape-interval-${sourceId}`);
-      const saveBtn = document.getElementById(`scrape-interval-save-${sourceId}`);
-      if (!input || !saveBtn) return;
-      const value = parseInt(input.value, 10);
-      if (!Number.isFinite(value)) return;
+    // ── Scrape schedule ──────────────────────────────────────────────────
+    function onScheduleModeChange(sourceId) {
+      const mode        = document.getElementById(`schedule-mode-${sourceId}`)?.value;
+      const intervalSub = document.getElementById(`interval-sub-${sourceId}`);
+      const cronSub     = document.getElementById(`cron-sub-${sourceId}`);
+      const helpEl      = document.getElementById(`sched-help-${sourceId}`);
+      const ctrl        = document.getElementById(`schedule-control-${sourceId}`);
+      if (intervalSub) intervalSub.style.display = mode === 'interval' ? '' : 'none';
+      if (cronSub)     cronSub.style.display     = mode === 'cron'     ? '' : 'none';
+      if (helpEl) {
+        if (mode === 'interval') {
+          helpEl.textContent = ctrl?.dataset.intervalHelp || '';
+        } else {
+          const offset = document.getElementById(`cron-offset-${sourceId}`)?.value || '0';
+          helpEl.textContent = `Fires at :${offset} past the hour, UTC. Predictable across restarts.`;
+        }
+      }
+    }
+
+    async function saveSchedule(sourceId) {
+      const saveBtn = document.getElementById(`schedule-save-${sourceId}`);
+      if (!saveBtn) return;
+      const mode = document.getElementById(`schedule-mode-${sourceId}`)?.value;
       saveBtn.disabled = true;
       const prevText = saveBtn.textContent;
       saveBtn.textContent = 'Saving…';
+      let body;
+      if (mode === 'cron') {
+        const template  = document.getElementById(`cron-preset-${sourceId}`)?.value;
+        const rawOffset = parseInt(document.getElementById(`cron-offset-${sourceId}`)?.value || '0', 10);
+        const offset    = isNaN(rawOffset) ? 0 : Math.max(0, Math.min(59, rawOffset));
+        if (!template) { saveBtn.textContent = prevText; saveBtn.disabled = false; return; }
+        body = {scrape_cron: `${offset} ${template}`};
+      } else {
+        const input = document.getElementById(`scrape-interval-${sourceId}`);
+        const value = parseInt(input?.value, 10);
+        if (!Number.isFinite(value)) { saveBtn.textContent = prevText; saveBtn.disabled = false; return; }
+        body = {scrape_interval: value, scrape_cron: null};
+      }
       try {
         const r = await fetch(`/api/sources/${sourceId}`, {
           method: 'PATCH',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({scrape_interval: value}),
+          body: JSON.stringify(body),
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-        const displayEl = document.getElementById(`scrape-interval-display-${sourceId}`);
-        if (displayEl) displayEl.textContent = data.scrape_interval;
+        const partEl = document.getElementById(`scrape-schedule-part-${sourceId}`);
+        if (partEl) {
+          if (data.scrape_cron) {
+            partEl.textContent = 'Clock-aligned';
+          } else {
+            partEl.innerHTML = `Every <span id="scrape-interval-display-${sourceId}">${data.scrape_interval}</span> min`;
+          }
+        }
+        const helpEl = document.getElementById(`sched-help-${sourceId}`);
+        if (helpEl) {
+          if (data.scrape_cron) {
+            const offset = data.scrape_cron.split(' ')[0];
+            helpEl.textContent = `Fires at :${offset} past the hour, UTC. Predictable across restarts.`;
+          } else {
+            const ctrl = document.getElementById(`schedule-control-${sourceId}`);
+            helpEl.textContent = ctrl?.dataset.intervalHelp || '';
+          }
+        }
         saveBtn.textContent = 'Saved';
         setTimeout(() => { saveBtn.textContent = prevText; saveBtn.disabled = false; }, 1200);
       } catch (e) {
         saveBtn.textContent = 'Error';
-        console.error('Failed to save scrape interval:', e);
+        console.error('Failed to save schedule:', e);
         setTimeout(() => { saveBtn.textContent = prevText; saveBtn.disabled = false; }, 1800);
       }
     }
+
+    function saveScrapeInterval(sourceId) { return saveSchedule(sourceId); }
 
     // ── Force refresh ─────────────────────────────────────────────────────
     async function forceCompleteRefresh() {
@@ -1124,7 +1213,10 @@
       const runBtn     = dashRow?.querySelector('.btn-run');
       const auditBtn   = dashRow?.querySelector('.btn-audit');
       const intervalInput   = document.getElementById(`scrape-interval-${sourceId}`);
-      const intervalSaveBtn = document.getElementById(`scrape-interval-save-${sourceId}`);
+      const modeSelect      = document.getElementById(`schedule-mode-${sourceId}`);
+      const cronSelect      = document.getElementById(`cron-preset-${sourceId}`);
+      const cronOffsetInput = document.getElementById(`cron-offset-${sourceId}`);
+      const schedSaveBtn    = document.getElementById(`schedule-save-${sourceId}`);
 
       if (checkbox) checkbox.checked = enabled;
       if (labelEl) {
@@ -1134,8 +1226,11 @@
       if (dashRow) dashRow.classList.toggle('disabled', !enabled);
       if (runBtn) runBtn.disabled = !enabled;
       if (auditBtn) auditBtn.disabled = !enabled;
-      if (intervalInput) intervalInput.disabled = !enabled;
-      if (intervalSaveBtn) intervalSaveBtn.disabled = !enabled;
+      if (intervalInput)   intervalInput.disabled   = !enabled;
+      if (modeSelect)      modeSelect.disabled       = !enabled;
+      if (cronSelect)      cronSelect.disabled        = !enabled;
+      if (cronOffsetInput) cronOffsetInput.disabled   = !enabled;
+      if (schedSaveBtn)    schedSaveBtn.disabled      = !enabled;
     }
 
     async function setSourceEnabled(sourceId, enabled, checkbox) {
