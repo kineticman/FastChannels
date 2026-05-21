@@ -795,11 +795,11 @@
       color: var(--text-subtle); font-size: 0.68rem; font-weight: 700;
       padding: 0.22rem 0; cursor: pointer; text-align: center; outline: none;
     }
-    .gn-mode-btn.gn-mode-manual { border-color: var(--success-fill); color: var(--success-soft); }
-    .gn-mode-btn.gn-mode-off { border-color: var(--text-muted); color: var(--text-soft); }
+    .gn-mode-btn.gn-mode-manual { }
+    .gn-mode-btn.gn-mode-off { }
 
     .gn-input {
-      width: 56px;
+      width: 72px;
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: 5px;
@@ -812,7 +812,7 @@
     }
     .gn-input::placeholder { color: var(--border); }
     .gn-input:focus { border-color: var(--accent); }
-    .gn-input.gn-set  { border-color: var(--success-fill); color: var(--success-soft); }
+    .gn-input.gn-set  { }
     .gn-input.gn-err  { border-color: var(--danger-border); color: var(--danger); }
     .gn-input.gn-saving { opacity: 0.5; pointer-events: none; }
     .gn-input.gn-disabled { opacity: 0.55; color: var(--text-soft); border-color: var(--text-dim); }
@@ -1591,7 +1591,7 @@
                 <button class="gn-mode-btn{% if gn_mode == 'manual' %} gn-mode-manual{% elif gn_mode == 'off' %} gn-mode-off{% endif %}"
                         id="gn-mode-btn-{{ ch.id }}" data-channel-id="{{ ch.id }}" type="button"
                         onclick="gnModeBtnCycle({{ ch.id }})"
-                        title="{% if gn_mode == 'manual' %}M = Manual: ID is user-locked; scraper will not overwrite it.{% elif gn_mode == 'off' %}O = Off: channel excluded from Gracenote routing entirely.{% else %}A = Auto: scraper or community CSV may assign a Gracenote ID; updates on each scrape.{% endif %} Click to cycle A→M→O.">{% if gn_mode == 'manual' %}M{% elif gn_mode == 'off' %}O{% else %}A{% endif %}</button>
+                        title="{% if gn_mode == 'manual' %}Gracenote mode: Manual — your ID is locked, the scraper won't change it. Click to switch to Off or back to Auto.{% elif gn_mode == 'off' %}Gracenote mode: Off — this channel is excluded from Gracenote routing entirely. Click to switch to Auto or Manual.{% else %}Gracenote mode: Auto — the scraper may assign or update this ID automatically. Click to lock it manually or turn it off.{% endif %}">{% if gn_mode == 'manual' %}M{% elif gn_mode == 'off' %}O{% else %}A{% endif %}</button>
                 <input
                   type="text"
                   class="gn-input {% if ch.gracenote_id %}gn-set{% endif %}{% if gn_mode == 'off' %} gn-disabled{% endif %}"
@@ -1604,10 +1604,10 @@
                   maxlength="32"
                   spellcheck="false"
                   autocomplete="off"
-                  title="Gracenote station ID. Auto = scraper-managed, Manual = locked, Off = disabled for this channel."
+                  title="Type a Gracenote station ID and press Enter to save."
                   {% if gn_mode == 'off' %}disabled{% endif %}
                 >
-                <button class="gs-open-btn" type="button" onclick="openGracenoteSuggestModal({{ ch.id }}, {onApplied: channelsGnOnApplied})" title="Search and rank Gracenote suggestions">Find</button>
+                <button class="gs-open-btn" type="button" onclick="openGracenoteSuggestModal({{ ch.id }}, {onApplied: channelsGnOnApplied})" title="Search and rank Gracenote suggestions">🔍</button>
                 <span class="gn-status" id="gn-status-{{ ch.id }}"></span>
               </div>
             </td>
@@ -2312,8 +2312,12 @@
       btn.textContent = {auto:'A', manual:'M', off:'O'}[mode] || 'A';
       btn.classList.toggle('gn-mode-manual', mode === 'manual');
       btn.classList.toggle('gn-mode-off', mode === 'off');
-      const titles = {auto:'Auto — scraper-managed', manual:'Manual — locked', off:'Off — disabled'};
-      btn.title = (titles[mode] || 'Auto') + '. Click to cycle A→M→O.';
+      const titles = {
+        auto:   'Gracenote mode: Auto — the scraper may assign or update this ID automatically. Click to lock it manually or turn it off.',
+        manual: 'Gracenote mode: Manual — your ID is locked, the scraper won\'t change it. Click to switch to Off or back to Auto.',
+        off:    'Gracenote mode: Off — this channel is excluded from Gracenote routing entirely. Click to switch to Auto or Manual.'
+      };
+      btn.title = titles[mode] || titles.auto;
     }
 
     function gnModeBtnCycle(channelId) {
@@ -2397,7 +2401,7 @@
         }
         inp.value = savedRaw;
         inp.classList.remove('gn-err');
-        inp.title = 'Gracenote station ID. Auto = scraper-managed, Manual = locked, Off = disabled for this channel.';
+        inp.title = 'Type a Gracenote station ID and press Enter to save.';
 
         if (savedRaw) {
           inp.classList.add('gn-set');
