@@ -294,6 +294,53 @@
     .advanced-chevron { color: var(--text-muted); font-size: 0.76rem; transition: transform 0.2s; }
     .advanced-chevron.open { transform: rotate(180deg); }
 
+    /* Custom channels */
+    .custom-channel-card {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.6rem 0.75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+    }
+    .custom-channel-main { flex: 1; min-width: 0; }
+    .custom-channel-name {
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .custom-channel-meta {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      min-width: 0;
+      margin-top: 0.1rem;
+      font-size: 0.74rem;
+      color: var(--text-muted);
+    }
+    .custom-channel-url {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      opacity: 0.7;
+    }
+    .custom-channel-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .custom-detect-text {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-all;
+    }
+
     /* City search autocomplete */
     .city-search-wrap { position: relative; }
     .city-search-results {
@@ -408,6 +455,8 @@
       .config-actions { justify-content: flex-start; }
       .config-status { min-width: 0; text-align: left; }
       .fields-grid { grid-template-columns: 1fr; }
+      .custom-channel-card { align-items: flex-start; flex-direction: column; }
+      .custom-channel-actions { width: 100%; justify-content: flex-start; }
     }
   </style>
   {% include 'admin/_theme_head.html' %}
@@ -725,7 +774,7 @@
       </div>
 
       <!-- Detection result panel -->
-      <div id="cc-detect-result" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.85rem 1rem;margin-bottom:1.1rem;font-size:.82rem;">
+      <div id="cc-detect-result" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.85rem 1rem;margin-bottom:1.1rem;font-size:.82rem;min-width:0;width:100%;box-sizing:border-box;">
         <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;">
           <span id="cc-result-icon" style="font-size:1rem;"></span>
           <strong id="cc-result-label" style="color:var(--text);"></strong>
@@ -734,9 +783,9 @@
         <div id="cc-mp4-warning" style="display:none;margin-bottom:.45rem;padding:.55rem .65rem;border-radius:6px;background:color-mix(in srgb, var(--danger) 10%, transparent);border:1px solid color-mix(in srgb, var(--danger) 35%, transparent);color:var(--danger);font-size:.75rem;line-height:1.35;">
           MP4 custom channels are supported, but they are brittle in Channels DVR. If possible, prefer HLS or MPEG-TS. Use MP4 only if HLS is not available.
         </div>
-        <div id="cc-result-stream" style="word-break:break-all;color:var(--text-soft);font-size:.75rem;margin-bottom:.4rem;"></div>
-        <div id="cc-result-headers" style="color:var(--text-muted);font-size:.74rem;"></div>
-        <div id="cc-result-resolver" style="color:var(--text-muted);font-size:.72rem;margin-top:.2rem;"></div>
+        <div id="cc-result-stream" class="custom-detect-text" style="color:var(--text-soft);font-size:.75rem;margin-bottom:.4rem;word-break:break-all;overflow-wrap:anywhere;"></div>
+        <div id="cc-result-headers" class="custom-detect-text" style="color:var(--text-muted);font-size:.74rem;word-break:break-all;overflow-wrap:anywhere;"></div>
+        <div id="cc-result-resolver" class="custom-detect-text" style="color:var(--text-muted);font-size:.72rem;margin-top:.2rem;word-break:break-all;overflow-wrap:anywhere;"></div>
         <div id="cc-youtube-note" style="display:none;margin-top:.4rem;font-size:.74rem;color:var(--text-muted);">YouTube stream URLs expire quickly, so this is usually best left on.</div>
         <!-- Proxy segments toggle -->
         <div id="cc-proxy-wrap" style="display:none;margin-top:.65rem;padding-top:.65rem;border-top:1px solid var(--border);">
@@ -2250,15 +2299,15 @@
         }
         channels.forEach(ch => { _customChannelCache[ch.id] = ch; });
         listEl.innerHTML = channels.map(ch => `
-          <div style="display:flex;align-items:center;gap:.75rem;padding:.6rem .75rem;background:var(--bg);border:1px solid var(--border);border-radius:7px;">
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:.88rem;font-weight:600;color:var(--text);" title="${_esc(ch.name)}">${_esc(ch.name.length > 60 ? ch.name.slice(0, 57) + '…' : ch.name)}</div>
-              <div style="font-size:.74rem;color:var(--text-muted);margin-top:.1rem;">
-                ${ch.category ? '<span style="margin-right:.5rem;">' + _esc(ch.category) + '</span>' : ''}
-                <span style="opacity:.7;">${_esc((ch.stream_url || '').replace(/\?.*/, '').slice(0, 60))}${(ch.stream_url || '').length > 60 ? '…' : ''}</span>
+          <div class="custom-channel-card">
+            <div class="custom-channel-main">
+              <div class="custom-channel-name" title="${_esc(ch.name)}">${_esc(ch.name.length > 60 ? ch.name.slice(0, 57) + '…' : ch.name)}</div>
+              <div class="custom-channel-meta">
+                ${ch.category ? '<span>' + _esc(ch.category) + '</span>' : ''}
+                <span class="custom-channel-url">${_esc((ch.stream_url || '').replace(/\?.*/, '').slice(0, 60))}${(ch.stream_url || '').length > 60 ? '…' : ''}</span>
               </div>
             </div>
-            <div style="display:flex;align-items:center;gap:.4rem;flex-shrink:0;">
+            <div class="custom-channel-actions">
               <span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:${ch.is_enabled ? 'var(--success-soft)' : 'var(--text-muted)'};border:1px solid var(--border);">${ch.is_enabled ? 'On' : 'Off'}</span>
               ${ch.stream_type ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--text-soft);border:1px solid var(--border);">' + _esc(_streamTypeLabel(ch.stream_type)) + '</span>' : ''}
               ${_looksLikeMp4Channel(ch) ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:color-mix(in srgb, var(--danger) 10%, transparent);color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 30%, transparent);">MP4 fragile</span>' : ''}
