@@ -2133,6 +2133,9 @@ def _schedule_due_scrapes():
 
         sources = Source.query.filter_by(is_enabled=True).all()
         for source in sources:
+            if _scrape_job_already_active(q, source.name):
+                _last_enqueued[source.name] = now
+                continue
             last_scraped = _utc_aware(source.last_scraped_at)
             last_queued = _utc_aware(_last_enqueued.get(source.name))
             candidates = [t for t in (last_scraped, last_queued) if t is not None]
@@ -2140,11 +2143,7 @@ def _schedule_due_scrapes():
 
             if _is_source_due(source, now, last):
                 try:
-                    if _scrape_job_already_active(q, source.name):
-                        logger.info('[scheduler] %s already queued/running; skipping duplicate enqueue', source.name)
-                        _last_enqueued[source.name] = now
-                        continue
-                    q.enqueue('app.worker.run_scraper', source.name, job_timeout=600, job_id=f'scrape-{source.name}')
+                    q.enqueue('app.worker.run_scraper', source.name, job_timeout=3600, job_id=f'scrape-{source.name}')
                     _last_enqueued[source.name] = now
                     if source.scrape_cron:
                         logger.info('[scheduler] Enqueued %s (cron=%s)', source.name, source.scrape_cron)

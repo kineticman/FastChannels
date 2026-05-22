@@ -31,6 +31,8 @@ from urllib.parse import quote_plus
 from uuid import uuid4
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
 from ..gracenote_map import resolve_gracenote
@@ -45,6 +47,7 @@ _PRODUCT  = "Plex Mediaverse"
 _EPG_HOST = "https://epg.provider.plex.tv"
 _PLEX_EXTRA_DAYS = 2
 _PLEX_GUIDE_WORKERS = 6
+_PLEX_LUMA_WORKERS = 4
 
 # Encoded Next.js router state expected by watch.plex.tv RSC endpoint
 _NEXT_ROUTER_STATE_TREE = (
@@ -796,10 +799,12 @@ class PlexScraper(BaseScraper):
         guide_key: str,
         url: str,
         source_channel_id: str,
+        session: requests.Session | None = None,
     ) -> list[ProgramData]:
         """Fetch and parse one channel's schedule from the luma fragment endpoint."""
+        sess = session or self.session
         try:
-            r = self.session.get(
+            r = sess.get(
                 url,
                 headers={
                     "Accept":                 "text/x-component, */*",
@@ -820,6 +825,30 @@ class PlexScraper(BaseScraper):
             logger.debug("[plex] luma HTTP %d for %s", r.status_code, guide_key)
             return []
         return _parse_luma_fragment(r.text, source_channel_id)
+
+    def _new_luma_session(self) -> requests.Session:
+        """Best-effort session for luma gap-fill.
+
+        Disable read retries so slow upstream fragments fail once instead of
+        emitting urllib3 retry warnings and stretching a single miss across
+        multiple 15s timeout windows.
+        """
+        session = requests.Session()
+        adapter = HTTPAdapter(max_retries=Retry(
+            total=3,
+            connect=3,
+            read=0,
+            status=2,
+            backoff_factor=1.0,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=None,
+            raise_on_status=False,
+        ))
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        session.headers.update(self.session.headers)
+        session.cookies.update(self.session.cookies.get_dict())
+        return session
 
     def _luma_gap_fill(
         self,
@@ -862,10 +891,19 @@ class PlexScraper(BaseScraper):
         import threading
         extras: list[ProgramData] = []
         lock = threading.Lock()
+        thread_local = threading.local()
 
         def _fetch_one(ch: ChannelData, gaps: list) -> None:
+            sess = getattr(thread_local, "session", None)
+            if sess is None:
+                sess = self._new_luma_session()
+                thread_local.session = sess
+            sess.cookies.update(self.session.cookies.get_dict())
             luma_progs = self._fetch_luma_programs(
-                ch.guide_key, luma_map[ch.guide_key], ch.source_channel_id
+                ch.guide_key,
+                luma_map[ch.guide_key],
+                ch.source_channel_id,
+                session=sess,
             )
             if not luma_progs:
                 return
@@ -874,7 +912,7 @@ class PlexScraper(BaseScraper):
                 with lock:
                     extras.extend(filled)
 
-        with ThreadPoolExecutor(max_workers=_PLEX_GUIDE_WORKERS) as pool:
+        with ThreadPoolExecutor(max_workers=_PLEX_LUMA_WORKERS) as pool:
             futs = [pool.submit(_fetch_one, ch, gaps) for ch, gaps in gapped]
             for fut in as_completed(futs):
                 try:
