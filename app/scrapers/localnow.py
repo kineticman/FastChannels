@@ -281,6 +281,7 @@ class LocalNowScraper(BaseScraper):
                         episode_title=episode_title,
                         season=season,
                         episode=episode,
+                        program_type="episode" if (season is not None or episode is not None) else None,
                     )
                 )
 

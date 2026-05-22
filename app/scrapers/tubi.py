@@ -470,6 +470,8 @@ class TubiScraper(BaseScraper):
                         poster = lst[0] if isinstance(lst, list) else lst
                         break
 
+                _season  = p.get('season_number') or None
+                _episode = p.get('episode_number') or None
                 programs.append(ProgramData(
                     source_channel_id = cid,
                     title             = title,
@@ -479,8 +481,9 @@ class TubiScraper(BaseScraper):
                     poster_url        = poster,
                     rating            = rating,
                     episode_title     = ep_title,
-                    season            = p.get('season_number') or None,
-                    episode           = p.get('episode_number') or None,
+                    season            = _season,
+                    episode           = _episode,
+                    program_type      = "episode" if (_season or _episode) else None,
                 ))
 
         logger.info('[tubi] %d EPG entries', len(programs))

@@ -1351,6 +1351,7 @@ class RokuScraper(BaseScraper):
             episode_title     = ep_title if series_title and ep_title != series_title else None,
             season            = season,
             episode           = episode,
+            program_type      = "episode" if series_title else None,
         )
 
     # ── resolve ────────────────────────────────────────────────────────────────

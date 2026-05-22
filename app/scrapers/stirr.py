@@ -547,8 +547,20 @@ class StirrScraper(BaseScraper):
             dur = sched.get("durSecs")
             if not sid or not start or not dur: continue
 
-            item = movies.get(sid) or shorts.get(sid) or specials.get(sid) or episodes.get(sid)
-            if not item: continue
+            if sid in movies:
+                item = movies[sid]
+                program_type = "movie"
+            elif sid in episodes:
+                item = episodes[sid]
+                program_type = "episode"
+            elif sid in shorts:
+                item = shorts[sid]
+                program_type = None
+            elif sid in specials:
+                item = specials[sid]
+                program_type = None
+            else:
+                continue
 
             title = _title(item)
             if not title: continue
@@ -566,6 +578,7 @@ class StirrScraper(BaseScraper):
                 description       = description,
                 poster_url        = (item.get("thumbnails") or [{}])[0].get("url"),
                 category          = (item.get("genres") or [{}])[0].get("description"),
+                program_type      = program_type,
             ))
         return results
 

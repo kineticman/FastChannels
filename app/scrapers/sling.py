@@ -493,6 +493,8 @@ class SlingScraper(BaseScraper):
         if isinstance(rating, list):
             rating = ", ".join(x for x in rating if x)
 
+        _season  = self._to_int(asset.get("season_number"))
+        _episode = self._to_int(asset.get("episode_number"))
         return ProgramData(
             source_channel_id=channel_guid,
             title=title,
@@ -503,8 +505,9 @@ class SlingScraper(BaseScraper):
             category=genre,
             rating=rating,
             episode_title=asset.get("episode_title"),
-            season=self._to_int(asset.get("season_number")),
-            episode=self._to_int(asset.get("episode_number")),
+            season=_season,
+            episode=_episode,
+            program_type="episode" if (_season or _episode) else None,
         )
 
     def _channel_from_tile(self, tile: dict[str, Any]) -> ChannelData | None:

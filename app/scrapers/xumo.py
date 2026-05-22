@@ -250,6 +250,13 @@ class XumoScraper(BaseScraper):
                                 continue
                             seen.add(dedupe_key)
 
+                            _pfx = asset_id[:2]
+                            if _pfx in ("MV", "XM", "XT"):
+                                _program_type = "movie"
+                            elif _pfx == "SH":
+                                _program_type = "episode"
+                            else:
+                                _program_type = None
                             programmes.append(
                                 ProgramData(
                                     source_channel_id=channel_id,
@@ -262,6 +269,7 @@ class XumoScraper(BaseScraper):
                                     episode_title=episode_title,
                                     season=season,
                                     episode=episode,
+                                    program_type=_program_type,
                                 )
                             )
 

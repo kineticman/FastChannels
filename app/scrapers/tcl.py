@@ -332,6 +332,7 @@ class TCLScraper(BaseScraper):
                 season=season,
                 episode=episode,
                 episode_title=ep_title,
+                program_type="episode" if (season is not None or episode is not None) else None,
             ))
 
         return all_programs

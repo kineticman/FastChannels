@@ -200,7 +200,12 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             if prog.is_live:
                 SubElement(el, 'live')
             cats = [c.casefold() for c in combined_cats]
-            is_movie = getattr(prog, 'program_type', None) == 'movie' or 'movie' in cats or 'movies' in cats
+            prog_type = getattr(prog, 'program_type', None)
+            is_movie = prog_type == 'movie' or 'movie' in cats or 'movies' in cats
+            # Ensure <category>Movie</category> is emitted when program_type
+            # signals a movie but the scraped category doesn't already say so.
+            if prog_type == 'movie' and 'movie' not in cats and 'movies' not in cats:
+                SubElement(el, 'category', lang='en').text = 'Movie'
             if prog.episode_title and not is_movie:
                 SubElement(el, 'sub-title', lang='en').text = _sanitize(prog.episode_title)
             if prog.season and prog.episode and not is_movie:

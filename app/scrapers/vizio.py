@@ -256,5 +256,6 @@ class VizioScraper(BaseScraper):
                 season            = season,
                 episode           = episode,
                 episode_title     = ep_title,
+                program_type      = "episode" if (series_title or season or episode) else None,
             ))
         return programs

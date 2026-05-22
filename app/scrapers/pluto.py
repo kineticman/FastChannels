@@ -547,6 +547,7 @@ class PlutoScraper(BaseScraper):
                         parse_original_air_date(clip.get('originalReleaseDate')) or
                         (_date(_title_year, 1, 1) if _title_year and _title_year > 1970 else None)
                     ),
+                    program_type      = 'movie' if series_type == 'film' else ('episode' if series_type == 'tv' else None),
                 ))
         return programs
 
