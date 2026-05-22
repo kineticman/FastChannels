@@ -50,27 +50,6 @@ class AmazonPrimeFreeScraper(BaseScraper):
             secret=True,
             help_text="Paste a valid Cookie header from a logged-in amazon.com browser session.",
         ),
-        ConfigField(
-            "user_agent",
-            "User-Agent",
-            field_type="text",
-            required=False,
-            help_text="Optional browser User-Agent override. A desktop Chrome UA works best.",
-        ),
-        ConfigField(
-            "marketplace_id",
-            "Marketplace ID",
-            field_type="text",
-            required=False,
-            help_text="Defaults to ATVPDKIKX0DER for amazon.com / US.",
-        ),
-        ConfigField(
-            "ux_locale",
-            "UX Locale",
-            field_type="text",
-            required=False,
-            help_text="Defaults to en_US.",
-        ),
     ]
 
     LIVE_TV_URL = "https://www.amazon.com/gp/video/livetv"
@@ -146,12 +125,11 @@ class AmazonPrimeFreeScraper(BaseScraper):
         super().__init__(config)
 
         self._cookie_header = (self.config.get("cookie_header") or "").strip()
-        self._marketplace_id = (self.config.get("marketplace_id") or "ATVPDKIKX0DER").strip()
-        self._ux_locale = (self.config.get("ux_locale") or "en_US").strip()
+        self._marketplace_id = "ATVPDKIKX0DER"
+        self._ux_locale = "en_US"
         user_agent = (
-            self.config.get("user_agent")
-            or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-               "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
         )
 
         self.session.headers.update(self.DEFAULT_HEADERS)
