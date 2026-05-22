@@ -63,167 +63,7 @@ class SlingScraper(BaseScraper):
             "Bearer JWT",
             field_type="password",
             secret=True,
-            help_text="Optional. Paste a fresh Sling Bearer token to skip OAuth bootstrap.",
-        ),
-        ConfigField(
-            "consumer_key",
-            "OAuth Consumer Key",
-            field_type="text",
-            required=False,
-            help_text="Needed if bearer_jwt is not supplied.",
-        ),
-        ConfigField(
-            "consumer_secret",
-            "OAuth Consumer Secret",
-            field_type="password",
-            required=False,
-            secret=True,
-            help_text="Needed if bearer_jwt is not supplied.",
-        ),
-        ConfigField(
-            "access_token",
-            "OAuth Access Token",
-            field_type="password",
-            required=False,
-            secret=True,
-            help_text="Sling browser accessToken from the session bootstrap response.",
-        ),
-        ConfigField(
-            "access_secret",
-            "OAuth Access Secret",
-            field_type="password",
-            required=False,
-            secret=True,
-            help_text="Sling browser accessSecret from the session bootstrap response.",
-        ),
-        ConfigField(
-            "device_guid",
-            "Device GUID",
-            field_type="text",
-            required=False,
-            help_text="HardwareDeviceGUID from Sling browser localStorage.",
-        ),
-        ConfigField(
-            "profile_guid",
-            "Profile GUID",
-            field_type="text",
-            required=False,
-            help_text="Profile/user GUID used in Sling's /cmw/v1/client/jwt request.",
-        ),
-        ConfigField(
-            "profile_type",
-            "Profile Type",
-            field_type="text",
-            required=False,
-            default="Admin",
-        ),
-        ConfigField(
-            "account_status",
-            "Account Status",
-            field_type="text",
-            required=False,
-            default="prospect",
-        ),
-        ConfigField(
-            "client_version",
-            "Client Version",
-            field_type="text",
-            required=False,
-            default="7.1.32",
-        ),
-        ConfigField(
-            "player_version",
-            "Player Version",
-            field_type="text",
-            required=False,
-            default="9.1.0",
-        ),
-        ConfigField(
-            "device_model",
-            "Device Model",
-            field_type="text",
-            required=False,
-            default="Chrome",
-        ),
-        ConfigField(
-            "client_config",
-            "Client Config",
-            field_type="text",
-            required=False,
-            default="rn-client-config",
-        ),
-        ConfigField(
-            "response_config",
-            "Response Config",
-            field_type="text",
-            required=False,
-            default="ar_browser_1_1",
-        ),
-        ConfigField(
-            "dma",
-            "DMA",
-            field_type="text",
-            required=False,
-            default="535",
-        ),
-        ConfigField(
-            "geo_zipcode",
-            "Geo Zipcode",
-            field_type="text",
-            required=False,
-            default="43017",
-        ),
-        ConfigField(
-            "time_zone_id",
-            "Time Zone ID",
-            field_type="text",
-            required=False,
-            default="America/New_York",
-        ),
-        ConfigField(
-            "timezone_offset",
-            "Timezone Offset",
-            field_type="text",
-            required=False,
-            default="-0500",
-        ),
-        ConfigField(
-            "focus_channel_id",
-            "Focus Channel ID",
-            field_type="text",
-            required=False,
-            default=DEFAULT_FOCUS_CHANNEL_ID,
-            help_text="Seed channel GUID for the paginated player_all_channels ribbon.",
-        ),
-        ConfigField(
-            "max_channel_pages",
-            "Max Channel Pages",
-            field_type="number",
-            required=False,
-            default=100,
-        ),
-        ConfigField(
-            "epg_windows_per_channel",
-            "EPG Windows Per Channel",
-            field_type="number",
-            required=False,
-            default=4,
-        ),
-        ConfigField(
-            "epg_channel_limit",
-            "EPG Channel Limit",
-            field_type="number",
-            required=False,
-            default=0,
-            help_text="0 means all channels; useful for testing.",
-        ),
-        ConfigField(
-            "epg_workers",
-            "EPG Parallel Workers",
-            field_type="number",
-            required=False,
-            default=20,
-            help_text="Number of parallel threads for EPG fetching. Higher = faster but more load.",
+            help_text="Paste a fresh Sling Bearer token captured from a browser session.",
         ),
     ]
 
@@ -234,15 +74,15 @@ class SlingScraper(BaseScraper):
                 "accept": "application/json, text/plain, */*",
                 "origin": "https://watch.sling.com",
                 "referer": "https://watch.sling.com/",
-                "client-config": self._cfg("client_config", "rn-client-config"),
-                "client-version": self._cfg("client_version", "7.1.32"),
-                "device-model": self._cfg("device_model", "Chrome"),
-                "player-version": self._cfg("player_version", "9.1.0"),
-                "response-config": self._cfg("response_config", "ar_browser_1_1"),
-                "dma": self._cfg("dma", "535"),
-                "geo-zipcode": self._cfg("geo_zipcode", "43017"),
-                "time-zone-id": self._cfg("time_zone_id", "America/New_York"),
-                "timezone": self._cfg("timezone_offset", "-0500"),
+                "client-config": "rn-client-config",
+                "client-version": "7.1.32",
+                "device-model": "Chrome",
+                "player-version": "9.1.0",
+                "response-config": "ar_browser_1_1",
+                "dma": "535",
+                "geo-zipcode": "43017",
+                "time-zone-id": "America/New_York",
+                "timezone": "-0500",
                 "features": "enable_ad_tracking,web_browser",
             }
         )
@@ -259,8 +99,8 @@ class SlingScraper(BaseScraper):
     def fetch_channels(self) -> list[ChannelData]:
         self._ensure_bearer()
 
-        focus_channel_id = self._cfg("focus_channel_id", self.DEFAULT_FOCUS_CHANNEL_ID)
-        max_pages = int(self._cfg("max_channel_pages", 100))
+        focus_channel_id = self.DEFAULT_FOCUS_CHANNEL_ID
+        max_pages = 100
         start_url = (
             f"{self.CMW_FAST}/pres/player_screen/player_all_channels"
             f"?focus_channel_id={quote(focus_channel_id)}"
@@ -294,10 +134,9 @@ class SlingScraper(BaseScraper):
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         self._ensure_bearer()
 
-        limit       = int(self._cfg("epg_channel_limit", 0))
-        max_windows = int(self._cfg("epg_windows_per_channel", 4))
-        max_workers = int(self._cfg("epg_workers", 20))
-        selected    = channels if limit <= 0 else channels[:limit]
+        max_windows = 4
+        max_workers = 20
+        selected    = channels
         total       = len(selected)
 
         # Snapshot the current headers (including auth) once; each worker thread

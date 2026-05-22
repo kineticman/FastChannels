@@ -2178,19 +2178,12 @@
     }
 
     function renderConfigFields(sourceId, sourceName, schema, values) {
-      const slingPrimaryKeys = new Set(['bearer_jwt']);
-      const isSling = sourceName === 'sling';
       let primarySchema = schema;
       let advancedSchema = [];
       let advancedTitle = '';
       let advancedCopy = '';
 
-      if (isSling) {
-        primarySchema = schema.filter(f => slingPrimaryKeys.has(f.key));
-        advancedSchema = schema.filter(f => !slingPrimaryKeys.has(f.key));
-        advancedTitle = 'Advanced Sling Settings';
-        advancedCopy = 'These values are mainly for troubleshooting or manual browser token capture. Most installs should leave them alone.';
-      } else if (sourceName === 'tcl') {
+      if (sourceName === 'tcl') {
         return renderTCLConfig(sourceId, schema, values);
       } else if (sourceName === 'localnow') {
         return renderLocalNowConfig(sourceId, schema, values);
