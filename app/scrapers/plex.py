@@ -698,6 +698,7 @@ class PlexScraper(BaseScraper):
                 episode           = int(video.attrib["index"]) if video.attrib.get("index", "").isdigit() else None,
                 episode_title     = ep_title,
                 original_air_date = _parse_date(video.attrib.get("originalAvailableAt")),
+                program_type      = video.attrib.get("type") or None,
             ))
 
         return programs
@@ -1014,6 +1015,7 @@ class PlexScraper(BaseScraper):
                         season            = entry.get("parentIndex"),
                         episode           = entry.get("index"),
                         episode_title     = ep_title,
+                        program_type      = entry.get("type") or None,
                     ))
 
             logger.info(

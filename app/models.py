@@ -203,6 +203,7 @@ class Program(db.Model):
     episode       = db.Column(db.Integer)
     original_air_date = db.Column(db.Date, nullable=True)
     is_live           = db.Column(db.Boolean, nullable=True)
+    program_type      = db.Column(db.String(16), nullable=True)  # "movie", "episode", or None
 
     __table_args__ = (
         db.Index('idx_programs_channel_id', 'channel_id'),

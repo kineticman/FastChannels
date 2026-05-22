@@ -422,6 +422,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE programs ADD COLUMN is_live BOOLEAN"
                 ))
+            if "program_type" not in program_cols:
+                conn.execute(text(
+                    "ALTER TABLE programs ADD COLUMN program_type VARCHAR(16)"
+                ))
             existing_indexes = {
                 row[1]
                 for row in conn.execute(text("PRAGMA index_list(programs)"))
