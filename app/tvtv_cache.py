@@ -2,12 +2,12 @@
 tvtv_cache.py
 
 Nightly bulk cache of tvtv.us guide data for all FAST channel stations in
-the bundled station index.  Fetches 3 days of grid data (today + 2) and
+the bundled station index.  Fetches 2 days of grid data (today + 1) and
 stores it in the tvtv_program_cache table.
 
 Called by the background worker on a cron schedule (default: 03:00 UTC).
 
-Typical cost: ~100-250 batched API calls (4 lineups × 3 days × ~20 batches
+Typical cost: ~70-170 batched API calls (4 lineups × 2 days × ~20 batches
 each), taking ~2-4 minutes including pacing delays.  Uses curl_cffi for
 Cloudflare bypass with a fresh session per lineup-day pair.
 
@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 _BATCH_SIZE  = 20    # station IDs per grid request — Cloudflare blocks >20
 _BATCH_DELAY = 1.0   # seconds between batches within a lineup-day
 _DAY_DELAY   = 1.0   # seconds between lineup-day pairs
-_DAYS        = 3     # days of guide data to cache (today + 2)
+_DAYS        = 2     # days of guide data to cache (today + 1)
 
 _TVTV_BASE = "https://tvtv.us"
 

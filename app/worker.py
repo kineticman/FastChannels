@@ -233,6 +233,21 @@ def _scrape_job_already_active(q: Queue, source_name: str) -> bool:
         return False
 
 
+def _any_scrapes_active() -> bool:
+    """Return True if any scraper jobs are queued or running."""
+    try:
+        r = redis.from_url(flask_app.config['REDIS_URL'])
+        q = Queue('scraper', connection=r)
+        queued = [jid for jid in q.get_job_ids() if jid.startswith('scrape-')]
+        running = [
+            jid for jid in StartedJobRegistry(q.name, connection=r).get_job_ids()
+            if jid.startswith('scrape-')
+        ]
+        return bool(queued or running)
+    except Exception:
+        return False
+
+
 def _no_scrapes_pending(current_source_name: str) -> bool:
     """Return True if no other scrape jobs are queued or running.
 
@@ -1314,7 +1329,7 @@ def run_xml_refresh():
 
 
 def run_tvtv_cache_refresh():
-    """Fetch 3 days of tvtv guide data for all indexed FAST stations and store in DB."""
+    """Fetch 2 days of tvtv guide data for all indexed FAST stations and store in DB."""
     with flask_app.app_context():
         from app.tvtv_cache import refresh_tvtv_cache
         from app.tvtv_lookup import get_station_entry
@@ -1339,7 +1354,7 @@ def run_tvtv_cache_refresh():
                     len(station_ids), len(applied & set(station_ids)),
                     len(community & set(station_ids) - applied))
 
-        summary = refresh_tvtv_cache(days=3, station_ids=station_ids)
+        summary = refresh_tvtv_cache(days=2, station_ids=station_ids)
         logger.info('[tvtv-cache] refresh complete: %s', summary)
 
 
@@ -2304,19 +2319,24 @@ if __name__ == '__main__':
         scheduler.add_job(_scheduled_remote_gracenote_refresh, 'interval', hours=24,
                           id='gracenote_remote_refresh', max_instances=1, coalesce=True)
 
-        def _scheduled_tvtv_cache_refresh():
+        def _scheduled_tvtv_cache_refresh() -> str:
             try:
                 r = redis.from_url(flask_app.config['REDIS_URL'])
                 q = Queue('maintenance', connection=r)
                 job_id = 'tvtv-cache-refresh'
+                if _any_scrapes_active():
+                    logger.info('[tvtv-cache] scraper work active; deferring refresh')
+                    return 'deferred'
                 active_ids = set(q.get_job_ids()) | set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
                 if job_id in active_ids:
                     logger.info('[tvtv-cache] refresh already queued/running, skipping')
-                    return
-                q.enqueue('app.worker.run_tvtv_cache_refresh', job_timeout=600, job_id=job_id)
+                    return 'active'
+                q.enqueue('app.worker.run_tvtv_cache_refresh', job_timeout=1800, job_id=job_id)
                 logger.info('[tvtv-cache] enqueued refresh job')
+                return 'queued'
             except Exception as exc:
                 logger.warning('[tvtv-cache] could not enqueue via RQ: %s', exc)
+                return 'error'
 
         # 03:00 user local time — reads timezone from AppSettings so it follows
         # whatever the user has configured in admin/settings.
@@ -2408,10 +2428,21 @@ if __name__ == '__main__':
                     if newest.tzinfo is None:
                         newest = newest.replace(tzinfo=_tz.utc)
                     age_hours = (datetime.now(_tz.utc) - newest).total_seconds() / 3600
-                    stale = age_hours > 13
+                    stale = age_hours > 25
                 if stale:
-                    _scheduled_tvtv_cache_refresh()
-                    logger.info('[tvtv-cache] stale/empty at startup (newest=%s) — triggered refresh', newest)
+                    startup_status = _scheduled_tvtv_cache_refresh()
+                    logger.info('[tvtv-cache] stale/empty at startup (newest=%s) — status=%s', newest, startup_status)
+                    if newest is None and startup_status == 'deferred':
+                        retry_at = datetime.now(_tz.utc) + timedelta(minutes=30)
+                        scheduler.add_job(
+                            _scheduled_tvtv_cache_refresh,
+                            'date',
+                            run_date=retry_at,
+                            id='tvtv_cache_empty_retry',
+                            replace_existing=True,
+                            misfire_grace_time=3600,
+                        )
+                        logger.info('[tvtv-cache] empty cache startup retry scheduled for %s', retry_at.isoformat())
             except Exception:
                 logger.exception('[tvtv-cache] startup staleness check failed')
 
