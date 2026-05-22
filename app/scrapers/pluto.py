@@ -548,6 +548,8 @@ class PlutoScraper(BaseScraper):
                         (_date(_title_year, 1, 1) if _title_year and _title_year > 1970 else None)
                     ),
                     program_type      = 'movie' if series_type == 'film' else ('episode' if series_type == 'tv' else None),
+                    series_id         = series.get('_id') or None,
+                    episode_id        = ep.get('_id') or None,
                 ))
         return programs
 

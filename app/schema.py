@@ -426,6 +426,14 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE programs ADD COLUMN program_type VARCHAR(16)"
                 ))
+            if "series_id" not in program_cols:
+                conn.execute(text(
+                    "ALTER TABLE programs ADD COLUMN series_id VARCHAR(64)"
+                ))
+            if "episode_id" not in program_cols:
+                conn.execute(text(
+                    "ALTER TABLE programs ADD COLUMN episode_id VARCHAR(64)"
+                ))
             existing_indexes = {
                 row[1]
                 for row in conn.execute(text("PRAGMA index_list(programs)"))

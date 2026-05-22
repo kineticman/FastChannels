@@ -270,6 +270,7 @@ class XumoScraper(BaseScraper):
                                     season=season,
                                     episode=episode,
                                     program_type=_program_type,
+                                    episode_id=asset_id or None,
                                 )
                             )
 

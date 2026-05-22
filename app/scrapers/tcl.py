@@ -40,6 +40,8 @@ import re as _re
 # "Law & Order: SVU S23: People vs. Richard Wheatley 2309"
 _TCL_COLON_RE = _re.compile(r'^(.+?)\s+S(\d+):\s+(.+)$', _re.IGNORECASE)
 _TCL_TRAILING_CODE = _re.compile(r'\s+\d+$')
+# Trailing "S1 E5" or "S1" left inside an episode title after dash-pattern parsing
+_TCL_TRAILING_SE = _re.compile(r'[\s"]*\bS\d+(?:\s+E\d+)?\s*$', _re.IGNORECASE)
 
 # "Show S1 - \"Ep Title\"" / "Show S2 E4" / "Show S1"
 _TCL_DASH_RE = _re.compile(
@@ -76,6 +78,10 @@ def _parse_tcl_title(
         season   = int(m.group(2)) if m.group(2) else api_season
         episode  = int(m.group(3)) if m.group(3) else api_episode
         ep_title = m.group(4).strip().strip('"') if m.group(4) else None
+        # Strip trailing "S1 E5" artifacts left when the episode title itself
+        # contains a redundant season/episode marker (e.g. 'Cabriolet" S1 E5')
+        if ep_title:
+            ep_title = _TCL_TRAILING_SE.sub('', ep_title).strip('" ') or None
         return series, season, episode, ep_title
 
     # Pattern: "The Rifleman  - A Matter of Faith" (no season in title, API has none either)

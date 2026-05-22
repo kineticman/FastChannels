@@ -235,7 +235,8 @@ class ProgramData:
     def __init__(self, source_channel_id, title, start_time, end_time,
                  description=None, poster_url=None, category=None, rating=None,
                  episode_title=None, season=None, episode=None,
-                 original_air_date=None, is_live=None, program_type=None):
+                 original_air_date=None, is_live=None, program_type=None,
+                 series_id=None, episode_id=None):
         self.source_channel_id = source_channel_id
         self.title        = title
         self.start_time   = start_time
@@ -250,6 +251,8 @@ class ProgramData:
         self.original_air_date = original_air_date
         self.is_live      = is_live
         self.program_type = program_type  # "movie", "episode", or None
+        self.series_id    = series_id    # stable source-level series identifier
+        self.episode_id   = episode_id   # stable source-level episode/content identifier
 
 
 class BaseScraper(ABC):

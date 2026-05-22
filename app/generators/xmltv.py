@@ -214,6 +214,12 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                 if prog.season >= 1 and prog.episode >= 1:
                     SubElement(el, 'episode-num', system='onscreen').text = \
                         f'S{prog.season:02d}E{prog.episode:02d}'
+            series_id  = getattr(prog, 'series_id',  None)
+            episode_id = getattr(prog, 'episode_id', None)
+            if series_id:
+                SubElement(el, 'series-id', system='fastchannels').text = series_id
+            if episode_id:
+                SubElement(el, 'episode-num', system='fastchannels').text = episode_id
             yield tostring(el, encoding='unicode') + '\n'
 
         last_id = programs[-1].id

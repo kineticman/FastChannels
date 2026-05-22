@@ -2088,6 +2088,8 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
             'original_air_date': pd.original_air_date,
             'is_live':           pd.is_live,
             'program_type':      getattr(pd, 'program_type', None),
+            'series_id':         getattr(pd, 'series_id',    None),
+            'episode_id':        getattr(pd, 'episode_id',   None),
         })
     # Commit in chunks so the write lock isn't held for the full batch.
     _CHUNK = 2000
