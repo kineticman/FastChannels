@@ -706,7 +706,15 @@
                           onclick="saveSchedule({{ source.id }})"
                           {% if not source.is_enabled %}disabled{% endif %}>Save</button>
                   <div class="help" id="sched-help-{{ source.id }}">
-                    {% if source.scrape_cron %}Fires at :{{ cron_offset }} past the hour, UTC. Predictable across restarts.{% else %}Recommended {{ interval_meta.recommended }} min · allowed {{ interval_meta.min }}–{{ interval_meta.max }} min.{% endif %}
+                    {% if source.scrape_cron %}
+                      {%- set co = '%02d' | format(cron_offset | int) -%}
+                      {%- if cron_template == '0 * * *' -%}
+                        Daily at 00:{{ co }} UTC — predictable across restarts.
+                      {%- else -%}
+                        {%- set _labels = {'* * * *': '1h', '*/2 * * *': '2h', '*/3 * * *': '3h', '*/4 * * *': '4h', '*/6 * * *': '6h', '*/8 * * *': '8h', '*/12 * * *': '12h'} -%}
+                        Every {{ _labels.get(cron_template, '?') }} at :{{ co }} UTC — predictable across restarts.
+                      {%- endif -%}
+                    {% else %}Recommended {{ interval_meta.recommended }} min · allowed {{ interval_meta.min }}–{{ interval_meta.max }} min.{% endif %}
                   </div>
                 </div>
 
@@ -929,6 +937,14 @@
     }
 
     // ── Scrape schedule ──────────────────────────────────────────────────
+    function _cronHelpText(template, offsetStr) {
+      const mm = String(parseInt(offsetStr, 10) || 0).padStart(2, '0');
+      const labels = {'* * * *': '1h', '*/2 * * *': '2h', '*/3 * * *': '3h', '*/4 * * *': '4h',
+                      '*/6 * * *': '6h', '*/8 * * *': '8h', '*/12 * * *': '12h'};
+      if (template === '0 * * *') return `Daily at 00:${mm} UTC — predictable across restarts.`;
+      return `Every ${labels[template] || '?'} at :${mm} UTC — predictable across restarts.`;
+    }
+
     function onScheduleModeChange(sourceId) {
       const mode        = document.getElementById(`schedule-mode-${sourceId}`)?.value;
       const intervalSub = document.getElementById(`interval-sub-${sourceId}`);
@@ -941,8 +957,9 @@
         if (mode === 'interval') {
           helpEl.textContent = ctrl?.dataset.intervalHelp || '';
         } else {
-          const offset = document.getElementById(`cron-offset-${sourceId}`)?.value || '0';
-          helpEl.textContent = `Fires at :${offset} past the hour, UTC. Predictable across restarts.`;
+          const template = document.getElementById(`cron-preset-${sourceId}`)?.value || '*/6 * * *';
+          const offset   = document.getElementById(`cron-offset-${sourceId}`)?.value || '0';
+          helpEl.textContent = _cronHelpText(template, offset);
         }
       }
     }
@@ -986,8 +1003,8 @@
         const helpEl = document.getElementById(`sched-help-${sourceId}`);
         if (helpEl) {
           if (data.scrape_cron) {
-            const offset = data.scrape_cron.split(' ')[0];
-            helpEl.textContent = `Fires at :${offset} past the hour, UTC. Predictable across restarts.`;
+            const parts    = data.scrape_cron.split(' ');
+            helpEl.textContent = _cronHelpText(parts.slice(1).join(' '), parts[0]);
           } else {
             const ctrl = document.getElementById(`schedule-control-${sourceId}`);
             helpEl.textContent = ctrl?.dataset.intervalHelp || '';
