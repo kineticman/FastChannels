@@ -301,6 +301,10 @@ def _parse_luma_fragment(content: str, source_channel_id: str) -> list[ProgramDa
                             season  = int(fact_m.group(1))
                             episode = int(fact_m.group(2))
                             break
+                    # guid encodes media type: plex://episode/... or plex://movie/...
+                    guid = data.get("guid") or ""
+                    guid_type = guid.split("://")[1].split("/")[0] if "://" in guid else None
+                    program_type = guid_type if guid_type in ("movie", "episode") else None
                     programs.append(ProgramData(
                         source_channel_id = source_channel_id,
                         title             = title,
@@ -312,6 +316,7 @@ def _parse_luma_fragment(content: str, source_channel_id: str) -> list[ProgramDa
                         rating            = rating,
                         season            = season,
                         episode           = episode,
+                        program_type      = program_type,
                     ))
                     break
     return programs
