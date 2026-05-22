@@ -111,30 +111,6 @@ class LocalNowScraper(BaseScraper):
             help_text="Optional market override such as ohColumbus,pbs-wosu. Leave blank to auto-discover.",
             default="",
         ),
-        ConfigField(
-            "program_size",
-            "Program Size",
-            field_type="number",
-            required=False,
-            help_text="Requested programme rows per channel sent to the Local Now API. The API currently ignores this and always returns exactly 5 programs per channel regardless of this value.",
-            default=10,
-        ),
-        ConfigField(
-            "resolve_best_variant",
-            "Resolve Best Variant",
-            field_type="toggle",
-            required=False,
-            help_text="If enabled, resolve master playlists to the highest-bandwidth media playlist at play time.",
-            default=True,
-        ),
-        ConfigField(
-            "prefer_session_m3u8",
-            "Prefer Session M3U8",
-            field_type="toggle",
-            required=False,
-            help_text="If enabled, use session_m3u8 before video_m3u8 when both are present.",
-            default=False,
-        ),
     ]
 
     HOME_URL = "https://localnow.com/"
@@ -169,9 +145,6 @@ class LocalNowScraper(BaseScraper):
 
         self._dma: Optional[str] = None
         self._market: Optional[str] = None
-        self._program_size: int = self._safe_int(self.config.get("program_size"), 10)
-        self._resolve_best_variant: bool = self._safe_bool(self.config.get("resolve_best_variant"), True)
-        self._prefer_session_m3u8: bool = self._safe_bool(self.config.get("prefer_session_m3u8"), False)
 
         self._channels_payload_cache: Optional[List[Dict[str, Any]]] = None
         self._channels_by_id: Dict[str, Dict[str, Any]] = {}
@@ -322,12 +295,7 @@ class LocalNowScraper(BaseScraper):
         self._ensure_runtime_bootstrapped()
         source_channel_id, slug = self._parse_internal_url(raw_url)
         playback = self._fetch_playback(source_channel_id=source_channel_id, slug=slug)
-        preferred = (
-            [playback.get("session_m3u8"), playback.get("video_m3u8")]
-            if self._prefer_session_m3u8
-            else [playback.get("video_m3u8"), playback.get("session_m3u8")]
-        )
-        return next((u for u in preferred if u), raw_url)
+        return next((u for u in [playback.get("video_m3u8"), playback.get("session_m3u8")] if u), raw_url)
 
     def resolve(self, raw_url: str) -> str:
         if not raw_url.startswith("localnow://"):
@@ -337,22 +305,15 @@ class LocalNowScraper(BaseScraper):
         source_channel_id, slug = self._parse_internal_url(raw_url)
         playback = self._fetch_playback(source_channel_id=source_channel_id, slug=slug)
 
-        preferred = []
-        if self._prefer_session_m3u8:
-            preferred = [playback.get("session_m3u8"), playback.get("video_m3u8")]
-        else:
-            preferred = [playback.get("video_m3u8"), playback.get("session_m3u8")]
-
-        stream_url = next((u for u in preferred if u), None)
+        stream_url = next((u for u in [playback.get("video_m3u8"), playback.get("session_m3u8")] if u), None)
         if not stream_url:
             logger.warning("[localnow] no playback URL for %s", source_channel_id)
             return raw_url
 
-        if self._resolve_best_variant:
-            try:
-                stream_url = self._resolve_best_variant_url(stream_url)
-            except Exception as exc:
-                logger.warning("[localnow] variant resolution failed for %s: %s", source_channel_id, exc)
+        try:
+            stream_url = self._resolve_best_variant_url(stream_url)
+        except Exception as exc:
+            logger.warning("[localnow] variant resolution failed for %s: %s", source_channel_id, exc)
 
         return stream_url
 
@@ -570,7 +531,6 @@ class LocalNowScraper(BaseScraper):
         self._ensure_runtime_bootstrapped()
         epg_url = self.EPG_URL_TMPL.format(host=self._dsp_host)
         params = {
-            "program_size": str(self._program_size),
             "dma": self._dma,
             "market": self._market,
         }
@@ -692,16 +652,3 @@ class LocalNowScraper(BaseScraper):
             return int(value)
         except Exception:
             return default
-
-    @staticmethod
-    def _safe_bool(value: Any, default: bool) -> bool:
-        if value is None:
-            return default
-        if isinstance(value, bool):
-            return value
-        s = str(value).strip().lower()
-        if s in {"1", "true", "yes", "on"}:
-            return True
-        if s in {"0", "false", "no", "off"}:
-            return False
-        return default
