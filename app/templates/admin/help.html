@@ -127,6 +127,7 @@
           <li><code>Enabled</code>: channel is included in your M3U / EPG output (set by you).</li>
           <li><code>DRM</code>: stream is protected — not playable in generic IPTV clients.</li>
           <li><code>Dead</code>: stream audit found this channel is not currently playable.</li>
+          <li><code>VOD</code>: stream audit detected on-demand content instead of a live feed — excluded from output.</li>
         </ul>
       </section>
 
@@ -173,12 +174,19 @@
       </section>
 
       <section class="card">
+        <h2>Scraping</h2>
+        <ul>
+          <li><strong>Scrape</strong>: refresh channels and EPG on the normal schedule.</li>
+          <li><strong>Force Full</strong>: clear and re-fetch everything from scratch — use when a source looks stale or after a long outage.</li>
+          <li><strong>Audit</strong>: health-check every stream for a source and automatically mark dead or DRM channels.</li>
+          <li>Sources run on their own schedule automatically. Use <strong>Configure</strong> to adjust frequency or set a clock-aligned start time.</li>
+        </ul>
+      </section>
+
+      <section class="card">
         <h2>Source Notes</h2>
         <ul>
-          <li><strong>Roku</strong>: some channels expose sparse future guide data; short EPG windows are expected.</li>
-          <li><strong>Sling Freestream</strong>: guide data works, but streams are DRM-only for generic IPTV clients.</li>
-          <li><strong>Amazon Prime Free</strong>: excluded from M3U output by default. Without cookie auth, channel discovery is limited.</li>
-          <li><strong>Samsung TV Plus</strong>: EPG covers approximately the current day. Region is configurable in source settings.</li>
+          <li><strong>Custom Channels</strong>: add any HLS/M3U8 stream by URL. FastChannels auto-detects special stream types (webcams, re-streaming proxies, etc.) and handles polling and header quirks automatically.</li>
           <li><strong>Pluto TV</strong>: session pool size is configurable in source settings if you have many concurrent viewers.</li>
         </ul>
       </section>
