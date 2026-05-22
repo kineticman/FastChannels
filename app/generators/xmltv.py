@@ -173,10 +173,12 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                 seen_categories: set[str] = set()
                 for cat in combined_cats:
                     key = cat.casefold()
-                    if key in seen_categories:
+                    normalized = _XMLTV_CAT_NORM.get(key, cat)
+                    norm_key = normalized.casefold()
+                    if norm_key in seen_categories:
                         continue
-                    seen_categories.add(key)
-                    SubElement(el, 'category', lang='en').text = _XMLTV_CAT_NORM.get(key, cat)
+                    seen_categories.add(norm_key)
+                    SubElement(el, 'category', lang='en').text = normalized
             # Always add source name as a category so clients can filter by provider
             src_name = ch_src_map.get(prog.channel_id)
             if src_name:

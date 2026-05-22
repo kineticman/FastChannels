@@ -914,10 +914,12 @@ def _esc(s):
 
 # Channels DVR tvc-guide-categories accepted values: Movie, Sports event, Series
 _GUIDE_CATEGORY_MAP = {
-    'movies': 'Movie',
-    'sports': 'Sports event',
-    'series': 'Series',
-    'tv shows': 'Series',
+    'movie':      'Movie',
+    'movies':     'Movie',
+    'sports':     'Sports event',
+    'sport':      'Sports event',
+    'series':     'Series',
+    'tv shows':   'Series',
     'television': 'Series',
 }
 
