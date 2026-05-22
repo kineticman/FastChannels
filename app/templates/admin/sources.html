@@ -2175,7 +2175,6 @@
     function renderConfigFields(sourceId, sourceName, schema, values) {
       const slingPrimaryKeys = new Set(['bearer_jwt']);
       const isSling = sourceName === 'sling';
-      const isAmazonPrimeFree = sourceName === 'amazon_prime_free';
       let primarySchema = schema;
       let advancedSchema = [];
       let advancedTitle = '';
@@ -2186,11 +2185,6 @@
         advancedSchema = schema.filter(f => !slingPrimaryKeys.has(f.key));
         advancedTitle = 'Advanced Sling Settings';
         advancedCopy = 'These values are mainly for troubleshooting or manual browser token capture. Most installs should leave them alone.';
-      } else if (isAmazonPrimeFree) {
-        primarySchema = [];
-        advancedSchema = schema;
-        advancedTitle = 'Advanced Amazon Settings';
-        advancedCopy = 'These values rarely need changes. Use them only if you are troubleshooting session capture or targeting a different Amazon locale.';
       } else if (sourceName === 'tcl') {
         return renderTCLConfig(sourceId, schema, values);
       } else if (sourceName === 'localnow') {
