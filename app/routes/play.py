@@ -88,6 +88,37 @@ _CUSTOM_STREAM_CACHE: dict[int, tuple[str, dict, float, str]] = {}
 _REDETECT_TTL = 300  # seconds
 _REDETECT_TTL_LIVE = 60  # seconds for rolling direct-video clips behind a live wrapper
 
+# Variant URL stored in Redis so ALL gunicorn workers share the same Wowza worker
+# session for custom HLS channels that have a master playlist.  Each master fetch
+# returns a random chunklist_w<id> — if workers hold different worker IDs the client
+# sees EXT-X-MEDIA-SEQUENCE from two independent counters → backward jumps → drop.
+# Redis key encodes (channel_id, master_stream_url) so it auto-invalidates when the
+# detection cache expires and a new token is issued.
+_CUSTOM_VARIANT_REDIS_KEY_PREFIX = 'custom_variant:'
+_CUSTOM_VARIANT_REDIS: 'redis.Redis | None' = None  # lazily initialised per worker
+
+
+def _custom_variant_redis() -> 'redis.Redis | None':
+    global _CUSTOM_VARIANT_REDIS
+    if _CUSTOM_VARIANT_REDIS is None:
+        try:
+            import redis as _r
+            from flask import current_app
+            _CUSTOM_VARIANT_REDIS = _r.from_url(
+                current_app.config['REDIS_URL'],
+                decode_responses=True,
+                socket_timeout=1,
+                socket_connect_timeout=1,
+            )
+        except Exception:
+            pass
+    return _CUSTOM_VARIANT_REDIS
+
+
+def _custom_variant_key(channel_id: int, stream_url: str) -> str:
+    import hashlib
+    return _CUSTOM_VARIANT_REDIS_KEY_PREFIX + str(channel_id) + ':' + hashlib.md5(stream_url.encode()).hexdigest()
+
 # Tracks the synthetic live manifest sequence per custom channel so clients see
 # a new media sequence whenever the upstream clip URL rotates.
 _CUSTOM_LIVE_SEQ: dict[int, tuple[str, int]] = {}
@@ -664,41 +695,83 @@ def custom_manifest_proxy(channel_id: str):
         custom_headers = channel.custom_headers or {}
         stream_url = channel.stream_url
 
-    try:
-        master_r = _requests.get(stream_url, headers=_custom_proxy_headers(channel, custom_headers), timeout=10)
-        if master_r.status_code in (401, 403) and channel.page_url:
-            fresh_url, fresh_headers, retry_info = _redetect_custom_stream_with_info(channel, ttl=0)
-            if fresh_url:
-                logger.info(
-                    '[custom-proxy] retrying master fetch for %s after %s using resolver=%s',
-                    raw_id,
-                    master_r.status_code,
-                    retry_info.get('resolver') or '-',
-                )
-                stream_url = fresh_url
-                custom_headers = fresh_headers
-                master_r = _requests.get(stream_url, headers=_custom_proxy_headers(channel, custom_headers), timeout=10)
-        master_r.raise_for_status()
-    except Exception as e:
-        logger.warning('[custom-proxy] master fetch failed for %s: %s', raw_id, e)
-        abort(502)
+    proxy_hdrs = _custom_proxy_headers(channel, custom_headers)
 
-    text = master_r.text
-    effective_url = master_r.url
+    # For master playlists: look up the cached variant URL from Redis so ALL gunicorn
+    # workers use the same Wowza worker ID (chunklist_w<id>) across polls.  Every
+    # master request returns a random worker with its own EXT-X-MEDIA-SEQUENCE counter;
+    # if two workers each get a different worker ID, the client sees the sequence
+    # alternate between independent counters → backward jumps → stream drop.
+    rdb = _custom_variant_redis()
+    rkey = _custom_variant_key(channel.id, stream_url) if rdb else None
+    text: str | None = None
+    effective_url: str = stream_url
 
-    # If it's a master playlist, resolve the best variant first
-    if '#EXT-X-STREAM-INF' in text:
-        best = _distro_pick_best_variant(text, effective_url)
-        if not best:
-            abort(502)
+    cached_variant_url = rdb.get(rkey) if rdb and rkey else None
+    if cached_variant_url:
         try:
-            variant_r = _requests.get(best, headers=_custom_proxy_headers(channel, custom_headers), timeout=10)
-            variant_r.raise_for_status()
-            text = variant_r.text
-            effective_url = variant_r.url
+            cv_r = _requests.get(cached_variant_url, headers=proxy_hdrs, timeout=10)
+            if cv_r.status_code == 200:
+                text = cv_r.text
+                effective_url = cv_r.url
+            else:
+                logger.debug('[custom-proxy] cached variant %s for channel %d, re-resolving',
+                             cv_r.status_code, channel.id)
+                try:
+                    rdb.delete(rkey)
+                except Exception:
+                    pass
         except Exception as e:
-            logger.warning('[custom-proxy] variant fetch failed for %s: %s', raw_id, e)
+            logger.debug('[custom-proxy] cached variant fetch failed for channel %d: %s', channel.id, e)
+            try:
+                rdb.delete(rkey)
+            except Exception:
+                pass
+
+    if text is None:
+        try:
+            master_r = _requests.get(stream_url, headers=proxy_hdrs, timeout=10)
+            if master_r.status_code in (401, 403) and channel.page_url:
+                fresh_url, fresh_headers, retry_info = _redetect_custom_stream_with_info(channel, ttl=0)
+                if fresh_url:
+                    logger.info(
+                        '[custom-proxy] retrying master fetch for %s after %s using resolver=%s',
+                        raw_id,
+                        master_r.status_code,
+                        retry_info.get('resolver') or '-',
+                    )
+                    stream_url = fresh_url
+                    custom_headers = fresh_headers
+                    proxy_hdrs = _custom_proxy_headers(channel, custom_headers)
+                    if rdb:
+                        rkey = _custom_variant_key(channel.id, stream_url)
+                    master_r = _requests.get(stream_url, headers=proxy_hdrs, timeout=10)
+            master_r.raise_for_status()
+        except Exception as e:
+            logger.warning('[custom-proxy] master fetch failed for %s: %s', raw_id, e)
             abort(502)
+
+        text = master_r.text
+        effective_url = master_r.url
+
+        # If it's a master playlist, resolve and store the variant URL in Redis
+        if '#EXT-X-STREAM-INF' in text:
+            best = _distro_pick_best_variant(text, effective_url)
+            if not best:
+                abort(502)
+            try:
+                variant_r = _requests.get(best, headers=proxy_hdrs, timeout=10)
+                variant_r.raise_for_status()
+                text = variant_r.text
+                effective_url = variant_r.url
+                if rdb and rkey:
+                    try:
+                        rdb.set(rkey, best, ex=7200)  # 2h; relies on failure path to refresh early
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning('[custom-proxy] variant fetch failed for %s: %s', raw_id, e)
+                abort(502)
 
     # Unless the channel explicitly requested segment proxying, leave segments
     # as direct absolute URLs.  YouTube/googlevideo HLS segment URLs already
