@@ -302,9 +302,15 @@ def _parse_luma_fragment(content: str, source_channel_id: str) -> list[ProgramDa
                             episode = int(fact_m.group(2))
                             break
                     # guid encodes media type: plex://episode/... or plex://movie/...
+                    # Only trust it when there's real program-specific metadata; gap-fill
+                    # filler slots (title == channel name, no ep_title, no S/E) use a
+                    # generic guid that misidentifies stand-up specials etc. as movies.
                     guid = data.get("guid") or ""
                     guid_type = guid.split("://")[1].split("/")[0] if "://" in guid else None
-                    program_type = guid_type if guid_type in ("movie", "episode") else None
+                    if guid_type in ("movie", "episode") and (ep_title or season or episode):
+                        program_type = guid_type
+                    else:
+                        program_type = None
                     programs.append(ProgramData(
                         source_channel_id = source_channel_id,
                         title             = title,
