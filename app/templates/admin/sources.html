@@ -1252,6 +1252,11 @@
       if (dashRow) dashRow.classList.toggle('disabled', !enabled);
       if (runBtn) runBtn.disabled = !enabled;
       if (auditBtn) auditBtn.disabled = !enabled;
+      if (dashRow?.dataset.custom === 'true') {
+        document.querySelectorAll(`.configure-btn-display[data-source-id="${sourceId}"]`).forEach(btn => {
+          btn.disabled = !enabled;
+        });
+      }
       if (intervalInput)   intervalInput.disabled   = !enabled;
       if (modeSelect)      modeSelect.disabled       = !enabled;
       if (cronSelect)      cronSelect.disabled        = !enabled;
