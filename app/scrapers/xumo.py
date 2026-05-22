@@ -250,8 +250,15 @@ class XumoScraper(BaseScraper):
                                 continue
                             seen.add(dedupe_key)
 
+                            content_type = str(asset.get("contentType") or "").upper()
                             _pfx = asset_id[:2]
-                            if _pfx in ("MV", "XM", "XT"):
+                            if content_type == "EPISODIC":
+                                _program_type = "episode"
+                            elif content_type in ("MOVIE", "FEATURE"):
+                                _program_type = "movie"
+                            elif _pfx in ("MV", "XM"):
+                                # MV = Movie, XM = Xumo Movie — reliably movie content
+                                # XT omitted: full asset shows contentType=EPISODIC for many XT IDs
                                 _program_type = "movie"
                             elif _pfx == "SH":
                                 _program_type = "episode"
