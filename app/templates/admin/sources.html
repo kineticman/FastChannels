@@ -276,6 +276,15 @@
     .region-select option { padding: 0.45rem 0.55rem; border-radius: 6px; }
     .region-custom { margin-top: 0.85rem; }
     .region-summary { margin-top: 0.45rem; font-size: 0.76rem; color: var(--text-muted); }
+    .region-checks { display: flex; gap: 0.6rem; margin-top: 0.3rem; }
+    .region-check-pill {
+      display: flex; align-items: center; gap: 0.45rem;
+      padding: 0.45rem 0.85rem; border: 1.5px solid var(--border); border-radius: 8px;
+      cursor: pointer; font-size: 0.84rem; color: var(--text); user-select: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .region-check-pill input[type=checkbox] { accent-color: var(--focus-accent); width: 1rem; height: 1rem; cursor: pointer; }
+    .region-check-pill:has(input:checked) { border-color: var(--focus-accent); background: color-mix(in srgb, var(--focus-accent) 10%, transparent); }
     .config-actions {
       display: flex; align-items: center; justify-content: flex-end; gap: 0.7rem; margin-top: 1rem;
     }
@@ -1925,6 +1934,45 @@
         </div>`;
     }
 
+    function tclUpdateCountry(sourceId) {
+      const container = document.getElementById(`source-config-${sourceId}`);
+      const checkboxes = [...container.querySelectorAll('.tcl-region-cb')];
+      const checked = checkboxes.filter(cb => cb.checked);
+      if (checked.length === 0) {
+        const fallback = checkboxes.find(cb => cb.value === 'US') || checkboxes[0];
+        if (fallback) fallback.checked = true;
+      }
+      const values = [...container.querySelectorAll('.tcl-region-cb:checked')].map(cb => cb.value);
+      document.getElementById(`cfg-${sourceId}-country_code`).value = values.join(',');
+    }
+
+    function renderTCLConfig(sourceId, schema, values) {
+      const selected = new Set(String(values.country_code || 'US').split(/[,\s|/]+/).map(v => v.trim().toUpperCase()).filter(Boolean));
+      const options = [
+        { value: 'US', label: 'United States' },
+        { value: 'CA', label: 'Canada' },
+      ];
+      const pills = options.map(o =>
+        `<label class="region-check-pill">
+          <input type="checkbox" class="tcl-region-cb" value="${o.value}" ${selected.has(o.value) ? 'checked' : ''} onchange="tclUpdateCountry(${sourceId})">
+          ${escapeHtml(o.label)}
+        </label>`
+      ).join('');
+      return `
+        <div class="config-title">Source Settings</div>
+        <div class="config-note">Select one or more regions. Channels are merged into a single TCL TV+ source.</div>
+        <div class="field field-full">
+          <label>Country</label>
+          <div class="region-checks">${pills}</div>
+          <input type="hidden" id="cfg-${sourceId}-country_code" data-key="country_code" value="${escapeHtml([...selected].join(','))}">
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
+    }
+
     function renderSamsungConfig(sourceId, schema, values) {
       const regionField = schema.find(f => f.key === 'region') || {
         key: 'region',
@@ -2143,6 +2191,8 @@
         advancedSchema = schema;
         advancedTitle = 'Advanced Amazon Settings';
         advancedCopy = 'These values rarely need changes. Use them only if you are troubleshooting session capture or targeting a different Amazon locale.';
+      } else if (sourceName === 'tcl') {
+        return renderTCLConfig(sourceId, schema, values);
       } else if (sourceName === 'localnow') {
         return renderLocalNowConfig(sourceId, schema, values);
       } else if (sourceName === 'distro') {

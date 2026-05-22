@@ -53,7 +53,7 @@ _WIN1252_REMAP = str.maketrans({
 _CHNUM_NAMESPACE_BLOCK = 100000
 _MASTER_GRACENOTE_START = 100000
 _FEED_NAMESPACE_BASE = 200000
-_REGION_LABEL_SOURCES = {"pluto", "samsung"}
+_REGION_LABEL_SOURCES = {"pluto", "samsung", "tcl"}
 
 # Gracenote ID prefixes recognised by Channels DVR
 _GRACENOTE_PREFIX_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')

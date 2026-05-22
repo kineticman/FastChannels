@@ -33,6 +33,7 @@ _VALID_RATINGS = frozenset({
 })
 
 
+import re
 import re as _re
 
 # "Bones S06: Twisted Bones In The Melted Truck 608"
@@ -114,7 +115,8 @@ class TCLScraper(BaseScraper):
         ConfigField(
             key='country_code', label='Country',
             field_type='select', default='US',
-            help_text='Only US and CA are supported.',
+            multiple=True,
+            help_text='Select one or more regions. Channels are merged into one source.',
             options=[
                 {'value': 'US', 'label': 'United States'},
                 {'value': 'CA', 'label': 'Canada'},
@@ -122,9 +124,20 @@ class TCLScraper(BaseScraper):
         ),
     ]
 
+    def _geos(self) -> list[str]:
+        raw = self.config.get('country_code', 'US')
+        seen: set[str] = set()
+        codes: list[str] = []
+        for part in re.split(r'[,|/\s]+', raw):
+            c = part.strip().upper()
+            if c in {'US', 'CA'} and c not in seen:
+                codes.append(c)
+                seen.add(c)
+        return codes or ['US']
+
     def __init__(self, config: dict = None):
         super().__init__(config)
-        self.country_code = self.config.get('country_code', 'US')
+        self.country_code = self._geos()[0]
         self.state_code = 'OH'
         self.user_id = self._DEVICE_ID
         self.timeout = 20
@@ -140,14 +153,14 @@ class TCLScraper(BaseScraper):
             ),
         })
 
-    def _common_params(self) -> dict:
+    def _common_params(self, country_code: str | None = None) -> dict:
         return {
             "userId": self.user_id,
             "device_type": "web",
             "device_model": "web",
             "device_id": self.user_id,
             "app_version": "1.0",
-            "country_code": self.country_code,
+            "country_code": country_code or self.country_code,
             "state_code": self.state_code,
         }
 
@@ -177,70 +190,69 @@ class TCLScraper(BaseScraper):
         return url
 
     def fetch_channels(self) -> List[ChannelData]:
-        livetab = self._get_json("/api/metadata/v2/livetab", params=self._common_params())
-        categories = livetab.get("lines", [])
         deduped: Dict[str, ChannelData] = {}
 
-        for cat in categories:
-            cat_id = cat["id"]
-            cat_name = cat.get("name")
-            
-            params = self._common_params()
-            params["category_id"] = cat_id
-            try:
-                payload = self._get_json("/api/metadata/v1/epg/programlist/by/category", params=params)
-            except Exception as e:
-                logger.warning(f"Failed to fetch category {cat_name} ({cat_id}): {e}")
-                continue
+        for country_code in self._geos():
+            livetab = self._get_json("/api/metadata/v2/livetab", params=self._common_params(country_code))
+            categories = livetab.get("lines", [])
 
-            is_spanish_cat = (cat_name or "").lower() in _SPANISH_CAT_NAMES
+            for cat in categories:
+                cat_id = cat["id"]
+                cat_name = cat.get("name")
 
-            for ch in payload.get("channels", []):
-                bundle_id = str(ch.get("bundle_id") or ch.get("id"))
-                name = ch.get("name", "")
+                params = self._common_params(country_code)
+                params["category_id"] = cat_id
+                try:
+                    payload = self._get_json("/api/metadata/v1/epg/programlist/by/category", params=params)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch category {cat_name} ({cat_id}): {e}")
+                    continue
 
-                category = category_for_channel(name, cat_name) or infer_category_from_name(name)
-                language = 'es' if is_spanish_cat else infer_language_from_metadata(name)
+                is_spanish_cat = (cat_name or "").lower() in _SPANISH_CAT_NAMES
 
-                if bundle_id not in deduped:
-                    logo_url = ch.get("logo_color") or ch.get("logo_white")
-                    source_tag = ch.get("source") or ""
-                    media_url = ch.get("media") or ""
-                    stream_url = "tcl://" + bundle_id + "?" + urlencode({
-                        "source": source_tag,
-                        "media": media_url,
-                    })
+                for ch in payload.get("channels", []):
+                    bundle_id = str(ch.get("bundle_id") or ch.get("id"))
+                    name = ch.get("name", "")
 
-                    deduped[bundle_id] = ChannelData(
-                        source_channel_id=bundle_id,
-                        name=name,
-                        stream_url=stream_url,
-                        logo_url=self._fix_url(logo_url),
-                        category=category,
-                        language=language,
-                        description=ch.get("description"),
-                    )
-                else:
-                    if category and not deduped[bundle_id].category:
-                        deduped[bundle_id].category = category
-                    if language == 'es' and deduped[bundle_id].language != 'es':
-                        deduped[bundle_id].language = 'es'
-        
-        # Final fallback for anything still missing
+                    category = category_for_channel(name, cat_name) or infer_category_from_name(name)
+                    language = 'es' if is_spanish_cat else infer_language_from_metadata(name)
+
+                    if bundle_id not in deduped:
+                        logo_url = ch.get("logo_color") or ch.get("logo_white")
+                        source_tag = ch.get("source") or ""
+                        media_url = ch.get("media") or ""
+                        stream_url = "tcl://" + bundle_id + "?" + urlencode({
+                            "source": source_tag,
+                            "media": media_url,
+                        })
+
+                        deduped[bundle_id] = ChannelData(
+                            source_channel_id=bundle_id,
+                            name=name,
+                            stream_url=stream_url,
+                            logo_url=self._fix_url(logo_url),
+                            category=category,
+                            language=language,
+                            country=country_code,
+                            description=ch.get("description"),
+                        )
+                    else:
+                        # Shared channel already claimed by an earlier region — only fill gaps
+                        if category and not deduped[bundle_id].category:
+                            deduped[bundle_id].category = category
+                        if language == 'es' and deduped[bundle_id].language != 'es':
+                            deduped[bundle_id].language = 'es'
+
         for ch in deduped.values():
             if not ch.category:
                 ch.category = "Entertainment"
-        
+
         return list(deduped.values())
 
     def fetch_epg(self, channels: List[ChannelData], **kwargs) -> List[ProgramData]:
         all_programs: List[ProgramData] = []
-        
-        livetab = self._get_json("/api/metadata/v2/livetab", params=self._common_params())
-        categories = livetab.get("lines", [])
 
         seen_programs: set = set()
-        # raw stub list: (bundle_id, prog_id, start_iso, end_iso, ch_poster_url)
         stubs: List[tuple] = []
 
         now = datetime.now(timezone.utc)
@@ -249,30 +261,34 @@ class TCLScraper(BaseScraper):
             "end": (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
-        for cat in categories:
-            cat_id = cat["id"]
-            params = self._common_params()
-            params["category_id"] = cat_id
-            params.update(range_params)
-            try:
-                payload = self._get_json("/api/metadata/v1/epg/programlist/by/category", params=params)
-            except Exception:
-                continue
+        for country_code in self._geos():
+            livetab = self._get_json("/api/metadata/v2/livetab", params=self._common_params(country_code))
+            categories = livetab.get("lines", [])
 
-            for ch in payload.get("channels", []):
-                bundle_id = str(ch.get("bundle_id") or ch.get("id"))
-                ch_poster = ch.get("poster_h_small") or ch.get("poster_h_medium") or ch.get("poster_v_small")
-                ch_poster_url = self._fix_url(ch_poster)
+            for cat in categories:
+                cat_id = cat["id"]
+                params = self._common_params(country_code)
+                params["category_id"] = cat_id
+                params.update(range_params)
+                try:
+                    payload = self._get_json("/api/metadata/v1/epg/programlist/by/category", params=params)
+                except Exception:
+                    continue
 
-                for prog in (ch.get("programs") or []):
-                    prog_id = prog.get("id")
-                    if not prog_id:
-                        continue
-                    unique_key = f"{bundle_id}:{prog_id}:{prog.get('start')}"
-                    if unique_key in seen_programs:
-                        continue
-                    seen_programs.add(unique_key)
-                    stubs.append((bundle_id, prog_id, prog.get("start"), prog.get("end"), ch_poster_url, prog.get("title", "")))
+                for ch in payload.get("channels", []):
+                    bundle_id = str(ch.get("bundle_id") or ch.get("id"))
+                    ch_poster = ch.get("poster_h_small") or ch.get("poster_h_medium") or ch.get("poster_v_small")
+                    ch_poster_url = self._fix_url(ch_poster)
+
+                    for prog in (ch.get("programs") or []):
+                        prog_id = prog.get("id")
+                        if not prog_id:
+                            continue
+                        unique_key = f"{bundle_id}:{prog_id}:{prog.get('start')}"
+                        if unique_key in seen_programs:
+                            continue
+                        seen_programs.add(unique_key)
+                        stubs.append((bundle_id, prog_id, prog.get("start"), prog.get("end"), ch_poster_url, prog.get("title", "")))
 
         # Batch-fetch program details (desc, rating, season, episode, poster)
         details = self._fetch_program_details([s[1] for s in stubs])
