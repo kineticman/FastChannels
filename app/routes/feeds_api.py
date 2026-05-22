@@ -10,7 +10,7 @@ from ..generators.m3u import get_global_chnum_overlaps, _selected_channel_stubs,
 from ..models import Channel, Feed, FeedChannelNumber, Source
 from ..url import public_base_url
 from ..xml_cache import delete_xml_artifact, invalidate_xml_cache
-from .tasks import trigger_xml_refresh
+from .tasks import trigger_xml_refresh, trigger_xml_refresh_catchup
 
 feeds_api_bp = Blueprint('feeds_api', __name__)
 SYSTEM_FEED_SLUGS = {'default'}
@@ -157,7 +157,11 @@ def create_feed():
     err = _safe_commit()
     if err:
         return err
-    _invalidate_and_refresh_xml()
+    invalidate_xml_cache()
+    if not trigger_xml_refresh():
+        # A refresh was already running when the feed was created; it won't include
+        # this new feed.  Queue a catch-up job that will run after it finishes.
+        trigger_xml_refresh_catchup()
     return jsonify(feed.to_dict(public_base_url())), 201
 
 

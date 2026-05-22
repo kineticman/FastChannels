@@ -214,7 +214,8 @@ def trigger_stream_audit_recheck(source_name: str, channel_ids: list):
         threading.Thread(target=run_stream_audit_recheck, args=(source_name, channel_ids), daemon=True).start()
 
 
-def trigger_xml_refresh():
+def trigger_xml_refresh() -> bool:
+    """Returns True if a job was enqueued, False if skipped due to debounce."""
     try:
         q = get_fast_queue()
         job_id = 'xml-refresh'
@@ -223,17 +224,35 @@ def trigger_xml_refresh():
         acquired = q.connection.set(f'lock:{job_id}', '1', nx=True, ex=10)
         if not acquired:
             logger.info('XML artifact refresh already queued/running')
-            return
+            return False
         if _job_already_active(q, job_id):
             logger.info('XML artifact refresh already queued/running')
-            return
+            return False
         q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id=job_id)
         logger.info('Enqueued XML artifact refresh')
+        return True
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for XML refresh')
         import threading
         from app.worker import run_xml_refresh
         threading.Thread(target=run_xml_refresh, daemon=True).start()
+        return True
+
+
+def trigger_xml_refresh_catchup() -> None:
+    """Enqueue a catch-up XML refresh using a separate job ID so it queues behind
+    any currently-running xml-refresh job.  Used when a new feed is created while
+    a refresh is already in-flight (which won't include the new feed)."""
+    try:
+        q = get_fast_queue()
+        job_id = 'xml-refresh-catchup'
+        if _job_already_active(q, job_id):
+            logger.info('XML artifact catch-up refresh already queued')
+            return
+        q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id=job_id)
+        logger.info('Enqueued XML artifact catch-up refresh')
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), skipping catch-up XML refresh: {e}')
 
 
 def trigger_source_channel_purge(source_id: int):
