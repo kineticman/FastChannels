@@ -232,7 +232,7 @@
     .col-filter-select {
       background: var(--bg); border: 1px solid transparent; color: var(--text-muted);
       font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
-      letter-spacing: 0.04em; cursor: pointer; padding: 0.1rem 0.2rem;
+      letter-spacing: 0.04em; cursor: pointer; padding: 0.1rem 0.2rem 0.1rem 0;
       border-radius: 4px; outline: none; max-width: 100px;
     }
     .col-filter-select:hover { border-color: var(--border); color: var(--text-soft); }
@@ -716,7 +716,8 @@
     th.check-col { width: 40px; }
     td { padding: 0.6rem 0.6rem; font-size: 0.85rem; border-bottom: 1px solid var(--bg); vertical-align: middle; }
     td.actions-col, td.toggle-col { padding-left: 0.25rem; padding-right: 0.25rem; }
-    th.actions-col, th.toggle-col { padding-left: 0.25rem; padding-right: 0.25rem; }
+    th.actions-col { padding-left: calc(0.25rem + 1.4rem + 0.2rem); padding-right: 0.25rem; }
+    th.toggle-col { padding-left: 0.25rem; padding-right: 0.25rem; }
     tr:last-child td { border-bottom: none; }
     tr.disabled td:not(.toggle-col) { opacity: 0.4; }
     tr:hover td { background: var(--accent-row-hover); }
@@ -1576,7 +1577,14 @@
                 {% endfor %}
               </select>
             </th>
-            <th>Region</th>
+            <th>
+              <select class="col-filter-select{% if country_filter %} col-filter-active{% endif %}" onchange="filterBy('country', this.value)" title="Filter by region">
+                <option value="">Region</option>
+                {% for c, count in countries %}
+                <option value="{{ c }}" {% if country_filter == c %}selected{% endif %}>{{ c }}</option>
+                {% endfor %}
+              </select>
+            </th>
             <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">Ch# <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
             <th class="actions-col">Actions</th>
@@ -1618,7 +1626,7 @@
               {% set _ = hover_parts.append('Last seen: ' ~ (ch.last_seen_at | localtime)) %}
             {% endif %}
             <td class="ch-name-td"
-                title="{{ ch.name }}{% if hover_parts %} · {{ hover_parts|join(' · ') }}{% endif %}"
+                title="Click to preview stream{% if hover_parts %} · {{ hover_parts|join(' · ') }}{% endif %}"
                 onclick="openPreview({{ ch.id }})">
               <div class="ch-name-wrap"><strong>{{ ch.name }}</strong></div>
             </td>
