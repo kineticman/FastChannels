@@ -45,5 +45,6 @@ Dev/
 stress_test.py
 probe_amazon.py
 docker-compose.override.yml
+docker-compose.test.yml
 CLAUDE.md
 tests/
