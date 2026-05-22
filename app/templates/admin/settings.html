@@ -834,6 +834,30 @@ async function downloadDbBackup() {
 // ── Timezone searchable combobox ───────────────────────────────────────────
 (function () {
   const TZ_LIST = {{ timezone_choices | tojson }};
+  const TZ_ALIAS_MAP = {
+    'America/New_York': ['eastern', 'east coast', 'new york'],
+    'America/Chicago': ['central', 'chicago'],
+    'America/Denver': ['mountain', 'denver'],
+    'America/Los_Angeles': ['pacific', 'west coast', 'los angeles', 'la'],
+    'America/Phoenix': ['arizona', 'phoenix'],
+    'America/Anchorage': ['alaska', 'anchorage'],
+    'Pacific/Honolulu': ['hawaii', 'honolulu'],
+  };
+  const TZ_ENTRIES = TZ_LIST.map(tz => {
+    const parts = tz.split('/');
+    const locationParts = parts.slice(1).flatMap(part => part.split('_'));
+    const searchTokens = new Set([
+      tz.toLowerCase(),
+      tz.toLowerCase().replaceAll('_', ' '),
+      ...parts.map(part => part.toLowerCase()),
+      ...locationParts.map(part => part.toLowerCase()),
+      ...(TZ_ALIAS_MAP[tz] || []),
+    ]);
+    return {
+      value: tz,
+      searchText: Array.from(searchTokens).join(' '),
+    };
+  });
 
   const input    = document.getElementById('tz-input');
   const dropdown = document.getElementById('tz-dropdown');
@@ -853,10 +877,10 @@ async function downloadDbBackup() {
   }
 
   function renderDropdown(query) {
-    const q = query.toLowerCase();
+    const q = query.trim().toLowerCase();
     const matches = q
-      ? TZ_LIST.filter(tz => tz.toLowerCase().includes(q)).slice(0, 100)
-      : TZ_LIST.slice(0, 100);
+      ? TZ_ENTRIES.filter(entry => entry.searchText.includes(q)).slice(0, 100)
+      : TZ_ENTRIES.slice(0, 100);
 
     dropdown.innerHTML = '';
     activeIdx = -1;
@@ -867,14 +891,14 @@ async function downloadDbBackup() {
       el.textContent = 'No timezones match';
       dropdown.appendChild(el);
     } else {
-      matches.forEach((tz, i) => {
+      matches.forEach((entry, i) => {
         const el = document.createElement('div');
         el.className = 'tz-option';
-        el.textContent = tz;
-        el.dataset.value = tz;
+        el.textContent = entry.value;
+        el.dataset.value = entry.value;
         el.addEventListener('mousedown', e => {
           e.preventDefault(); // keep focus on input
-          input.value = tz;
+          input.value = entry.value;
           closeDropdown();
         });
         dropdown.appendChild(el);
