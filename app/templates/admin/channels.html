@@ -1955,6 +1955,7 @@
     }
 
     function _teardownPreviewPlayer() {
+      _previewDetectingFor = null;
       const video = document.getElementById('preview-player');
       _stopStatsLoop();
       _statsVisible = false;
@@ -1991,30 +1992,61 @@
       await _loadPreviewContent(_previewList[_previewIndex], content);
     }
 
-    async function _loadPreviewContent(channelId, content) {
+    function _previewStreamSectionHtml(data, detecting) {
+      const ch = data.channel || {};
+      const playUrl = data.play_url;
+      const previewUrl = data.preview_url || data.play_url;
+      const previewWarning = data.preview_warning || '';
+      const playbackMode = String(ch.playback_mode || 'hls').toLowerCase();
+      const streamType = String(ch.stream_type || '').toLowerCase();
+      const previewHint = !detecting && previewWarning
+        ? `<div class="modal-preview modal-preview--warning">${escapeHtml(previewWarning)}</div>`
+        : '';
+      const unsupportedNote = !detecting && playbackMode === 'unsupported'
+        ? `<div class="modal-preview">This stream type is not supported by the built-in browser preview. Use <strong>Open Externally</strong> or VLC for playback.</div>`
+        : '';
+      const playbackNote = !detecting && !playUrl
+        ? `<div class="modal-preview">Browser preview is not available for this source or channel. You can still use the program details here for quick guide verification.</div>`
+        : '';
+      const playBtn = detecting
+        ? `<button class="preview-action-btn primary" disabled>Detecting stream…</button>`
+        : (previewUrl ? `<button class="preview-action-btn primary" onclick="loadPreviewPlayer('${escapeHtml(previewUrl)}', '${escapeHtml(playbackMode)}', '${escapeHtml(streamType)}')">Play Here</button>` : '');
+      return `
+        ${previewHint}${unsupportedNote}${playbackNote}
+        <div class="preview-actions">
+          ${playBtn}
+          ${playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open Externally</a>` : ''}
+          ${playUrl ? `<a class="preview-action-btn neutral" href="${escapeHtml(playUrl.replace('.m3u8', '.m3u'))}" title="Download playlist and open in VLC">Open in VLC</a>` : ''}
+          <button class="preview-action-btn neutral" onclick="closePreviewModal()">Close</button>
+        </div>
+      `;
+    }
+
+    let _previewDetectingFor = null;
+
+    async function _detectPreviewStream(channelId) {
+      _previewDetectingFor = channelId;
       try {
         const r = await fetch(`/api/channels/${channelId}/preview`);
+        const data = await r.json();
+        if (_previewDetectingFor !== channelId) return;
+        if (!r.ok) return;
+        const section = document.getElementById('preview-stream-section');
+        if (section) section.innerHTML = _previewStreamSectionHtml(data, false);
+      } catch (_e) {
+        // silently ignore; modal still works via Open Externally / VLC
+      }
+    }
+
+    async function _loadPreviewContent(channelId, content) {
+      try {
+        const r = await fetch(`/api/channels/${channelId}/preview?detect=0`);
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
 
         const ch = data.channel || {};
-        const playUrl = data.play_url;
-        const previewUrl = data.preview_url || data.play_url;
-        const previewWarning = data.preview_warning || '';
-        const playbackMode = String(ch.playback_mode || 'hls').toLowerCase();
-        const streamType = String(ch.stream_type || '').toLowerCase();
-        const useNativeVideo = playbackMode === 'native' || ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(streamType);
         const warning = ch.disable_reason
           ? `<div class="modal-preview">This channel is currently flagged <strong>${escapeHtml(ch.disable_reason)}</strong>. Preview playback may fail or may have been disabled for a reason.</div>`
-          : '';
-        const previewHint = previewWarning
-          ? `<div class="modal-preview modal-preview--warning">${escapeHtml(previewWarning)}</div>`
-          : '';
-        const unsupportedNote = playbackMode === 'unsupported'
-          ? `<div class="modal-preview">This stream type is not supported by the built-in browser preview. Use <strong>Open Externally</strong> or VLC for playback.</div>`
-          : '';
-        const playbackNote = !playUrl
-          ? `<div class="modal-preview">Browser preview is not available for this source or channel. You can still use the program details here for quick guide verification.</div>`
           : '';
         const navRow = _previewList && _previewList.length > 1 ? `
           <div class="preview-nav-row">
@@ -2044,10 +2076,7 @@
               ? `📅 Channel has <strong>${data.epg_programs}</strong> program${data.epg_programs !== 1 ? 's' : ''} and <strong>${data.epg_hours}h</strong> of program data available from source`
               : '📅 No program data available from source'}
           </div>
-          ${previewHint}
           ${warning}
-          ${unsupportedNote}
-          ${playbackNote}
           <div class="preview-grid">
             ${renderProgramCard('Now Playing', data.current_program, ch.category)}
             ${renderProgramCard('Up Next', data.next_program, ch.category)}
@@ -2055,12 +2084,7 @@
           <div class="preview-note" style="margin-top: -0.25rem; margin-bottom: 0.9rem;">
             Guide details shown here come from the FastChannels scraper for this source, not from Gracenote.
           </div>
-          <div class="preview-actions">
-            ${previewUrl ? `<button class="preview-action-btn primary" onclick="loadPreviewPlayer('${escapeHtml(previewUrl)}', '${escapeHtml(playbackMode)}', '${escapeHtml(streamType)}')">Play Here</button>` : ''}
-            ${playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open Externally</a>` : ''}
-            ${playUrl ? `<a class="preview-action-btn neutral" href="${escapeHtml(playUrl.replace('.m3u8', '.m3u'))}" title="Download playlist and open in VLC">Open in VLC</a>` : ''}
-            <button class="preview-action-btn neutral" onclick="closePreviewModal()">Close</button>
-          </div>
+          <div id="preview-stream-section">${_previewStreamSectionHtml(data, data.needs_detection)}</div>
           <div class="preview-player-wrap" id="preview-player-wrap">
             <div class="preview-video-wrap">
               <video id="preview-player" controls playsinline preload="none"></video>
@@ -2078,6 +2102,10 @@
             </div>
           </div>
         `;
+
+        if (data.needs_detection) {
+          _detectPreviewStream(channelId);
+        }
       } catch (e) {
         content.innerHTML = `
           <h2>Preview</h2>

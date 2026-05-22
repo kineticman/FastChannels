@@ -1748,6 +1748,9 @@ def preview_channel(channel_id):
     preview_url = None
     preview_warning = None
     preview_warning_kind = None
+    needs_detection = False
+
+    fast_mode = request.args.get('detect', '1') == '0'
 
     def _host_of(url: str | None) -> str:
         return (urlsplit(url or '').netloc or '').lower()
@@ -1766,38 +1769,45 @@ def preview_channel(channel_id):
         )
 
     if ch.source and ch.source.name == 'custom':
-        try:
-            from ..scrapers.stream_detector import StreamDetector
-            from .play import _redetect_custom_stream
+        if fast_mode and ch.page_url:
+            needs_detection = True
+            if stream_type in {'mp4', 'webm', 'mov', 'mkv', 'direct'} and ch.stream_url:
+                preview_url = ch.stream_url
+            elif ch.source_channel_id:
+                preview_url = f'/play/custom/{ch.source_channel_id}/proxy.m3u8'
+        else:
+            try:
+                from ..scrapers.stream_detector import StreamDetector
+                from .play import _redetect_custom_stream
 
-            resolved_url = None
-            if ch.page_url:
-                resolved_url, _ = _redetect_custom_stream(ch)
-            if resolved_url:
-                resolved_type = (StreamDetector.infer_stream_type(resolved_url) or stream_type or '').strip().lower()
-                stream_type = resolved_type
-                if resolved_type in {'mp4', 'webm', 'mov', 'mkv', 'direct'}:
-                    preview_url = resolved_url
-                elif resolved_type == 'hls':
+                resolved_url = None
+                if ch.page_url:
+                    resolved_url, _ = _redetect_custom_stream(ch)
+                if resolved_url:
+                    resolved_type = (StreamDetector.infer_stream_type(resolved_url) or stream_type or '').strip().lower()
+                    stream_type = resolved_type
+                    if resolved_type in {'mp4', 'webm', 'mov', 'mkv', 'direct'}:
+                        preview_url = resolved_url
+                    elif resolved_type == 'hls':
+                        preview_url = f'/play/custom/{ch.source_channel_id}/proxy.m3u8'
+                        if _is_youtube_host(ch.page_url) or _is_googlevideo_host(resolved_url):
+                            preview_warning = (
+                                'This is a YouTube-style HLS stream. '
+                                'The built-in browser preview may not play reliably; use "Open Externally" if preview fails.'
+                            )
+                            preview_warning_kind = 'youtube-hls'
+                elif stream_type == 'hls':
                     preview_url = f'/play/custom/{ch.source_channel_id}/proxy.m3u8'
-                    if _is_youtube_host(ch.page_url) or _is_googlevideo_host(resolved_url):
+                    if _is_youtube_host(ch.page_url) or _is_googlevideo_host(ch.stream_url):
                         preview_warning = (
                             'This is a YouTube-style HLS stream. '
                             'The built-in browser preview may not play reliably; use "Open Externally" if preview fails.'
                         )
                         preview_warning_kind = 'youtube-hls'
-            elif stream_type == 'hls':
-                preview_url = f'/play/custom/{ch.source_channel_id}/proxy.m3u8'
-                if _is_youtube_host(ch.page_url) or _is_googlevideo_host(ch.stream_url):
-                    preview_warning = (
-                        'This is a YouTube-style HLS stream. '
-                        'The built-in browser preview may not play reliably; use "Open Externally" if preview fails.'
-                    )
-                    preview_warning_kind = 'youtube-hls'
-            elif stream_type in {'mp4', 'webm', 'mov', 'mkv', 'direct'} and ch.stream_url:
-                preview_url = ch.stream_url
-        except Exception:
-            preview_url = None
+                elif stream_type in {'mp4', 'webm', 'mov', 'mkv', 'direct'} and ch.stream_url:
+                    preview_url = ch.stream_url
+            except Exception:
+                preview_url = None
 
     if not preview_url and ch.source and ch.source.name == 'custom' and stream_type == 'hls':
         preview_url = f'/play/custom/{ch.source_channel_id}/proxy.m3u8'
@@ -1906,6 +1916,7 @@ def preview_channel(channel_id):
         'preview_url': preview_url,
         'preview_warning': preview_warning,
         'preview_warning_kind': preview_warning_kind,
+        'needs_detection': needs_detection,
         'epg_programs': future_count,
         'epg_hours': epg_hours,
     })
