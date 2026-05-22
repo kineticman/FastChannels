@@ -245,6 +245,8 @@ class SamsungScraper(BaseScraper):
                 season, episode = _parse_onscreen_episode_num(prog)
                 icon_el   = prog.find('icon')
                 poster    = icon_el.get('src') if icon_el is not None else None
+                cats      = [c.text.strip() for c in prog.findall('category') if c.text and c.text.strip()]
+                category  = ';'.join(cats) if cats else None
 
                 programs.append(ProgramData(
                     source_channel_id = ch_id,
@@ -257,6 +259,7 @@ class SamsungScraper(BaseScraper):
                     episode_title     = episode_title,
                     season            = season,
                     episode           = episode,
+                    category          = category,
                 ))
                 region_count += 1
 
