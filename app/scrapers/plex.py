@@ -245,9 +245,19 @@ def _build_category_map(rsc_objects: list[dict]) -> tuple[dict[str, str], set[st
 
 
 def _parse_luma_fragment(content: str, source_channel_id: str) -> list[ProgramData]:
-    """Parse a luma.plex.tv RSC text/x-component payload into ProgramData objects."""
+    """Parse a luma.plex.tv RSC text/x-component payload into ProgramData objects.
+
+    Response format (as of May 2026):
+      [{"id":"<24-hex>","title":"...","subtitle":"7:00 PM - 8:00 PM",
+        ["badge":{...},] "data":{"guid":"plex://...","beginsAt":...,"endsAt":...},
+        "previewData":{...}}, ...]
+    The top-level "subtitle" is a time-range display string, not the episode title.
+    Episode title lives in previewData.subtitle as before.
+    """
     programs: list[ProgramData] = []
-    for m in _re.finditer(r'\{"id":"[^"]+","title":"[^"]*","data":\{"guid":', content):
+    # Match airing objects by their 24-char hex id — robust to new fields inserted
+    # between "title" and "data" (subtitle, badge, etc.).
+    for m in _re.finditer(r'\{"id":"[a-f0-9]{24}","title":', content):
         pos = m.start()
         depth = 0
         for i in range(pos, min(pos + 8000, len(content))):
@@ -272,6 +282,8 @@ def _parse_luma_fragment(content: str, source_channel_id: str) -> list[ProgramDa
                     if not start_dt or not end_dt:
                         break
                     title    = preview.get("title") or obj.get("title") or "Unknown"
+                    # previewData.subtitle is the episode title;
+                    # obj["subtitle"] is a time-range string ("7:00 PM - 8:00 PM") — skip it
                     ep_title = preview.get("subtitle") or None
                     if ep_title and _re.match(r'^\d+:\d+ [AP]M', ep_title):
                         ep_title = None
@@ -847,10 +859,6 @@ class PlexScraper(BaseScraper):
                 return
             filled = _merge_luma_into_gaps(by_channel.get(ch.source_channel_id, []), luma_progs)
             if filled:
-                logger.info(
-                    "[plex] luma gap-fill %s: +%d airings (had %d gaps)",
-                    ch.name, len(filled), len(gaps),
-                )
                 with lock:
                     extras.extend(filled)
 
