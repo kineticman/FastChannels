@@ -233,6 +233,33 @@ def _scrape_job_already_active(q: Queue, source_name: str) -> bool:
         return False
 
 
+def _no_scrapes_pending(current_source_name: str) -> bool:
+    """Return True if no other scrape jobs are queued or running.
+
+    When multiple sources share a cron schedule they land in the scraper queue
+    back-to-back. Triggering the xml-refresh after the first one finishes means
+    the fast worker rebuilds M3U/EPG while the remaining sources haven't written
+    their data yet. Deferring until the queue drains ensures one clean rebuild
+    captures all sources.
+    """
+    try:
+        r = redis.from_url(flask_app.config['REDIS_URL'])
+        q = Queue('scraper', connection=r)
+        current_job_id = f'scrape-{current_source_name}'
+        other_running = [
+            jid for jid in StartedJobRegistry(q.name, connection=r).get_job_ids()
+            if jid != current_job_id
+        ]
+        queued = [jid for jid in q.get_job_ids() if jid.startswith('scrape-')]
+        if other_running or queued:
+            logger.info('[%s] deferring xml refresh — %d scraper job(s) still pending',
+                        current_source_name, len(other_running) + len(queued))
+            return False
+        return True
+    except Exception:
+        return True  # safe fallback: don't suppress the refresh
+
+
 def _utc_aware(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
@@ -377,7 +404,8 @@ def run_scraper(source_name: str, force_full: bool = False):
                                        source_name, _attempt + 1, _wait)
                         time.sleep(_wait)
                 invalidate_xml_cache()
-                _enqueue_xml_refresh_job()
+                if _no_scrapes_pending(source_name):
+                    _enqueue_xml_refresh_job()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] EPG-only run complete — %d channels, %d programs (%.1fs)',
                             source_name, len(db_channels), len(programs), elapsed)
@@ -429,7 +457,8 @@ def run_scraper(source_name: str, force_full: bool = False):
                                        source_name, _attempt + 1, _wait)
                         time.sleep(_wait)
                 invalidate_xml_cache()
-                _enqueue_xml_refresh_job()
+                if _no_scrapes_pending(source_name):
+                    _enqueue_xml_refresh_job()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
