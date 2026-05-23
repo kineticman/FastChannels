@@ -448,6 +448,9 @@
     .epg-only-wrap label:hover { color: var(--text-soft); }
     .epg-only-wrap input[type=checkbox] { accent-color: #7c3aed; cursor: pointer; }
 
+    /* Mobile-only enable/disable toggle row inside source cell */
+    .mobile-toggle-wrap { display: none; flex-direction: row; align-items: center; gap: 0.45rem; margin-top: 0.5rem; }
+
     @media (max-width: 760px) {
       html { font-size: 16px; }
       nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
@@ -458,6 +461,7 @@
       .actions-btn { flex: 1 1 100%; }
       .col-toggle { display: none; }
       .dashboard-table th.col-toggle { display: none; }
+      .mobile-toggle-wrap { display: flex; }
       .col-actions { width: auto; }
       .col-configure { display: none; }
       .dashboard-table th.col-configure { display: none; }
@@ -572,6 +576,17 @@
               <div class="audit-status" id="audit-status-{{ source.id }}"></div>
               <div class="audit-last-result" id="audit-last-result-{{ source.id }}"></div>
               {% endif %}
+              <div class="mobile-toggle-wrap">
+                <label class="toggle" id="mobile-toggle-{{ source.id }}">
+                  <input type="checkbox" {% if source.is_enabled %}checked{% endif %}
+                         onchange="onSourceToggle({{ source.id }}, '{{ source.display_name }}', this)">
+                  <span class="slider"></span>
+                </label>
+                <span class="toggle-label {% if source.is_enabled %}on{% else %}off{% endif %}"
+                      id="mobile-toggle-label-{{ source.id }}">
+                  {% if source.is_enabled %}On{% else %}Off{% endif %}
+                </span>
+              </div>
             </td>
 
             <td class="col-toggle">
@@ -1235,6 +1250,9 @@
       const toggleEl   = document.getElementById(`toggle-${sourceId}`);
       const checkbox   = toggleEl?.querySelector('input[type="checkbox"]');
       const labelEl    = document.getElementById(`toggle-label-${sourceId}`);
+      const mobileToggleEl = document.getElementById(`mobile-toggle-${sourceId}`);
+      const mobileCheckbox = mobileToggleEl?.querySelector('input[type="checkbox"]');
+      const mobileLabelEl  = document.getElementById(`mobile-toggle-label-${sourceId}`);
       const dashRow    = document.getElementById(`dash-row-${sourceId}`);
       const runBtn     = dashRow?.querySelector('.btn-run');
       const auditBtn   = dashRow?.querySelector('.btn-audit');
@@ -1248,6 +1266,11 @@
       if (labelEl) {
         labelEl.textContent = enabled ? 'On' : 'Off';
         labelEl.className = `toggle-label ${enabled ? 'on' : 'off'}`;
+      }
+      if (mobileCheckbox) mobileCheckbox.checked = enabled;
+      if (mobileLabelEl) {
+        mobileLabelEl.textContent = enabled ? 'On' : 'Off';
+        mobileLabelEl.className = `toggle-label ${enabled ? 'on' : 'off'}`;
       }
       if (dashRow) dashRow.classList.toggle('disabled', !enabled);
       if (runBtn) runBtn.disabled = !enabled;
@@ -1265,8 +1288,10 @@
     }
 
     async function setSourceEnabled(sourceId, enabled, checkbox) {
-      const toggleEl   = document.getElementById(`toggle-${sourceId}`);
-      toggleEl.classList.add('saving');
+      const toggleEl       = document.getElementById(`toggle-${sourceId}`);
+      const mobileToggleEl = document.getElementById(`mobile-toggle-${sourceId}`);
+      toggleEl?.classList.add('saving');
+      mobileToggleEl?.classList.add('saving');
 
       try {
         const r = await fetch(`/api/sources/${sourceId}`, {
@@ -1280,10 +1305,11 @@
         applySourceEnabledState(sourceId, enabled);
 
       } catch (e) {
-        checkbox.checked = !enabled;
+        applySourceEnabledState(sourceId, !enabled);
         console.error('Source toggle failed:', e);
       } finally {
-        toggleEl.classList.remove('saving');
+        toggleEl?.classList.remove('saving');
+        mobileToggleEl?.classList.remove('saving');
         _pendingSourceId = null;
         _pendingCheckbox = null;
       }
