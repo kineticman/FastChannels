@@ -8,8 +8,8 @@ stores it in the tvtv_program_cache table.
 Called by the background worker on a cron schedule (default: 03:00 UTC).
 
 Typical cost: ~70-170 batched API calls (4 lineups × 2 days × ~20 batches
-each), taking ~2-4 minutes including pacing delays.  Uses curl_cffi for
-Cloudflare bypass with a fresh session per lineup-day pair.
+each), taking ~2-4 minutes including pacing delays. Uses curl_cffi for a
+browser-like HTTP session without a headless browser bootstrap.
 
 Standalone dry run (prints stats, writes nothing):
     docker exec fastchannels python -m app.tvtv_cache --dry-run
@@ -80,76 +80,21 @@ def _make_session():
     return s
 
 
-def _get_cf_session():
+def _get_session():
     """
-    Launch headless Chromium via Playwright, let it pass the Cloudflare
-    challenge on tvtv.us, extract cf_clearance + User-Agent, and return
-    a curl_cffi Session pre-loaded with those credentials.
+    Prime a curl_cffi-backed session for tvtv.us.
 
-    Falls back to a plain _make_session() if Playwright is unavailable or
-    the challenge doesn't complete.
+    tvtv's API currently responds directly to a browser-like HTTP client, so
+    we avoid a headless-browser Cloudflare bootstrap here. A best-effort GET
+    to the homepage warms any cookies the site wants to set before the batch
+    API calls start.
     """
+    s = _make_session()
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        log.warning("[tvtv-cache] playwright not available, using plain session")
-        return _make_session()
-
-    log.info("[tvtv-cache] bootstrapping Cloudflare session via Playwright...")
-    cookies = []
-    user_agent = None
-
-    try:
-        with sync_playwright() as p:
-            # --no-sandbox is required for headless Chromium in Docker containers.
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            try:
-                ctx = browser.new_context()
-                page = ctx.new_page()
-                try:
-                    page.goto(f"{_TVTV_BASE}/", wait_until="domcontentloaded", timeout=30_000)
-                except Exception:
-                    pass
-                # Wait up to 15s for Cloudflare to issue cf_clearance
-                for _ in range(15):
-                    all_cookies = ctx.cookies(_TVTV_BASE)
-                    if any(c["name"] == "cf_clearance" for c in all_cookies):
-                        break
-                    page.wait_for_timeout(1_000)
-                cookies = ctx.cookies(_TVTV_BASE)
-                user_agent = page.evaluate("navigator.userAgent")
-            finally:
-                browser.close()
+        r = s.get(f"{_TVTV_BASE}/", timeout=15)
+        log.info("[tvtv-cache] primed session via homepage: HTTP %s", r.status_code)
     except Exception as exc:
-        log.warning("[tvtv-cache] Playwright bootstrap failed: %s — using plain session", exc)
-        return _make_session()
-
-    cf = next((c for c in cookies if c["name"] == "cf_clearance"), None)
-    if cf:
-        log.info("[tvtv-cache] cf_clearance obtained")
-    else:
-        log.warning("[tvtv-cache] cf_clearance not found after Playwright bootstrap — Cloudflare challenge may not have completed")
-
-    if _CURL_CFFI:
-        s = _http.Session(impersonate="chrome120")
-    else:
-        s = _http.Session()
-
-    s.headers.update({
-        "Accept": "application/json, text/plain, */*",
-        "Referer": f"{_TVTV_BASE}/",
-        "Origin": _TVTV_BASE,
-        "User-Agent": user_agent or "",
-    })
-    # Inject all tvtv.us cookies (cf_clearance, __cf_bm, etc.)
-    cookie_header = "; ".join(
-        f"{c['name']}={c['value']}"
-        for c in cookies
-        if "tvtv" in c.get("domain", "")
-    )
-    if cookie_header:
-        s.headers["Cookie"] = cookie_header
-
+        log.warning("[tvtv-cache] homepage prime failed: %s — continuing with direct API session", exc)
     return s
 
 
@@ -259,8 +204,8 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
     total_rows    = 0
     total_errors  = 0
 
-    # Bootstrap one Cloudflare-cleared session for the entire run.
-    session = _get_cf_session() if not dry_run else None
+    # Reuse one warmed session for the entire refresh run.
+    session = _get_session() if not dry_run else None
 
     for lineup, station_ids in lineup_stations.items():
         for day_offset in range(days):
