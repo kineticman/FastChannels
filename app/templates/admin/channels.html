@@ -48,6 +48,13 @@
     .toolbar-advanced summary::-webkit-details-marker { display: none; }
     .toolbar-advanced summary:hover { color: var(--text); }
     .toolbar-advanced[open] summary { color: var(--accent-soft); }
+    .filter-adv-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 1.1rem; height: 1.1rem; padding: 0 0.25rem;
+      background: var(--accent-strong); color: #fff;
+      border-radius: 999px; font-size: 0.65rem; font-weight: 700; line-height: 1;
+      vertical-align: middle; margin-left: 0.1rem;
+    }
     .toolbar-secondary {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -1265,6 +1272,12 @@
 <body>
   <div id="bulk-toast"></div>
   <script>
+    // Collapse the advanced filter panel on mobile so the channel list is immediately visible.
+    if (window.innerWidth <= 768) {
+      const adv = document.getElementById('toolbar-advanced');
+      if (adv) adv.removeAttribute('open');
+    }
+
     // Server-rendered filter state — always matches the current page view.
     const _pageFilters = {
       feed:       {{ feed_filter      | tojson }},
@@ -1321,8 +1334,9 @@
           <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
         </div>
       </div>
-      <details class="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter %}open{% endif %}>
-        <summary>More filters</summary>
+      {% set _adv_count = (1 if feed_filter else 0) + (1 if category_filter else 0) + (1 if enabled_filter else 0) + (1 if presence_filter else 0) + (1 if drm_filter else 0) + (1 if language_filter else 0) + (1 if country_filter else 0) + (1 if gracenote_filter else 0) + (1 if gracenote_mode_filter else 0) + (1 if duplicates_filter else 0) + (1 if new_filter else 0) + (1 if epg_filter else 0) + (1 if resolution_filter else 0) %}
+      <details class="toolbar-advanced" id="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter %}open{% endif %}>
+        <summary>More filters{% if _adv_count %} <span class="filter-adv-badge">{{ _adv_count }}</span>{% endif %}</summary>
         <div class="toolbar-secondary">
           <div class="filter-group">
             <label class="filter-label" for="feed-filter">Feed</label>
