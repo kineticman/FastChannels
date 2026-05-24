@@ -718,14 +718,25 @@ def settings():
             'label': 'Time Zone',
             'anchor': 'settings-card-timezone',
         })
+    _eff_url = app_settings.effective_public_base_url() or (current_app.config.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
+    _url_from_env = (not (app_settings.public_base_url or '').strip()) and (app_settings.env_public_base_url() is not None or bool((current_app.config.get('PUBLIC_BASE_URL') or '').strip()))
+    _no_port_warning = False
+    if _eff_url and not _url_from_env:
+        from urllib.parse import urlsplit as _urlsplit
+        try:
+            _p = _urlsplit(_eff_url if '://' in _eff_url else f'http://{_eff_url}')
+            _no_port_warning = not bool(_p.port)
+        except Exception:
+            pass
     return render_template('admin/settings.html',
                            channels_dvr_url=app_settings.effective_channels_dvr_url() or '',
-                           public_base_url=app_settings.effective_public_base_url() or (current_app.config.get('PUBLIC_BASE_URL') or '').strip().rstrip('/'),
+                           public_base_url=_eff_url,
                            timezone_name=app_settings.effective_timezone_name(),
                            timezone_name_from_db=(app_settings.timezone_name or '').strip(),
                            timezone_choices=timezone_choices(),
                            channels_dvr_url_from_env=(not (app_settings.channels_dvr_url or '').strip()) and app_settings.env_channels_dvr_url() is not None,
-                           public_base_url_from_env=(not (app_settings.public_base_url or '').strip()) and (app_settings.env_public_base_url() is not None or bool((current_app.config.get('PUBLIC_BASE_URL') or '').strip())),
+                           public_base_url_from_env=_url_from_env,
+                           public_base_url_no_port_warning=_no_port_warning,
                            settings_needs_config=settings_needs_config,
                            request_base_url=request_base_url,
                            detected_base_url=detected_base_url(),

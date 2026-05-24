@@ -464,7 +464,7 @@ def _process_stats() -> dict:
     }
 
 
-def _normalize_server_url(value: str | None, default_port: int = 5523) -> str | None:
+def _normalize_server_url(value: str | None, default_port: int | None = None) -> str | None:
     raw = (value or '').strip()
     if not raw:
         return None
@@ -484,7 +484,7 @@ def _normalize_server_url(value: str | None, default_port: int = 5523) -> str | 
     if path not in ('', '/'):
         host = f'{host}{path}'
 
-    if ':' not in host.rsplit(']', 1)[-1]:
+    if default_port is not None and ':' not in host.rsplit(']', 1)[-1]:
         host = f'{host}:{default_port}'
 
     return f'{scheme}://{host}'.rstrip('/')
@@ -2970,7 +2970,7 @@ def app_settings():
         if 'channels_dvr_url' in data:
             row.channels_dvr_url = _normalize_server_url(data['channels_dvr_url'], default_port=8089)
         if 'public_base_url' in data:
-            row.public_base_url = _normalize_server_url(data['public_base_url'], default_port=5523)
+            row.public_base_url = _normalize_server_url(data['public_base_url'], default_port=None)
         if 'timezone_name' in data:
             tz_name = normalize_timezone_name(data.get('timezone_name'))
             if data.get('timezone_name') and tz_name is None:

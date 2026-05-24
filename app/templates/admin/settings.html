@@ -440,15 +440,18 @@
         <div class="field field-full">
           <label for="public-base-url">FastChannels Server URL</label>
           <input type="text" id="public-base-url"
-                 placeholder="192.168.1.50 or 192.168.1.50:5523" value="{{ public_base_url }}">
-          <div class="help">Address other devices should use to reach this FastChannels server for generated M3U, XML, logo, poster, and playback URLs. You can enter just the IP or hostname and FastChannels will fill in <code>http://</code> and port <code>5523</code> automatically.</div>
+                 placeholder="192.168.1.50:5523" value="{{ public_base_url or detected_base_url }}"
+                 oninput="checkPublicBaseUrlPortWarning()">
+          <div class="help">Address other devices should use to reach this FastChannels server for generated M3U, XML, logo, poster, and playback URLs. Include <code>http://</code> and the port if needed (most installs use <code>:5523</code>).</div>
+          <div class="help" id="no-port-warning" style="color:var(--warning-soft);{% if not public_base_url_no_port_warning %} display:none;{% endif %}">
+            No port specified — this is fine if you're behind a reverse proxy, but most direct installs need <code>:5523</code>.
+          </div>
           {% if public_base_url_from_env %}
           <div class="help">Currently coming from environment variable <code>FASTCHANNELS_SERVER_URL</code>. Saving here will override it in the database.</div>
           {% endif %}
           <div class="hint-box">
             Browser address: <code>{{ request_base_url }}</code><br>
             Detected server address: <code>{{ detected_base_url }}</code><br>
-            Recommended: enter the address clients should actually use to reach FastChannels, for example <code>http://192.168.1.50:5523</code>.<br>
             If this field is set, generated feed URLs will use it exactly, even if you open the admin UI from a different host or port.<br>
             If FastChannels is running in Docker and you opened the UI with <code>localhost</code>, auto-detect is usually not what other devices need, so set this field manually.
           </div>
@@ -749,12 +752,24 @@ async function saveSettings(body, statusId) {
   }
 }
 
+function checkPublicBaseUrlPortWarning() {
+  const val = document.getElementById('public-base-url').value.trim();
+  const warning = document.getElementById('no-port-warning');
+  if (!warning) return;
+  if (!val) { warning.style.display = 'none'; return; }
+  const s = val.includes('://') ? val : 'http://' + val;
+  let hasPort = false;
+  try { hasPort = !!new URL(s).port; } catch (_) { hasPort = true; }
+  warning.style.display = hasPort ? 'none' : '';
+}
+
 async function savePublicBaseUrlSettings() {
   const publicBaseUrl = document.getElementById('public-base-url').value.trim();
   const ok = await saveSettings({
     public_base_url: publicBaseUrl || null,
   }, 'public-base-url-status');
   if (ok) {
+    checkPublicBaseUrlPortWarning();
     settingsNeedsConfigState.public_base_url = !publicBaseUrl && {{ 'true' if not public_base_url_from_env else 'false' }};
     refreshSettingsNeedsConfigBanner();
   }
