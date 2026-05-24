@@ -137,6 +137,10 @@ class LGChannelsScraper(BaseScraper):
                     else:
                         category_value = base_category
 
+                    raw_prog_id = self._clean_str(prog.get("programId")) or ""
+                    # Strip optional locale suffix (e.g. "MV014035030000-US" → "MV014035030000")
+                    tms_id = raw_prog_id.split("-")[0] if raw_prog_id else None
+
                     programs.append(
                         ProgramData(
                             source_channel_id=source_channel_id,
@@ -154,6 +158,7 @@ class LGChannelsScraper(BaseScraper):
                             episode_title=None,
                             season=None,
                             episode=None,
+                            episode_id=tms_id or None,
                         )
                     )
 

@@ -221,7 +221,8 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             if series_id:
                 SubElement(el, 'series-id', system='fastchannels').text = series_id
             if episode_id:
-                SubElement(el, 'episode-num', system='fastchannels').text = episode_id
+                system = 'dd_progid' if _is_tms_id(episode_id) else 'fastchannels'
+                SubElement(el, 'episode-num', system=system).text = episode_id
             yield tostring(el, encoding='unicode') + '\n'
 
         last_id = programs[-1].id
@@ -264,7 +265,15 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     yield '</tv>\n'
 
 
+import re as _re
+_TMS_ID_RE = _re.compile(r'^(?:SH|EP|MV|SP|NO)\d{10,12}$')
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────
+
+def _is_tms_id(value: str) -> bool:
+    return bool(_TMS_ID_RE.match(value or ''))
+
 
 def _dt(dt) -> str:
     if dt.tzinfo is None:

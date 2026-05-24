@@ -282,6 +282,7 @@ class LocalNowScraper(BaseScraper):
                         season=season,
                         episode=episode,
                         program_type="episode" if (season is not None or episode is not None) else None,
+                        episode_id=(item.get("program_id") or "").strip() or None,
                     )
                 )
 
