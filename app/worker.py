@@ -667,7 +667,6 @@ def run_stream_audit(source_name: str):
 
         def _mark_audit_error_inactive(channel, reason):
             channel.is_active = False
-            channel.is_enabled = True
             channel.disable_reason = reason
 
         # Brief warmup pause — gives any residual rate-limit ban time to clear

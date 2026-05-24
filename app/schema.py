@@ -341,6 +341,7 @@ def ensure_runtime_schema() -> None:
                 text("SELECT migration_025_done FROM app_settings WHERE id = 1")
             ).fetchone()
             if not _m025_done or not _m025_done[0]:
+                conn.execute(text("PRAGMA foreign_keys = ON"))
                 vidaa_sources = conn.execute(
                     text("SELECT id FROM sources WHERE name = 'vidaa'")
                 ).fetchall()
@@ -397,6 +398,9 @@ def ensure_runtime_schema() -> None:
                         "Migration 025: merged %d / renamed %d Vidaa channel ID(s)",
                         _m025_merged, _m025_renamed,
                     )
+                conn.execute(text(
+                    "INSERT OR IGNORE INTO app_settings (id, migration_025_done) VALUES (1, 0)"
+                ))
                 conn.execute(text("UPDATE app_settings SET migration_025_done = 1 WHERE id = 1"))
 
         if "tvtv_program_cache" in tables:
