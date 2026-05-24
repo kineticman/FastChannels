@@ -229,6 +229,7 @@
     .interval-control .cron-offset { width: 48px; }
     .interval-control .unit { font-size: 0.76rem; color: var(--text-soft); }
     .interval-control .help { width: 100%; font-size: 0.74rem; color: var(--text-muted); line-height: 1.4; }
+    .interval-control .help .cron-expr { font-family: monospace; font-size: 0.8em; opacity: 0.75; }
     .sched-sub { display: flex; align-items: center; gap: 0.45rem; }
     .cleanup-source-row { display: grid; grid-template-columns: 1.2rem 2rem 1fr; align-items: center; gap: 0.4rem; padding: 0.22rem 0.35rem; border-radius: 4px; cursor: pointer; user-select: none; }
     .cleanup-source-row:hover { background: var(--bg); }
@@ -733,10 +734,10 @@
                     {% if source.scrape_cron %}
                       {%- set co = '%02d' | format(cron_offset | int) -%}
                       {%- if cron_template == '0 * * *' -%}
-                        Daily at 00:{{ co }} UTC — predictable across restarts.
+                        Daily at 00:{{ co }} UTC — predictable across restarts.<br><span class="cron-expr">{{ source.scrape_cron }}</span>
                       {%- else -%}
                         {%- set _labels = {'* * * *': '1h', '*/2 * * *': '2h', '*/3 * * *': '3h', '*/4 * * *': '4h', '*/6 * * *': '6h', '*/8 * * *': '8h', '*/12 * * *': '12h'} -%}
-                        Every {{ _labels.get(cron_template, '?') }} at :{{ co }} UTC — predictable across restarts.
+                        Every {{ _labels.get(cron_template, '?') }} at :{{ co }} UTC — predictable across restarts.<br><span class="cron-expr">{{ source.scrape_cron }}</span>
                       {%- endif -%}
                     {% else %}Recommended {{ interval_meta.recommended }} min · allowed {{ interval_meta.min }}–{{ interval_meta.max }} min.{% endif %}
                   </div>
@@ -963,10 +964,12 @@
     // ── Scrape schedule ──────────────────────────────────────────────────
     function _cronHelpText(template, offsetStr) {
       const mm = String(parseInt(offsetStr, 10) || 0).padStart(2, '0');
+      const minute = parseInt(offsetStr, 10) || 0;
       const labels = {'* * * *': '1h', '*/2 * * *': '2h', '*/3 * * *': '3h', '*/4 * * *': '4h',
                       '*/6 * * *': '6h', '*/8 * * *': '8h', '*/12 * * *': '12h'};
-      if (template === '0 * * *') return `Daily at 00:${mm} UTC — predictable across restarts.`;
-      return `Every ${labels[template] || '?'} at :${mm} UTC — predictable across restarts.`;
+      const cronExpr = `<br><span class="cron-expr">${minute} ${template}</span>`;
+      if (template === '0 * * *') return `Daily at 00:${mm} UTC — predictable across restarts.${cronExpr}`;
+      return `Every ${labels[template] || '?'} at :${mm} UTC — predictable across restarts.${cronExpr}`;
     }
 
     function onScheduleModeChange(sourceId) {
@@ -983,7 +986,7 @@
         } else {
           const template = document.getElementById(`cron-preset-${sourceId}`)?.value || '*/6 * * *';
           const offset   = document.getElementById(`cron-offset-${sourceId}`)?.value || '0';
-          helpEl.textContent = _cronHelpText(template, offset);
+          helpEl.innerHTML = _cronHelpText(template, offset);
         }
       }
     }
@@ -1028,7 +1031,7 @@
         if (helpEl) {
           if (data.scrape_cron) {
             const parts    = data.scrape_cron.split(' ');
-            helpEl.textContent = _cronHelpText(parts.slice(1).join(' '), parts[0]);
+            helpEl.innerHTML = _cronHelpText(parts.slice(1).join(' '), parts[0]);
           } else {
             const ctrl = document.getElementById(`schedule-control-${sourceId}`);
             helpEl.textContent = ctrl?.dataset.intervalHelp || '';
