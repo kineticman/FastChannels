@@ -877,6 +877,11 @@
             Refresh stream URL during playback <span style="font-size:.74rem;color:var(--text-muted);">(re-checks the source page when the channel is played so expired or rotated stream URLs stay fresh)</span>
           </label>
         </div>
+        <!-- Preview stream button -->
+        <div id="cc-preview-btn-wrap" style="display:none;margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--border);">
+          <button onclick="openCcPreviewModal()" style="padding:.38rem .85rem;font-size:.82rem;border-radius:6px;border:1px solid var(--accent-soft);background:transparent;color:var(--accent-soft);cursor:pointer;font-weight:600;">▶ Preview Stream</button>
+          <span style="margin-left:.6rem;font-size:.75rem;color:var(--text-muted);">Test playback in your browser before saving</span>
+        </div>
       </div>
 
       <!-- Channel metadata -->
@@ -926,6 +931,25 @@
           <button class="btn btn-cancel btn-sm" onclick="closeCustomChannelModal()">Cancel</button>
           <button class="btn btn-run btn-sm" id="cc-save-btn" onclick="saveCustomChannel()">Save Channel</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stream preview modal for custom channel editor -->
+  <div class="modal-overlay" id="cc-preview-modal" onclick="closeCcPreviewModal(event)" style="z-index:200;">
+    <div class="modal-box" style="width:700px;max-width:95vw;max-height:90vh;overflow-y:auto;" onclick="event.stopPropagation()">
+      <h2 style="font-size:1.05rem;font-weight:700;margin-bottom:.35rem;">Stream Preview</h2>
+      <div id="cc-preview-subtitle" style="color:var(--text-soft);font-size:.75rem;margin-bottom:1rem;word-break:break-all;overflow-wrap:anywhere;"></div>
+      <video id="cc-preview-player" controls playsinline preload="none" style="width:100%;max-height:400px;background:#000;border-radius:6px;display:block;"></video>
+      <div style="display:flex;align-items:center;gap:.75rem;margin-top:.6rem;">
+        <label style="font-size:.78rem;color:var(--text-muted);white-space:nowrap;">Volume</label>
+        <input type="range" id="cc-preview-volume" min="0" max="100" value="50" style="flex:1;">
+        <span id="cc-preview-vol-pct" style="font-size:.78rem;color:var(--text-muted);width:3rem;text-align:right;">50%</span>
+      </div>
+      <div id="cc-preview-status" style="color:var(--text-soft);font-size:.78rem;margin-top:.5rem;min-height:1.2em;line-height:1.45;"></div>
+      <p style="margin:.65rem 0 0;font-size:.74rem;color:var(--text-muted);line-height:1.4;">Browser playback depends on stream format and source restrictions. If playback fails here, the channel may still work fine in Channels DVR.</p>
+      <div style="display:flex;justify-content:flex-end;margin-top:1rem;">
+        <button onclick="closeCcPreviewModal()" style="padding:.42rem 1.1rem;font-size:.84rem;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-soft);cursor:pointer;">Close</button>
       </div>
     </div>
   </div>
@@ -2711,6 +2735,7 @@
         document.getElementById('cc-detect-result').style.display = 'none';
         document.getElementById('cc-redetect-wrap').style.display = 'none';
         document.getElementById('cc-youtube-note').style.display = 'none';
+        document.getElementById('cc-preview-btn-wrap').style.display = 'none';
       }
 
       document.getElementById('custom-channel-modal').classList.add('open');
@@ -2732,6 +2757,7 @@
 
     function onCustomUrlInput() {
       document.getElementById('cc-detect-result').style.display = 'none';
+      document.getElementById('cc-preview-btn-wrap').style.display = 'none';
       _clearDetectPolling();
       _setDetectStatus('', '');
       document.getElementById('cc-redetect-wrap').style.display = 'none';
@@ -2759,6 +2785,7 @@
       _ccIsPageUrl = false;
       _setDetectStatus('Starting detection…', 'var(--text-muted)', true);
       document.getElementById('cc-detect-result').style.display = 'none';
+      document.getElementById('cc-preview-btn-wrap').style.display = 'none';
 
       try {
         const r = await fetch('/api/custom-channels/detect/start', {
@@ -2862,6 +2889,7 @@
 
       document.getElementById('cc-redetect-wrap').style.display = isPageUrl || isYoutube ? '' : 'none';
       document.getElementById('cc-youtube-note').style.display = isYoutube ? '' : 'none';
+      document.getElementById('cc-preview-btn-wrap').style.display = (ok && streamUrl) ? '' : 'none';
 
       panel.style.display = '';
     }
@@ -3089,7 +3117,82 @@
       if (r2) { _catalogData = await r2.json(); renderCatalog(_catalogData); }
       btn.disabled = false;
     }
+
+    // ── Custom channel stream preview ─────────────────────────────────────────
+    let _ccPreviewHls = null;
+
+    function openCcPreviewModal() {
+      const url = _ccDetectedUrl;
+      if (!url) return;
+      document.getElementById('cc-preview-subtitle').textContent = url;
+      document.getElementById('cc-preview-modal').classList.add('open');
+      _startCcPreviewPlayer(url, _ccDetectedType);
+    }
+
+    function closeCcPreviewModal(event) {
+      // Called from overlay click (with event) or Close button (no event).
+      // Overlay click guard: only close when clicking the backdrop itself.
+      if (event && event.target !== document.getElementById('cc-preview-modal')) return;
+      _teardownCcPreviewPlayer();
+      document.getElementById('cc-preview-modal').classList.remove('open');
+    }
+
+    function _teardownCcPreviewPlayer() {
+      const video = document.getElementById('cc-preview-player');
+      if (_ccPreviewHls) { _ccPreviewHls.destroy(); _ccPreviewHls = null; }
+      if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
+    }
+
+    function _startCcPreviewPlayer(url, streamType) {
+      const video = document.getElementById('cc-preview-player');
+      const status = document.getElementById('cc-preview-status');
+      _teardownCcPreviewPlayer();
+      video.volume = document.getElementById('cc-preview-volume').value / 100;
+      if (status) status.textContent = 'Loading stream…';
+
+      const effectiveType = String(streamType || '').toLowerCase();
+      const useNative = ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(effectiveType);
+      if (useNative) {
+        video.src = url;
+        video.load();
+        video.play().catch(() => {});
+        if (status) status.textContent = 'Using native video playback.';
+        return;
+      }
+
+      // Always route HLS through server-side proxy — handles CORS and custom headers transparently.
+      const headersJson = JSON.stringify(_ccDetectedHeaders || {});
+      const proxyUrl = `/api/custom-channels/preview-manifest?url=${encodeURIComponent(url)}&h=${encodeURIComponent(headersJson)}`;
+
+      if (window.Hls && window.Hls.isSupported()) {
+        _ccPreviewHls = new window.Hls({ enableWorker: true, lowLatencyMode: false });
+        _ccPreviewHls.loadSource(proxyUrl);
+        _ccPreviewHls.attachMedia(video);
+        _ccPreviewHls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+          video.play().catch(() => {});
+          if (status) status.textContent = 'HLS manifest loaded — playing.';
+        });
+        _ccPreviewHls.on(window.Hls.Events.ERROR, (_e, data) => {
+          if (data.fatal && status) status.textContent = `Playback error: ${data.type} / ${data.details}`;
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = proxyUrl;
+        video.load();
+        video.play().catch(() => {});
+        if (status) status.textContent = 'Using native HLS playback.';
+      } else {
+        if (status) status.textContent = 'HLS playback not supported in this browser. Try Chrome or a Chromium-based browser.';
+      }
+    }
+
+    document.getElementById('cc-preview-volume').addEventListener('input', function() {
+      document.getElementById('cc-preview-player').volume = this.value / 100;
+      document.getElementById('cc-preview-vol-pct').textContent = this.value + '%';
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
   </script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
   {% include 'admin/_update_modal.html' %}
 </body>

@@ -1,8 +1,11 @@
 import json
+import logging
 import os as _os
 import re
 import time as _time
 import requests as _req
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -887,6 +890,126 @@ def list_channel_catalog():
             channels.append({**ch, "already_added": ch["stream_url"] in existing_urls})
         result.append({**group, "channels": channels})
     return jsonify(result)
+
+
+_PREVIEW_PROXY_UA = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) '
+    'Chrome/145.0.0.0 Safari/537.36'
+)
+_PREVIEW_SSRF_RE = re.compile(
+    r'^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|0\.0\.0\.0)',
+    re.IGNORECASE,
+)
+
+
+@api_bp.route('/custom-channels/preview-manifest')
+def custom_channel_preview_manifest():
+    """
+    Proxy an HLS manifest for the custom-channel stream preview UI.
+
+    Fetches the manifest server-side (bypassing browser CORS/header restrictions),
+    resolves master→variant if needed, rewrites segment URLs to go through
+    /api/custom-channels/preview-segment, and returns the manifest.
+    """
+    from urllib.parse import quote as _quote, unquote as _unquote
+
+    raw_url = request.args.get('url', '').strip()
+    headers_json = request.args.get('h', '{}')
+
+    if not raw_url.startswith('https://'):
+        return ('HTTPS only', 400)
+    parsed = urlsplit(raw_url)
+    if _PREVIEW_SSRF_RE.match(parsed.netloc.split(':')[0]):
+        return ('Blocked', 403)
+
+    try:
+        extra = json.loads(headers_json)
+    except Exception:
+        extra = {}
+
+    req_headers = {k: v for k, v in extra.items() if not k.startswith('_')}
+    req_headers.setdefault('User-Agent', _PREVIEW_PROXY_UA)
+
+    try:
+        r = _req.get(raw_url, headers=req_headers, timeout=12)
+        r.raise_for_status()
+    except Exception as e:
+        return (f'Upstream error: {e}', 502)
+
+    text = r.text
+    effective_url = r.url
+
+    if '#EXT-X-STREAM-INF' in text:
+        from app.scrapers.distro import _pick_best_variant
+        best = _pick_best_variant(text, effective_url)
+        if not best:
+            return ('No variant found', 502)
+        try:
+            vr = _req.get(best, headers=req_headers, timeout=12)
+            vr.raise_for_status()
+            text = vr.text
+            effective_url = vr.url
+        except Exception as e:
+            return (f'Variant fetch error: {e}', 502)
+
+    variant_base = effective_url.rsplit('/', 1)[0] + '/'
+    base_url = request.host_url.rstrip('/')
+    encoded_h = _quote(headers_json, safe='')
+
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            abs_seg = stripped if stripped.startswith('http') else _urljoin(variant_base, stripped)
+            line = f'{base_url}/api/custom-channels/preview-segment?url={_quote(abs_seg, safe="")}&h={encoded_h}'
+        lines.append(line)
+
+    from flask import Response
+    return Response(
+        '\n'.join(lines),
+        mimetype='application/vnd.apple.mpegurl',
+        headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+    )
+
+
+@api_bp.route('/custom-channels/preview-segment')
+def custom_channel_preview_segment():
+    """Proxy a single HLS segment for the custom-channel stream preview UI."""
+    from flask import Response
+
+    # Flask already decodes query params once; do NOT call unquote again or
+    # percent-encoded chars in auth tokens (e.g. %2F, %2B) get over-decoded.
+    raw_url = request.args.get('url', '')
+    headers_json = request.args.get('h', '{}')
+
+    if not raw_url.startswith('https://'):
+        return ('HTTPS only', 400)
+    parsed = urlsplit(raw_url)
+    if _PREVIEW_SSRF_RE.match(parsed.netloc.split(':')[0]):
+        return ('Blocked', 403)
+
+    try:
+        extra = json.loads(headers_json)
+    except Exception:
+        extra = {}
+
+    req_headers = {k: v for k, v in extra.items() if not k.startswith('_')}
+    req_headers.setdefault('User-Agent', _PREVIEW_PROXY_UA)
+
+    try:
+        r = _req.get(raw_url, headers=req_headers, timeout=20, stream=True)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[preview-segment] fetch failed for %s: %s', raw_url[:120], e)
+        return (f'Segment fetch failed: {e}', 502)
+
+    content_type = r.headers.get('Content-Type', 'video/MP2T')
+    return Response(
+        r.iter_content(8192),
+        content_type=content_type,
+        headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+    )
 
 
 def _custom_detect_key(detect_id: str) -> str:
