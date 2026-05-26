@@ -204,7 +204,7 @@ class PlutoScraper(BaseScraper):
         ConfigField(
             key='country_codes', label='Country/Region Feeds',
             field_type='select', default='us_east', multiple=True,
-            help_text='Choose one or more Pluto regions. GB is accepted in legacy configs, but the selector only shows supported live regions.',
+            help_text='Choose one or more Pluto regions. "Home/Server IP" uses your server\'s actual IP address — useful on home servers that may receive geo-specific local affiliate channels not available in standard regional feeds.',
             options=[
                 {'value': 'us_east', 'label': 'United States (East)'},
                 {'value': 'us_west', 'label': 'United States (West)'},
@@ -212,6 +212,7 @@ class PlutoScraper(BaseScraper):
                 {'value': 'uk', 'label': 'United Kingdom'},
                 {'value': 'fr', 'label': 'France'},
                 {'value': 'de', 'label': 'Germany'},
+                {'value': 'local', 'label': 'Home/Server IP (Local Affiliates)'},
             ],
         ),
         ConfigField(
@@ -233,6 +234,9 @@ class PlutoScraper(BaseScraper):
             code = _COUNTRY_CODE_ALIASES.get(raw_code.strip().lower(), raw_code.strip().lower())
             if code in ALLOWED_COUNTRY_CODES and code not in country_codes:
                 country_codes.append(code)
+        # 'local' must be processed last so regional feeds win the dedup for
+        # shared channels, preventing stream_url churn on existing rows.
+        country_codes.sort(key=lambda c: 1 if c == 'local' else 0)
         self.country_codes = country_codes or ['us_east']
 
         try:
