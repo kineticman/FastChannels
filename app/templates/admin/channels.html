@@ -1704,7 +1704,7 @@
                   {% if ch.disable_reason and ch.disable_reason.startswith('DRM') %}
                   <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'DRM')" title="{{ ch.disable_reason }} — stream is protected, not playable in generic IPTV clients. Click to re-enable.">🔒</span>
                   {% elif ch.disable_reason == 'Dead' %}
-                  <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'Dead')" title="Dead — stream audit found this channel not currently playable. Click to re-enable.">💀</span>
+                  <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'Dead', {{ ch.missed_scrapes or 0 }})" title="Dead — stream audit found this channel not currently playable. Click to re-enable or delete.">💀</span>
                   {% elif ch.disable_reason == 'VOD' %}
                   <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'VOD')" title="VOD — this channel serves on-demand content, not a live stream. Click to re-enable.">📼</span>
                   {% endif %}
@@ -3141,8 +3141,9 @@
 
     let _reenableChannelId = null;
 
-    function openReenableModal(channelId, flagType) {
+    function openReenableModal(channelId, flagType, missedScrapes) {
       _reenableChannelId = channelId;
+      const scraperLost = flagType === 'Dead' && (missedScrapes || 0) >= 3;
       let icon, title, body;
       if (flagType === 'DRM') {
         icon  = '🔒';
@@ -3152,6 +3153,10 @@
         icon  = '📼';
         title = 'Re-enable VOD Channel';
         body  = 'This channel was detected as VOD (on-demand content), not a live stream. If re-enabled, it will play through its content once and then stop — it won\'t loop or update like a live FAST channel. Re-enable anyway?';
+      } else if (scraperLost) {
+        icon  = '💀';
+        title = 'Dead + Scraper Lost';
+        body  = `This channel was flagged as dead and has since disappeared from the scraper (${missedScrapes} missed scrapes). You can attempt to re-enable it, or permanently delete it.`;
       } else {
         icon  = '💀';
         title = 'Re-enable Dead Channel';
@@ -3159,6 +3164,7 @@
       }
       document.getElementById('reenable-modal-title').textContent = `${icon} ${title}`;
       document.getElementById('reenable-modal-body').textContent = body;
+      document.getElementById('reenable-delete-btn').style.display = scraperLost ? 'inline-block' : 'none';
       document.getElementById('reenable-modal').classList.add('open');
     }
 
@@ -3192,6 +3198,25 @@
         btn.textContent = 'Error';
         btn.disabled = false;
         console.error('Re-enable failed:', e);
+      }
+    }
+
+    async function confirmReenableDelete() {
+      const channelId = _reenableChannelId;
+      if (!channelId) return;
+      const btn = document.getElementById('reenable-delete-btn');
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        closeReenableModal();
+        const row = document.getElementById(`row-${channelId}`);
+        if (row) row.remove();
+      } catch (e) {
+        btn.textContent = 'Error';
+        btn.disabled = false;
+        console.error('Delete failed:', e);
       }
     }
 
@@ -3638,6 +3663,7 @@
       <p id="reenable-modal-body" style="margin:0.75rem 0 1.25rem"></p>
       <div style="display:flex;gap:0.75rem;justify-content:flex-end">
         <button style="padding:0.4rem 1rem;border-radius:4px;border:1px solid #555;background:#333;color:#ccc;cursor:pointer" onclick="closeReenableModal()">Cancel</button>
+        <button id="reenable-delete-btn" style="display:none;padding:0.4rem 1rem;border-radius:4px;border:none;background:#7b2d2d;color:#fff;cursor:pointer;font-weight:600" onclick="confirmReenableDelete()">Delete</button>
         <button id="reenable-confirm-btn" style="padding:0.4rem 1rem;border-radius:4px;border:none;background:#c0392b;color:#fff;cursor:pointer;font-weight:600" onclick="confirmReenable()">Re-enable</button>
       </div>
     </div>
