@@ -35,6 +35,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
+from .category_utils import infer_category_from_name
 from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
@@ -618,7 +619,7 @@ class PlexScraper(BaseScraper):
                 stream_url        = f"plex://{channel_id}",
                 logo_url          = logo,
                 slug              = slug,
-                category          = cat_map.get(channel_id),
+                category          = cat_map.get(channel_id) or infer_category_from_name(name),
                 language          = lang,
                 country           = "US",
                 stream_type       = "hls",
