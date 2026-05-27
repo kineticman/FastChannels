@@ -296,7 +296,7 @@ def sources():
     }
     needs_config = [
         s for s in sources_list
-        if source_config_status.get(s.id) == 'required'
+        if source_config_status.get(s.id) == 'required' and s.is_enabled
     ]
 
     from ..scrapers.category_utils import CANONICAL_CATEGORIES
