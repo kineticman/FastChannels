@@ -1214,7 +1214,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'nbclx':                                'News',
 
     # ── Outdoors ─────────────────────────────────────────────────────────────
-    'giddy up tv':                          'Outdoors',
+    'giddy up tv':                          'Westerns',
     'mlb channel':                          'Sports',
     'nfl channel':                          'Sports',
     'absinthe tv':                          'Sports',
