@@ -180,7 +180,7 @@
             <td style="color:{% if not source.is_enabled %}var(--text-dim){% elif nxt and nxt < now %}var(--warning){% else %}var(--text-muted){% endif %}" id="next-scrape-{{ source.id }}">{% if not source.is_enabled %}Disabled{% else %}{{ nxt | localtime }}{% endif %}</td>
             <td>
               {% if source.name != 'custom' %}
-              <button class="btn btn-sm" onclick="run({{ source.id }}, this)">Scrape Now</button>
+              <button class="btn btn-sm" onclick="run({{ source.id }}, this)"{% if not source.is_enabled %} disabled title="Enable this source to scrape"{% endif %}>Scrape Now</button>
               <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
               {% endif %}
             </td>
