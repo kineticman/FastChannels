@@ -1,6 +1,6 @@
 # FastChannels
 
-FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
+FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Frndly TV, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
 
 ## Deploy with Portainer
 
@@ -180,7 +180,7 @@ M3U and EPG XML outputs are cached to disk and served as fast file reads. The ca
 
 ### Stream Audit
 
-Sources that support it have a **📋 Stream Audit** button on the Sources page that health-checks every channel's stream URL and automatically marks dead or DRM-protected channels inactive. Currently supported: Pluto TV, Tubi TV, The Roku Channel, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo Play, Local Now, LG Channels, FreeLiveSports, STIRR.
+Sources that support it have a **📋 Stream Audit** button on the Sources page that health-checks every channel's stream URL and automatically marks dead or DRM-protected channels inactive. Currently supported: Pluto TV, Tubi TV, The Roku Channel, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo Play, Local Now, LG Channels, FreeLiveSports, STIRR, Bally Sports Live, Frndly TV, Hallmark, TCL TV+, Vidaa Free TV.
 
 Running a Stream Audit after your initial scrape is strongly recommended. It shows a live progress bar and a running count of DRM and dead channels found as it works through the list. Depending on channel count it may take several minutes.
 
@@ -228,6 +228,11 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | STIRR | None | Public API |
 | FreeLiveSports | None | Public API |
 | Amazon Prime Free | Optional cookie header | EPG-only by default; streams are DRM-only |
+| Bally Sports Live | None | Free, unauthenticated |
+| Hallmark | None | Free, unauthenticated |
+| TCL TV+ | None | Free, unauthenticated |
+| Vidaa Free TV | None | Free, unauthenticated |
+| Frndly TV | Email/password required | Paid subscription required; disabled by default |
 
 - **Roku**: Cloudflare rate-limiting can cause occasional 403 errors during scraping or playback. If this happens, wait a few minutes before retrying — repeated attempts make it worse. Some channels also expose sparse future guide data; short EPG windows are expected on those channels.
 - **Amazon Prime Free**: without a valid cookie header, channel discovery pagination is limited.
