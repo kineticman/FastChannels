@@ -10,7 +10,7 @@ from typing import Any
 
 import requests
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, StreamDeadError, infer_language_from_metadata
 from .category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ class FrndlyTVScraper(BaseScraper):
         username = self.config.get('username', '').strip()
         password = self.config.get('password', '').strip()
         if not username or not password:
-            raise RuntimeError('Frndly TV username and password are required')
+            raise ScrapeSkipError('Frndly TV requires a username and password — configure credentials in Sources')
 
         params = {
             'box_id': _BOX_ID,
