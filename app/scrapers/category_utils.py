@@ -1015,6 +1015,13 @@ _NAME_OVERRIDES: dict[str, str] = {
     'amazon live':                          'Shopping',
 
     # ── Latino ───────────────────────────────────────────────────────────────
+    'américa teve':                         'Latino',
+    'america teve':                         'Latino',
+    'rcn más':                              'Latino',
+    'rcn mas':                              'Latino',
+    'vr+':                                  'Latino',
+    'única tv':                             'Latino',
+    'unica tv':                             'Latino',
     'box cinema':                           'Latino',
     'el rey rebel':                         'Latino',
     'latino vibes':                         'Latino',
@@ -1305,6 +1312,10 @@ _NAME_OVERRIDES: dict[str, str] = {
     'shop tv':                              'Shopping',
 
     # ── Sports ───────────────────────────────────────────────────────────────
+    'willow tv':                            'Sports',
+    'willow xtra':                          'Sports',
+    'unbeaten':                             'Sports',
+    'perfect game tv':                      'Sports',
     'formula 1 tv':                         'Sports',
     'motogp tv':                            'Sports',
     'mtrspt1':                              'Sports',
