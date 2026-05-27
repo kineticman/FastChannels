@@ -1,3 +1,6 @@
+# Portions of the auth flow, stream resolution, and channel/guide parsing are
+# adapted from https://github.com/matthuisman/frndlytv-for-channels (MIT License,
+# Copyright (c) 2021 Robbie Trencheny).
 from __future__ import annotations
 
 import logging
