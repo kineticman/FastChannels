@@ -1021,6 +1021,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'rcn mas':                              'Latino',
     'vr+':                                  'Latino',
     'única tv':                             'Latino',
+    'única  tv':                            'Latino',
     'unica tv':                             'Latino',
     'box cinema':                           'Latino',
     'el rey rebel':                         'Latino',
