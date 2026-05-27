@@ -800,8 +800,8 @@ def run_stream_audit(source_name: str):
                         continue
                     raise
 
-                if r.status_code in (403, 429, 503):
-                    wait = 30 + skipped_403 * 5  # escalate backoff with repeated 403s
+                if r.status_code in (403, 429, 500, 502, 503, 504):
+                    wait = 30 + skipped_403 * 5  # escalate backoff with repeated errors
                     logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
                                    source_name, r.status_code, wait)
                     _time.sleep(min(wait, 120))
@@ -825,14 +825,14 @@ def run_stream_audit(source_name: str):
                     logger.info('[audit] dead stream: %s  (HTTP %d)', ch.name, r.status_code)
                     continue
 
-                if r.status_code in (403, 429, 503):
-                    # Still rate-limited after backoff — skip without penalising the
-                    # consecutive-error budget.  These are CDN/auth throttles, not
-                    # real stream errors, so they should not abort the audit.
+                if r.status_code in (403, 429, 500, 502, 503, 504):
+                    # Still rate-limited or transient server error after backoff —
+                    # skip without penalising the consecutive-error budget.
+                    # 500/502/504 are CDN hiccups, not stream problems.
                     skipped_403 += 1
                     consecutive_errors = 0
                     report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'rate-limited', 'reason': f'HTTP {r.status_code}'})
-                    logger.info('[audit] %s still rate-limited (%d) after backoff, skipping',
+                    logger.info('[audit] %s transient error (%d) after backoff, skipping',
                                 ch.name, r.status_code)
                     continue
 
