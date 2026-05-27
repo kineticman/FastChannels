@@ -2239,6 +2239,43 @@
       }
     }
 
+    function renderFuboConfig(sourceId, schema, values) {
+      const fastOnly = values.fast_only !== 'false';
+      return `
+        <div class="config-title">Fubo TV Settings</div>
+        <div class="config-note">Enter your Fubo TV email and password. FastChannels logs in automatically and refreshes your session as needed.</div>
+        <div class="fields-grid">
+          <div class="field">
+            <label for="cfg-${sourceId}-username">Email <span class="req">*</span></label>
+            <input type="text" id="cfg-${sourceId}-username" data-key="username" data-secret="false"
+                   value="${escapeHtml(String(values.username || ''))}"
+                   placeholder="you@example.com" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="cfg-${sourceId}-password">Password <span class="req">*</span></label>
+            <input type="password" id="cfg-${sourceId}-password" data-key="password" data-secret="true"
+                   value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
+          </div>
+          <div class="field field-full" style="margin-top:0.25rem;">
+            <label style="display:inline-flex;align-items:center;gap:0.5rem;font-size:0.84rem;font-weight:normal;text-transform:none;letter-spacing:normal;cursor:pointer;">
+              <input type="checkbox" id="cfg-${sourceId}-fast_only-check"
+                     ${fastOnly ? 'checked' : ''}
+                     style="accent-color:var(--accent-strong);cursor:pointer;width:1rem;height:1rem;"
+                     onchange="document.getElementById('cfg-${sourceId}-fast_only').value = this.checked ? 'true' : 'false'">
+              FAST channels only — free ad-supported channels (~180 channels, no DRM)
+            </label>
+            <input type="hidden" id="cfg-${sourceId}-fast_only" data-key="fast_only" data-secret="false"
+                   value="${fastOnly ? 'true' : 'false'}">
+            <div class="help" style="margin-left:1.5rem;">Uncheck to include all channels from your paid subscription (~835 channels, some DRM-protected).</div>
+          </div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
+    }
+
     function renderConfigFields(sourceId, sourceName, schema, values) {
       let primarySchema = schema;
       let advancedSchema = [];
@@ -2257,6 +2294,8 @@
         return renderSamsungConfig(sourceId, schema, values);
       } else if (sourceName === 'pluto') {
         return renderPlutoConfig(sourceId, schema, values);
+      } else if (sourceName === 'fubo') {
+        return renderFuboConfig(sourceId, schema, values);
       }
 
       const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {
