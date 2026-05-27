@@ -294,7 +294,7 @@
     .btn-secondary:hover { background: var(--text-dim); }
     .dup-badge {
       display: inline-block; font-size: 0.6rem; font-weight: 700; padding: 0.1rem 0.35rem;
-      border-radius: 3px; background: var(--warning-bg-2); color: var(--warning); margin-left: 0.4rem;
+      border-radius: 3px; background: var(--warning-bg-2); color: var(--warning); margin-left: 0.1rem;
       vertical-align: middle; letter-spacing: 0.05em;
     }
     tr.dup-group-1 td { background: color-mix(in srgb, var(--warning) 10%, transparent); }
@@ -306,7 +306,7 @@
     }
     .badge-manual-dup {
       display: inline-block; font-size: 0.6rem; font-weight: 700; padding: 0.1rem 0.35rem;
-      border-radius: 3px; background: var(--purple-panel); color: var(--purple); margin-left: 0.4rem;
+      border-radius: 3px; background: var(--purple-panel); color: var(--purple); margin-left: 0.1rem;
       vertical-align: middle; letter-spacing: 0.05em; border: 1px solid var(--purple-panel-border-soft);
     }
     .btn-mark-dup {
@@ -1549,8 +1549,8 @@
             <th class="sortable {% if sort_by == 'name' %}active{% endif %}" onclick="sortBy('name')">
               Name <span class="sort-arrow">{% if sort_by == 'name' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span>
             </th>
-            <th style="width:1px;white-space:nowrap">
-              <select class="col-filter-select{% if duplicates_filter %} col-filter-active{% endif %}" onchange="filterBy('duplicates', this.value)" title="Filter by duplicate status">
+            <th style="width:1px;white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">
+              <select class="col-filter-select{% if duplicates_filter %} col-filter-active{% endif %}" onchange="filterBy('duplicates', this.value)" title="Filter by duplicate status" style="width:42px">
                 <option value="">DUP</option>
                 <option value="1" {% if duplicates_filter == '1' %}selected{% endif %}>⚠ Dupes</option>
                 <option value="unique" {% if duplicates_filter == 'unique' %}selected{% endif %}>✓ Unique</option>
