@@ -304,7 +304,7 @@ class FuboScraper(BaseScraper):
                 stream_url=f'fubo://{ch_id}',
                 logo_url=logo or None,
                 category=category,
-                language=infer_language_from_metadata(name),
+                language='es' if 'spanish' in tags_lower else infer_language_from_metadata(name),
                 country='US',
                 stream_type='hls',
                 description=desc or None,
