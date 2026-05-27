@@ -1,8 +1,6 @@
 import re
 
 
-_EXT_X_KEY_RE = re.compile(r'^#EXT-X-KEY:(.+)$', re.IGNORECASE)
-
 _VIDEO_CODEC_MAP = {
     'avc1': 'h264', 'avc3': 'h264',
     'hvc1': 'hevc', 'hev1': 'hevc',
@@ -109,6 +107,8 @@ def parse_stream_info(master_text: str) -> dict | None:
     }
 _ATTR_RE = re.compile(r'([A-Z0-9-]+)=(".*?"|[^,]+)', re.IGNORECASE)
 _DRM_METHODS = {'SAMPLE-AES', 'SAMPLE-AES-CTR', 'SAMPLE-AES-CENC'}
+# Match both #EXT-X-KEY and #EXT-X-SESSION-KEY (used in CMAF multi-DRM manifests)
+_EXT_X_KEY_ANY_RE = re.compile(r'^#EXT-X-(?:SESSION-)?KEY:(.+)$', re.IGNORECASE)
 
 
 def _parse_attrs(attr_text: str) -> dict[str, str]:
@@ -125,15 +125,21 @@ def inspect_hls_drm(manifest_text: str) -> dict | None:
     """
     Inspect HLS manifest text for client-breaking DRM/encryption.
 
-    Notes:
-    - Do not flag plain AES-128 by itself. Generic HLS clients can often play it.
-    - Flag SAMPLE-AES family methods.
-    - Flag explicit KEYFORMAT markers for known DRM systems even if the method is
-      not in the SAMPLE-AES family.
+    Scans all #EXT-X-KEY and #EXT-X-SESSION-KEY lines (both forms appear in
+    CMAF multi-DRM manifests).  If Widevine is present in any entry, returns
+    None — the stream is Widevine-capable and should not be disabled.  FairPlay
+    appearing first in Irdeto/CMAF manifests alongside Widevine is a red herring;
+    only FairPlay-only or PlayReady-only streams are truly unplayable on most
+    clients.
+
+    Plain AES-128 (METHOD=AES-128, no KEYFORMAT) is not flagged.
     """
+    found: list[dict] = []
+    has_widevine = False
+
     for raw_line in manifest_text.splitlines():
         line = raw_line.strip()
-        match = _EXT_X_KEY_RE.match(line)
+        match = _EXT_X_KEY_ANY_RE.match(line)
         if not match:
             continue
         attrs = _parse_attrs(match.group(1))
@@ -148,6 +154,7 @@ def inspect_hls_drm(manifest_text: str) -> dict | None:
         if keyformat and keyformat_lower != 'identity':
             if 'widevine' in keyformat_lower or 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed' in keyformat_lower:
                 drm_type = 'Widevine'
+                has_widevine = True
             elif 'fairplay' in keyformat_lower or 'apple' in keyformat_lower or 'com.apple.streamingkeydelivery' in keyformat_lower:
                 drm_type = 'FairPlay'
             elif 'playready' in keyformat_lower or 'microsoft' in keyformat_lower or '9a04f079-9840-4286-ab92-e65be0885f95' in keyformat_lower:
@@ -156,10 +163,20 @@ def inspect_hls_drm(manifest_text: str) -> dict | None:
                 drm_type = f'Unknown (KEYFORMAT={keyformat})'
 
         if drm_type or method in _DRM_METHODS:
-            return {
+            found.append({
                 'method': method,
                 'uri': uri,
                 'keyformat': keyformat or None,
                 'drm_type': drm_type or f'Encrypted ({method})',
-            }
-    return None
+            })
+
+    if not found:
+        return None
+
+    # CMAF multi-DRM: Widevine present means the stream is Widevine-capable.
+    # Don't block — FairPlay keys co-existing with Widevine in the same manifest
+    # are for Apple clients; the stream is not FairPlay-only.
+    if has_widevine:
+        return None
+
+    return found[0]
