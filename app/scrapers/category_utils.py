@@ -715,6 +715,7 @@ _NAME_OVERRIDES: dict[str, str] = {
 
     # ── Entertainment ───────────────────────────────────────────────────────
     '365blk [fast]':                        'Entertainment',
+    'aspiretv':                             'Entertainment',
     'whoa! that was wild!':                 'Entertainment',
     'bizaar':                               'Entertainment',
     'bounce xl':                            'Entertainment',
@@ -1055,6 +1056,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     # whose names happen to start with W or K — override them explicitly:
     'kung fu movies':                       'Action & Adventure',
     'wild west tv':                         'Westerns',
+    'west':                                 'Westerns',
     'wine watches & whiskey':               'Lifestyle',
     'witz comedy tv':                       'Comedy',
     'witz-comedy tv':                       'Comedy',
@@ -1147,6 +1149,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'billboard tv':                         'Music',
     'revolt mixtape':                       'Music',
     'circle':                               'Music',
+    'stingray holidayscapes':               'Ambiance',
 
     # ── Nature ───────────────────────────────────────────────────────────────
     'bbc travel':                           'Travel',
