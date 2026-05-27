@@ -430,7 +430,12 @@ class FuboScraper(BaseScraper):
             if 'not in allowed list' in err or r.status_code == 403:
                 raise StreamDeadError(f'Fubo channel {ch_id} not in subscription: {err}')
             raise RuntimeError(f'Fubo stream resolution failed for channel {ch_id}: {err or r.status_code}')
-        stream_url = (r.json().get('stream') or {}).get('url', '')
+        stream = r.json().get('stream') or {}
+        if stream.get('drmProvider') == 'wurl':
+            raise StreamDeadError(
+                f'Fubo channel {ch_id} uses WURL proprietary DRM — not supported'
+            )
+        stream_url = stream.get('url', '')
         if not stream_url:
             raise RuntimeError(f'Fubo: no stream URL returned for channel {ch_id}')
         return stream_url
