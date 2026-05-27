@@ -403,7 +403,7 @@
                      placeholder="e.g. 10000" value="{{ feed.chnum_start or '' }}"
                      oninput="checkInlineChnumConflict({{ feed.id }})">
               <button class="btn btn-ghost" type="button" onclick="saveFeedChnum({{ feed.id }})">Save</button>
-              <button class="btn btn-ghost" type="button" onclick="resetFeedChnums({{ feed.id }}, '{{ feed.name|e }}', true, this)">Reset Channel Numbers</button>
+              <button class="btn btn-ghost" type="button" onclick="resetFeedChnums({{ feed.id }}, '{{ feed.name|e }}', true, this)" title="Clears all auto-assigned channel numbers and regenerates them sequentially from the saved Master Channel Number Start. Pinned numbers are preserved.">Reset Channel Numbers</button>
             </div>
             <div class="help">Applies to all sources without their own channel number start.{% if default_chnum_from_env %} Currently inherited from env var <code>MASTER_CHANNEL_NUMBER_START</code> — saving here overrides it.{% endif %}</div>
             <div id="chnum-conflict-{{ feed.id }}" style="margin-top:4px;font-size:0.78rem;line-height:1.6"></div>
@@ -422,7 +422,7 @@
                      value="{{ feed.chnum_start or '' }}"
                      oninput="checkInlineChnumConflict({{ feed.id }})">
               <button class="btn btn-ghost" type="button" onclick="saveFeedChnum({{ feed.id }})">Save</button>
-              <button class="btn btn-ghost" type="button" onclick="resetFeedChnums({{ feed.id }}, '{{ feed.name|e }}', false, this)">Reset Channel Numbers</button>
+              <button class="btn btn-ghost" type="button" onclick="resetFeedChnums({{ feed.id }}, '{{ feed.name|e }}', false, this)" title="Clears this feed's sticky channel-number assignments and regenerates them sequentially from the saved Channel Number Start.">Reset Channel Numbers</button>
             </div>
             <div class="help">Leave blank to auto-assign (currently {{ feed_chnum_placeholder.get(feed.id, 'auto') }}). Set a value to number all channels in this feed sequentially from here.</div>
             <div id="chnum-conflict-{{ feed.id }}" style="margin-top:4px;font-size:0.78rem;line-height:1.6"></div>
