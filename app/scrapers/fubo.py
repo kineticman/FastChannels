@@ -312,7 +312,18 @@ class FuboScraper(BaseScraper):
                 tags=tags,
             ))
 
-        logger.info('[fubo] fetched %d channels', len(channels))
+        # Fubo EPG sometimes contains duplicate entries for the same channel
+        # (e.g. id=123605 and id=1236050001) — alternate feed slots. Deduplicate
+        # by name, keeping the shortest channel ID (the canonical original).
+        seen: dict[str, ChannelData] = {}
+        for ch in channels:
+            name = ch.name
+            if name not in seen or len(ch.source_channel_id) < len(seen[name].source_channel_id):
+                seen[name] = ch
+        pre_dedup = len(channels)
+        channels = list(seen.values())
+
+        logger.info('[fubo] fetched %d channels (%d after dedup)', pre_dedup, len(channels))
         return channels
 
     # ── EPG ───────────────────────────────────────────────────────────────────
