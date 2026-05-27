@@ -132,6 +132,11 @@
       color: var(--warning-soft);
       border-color: var(--warning-border);
     }
+    .config-badge.premium {
+      background: color-mix(in srgb, #7c3aed 12%, transparent);
+      color: #a78bfa;
+      border-color: color-mix(in srgb, #7c3aed 35%, transparent);
+    }
 
     /* Scrape / audit status in dashboard row */
     .scrape-status { font-size: 0.75rem; margin-top: 0.2rem; display: flex; align-items: center; gap: 0.35rem; min-height: 0; }
@@ -552,6 +557,9 @@
                 <span class="source-name">{{ source.display_name }}</span>
                 {% if not is_custom %}
                   {% if source.last_error %}<span class="err-pip" title="{{ source.last_error }}">⚠</span>{% endif %}
+                  {% if premium_sources.get(source.name) %}
+                    <span class="config-badge premium">Premium</span>
+                  {% endif %}
                   {% if cfg_status == 'configured' %}
                     <span class="config-badge configured" id="config-badge-{{ source.id }}">Configured</span>
                   {% elif cfg_status == 'required' %}

@@ -53,8 +53,9 @@ class FrndlyTVScraper(BaseScraper):
     source_name = 'frndlytv'
     display_name = 'Frndly TV'
     scrape_interval = 360
-    stream_audit_enabled = False  # streams require auth; audit would always fail
+    stream_audit_enabled = True
     config_required = True
+    is_premium = True
 
     config_schema = [
         ConfigField('username', 'Username / Email', required=True,

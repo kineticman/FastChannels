@@ -267,6 +267,10 @@ def sources():
         name: getattr(cls, 'config_required', False)
         for name, cls in all_scrapers.items()
     }
+    premium_sources = {
+        name: getattr(cls, 'is_premium', False)
+        for name, cls in all_scrapers.items()
+    }
     source_interval_meta = {
         name: {
             'recommended': getattr(cls, 'scrape_interval', 360),
@@ -301,6 +305,7 @@ def sources():
                            chnum_warnings=[],
                            audit_enabled=audit_enabled,
                            config_required=config_required,
+                           premium_sources=premium_sources,
                            source_interval_meta=source_interval_meta,
                            source_config_status=source_config_status,
                            needs_config=needs_config,

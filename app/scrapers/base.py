@@ -264,6 +264,7 @@ class BaseScraper(ABC):
     max_scrape_interval: int = 10080
     stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source
     config_required: bool = False      # True if source won't return useful channels without user configuration
+    is_premium: bool = False           # True for paid/subscription services — shown as a badge in the admin UI
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
     channel_miss_threshold: int = 3  # missed scrapes before is_active=False; override per scraper
     rehome_by_guide_key: bool = False  # when True, re-use existing DB rows whose guide_key matches an incoming channel whose uuid changed
