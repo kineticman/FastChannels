@@ -481,7 +481,7 @@
           <label for="channels-dvr-url">Channels DVR Server URL</label>
           <input type="url" id="channels-dvr-url"
                  placeholder="http://192.168.1.x:8089" value="{{ channels_dvr_url }}">
-          <div class="help">Base URL of your Channels DVR server (port 8089). Find it in Channels DVR → Settings → About.</div>
+          <div class="help">Base URL of your Channels DVR server (port 8089). Find it in Channels DVR → Settings → About. If FastChannels and Channels DVR are on the same machine and the Test Connection button fails with your LAN IP, try <code>http://172.17.0.1:8089</code> instead (the Docker host gateway).</div>
           {% if channels_dvr_url_from_env %}
           <div class="help">Currently coming from environment variable <code>CHANNELS_DVR_SERVER_URL</code>. Saving here will override it in the database.</div>
           {% endif %}
@@ -502,6 +502,7 @@
       </div>
       <div class="field-actions">
         <span class="save-status" id="dvr-settings-status"></span>
+        <button class="btn btn-secondary" onclick="testDvrConnection()">Test Connection</button>
         <button class="btn btn-primary" onclick="saveDvrSettings()">Save</button>
       </div>
     </div>
@@ -772,6 +773,28 @@ async function savePublicBaseUrlSettings() {
     checkPublicBaseUrlPortWarning();
     settingsNeedsConfigState.public_base_url = !publicBaseUrl && {{ 'true' if not public_base_url_from_env else 'false' }};
     refreshSettingsNeedsConfigBanner();
+  }
+}
+
+async function testDvrConnection() {
+  const statusEl = document.getElementById('dvr-settings-status');
+  statusEl.textContent = 'Testing…';
+  statusEl.className = 'save-status';
+  try {
+    const resp = await fetch('/api/dvr/test-connection');
+    const data = await resp.json();
+    if (data.ok) {
+      let msg = `Connected to Channels DVR v${data.version}`;
+      if (data.username) msg += ` (${data.username})`;
+      statusEl.textContent = msg;
+      statusEl.className = 'save-status ok';
+    } else {
+      statusEl.textContent = data.error || 'Connection failed.';
+      statusEl.className = 'save-status error';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Connection failed.';
+    statusEl.className = 'save-status error';
   }
 }
 

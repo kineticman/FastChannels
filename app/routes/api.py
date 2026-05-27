@@ -2927,7 +2927,7 @@ def push_feed_to_dvr(feed_id):
         if xmltv_url:
             payload['xmltv_url']     = xmltv_url
             payload['xmltv_refresh'] = '3600'
-        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=30)
+        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=30, verify=False)
 
     gn_name  = f"FastChannels {feed.name} Gracenote"
     epg_name = f"FastChannels {feed.name}"
@@ -2995,7 +2995,7 @@ def push_source_to_dvr(source_id):
         if xmltv_url:
             payload['xmltv_url'] = xmltv_url
             payload['xmltv_refresh'] = '3600'
-        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=30)
+        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=30, verify=False)
 
     query_param = f"?source={source.name}"
     std_name = f"FastChannels {source.display_name}"
@@ -3062,7 +3062,7 @@ def push_raw_output_to_dvr():
         if xmltv_url:
             payload['xmltv_url'] = xmltv_url
             payload['xmltv_refresh'] = '3600'
-        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=8)
+        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=8, verify=False)
 
     std_name = 'FastChannels Raw Output'
     gn_name = 'FastChannels Raw Output Gracenote'
@@ -3086,6 +3086,31 @@ def push_raw_output_to_dvr():
         return jsonify({'error': f'DVR {resp.status_code}: {resp.text[:300]}'}), 502
 
     return jsonify({'ok': True, 'sources_added': sources_added})
+
+
+@api_bp.route('/dvr/test-connection', methods=['GET'])
+def dvr_test_connection():
+    """Ping the configured Channels DVR server and return version info."""
+    settings = AppSettings.get()
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
+    try:
+        r = _req.get(f"{dvr_url}/status", timeout=5, verify=False)
+        r.raise_for_status()
+        data = r.json()
+        return jsonify({
+            'ok': True,
+            'version': data.get('version', ''),
+            'username': data.get('username', ''),
+            'subscription': data.get('subscription', ''),
+        })
+    except _req.exceptions.ConnectionError:
+        return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
+    except _req.exceptions.Timeout:
+        return jsonify({'error': 'Channels DVR timed out.'}), 504
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 502
 
 
 @api_bp.route('/settings', methods=['GET', 'POST'])

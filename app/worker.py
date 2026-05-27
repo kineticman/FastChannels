@@ -2373,7 +2373,7 @@ if __name__ == '__main__':
                 safe      = _re.sub(r'[^a-zA-Z0-9]', '', name)
                 lineup_id = f'XMLTV-{safe}'
                 try:
-                    r = _requests.put(f'{dvr_url}/dvr/lineups/{lineup_id}', timeout=15)
+                    r = _requests.put(f'{dvr_url}/dvr/lineups/{lineup_id}', timeout=15, verify=False)
                     if r.ok:
                         refreshed.append(lineup_id)
                     else:
