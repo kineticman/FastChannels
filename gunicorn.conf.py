@@ -11,6 +11,11 @@ _SUPPRESS_PATTERNS = (
     '/logos/',                 # cached logo file hits — too noisy
     '/posters/',               # cached poster file hits — too noisy
     '/play/custom/segment',    # segment proxy is high-volume by design
+    '"GET /static/',           # static asset cache hits — 304s add no signal
+    'GET /api/gracenote/community-summary',  # polled frequently, low signal
+    'GET /api/gracenote/remote-map/status', # polled frequently, low signal
+    'GET /favicon.ico',                     # browser auto-request, always 404
+    'GET /api/system-stats',               # polled frequently, low signal
     '/api/sources/chnum',      # overlap-banner polling
     '/api/feeds/chnum-ranges', # feed page chnum conflict checker
     'GET /api/sources HTTP',   # sources list fetched on every poll cycle finish
@@ -19,7 +24,7 @@ _SUPPRESS_PATTERNS = (
 )
 
 # Suppress GET /api/sources/{id}/config but keep POSTs and action endpoints
-_SUPPRESS_RE = re.compile(r'GET /api/sources/\d+/config ')
+_SUPPRESS_RE = re.compile(r'GET /api/sources/\d+/config |GET /api/channels/\d+/preview|/api/channels/\d+/inspect|GET /api/channels/\d+/feed-membership')
 
 # Suppress feed/M3U/EPG requests — healthy DVR polling, not worth logging
 _SUPPRESS_FEED_RE = re.compile(r'"GET /feeds/|"GET /m3u/|"GET /output/')
