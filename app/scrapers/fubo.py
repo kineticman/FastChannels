@@ -275,7 +275,7 @@ class FuboScraper(BaseScraper):
             # Skip PPV/pay-per-view channels
             if any(t in ch_id for t in ['168364', '168365', '36230000']):
                 continue
-            tags = ch.get('tags') or []
+            tags = [t for t in (ch.get('tags') or []) if not t.lower().startswith('us-compare')]
             tags_lower = [t.lower() for t in tags]
             if 'ppv' in tags_lower:
                 continue
