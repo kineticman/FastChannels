@@ -498,7 +498,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'dino', 'animation+', 'animation +',
         'junior', 'jr.', 'cartoon', 'barney', 'dinos 24',
         'my little pony', 'strawberry shortcake', 'power rangers',
-        'kartoon', 'pocket.watch', 'baby',
+        'kartoon', 'pocket.watch', 'baby', 'toons',
     }, 'Kids'),
     # Drama & Soaps
     ({
@@ -675,6 +675,10 @@ _NAME_OVERRIDES: dict[str, str] = {
     'lassie':                               'Classic TV',
     'little house on the prairie':          'Classic TV',
     'the beverly hillbillies':              'Classic TV',
+    'heroes & icons':                       'Classic TV',
+    'metv':                                 'Classic TV',
+    'metv toons':                           'Kids',
+    'metv+':                                'Classic TV',
 
     # ── Comedy ───────────────────────────────────────────────────────────────
     'the conners':                          'Comedy',
@@ -740,8 +744,10 @@ _NAME_OVERRIDES: dict[str, str] = {
     'bosch':                                'Drama',
     'designated survivor':                  'Drama',
     'heartland':                            'Drama',
+    'great':                                'Drama',
     'ion':                                  'Drama',
     'ion plus':                             'Drama',
+    'lifetime':                             'Movies',
     'las vegas':                            'Drama',
     'lawless':                              'Drama',
     'leverage':                             'Drama',
@@ -817,6 +823,11 @@ _NAME_OVERRIDES: dict[str, str] = {
     'daystar español':                      'Faith',
     'trinity broadcast network':            'Faith',
     'touched by an angel':                  'Faith',
+    'dove spirit of the heart land':        'Faith',
+    'great american faith & living':        'Faith',
+    'insp':                                 'Faith',
+    'story television':                     'Faith',
+    'uptv':                                 'Faith',
 
     # ── Food ─────────────────────────────────────────────────────────────────
     'new kfood':                            'Food',
@@ -990,6 +1001,9 @@ _NAME_OVERRIDES: dict[str, str] = {
     'escape to the country':                'Lifestyle',
     "women's wellness by commune":          'Lifestyle',
     'outdoor channel':                      'Outdoors',
+    'cleo tv':                              'Lifestyle',
+    'dabl':                                 'Lifestyle',
+    'fyi':                                  'Lifestyle',
     'latv':                                 'Latino',
     'wwe superstar central':               'Sports',
     'journy tv':                            'Travel',
@@ -1089,12 +1103,21 @@ _NAME_OVERRIDES: dict[str, str] = {
     'new kmovies':                          'Movies',
     'the asylum':                           'Movies',
     'universal movies':                     'Movies',
+    'family movie classics':                'Movies',
+    'fetv':                                 'Movies',
+    'great american family':               'Movies',
+    'hallmark family':                      'Movies',
+    'hallmark mystery':                     'Movies',
+    'lmn':                                  'Movies',
+    'pixl':                                 'Movies',
 
     # ── Music ────────────────────────────────────────────────────────────────
     'saga music haryanvi':                  'Music',
     'saga music':                           'Music',
     'yrf music':                            'Music',
     'hot country':                          'Music',
+    'flashback 70s':                        'Music',
+    'remember the 80s':                     'Music',
     'pop adult':                            'Music',
     'ghaint punjab':                        'Music',
     'smooth jazz':                          'Music',
@@ -1182,6 +1205,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'yachting tv':                          'Outdoors',
     'game & fish tv':                       'Outdoors',
     'hunt fish tv':                         'Outdoors',
+    'pursuit':                              'Outdoors',
+    'pursuit channel':                      'Outdoors',
     'pursuit up':                           'Outdoors',
     'pursuitup':                            'Outdoors',
     'field & stream tv':                    'Outdoors',
@@ -1345,6 +1370,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'lucha libre aaa':                      'Sports',
 
     # ── Travel ───────────────────────────────────────────────────────────────
+    'envoy tv':                             'Travel',
     'journy':                               'Travel',
     'travel + adventure':                   'Travel',
     'travel and adventure':                 'Travel',
@@ -1384,6 +1410,9 @@ _NAME_OVERRIDES: dict[str, str] = {
     'todo crimen':                          'True Crime',
     'zona investigación':                   'True Crime',
     'zona investigacion':                   'True Crime',
+    'a&e':                                  'True Crime',
+    'justice central':                      'True Crime',
+    'start tv':                             'True Crime',
 
     # ── Westerns ─────────────────────────────────────────────────────────────
     'the rifleman':                         'Westerns',
@@ -1395,6 +1424,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'the young riders':                     'Westerns',
     'life and legend of wyatt earp':        'Westerns',
     'cowboy movie channel':                 'Westerns',
+    'grit':                                 'Westerns',
     'grit xtra':                            'Westerns',
     'old west tv':                          'Westerns',
     'rawhide':                              'Westerns',
