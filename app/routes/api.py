@@ -3209,6 +3209,55 @@ def backup_db():
         _os.unlink(tmp_gz.name)
 
 
+@api_bp.route('/settings/restore-db', methods=['POST'])
+def restore_db():
+    """Accept a .db or .db.gz upload and atomically replace the live database."""
+    import gzip as _gzip, signal as _signal, sqlite3 as _sqlite3
+
+    f = request.files.get('db_file')
+    if not f:
+        return jsonify({'error': 'No file uploaded.'}), 400
+
+    filename = f.filename or ''
+    data = f.read()
+
+    if filename.lower().endswith('.gz'):
+        try:
+            data = _gzip.decompress(data)
+        except Exception:
+            return jsonify({'error': 'Could not decompress .gz file — is it a valid gzip archive?'}), 400
+
+    SQLITE_MAGIC = b'SQLite format 3\x00'
+    if not data.startswith(SQLITE_MAGIC):
+        return jsonify({'error': 'File does not appear to be a valid SQLite database.'}), 400
+
+    db_path  = '/data/fastchannels.db'
+    tmp_path = '/data/fastchannels_restore_tmp.db'
+    try:
+        with open(tmp_path, 'wb') as fp:
+            fp.write(data)
+        # Remove stale WAL/SHM so the restored DB starts clean
+        for ext in ('-wal', '-shm'):
+            stale = db_path + ext
+            if _os.path.exists(stale):
+                _os.unlink(stale)
+        _os.replace(tmp_path, db_path)
+    except Exception as exc:
+        try:
+            _os.unlink(tmp_path)
+        except OSError:
+            pass
+        return jsonify({'error': f'Failed to write database: {exc}'}), 500
+
+    # Gracefully reload gunicorn workers so they open fresh connections to the new DB
+    try:
+        _os.kill(_os.getppid(), _signal.SIGHUP)
+    except Exception:
+        pass
+
+    return jsonify({'status': 'ok'})
+
+
 @api_bp.route('/system-stats')
 def system_stats():
     # ── Database ──────────────────────────────────────────────────────────

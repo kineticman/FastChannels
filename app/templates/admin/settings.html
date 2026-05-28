@@ -557,11 +557,28 @@
     <div class="source-body open">
       <div class="toggle-row-help" style="max-width:640px;margin-top:0.75rem;margin-bottom:0.75rem">
         Downloads a gzip-compressed copy of <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">fastchannels.db</code> — includes all channels, sources, feeds, settings, and Gracenote assignments.
-        Store it somewhere safe. To restore, decompress the file and replace <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">/data/fastchannels.db</code> with it, then restart the container.
+        Store it somewhere safe. To restore, upload the backup file below — the container will automatically reload.
       </div>
       <div class="field-actions" style="justify-content:flex-start;margin-top:0.5rem;padding-top:0;border-top:none">
         <button class="btn btn-audit" id="backup-db-btn" onclick="downloadDbBackup()">Download DB Backup</button>
         <span class="save-status" id="backup-db-status"></span>
+      </div>
+      <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+        <div class="toggle-row-label" style="margin-bottom:0.5rem">Restore from Backup</div>
+        <div class="toggle-row-help" style="max-width:640px;margin-bottom:0.75rem">
+          Accepts <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">.db</code> or <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">.db.gz</code> files.
+          The existing database will be replaced. <strong>Restart the container after restoring</strong> to ensure all background workers pick up the new database.
+          <strong>This cannot be undone — download a backup first.</strong>
+        </div>
+        <div class="field-actions" style="justify-content:flex-start;align-items:center;gap:0.75rem;margin-top:0;padding-top:0;border-top:none">
+          <label class="btn btn-audit" style="cursor:pointer;margin:0">
+            Choose File&hellip;
+            <input type="file" id="restore-db-file" accept=".db,.db.gz" style="display:none" onchange="restoreDbFileChosen(this)">
+          </label>
+          <span id="restore-db-filename" style="color:var(--text-muted);font-size:0.85rem">No file chosen</span>
+          <button class="btn btn-delete" id="restore-db-btn" onclick="uploadDbRestore()" disabled style="margin:0">Restore</button>
+          <span class="save-status" id="restore-db-status"></span>
+        </div>
       </div>
     </div>
   </div>
@@ -865,6 +882,48 @@ async function downloadDbBackup() {
     status.className = 'save-status error';
     status.textContent = '✕ ' + e.message;
   } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+function restoreDbFileChosen(input) {
+  const label = document.getElementById('restore-db-filename');
+  const btn   = document.getElementById('restore-db-btn');
+  if (input.files && input.files[0]) {
+    label.textContent = input.files[0].name;
+    btn.disabled = false;
+  } else {
+    label.textContent = 'No file chosen';
+    btn.disabled = true;
+  }
+}
+
+async function uploadDbRestore() {
+  const input  = document.getElementById('restore-db-file');
+  const btn    = document.getElementById('restore-db-btn');
+  const status = document.getElementById('restore-db-status');
+  if (!input.files || !input.files[0]) return;
+
+  if (!confirm('Replace the current database with this backup? This cannot be undone.')) return;
+
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  status.className = 'save-status';
+  status.textContent = 'Uploading…';
+
+  const form = new FormData();
+  form.append('db_file', input.files[0]);
+
+  try {
+    const r = await fetch('/api/settings/restore-db', { method: 'POST', body: form });
+    const payload = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(payload.error || `HTTP ${r.status}`);
+    status.className = 'save-status ok';
+    status.textContent = '✓ Restore complete — restart the container to finish.';
+  } catch (e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ ' + e.message;
     btn.disabled = false;
     btn.textContent = originalText;
   }
