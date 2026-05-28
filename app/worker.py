@@ -2172,7 +2172,7 @@ def _schedule_due_scrapes():
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
-        default_disabled_sources = {'amazon_prime_free', 'sling', 'localnow', 'pluto', 'frndlytv'}
+        default_disabled_sources = {'amazon_prime_free', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo'}
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():
             db.session.add(Source(
