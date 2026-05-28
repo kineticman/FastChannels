@@ -497,6 +497,88 @@ def ensure_runtime_schema() -> None:
                 feed,
             )
 
+        # Plex compound channel ID migration.
+        # Plex channel IDs have the format "{server_id}-{channel_id}" where the
+        # server prefix rotates when Plex migrates infrastructure.  The stable
+        # identifier is the channel part (= gridKey).  This block normalises all
+        # source_channel_id / stream_url values to the channel part and removes
+        # duplicate channel rows that arose from a prefix rotation.
+        # Fast-exit: if no plex channels with a hyphenated ID exist, there is
+        # nothing to do (idempotent on every subsequent boot).
+        if "channels" in tables and "sources" in tables:
+            _plex_src = conn.execute(
+                text("SELECT id FROM sources WHERE name = 'plex' LIMIT 1")
+            ).fetchone()
+            if _plex_src:
+                _plex_src_id = _plex_src[0]
+                _has_compound = conn.execute(text(
+                    "SELECT 1 FROM channels "
+                    "WHERE source_id = :sid AND instr(source_channel_id, '-') > 0 LIMIT 1"
+                ), {"sid": _plex_src_id}).fetchone()
+                if _has_compound:
+                    import re as _plex_re
+                    _PLEX_CID_RE = _plex_re.compile(r'^[0-9a-f]{24}-([0-9a-f]{24})$')
+
+                    _plex_rows = conn.execute(text(
+                        "SELECT id, source_channel_id, guide_key "
+                        "FROM channels WHERE source_id = :sid"
+                    ), {"sid": _plex_src_id}).fetchall()
+
+                    from collections import defaultdict as _dd
+                    _by_part: dict = _dd(list)
+                    for _ch_id, _scid, _gk in _plex_rows:
+                        _m = _PLEX_CID_RE.match(_scid or '')
+                        _part = _gk or (_m.group(1) if _m else _scid)
+                        if _part:
+                            _by_part[_part].append(_ch_id)
+
+                    _deduped = 0
+                    _normalized = 0
+                    for _part, _cids in _by_part.items():
+                        _cids.sort()          # lowest id = oldest row = has programs
+                        _winner = _cids[0]
+                        # Grab the newest loser's stream_url — it carries the current
+                        # server prefix which the Plex play API requires.
+                        _newest_loser_url = None
+                        for _loser in _cids[1:]:
+                            _loser_row = conn.execute(text(
+                                "SELECT stream_url FROM channels WHERE id = :l"
+                            ), {"l": _loser}).fetchone()
+                            if _loser_row and _loser_row[0]:
+                                _newest_loser_url = _loser_row[0]
+                            conn.execute(text(
+                                "UPDATE programs SET channel_id = :w WHERE channel_id = :l"
+                            ), {"w": _winner, "l": _loser})
+                            conn.execute(text(
+                                "DELETE FROM feed_channel_numbers WHERE channel_id = :l"
+                            ), {"l": _loser})
+                            conn.execute(text(
+                                "DELETE FROM channels WHERE id = :l"
+                            ), {"l": _loser})
+                            _deduped += 1
+                        # Normalize source_channel_id to the stable channel part.
+                        # Update stream_url to the newest loser's URL (current server prefix)
+                        # if available; otherwise keep stream_url as-is.
+                        _update = {"part": _part, "w": _winner}
+                        if _newest_loser_url:
+                            conn.execute(text(
+                                "UPDATE channels "
+                                "SET source_channel_id = :part, stream_url = :url "
+                                "WHERE id = :w"
+                            ), {**_update, "url": _newest_loser_url})
+                        else:
+                            conn.execute(text(
+                                "UPDATE channels SET source_channel_id = :part WHERE id = :w"
+                            ), _update)
+                        _normalized += 1
+
+                    if _deduped or _normalized:
+                        import logging as _log
+                        _log.getLogger(__name__).info(
+                            "Plex channel ID migration: %d normalized, %d duplicates removed",
+                            _normalized, _deduped,
+                        )
+
         # Apply category corrections to all existing channels on startup so
         # upgrading users don't have to wait for a full re-scrape cycle.
         if "channels" in tables:

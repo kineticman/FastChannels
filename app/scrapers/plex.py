@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re as _re
 import subprocess
 import string
 import time
@@ -46,9 +47,14 @@ _UA = (
 )
 _PRODUCT  = "Plex Mediaverse"
 _EPG_HOST = "https://epg.provider.plex.tv"
-_PLEX_EXTRA_DAYS = 2
+_PLEX_EXTRA_DAYS = 4
 _PLEX_GUIDE_WORKERS = 6
 _PLEX_LUMA_WORKERS = 4
+
+# Plex channel IDs arrive as "{server_id}-{channel_id}" (both 24-char hex).
+# The server prefix rotates when Plex migrates infrastructure; the channel
+# part (same as gridKey) is stable.  Always normalise to the channel part.
+_PLEX_COMPOUND_ID_RE = _re.compile(r'^[0-9a-f]{24}-([0-9a-f]{24})$')
 
 # Encoded Next.js router state expected by watch.plex.tv RSC endpoint
 _NEXT_ROUTER_STATE_TREE = (
@@ -171,7 +177,6 @@ def _parse_ts(value) -> datetime | None:
         return None
 
 
-import re as _re
 _PLEX_EP_ONLY  = _re.compile(r'^Episode\s+\d+$', _re.IGNORECASE)
 _PLEX_EP_COLON = _re.compile(r'^Episode\s+\d+\s*:\s*(.+)$', _re.IGNORECASE)
 
@@ -203,6 +208,14 @@ def _parse_date(value: str | None) -> date | None:
         return datetime.strptime(raw, "%Y-%m-%d").date()
     except ValueError:
         return None
+
+
+def _normalize_plex_id(raw: str | None) -> str | None:
+    """Strip the rotating server prefix from a compound Plex channel ID."""
+    if not raw:
+        return None
+    m = _PLEX_COMPOUND_ID_RE.match(raw)
+    return m.group(1) if m else raw
 
 
 def _rand_rsc() -> str:
@@ -566,6 +579,11 @@ class PlexScraper(BaseScraper):
             "[plex] genre map: %d categorised, %d with tags, %d Spanish",
             len(cat_map), len(tags_map), len(spanish_ids),
         )
+        # Normalize keys to the stable channel part so lookups work regardless
+        # of which server prefix the genre endpoint happens to return.
+        cat_map     = {_normalize_plex_id(k) or k: v for k, v in cat_map.items()}
+        tags_map    = {_normalize_plex_id(k) or k: v for k, v in tags_map.items()}
+        spanish_ids = {_normalize_plex_id(k) or k for k in spanish_ids}
         return cat_map, tags_map, spanish_ids
 
     # ── fetch_channels ─────────────────────────────────────────────────────────
@@ -601,22 +619,28 @@ class PlexScraper(BaseScraper):
 
         channels: dict[str, ChannelData] = {}
         for ch in root.findall(".//Channel"):
-            channel_id = ch.get("id")
+            raw_id   = ch.get("id") or ""
+            grid_key = ch.get("gridKey") or ""
+            # gridKey is the stable 24-hex channel identifier (no server prefix).
+            # Fall back to stripping the prefix from id if gridKey is absent.
+            channel_id = grid_key or _normalize_plex_id(raw_id) or raw_id
             if not channel_id or channel_id in channels:
                 continue
 
-            name     = ch.get("title") or ch.get("callSign") or channel_id
-            slug     = ch.get("slug") or channel_id
-            logo     = ch.get("thumb")
-            summary  = (ch.get("summary") or "").strip() or None
-            grid_key = ch.get("gridKey")
+            name    = ch.get("title") or ch.get("callSign") or channel_id
+            slug    = ch.get("slug") or channel_id
+            logo    = ch.get("thumb")
+            summary = (ch.get("summary") or "").strip() or None
 
             lang = "es" if channel_id in spanish_ids else infer_language_from_metadata(name, cat_map.get(channel_id))
 
             channels[channel_id] = ChannelData(
                 source_channel_id = channel_id,
                 name              = name,
-                stream_url        = f"plex://{channel_id}",
+                # stream_url keeps the full compound ID (server-prefix + channel_id) so
+                # that resolve() can pass it unchanged to the Plex play API, which requires
+                # the compound form.  source_channel_id uses only the stable channel part.
+                stream_url        = f"plex://{raw_id or channel_id}",
                 logo_url          = logo,
                 slug              = slug,
                 category          = cat_map.get(channel_id) or infer_category_from_name(name),
@@ -624,7 +648,7 @@ class PlexScraper(BaseScraper):
                 country           = "US",
                 stream_type       = "hls",
                 gracenote_id      = resolve_gracenote("plex", lookup_key=channel_id),
-                guide_key         = grid_key,
+                guide_key         = grid_key or channel_id,
                 tags              = tags_map.get(channel_id, []),
                 description       = summary,
             )
@@ -929,166 +953,23 @@ class PlexScraper(BaseScraper):
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         """
-        Fetch full EPG from the Plex grid API (epg.provider.plex.tv/grid).
+        Fetch EPG using per-channel targeted grid API (channelGridKey + date).
 
-        The grid endpoint returns ALL channels in one shot regardless of any
-        channelIds filter, so we fetch 3 consecutive 8-hour windows (24 h total)
-        and filter the results in-memory by our known channel IDs.
+        The bulk beginningAt/endingAt grid endpoint was retired by Plex (May 2026)
+        and now returns 400.  The per-channel channelGridKey endpoint is the sole
+        EPG source; it covers today through _PLEX_EXTRA_DAYS forward.
+        Luma fragment fetches fill any remaining gaps.
         """
         if not self._ensure_auth():
             return []
 
-        known_ids = {ch.source_channel_id for ch in channels}
         enabled_ids = set(kwargs.get("enabled_ids") or [])
-        programs: list[ProgramData] = []
-        seen: set[str] = set()   # deduplicate by media airing id
-        fetch_t0 = time.monotonic()
+        if not enabled_ids:
+            # Outside the worker context (e.g., BaseScraper.run()) no enabled_ids
+            # kwarg is passed; treat all channels as enabled.
+            enabled_ids = {ch.source_channel_id for ch in channels if ch.source_channel_id}
 
-        headers = {
-            "Accept":                   "application/json",
-            "X-Plex-Token":             self._auth_token,
-            "X-Plex-Client-Identifier": self._client_id,
-            "X-Plex-Product":           _PRODUCT,
-            "X-Plex-Platform":          "Chrome",
-            "X-Plex-Platform-Version":  "145.0.0.0",
-            # Suppress session-level provider-version header — it triggers a
-            # channelGridKey requirement on the grid endpoint.
-            "X-Plex-Provider-Version":  None,
-        }
-
-        import time as _time
-        window_hours = 8
-        window_secs  = window_hours * 3600
-        n_windows    = 3   # 24 h total
-
-        t_start = int(_time.time())
-        token_refreshed = False
-        logger.info(
-            "[plex] grid fetch starting: channels=%d windows=%d span_hours=%d",
-            len(known_ids),
-            n_windows,
-            window_hours * n_windows,
-        )
-        for w in range(n_windows):
-            begins_at = t_start + w * window_secs
-            ends_at   = begins_at + window_secs
-            window_t0 = time.monotonic()
-            try:
-                r = self.session.get(
-                    f"{_EPG_HOST}/grid",
-                    params={"beginningAt": begins_at, "endingAt": ends_at},
-                    headers=headers,
-                    timeout=30,
-                )
-                if r.status_code in (401, 403) and not token_refreshed:
-                    logger.info("[plex] grid %d — refreshing token and retrying", r.status_code)
-                    self._auth_token = None
-                    token_refreshed = True
-                    if self._ensure_auth(force=True):
-                        headers["X-Plex-Token"] = self._auth_token
-                        r = self.session.get(
-                            f"{_EPG_HOST}/grid",
-                            params={"beginningAt": begins_at, "endingAt": ends_at},
-                            headers=headers,
-                            timeout=30,
-                        )
-                r.raise_for_status()
-                entries = r.json().get("MediaContainer", {}).get("Metadata", [])
-            except Exception as exc:
-                logger.warning("[plex] grid fetch window %d failed: %s", w + 1, exc)
-                continue
-
-            for entry in entries:
-                for media in entry.get("Media", []):
-                    ch_id = media.get("channelIdentifier")
-                    if not ch_id or ch_id not in known_ids:
-                        continue
-
-                    airing_id = media.get("id")
-                    if airing_id and airing_id in seen:
-                        continue
-                    if airing_id:
-                        seen.add(airing_id)
-
-                    start = _parse_ts(media.get("beginsAt"))
-                    end   = _parse_ts(media.get("endsAt"))
-                    if not start or not end:
-                        continue
-
-                    raw_title = entry.get("title") or "Unknown"
-                    gp_title = entry.get("grandparentTitle") or ""
-                    # Plex grid entries for episodic content typically use:
-                    #   title            = episode title
-                    #   grandparentTitle = series title
-                    # XMLTV expects:
-                    #   <title>     = series/program title
-                    #   <sub-title> = episode title
-                    # For movies/specials grandparentTitle is absent, so keep the
-                    # original title and omit episode_title.
-                    if gp_title and gp_title.lower() != raw_title.lower():
-                        title = gp_title
-                        ep_title = _clean_ep_title(raw_title)
-                    else:
-                        title = raw_title
-                        ep_title = None
-
-                    # For TV episodes prefer show art (grandparentThumb) over
-                    # the 16:9 episode still (thumb). For movies thumb is portrait.
-                    if gp_title:
-                        poster = (
-                            entry.get("grandparentThumb")
-                            or entry.get("thumb")
-                            or next(
-                                (img["url"] for img in entry.get("Image", [])
-                                 if img.get("type") == "coverArt"),
-                                None,
-                            )
-                        )
-                    else:
-                        poster = (
-                            entry.get("thumb")
-                            or next(
-                                (img["url"] for img in entry.get("Image", [])
-                                 if img.get("type") == "coverArt"),
-                                None,
-                            )
-                        )
-
-                    programs.append(ProgramData(
-                        source_channel_id = ch_id,
-                        title             = title,
-                        description       = entry.get("summary") or None,
-                        start_time        = start,
-                        end_time          = end,
-                        poster_url        = poster,
-                        rating            = entry.get("contentRating") or None,
-                        season            = entry.get("parentIndex"),
-                        episode           = entry.get("index"),
-                        episode_title     = ep_title,
-                        program_type      = entry.get("type") or None,
-                    ))
-
-            logger.info(
-                "[plex] grid window %d/%d fetched in %.1fs: metadata=%d cumulative_programs=%d seen_airings=%d",
-                w + 1,
-                n_windows,
-                time.monotonic() - window_t0,
-                len(entries),
-                len(programs),
-                len(seen),
-            )
-            if self._progress_cb:
-                self._progress_cb('epg', w + 1, n_windows)
-
-        logger.info(
-            "[plex] %d EPG entries fetched from grid API in %.1fs",
-            len(programs),
-            time.monotonic() - fetch_t0,
-        )
-        extra_programs = self._fetch_extra_day_programs(channels, enabled_ids)
-        if extra_programs:
-            programs.extend(extra_programs)
-            logger.info("[plex] %d total EPG entries after targeted extension", len(programs))
+        programs = self._fetch_extra_day_programs(channels, enabled_ids)
 
         luma_extras = self._luma_gap_fill(channels, enabled_ids, programs)
         if luma_extras:
