@@ -78,6 +78,7 @@ class FrndlyTVScraper(BaseScraper):
         session_id = self.config.get('session_id')
         if session_id:
             self._frndly_headers['session-id'] = session_id
+        self._path_cache: dict[str, tuple[str, int]] = {}  # ch_id -> (path, expire_ts)
 
     # ── Auth ────────────────────────────────────────────────────────────────
 
@@ -139,7 +140,14 @@ class FrndlyTVScraper(BaseScraper):
         """GET with Frndly auth headers; re-logins once on auth failure."""
         for attempt in range(2):
             r = self.session.get(url, params=params, headers=self._frndly_headers, timeout=15)
-            data = r.json()
+            try:
+                data = r.json()
+            except ValueError:
+                if attempt == 0:
+                    logger.debug('[frndlytv] non-JSON response (HTTP %s) on %s, re-logging in', r.status_code, url)
+                    self._login()
+                    continue
+                raise RuntimeError(f'Frndly TV API returned non-JSON (HTTP {r.status_code}) for {url}')
             if 'response' in data:
                 return data['response']
             error_code = (data.get('error') or {}).get('code')
@@ -456,6 +464,9 @@ class FrndlyTVScraper(BaseScraper):
 
     def _channel_path_from_guide(self, ch_id: str) -> str:
         now = int(time.time())
+        cached = self._path_cache.get(ch_id)
+        if cached and cached[1] > now:
+            return cached[0]
         params = {
             'channel_ids': ch_id,
             'page': 0,
@@ -470,5 +481,7 @@ class FrndlyTVScraper(BaseScraper):
                 if start_ms <= now * 1000 <= end_ms:
                     path = (prog.get('target') or {}).get('path')
                     if path:
+                        expire = min(int(end_ms / 1000), now + 1800)
+                        self._path_cache[ch_id] = (path, expire)
                         return path
         raise RuntimeError(f'No live program found in guide for channel {ch_id}')

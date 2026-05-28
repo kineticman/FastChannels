@@ -898,7 +898,7 @@ _PREVIEW_PROXY_UA = (
     'Chrome/145.0.0.0 Safari/537.36'
 )
 _PREVIEW_SSRF_RE = re.compile(
-    r'^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|0\.0\.0\.0)',
+    r'^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1|0\.0\.0\.0)',
     re.IGNORECASE,
 )
 
@@ -3219,7 +3219,10 @@ def restore_db():
         return jsonify({'error': 'No file uploaded.'}), 400
 
     filename = f.filename or ''
-    data = f.read()
+    _MAX_DB_SIZE = 200 * 1024 * 1024  # 200 MB
+    data = f.read(_MAX_DB_SIZE + 1)
+    if len(data) > _MAX_DB_SIZE:
+        return jsonify({'error': 'Upload too large — 200 MB maximum.'}), 413
 
     if filename.lower().endswith('.gz'):
         try:
@@ -3236,12 +3239,16 @@ def restore_db():
     try:
         with open(tmp_path, 'wb') as fp:
             fp.write(data)
-        # Remove stale WAL/SHM so the restored DB starts clean
+        # Atomically replace the live DB first, then remove stale WAL/SHM so new
+        # connections get a clean WAL rather than replaying the old one.
+        _os.replace(tmp_path, db_path)
         for ext in ('-wal', '-shm'):
             stale = db_path + ext
             if _os.path.exists(stale):
-                _os.unlink(stale)
-        _os.replace(tmp_path, db_path)
+                try:
+                    _os.unlink(stale)
+                except OSError:
+                    pass
     except Exception as exc:
         try:
             _os.unlink(tmp_path)
