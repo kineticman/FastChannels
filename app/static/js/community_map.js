@@ -14,6 +14,38 @@ function cmStatusInfo(row) {
   return { label: 'Available', cls: 'none', key: 'available' };
 }
 
+function _cmSummaryBar() {
+  const counts = { available: 0, native: 0, manual: 0, applied: 0, off: 0 };
+  _cmData.forEach(row => { const k = cmStatusInfo(row).key; if (k in counts) counts[k]++; });
+  const unapplied = counts.available + counts.native + counts.manual;
+  const bar = document.getElementById('cm-status-summary');
+  if (!bar) return;
+  const chips = [
+    unapplied > 0
+      ? `<button onclick="document.getElementById('cm-filter-status').value='unapplied';renderCmTable()"
+           style="background:#1e3a5f;border:1px solid #3b82f6;color:#93c5fd;border-radius:1rem;padding:0.2rem 0.65rem;font-size:0.78rem;cursor:pointer;white-space:nowrap">
+           🔵 ${unapplied} not yet applied</button>`
+      : `<span style="color:#86efac;font-size:0.8rem">✅ All applied</span>`,
+    counts.available > 0
+      ? `<button onclick="document.getElementById('cm-filter-status').value='available';renderCmTable()"
+           style="background:#0f2a1a;border:1px solid #16a34a;color:#86efac;border-radius:1rem;padding:0.2rem 0.65rem;font-size:0.78rem;cursor:pointer;white-space:nowrap">
+           ${counts.available} available</button>` : '',
+    counts.native > 0
+      ? `<button onclick="document.getElementById('cm-filter-status').value='native';renderCmTable()"
+           style="background:#1c1a0a;border:1px solid #ca8a04;color:#fde047;border-radius:1rem;padding:0.2rem 0.65rem;font-size:0.78rem;cursor:pointer;white-space:nowrap">
+           ${counts.native} native ID conflict</button>` : '',
+    counts.manual > 0
+      ? `<button onclick="document.getElementById('cm-filter-status').value='manual';renderCmTable()"
+           style="background:#2a1a1a;border:1px solid #dc2626;color:#fca5a5;border-radius:1rem;padding:0.2rem 0.65rem;font-size:0.78rem;cursor:pointer;white-space:nowrap">
+           ${counts.manual} manual override</button>` : '',
+    `<button onclick="document.getElementById('cm-filter-status').value='applied';renderCmTable()"
+       style="background:#0d1f12;border:1px solid #166534;color:#4ade80;border-radius:1rem;padding:0.2rem 0.65rem;font-size:0.78rem;cursor:pointer;white-space:nowrap">
+       ${counts.applied} applied</button>`,
+  ].filter(Boolean);
+  bar.innerHTML = chips.join('');
+  bar.style.display = 'flex';
+}
+
 function renderCmTable() {
   const search = (document.getElementById('cm-search').value || '').toLowerCase();
   const filterStatus = document.getElementById('cm-filter-status').value;
@@ -23,10 +55,14 @@ function renderCmTable() {
     if (search && !row.channel_name.toLowerCase().includes(search) && !row.source_name.toLowerCase().includes(search)) return false;
     if (filterSource && row.source_name !== filterSource) return false;
     if (filterCategory && row.category !== filterCategory) return false;
-    if (filterStatus && cmStatusInfo(row).key !== filterStatus) return false;
+    if (filterStatus === 'unapplied') {
+      const k = cmStatusInfo(row).key;
+      if (k === 'applied' || k === 'off') return false;
+    } else if (filterStatus && cmStatusInfo(row).key !== filterStatus) return false;
     return true;
   });
-  document.getElementById('cm-count').textContent = `${rows.length} channel${rows.length !== 1 ? 's' : ''}`;
+  const totalLabel = filterStatus ? ` of ${_cmData.length}` : '';
+  document.getElementById('cm-count').textContent = `${rows.length}${totalLabel} channel${rows.length !== 1 ? 's' : ''}`;
   const tbody = document.getElementById('cm-tbody');
   if (!rows.length) { tbody.innerHTML = '<tr><td colspan="5" class="cm-empty">No matches.</td></tr>'; return; }
   tbody.innerHTML = rows.map(row => {
@@ -59,6 +95,10 @@ async function openCommunityMap() {
     const categories = [...new Set(_cmData.map(r => r.category).filter(Boolean))].sort();
     const catSel = document.getElementById('cm-filter-category');
     categories.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; catSel.appendChild(o); });
+    // Default to "not yet applied" so the user sees what needs action, not the wall of applied rows
+    const hasUnapplied = _cmData.some(r => { const k = cmStatusInfo(r).key; return k !== 'applied' && k !== 'off'; });
+    if (hasUnapplied) document.getElementById('cm-filter-status').value = 'unapplied';
+    _cmSummaryBar();
     renderCmTable();
     // First-time guidance: if nothing is applied yet, show a "get started" banner
     const noneApplied = _cmData.length > 0 && _cmData.every(r => cmStatusInfo(r).key === 'available');
@@ -180,7 +220,7 @@ async function runApplyAll(newOnly = false) {
         <div style="color:#475569">${d.already_done} already applied — skipped</div>
       </div>
       <div style="display:flex;justify-content:flex-end;margin-top:1rem">
-        <button class="btn-sm btn-secondary" onclick="closeApplyAllConfirm();_cmData=[];openCommunityMap()">Refresh Map</button>
+        <button class="btn-sm btn-secondary" onclick="closeApplyAllConfirm();_cmData=[];document.getElementById('cm-filter-status').value='unapplied';openCommunityMap()">Refresh Map</button>
       </div>
     `;
   } catch(e) {

@@ -1,4 +1,3 @@
-provider,key,tmsid,time_shift,notes
 freelivesports,6721235c3d39e9e0c717997d,124806,,ACC Digital Network
 freelivesports,66f5a9a408f2c39175aab916,142414,,Action Plus
 freelivesports,6721226853bb4ab784918230,163942,,Big 12 Network
@@ -364,6 +363,7 @@ pluto,623b92a2ccefed0007b1db48,124050,,XITE Classic Country
 pluto,623b93628e6ded0007337d4d,124051,,XITE Gospel
 pluto,623a1b5188ecdc0007c9ef5a,124052,,XITE Rock x Metal
 pluto,696998dfa2b623e8b20125a3,146460,,ZenLIFE by Stingray
+provider,key,tmsid,time_shift,notes
 roku,f95c40a17cfe5b9fb1970192e378fb0c,120551,,AccuWeather NOW
 roku,aa16704e1ee052dea67cee1f79618754,112881,,Alien Nation by DUST
 roku,a96f9c338b3e5ab29ec3b436c01c84da,115365,,America's Test Kitchen
@@ -459,31 +459,221 @@ roku,77946e082d8958f599087890aebf1623,155772,,Yu-Gi-Oh!
 roku,f99fa811e587e924c1aeebfe3d7f575f,163834,,Z Nation
 roku,bc932f13c31e542db6e3e6247e7131bc,120375,,beIN SPORTS Xtra
 roku,909b135136a1567eaf3f65fb64988323,119661,,beIN SPORTS Xtra en Español
+samsung,USBB320000397,181756,,21 Jump Street
+samsung,US4000064JE,123880,,40 y 20
+samsung,USBD70000412,126373,,4UV
+samsung,USBC39000171G,113380,,ABC News Live
+samsung,USBD25000161U,124806,,ACC Digital Network
+samsung,US4100038R9,195568,,AFV with Alfonso Ribeiro
+samsung,USBD300022FH,124177,,ALLBLK Gems
+samsung,US15000032I,132816,,ANIME x HIDIVE
 samsung,US50000551O,120551,,AccuWeather NOW
 samsung,US35000201T,180558,,Acorn TV Mysteries
 samsung,USBC100000630,112881,,Alien Nation by DUST
 samsung,USBD3300019OU,118217,,All Babies Channel
 samsung,USBD12000061R,115679,,All Reality We TV
 samsung,USBD1200005XR,117227,,All Weddings We TV
+samsung,USBA1600001XM,134109,,Always Funny Videos
+samsung,US3500006VF,188916,,America's Got Talent
+samsung,USBA3800002KI,159852,,America's Test Kitchen
+samsung,USBD42000250Q,138396,,American Crimes
 samsung,USBD3500041ZF,136153,,American Pickers by History
+samsung,USBD25000138Y,127174,,At Home with Family Handyman
+samsung,USBB5200020Z0,123425,,Ax Men
+samsung,US4500009VV,141828,,BBC Comedy
+samsung,USBD1700001RW,151422,,BBC Earth
+samsung,USBC6000108Z,120076,,BBC Food
+samsung,US4000033L,101443,,BBC News
+samsung,US2500009PQ,159706,,BET x Tyler Perry Comedy
+samsung,US2500008CV,159707,,BET x Tyler Perry Drama
+samsung,US300001UO,152647,,Barney and Friends
+samsung,USBA2000001BR,120491,,Baywatch
 samsung,US14000119Q,181619,,Beach Bonfire Vibes
+samsung,US1300003SW,185704,,Billboard TV
+samsung,USBD12000183X,120469,,Billiard TV
+samsung,US9000032J,181759,,Blippi
+samsung,USAJ30000041W,123870,,Bloomberg Originals
+samsung,USAJ3400011A8,146958,,Bloomberg TV+
+samsung,US2900010UT,183474,,Bondi Rescue
+samsung,USBD300008G1,120372,,Bounce XL
+samsung,US2600022YJ,151996,,BuzzFeed Unsolved
+samsung,USBC4400003OU,124721,,CBC News
+samsung,USBA370000104,104846,,CBS News 24/7
+samsung,USBB4800005VO,108919,,CBS Sports HQ
+samsung,US25000075Y,159704,,CW FOREVER
+samsung,US25000063S,159705,,CW Gold
 samsung,US1500002I2,181620,,Campfire Vibes
+samsung,USBD3500031F3,183128,,Cheaters
+samsung,USBA300035FV,116338,,Circle
+samsung,USBC390002256,129137,,Cold Case Files
+samsung,USBD7000145C,115447,,Comedy Dynamics
+samsung,USBC10000129R,117060,,Complex TV
+samsung,USBD120001614,181519,,Conan O'Brien TV
+samsung,USBA34000049Z,123605,,Court TV
 samsung,US2900005NW,184122,,Cozy Vibes
+samsung,USBB52000236D,123427,,Crime ThrillHer
+samsung,USBC3900021HS,126369,,Dance Moms
+samsung,USAJ3504708A,120204,,DangerTV
+samsung,USBB5200007BY,113957,,Dateline 24/7
+samsung,USBB52000246M,123432,,Deal Zone
+samsung,USBB4400017N3,122475,,Deal or No Deal
+samsung,US2900007HA,181762,,Death Valley Days
+samsung,USBD700010XU,123455,,Degrassi
+samsung,USBD300006A6,181867,,Divorce Court
 samsung,USAJ3504701A,129672,,Documentary+
+samsung,US3400001FX,147688,,Dog Whisperer
+samsung,US900002IH,150981,,Dog the Bounty Hunter
+samsung,USBD700013BW,138277,,DraftKings Network
+samsung,USBC4400002GF,131429,,Duck Dynasty
+samsung,USBA3700002JF,110291,,ET
+samsung,USBD2500012DH,146144,,Ebony TV by Lionsgate
+samsung,USBC6000225M,112797,,ElectricNOW
+samsung,US3900006GL,192927,,Envoy FAST
+samsung,USBC24000145I,132456,,Estrella Games
+samsung,USAJ2200020N4,117478,,Estrella News
+samsung,USBA300040WR,117477,,Estrella TV
+samsung,USBA300032J7,119212,,FOX SOUL
+samsung,US2700001QY,141469,,FOX Sports
+samsung,USBD700003L7,121307,,FOX Weather
+samsung,USAJ3504702A,121204,,FailArmy
+samsung,US490000330,138686,,Family Feud Classic
+samsung,US1400012RF,145517,,FanDuel TV Extra
+samsung,USBB2300002Q6,182249,,Fear Factor
 samsung,US3500004M7,136407,,FilmRise Anime
 samsung,USBA3800004EL,182248,,Fireplace Vibes
+samsung,USBC24000213P,124040,,Grit Xtra
+samsung,US44000027B,159990,,Grjngo
+samsung,USAK3508724A,111140,,Gusto TV
+samsung,USBC4400006BR,127985,,Haunt TV
+samsung,USBB2900003O3,182247,,Heartland
+samsung,USBB2900002Z7,182246,,Hell's Kitchen
+samsung,USBC21000142T,181858,,Home Refresh
+samsung,USAJ3000006X5,113673,,Home.Made.Nation
+samsung,USBD700022M5,128544,,Homeful
+samsung,USBC100001175,124998,,Horror by ALTER
+samsung,US2900006IV,183165,,Hot Ones
+samsung,USBD300002TU,122912,,ION
+samsung,USBC24000223S,123651,,ION Mystery
+samsung,USBD300003LK,117518,,ION Plus
+samsung,USBB520002173,123426,,Ice Road Truckers
+samsung,US2600024EO,185571,,In Depth with Graham Bensinger
 samsung,US1400007V6,182349,,Island Vibes
+samsung,USBC4400004KK,181860,,Just for Laughs GAGS
+samsung,USBA3000042O6,182244,,Kitchen Nightmares
+samsung,USBC1300009VM,183672,,LOL! Network
+samsung,USBD17000172A,124022,,Las 3 Marías
+samsung,USBB5200019FO,121308,,Lifetime Movie Favorites
+samsung,US1600002OK,177720,,Lifetime Movies Love & Drama
+samsung,US160000159,176608,,Live PD Presents
+samsung,USBA300024TN,119219,,LiveNOW from FOX
+samsung,USBC4400005HY,118952,,Localish
+samsung,US300065DB,140393,,Love Pets
 samsung,US2900004L2,183982,,Luxe Fireplace Vibes
+samsung,USBD300021B8,132782,,MSG SportsZone
+samsung,USBC440000193,129047,,Matched Married Meet
+samsung,US21000043S,170349,,MeatEater
+samsung,US4100032W9,199616,,MiLB
+samsung,USBD700015LK,124312,,Midnight Pulp
+samsung,USBC24000134A,122437,,Midsomer Murders
+samsung,US18000163F,157054,,Miramax Movie Channel
+samsung,US3500007C4,187515,,MotoGP Channel
+samsung,USBD17000117B,158131,,MovieSphere
+samsung,US310000101,146284,,MrBeast
+samsung,US2900008FP,142109,,Mythical 24/7
+samsung,USBB2200014DK,114174,,NBC News NOW
+samsung,USBD420002446,114140,,NBC Sports NOW
+samsung,US300062TG,166712,,NESN Nation
+samsung,USBA300028QU,121162,,NEWSMAX2
+samsung,US2600007WJ,121705,,NFL Channel
+samsung,USBC3200019WF,129130,,NHRA TV
+samsung,US1800015K5,157057,,National Lampoon
+samsung,US3000005RS,138525,,Noticias Telemundo Ahora
+samsung,US8000024G,135510,,OUTflix Movies
 samsung,US700012OU,184123,,Ocean Vibes
+samsung,USBC6000219D,181862,,Operation Repo
+samsung,US33000154M,131737,,Overtime
 samsung,US130000639,199683,,PBS Genealogy
+samsung,US1300007KZ,128391,,PBS Nature
+samsung,US400001M2,176119,,PGA Tour
+samsung,USBD2500017XQ,123515,,POWERNATION
+samsung,USBA300034DB,125214,,Pac-12 Insider
+samsung,USBD4200016QR,146769,,PickleballTV
+samsung,USBD12000038K,122435,,Portlandia
+samsung,US5000052H1,163435,,Price is Right
 samsung,USBD3500024YB,119149,,Qello Concerts by Stingray
+samsung,USBD1700019RN,121708,,RACER Select
+samsung,USBB3200001MG,121781,,REELZ Famous & Infamous
+samsung,US4500001DM,157959,,RIG TV
 samsung,US14000030Y,183984,,Rainy Day Vibes
+samsung,USBD1700018II,124006,,Rebelde
+samsung,USBC36000073J,119355,,RetroCrush
+samsung,USBA3800003VP,113603,,Revry
+samsung,USBD12000239N,118462,,Ryan and Friends
+samsung,US3700004Y0,140284,,Salem News Channel
+samsung,USBA3000043LH,183202,,Samsung Wild Life
+samsung,USBD3000073N,120010,,Scripps News
+samsung,US400221W2,204956,,Scripps Sports Network
+samsung,USBC1000004G8,123662,,Shades of Black
+samsung,USBD1200021JM,111132,,Shout! TV
+samsung,USBB52000022Q,114448,,Sky News
+samsung,USAJ3504705A,113991,,Stadium
 samsung,USBD35000180U,119116,,Stingray Classic Rock
+samsung,USBD3500011J3,45225,,Stingray Easy Listening
+samsung,USBD3500008IJ,67565,,Stingray Flashback 70s
+samsung,USBD3500022DN,130249,,Stingray Greatest Hits
 samsung,USBD3500010MT,129468,,Stingray Hip Hop
 samsung,USBD3500038R6,149883,,Stingray Holidayscapes
 samsung,USBD3300021KV,119114,,Stingray Hot Country
 samsung,USBD3300022QK,67566,,Stingray Remember the 80s
+samsung,USBD3500017CE,68687,,Stingray Romance Latino
+samsung,USBD35000128A,67571,,Stingray Smooth Jazz
+samsung,USBD3500016NH,171038,,Stingray Today's K-Pop
 samsung,US1400014N9,183985,,Storm Vibes
+samsung,USBC44000087O,121598,,Supermarket Sweep
+samsung,USBD70000213,149408,,TMZ
+samsung,USBB32000251N,114138,,TODAY All Day
+samsung,USBD7000189R,107076,,Tastemade
+samsung,US3900007ZW,161801,,Team USA TV
+samsung,USBD700012OA,114491,,The Bob Ross Channel
+samsung,USBD1200022S1,118087,,The Design Network
+samsung,US1000016Q,114934,,The First
+samsung,USBC2100009GT,132922,,The Jack Hanna Channel
+samsung,US4500011SP,168810,,The Martha Stewart Channel
+samsung,US3600003R7,171941,,The NBA Channel
+samsung,USBD1200004NS,115540,,The Walking Dead Universe
+samsung,USBC13000065U,115492,,This Old House
+samsung,USBC1300005T6,122387,,This Old House Makers
+samsung,USAJ3400020KC,118456,,Tiny House Nation
+samsung,US370001124,185671,,Tony Robbins
+samsung,USBB5200027Z5,123423,,Torque
+samsung,US1000012ML,156718,,UEFA Champions League
+samsung,USBB1900006NY,135718,,VICE
+samsung,USBD300011KQ,121122,,Vevo '70s
+samsung,USBD300012YC,121123,,Vevo '80s
+samsung,USBD3000133M,121124,,Vevo '90s
+samsung,USBD120002431,138073,,Vevo 2010s
+samsung,USBB4400015F5,121125,,Vevo 2K
+samsung,USBC3600001RQ,120902,,Vevo Country
+samsung,USBC3600002EK,120900,,Vevo Hip-Hop
+samsung,USBC3600015GF,120053,,Vevo Latino
+samsung,USBC3600008WY,115694,,Vevo Pop
+samsung,USBC3900009K5,120901,,Vevo R&B
+samsung,USBD3000145P,122261,,Vevo Rock
+samsung,USBB44000099N,124003,,ViX Novelas de romance
+samsung,USBB440002055,121424,,Waypoint TV
+samsung,USAJ3400014LK,127141,,WeatherSpy
+samsung,USBC3200020QF,127279,,Western Bound
+samsung,US4500003B0,153591,,Wild West TV
+samsung,US20000131M,164602,,Willow Sports
+samsung,USBB4400018LR,113735,,Wipeout Xtra
+samsung,USBC1000002NP,183203,,World’s Most Evil Killers
+samsung,USBD3300011UT,124050,,XITE Classic Country
+samsung,USAK3508706A,116101,,Xtreme Outdoor Presented by HISTORY
+samsung,US3200012O8,187516,,Yahoo! Sports Network
+samsung,US1000003G8,155772,,Yu-Gi-Oh
+samsung,USBD3500027DS,146460,,ZenLIFE by Stingray
+samsung,USAJ2200023Z0,106100,,fubo Sports Network
+samsung,USBD12000153A,118464,,pocket.watch Game-On
 tubi,400000096,113780,,A&E Crime 360
 tubi,618762,113380,,ABC News Live
 tubi,400000012,124806,,ACCDN

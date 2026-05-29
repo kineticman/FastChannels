@@ -22,10 +22,12 @@
         <tr><td style="padding:0.3rem 0.6rem;white-space:nowrap"><span class="cm-badge off">Off</span></td><td style="padding:0.3rem 0.6rem;color:var(--text-subtle)">Gracenote is disabled for this channel entirely</td></tr>
       </table>
     </details>
+    <div id="cm-status-summary" style="display:none;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem"></div>
     <div class="cm-filters">
       <input type="search" id="cm-search" placeholder="Filter by channel or source…" oninput="renderCmTable()">
       <select id="cm-filter-status" onchange="renderCmTable()">
         <option value="">All statuses</option>
+        <option value="unapplied">Not yet applied</option>
         <option value="available">Available</option>
         <option value="applied">Already applied</option>
         <option value="native">Has native ID</option>

@@ -14,6 +14,7 @@ class Config:
         'sqlite:////data/fastchannels.db'
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    TEMPLATES_AUTO_RELOAD = True
     # isolation_level=None: use SQLite autocommit / deferred transactions so
     # gunicorn workers never issue BEGIN IMMEDIATE (which serialises all
     # connections behind a write lock).  WAL mode handles concurrency; readers
