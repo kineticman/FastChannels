@@ -86,6 +86,17 @@ _IFRAME_SKIP_HOSTS = frozenset({
     'cdn.segment.com',
     'cdn.amplitude.com',
 })
+# Domain suffixes whose subdomains serve ad video (VAST/pre-roll) manifests but
+# never the target live stream.  Checked as host-suffix in _run_playwright_candidates
+# so that pubads.g.doubleclick.net, securepubads.g.doubleclick.net, etc. are all
+# covered by the single entry 'doubleclick.net'.
+_PLAYWRIGHT_AD_HOST_SUFFIXES: frozenset[str] = frozenset({
+    'doubleclick.net',       # Google DFP / GAM (pubads, securepubads, …)
+    'googlesyndication.com', # Google AdSense / display
+    'googleadservices.com',  # Google Ads tracking
+    '2mdn.net',              # Google ad CDN (DoubleClick CDN)
+    'adsystem.amazon.com',   # Amazon Advertising
+})
 _SCRIPT_SRC_RE = re.compile(r'''<script[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
 _SCRIPT_BLOCK_RE = re.compile(r'''<script\b[^>]*>(.*?)</script>''', re.IGNORECASE | re.DOTALL)
 _META_VIDEO_RE = re.compile(
@@ -2949,6 +2960,10 @@ class StreamDetector:
                     if not c or c in seen:
                         return
                     netloc = urlsplit(c).netloc.lower()
+                    # Drop known ad-network CDNs (Google IMA pre-rolls, etc.)
+                    if any(netloc == s or netloc.endswith('.' + s)
+                           for s in _PLAYWRIGHT_AD_HOST_SUFFIXES):
+                        return
                     for _pat, _key in _PLAYWRIGHT_FALSE_POSITIVE_HOSTS:
                         if _pat.search(netloc) and _key not in page_netloc:
                             return

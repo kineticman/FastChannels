@@ -242,6 +242,18 @@ def _redetect_custom_stream_with_info(channel, ttl: int = _REDETECT_TTL) -> tupl
         stored_new = dict(headers)
         if result.opaque_id and result.opaque_id.startswith('videolinq://'):
             stored_new['_videolinq_id'] = result.opaque_id[len('videolinq://'):]
+        # Carry the session-variants flag forward so re-detections don't re-probe.
+        # On first detection, check the master for _uid= in variant URLs; if found,
+        # set the flag so the play proxy routes this channel through the HLS relay.
+        if stored_hdrs.get('_session_variants'):
+            stored_new['_session_variants'] = True
+        elif _url_is_hls(stream_url) and not stored_new.get('_session_variants'):
+            if _master_has_session_variants(stream_url, stored_new):
+                stored_new['_session_variants'] = True
+                logger.info(
+                    '[custom-redetect] session-variant master detected for channel %d, enabling HLS relay',
+                    channel_id,
+                )
         if (
             stream_url != channel.stream_url
             or stored_new != stored_hdrs
@@ -389,6 +401,30 @@ _PRIVATE_IP_RE = re.compile(
     r'^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|0\.0\.0\.0)',
     re.IGNORECASE,
 )
+
+# Variant URL pattern indicating a session token that rotates after each ad break
+# (e.g. ViewTV's _uid=).  Masters that embed this in variant URLs need the relay
+# proxy so the player never holds a stale session reference.
+_SESSION_VARIANT_RE = re.compile(r'[?&]_uid=', re.IGNORECASE)
+
+
+def _master_has_session_variants(master_url: str, req_headers: dict) -> bool:
+    """Return True if the master playlist's variant lines contain _uid= session tokens."""
+    try:
+        clean = {k: v for k, v in req_headers.items() if not k.startswith('_')}
+        r = _requests.get(
+            master_url,
+            headers={'User-Agent': _BROWSER_UA, **clean},
+            timeout=8,
+        )
+        if not r.ok or '#EXT-X-STREAM-INF' not in r.text:
+            return False
+        for line in r.text.splitlines():
+            if line and not line.startswith('#') and _SESSION_VARIANT_RE.search(line):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 @play_bp.route('/play/distro/segment')
@@ -715,14 +751,15 @@ def custom_manifest_proxy(channel_id: str):
                 text = cv_r.text
                 effective_url = cv_r.url
             else:
-                logger.debug('[custom-proxy] cached variant %s for channel %d, re-resolving',
-                             cv_r.status_code, channel.id)
+                logger.info('[custom-proxy] cached variant HTTP %s for channel %d (%s), re-fetching master',
+                            cv_r.status_code, channel.id, raw_id[:40])
                 try:
                     rdb.delete(rkey)
                 except Exception:
                     pass
         except Exception as e:
-            logger.debug('[custom-proxy] cached variant fetch failed for channel %d: %s', channel.id, e)
+            logger.info('[custom-proxy] cached variant fetch failed for channel %d (%s): %s',
+                        channel.id, raw_id[:40], e)
             try:
                 rdb.delete(rkey)
             except Exception:
@@ -781,19 +818,30 @@ def custom_manifest_proxy(channel_id: str):
     encoded_id = _quote(raw_id, safe='')
     proxy_segments = bool(getattr(channel, 'proxy_segments', False))
 
+    session_variants = bool((channel.custom_headers or {}).get('_session_variants'))
     lines = []
     for line in text.splitlines():
         stripped = line.strip()
         if stripped and not stripped.startswith('#'):
             abs_url = stripped if stripped.startswith('http') else urljoin(variant_base, stripped)
+            # ViewTV mrouter URLs are cross-domain 302 redirects to the real segment.
+            # Many players won't follow cross-domain segment redirects and drop.
+            # Unwrap by extracting the seg= parameter directly.
+            if session_variants and '/mrouter?' in abs_url:
+                from urllib.parse import parse_qs as _pqs, urlsplit as _us
+                _seg = (_pqs(_us(abs_url).query).get('seg') or [''])[0]
+                if _seg:
+                    abs_url = _seg
             if proxy_segments:
                 line = f'{base_url}/play/custom/segment?url={_quote(abs_url, safe="")}&src={encoded_id}'
             else:
                 line = abs_url
         lines.append(line)
 
+    body = '\n'.join(lines)
+
     return Response(
-        '\n'.join(lines),
+        body,
         mimetype='application/vnd.apple.mpegurl',
         headers={'Cache-Control': 'no-cache'},
     )
@@ -1060,7 +1108,12 @@ def play(source_name: str, channel_id: str):
     if source_name == 'custom' and channel.page_url and resolved_url:
         has_proxy_headers = bool(custom_headers)
         if _url_is_hls(resolved_url):
-            if getattr(channel, 'proxy_segments', False) or has_proxy_headers:
+            _needs_relay = (
+                getattr(channel, 'proxy_segments', False)
+                or has_proxy_headers
+                or bool((channel.custom_headers or {}).get('_session_variants'))
+            )
+            if _needs_relay:
                 from urllib.parse import quote as _quote
                 encoded_id = _quote(channel.source_channel_id, safe='')
                 _log_custom_play_path(
@@ -1116,9 +1169,14 @@ def play(source_name: str, channel_id: str):
                 302,
             )
 
-    # Custom channels with segment proxying enabled: serve a manifest proxy
-    # so the client never needs to send custom headers directly.
-    if source_name == 'custom' and (getattr(channel, 'proxy_segments', False) or custom_headers):
+    # Custom channels with segment proxying, required headers, or session-variant
+    # masters: serve a manifest proxy so the client never needs to send custom
+    # headers and stale session tokens are transparently refreshed.
+    if source_name == 'custom' and (
+        getattr(channel, 'proxy_segments', False)
+        or custom_headers
+        or bool((channel.custom_headers or {}).get('_session_variants'))
+    ):
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
         _log_custom_play_path(
