@@ -9,7 +9,8 @@
       "USA-IMDBTV-X",
       "USA-SAMSUNG-X",
       "USA-VIZIO-X",
-      "USA-PLUTOTV-X"
+      "USA-PLUTOTV-X",
+      "USA-FUBO535-X"
     ],
     "station_count": 3564
   },
@@ -22,14 +23,16 @@
         "USA-IMDBTV-X": "173",
         "USA-SAMSUNG-X": "034",
         "USA-TUBISTR-X": "012",
-        "USA-PLUTOTV-X": "771"
+        "USA-PLUTOTV-X": "771",
+        "USA-FUBO535-X": "020"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
         "USA-TUBISTR-X",
-        "USA-PLUTOTV-X"
+        "USA-PLUTOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "124721": {
@@ -88,7 +91,8 @@
         "USA-GNSTR-X": "937",
         "USA-SAMSUNG-X": "249",
         "USA-AMZPV-X": "600",
-        "USA-TUBISTR-X": "014"
+        "USA-TUBISTR-X": "014",
+        "USA-FUBO535-X": "190"
       },
       "lineups": [
         "USA-XUMOTV-X",
@@ -96,7 +100,8 @@
         "USA-GNSTR-X",
         "USA-SAMSUNG-X",
         "USA-AMZPV-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "99988": {
@@ -158,11 +163,13 @@
       "call_sign": "SNC",
       "channel_numbers": {
         "USA-XUMOTV-X": "010",
-        "USA-SAMSUNG-X": "506"
+        "USA-SAMSUNG-X": "506",
+        "USA-FUBO535-X": "322"
       },
       "lineups": [
         "USA-XUMOTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "120010": {
@@ -216,11 +223,13 @@
       "call_sign": "TYT",
       "channel_numbers": {
         "USA-XUMOTV-X": "014",
-        "USA-GNSTR-X": "606"
+        "USA-GNSTR-X": "606",
+        "USA-FUBO535-X": "374"
       },
       "lineups": [
         "USA-XUMOTV-X",
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "122855": {
@@ -258,7 +267,8 @@
         "USA-SAMSUNG-X": "172",
         "USA-AMZPV-X": "593",
         "USA-TUBISTR-X": "163",
-        "USA-PLUTOTV-X": "740"
+        "USA-PLUTOTV-X": "740",
+        "USA-FUBO535-X": "148"
       },
       "lineups": [
         "USA-XUMOTV-X",
@@ -266,7 +276,8 @@
         "USA-SAMSUNG-X",
         "USA-AMZPV-X",
         "USA-TUBISTR-X",
-        "USA-PLUTOTV-X"
+        "USA-PLUTOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "132713": {
@@ -284,11 +295,13 @@
       "call_sign": "WTHRSPY",
       "channel_numbers": {
         "USA-XUMOTV-X": "019",
-        "USA-SAMSUNG-X": "347"
+        "USA-SAMSUNG-X": "347",
+        "USA-FUBO535-X": "398"
       },
       "lineups": [
         "USA-XUMOTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "124806": {
@@ -310,11 +323,13 @@
       "call_sign": "CRNHOLE",
       "channel_numbers": {
         "USA-XUMOTV-X": "021",
-        "USA-GNSTR-X": "1037"
+        "USA-GNSTR-X": "1037",
+        "USA-FUBO535-X": "094"
       },
       "lineups": [
         "USA-XUMOTV-X",
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "120375": {
@@ -337,12 +352,14 @@
       "channel_numbers": {
         "USA-XUMOTV-X": "023",
         "USA-GNSTR-X": "981",
-        "USA-SAMSUNG-X": "166"
+        "USA-SAMSUNG-X": "166",
+        "USA-FUBO535-X": "046"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-GNSTR-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "108919": {
@@ -372,7 +389,8 @@
       "lineups": [
         "USA-XUMOTV-X",
         "USA-GNSTR-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "111828": {
@@ -484,14 +502,16 @@
         "USA-IMDBTV-X": "206",
         "USA-GNSTR-X": "129",
         "USA-SAMSUNG-X": "345",
-        "USA-TUBISTR-X": "031"
+        "USA-TUBISTR-X": "031",
+        "USA-FUBO535-X": "271"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-GNSTR-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "125214": {
@@ -514,10 +534,12 @@
       "station_id": "122524",
       "call_sign": "PAAFRUS",
       "channel_numbers": {
-        "USA-XUMOTV-X": "036"
+        "USA-XUMOTV-X": "036",
+        "USA-FUBO535-X": "274"
       },
       "lineups": [
-        "USA-XUMOTV-X"
+        "USA-XUMOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "176119": {
@@ -532,7 +554,8 @@
         "USA-XUMOTV-X",
         "USA-SAMSUNG-X",
         "USA-SAMSUNG-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "112487": {
@@ -565,7 +588,8 @@
         "USA-IMDBTV-X": "108",
         "USA-SAMSUNG-X": "302",
         "USA-TUBISTR-X": "093",
-        "USA-PLUTOTV-X": "763"
+        "USA-PLUTOTV-X": "763",
+        "USA-FUBO535-X": "399"
       },
       "lineups": [
         "USA-XUMOTV-X",
@@ -573,7 +597,8 @@
         "USA-SAMSUNG-X",
         "USA-TUBISTR-X",
         "USA-TUBISTR-X",
-        "USA-PLUTOTV-X"
+        "USA-PLUTOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "102883": {
@@ -623,11 +648,13 @@
       "call_sign": "DOCPLUS",
       "channel_numbers": {
         "USA-XUMOTV-X": "046",
-        "USA-SAMSUNG-X": "003"
+        "USA-SAMSUNG-X": "003",
+        "USA-FUBO535-X": "103"
       },
       "lineups": [
         "USA-XUMOTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "146144": {
@@ -638,7 +665,8 @@
         "USA-IMDBTV-X": "691",
         "USA-SAMSUNG-X": "240",
         "USA-AMZPV-X": "2780",
-        "USA-TUBISTR-X": "052"
+        "USA-TUBISTR-X": "052",
+        "USA-FUBO535-X": "110"
       },
       "lineups": [
         "USA-XUMOTV-X",
@@ -646,7 +674,8 @@
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
         "USA-AMZPV-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "113361": {
@@ -655,12 +684,14 @@
       "channel_numbers": {
         "USA-XUMOTV-X": "048",
         "USA-GNSTR-X": "619",
-        "USA-AMZPV-X": "056"
+        "USA-AMZPV-X": "056",
+        "USA-FUBO535-X": "407"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-GNSTR-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "125218": {
@@ -766,13 +797,15 @@
         "USA-XUMOTV-X": "058",
         "USA-IMDBTV-X": "169",
         "USA-SAMSUNG-X": "009",
-        "USA-TUBISTR-X": "049"
+        "USA-TUBISTR-X": "049",
+        "USA-FUBO535-X": "198"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "158131": {
@@ -819,14 +852,16 @@
         "USA-IMDBTV-X": "037",
         "USA-GNSTR-X": "980",
         "USA-SAMSUNG-X": "227",
-        "USA-TUBISTR-X": "058"
+        "USA-TUBISTR-X": "058",
+        "USA-FUBO535-X": "030"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-GNSTR-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "123455": {
@@ -850,13 +885,15 @@
         "USA-XUMOTV-X": "065",
         "USA-IMDBTV-X": "018",
         "USA-GNSTR-X": "637",
-        "USA-SAMSUNG-X": "067"
+        "USA-SAMSUNG-X": "067",
+        "USA-FUBO535-X": "112"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-GNSTR-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "125212": {
@@ -894,13 +931,15 @@
         "USA-XUMOTV-X": "068",
         "USA-IMDBTV-X": "123",
         "USA-SAMSUNG-X": "078",
-        "USA-TUBISTR-X": "154"
+        "USA-TUBISTR-X": "154",
+        "USA-FUBO535-X": "180"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "115539": {
@@ -943,7 +982,8 @@
         "USA-GNSTR-X": "613",
         "USA-SAMSUNG-X": "224",
         "USA-AMZPV-X": "047",
-        "USA-TUBISTR-X": "128"
+        "USA-TUBISTR-X": "128",
+        "USA-FUBO535-X": "108"
       },
       "lineups": [
         "USA-XUMOTV-X",
@@ -951,7 +991,8 @@
         "USA-GNSTR-X",
         "USA-SAMSUNG-X",
         "USA-AMZPV-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "138568": {
@@ -992,10 +1033,12 @@
       "station_id": "128542",
       "call_sign": "DMTV",
       "channel_numbers": {
-        "USA-XUMOTV-X": "074"
+        "USA-XUMOTV-X": "074",
+        "USA-FUBO535-X": "102"
       },
       "lineups": [
-        "USA-XUMOTV-X"
+        "USA-XUMOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "125220": {
@@ -1038,12 +1081,14 @@
       "channel_numbers": {
         "USA-XUMOTV-X": "078",
         "USA-IMDBTV-X": "232",
-        "USA-TUBISTR-X": "130"
+        "USA-TUBISTR-X": "130",
+        "USA-FUBO535-X": "270"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "119397": {
@@ -1114,7 +1159,8 @@
         "USA-SAMSUNG-X": "230",
         "USA-AMZPV-X": "028",
         "USA-TUBISTR-X": "068",
-        "USA-PLUTOTV-X": "745"
+        "USA-PLUTOTV-X": "745",
+        "USA-FUBO535-X": "055"
       },
       "lineups": [
         "USA-XUMOTV-X",
@@ -1123,7 +1169,8 @@
         "USA-SAMSUNG-X",
         "USA-AMZPV-X",
         "USA-TUBISTR-X",
-        "USA-PLUTOTV-X"
+        "USA-PLUTOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "122475": {
@@ -1187,7 +1234,8 @@
         "USA-GNSTR-X": "683",
         "USA-SAMSUNG-X": "070",
         "USA-AMZPV-X": "064",
-        "USA-TUBISTR-X": "072"
+        "USA-TUBISTR-X": "072",
+        "USA-FUBO535-X": "158"
       },
       "lineups": [
         "USA-XUMOTV-X",
@@ -1195,7 +1243,8 @@
         "USA-GNSTR-X",
         "USA-SAMSUNG-X",
         "USA-AMZPV-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "135386": {
@@ -1232,14 +1281,16 @@
         "USA-IMDBTV-X": "047",
         "USA-GNSTR-X": "1007",
         "USA-SAMSUNG-X": "287",
-        "USA-TUBISTR-X": "073"
+        "USA-TUBISTR-X": "073",
+        "USA-FUBO535-X": "328"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-GNSTR-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "135168": {
@@ -1368,14 +1419,16 @@
       "channel_numbers": {
         "USA-XUMOTV-X": "100",
         "USA-IMDBTV-X": "138",
-        "USA-TUBISTR-X": "114"
+        "USA-TUBISTR-X": "114",
+        "USA-FUBO535-X": "403"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-IMDBTV-X",
         "USA-TUBISTR-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "120204": {
@@ -1383,11 +1436,13 @@
       "call_sign": "DANGER",
       "channel_numbers": {
         "USA-XUMOTV-X": "101",
-        "USA-SAMSUNG-X": "064"
+        "USA-SAMSUNG-X": "064",
+        "USA-FUBO535-X": "100"
       },
       "lineups": [
         "USA-XUMOTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "113360": {
@@ -1412,14 +1467,16 @@
       "channel_numbers": {
         "USA-XUMOTV-X": "103",
         "USA-IMDBTV-X": "449",
-        "USA-SAMSUNG-X": "547"
+        "USA-SAMSUNG-X": "547",
+        "USA-FUBO535-X": "104"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "138393": {
@@ -1502,7 +1559,8 @@
         "USA-IMDBTV-X": "080",
         "USA-GNSTR-X": "715",
         "USA-SAMSUNG-X": "340",
-        "USA-TUBISTR-X": "121"
+        "USA-TUBISTR-X": "121",
+        "USA-FUBO535-X": "264"
       },
       "lineups": [
         "USA-XUMOTV-X",
@@ -1510,7 +1568,8 @@
         "USA-GNSTR-X",
         "USA-SAMSUNG-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "134159": {
@@ -1724,7 +1783,8 @@
       "lineups": [
         "USA-XUMOTV-X",
         "USA-GNSTR-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "115365": {
@@ -1797,12 +1857,14 @@
       "channel_numbers": {
         "USA-XUMOTV-X": "134",
         "USA-GNSTR-X": "649",
-        "USA-SAMSUNG-X": "072"
+        "USA-SAMSUNG-X": "072",
+        "USA-FUBO535-X": "166"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-GNSTR-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "150067": {
@@ -1847,12 +1909,14 @@
       "channel_numbers": {
         "USA-XUMOTV-X": "138",
         "USA-GNSTR-X": "605",
-        "USA-SAMSUNG-X": "291"
+        "USA-SAMSUNG-X": "291",
+        "USA-FUBO535-X": "342"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-GNSTR-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "124329": {
@@ -1862,13 +1926,15 @@
         "USA-XUMOTV-X": "139",
         "USA-IMDBTV-X": "121",
         "USA-SAMSUNG-X": "248",
-        "USA-TUBISTR-X": "080"
+        "USA-TUBISTR-X": "080",
+        "USA-FUBO535-X": "183"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "138398": {
@@ -1925,13 +1991,15 @@
         "USA-XUMOTV-X": "143",
         "USA-IMDBTV-X": "098",
         "USA-SAMSUNG-X": "060",
-        "USA-TUBISTR-X": "115"
+        "USA-TUBISTR-X": "115",
+        "USA-FUBO535-X": "090"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "137506": {
@@ -1941,13 +2009,15 @@
         "USA-XUMOTV-X": "144",
         "USA-IMDBTV-X": "374",
         "USA-GNSTR-X": "1342",
-        "USA-SAMSUNG-X": "446"
+        "USA-SAMSUNG-X": "446",
+        "USA-FUBO535-X": "189"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-GNSTR-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "113957": {
@@ -1996,13 +2066,15 @@
         "USA-XUMOTV-X": "148",
         "USA-IMDBTV-X": "146",
         "USA-SAMSUNG-X": "077",
-        "USA-TUBISTR-X": "105"
+        "USA-TUBISTR-X": "105",
+        "USA-FUBO535-X": "175"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "109553": {
@@ -2011,13 +2083,15 @@
       "channel_numbers": {
         "USA-XUMOTV-X": "149",
         "USA-IMDBTV-X": "633",
-        "USA-GNSTR-X": "123"
+        "USA-GNSTR-X": "123",
+        "USA-FUBO535-X": "188"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-GNSTR-X",
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "122437": {
@@ -2158,13 +2232,15 @@
         "USA-XUMOTV-X": "159",
         "USA-IMDBTV-X": "112",
         "USA-SAMSUNG-X": "339",
-        "USA-TUBISTR-X": "066"
+        "USA-TUBISTR-X": "066",
+        "USA-FUBO535-X": "243"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "111132": {
@@ -2238,7 +2314,8 @@
         "USA-GNSTR-X": "992",
         "USA-SAMSUNG-X": "242",
         "USA-AMZPV-X": "599",
-        "USA-TUBISTR-X": "050"
+        "USA-TUBISTR-X": "050",
+        "USA-FUBO535-X": "138"
       },
       "lineups": [
         "USA-XUMOTV-X",
@@ -2247,7 +2324,8 @@
         "USA-GNSTR-X",
         "USA-SAMSUNG-X",
         "USA-AMZPV-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "131888": {
@@ -2591,12 +2669,14 @@
       "channel_numbers": {
         "USA-XUMOTV-X": "191",
         "USA-IMDBTV-X": "212",
-        "USA-AMZPV-X": "1225"
+        "USA-AMZPV-X": "1225",
+        "USA-FUBO535-X": "156"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "123191": {
@@ -2616,11 +2696,13 @@
       "call_sign": "PFLMMA",
       "channel_numbers": {
         "USA-XUMOTV-X": "193",
-        "USA-GNSTR-X": "1450"
+        "USA-GNSTR-X": "1450",
+        "USA-FUBO535-X": "282"
       },
       "lineups": [
         "USA-XUMOTV-X",
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "122436": {
@@ -2662,7 +2744,8 @@
         "USA-SAMSUNG-X": "170",
         "USA-AMZPV-X": "590",
         "USA-TUBISTR-X": "165",
-        "USA-PLUTOTV-X": "751"
+        "USA-PLUTOTV-X": "751",
+        "USA-FUBO535-X": "120"
       },
       "lineups": [
         "USA-XUMOTV-X",
@@ -2671,7 +2754,8 @@
         "USA-AMZPV-X",
         "USA-TUBISTR-X",
         "USA-TUBISTR-X",
-        "USA-PLUTOTV-X"
+        "USA-PLUTOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "117477": {
@@ -2772,11 +2856,13 @@
       "call_sign": "TMESP",
       "channel_numbers": {
         "USA-XUMOTV-X": "209",
-        "USA-IMDBTV-X": "284"
+        "USA-IMDBTV-X": "284",
+        "USA-FUBO535-X": "365"
       },
       "lineups": [
         "USA-XUMOTV-X",
-        "USA-IMDBTV-X"
+        "USA-IMDBTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "118681": {
@@ -3071,13 +3157,15 @@
         "USA-XUMOTV-X": "235",
         "USA-GNSTR-X": "132",
         "USA-SAMSUNG-X": "237",
-        "USA-AMZPV-X": "046"
+        "USA-AMZPV-X": "046",
+        "USA-FUBO535-X": "106"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-GNSTR-X",
         "USA-SAMSUNG-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "125217": {
@@ -3452,12 +3540,14 @@
       "channel_numbers": {
         "USA-XUMOTV-X": "265",
         "USA-SAMSUNG-X": "102",
-        "USA-AMZPV-X": "1015"
+        "USA-AMZPV-X": "1015",
+        "USA-FUBO535-X": "191"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-SAMSUNG-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "135978": {
@@ -3714,13 +3804,15 @@
         "USA-XUMOTV-X": "283",
         "USA-IMDBTV-X": "506",
         "USA-GNSTR-X": "684",
-        "USA-SAMSUNG-X": "231"
+        "USA-SAMSUNG-X": "231",
+        "USA-FUBO535-X": "402"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
         "USA-GNSTR-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "151350": {
@@ -3845,11 +3937,13 @@
       "call_sign": "ATHFHM",
       "channel_numbers": {
         "USA-XUMOTV-X": "293",
-        "USA-SAMSUNG-X": "329"
+        "USA-SAMSUNG-X": "329",
+        "USA-FUBO535-X": "029"
       },
       "lineups": [
         "USA-XUMOTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "120074": {
@@ -3873,12 +3967,14 @@
       "call_sign": "CRAFT",
       "channel_numbers": {
         "USA-XUMOTV-X": "295",
-        "USA-SAMSUNG-X": "442"
+        "USA-SAMSUNG-X": "442",
+        "USA-FUBO535-X": "091"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-SAMSUNG-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "131923": {
@@ -3958,13 +4054,15 @@
         "USA-XUMOTV-X": "301",
         "USA-GNSTR-X": "709",
         "USA-SAMSUNG-X": "518",
-        "USA-PLUTOTV-X": "752"
+        "USA-PLUTOTV-X": "752",
+        "USA-FUBO535-X": "348"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-GNSTR-X",
         "USA-SAMSUNG-X",
-        "USA-PLUTOTV-X"
+        "USA-PLUTOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "113738": {
@@ -4049,12 +4147,14 @@
       "channel_numbers": {
         "USA-XUMOTV-X": "308",
         "USA-IMDBTV-X": "218",
-        "USA-AMZPV-X": "1246"
+        "USA-AMZPV-X": "1246",
+        "USA-FUBO535-X": "325"
       },
       "lineups": [
         "USA-XUMOTV-X",
         "USA-IMDBTV-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "126329": {
@@ -4271,12 +4371,14 @@
       "channel_numbers": {
         "USA-IMDBTV-X": "038",
         "USA-SAMSUNG-X": "292",
-        "USA-TUBISTR-X": "089"
+        "USA-TUBISTR-X": "089",
+        "USA-FUBO535-X": "343"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "120975": {
@@ -4296,13 +4398,15 @@
         "USA-IMDBTV-X": "040",
         "USA-GNSTR-X": "652",
         "USA-AMZPV-X": "179",
-        "USA-TUBISTR-X": "096"
+        "USA-TUBISTR-X": "096",
+        "USA-FUBO535-X": "240"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-GNSTR-X",
         "USA-AMZPV-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "121308": {
@@ -4408,10 +4512,12 @@
       "station_id": "121165",
       "call_sign": "PETCOLL",
       "channel_numbers": {
-        "USA-IMDBTV-X": "059"
+        "USA-IMDBTV-X": "059",
+        "USA-FUBO535-X": "281"
       },
       "lineups": [
-        "USA-IMDBTV-X"
+        "USA-IMDBTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "121107": {
@@ -4478,12 +4584,14 @@
       "channel_numbers": {
         "USA-IMDBTV-X": "068",
         "USA-SAMSUNG-X": "058",
-        "USA-AMZPV-X": "592"
+        "USA-AMZPV-X": "592",
+        "USA-FUBO535-X": "099"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "120620": {
@@ -4526,20 +4634,24 @@
       "station_id": "123010",
       "call_sign": "XAZWMEK",
       "channel_numbers": {
-        "USA-IMDBTV-X": "076"
+        "USA-IMDBTV-X": "076",
+        "USA-FUBO535-X": "400"
       },
       "lineups": [
-        "USA-IMDBTV-X"
+        "USA-IMDBTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "121991": {
       "station_id": "121991",
       "call_sign": "IMPACTW",
       "channel_numbers": {
-        "USA-IMDBTV-X": "077"
+        "USA-IMDBTV-X": "077",
+        "USA-FUBO535-X": "174"
       },
       "lineups": [
-        "USA-IMDBTV-X"
+        "USA-IMDBTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "123040": {
@@ -4675,13 +4787,15 @@
         "USA-IMDBTV-X": "103",
         "USA-SAMSUNG-X": "540",
         "USA-AMZPV-X": "648",
-        "USA-TUBISTR-X": "063"
+        "USA-TUBISTR-X": "063",
+        "USA-FUBO535-X": "088"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
         "USA-AMZPV-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "121204": {
@@ -4689,11 +4803,13 @@
       "call_sign": "FLARMY",
       "channel_numbers": {
         "USA-IMDBTV-X": "104",
-        "USA-SAMSUNG-X": "478"
+        "USA-SAMSUNG-X": "478",
+        "USA-FUBO535-X": "130"
       },
       "lineups": [
         "USA-IMDBTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "124103": {
@@ -4788,10 +4904,12 @@
       "station_id": "124405",
       "call_sign": "XMVFW",
       "channel_numbers": {
-        "USA-IMDBTV-X": "126"
+        "USA-IMDBTV-X": "126",
+        "USA-FUBO535-X": "408"
       },
       "lineups": [
-        "USA-IMDBTV-X"
+        "USA-IMDBTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "124856": {
@@ -4842,11 +4960,13 @@
       "call_sign": "TMHOME",
       "channel_numbers": {
         "USA-IMDBTV-X": "156",
-        "USA-SAMSUNG-X": "289"
+        "USA-SAMSUNG-X": "289",
+        "USA-FUBO535-X": "366"
       },
       "lineups": [
         "USA-IMDBTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "124325": {
@@ -4919,11 +5039,13 @@
       "call_sign": "WSN",
       "channel_numbers": {
         "USA-IMDBTV-X": "166",
-        "USA-GNSTR-X": "1124"
+        "USA-GNSTR-X": "1124",
+        "USA-FUBO535-X": "397"
       },
       "lineups": [
         "USA-IMDBTV-X",
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "14767": {
@@ -5126,12 +5248,14 @@
       "channel_numbers": {
         "USA-IMDBTV-X": "195",
         "USA-GNSTR-X": "608",
-        "USA-AMZPV-X": "1212"
+        "USA-AMZPV-X": "1212",
+        "USA-FUBO535-X": "327"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-GNSTR-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "129048": {
@@ -5140,12 +5264,14 @@
       "channel_numbers": {
         "USA-IMDBTV-X": "196",
         "USA-GNSTR-X": "1122",
-        "USA-AMZPV-X": "1213"
+        "USA-AMZPV-X": "1213",
+        "USA-FUBO535-X": "375"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-GNSTR-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "130385": {
@@ -5376,11 +5502,13 @@
       "call_sign": "HERSPHR",
       "channel_numbers": {
         "USA-IMDBTV-X": "235",
-        "USA-SAMSUNG-X": "402"
+        "USA-SAMSUNG-X": "402",
+        "USA-FUBO535-X": "168"
       },
       "lineups": [
         "USA-IMDBTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "135388": {
@@ -5457,10 +5585,12 @@
       "station_id": "135516",
       "call_sign": "NSYCONF",
       "channel_numbers": {
-        "USA-IMDBTV-X": "248"
+        "USA-IMDBTV-X": "248",
+        "USA-FUBO535-X": "267"
       },
       "lineups": [
-        "USA-IMDBTV-X"
+        "USA-IMDBTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "135519": {
@@ -5528,11 +5658,13 @@
       "call_sign": "WPTAMA",
       "channel_numbers": {
         "USA-IMDBTV-X": "259",
-        "USA-SAMSUNG-X": "304"
+        "USA-SAMSUNG-X": "304",
+        "USA-FUBO535-X": "395"
       },
       "lineups": [
         "USA-IMDBTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "134889": {
@@ -5682,11 +5814,13 @@
       "call_sign": "PKGFAST",
       "channel_numbers": {
         "USA-IMDBTV-X": "286",
-        "USA-PLUTOTV-X": "767"
+        "USA-PLUTOTV-X": "767",
+        "USA-FUBO535-X": "289"
       },
       "lineups": [
         "USA-IMDBTV-X",
-        "USA-PLUTOTV-X"
+        "USA-PLUTOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "134231": {
@@ -5793,12 +5927,14 @@
       "call_sign": "XMVFBI",
       "channel_numbers": {
         "USA-IMDBTV-X": "373",
-        "USA-TUBISTR-X": "059"
+        "USA-TUBISTR-X": "059",
+        "USA-FUBO535-X": "404"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-IMDBTV-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "138876": {
@@ -5956,11 +6092,13 @@
       "call_sign": "CRUNCHY",
       "channel_numbers": {
         "USA-IMDBTV-X": "382",
-        "USA-SAMSUNG-X": "403"
+        "USA-SAMSUNG-X": "403",
+        "USA-FUBO535-X": "095"
       },
       "lineups": [
         "USA-IMDBTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "139721": {
@@ -6064,12 +6202,14 @@
       "call_sign": "GETCMDY",
       "channel_numbers": {
         "USA-IMDBTV-X": "406",
-        "USA-SAMSUNG-X": "535"
+        "USA-SAMSUNG-X": "535",
+        "USA-FUBO535-X": "153"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "125046": {
@@ -6078,13 +6218,15 @@
       "channel_numbers": {
         "USA-IMDBTV-X": "414",
         "USA-SAMSUNG-X": "057",
-        "USA-TUBISTR-X": "099"
+        "USA-TUBISTR-X": "099",
+        "USA-FUBO535-X": "098"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "125052": {
@@ -6093,12 +6235,14 @@
       "channel_numbers": {
         "USA-IMDBTV-X": "408",
         "USA-SAMSUNG-X": "056",
-        "USA-TUBISTR-X": "098"
+        "USA-TUBISTR-X": "098",
+        "USA-FUBO535-X": "082"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "144885": {
@@ -6225,12 +6369,14 @@
       "channel_numbers": {
         "USA-IMDBTV-X": "434",
         "USA-SAMSUNG-X": "047",
-        "USA-TUBISTR-X": "160"
+        "USA-TUBISTR-X": "160",
+        "USA-FUBO535-X": "295"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "146874": {
@@ -6487,10 +6633,12 @@
       "station_id": "153524",
       "call_sign": "ONECH",
       "channel_numbers": {
-        "USA-IMDBTV-X": "475"
+        "USA-IMDBTV-X": "475",
+        "USA-FUBO535-X": "269"
       },
       "lineups": [
-        "USA-IMDBTV-X"
+        "USA-IMDBTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "138647": {
@@ -6498,12 +6646,14 @@
       "call_sign": "SS1",
       "channel_numbers": {
         "USA-IMDBTV-X": "476",
-        "USA-GNSTR-X": "1622"
+        "USA-GNSTR-X": "1622",
+        "USA-FUBO535-X": "329"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-GNSTR-X",
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "156718": {
@@ -6572,10 +6722,12 @@
       "station_id": "156959",
       "call_sign": "XMVUER",
       "channel_numbers": {
-        "USA-IMDBTV-X": "482"
+        "USA-IMDBTV-X": "482",
+        "USA-FUBO535-X": "410"
       },
       "lineups": [
-        "USA-IMDBTV-X"
+        "USA-IMDBTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "157277": {
@@ -6771,12 +6923,14 @@
       "channel_numbers": {
         "USA-IMDBTV-X": "503",
         "USA-SAMSUNG-X": "443",
-        "USA-AMZPV-X": "1874"
+        "USA-AMZPV-X": "1874",
+        "USA-FUBO535-X": "305"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "146460": {
@@ -6990,7 +7144,8 @@
       },
       "lineups": [
         "USA-IMDBTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "161600": {
@@ -7002,7 +7157,8 @@
       },
       "lineups": [
         "USA-IMDBTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "161801": {
@@ -7217,12 +7373,14 @@
       "call_sign": "WILLOWP",
       "channel_numbers": {
         "USA-IMDBTV-X": "547",
-        "USA-SAMSUNG-X": "528"
+        "USA-SAMSUNG-X": "528",
+        "USA-FUBO535-X": "388"
       },
       "lineups": [
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "164503": {
@@ -7354,11 +7512,13 @@
       "call_sign": "DPWT",
       "channel_numbers": {
         "USA-IMDBTV-X": "565",
-        "USA-SAMSUNG-X": "530"
+        "USA-SAMSUNG-X": "530",
+        "USA-FUBO535-X": "107"
       },
       "lineups": [
         "USA-IMDBTV-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "167583": {
@@ -7921,10 +8081,12 @@
       "station_id": "170347",
       "call_sign": "LAWLSLG",
       "channel_numbers": {
-        "USA-IMDBTV-X": "631"
+        "USA-IMDBTV-X": "631",
+        "USA-FUBO535-X": "187"
       },
       "lineups": [
-        "USA-IMDBTV-X"
+        "USA-IMDBTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "153411": {
@@ -8435,7 +8597,8 @@
       "lineups": [
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "187516": {
@@ -8449,7 +8612,8 @@
       "lineups": [
         "USA-IMDBTV-X",
         "USA-SAMSUNG-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "183304": {
@@ -8481,11 +8645,13 @@
       "call_sign": "CURINOW",
       "channel_numbers": {
         "USA-IMDBTV-X": "687",
-        "USA-GNSTR-X": "1125"
+        "USA-GNSTR-X": "1125",
+        "USA-FUBO535-X": "097"
       },
       "lineups": [
         "USA-IMDBTV-X",
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "191977": {
@@ -10861,11 +11027,13 @@
       "call_sign": "XMVFCT",
       "channel_numbers": {
         "USA-GNSTR-X": "614",
-        "USA-AMZPV-X": "054"
+        "USA-AMZPV-X": "054",
+        "USA-FUBO535-X": "405"
       },
       "lineups": [
         "USA-GNSTR-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "113363": {
@@ -10885,11 +11053,13 @@
       "call_sign": "XMVHKN",
       "channel_numbers": {
         "USA-GNSTR-X": "617",
-        "USA-AMZPV-X": "074"
+        "USA-AMZPV-X": "074",
+        "USA-FUBO535-X": "409"
       },
       "lineups": [
         "USA-GNSTR-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "134959": {
@@ -14003,10 +14173,12 @@
       "station_id": "120802",
       "call_sign": "TCNT",
       "channel_numbers": {
-        "USA-GNSTR-X": "983"
+        "USA-GNSTR-X": "983",
+        "USA-FUBO535-X": "346"
       },
       "lineups": [
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "121125": {
@@ -14133,13 +14305,15 @@
       "channel_numbers": {
         "USA-GNSTR-X": "1010",
         "USA-TUBISTR-X": "166",
-        "USA-PLUTOTV-X": "754"
+        "USA-PLUTOTV-X": "754",
+        "USA-FUBO535-X": "040"
       },
       "lineups": [
         "USA-GNSTR-X",
         "USA-TUBISTR-X",
         "USA-TUBISTR-X",
-        "USA-PLUTOTV-X"
+        "USA-PLUTOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "121197": {
@@ -14831,21 +15005,25 @@
       "station_id": "135380",
       "call_sign": "SSNEST1",
       "channel_numbers": {
-        "USA-GNSTR-X": "1473"
+        "USA-GNSTR-X": "1473",
+        "USA-FUBO535-X": "330"
       },
       "lineups": [
         "USA-GNSTR-X",
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "128628": {
       "station_id": "128628",
       "call_sign": "PG",
       "channel_numbers": {
-        "USA-GNSTR-X": "1130"
+        "USA-GNSTR-X": "1130",
+        "USA-FUBO535-X": "283"
       },
       "lineups": [
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "136236": {
@@ -16472,11 +16650,13 @@
       "call_sign": "FFCL",
       "channel_numbers": {
         "USA-GNSTR-X": "1349",
-        "USA-SAMSUNG-X": "481"
+        "USA-SAMSUNG-X": "481",
+        "USA-FUBO535-X": "127"
       },
       "lineups": [
         "USA-GNSTR-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "128385": {
@@ -16578,11 +16758,13 @@
       "call_sign": "HWNEST1",
       "channel_numbers": {
         "USA-GNSTR-X": "1364",
-        "USA-SAMSUNG-X": "245"
+        "USA-SAMSUNG-X": "245",
+        "USA-FUBO535-X": "172"
       },
       "lineups": [
         "USA-GNSTR-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "122101": {
@@ -16694,7 +16876,8 @@
       },
       "lineups": [
         "USA-GNSTR-X",
-        "USA-SAMSUNG-X"
+        "USA-SAMSUNG-X",
+        "USA-FUBO535-X"
       ]
     },
     "124028": {
@@ -17395,10 +17578,12 @@
       "station_id": "135835",
       "call_sign": "WROI",
       "channel_numbers": {
-        "USA-GNSTR-X": "1457"
+        "USA-GNSTR-X": "1457",
+        "USA-FUBO535-X": "396"
       },
       "lineups": [
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "138947": {
@@ -18851,11 +19036,13 @@
       "call_sign": "WAPAP",
       "channel_numbers": {
         "USA-GNSTR-X": "1624",
-        "USA-AMZPV-X": "1904"
+        "USA-AMZPV-X": "1904",
+        "USA-FUBO535-X": "382"
       },
       "lineups": [
         "USA-GNSTR-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "148511": {
@@ -18876,22 +19063,26 @@
       "call_sign": "TCINE",
       "channel_numbers": {
         "USA-GNSTR-X": "1626",
-        "USA-AMZPV-X": "1903"
+        "USA-AMZPV-X": "1903",
+        "USA-FUBO535-X": "345"
       },
       "lineups": [
         "USA-GNSTR-X",
         "USA-AMZPV-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "150077": {
       "station_id": "150077",
       "call_sign": "FLORACE",
       "channel_numbers": {
-        "USA-GNSTR-X": "1627"
+        "USA-GNSTR-X": "1627",
+        "USA-FUBO535-X": "131"
       },
       "lineups": [
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "148716": {
@@ -18919,11 +19110,13 @@
       "call_sign": "NS90S",
       "channel_numbers": {
         "USA-GNSTR-X": "1632",
-        "USA-AMZPV-X": "2236"
+        "USA-AMZPV-X": "2236",
+        "USA-FUBO535-X": "266"
       },
       "lineups": [
         "USA-GNSTR-X",
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "151829": {
@@ -19022,10 +19215,12 @@
       "station_id": "152976",
       "call_sign": "SURFER",
       "channel_numbers": {
-        "USA-GNSTR-X": "1655"
+        "USA-GNSTR-X": "1655",
+        "USA-FUBO535-X": "339"
       },
       "lineups": [
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "152977": {
@@ -19467,10 +19662,12 @@
       "station_id": "160863",
       "call_sign": "MYSTERA",
       "channel_numbers": {
-        "USA-GNSTR-X": "1709"
+        "USA-GNSTR-X": "1709",
+        "USA-FUBO535-X": "248"
       },
       "lineups": [
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "160930": {
@@ -19571,7 +19768,8 @@
       },
       "lineups": [
         "USA-GNSTR-X",
-        "USA-GNSTR-X"
+        "USA-GNSTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "52181": {
@@ -20947,11 +21145,13 @@
       "call_sign": "ALWFV",
       "channel_numbers": {
         "USA-SAMSUNG-X": "001",
-        "USA-TUBISTR-X": "060"
+        "USA-TUBISTR-X": "060",
+        "USA-FUBO535-X": "025"
       },
       "lineups": [
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "147374": {
@@ -21384,12 +21584,14 @@
       "channel_numbers": {
         "USA-SAMSUNG-X": "085",
         "USA-TUBISTR-X": "188",
-        "USA-PLUTOTV-X": "735"
+        "USA-PLUTOTV-X": "735",
+        "USA-FUBO535-X": "249"
       },
       "lineups": [
         "USA-SAMSUNG-X",
         "USA-TUBISTR-X",
-        "USA-PLUTOTV-X"
+        "USA-PLUTOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "19574": {
@@ -21785,11 +21987,13 @@
       "call_sign": "ESGMS",
       "channel_numbers": {
         "USA-SAMSUNG-X": "241",
-        "USA-TUBISTR-X": "167"
+        "USA-TUBISTR-X": "167",
+        "USA-FUBO535-X": "114"
       },
       "lineups": [
         "USA-SAMSUNG-X",
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "127985": {
@@ -31821,10 +32025,12 @@
       "station_id": "134762",
       "call_sign": "XSLUM",
       "channel_numbers": {
-        "USA-AMZPV-X": "2241"
+        "USA-AMZPV-X": "2241",
+        "USA-FUBO535-X": "412"
       },
       "lineups": [
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "147888": {
@@ -34863,10 +35069,12 @@
       "station_id": "73067",
       "call_sign": "BOUNCE",
       "channel_numbers": {
-        "USA-AMZPV-X": "2584"
+        "USA-AMZPV-X": "2584",
+        "USA-FUBO535-X": "049"
       },
       "lineups": [
-        "USA-AMZPV-X"
+        "USA-AMZPV-X",
+        "USA-FUBO535-X"
       ]
     },
     "113681": {
@@ -36255,10 +36463,12 @@
       "station_id": "132491",
       "call_sign": "CINEES",
       "channel_numbers": {
-        "USA-TUBISTR-X": "169"
+        "USA-TUBISTR-X": "169",
+        "USA-FUBO535-X": "080"
       },
       "lineups": [
-        "USA-TUBISTR-X"
+        "USA-TUBISTR-X",
+        "USA-FUBO535-X"
       ]
     },
     "118891": {
@@ -38289,7 +38499,8 @@
         "USA-PLUTOTV-X": "262"
       },
       "lineups": [
-        "USA-PLUTOTV-X"
+        "USA-PLUTOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "117293": {
@@ -38426,10 +38637,12 @@
       "station_id": "124310",
       "call_sign": "TPIR60",
       "channel_numbers": {
-        "USA-PLUTOTV-X": "746"
+        "USA-PLUTOTV-X": "746",
+        "USA-FUBO535-X": "369"
       },
       "lineups": [
-        "USA-PLUTOTV-X"
+        "USA-PLUTOTV-X",
+        "USA-FUBO535-X"
       ]
     },
     "130514": {
@@ -38470,6 +38683,256 @@
       },
       "lineups": [
         "USA-PLUTOTV-X"
+      ]
+    },
+    "93459": {
+      "station_id": "93459",
+      "call_sign": "AMTEVE",
+      "channel_numbers": {
+        "USA-FUBO535-X": "026"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "110289": {
+      "station_id": "110289",
+      "call_sign": "CLEOHD",
+      "channel_numbers": {
+        "USA-FUBO535-X": "084"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "140182": {
+      "station_id": "140182",
+      "call_sign": "CINESER",
+      "channel_numbers": {
+        "USA-FUBO535-X": "081"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "126134": {
+      "station_id": "126134",
+      "call_sign": "FILMEX",
+      "channel_numbers": {
+        "USA-FUBO535-X": "128"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "137352": {
+      "station_id": "137352",
+      "call_sign": "FREMOV",
+      "channel_numbers": {
+        "USA-FUBO535-X": "139"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "89922": {
+      "station_id": "89922",
+      "call_sign": "GRIT",
+      "channel_numbers": {
+        "USA-FUBO535-X": "162"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "119098": {
+      "station_id": "119098",
+      "call_sign": "GUSTOES",
+      "channel_numbers": {
+        "USA-FUBO535-X": "165"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "78850": {
+      "station_id": "78850",
+      "call_sign": "JUST",
+      "channel_numbers": {
+        "USA-FUBO535-X": "184"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "92091": {
+      "station_id": "92091",
+      "call_sign": "LAFF",
+      "channel_numbers": {
+        "USA-FUBO535-X": "185"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "160472": {
+      "station_id": "160472",
+      "call_sign": "LOSLA",
+      "channel_numbers": {
+        "USA-FUBO535-X": "194"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "160471": {
+      "station_id": "160471",
+      "call_sign": "LOSTD",
+      "channel_numbers": {
+        "USA-FUBO535-X": "195"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "125383": {
+      "station_id": "125383",
+      "call_sign": "RCNMS",
+      "channel_numbers": {
+        "USA-FUBO535-X": "300"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "93564": {
+      "station_id": "93564",
+      "call_sign": "SHOPLCH",
+      "channel_numbers": {
+        "USA-FUBO535-X": "319"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "115674": {
+      "station_id": "115674",
+      "call_sign": "YUM",
+      "channel_numbers": {
+        "USA-FUBO535-X": "413"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "147367": {
+      "station_id": "147367",
+      "call_sign": "THENEST",
+      "channel_numbers": {
+        "USA-FUBO535-X": "351"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "153526": {
+      "station_id": "153526",
+      "call_sign": "TRIPOK",
+      "channel_numbers": {
+        "USA-FUBO535-X": "371"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "134761": {
+      "station_id": "134761",
+      "call_sign": "XSLFRTC",
+      "channel_numbers": {
+        "USA-FUBO535-X": "411"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "125419": {
+      "station_id": "125419",
+      "call_sign": "VRPLUS",
+      "channel_numbers": {
+        "USA-FUBO535-X": "380"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "132644": {
+      "station_id": "132644",
+      "call_sign": "W2FTV",
+      "channel_numbers": {
+        "USA-FUBO535-X": "381"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "144954": {
+      "station_id": "144954",
+      "call_sign": "WHOA",
+      "channel_numbers": {
+        "USA-FUBO535-X": "386"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "135382": {
+      "station_id": "135382",
+      "call_sign": "WNNEST1",
+      "channel_numbers": {
+        "USA-FUBO535-X": "393"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "80621": {
+      "station_id": "80621",
+      "call_sign": "WLLOHD",
+      "channel_numbers": {
+        "USA-FUBO535-X": "389"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "140181": {
+      "station_id": "140181",
+      "call_sign": "ZONAINV",
+      "channel_numbers": {
+        "USA-FUBO535-X": "426"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "96553": {
+      "station_id": "96553",
+      "call_sign": "EUNEWSP",
+      "channel_numbers": {
+        "USA-FUBO535-X": "121"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
+      ]
+    },
+    "102309": {
+      "station_id": "102309",
+      "call_sign": "I24NEHD",
+      "channel_numbers": {
+        "USA-FUBO535-X": "173"
+      },
+      "lineups": [
+        "USA-FUBO535-X"
       ]
     }
   }
