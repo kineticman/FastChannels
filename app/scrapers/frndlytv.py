@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -40,6 +41,30 @@ _CACHE_MAX = 8000      # max content_cache entries to keep in source config
 
 # "S2 Ep14 | Manager Meltdown"  or  "S1 Ep3"  (no episode title)
 _SE_RE = re.compile(r'S(\d+)\s+Ep(\d+)(?:\s*\|\s*(.+))?', re.IGNORECASE)
+
+# Module-level path cache: ch_id → (path, expire_ts).  Shared across all
+# FrndlyTVScraper instances in this process so the guide API is only called
+# once per program per worker, not once per play request.
+_PATH_CACHE: dict[str, tuple[str, int]] = {}
+_REDIS_PATH_KEY = 'frndly_path:'
+_redis_client = None
+
+
+def _get_redis():
+    """Lazy Redis client for cross-worker path caching. Returns None if unavailable."""
+    global _redis_client
+    if _redis_client is None:
+        try:
+            import redis as _r
+            _redis_client = _r.from_url(
+                os.environ.get('REDIS_URL', 'redis://localhost:6379/0'),
+                decode_responses=True,
+                socket_timeout=1,
+                socket_connect_timeout=1,
+            )
+        except Exception:
+            pass
+    return _redis_client
 
 
 class FrndlyTVScraper(BaseScraper):
@@ -78,7 +103,7 @@ class FrndlyTVScraper(BaseScraper):
         session_id = self.config.get('session_id')
         if session_id:
             self._frndly_headers['session-id'] = session_id
-        self._path_cache: dict[str, tuple[str, int]] = {}  # ch_id -> (path, expire_ts)
+        self._path_cache = _PATH_CACHE  # module-level; persists across instances
 
     # ── Auth ────────────────────────────────────────────────────────────────
 
@@ -472,9 +497,23 @@ class FrndlyTVScraper(BaseScraper):
 
     def _channel_path_from_guide(self, ch_id: str) -> str:
         now = int(time.time())
+
+        # Local (per-process) cache
         cached = self._path_cache.get(ch_id)
         if cached and cached[1] > now:
             return cached[0]
+
+        # Redis cache — shared across all gunicorn workers
+        rdb = _get_redis()
+        if rdb:
+            try:
+                redis_path = rdb.get(f'{_REDIS_PATH_KEY}{ch_id}')
+                if redis_path:
+                    self._path_cache[ch_id] = (redis_path, now + 1800)
+                    return redis_path
+            except Exception:
+                pass
+
         params = {
             'channel_ids': ch_id,
             'page': 0,
@@ -491,5 +530,11 @@ class FrndlyTVScraper(BaseScraper):
                     if path:
                         expire = min(int(end_ms / 1000), now + 1800)
                         self._path_cache[ch_id] = (path, expire)
+                        if rdb:
+                            try:
+                                rdb.set(f'{_REDIS_PATH_KEY}{ch_id}', path,
+                                        ex=max(60, expire - now))
+                            except Exception:
+                                pass
                         return path
         raise RuntimeError(f'No live program found in guide for channel {ch_id}')
