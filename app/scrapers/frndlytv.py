@@ -31,7 +31,7 @@ _GUIDE_URL = 'https://frndlytv-tvguideapi.revlet.net/service/api/v1/static/tvgui
 _TEMPLATE_URL = 'https://frndlytv-api.revlet.net/service/api/v1/template/data'
 _SESSION_END_URL = 'https://frndlytv-api.revlet.net/service/api/v1/stream/session/end'
 
-_LOGIN_TTL = 60 * 60 * 5  # force re-login after 5 hours
+_LOGIN_TTL = 60 * 60 * 24  # force re-login after 24 hours
 _EPG_DAYS = 3
 _GUIDE_CHUNK = 20       # channel IDs per guide request
 _ENRICH_WORKERS = 2    # conservative concurrency for template/data enrichment
@@ -65,7 +65,7 @@ class FrndlyTVScraper(BaseScraper):
                     placeholder='you@example.com',
                     help_text='Your Frndly TV login email'),
         ConfigField('password', 'Password', field_type='password', required=True,
-                    secret=True, help_text='Your Frndly TV password'),
+                    secret=True, help_text='Your Frndly TV password. If you signed up via Google or Apple, visit frndlytv.com → Forgot Password to set a direct password first.'),
     ]
 
     def __init__(self, config: dict | None = None):
@@ -129,7 +129,15 @@ class FrndlyTVScraper(BaseScraper):
         if session_id and (time.time() - login_time) < _LOGIN_TTL:
             self._frndly_headers['session-id'] = session_id
             return
-        self._login()
+        try:
+            self._login()
+        except Exception:
+            if session_id:
+                # Cached session may still be valid; let _api_get handle auth failure reactively.
+                logger.warning('[frndlytv] re-login failed; continuing with cached session')
+                self._frndly_headers['session-id'] = session_id
+            else:
+                raise
 
     def pre_run_setup(self) -> None:
         self._ensure_session()
