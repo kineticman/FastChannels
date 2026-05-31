@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Guide — FastChannels Admin</title>
+  <style>
+    html { font-size: 17px; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }
+    nav { background: var(--surface); padding: 1rem 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    nav .version { margin-left: auto; color: var(--text-muted); font-size: 0.75rem; }
+    nav h1 { color: var(--accent); font-size: 1.2rem; font-weight: 700; }
+    nav a { color: var(--text-soft); text-decoration: none; font-size: 0.9rem; }
+    nav a:hover { color: var(--text); }
+    nav a.active { color: var(--accent); font-weight: 600; }
+    .container { max-width: 1600px; margin: 1.5rem auto; padding: 0 1.5rem; }
+    .section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; }
+    .btn { padding: 0.4rem 1rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: none; background: var(--accent-strong); color: white; }
+    .btn:hover { background: var(--accent-strong-hover); }
+    .btn-sm { padding: 0.3rem 0.75rem; font-size: 0.75rem; }
+    .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text-soft); }
+    .btn-ghost:hover { background: var(--bg); color: var(--text); }
+
+    /* ── Toolbar ── */
+    .guide-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin-bottom: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .guide-toolbar select,
+    .guide-toolbar input[type="text"] {
+      padding: 0.35rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.85rem;
+      height: 2rem;
+    }
+    .guide-toolbar input[type="text"] { width: 170px; }
+    .guide-toolbar-sep { width: 1px; height: 1.4rem; background: var(--border); margin: 0 0.2rem; }
+    .guide-meta {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-left: auto;
+    }
+
+    /* ── Guide outer scroll container ── */
+    .guide-outer {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: grab;
+    }
+    .guide-outer.dragging { cursor: grabbing; }
+    .guide-inner {
+      min-width: 1000px;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+    }
+
+    /* ── Shared row layout ── */
+    .guide-header-row,
+    .guide-row {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+    }
+    .guide-row:last-child { border-bottom: none; }
+
+    /* ── Sticky channel label column ── */
+    .ch-cell {
+      width: 180px;
+      flex-shrink: 0;
+      position: sticky;
+      left: 0;
+      z-index: 4;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0 0.6rem;
+      min-height: 52px;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .ch-cell:hover { background: var(--surface-2, color-mix(in srgb, var(--surface) 85%, var(--accent))); }
+    .ch-cell.corner {
+      height: 28px;
+      min-height: 28px;
+      z-index: 5;
+      cursor: default;
+    }
+    .ch-cell.corner:hover { background: var(--surface); }
+    .ch-logo {
+      width: 28px;
+      height: 28px;
+      object-fit: contain;
+      flex-shrink: 0;
+      border-radius: 3px;
+    }
+    .ch-name {
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--text);
+      line-height: 1.2;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    /* ── Time header track ── */
+    .time-header-track {
+      flex: 1;
+      position: relative;
+      height: 28px;
+      background: var(--bg);
+    }
+    .time-tick {
+      position: absolute;
+      top: 6px;
+      transform: translateX(-50%);
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      pointer-events: none;
+      user-select: none;
+    }
+    .time-tick:first-child { transform: translateX(0); }
+
+    /* ── Programs track ── */
+    .programs-track {
+      flex: 1;
+      position: relative;
+      height: 52px;
+      background: var(--bg);
+    }
+
+    /* ── Now line ── */
+    .now-line {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: #e53e3e;
+      pointer-events: none;
+      z-index: 3;
+      opacity: 0.85;
+    }
+    .time-header-track .now-line {
+      top: 18px;
+      bottom: 0;
+    }
+
+    /* ── Program blocks ── */
+    .program-block {
+      position: absolute;
+      top: 3px;
+      bottom: 3px;
+      border-radius: 4px;
+      overflow: hidden;
+      padding: 3px 5px;
+      cursor: pointer;
+      background: var(--accent-bg);
+      border: 1px solid var(--accent-border);
+      transition: filter 0.1s;
+      min-width: 2px;
+    }
+    .program-block:hover { filter: brightness(1.15); z-index: 2; }
+    .program-block.prog-current {
+      background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+      border-color: var(--accent);
+    }
+    .prog-title {
+      display: block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.3;
+    }
+    .prog-time {
+      display: block;
+      font-size: 0.62rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    .program-block.narrow .prog-title,
+    .program-block.narrow .prog-time { display: none; }
+
+    /* ── Empty EPG row ── */
+    .prog-empty {
+      position: absolute;
+      inset: 4px 6px;
+      display: flex;
+      align-items: center;
+      font-size: 0.68rem;
+      color: var(--text-dim, var(--text-muted));
+      font-style: italic;
+    }
+
+    /* ── Divider between sources ── */
+    .source-divider {
+      display: flex;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+    }
+    .source-divider-label {
+      width: 180px;
+      flex-shrink: 0;
+      padding: 4px 0.6rem;
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+      position: sticky;
+      left: 0;
+      background: var(--bg);
+      border-right: 1px solid var(--border);
+    }
+    .source-divider-fill { flex: 1; }
+
+    /* ── Modal ── */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; background: var(--overlay, rgba(0,0,0,0.6));
+      z-index: 1000; align-items: center; justify-content: center; padding: 1rem;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 1.5rem; width: 580px; max-width: min(98vw, 580px); max-height: 92vh;
+      overflow-y: auto; box-shadow: var(--shadow-soft, 0 8px 32px rgba(0,0,0,0.3));
+      overscroll-behavior: contain; position: relative;
+    }
+    .modal-close {
+      position: absolute; top: 0.85rem; right: 1rem;
+      background: none; border: none; font-size: 1.5rem; line-height: 1;
+      cursor: pointer; color: var(--text-muted); padding: 0;
+    }
+    .modal-close:hover { color: var(--text); }
+    .modal-loading { color: var(--text-muted); text-align: center; padding: 2.5rem 0; font-size: 0.9rem; }
+
+    /* ── Modal content ── */
+    .gm-header { display: flex; align-items: center; gap: 0.85rem; margin-bottom: 1rem; padding-right: 2rem; }
+    .gm-logo { width: 48px; height: 48px; object-fit: contain; border-radius: 6px; background: var(--bg); flex-shrink: 0; }
+    .gm-logo-blank { width: 48px; height: 48px; flex-shrink: 0; }
+    .gm-channel-name { font-size: 1rem; font-weight: 700; color: var(--text-strong, var(--text)); }
+    .gm-channel-meta { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.1rem; }
+    .gm-divider { border: none; border-top: 1px solid var(--border); margin: 0.85rem 0; }
+    .gm-prog-label {
+      font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--accent-soft); margin-bottom: 0.4rem;
+    }
+    .gm-prog-title { font-size: 1.05rem; font-weight: 700; color: var(--text-strong, var(--text)); margin-bottom: 0.25rem; line-height: 1.3; }
+    .gm-prog-time { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.6rem; }
+    .gm-prog-desc {
+      font-size: 0.83rem; color: var(--text-soft, var(--text-muted)); line-height: 1.55;
+      margin-bottom: 0.75rem; border-left: 2px solid var(--border); padding-left: 0.7rem;
+    }
+    .gm-prog-meta { font-size: 0.75rem; color: var(--text-dim, var(--text-muted)); margin-bottom: 0.75rem; }
+    .gm-poster {
+      float: right; margin: 0 0 0.5rem 0.75rem;
+      width: 76px; height: 76px; border-radius: 6px;
+      object-fit: cover; background: var(--bg);
+    }
+    .gm-live-badge {
+      display: inline-block; background: var(--success-bg); color: var(--success);
+      border-radius: 4px; font-size: 0.65rem; font-weight: 700; padding: 2px 6px;
+      vertical-align: middle; letter-spacing: 0.04em;
+    }
+    .gm-upcoming-badge {
+      display: inline-block; background: var(--accent-bg); color: var(--accent-soft);
+      border-radius: 4px; font-size: 0.65rem; font-weight: 700; padding: 2px 6px;
+      vertical-align: middle; letter-spacing: 0.04em;
+    }
+    .gm-note { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem; font-style: italic; }
+    .gm-warning {
+      background: var(--warning-bg); border: 1px solid var(--warning-border);
+      border-radius: 6px; padding: 0.5rem 0.75rem;
+      font-size: 0.8rem; color: var(--warning-soft); margin-bottom: 0.75rem;
+    }
+
+    /* ── Preview action buttons (same as channels.html) ── */
+    .preview-action-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 0.45rem 1rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;
+      border: 1px solid transparent; text-decoration: none; font-weight: 500; white-space: nowrap;
+    }
+    .preview-action-btn.primary { background: var(--success-border); border-color: var(--success-border); color: var(--success-contrast, #fff); }
+    .preview-action-btn.primary:hover { opacity: 0.9; }
+    .preview-action-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .preview-action-btn.secondary { background: var(--info); border-color: var(--info); color: var(--info-contrast, #fff); }
+    .preview-action-btn.secondary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+    .preview-action-btn.neutral { background: var(--surface); border-color: var(--border); color: var(--text-subtle, var(--text-soft)); }
+    .preview-action-btn.neutral:hover { background: var(--bg); border-color: var(--text-dim, var(--border)); }
+    .gm-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
+    .gm-player-wrap { margin-top: 0.25rem; }
+    .gm-player-wrap video { width: 100%; border-radius: 6px; background: #000; max-height: 340px; }
+    .gm-player-note {
+      font-size: 0.72rem; color: var(--text-muted); margin-top: 0.5rem; line-height: 1.4;
+    }
+
+    @media (max-width: 760px) {
+      html { font-size: 16px; }
+      nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
+      nav h1 { width: 100%; }
+      nav .version { margin-left: 0; width: 100%; order: 99; }
+      .container { margin: 1rem auto; padding: 0 0.75rem; }
+      .modal-overlay { align-items: flex-start; padding: 0.75rem 0.5rem; }
+      .modal-box { width: 100%; max-width: 100%; border-radius: 8px; }
+    }
+  </style>
+  {% include 'admin/_theme_head.html' %}
+</head>
+<body>
+  <nav>
+    <h1>⚡ FastChannels</h1>
+    <a href="/admin/">Dashboard</a>
+    <a href="/admin/sources">Sources</a>
+    <a href="/admin/channels">Channels</a>
+    <a href="/admin/guide" class="active">Guide</a>
+    <a href="/admin/feeds">Feeds</a>
+    <a href="/admin/settings">Settings</a>
+    <a href="/admin/logs">Logs</a>
+    <a href="/admin/help">Help</a>
+    {% include 'admin/_theme_toggle.html' %}
+    {% if update_status.update_available %}<span class="version" style="cursor:pointer" onclick="openUpdateModal()" title="Update available: v{{ update_status.latest_version }}">v{{ app_version }}<span class="update-pip"></span></span>{% else %}<a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="View FastChannels on GitHub">v{{ app_version }}</a>{% endif %}
+  </nav>
+
+  <div class="container">
+    <div class="section">
+      <form method="get" class="guide-toolbar" id="guide-filter-form">
+        <select name="source_id" onchange="this.form.submit()" aria-label="Source">
+          <option value="">All Sources</option>
+          {% for src in sources %}
+          <option value="{{ src.id }}"{% if source_id == src.id %} selected{% endif %}>{{ src.display_name }}</option>
+          {% endfor %}
+        </select>
+        <select name="feed_id" onchange="this.form.submit()" aria-label="Feed">
+          <option value="">All Feeds</option>
+          {% for feed in feeds %}
+          <option value="{{ feed.id }}"{% if feed_id == feed.id %} selected{% endif %}>{{ feed.name }}</option>
+          {% endfor %}
+        </select>
+        <select name="category" onchange="this.form.submit()" aria-label="Category">
+          <option value="">All Categories</option>
+          {% for cat in categories %}
+          <option value="{{ cat }}"{% if category == cat %} selected{% endif %}>{{ cat }}</option>
+          {% endfor %}
+        </select>
+        <div class="guide-toolbar-sep"></div>
+        <input type="text" name="search" placeholder="Search what's on…" value="{{ search }}" aria-label="Search programs">
+        <button type="submit" class="btn btn-sm">Search</button>
+        {% if source_id or feed_id or category or search %}<a href="/admin/guide" class="btn btn-sm btn-ghost">Clear</a>{% endif %}
+        <div class="guide-toolbar-sep"></div>
+        <button type="button" class="btn btn-sm btn-ghost" onclick="shiftTime(-2)" title="Go back 2 hours">&#8592; 2h</button>
+        {% if offset_hours != 0 %}
+        <button type="button" class="btn btn-sm" onclick="shiftTime({{ -offset_hours }})" title="Return to live guide">Now</button>
+        {% else %}
+        <button type="button" class="btn btn-sm btn-ghost" onclick="scrollToNow()">Jump to Now</button>
+        {% endif %}
+        <button type="button" class="btn btn-sm btn-ghost" onclick="shiftTime(2)" title="Go forward 2 hours">2h &#8594;</button>
+        <span class="guide-meta">
+          {% if offset_hours != 0 %}
+          <span style="color:var(--warning-soft,var(--warning))">
+            {% if offset_hours < 0 %}{{ (-offset_hours) }}h ago{% else %}+{{ offset_hours }}h{% endif %}
+          </span> ·
+          {% endif %}
+          {{ channel_count }} channels · {{ program_count }} programs{% if offset_hours == 0 %} · auto-refresh in <span id="refresh-countdown">60</span>s{% endif %}
+        </span>
+      </form>
+
+      <div class="guide-outer" id="guide-outer">
+        <div class="guide-inner" id="guide-inner">
+
+          <!-- Time header -->
+          <div class="guide-header-row">
+            <div class="ch-cell corner"></div>
+            <div class="time-header-track">
+              {% for tick in ticks %}
+              <div class="time-tick" style="left:{{ tick.left }}%">{{ tick.label }}</div>
+              {% endfor %}
+              <div class="now-line" id="now-line-hdr" style="left:{{ now_pct }}%"></div>
+            </div>
+          </div>
+
+          <!-- Channel rows, grouped by source -->
+          {% set ns = namespace(current_source_id=none) %}
+          {% for row in guide_rows %}
+            {% if row.channel.source_id != ns.current_source_id %}
+              {% set ns.current_source_id = row.channel.source_id %}
+              {% for src in sources %}{% if src.id == ns.current_source_id %}
+              <div class="source-divider">
+                <div class="source-divider-label">{{ src.display_name }}</div>
+                <div class="source-divider-fill"></div>
+              </div>
+              {% endif %}{% endfor %}
+            {% endif %}
+          <div class="guide-row" data-channel-id="{{ row.channel.id }}">
+            <div class="ch-cell" onclick="openGuideChannelModal({{ row.channel.id }}, this.closest('.guide-row'))">
+              {% if row.channel.logo_url %}<img src="{{ row.channel.logo_url }}" alt="" class="ch-logo">{% endif %}
+              <span class="ch-name">{{ row.channel.name }}</span>
+            </div>
+            <div class="programs-track">
+              <div class="now-line" style="left:{{ now_pct }}%"></div>
+              {% if row.programs %}
+                {% for prog in row.programs %}
+                <div class="program-block{% if prog.is_current %} prog-current{% endif %}{% if prog.width < 4 %} narrow{% endif %}"
+                     style="left:{{ prog.left }}%;width:{{ prog.width }}%"
+                     data-channel-id="{{ row.channel.id }}"
+                     data-title="{{ prog.title }}"
+                     data-desc="{{ prog.description }}"
+                     data-start="{{ prog.start_display }}"
+                     data-end="{{ prog.end_display }}"
+                     data-cat="{{ prog.category }}"
+                     data-rating="{{ prog.rating }}"
+                     data-poster="{{ prog.poster_url }}"
+                     data-current="{{ '1' if prog.is_current else '' }}"
+                     title="{{ prog.title }} · {{ prog.start_display }}–{{ prog.end_display }}{% if prog.description %} · {{ prog.description[:120] }}{% endif %}"
+                     onclick="openGuideProgModal(this)">
+                  <span class="prog-title">{{ prog.title }}</span>
+                  <span class="prog-time">{{ prog.start_display }}</span>
+                </div>
+                {% endfor %}
+              {% else %}
+                <div class="prog-empty">No EPG data</div>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+
+          {% if not guide_rows %}
+          <div style="padding: 2rem; text-align: center; color: var(--text-muted); font-size: 0.9rem;">
+            No active channels found{% if source_id %} for the selected source{% endif %}.
+          </div>
+          {% endif %}
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Guide preview modal -->
+  <div class="modal-overlay" id="guide-modal" onclick="if(event.target===this)closeGuideModal()">
+    <div class="modal-box">
+      <div id="gm-content">
+        <div class="modal-loading">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+  <script>
+    const _APP_TZ = {{ app_timezone_name | tojson }};
+    let _guideHls = null;
+    let _guideDetectingFor = null;
+
+    // ── Scroll to now ────────────────────────────────────────────────
+    const NOW_PCT = {{ now_pct }};
+
+    function scrollToNow() {
+      const outer = document.getElementById('guide-outer');
+      const hdrLine = document.getElementById('now-line-hdr');
+      if (!hdrLine || !outer) return;
+      const outerRect  = outer.getBoundingClientRect();
+      const lineRect   = hdrLine.getBoundingClientRect();
+      const lineInOuter = lineRect.left - outerRect.left + outer.scrollLeft;
+      outer.scrollLeft = Math.max(0, lineInOuter - outer.clientWidth * 0.28);
+    }
+
+    window.addEventListener('load', scrollToNow);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeGuideModal(); });
+
+    // ── Drag-to-scroll ────────────────────────────────────────────────
+    (function () {
+      const el = document.getElementById('guide-outer');
+      let active = false, moved = false, startX = 0, startLeft = 0;
+
+      // Use pointer events (not mouse) so the browser can't start HTML5
+      // drag-and-drop mid-gesture, but DON'T use setPointerCapture — that
+      // reroutes the click event away from the program block and breaks modals.
+      // Listening on document for move/up means the drag keeps working even
+      // if the pointer wanders outside the element.
+      el.addEventListener('pointerdown', e => {
+        if (e.button !== 0) return;
+        active    = true;
+        moved     = false;
+        startX    = e.clientX;
+        startLeft = el.scrollLeft;
+      });
+
+      document.addEventListener('pointermove', e => {
+        if (!active) return;
+        const dx = e.clientX - startX;
+        if (Math.abs(dx) < 5) return;
+        moved = true;
+        el.scrollLeft = startLeft - dx;
+        el.classList.add('dragging');
+      });
+
+      document.addEventListener('pointerup', () => {
+        if (!active) return;
+        active = false;
+        el.classList.remove('dragging');
+      });
+
+      // Prevent native HTML5 drag-and-drop, which would swallow pointermove
+      el.addEventListener('dragstart', e => e.preventDefault());
+
+      // Swallow the click that fires after a drag so modals don't open
+      el.addEventListener('click', e => {
+        if (moved) { e.stopPropagation(); moved = false; }
+      }, true);
+    })();
+
+    // ── Time navigation ───────────────────────────────────────────────
+    function shiftTime(deltaHours) {
+      const params = new URLSearchParams(window.location.search);
+      const current = parseInt(params.get('offset') || '0', 10);
+      const next = current + deltaHours;
+      if (next === 0) {
+        params.delete('offset');
+      } else {
+        params.set('offset', String(next));
+      }
+      window.location.search = params.toString();
+    }
+
+    // ── Auto-refresh (live mode only) ─────────────────────────────────
+    const _OFFSET_HOURS = {{ offset_hours }};
+    if (_OFFSET_HOURS === 0) {
+      let remaining = 60;
+      const countdown = document.getElementById('refresh-countdown');
+      setInterval(() => {
+        remaining -= 1;
+        if (countdown) countdown.textContent = remaining;
+        if (remaining <= 0) location.reload();
+      }, 1000);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────
+    function escapeHtml(str) {
+      return String(str)
+        .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+    }
+
+    function extractProgData(el) {
+      return {
+        title:   el.dataset.title   || '',
+        desc:    el.dataset.desc    || '',
+        start:   el.dataset.start   || '',
+        end:     el.dataset.end     || '',
+        cat:     el.dataset.cat     || '',
+        rating:  el.dataset.rating  || '',
+        poster:  el.dataset.poster  || '',
+        current: !!el.dataset.current,
+      };
+    }
+
+    // ── Open modal: channel cell click (use current program if any) ───
+    function openGuideChannelModal(channelId, rowEl) {
+      const currentBlock = rowEl ? rowEl.querySelector('.prog-current') : null;
+      const prog = currentBlock ? extractProgData(currentBlock) : null;
+      openGuideModal(channelId, prog);
+    }
+
+    // ── Open modal: program block click ──────────────────────────────
+    function openGuideProgModal(el) {
+      const channelId = parseInt(el.dataset.channelId, 10);
+      openGuideModal(channelId, extractProgData(el));
+    }
+
+    // ── Core modal open/close ─────────────────────────────────────────
+    function closeGuideModal() {
+      _guideDetectingFor = null;
+      const modal = document.getElementById('guide-modal');
+      modal.classList.remove('open');
+      document.body.style.overflow = '';
+      if (_guideHls) { _guideHls.destroy(); _guideHls = null; }
+      const v = document.getElementById('gm-player');
+      if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+    }
+
+    async function openGuideModal(channelId, prog) {
+      const modal = document.getElementById('guide-modal');
+      const content = document.getElementById('gm-content');
+      content.innerHTML = '<div class="modal-loading">Loading…</div>';
+      modal.classList.add('open');
+      document.body.style.overflow = 'hidden';
+      await _loadGuideModal(channelId, prog);
+    }
+
+    // ── Fetch channel data + render modal ─────────────────────────────
+    async function _loadGuideModal(channelId, prog) {
+      const content = document.getElementById('gm-content');
+      try {
+        const r = await fetch(`/api/channels/${channelId}/preview?detect=0`);
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+        const ch = data.channel || {};
+        const playUrl     = data.play_url;
+        const previewUrl  = data.preview_url || data.play_url;
+        const mode        = String(ch.playback_mode || 'hls').toLowerCase();
+        const streamType  = String(ch.stream_type || '').toLowerCase();
+        const detecting   = data.needs_detection;
+
+        // Fall back to current_program from API if no prog data passed
+        if (!prog && data.current_program) {
+          const cp = data.current_program;
+          prog = {
+            title:   cp.title || '',
+            desc:    cp.description || '',
+            start:   _fmtTime(cp.start_time),
+            end:     _fmtTime(cp.end_time),
+            cat:     cp.category || '',
+            rating:  cp.rating || '',
+            poster:  cp.poster_url || '',
+            current: true,
+          };
+        }
+
+        const badge = (prog && prog.current)
+          ? '<span class="gm-live-badge">LIVE NOW</span>'
+          : (prog ? '<span class="gm-upcoming-badge">UPCOMING</span>' : '');
+
+        const poster = (prog && prog.poster)
+          ? `<img class="gm-poster" src="${escapeHtml(prog.poster)}" alt="" loading="lazy" onerror="this.remove()">`
+          : '';
+
+        const metaParts = [ch.source_display_name, ch.category, ch.language].filter(Boolean);
+
+        const warningHtml = ch.disable_reason
+          ? `<div class="gm-warning">Channel flagged: <strong>${escapeHtml(ch.disable_reason)}</strong> — playback may fail.</div>`
+          : '';
+
+        const notCurrentNote = (prog && !prog.current)
+          ? `<div class="gm-note">Stream plays current live content, not this upcoming program.</div>`
+          : '';
+
+        const catRating = [prog && prog.cat, prog && prog.rating].filter(Boolean).join(' · ');
+
+        const playBtn = detecting
+          ? `<button class="preview-action-btn primary" disabled>Detecting stream…</button>`
+          : (previewUrl
+              ? `<button class="preview-action-btn primary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(streamType)}')">Play Here</button>`
+              : '');
+        const extBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open Externally</a>` : '';
+        const vlcBtn  = playUrl ? `<a class="preview-action-btn neutral" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
+        const noStream = !playUrl && !detecting ? `<span style="font-size:0.8rem;color:var(--text-muted)">No stream available for this source</span>` : '';
+
+        content.innerHTML = `
+          <button class="modal-close" onclick="closeGuideModal()" aria-label="Close">×</button>
+          <div class="gm-header">
+            ${ch.logo_url
+              ? `<img class="gm-logo" src="${escapeHtml(ch.logo_display_url || ch.logo_url)}" alt="">`
+              : `<div class="gm-logo-blank"></div>`}
+            <div>
+              <div class="gm-channel-name">${escapeHtml(ch.name || 'Channel')}</div>
+              <div class="gm-channel-meta">${metaParts.map(escapeHtml).join(' · ')}</div>
+            </div>
+          </div>
+          <hr class="gm-divider">
+          ${prog ? `
+            <div class="gm-prog-label">${prog.current ? 'Now Playing' : 'Upcoming'} ${badge}</div>
+            <div style="overflow:hidden">
+              ${poster}
+              <div class="gm-prog-title">${escapeHtml(prog.title || '—')}</div>
+              <div class="gm-prog-time">${escapeHtml(prog.start)} – ${escapeHtml(prog.end)}</div>
+              ${prog.desc ? `<div class="gm-prog-desc">${escapeHtml(prog.desc)}</div>` : ''}
+              ${catRating ? `<div class="gm-prog-meta">${escapeHtml(catRating)}</div>` : ''}
+            </div>
+          ` : `<div class="gm-prog-label">No current program data</div>`}
+          ${notCurrentNote}
+          ${warningHtml}
+          <div class="gm-actions" id="gm-actions">
+            ${playBtn}${extBtn}${vlcBtn}${noStream}
+            <button class="preview-action-btn neutral" onclick="closeGuideModal()">Close</button>
+          </div>
+          <div class="gm-player-wrap" id="gm-player-wrap" style="display:none">
+            <video id="gm-player" controls playsinline preload="none"></video>
+            <div class="gm-player-note">Browser playback depends on stream format and source restrictions. If it fails here, try Open Externally or VLC.</div>
+          </div>
+        `;
+
+        if (detecting) _detectGuideStream(channelId, previewUrl, mode, streamType);
+
+      } catch (e) {
+        content.innerHTML = `
+          <button class="modal-close" onclick="closeGuideModal()">×</button>
+          <div class="modal-loading">Failed to load channel data.</div>
+          <div style="text-align:center;padding-bottom:1rem">
+            <button class="btn btn-ghost btn-sm" onclick="closeGuideModal()">Close</button>
+          </div>`;
+      }
+    }
+
+    // ── HLS.js player ────────────────────────────────────────────────
+    function loadGuidePlayer(url, mode, type) {
+      const wrap  = document.getElementById('gm-player-wrap');
+      const video = document.getElementById('gm-player');
+      if (!wrap || !video) return;
+      wrap.style.display = '';
+      video.volume = 0.5;
+      if (_guideHls) { _guideHls.destroy(); _guideHls = null; }
+      if (mode === 'native' || !Hls.isSupported()) {
+        video.src = url;
+        video.play().catch(() => {});
+      } else {
+        _guideHls = new Hls({ maxBufferLength: 15 });
+        _guideHls.loadSource(url);
+        _guideHls.attachMedia(video);
+        _guideHls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+      }
+    }
+
+    // ── Background stream detection ───────────────────────────────────
+    async function _detectGuideStream(channelId) {
+      _guideDetectingFor = channelId;
+      try {
+        const r    = await fetch(`/api/channels/${channelId}/preview`);
+        const data = await r.json();
+        if (_guideDetectingFor !== channelId || !r.ok) return;
+        const ch         = data.channel || {};
+        const playUrl    = data.play_url;
+        const previewUrl = data.preview_url || data.play_url;
+        const mode       = String(ch.playback_mode || 'hls').toLowerCase();
+        const type       = String(ch.stream_type || '').toLowerCase();
+        const actions    = document.getElementById('gm-actions');
+        if (!actions) return;
+        const playBtn = previewUrl
+          ? `<button class="preview-action-btn primary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(type)}')">Play Here</button>`
+          : '';
+        const extBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open Externally</a>` : '';
+        const vlcBtn  = playUrl ? `<a class="preview-action-btn neutral" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
+        actions.innerHTML = `${playBtn}${extBtn}${vlcBtn}<button class="preview-action-btn neutral" onclick="closeGuideModal()">Close</button>`;
+      } catch (_e) { /* silently ignore — stream detect failed */ }
+    }
+
+    // ── Format UTC ISO time into local display ────────────────────────
+    function _fmtTime(iso) {
+      if (!iso) return '';
+      try {
+        return new Date(iso).toLocaleTimeString([], {
+          hour: 'numeric', minute: '2-digit', timeZone: _APP_TZ,
+        });
+      } catch (_e) { return ''; }
+    }
+  </script>
+
+  {% include 'admin/_update_modal.html' %}
+</body>
+</html>

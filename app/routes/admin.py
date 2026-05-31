@@ -613,6 +613,148 @@ def channels():
                            filter_qs=filter_qs)
 
 
+@admin_bp.route('/guide')
+def guide():
+    from zoneinfo import ZoneInfo
+
+    now_utc = datetime.now(timezone.utc)
+    app_settings = AppSettings.get()
+    tz = ZoneInfo(app_settings.effective_timezone_name())
+
+    offset_hours     = max(-48, min(48, request.args.get('offset', type=int, default=0)))
+    offset           = timedelta(hours=offset_hours)
+    window_start_utc = now_utc + offset - timedelta(minutes=30)
+    window_end_utc   = now_utc + offset + timedelta(hours=4, minutes=30)
+    window_seconds   = (window_end_utc - window_start_utc).total_seconds()
+
+    window_start_local = window_start_utc.astimezone(tz)
+    window_end_local   = window_end_utc.astimezone(tz)
+    now_local          = now_utc.astimezone(tz)
+
+    source_id = request.args.get('source_id', type=int)
+    feed_id   = request.args.get('feed_id',   type=int)
+    category  = request.args.get('category',  type=str, default='').strip()
+    search    = request.args.get('search',    type=str, default='').strip()
+
+    sources    = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
+    feeds      = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
+    categories = [r[0] for r in (
+        db.session.query(Channel.category)
+        .filter(Channel.is_active == True, Channel.is_enabled == True, Channel.category != None)
+        .distinct().order_by(Channel.category).all()
+    )]
+
+    q = Channel.query.filter_by(is_active=True, is_enabled=True)
+    if source_id:
+        q = q.filter(Channel.source_id == source_id)
+    if feed_id:
+        selected_feed = Feed.query.filter_by(id=feed_id, is_enabled=True).first()
+        if selected_feed:
+            q = q.join(Source, Channel.source_id == Source.id)
+            q = _apply_admin_feed_membership_filters(q, selected_feed)
+    if category:
+        q = q.filter(Channel.category == category)
+    if search:
+        matching_ch_ids = (
+            db.session.query(Program.channel_id)
+            .filter(
+                Program.title.ilike(f'%{search}%'),
+                Program.end_time   > window_start_utc,
+                Program.start_time < window_end_utc,
+            )
+            .distinct()
+            .scalar_subquery()
+        )
+        q = q.filter(Channel.id.in_(matching_ch_ids))
+    channels = q.order_by(
+        Channel.source_id,
+        db.func.coalesce(Channel.number, 99999).asc(),
+        Channel.name,
+    ).all()
+
+    channel_ids = [c.id for c in channels]
+
+    if channel_ids:
+        programs = (Program.query
+            .filter(
+                Program.channel_id.in_(channel_ids),
+                Program.end_time   > window_start_utc,
+                Program.start_time < window_end_utc,
+            )
+            .order_by(Program.channel_id, Program.start_time)
+            .all())
+    else:
+        programs = []
+
+    prog_by_channel = defaultdict(list)
+    for p in programs:
+        prog_by_channel[p.channel_id].append(p)
+
+    def _as_utc(dt):
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    def time_pct(dt_local):
+        return (dt_local - window_start_local).total_seconds() / window_seconds * 100
+
+    guide_rows = []
+    for channel in channels:
+        row_programs = []
+        for p in prog_by_channel.get(channel.id, []):
+            start_utc_p = _as_utc(p.start_time)
+            end_utc_p   = _as_utc(p.end_time)
+            start_local = start_utc_p.astimezone(tz)
+            end_local   = end_utc_p.astimezone(tz)
+            clamped_start = max(start_local, window_start_local)
+            clamped_end   = min(end_local,   window_end_local)
+            left  = time_pct(clamped_start)
+            width = (clamped_end - clamped_start).total_seconds() / window_seconds * 100
+            row_programs.append({
+                'title':         p.title,
+                'description':   (p.description or '')[:300],
+                'category':      p.category or '',
+                'start_display': start_local.strftime('%-I:%M %p'),
+                'end_display':   end_local.strftime('%-I:%M %p'),
+                'left':          round(left, 4),
+                'width':         round(width, 4),
+                'is_current':    start_utc_p <= now_utc < end_utc_p,
+                'rating':        p.rating or '',
+                'poster_url':    p.poster_url or '',
+            })
+        guide_rows.append({'channel': channel, 'programs': row_programs})
+
+    # 30-minute tick marks aligned to clock boundaries
+    ticks = []
+    t = window_start_local.replace(second=0, microsecond=0)
+    remainder = t.minute % 30
+    if remainder:
+        t += timedelta(minutes=30 - remainder)
+    while t <= window_end_local:
+        ticks.append({'label': t.strftime('%-I:%M %p'), 'left': round(time_pct(t), 4)})
+        t += timedelta(minutes=30)
+
+    now_pct = round(time_pct(now_local), 4)
+
+    return render_template(
+        'admin/guide.html',
+        guide_rows=guide_rows,
+        ticks=ticks,
+        now_pct=now_pct,
+        sources=sources,
+        feeds=feeds,
+        categories=categories,
+        source_id=source_id,
+        feed_id=feed_id,
+        category=category,
+        search=search,
+        offset_hours=offset_hours,
+        channel_count=len(channels),
+        program_count=len(programs),
+        app_timezone_name=app_settings.effective_timezone_name(),
+    )
+
+
 @admin_bp.route('/channels/chnum-map')
 def channels_chnum_map():
     raw_ids = (request.args.get('ids') or '').strip()
