@@ -2150,11 +2150,12 @@
 
     async function _doCitySearch(sourceId, query) {
       const resultsEl = document.getElementById(`city-results-${sourceId}`);
+      const _advancedHint = ' Use <strong>Advanced Options</strong> below to enter DMA and market manually (e.g. DMA <code>501</code>, market <code>nyNewYorkCity,pbs-wnet</code> for New York).';
       try {
         const r = await fetch(`/api/localnow/cities?q=${encodeURIComponent(query)}`);
         const data = await r.json();
-        if (!Array.isArray(data) || !data.length) {
-          resultsEl.innerHTML = '<div class="city-searching">No results found</div>';
+        if (!r.ok || !Array.isArray(data) || !data.length) {
+          resultsEl.innerHTML = `<div class="city-searching">No results found.${_advancedHint}</div>`;
           return;
         }
         resultsEl.innerHTML = data.map(c =>
@@ -2168,7 +2169,7 @@
           </div>`
         ).join('');
       } catch (e) {
-        resultsEl.innerHTML = '<div class="city-searching">Search failed</div>';
+        resultsEl.innerHTML = `<div class="city-searching">City search unavailable.${_advancedHint}</div>`;
       }
     }
 

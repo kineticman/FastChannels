@@ -66,6 +66,8 @@ def build_setup_checklist(app_settings, sources_by_name: dict, scrapers_by_name:
         scraper_cls = scrapers_by_name.get(source_name)
         if not source or not scraper_cls:
             continue
+        if not source.is_enabled:
+            continue
         if not is_source_config_complete(source_name, scraper_cls, source.config or {}):
             items.append({
                 'key': source_name,
