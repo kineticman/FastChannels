@@ -303,10 +303,12 @@
     .preview-action-btn.primary { background: var(--success-border); border-color: var(--success-border); color: var(--success-contrast, #fff); }
     .preview-action-btn.primary:hover { opacity: 0.9; }
     .preview-action-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
-    .preview-action-btn.secondary { background: var(--info); border-color: var(--info); color: var(--info-contrast, #fff); }
-    .preview-action-btn.secondary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+    .preview-action-btn.secondary { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
+    .preview-action-btn.secondary:hover { background: var(--accent-strong-hover); border-color: var(--accent-strong-hover); }
     .preview-action-btn.neutral { background: var(--surface); border-color: var(--border); color: var(--text-subtle, var(--text-soft)); }
     .preview-action-btn.neutral:hover { background: var(--bg); border-color: var(--text-dim, var(--border)); }
+    .preview-action-btn.danger { background: var(--danger-border); border-color: var(--danger-border); color: #fff; }
+    .preview-action-btn.danger:hover { opacity: 0.88; }
     .gm-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
     .gm-player-wrap { margin-top: 0.25rem; }
     .gm-player-wrap video { width: 100%; border-radius: 6px; background: #000; max-height: 340px; }
@@ -380,9 +382,11 @@
             {% if offset_hours < 0 %}{{ (-offset_hours) }}h ago{% else %}+{{ offset_hours }}h{% endif %}
           </span> ·
           {% endif %}
-          {{ channel_count }} channels · {{ program_count }} programs{% if offset_hours == 0 %} · auto-refresh in <span id="refresh-countdown">60</span>s{% endif %}
+          {{ channel_count }} channels · {{ program_count }} programs{% if offset_hours == 0 %} · auto-refresh in <span id="refresh-countdown">15</span>m{% endif %}
         </span>
       </form>
+
+      <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem">Showing active, enabled channels — the same set included in M3U output. Disable a channel on the <a href="/admin/channels" style="color:var(--accent)">Channels</a> page to hide it here.</p>
 
       <div class="guide-outer" id="guide-outer">
         <div class="guide-inner" id="guide-inner">
@@ -498,6 +502,7 @@
       // if the pointer wanders outside the element.
       el.addEventListener('pointerdown', e => {
         if (e.button !== 0) return;
+        if (e.pointerType === 'touch') return; // browser handles native touch-scroll; skip so taps aren't blocked
         active    = true;
         moved     = false;
         startX    = e.clientX;
@@ -517,6 +522,10 @@
         if (!active) return;
         active = false;
         el.classList.remove('dragging');
+        // If a drag happened, clear the flag after any spurious post-drag
+        // click has had a chance to be caught by the capture handler below.
+        // Without this, moved stays true and the next intentional click is lost.
+        if (moved) setTimeout(() => { moved = false; }, 50);
       });
 
       // Prevent native HTML5 drag-and-drop, which would swallow pointermove
@@ -526,6 +535,40 @@
       el.addEventListener('click', e => {
         if (moved) { e.stopPropagation(); moved = false; }
       }, true);
+    })();
+
+    // ── Mouse-wheel → horizontal scroll + edge auto-advance ──────────
+    (function () {
+      const el = document.getElementById('guide-outer');
+
+      // When scrolled to either edge, load the adjacent time window
+      let _shiftPending = false;
+
+      function _tryShift(dir) {
+        if (_shiftPending) return;
+        if (dir < 0 && el.scrollLeft < 10 && _OFFSET_HOURS > 0)           { _shiftPending = true; shiftTime(-2); }
+        else if (dir > 0 && el.scrollWidth - el.scrollLeft - el.clientWidth < 60 && _OFFSET_HOURS < 46) { _shiftPending = true; shiftTime(2); }
+      }
+
+      el.addEventListener('scroll', () => {
+        _tryShift(el.scrollLeft < 10 ? -1 : 1);
+      }, { passive: true });
+
+      // Overscroll detection — scroll event never fires when scrollLeft is
+      // already 0 (left edge) and user keeps swiping/scrolling right-to-left.
+      let _txStart = 0, _txAtLeft = false;
+      el.addEventListener('touchstart', e => {
+        _txStart  = e.touches[0].clientX;
+        _txAtLeft = el.scrollLeft < 10;
+      }, { passive: true });
+      el.addEventListener('touchmove', e => {
+        if (_txAtLeft && e.touches[0].clientX - _txStart > 50) _tryShift(-1);
+      }, { passive: true });
+
+      // Horizontal trackpad overscroll at left edge
+      el.addEventListener('wheel', e => {
+        if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) _tryShift(e.deltaX < 0 ? -1 : 1);
+      }, { passive: true });
     })();
 
     // ── Time navigation ───────────────────────────────────────────────
@@ -544,12 +587,18 @@
     // ── Auto-refresh (live mode only) ─────────────────────────────────
     const _OFFSET_HOURS = {{ offset_hours }};
     if (_OFFSET_HOURS === 0) {
-      let remaining = 60;
+      let remaining = 900;
       const countdown = document.getElementById('refresh-countdown');
       setInterval(() => {
         remaining -= 1;
-        if (countdown) countdown.textContent = remaining;
-        if (remaining <= 0) location.reload();
+        if (countdown) countdown.textContent = Math.ceil(remaining / 60);
+        if (remaining <= 0) {
+          if (document.getElementById('guide-modal').classList.contains('open')) {
+            remaining = 900; // modal is open — defer reload
+          } else {
+            location.reload();
+          }
+        }
       }, 1000);
     }
 
@@ -657,12 +706,12 @@
         const catRating = [prog && prog.cat, prog && prog.rating].filter(Boolean).join(' · ');
 
         const playBtn = detecting
-          ? `<button class="preview-action-btn primary" disabled>Detecting stream…</button>`
+          ? `<button class="preview-action-btn secondary" disabled>Detecting stream…</button>`
           : (previewUrl
-              ? `<button class="preview-action-btn primary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(streamType)}')">Play Here</button>`
+              ? `<button class="preview-action-btn secondary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(streamType)}')">Play Here</button>`
               : '');
         const extBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open Externally</a>` : '';
-        const vlcBtn  = playUrl ? `<a class="preview-action-btn neutral" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
+        const vlcBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
         const noStream = !playUrl && !detecting ? `<span style="font-size:0.8rem;color:var(--text-muted)">No stream available for this source</span>` : '';
 
         content.innerHTML = `
@@ -691,7 +740,7 @@
           ${warningHtml}
           <div class="gm-actions" id="gm-actions">
             ${playBtn}${extBtn}${vlcBtn}${noStream}
-            <button class="preview-action-btn neutral" onclick="closeGuideModal()">Close</button>
+            <button class="preview-action-btn danger" onclick="closeGuideModal()">Close</button>
           </div>
           <div class="gm-player-wrap" id="gm-player-wrap" style="display:none">
             <video id="gm-player" controls playsinline preload="none"></video>
@@ -745,11 +794,11 @@
         const actions    = document.getElementById('gm-actions');
         if (!actions) return;
         const playBtn = previewUrl
-          ? `<button class="preview-action-btn primary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(type)}')">Play Here</button>`
+          ? `<button class="preview-action-btn secondary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(type)}')">Play Here</button>`
           : '';
         const extBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open Externally</a>` : '';
-        const vlcBtn  = playUrl ? `<a class="preview-action-btn neutral" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
-        actions.innerHTML = `${playBtn}${extBtn}${vlcBtn}<button class="preview-action-btn neutral" onclick="closeGuideModal()">Close</button>`;
+        const vlcBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
+        actions.innerHTML = `${playBtn}${extBtn}${vlcBtn}<button class="preview-action-btn danger" onclick="closeGuideModal()">Close</button>`;
       } catch (_e) { /* silently ignore — stream detect failed */ }
     }
 
