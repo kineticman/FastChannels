@@ -1734,9 +1734,9 @@
                 </label>
               </div>
               {% if ch.is_enabled and not ch.is_active %}
-              <div class="inactive-warn" id="inactive-warn-{{ ch.id }}" onclick="openMissedModal({{ ch.id }}, '{{ ch.name|e }}', {{ ch.missed_scrapes or 0 }}, {{ 'true' if ch.scrape_pinned else 'false' }})" title="Missing from recent scrapes — click for options.">scraper lost</div>
+              <div class="inactive-warn" id="inactive-warn-{{ ch.id }}" onclick="openMissedModal({{ ch.id }}, {{ ch.name|tojson }}, {{ ch.missed_scrapes or 0 }}, {{ 'true' if ch.scrape_pinned else 'false' }})" title="Missing from recent scrapes — click for options.">scraper lost</div>
               {% elif ch.scrape_pinned and ch.missed_scrapes %}
-              <div class="scrape-pinned-badge" id="inactive-warn-{{ ch.id }}" onclick="openMissedModal({{ ch.id }}, '{{ ch.name|e }}', {{ ch.missed_scrapes or 0 }}, true)" title="Pinned — staying active despite {{ ch.missed_scrapes }} missed scrape{{ 's' if ch.missed_scrapes != 1 else '' }}. Click for options.">pinned ⚑</div>
+              <div class="scrape-pinned-badge" id="inactive-warn-{{ ch.id }}" onclick="openMissedModal({{ ch.id }}, {{ ch.name|tojson }}, {{ ch.missed_scrapes or 0 }}, true)" title="Pinned — staying active despite {{ ch.missed_scrapes }} missed scrape{{ 's' if ch.missed_scrapes != 1 else '' }}. Click for options.">pinned ⚑</div>
               {% endif %}
             </td>
           </tr>
