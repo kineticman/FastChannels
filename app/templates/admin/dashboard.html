@@ -170,7 +170,7 @@
       </div>
       <div class="table-wrap">
       <table>
-        <thead><tr><th>Source</th><th>Status</th><th title="Channels currently eligible for output (active, enabled, source enabled, and streamable)">Output Channels</th><th>Last Scraped</th><th>Next Scrape</th><th>Action</th></tr></thead>
+        <thead><tr><th>Source</th><th>Status</th><th title="Channels currently eligible for output (active, enabled, source enabled, and streamable)">Output Channels</th><th title="Distinct output channels from this source that appear in at least one non-default feed">In a Feed</th><th>Last Scraped</th><th>Next Scrape</th><th>Action</th></tr></thead>
         <tbody>
           {% for source in sources %}
           <tr>
@@ -179,6 +179,9 @@
             <td>
               {{ source_output_meta[source.id].channel_count }}
               {% if source_output_meta[source.id].channel_count > 750 %}<span class="warn">⚠</span>{% endif %}
+            </td>
+            <td style="color:{% if source_output_meta[source.id].feed_channel_count %}var(--text){% else %}var(--text-muted){% endif %}">
+              {{ source_output_meta[source.id].feed_channel_count or '—' }}
             </td>
             <td style="color:var(--text-muted)" id="last-scraped-{{ source.id }}">{{ source.last_scraped_at | localtime }}</td>
             {% set nxt = source.next_scrape_at() %}

@@ -243,8 +243,33 @@ def dashboard():
         .all()
     )
     count_map = {source_id: count for source_id, count in count_rows}
+
+    # Count channels in any non-default feed per source
+    non_default_feeds = [f for f in feeds if f.slug != 'default']
+    feed_member_map: dict[int, int] = {}
+    if non_default_feeds:
+        all_feed_channel_ids: set[int] = set()
+        for feed in non_default_feeds:
+            ids = (
+                _build_channel_query(feed_to_query_filters(feed.filters or {}))
+                .with_entities(Channel.id)
+                .all()
+            )
+            all_feed_channel_ids.update(row[0] for row in ids)
+        if all_feed_channel_ids:
+            feed_count_rows = (
+                db.session.query(Channel.source_id, db.func.count(Channel.id))
+                .filter(Channel.id.in_(all_feed_channel_ids))
+                .group_by(Channel.source_id)
+                .all()
+            )
+            feed_member_map = {sid: cnt for sid, cnt in feed_count_rows}
+
     source_output_meta = {
-        source.id: {'channel_count': count_map.get(source.id, 0)}
+        source.id: {
+            'channel_count': count_map.get(source.id, 0),
+            'feed_channel_count': feed_member_map.get(source.id, 0),
+        }
         for source in sources
     }
     return render_template('admin/dashboard.html', sources=sources,
