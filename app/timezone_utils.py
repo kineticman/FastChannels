@@ -45,6 +45,12 @@ def read_timezone_cache(*, force: bool = False) -> str | None:
     except OSError:
         name = None
 
+    if name is None:
+        # File missing or empty — keep the last known good value rather than
+        # blanking the cache and causing a UTC fallback.
+        _cache_state['checked_at'] = now
+        return _cache_state['name']
+
     _cache_state['checked_at'] = now
     _cache_state['name'] = name
     return name
@@ -52,11 +58,16 @@ def read_timezone_cache(*, force: bool = False) -> str | None:
 
 def write_timezone_cache(value: str | None) -> str | None:
     name = normalize_timezone_name(value)
+    if name is None:
+        # Don't overwrite a valid cached timezone with nothing — a transient
+        # None (e.g. AppSettings not yet committed) would blank the file and
+        # cause all processes to fall back to UTC until the next valid write.
+        return None
     parent = os.path.dirname(_TIMEZONE_CACHE_PATH)
     if parent:
         os.makedirs(parent, exist_ok=True)
     with open(_TIMEZONE_CACHE_PATH, 'w', encoding='utf-8') as fp:
-        fp.write(name or '')
+        fp.write(name)
     _cache_state['checked_at'] = time.time()
     _cache_state['name'] = name
     return name
