@@ -24,6 +24,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from croniter import croniter as _croniter
 from sqlalchemy import and_, not_, or_, text
 from sqlalchemy.exc import OperationalError as _SAOperationalError
+from sqlalchemy.orm.attributes import flag_modified as _flag_modified
 from app import create_app
 from app.config_store import persist_source_config_updates
 from app.extensions import db
@@ -630,6 +631,8 @@ def run_stream_audit(source_name: str):
         errors   = 0
         skipped_403 = 0
         consecutive_errors = 0
+        consecutive_skipped_403 = 0  # geo-block detector
+        consecutive_transient_errors = 0  # resolve-timeout detector
         report_channels = []
         _audit_ignore_4xx = getattr(scraper_cls, 'audit_ignore_4xx', False)
         _audit_ignore_vod = getattr(scraper_cls, 'audit_ignore_vod', False)
@@ -717,6 +720,12 @@ def run_stream_audit(source_name: str):
                     if _is_transient_network_error(re_exc):
                         logger.warning('[audit] transient resolve failure for %s: %s', ch.name, re_exc)
                         errors += 1
+                        consecutive_transient_errors += 1
+                        if consecutive_transient_errors >= 20:
+                            logger.warning('[audit] %s: %d consecutive transient resolve failures — '
+                                           'source API may be unreachable, aborting audit.',
+                                           source_name, consecutive_transient_errors)
+                            break
                         continue
                     # If the scraper entered a rate-limit cooldown, wait it out rather
                     # than burning through the consecutive-error budget on channels that
@@ -749,6 +758,8 @@ def run_stream_audit(source_name: str):
                 if not resolved_url.startswith('http'):
                     checked += 1
                     consecutive_errors = 0
+                    consecutive_skipped_403 = 0
+                    consecutive_transient_errors = 0
                     if not ch.is_active:
                         ch.is_active = True
                         ch.disable_reason = None
@@ -801,10 +812,14 @@ def run_stream_audit(source_name: str):
                     raise
 
                 if r.status_code in (403, 429, 500, 502, 503, 504):
-                    wait = 30 + skipped_403 * 5  # escalate backoff with repeated errors
-                    logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
-                                   source_name, r.status_code, wait)
-                    _time.sleep(min(wait, 120))
+                    # After 5 consecutive 403/skip responses, drop the backoff — it's
+                    # almost certainly geo-blocking, not rate-limiting, so the delay
+                    # just burns RQ job time without any benefit.
+                    if consecutive_skipped_403 < 5:
+                        wait = 30 + skipped_403 * 5
+                        logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
+                                       source_name, r.status_code, wait)
+                        _time.sleep(min(wait, 120))
                     r = _run_with_signal_timeout(
                         f"[audit] {source_name} {i}/{total} manifest-retry {ch.name}",
                         _audit_channel_timeout,
@@ -815,12 +830,14 @@ def run_stream_audit(source_name: str):
                     if _audit_ignore_4xx:
                         checked += 1
                         consecutive_errors = 0
+                        consecutive_skipped_403 = 0
                         continue
                     ch.is_active      = False
                     ch.is_enabled     = False
                     ch.disable_reason = 'Dead'
                     dead += 1
                     consecutive_errors = 0
+                    consecutive_skipped_403 = 0
                     report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'dead', 'reason': f'HTTP {r.status_code}'})
                     logger.info('[audit] dead stream: %s  (HTTP %d)', ch.name, r.status_code)
                     continue
@@ -830,10 +847,16 @@ def run_stream_audit(source_name: str):
                     # skip without penalising the consecutive-error budget.
                     # 500/502/504 are CDN hiccups, not stream problems.
                     skipped_403 += 1
+                    consecutive_skipped_403 += 1
                     consecutive_errors = 0
                     report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'rate-limited', 'reason': f'HTTP {r.status_code}'})
                     logger.info('[audit] %s transient error (%d) after backoff, skipping',
                                 ch.name, r.status_code)
+                    if consecutive_skipped_403 >= 30:
+                        logger.warning('[audit] %s: %d consecutive 403/skip responses — '
+                                       'source appears geo-blocked, aborting audit.',
+                                       source_name, consecutive_skipped_403)
+                        break
                     continue
 
                 if r.status_code != 200:
@@ -841,6 +864,7 @@ def run_stream_audit(source_name: str):
                     logger.warning('[audit] error: %s (HTTP %d) — marked inactive', ch.name, r.status_code)
                     errors += 1
                     consecutive_errors += 1
+                    consecutive_skipped_403 = 0
                     report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'error', 'reason': f'HTTP {r.status_code}'})
                     if consecutive_errors >= 20:
                         logger.error('[audit] %s: 20 consecutive errors — aborting. '
@@ -849,6 +873,8 @@ def run_stream_audit(source_name: str):
                     continue
 
                 consecutive_errors = 0
+                consecutive_skipped_403 = 0
+                consecutive_transient_errors = 0
                 checked += 1
                 manifest_text = r.text
                 manifest_url  = r.url
@@ -979,6 +1005,7 @@ def run_stream_audit(source_name: str):
             'ts': datetime.now(timezone.utc).isoformat(),
         }
         source.config = cfg
+        _flag_modified(source, 'config')
         db.session.commit()
         _audit_progress(0, 0, phase='done')
         logger.info('[audit] %s: done — total=%d checked=%d flagged=%d dead=%d vod=%d errors=%d skipped_403=%d',
@@ -1138,6 +1165,7 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
         cfg['last_audit_result'] = result_summary
 
         source.config = cfg
+        _flag_modified(source, 'config')
         db.session.commit()
         _rc_progress(0, 0, phase='done')
         logger.info('[audit-recheck] %s: done — rechecked=%d still_limited=%d',
