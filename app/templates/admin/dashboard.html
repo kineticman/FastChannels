@@ -17,6 +17,7 @@
     nav h1 { color: var(--accent); font-size: 1.2rem; font-weight: 700; }
     nav a { color: var(--text-soft); text-decoration: none; font-size: 0.9rem; }
     nav a:hover { color: var(--text); }
+    nav a.active { color: var(--accent); font-weight: 600; }
     .container { max-width: 1200px; margin: 2rem auto; padding: 0 2rem; }
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
     .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
@@ -90,7 +91,7 @@
 <body>
   <nav>
     <h1>⚡ FastChannels</h1>
-    <a href="/admin/">Dashboard</a>
+    <a href="/admin/" class="active">Dashboard</a>
     <a href="/admin/sources">Sources</a>
     <a href="/admin/channels">Channels</a>
     <a href="/admin/guide">Guide</a>

@@ -691,11 +691,19 @@ def guide():
             .scalar_subquery()
         )
         q = q.filter(Channel.id.in_(matching_ch_ids))
-    channels = q.order_by(
-        Channel.source_id,
-        db.func.coalesce(Channel.number, 99999).asc(),
-        Channel.name,
-    ).all()
+    guide_sort_name = case(
+        (db.func.lower(Channel.name).like('the %'), db.func.lower(db.func.substr(Channel.name, 5))),
+        (db.func.lower(Channel.name).like('an %'),  db.func.lower(db.func.substr(Channel.name, 4))),
+        (db.func.lower(Channel.name).like('a %'),   db.func.lower(db.func.substr(Channel.name, 3))),
+        else_=db.func.lower(Channel.name),
+    )
+    if source_id:
+        channels = q.order_by(
+            db.func.coalesce(Channel.number, 99999).asc(),
+            Channel.name,
+        ).all()
+    else:
+        channels = q.order_by(guide_sort_name).all()
 
     channel_ids = [c.id for c in channels]
 

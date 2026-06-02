@@ -409,10 +409,13 @@
             </div>
           </div>
 
-          <!-- Channel rows, grouped by source -->
+          <!-- Channel rows -->
           {% set ns = namespace(current_source_id=none) %}
           {% for row in guide_rows %}
-            {% if row.channel.source_id != ns.current_source_id %}
+            {% if not source_id and row.channel.source_id != ns.current_source_id %}
+              {% set ns.current_source_id = row.channel.source_id %}
+            {% endif %}
+            {% if source_id and row.channel.source_id != ns.current_source_id %}
               {% set ns.current_source_id = row.channel.source_id %}
               {% for src in sources %}{% if src.id == ns.current_source_id %}
               <div class="source-divider">
