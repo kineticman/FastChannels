@@ -732,6 +732,7 @@ def guide():
         return (dt_local - window_start_local).total_seconds() / window_seconds * 100
 
     guide_rows = []
+    guide_programs_json = {}
     for channel in channels:
         row_programs = []
         for p in prog_by_channel.get(channel.id, []):
@@ -744,18 +745,19 @@ def guide():
             left  = time_pct(clamped_start)
             width = (clamped_end - clamped_start).total_seconds() / window_seconds * 100
             row_programs.append({
-                'title':         p.title,
-                'description':   (p.description or '')[:300],
-                'category':      p.category or '',
-                'start_display': start_local.strftime('%-I:%M %p'),
-                'end_display':   end_local.strftime('%-I:%M %p'),
-                'left':          round(left, 4),
-                'width':         round(width, 4),
-                'is_current':    start_utc_p <= now_utc < end_utc_p,
-                'rating':        p.rating or '',
-                'poster_url':    p.poster_url or '',
+                'title':   p.title,
+                'desc':    (p.description or '')[:300],
+                'cat':     p.category or '',
+                'start':   start_local.strftime('%-I:%M %p'),
+                'end':     end_local.strftime('%-I:%M %p'),
+                'left':    round(left, 4),
+                'width':   round(width, 4),
+                'current': start_utc_p <= now_utc < end_utc_p,
+                'rating':  p.rating or '',
+                'poster':  p.poster_url or '',
             })
-        guide_rows.append({'channel': channel, 'programs': row_programs})
+        guide_rows.append({'channel': channel})
+        guide_programs_json[channel.id] = row_programs
 
     # 30-minute tick marks aligned to clock boundaries
     ticks = []
@@ -772,6 +774,7 @@ def guide():
     return render_template(
         'admin/guide.html',
         guide_rows=guide_rows,
+        guide_programs_json=guide_programs_json,
         ticks=ticks,
         now_pct=now_pct,
         sources=sources,

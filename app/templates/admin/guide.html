@@ -316,6 +316,19 @@
     .preview-action-btn.neutral:hover { background: var(--bg); border-color: var(--text-dim, var(--border)); }
     .preview-action-btn.danger { background: var(--danger-border); border-color: var(--danger-border); color: #fff; }
     .preview-action-btn.danger:hover { opacity: 0.88; }
+    .gm-nav-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 0.85rem; padding-bottom: 0.75rem; padding-right: 2rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .gm-nav-btn {
+      background: none; border: 1px solid var(--border); color: var(--text-soft);
+      padding: 0.25rem 0.7rem; border-radius: 5px; cursor: pointer; font-size: 0.82rem;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .gm-nav-btn:hover:not(:disabled) { border-color: var(--accent-soft); color: var(--accent-soft); background: var(--accent-bg); }
+    .gm-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .gm-nav-pos { font-size: 0.78rem; color: var(--text-muted); }
     .gm-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
     .gm-player-wrap { margin-top: 0.25rem; }
     .gm-player-wrap video { width: 100%; border-radius: 6px; background: #000; max-height: 340px; }
@@ -429,30 +442,8 @@
               {% if row.channel.logo_url %}<img src="{{ row.channel.logo_url }}" alt="" class="ch-logo">{% endif %}
               <span class="ch-name">{{ row.channel.name }}</span>
             </div>
-            <div class="programs-track">
+            <div class="programs-track" data-channel-id="{{ row.channel.id }}">
               <div class="now-line" style="left:{{ now_pct }}%"></div>
-              {% if row.programs %}
-                {% for prog in row.programs %}
-                <div class="program-block{% if prog.is_current %} prog-current{% endif %}{% if prog.width < 4 %} narrow{% endif %}"
-                     style="left:{{ prog.left }}%;width:{{ prog.width }}%"
-                     data-channel-id="{{ row.channel.id }}"
-                     data-title="{{ prog.title }}"
-                     data-desc="{{ prog.description }}"
-                     data-start="{{ prog.start_display }}"
-                     data-end="{{ prog.end_display }}"
-                     data-cat="{{ prog.category }}"
-                     data-rating="{{ prog.rating }}"
-                     data-poster="{{ prog.poster_url }}"
-                     data-current="{{ '1' if prog.is_current else '' }}"
-                     title="{{ prog.title }} · {{ prog.start_display }}–{{ prog.end_display }}{% if prog.description %} · {{ prog.description[:120] }}{% endif %}"
-                     onclick="openGuideProgModal(this)">
-                  <span class="prog-title">{{ prog.title }}</span>
-                  <span class="prog-time">{{ prog.start_display }}</span>
-                </div>
-                {% endfor %}
-              {% else %}
-                <div class="prog-empty">No EPG data</div>
-              {% endif %}
             </div>
           </div>
           {% endfor %}
@@ -481,8 +472,74 @@
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
   <script>
     const _APP_TZ = {{ app_timezone_name | tojson }};
+    const GUIDE_PROGRAMS = {{ guide_programs_json | tojson }};
+
+    // ── Lazy-load program tracks ──────────────────────────────────────
+    function _populateTrack(track) {
+      const channelId = track.dataset.channelId;
+      const programs  = GUIDE_PROGRAMS[channelId];
+      if (!programs || !programs.length) {
+        track.insertAdjacentHTML('beforeend', '<div class="prog-empty">No EPG data</div>');
+        return;
+      }
+      const html = programs.map(p => {
+        const cls     = 'program-block' + (p.current ? ' prog-current' : '') + (p.width < 4 ? ' narrow' : '');
+        const tooltip = escapeHtml(p.title) + ' · ' + escapeHtml(p.start) + '–' + escapeHtml(p.end)
+                        + (p.desc ? ' · ' + escapeHtml(p.desc.slice(0, 120)) : '');
+        return `<div class="${cls}"
+          style="left:${p.left}%;width:${p.width}%"
+          data-channel-id="${channelId}"
+          data-title="${escapeHtml(p.title)}"
+          data-desc="${escapeHtml(p.desc)}"
+          data-start="${escapeHtml(p.start)}"
+          data-end="${escapeHtml(p.end)}"
+          data-cat="${escapeHtml(p.cat)}"
+          data-rating="${escapeHtml(p.rating)}"
+          data-poster="${escapeHtml(p.poster)}"
+          ${p.current ? 'data-current="1"' : ''}
+          title="${tooltip}"
+          onclick="openGuideProgModal(this)">
+          <span class="prog-title">${escapeHtml(p.title)}</span>
+          <span class="prog-time">${escapeHtml(p.start)}</span>
+        </div>`;
+      }).join('');
+      track.insertAdjacentHTML('beforeend', html);
+    }
+
+    (function () {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (!entry.isIntersecting) return;
+          _populateTrack(entry.target);
+          observer.unobserve(entry.target);
+        });
+      }, { rootMargin: '400px 0px' });
+      document.querySelectorAll('.programs-track[data-channel-id]').forEach(el => observer.observe(el));
+    })();
+
     let _guideHls = null;
     let _guideDetectingFor = null;
+    let _guideChannelList = null;
+    let _guideChannelIndex = -1;
+
+    function _buildGuideChannelList() {
+      return Array.from(document.querySelectorAll('.guide-row[data-channel-id]'))
+        .map(el => parseInt(el.dataset.channelId, 10));
+    }
+
+    async function navigateGuide(delta) {
+      if (!_guideChannelList || _guideChannelList.length === 0) return;
+      const newIndex = _guideChannelIndex + delta;
+      if (newIndex < 0 || newIndex >= _guideChannelList.length) return;
+      _guideChannelIndex = newIndex;
+      _guideDetectingFor = null;
+      if (_guideHls) { _guideHls.destroy(); _guideHls = null; }
+      const v = document.getElementById('gm-player');
+      if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+      const content = document.getElementById('gm-content');
+      content.innerHTML = '<div class="modal-loading">Loading…</div>';
+      await _loadGuideModal(_guideChannelList[_guideChannelIndex], null);
+    }
 
     // ── Scroll to now ────────────────────────────────────────────────
     const NOW_PCT = {{ now_pct }};
@@ -498,7 +555,13 @@
     }
 
     window.addEventListener('load', scrollToNow);
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeGuideModal(); });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { closeGuideModal(); return; }
+      const modal = document.getElementById('guide-modal');
+      if (!modal.classList.contains('open')) return;
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); navigateGuide(-1); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); navigateGuide(1); }
+    });
 
     // Pin toolbar flush below sticky nav
     (function () {
@@ -666,6 +729,8 @@
     }
 
     async function openGuideModal(channelId, prog) {
+      _guideChannelList = _buildGuideChannelList();
+      _guideChannelIndex = _guideChannelList.indexOf(channelId);
       const modal = document.getElementById('guide-modal');
       const content = document.getElementById('gm-content');
       content.innerHTML = '<div class="modal-loading">Loading…</div>';
@@ -733,8 +798,16 @@
         const vlcBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
         const noStream = !playUrl && !detecting ? `<span style="font-size:0.8rem;color:var(--text-muted)">No stream available for this source</span>` : '';
 
+        const navRow = _guideChannelList && _guideChannelList.length > 1 ? `
+          <div class="gm-nav-row">
+            <button class="gm-nav-btn" onclick="navigateGuide(-1)" ${_guideChannelIndex <= 0 ? 'disabled' : ''}>&#8249; Prev</button>
+            <span class="gm-nav-pos">${_guideChannelIndex + 1} of ${_guideChannelList.length}</span>
+            <button class="gm-nav-btn" onclick="navigateGuide(1)" ${_guideChannelIndex >= _guideChannelList.length - 1 ? 'disabled' : ''}>Next &#8250;</button>
+          </div>` : '';
+
         content.innerHTML = `
           <button class="modal-close" onclick="closeGuideModal()" aria-label="Close">×</button>
+          ${navRow}
           <div class="gm-header">
             ${ch.logo_url
               ? `<img class="gm-logo" src="${escapeHtml(ch.logo_display_url || ch.logo_url)}" alt="">`
