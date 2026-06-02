@@ -11,7 +11,7 @@ import logging
 import re
 import threading
 import time as _time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, parse_qs as _parse_qs
 
 import requests as _requests
 
@@ -828,8 +828,8 @@ def custom_manifest_proxy(channel_id: str):
             # Many players won't follow cross-domain segment redirects and drop.
             # Unwrap by extracting the seg= parameter directly.
             if session_variants and '/mrouter?' in abs_url:
-                from urllib.parse import parse_qs as _pqs, urlsplit as _us
-                _seg = (_pqs(_us(abs_url).query).get('seg') or [''])[0]
+                from urllib.parse import urlsplit as _us
+                _seg = (_parse_qs(_us(abs_url).query).get('seg') or [''])[0]
                 if _seg:
                     abs_url = _seg
             if proxy_segments:
