@@ -35,6 +35,9 @@ class AmazonPrimeFreeScraper(BaseScraper):
     display_name = "Amazon Prime Free Channels"
     scrape_interval = 100  # minutes — keep well under the 2-hour DASH URL TTL
 
+    stream_audit_enabled = True
+    audit_requires_config = ['cookie_header']
+
     phase_timeouts = {
         "init":      30,
         "bootstrap": 60,

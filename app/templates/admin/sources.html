@@ -1475,21 +1475,29 @@
 
       if (result && !isRunning) {
         const ts  = result.ts ? new Date(result.ts).toLocaleString() : '';
-        const ok  = Math.max(0, (result.checked || 0) - (result.vod || 0) - (result.flagged || 0));
-        const bits = [
-          result.total       ? `${result.total} scanned`                                         : null,
-          `<span class="aud-ok">${ok} ok</span>`,
-          result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`               : null,
-          result.vod         ? `<span class="aud-vod">${result.vod} VOD</span>`                  : null,
-          result.flagged     ? `<span class="aud-drm">${result.flagged} DRM</span>`              : null,
-          result.skipped_403 ? `<span class="aud-403">${result.skipped_403} rate-limited</span>` : null,
-          result.errors      ? `${result.errors} errors`                                         : null,
-        ].filter(Boolean);
-        html += `
-          <div class="audit-summary">
-            <div class="audit-summary-counts">${bits.join(' · ')}${result.partial ? ' <span class="aud-partial">(partial)</span>' : ''}</div>
-            ${ts ? `<div class="audit-summary-ts">${escapeHtml(ts)}</div>` : ''}
-          </div>`;
+        if (result.skipped_reason) {
+          html += `
+            <div class="audit-summary">
+              <div class="audit-summary-counts"><span class="aud-partial">Skipped — ${escapeHtml(result.skipped_reason)}</span></div>
+              ${ts ? `<div class="audit-summary-ts">${escapeHtml(ts)}</div>` : ''}
+            </div>`;
+        } else {
+          const ok  = Math.max(0, (result.checked || 0) - (result.vod || 0) - (result.flagged || 0));
+          const bits = [
+            result.total       ? `${result.total} scanned`                                         : null,
+            `<span class="aud-ok">${ok} ok</span>`,
+            result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`               : null,
+            result.vod         ? `<span class="aud-vod">${result.vod} VOD</span>`                  : null,
+            result.flagged     ? `<span class="aud-drm">${result.flagged} DRM</span>`              : null,
+            result.skipped_403 ? `<span class="aud-403">${result.skipped_403} rate-limited</span>` : null,
+            result.errors      ? `${result.errors} errors`                                         : null,
+          ].filter(Boolean);
+          html += `
+            <div class="audit-summary">
+              <div class="audit-summary-counts">${bits.join(' · ')}${result.partial ? ' <span class="aud-partial">(partial)</span>' : ''}</div>
+              ${ts ? `<div class="audit-summary-ts">${escapeHtml(ts)}</div>` : ''}
+            </div>`;
+        }
       }
 
       if (!isRunning) {
