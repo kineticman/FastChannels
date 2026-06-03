@@ -3252,6 +3252,10 @@
       document.getElementById('cc-preview-player').volume = this.value / 100;
       document.getElementById('cc-preview-vol-pct').textContent = this.value + '%';
     });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && document.getElementById('cc-preview-modal').classList.contains('open'))
+        closeCcPreviewModal();
+    });
     // ─────────────────────────────────────────────────────────────────────────
 
   </script>

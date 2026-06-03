@@ -4397,6 +4397,13 @@
     document.getElementById('note-modal').addEventListener('keydown', e => {
       if (e.key === 'Escape') closeNoteModal();
     });
+
+    document.addEventListener('keydown', e => {
+      if (!document.getElementById('preview-modal').classList.contains('open')) return;
+      if (e.key === 'Escape') { closePreviewModal(); return; }
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); navigatePreview(-1); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); navigatePreview(1); }
+    });
   </script>
 
   {% include 'admin/_update_modal.html' %}
