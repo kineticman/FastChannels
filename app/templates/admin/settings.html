@@ -486,7 +486,7 @@
           <label for="channels-dvr-url">Channels DVR Server URL</label>
           <input type="url" id="channels-dvr-url"
                  placeholder="http://192.168.1.x:8089" value="{{ channels_dvr_url }}">
-          <div class="help">Base URL of your Channels DVR server (port 8089). Find it in Channels DVR → Settings → About. If FastChannels and Channels DVR are on the same machine and the Test Connection button fails with your LAN IP, try <code>http://172.17.0.1:8089</code> instead (the Docker host gateway).</div>
+          <div class="help">Base URL of your Channels DVR server (port 8089). To find it, open <a href="https://my.channelsdvr.net" target="_blank">my.channelsdvr.net</a> → Settings → General — your server address is listed there. If FastChannels and Channels DVR are on the same machine and the Test Connection button fails with your LAN IP, try <code>http://172.17.0.1:8089</code> instead (the Docker host gateway).</div>
           {% if channels_dvr_url_from_env %}
           <div class="help">Currently coming from environment variable <code>CHANNELS_DVR_SERVER_URL</code>. Saving here will override it in the database.</div>
           {% endif %}
