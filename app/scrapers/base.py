@@ -264,6 +264,8 @@ class BaseScraper(ABC):
     max_scrape_interval: int = 10080
     stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source
     audit_requires_config: list[str] = []  # config keys that must be non-empty for the audit to run
+    kodi_props: dict[str, str] = {}  # extra #KODIPROP lines emitted per-channel in M3U output
+    license_url: str = None  # DRM license server URL; enables /play/<source>/license proxy endpoint
     config_required: bool = False      # True if source won't return useful channels without user configuration
     is_premium: bool = False           # True for paid/subscription services — shown as a badge in the admin UI
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
@@ -348,6 +350,29 @@ class BaseScraper(ABC):
     def resolve(self, raw_url: str) -> str:
         """Override to resolve raw stored URLs to playable URLs at request time."""
         return raw_url
+
+    @classmethod
+    def license_request_headers(cls, config: dict) -> dict:
+        """Headers to attach when proxying a DRM license request to the license server.
+        Override in scrapers that require auth on their license server."""
+        return {}
+
+    @classmethod
+    def get_license_url(cls, config: dict) -> str | None:
+        """Returns the full license server URL (with any config-dependent query params).
+        Override in scrapers that need dynamic license URLs. Default uses license_url."""
+        return cls.license_url
+
+    @classmethod
+    def get_kodi_props(cls, base_url: str) -> dict[str, str]:
+        """Returns #KODIPROP key/value pairs for M3U output.
+        If the scraper has a license_url, injects the proxy license_key automatically."""
+        props = dict(cls.kodi_props)
+        if cls.license_url and 'inputstream.adaptive.license_key' not in props:
+            props['inputstream.adaptive.license_key'] = (
+                f'{base_url}/play/{cls.source_name}/license||R{{SSM}}|'
+            )
+        return props
 
     def run(self) -> tuple[list[ChannelData], list[ProgramData]]:
         channels = self.fetch_channels()

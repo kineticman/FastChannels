@@ -1016,6 +1016,35 @@ def custom_segment_proxy():
         abort(502)
 
 
+@play_bp.route('/play/<source_name>/license', methods=['POST'])
+def license_proxy(source_name: str):
+    """DRM license proxy — forwards Widevine challenges to the scraper's license_url
+    with source-specific auth headers so clients don't need credentials."""
+    from ..models import Source
+    scraper_cls = registry.get(source_name)
+    if not scraper_cls or not getattr(scraper_cls, 'license_url', None):
+        abort(404)
+    source = Source.query.filter_by(name=source_name).first()
+    if not source:
+        abort(404)
+    challenge = request.get_data()
+    if not challenge:
+        abort(400)
+    cfg = source.config or {}
+    license_url = scraper_cls.get_license_url(cfg)
+    if not license_url:
+        abort(404)
+    headers = scraper_cls.license_request_headers(cfg)
+    headers.setdefault('Content-Type', 'application/octet-stream')
+    try:
+        r = _requests.post(license_url, data=challenge, headers=headers, timeout=10)
+        logger.info('[license-proxy] %s -> HTTP %s', source_name, r.status_code)
+        return Response(r.content, status=r.status_code, content_type=r.headers.get('Content-Type', 'application/octet-stream'))
+    except Exception as e:
+        logger.warning('[license-proxy] %s request failed: %s', source_name, e)
+        abort(502)
+
+
 @play_bp.route('/play/<source_name>/<channel_id>.m3u8')
 def play(source_name: str, channel_id: str):
     client_ip = _client_ip()

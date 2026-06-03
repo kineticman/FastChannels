@@ -6,6 +6,7 @@ from sqlalchemy.orm import contains_eager
 from ..extensions import db
 from ..models import Channel, Source, Feed, AppSettings
 from ..url import proxy_logo_url
+from ..scrapers import registry as _scraper_registry
 
 log = logging.getLogger(__name__)
 
@@ -718,6 +719,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
             log.warning('chnum overlap: %s', w)
 
     multi_country_map = _source_multi_country_map(channels)
+    _kodi_props_cache: dict[str, dict] = {}
     lines = ['#EXTM3U']
     for ch in channels:
         tvg_id = _tvg_id(ch)
@@ -745,6 +747,15 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         guide_cat = _tvc_guide_category(ch)
         if guide_cat:
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
+        src_name = ch.source.name
+        if src_name not in _kodi_props_cache:
+            scraper_cls = _scraper_registry.get(src_name)
+            if scraper_cls and hasattr(scraper_cls, 'get_kodi_props'):
+                _kodi_props_cache[src_name] = scraper_cls.get_kodi_props(base_url)
+            else:
+                _kodi_props_cache[src_name] = getattr(scraper_cls, 'kodi_props', {}) if scraper_cls else {}
+        for prop_key, prop_val in _kodi_props_cache[src_name].items():
+            lines.append(f'#KODIPROP:{prop_key}={prop_val}')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
 

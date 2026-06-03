@@ -37,6 +37,10 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
     stream_audit_enabled = True
     audit_requires_config = ['cookie_header']
+    kodi_props = {
+        'inputstream': 'inputstream.adaptive',
+        'inputstream.adaptive.manifest_type': 'mpd',
+    }
 
     phase_timeouts = {
         "init":      30,
