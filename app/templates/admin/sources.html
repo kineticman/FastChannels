@@ -165,6 +165,7 @@
     .audit-last-result .aud-drm     { color: var(--warning); }
     .audit-last-result .aud-403     { color: var(--warning); }
     .audit-last-result .aud-ok      { color: var(--success-soft); }
+    .audit-last-result .aud-partial { color: var(--text-muted, #888); font-style: italic; }
 
     /* Toggle */
     .toggle-wrap { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; }
@@ -1486,7 +1487,7 @@
         ].filter(Boolean);
         html += `
           <div class="audit-summary">
-            <div class="audit-summary-counts">${bits.join(' · ')}</div>
+            <div class="audit-summary-counts">${bits.join(' · ')}${result.partial ? ' <span class="aud-partial">(partial)</span>' : ''}</div>
             ${ts ? `<div class="audit-summary-ts">${escapeHtml(ts)}</div>` : ''}
           </div>`;
       }
@@ -1773,7 +1774,7 @@
       if (r.flagged)          bits.push(`<span class="aud-drm">${r.flagged} DRM</span>`);
       if (r.skipped_403)      bits.push(`<span class="aud-403">${r.skipped_403} rate-limited</span>`);
       if (r.errors)           bits.push(`${r.errors} errors`);
-      el.innerHTML = `Last audit: ${bits.join(' · ')}${ts ? ' <span style="opacity:.5">· ' + ts + '</span>' : ''}`;
+      el.innerHTML = `Last audit: ${bits.join(' · ')}${r.partial ? ' <span class="aud-partial">(partial)</span>' : ''}${ts ? ' <span style="opacity:.5">· ' + ts + '</span>' : ''}`;
     }
 
     function _renderAuditStatus(sourceId, data) {

@@ -812,14 +812,15 @@ def run_stream_audit(source_name: str):
                     raise
 
                 if r.status_code in (403, 429, 500, 502, 503, 504):
-                    # After 5 consecutive 403/skip responses, drop the backoff — it's
-                    # almost certainly geo-blocking, not rate-limiting, so the delay
-                    # just burns RQ job time without any benefit.
-                    if consecutive_skipped_403 < 5:
+                    # After 5 total 403/skip responses the source is likely geo-blocked
+                    # for this IP; further backoffs just burn RQ job time. Use the total
+                    # skipped_403 count (not consecutive) so interleaved successes don't
+                    # re-enable multi-minute sleeps.
+                    if skipped_403 < 5:
                         wait = 30 + skipped_403 * 5
                         logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
                                        source_name, r.status_code, wait)
-                        _time.sleep(min(wait, 120))
+                        _time.sleep(min(wait, 30))
                     r = _run_with_signal_timeout(
                         f"[audit] {source_name} {i}/{total} manifest-retry {ch.name}",
                         _audit_channel_timeout,
@@ -981,6 +982,16 @@ def run_stream_audit(source_name: str):
 
             finally:
                 if i % 25 == 0:
+                    _partial_cfg = dict(source.config or {})
+                    _partial_cfg['last_audit_result'] = {
+                        'total': i, 'checked': checked, 'flagged': flagged,
+                        'dead': dead, 'vod': vod, 'errors': errors, 'skipped_403': skipped_403,
+                        'ts': datetime.now(timezone.utc).isoformat(),
+                        'partial': True,
+                    }
+                    source.last_audited_at = datetime.now(timezone.utc)
+                    source.config = _partial_cfg
+                    _flag_modified(source, 'config')
                     db.session.commit()
                     _audit_progress(i, total, flagged, dead, vod, errors, skipped_403)
                     logger.info('[audit] %s: %d/%d — checked=%d flagged=%d dead=%d vod=%d errors=%d skipped_403=%d',
