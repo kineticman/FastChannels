@@ -262,8 +262,8 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
         logger.info("[%s] cache miss — resolving stream URL for %s", self.source_name, station_id[:40])
         url_map = self._resolve_channels([station_id])
-        if url_map.get(station_id):
-            url = url_map[station_id]
+        url = url_map.get(station_id, "")
+        if url and not url.startswith("prs_error:"):
             self._stream_url_cache[station_id] = {
                 "url": url,
                 "expires_at": time.time() + self._STREAM_URL_TTL,
@@ -274,7 +274,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
             return url
 
         logger.warning("[%s] could not resolve stream URL for %s", self.source_name, station_id[:40])
-        return raw_url
+        return None
 
     # ------------------------------------------------------------------
     # Direct HTTP stream URL resolution (Amazon PRS endpoint)
@@ -351,9 +351,12 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
             url_sets = body.get("playbackUrls", {}).get("urlSets", {})
             if not url_sets:
-                err = body.get("errorsByResource", {}).get("PlaybackUrls", {}).get("errorCode", "")
+                top_err = body.get("error", {}).get("errorCode", "")
+                res_err = body.get("errorsByResource", {}).get("PlaybackUrls", {}).get("errorCode", "")
+                err = top_err or res_err
                 if err:
-                    logger.debug("[%s] PRS error for %s: %s", self.source_name, gip[:40], err)
+                    logger.warning("[%s] PRS error for %s: %s", self.source_name, gip[:40], err)
+                    return gip, f"prs_error:{err}"
                 return gip, ""
 
             # Prefer Qwilt CDN (clean URL, no obfuscating auth tokens in path)
@@ -379,7 +382,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
         t0 = time.time()
         with ThreadPoolExecutor(max_workers=self._PRS_WORKERS) as pool:
             for gip, url in pool.map(_resolve_one, station_ids):
-                if url:
+                if url and not url.startswith("prs_error:"):
                     results[gip] = url
         elapsed = time.time() - t0
         logger.info("[%s] PRS resolved %d/%d stream URLs in %.1fs",
