@@ -263,6 +263,9 @@ class BaseScraper(ABC):
     min_scrape_interval: int = 30
     max_scrape_interval: int = 10080
     stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source
+    # 'full' = descriptions + posters + episode metadata; 'basic' = titles + times only.
+    # Used by the resolve-duplicates priority key to prefer richer EPG when breaking ties.
+    epg_quality: str = 'full'
     audit_requires_config: list[str] = []  # config keys that must be non-empty for the audit to run
     kodi_props: dict[str, str] = {}  # extra #KODIPROP lines emitted per-channel in M3U output
     license_url: str = None  # DRM license server URL; enables /play/<source>/license proxy endpoint

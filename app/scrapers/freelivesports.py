@@ -151,6 +151,7 @@ class FreeLiveSportsScraper(BaseScraper):
     source_name     = "freelivesports"
     display_name    = "FreeLiveSports"
     stream_audit_enabled = True
+    epg_quality = 'partial'   # event descriptions present; no poster artwork
     scrape_interval = 360
     config_schema   = []   # public API, no credentials needed
 

@@ -28,6 +28,7 @@ class BallysScraper(BaseScraper):
     display_name = "Bally Sports Live"
     scrape_interval = 360
     stream_audit_enabled = True
+    epg_quality = 'partial'   # descriptions present; no poster artwork
 
     config_schema = []
 

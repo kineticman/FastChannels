@@ -44,6 +44,7 @@ class SlingScraper(BaseScraper):
     display_name = "Sling Freestream"
     scrape_interval = 360
     stream_audit_enabled = True
+    epg_quality = 'basic'     # thumbnails only; no program descriptions
     channel_refresh_hours = 12
 
     CMW_FAST = "https://p-cmwnext-fast.movetv.com"

@@ -2816,6 +2816,18 @@ def resolve_duplicates():
     def has_epg(ch):
         return ch.id in _channels_with_epg
 
+    from ..scrapers.registry import get as _get_scraper
+    # Lower score = higher priority. 'partial' sits between full and basic.
+    _EPG_QUALITY_SCORE = {'full': 0.0, 'partial': 0.3, 'basic': 0.6}
+
+    def epg_score(ch):
+        """0.0 = full EPG, 0.3 = partial (desc but no art), 0.6 = basic (titles only), 1.0 = no EPG."""
+        if not has_epg(ch):
+            return 1.0
+        scraper_cls = _get_scraper(ch.source.name)
+        quality = getattr(scraper_cls, 'epg_quality', 'full') if scraper_cls else 'full'
+        return _EPG_QUALITY_SCORE.get(quality, 0.0)
+
     def priority_key(ch):
         try:
             source_rank = priority.index(ch.source.name)
@@ -2824,7 +2836,7 @@ def resolve_duplicates():
         return (
             1 if is_unhealthy(ch) else 0,
             0 if has_gracenote(ch) else 1,
-            0 if has_epg(ch) else 1,
+            epg_score(ch),
             source_rank,
         )
 
