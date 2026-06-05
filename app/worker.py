@@ -532,6 +532,10 @@ def run_scraper(source_name: str, force_full: bool = False):
             epg_input = None
             scraper = None
             gc.collect()
+            try:
+                _ctypes.CDLL('libc.so.6').malloc_trim(0)
+            except Exception:
+                pass
 
 
 def _iter_exception_chain(exc: Exception):
