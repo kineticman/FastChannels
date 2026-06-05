@@ -1,7 +1,6 @@
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import re
-from types import SimpleNamespace
 import unicodedata
 from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case
@@ -10,7 +9,6 @@ from ..models import Source, Channel, Feed, AppSettings, Program
 from ..generators.m3u import (
     _build_channel_query,
     _build_feed_chnum_map,
-    _parse_gracenote_id,
     _build_source_chnum_map,
     _build_sticky_gn_chnum_map,
     _selected_channel_stubs,
@@ -187,28 +185,24 @@ def _apply_admin_feed_membership_filters(query, feed: Feed):
 
 def _feed_split_counts(feed: Feed) -> dict[str, int]:
     filters = feed_to_query_filters(feed.filters or {})
-    query = _build_channel_query(filters).order_by(None)
-    total = query.count()
-    if total == 0:
-        return {'standard_count': 0, 'gracenote_count': 0, 'total_count': 0}
-
-    gn_rows = (
-        query.with_entities(Channel.gracenote_id, Channel.slug, Channel.gracenote_mode)
-        .filter(
+    from sqlalchemy import func
+    has_gracenote = (
+        (Channel.gracenote_mode != 'off')
+        & (
             ((Channel.gracenote_id != None) & (Channel.gracenote_id != ''))
             | Channel.slug.like('%|%')
         )
-        .all()
     )
-    gn_count = sum(
-        1
-        for row in gn_rows
-        if _parse_gracenote_id(SimpleNamespace(
-            gracenote_id=row.gracenote_id,
-            slug=row.slug,
-            gracenote_mode=row.gracenote_mode,
-        ))
+    row = (
+        _build_channel_query(filters)
+        .order_by(None)
+        .with_entities(
+            func.count().label('total'),
+            func.count(case((has_gracenote, Channel.id))).label('gn_count'),
+        )
+        .one()
     )
+    total, gn_count = row.total, row.gn_count
     return {
         'standard_count': max(total - gn_count, 0),
         'gracenote_count': gn_count,
