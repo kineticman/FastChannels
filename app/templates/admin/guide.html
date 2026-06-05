@@ -437,12 +437,10 @@
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
   <script>
     const _APP_TZ = {{ app_timezone_name | tojson }};
-    const GUIDE_PROGRAMS = {{ guide_programs_json | tojson }};
 
-    // ── Lazy-load program tracks ──────────────────────────────────────
-    function _populateTrack(track) {
+    // ── Lazy-fetch program tracks ─────────────────────────────────────
+    function _renderTrack(track, programs) {
       const channelId = track.dataset.channelId;
-      const programs  = GUIDE_PROGRAMS[channelId];
       if (!programs || !programs.length) {
         track.insertAdjacentHTML('beforeend', '<div class="prog-empty">No EPG data</div>');
         return;
@@ -472,11 +470,29 @@
     }
 
     (function () {
+      const pending = new Set();
+      let timer = null;
+      function flush() {
+        if (!pending.size) return;
+        const ids = Array.from(pending);
+        pending.clear();
+        const url = `/admin/guide/programs?channel_ids=${ids.join(',')}&offset=${_OFFSET_HOURS}`;
+        fetch(url)
+          .then(r => r.json())
+          .then(data => {
+            ids.forEach(id => {
+              const track = document.querySelector(`.programs-track[data-channel-id="${id}"]`);
+              if (track) _renderTrack(track, data[id] || []);
+            });
+          });
+      }
       const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
           if (!entry.isIntersecting) return;
-          _populateTrack(entry.target);
           observer.unobserve(entry.target);
+          pending.add(entry.target.dataset.channelId);
+          clearTimeout(timer);
+          timer = setTimeout(flush, 50);
         });
       }, { rootMargin: '400px 0px' });
       document.querySelectorAll('.programs-track[data-channel-id]').forEach(el => observer.observe(el));

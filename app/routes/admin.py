@@ -4,6 +4,7 @@ import re
 import unicodedata
 from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case
+from sqlalchemy.orm import load_only
 from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings, Program
 from ..generators.m3u import (
@@ -663,7 +664,9 @@ def guide():
         .distinct().order_by(Channel.category).all()
     )]
 
-    q = Channel.query.filter_by(is_active=True, is_enabled=True)
+    q = Channel.query.options(load_only(
+        Channel.id, Channel.name, Channel.logo_url, Channel.number, Channel.source_id,
+    )).filter_by(is_active=True, is_enabled=True)
     if source_id:
         q = q.filter(Channel.source_id == source_id)
     if feed_id:
@@ -701,57 +704,19 @@ def guide():
 
     channel_ids = [c.id for c in channels]
 
-    if channel_ids:
-        programs = (Program.query
-            .filter(
-                Program.channel_id.in_(channel_ids),
-                Program.end_time   > window_start_utc,
-                Program.start_time < window_end_utc,
-            )
-            .order_by(Program.channel_id, Program.start_time)
-            .all())
-    else:
-        programs = []
+    program_count = (
+        Program.query.filter(
+            Program.channel_id.in_(channel_ids),
+            Program.end_time   > window_start_utc,
+            Program.start_time < window_end_utc,
+        ).count()
+        if channel_ids else 0
+    )
 
-    prog_by_channel = defaultdict(list)
-    for p in programs:
-        prog_by_channel[p.channel_id].append(p)
-
-    def _as_utc(dt):
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
+    guide_rows = [{'channel': c} for c in channels]
 
     def time_pct(dt_local):
         return (dt_local - window_start_local).total_seconds() / window_seconds * 100
-
-    guide_rows = []
-    guide_programs_json = {}
-    for channel in channels:
-        row_programs = []
-        for p in prog_by_channel.get(channel.id, []):
-            start_utc_p = _as_utc(p.start_time)
-            end_utc_p   = _as_utc(p.end_time)
-            start_local = start_utc_p.astimezone(tz)
-            end_local   = end_utc_p.astimezone(tz)
-            clamped_start = max(start_local, window_start_local)
-            clamped_end   = min(end_local,   window_end_local)
-            left  = time_pct(clamped_start)
-            width = (clamped_end - clamped_start).total_seconds() / window_seconds * 100
-            row_programs.append({
-                'title':   p.title,
-                'desc':    (p.description or '')[:300],
-                'cat':     p.category or '',
-                'start':   start_local.strftime('%-I:%M %p'),
-                'end':     end_local.strftime('%-I:%M %p'),
-                'left':    round(left, 4),
-                'width':   round(width, 4),
-                'current': start_utc_p <= now_utc < end_utc_p,
-                'rating':  p.rating or '',
-                'poster':  p.poster_url or '',
-            })
-        guide_rows.append({'channel': channel})
-        guide_programs_json[channel.id] = row_programs
 
     # 30-minute tick marks aligned to clock boundaries
     ticks = []
@@ -768,7 +733,6 @@ def guide():
     return render_template(
         'admin/guide.html',
         guide_rows=guide_rows,
-        guide_programs_json=guide_programs_json,
         ticks=ticks,
         now_pct=now_pct,
         sources=sources,
@@ -780,9 +744,81 @@ def guide():
         search=search,
         offset_hours=offset_hours,
         channel_count=len(channels),
-        program_count=len(programs),
+        program_count=program_count,
         app_timezone_name=app_settings.effective_timezone_name(),
     )
+
+
+@admin_bp.route('/guide/programs')
+def guide_programs():
+    from zoneinfo import ZoneInfo
+    raw_ids = (request.args.get('channel_ids') or '').strip()
+    if not raw_ids:
+        return jsonify({})
+    try:
+        channel_ids = [int(x) for x in raw_ids.split(',') if x.strip()]
+    except ValueError:
+        return jsonify({}), 400
+    if not channel_ids:
+        return jsonify({})
+
+    offset_hours     = max(-48, min(48, request.args.get('offset', type=int, default=0)))
+    now_utc          = datetime.now(timezone.utc)
+    offset           = timedelta(hours=offset_hours)
+    window_start_utc = now_utc + offset - timedelta(minutes=30)
+    window_end_utc   = now_utc + offset + timedelta(hours=4, minutes=30)
+    window_seconds   = (window_end_utc - window_start_utc).total_seconds()
+
+    app_settings        = AppSettings.get()
+    tz                  = ZoneInfo(app_settings.effective_timezone_name())
+    window_start_local  = window_start_utc.astimezone(tz)
+    window_end_local    = window_end_utc.astimezone(tz)
+
+    programs = (
+        Program.query
+        .options(load_only(
+            Program.channel_id, Program.start_time, Program.end_time,
+            Program.title, Program.description, Program.category,
+            Program.rating, Program.poster_url,
+        ))
+        .filter(
+            Program.channel_id.in_(channel_ids),
+            Program.end_time   > window_start_utc,
+            Program.start_time < window_end_utc,
+        )
+        .order_by(Program.channel_id, Program.start_time)
+        .all()
+    )
+
+    def _as_utc(dt):
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+    def time_pct(dt_local):
+        return (dt_local - window_start_local).total_seconds() / window_seconds * 100
+
+    result = {cid: [] for cid in channel_ids}
+    for p in programs:
+        start_utc_p   = _as_utc(p.start_time)
+        end_utc_p     = _as_utc(p.end_time)
+        start_local   = start_utc_p.astimezone(tz)
+        end_local     = end_utc_p.astimezone(tz)
+        clamped_start = max(start_local, window_start_local)
+        clamped_end   = min(end_local,   window_end_local)
+        left  = time_pct(clamped_start)
+        width = (clamped_end - clamped_start).total_seconds() / window_seconds * 100
+        result[p.channel_id].append({
+            'title':   p.title,
+            'desc':    (p.description or '')[:300],
+            'cat':     p.category or '',
+            'start':   start_local.strftime('%-I:%M %p'),
+            'end':     end_local.strftime('%-I:%M %p'),
+            'left':    round(left, 4),
+            'width':   round(width, 4),
+            'current': start_utc_p <= now_utc < end_utc_p,
+            'rating':  p.rating or '',
+            'poster':  p.poster_url or '',
+        })
+    return jsonify(result)
 
 
 @admin_bp.route('/channels/chnum-map')
