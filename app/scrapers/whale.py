@@ -267,8 +267,10 @@ class WhaleScraper(BaseScraper):
             futures = {pool.submit(_fetch_one, pid): pid for pid in near_term}
             for fut in as_completed(futures):
                 prgch_id, detail = fut.result()
-                if not detail:
+                if detail is None:
                     errors += 1
+                    continue
+                if not detail:
                     continue
 
                 prog = near_term[prgch_id]

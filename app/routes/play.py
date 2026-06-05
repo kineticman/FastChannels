@@ -1027,9 +1027,11 @@ def license_proxy(source_name: str):
     source = Source.query.filter_by(name=source_name).first()
     if not source:
         abort(404)
-    challenge = request.get_data()
+    challenge = request.get_data(limit=65536)
     if not challenge:
         abort(400)
+    if len(challenge) > 65536:
+        abort(413)
     cfg = source.config or {}
     license_url = scraper_cls.get_license_url(cfg)
     if not license_url:

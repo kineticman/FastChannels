@@ -771,6 +771,15 @@ def run_stream_audit(source_name: str):
 
                 # audit_resolve() may return an opaque internal URL (e.g. stirr://)
                 # as a sentinel meaning "channel confirmed alive, skip manifest fetch".
+                # None means the scraper could not resolve the URL (e.g. PRS failure).
+                if not resolved_url:
+                    errors += 1
+                    consecutive_errors += 1
+                    logger.warning('[audit] %s: resolve() returned None for %s', source_name, ch.name)
+                    if consecutive_errors >= 20:
+                        logger.error('[audit] %s: 20 consecutive errors — aborting.', source_name)
+                        break
+                    continue
                 if not resolved_url.startswith('http'):
                     checked += 1
                     consecutive_errors = 0
@@ -828,11 +837,9 @@ def run_stream_audit(source_name: str):
                     raise
 
                 if r.status_code in (403, 429, 500, 502, 503, 504):
-                    # After 5 total 403/skip responses the source is likely geo-blocked
-                    # for this IP; further backoffs just burn RQ job time. Use the total
-                    # skipped_403 count (not consecutive) so interleaved successes don't
-                    # re-enable multi-minute sleeps.
-                    if skipped_403 < 5:
+                    # After 5 consecutive 403/skip responses the source is likely
+                    # geo-blocked; further backoffs just burn RQ job time.
+                    if consecutive_skipped_403 < 5:
                         wait = 30 + skipped_403 * 5
                         logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
                                        source_name, r.status_code, wait)
