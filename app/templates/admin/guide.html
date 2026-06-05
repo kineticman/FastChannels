@@ -219,28 +219,6 @@
       font-style: italic;
     }
 
-    /* ── Divider between sources ── */
-    .source-divider {
-      display: flex;
-      background: var(--bg);
-      border-bottom: 1px solid var(--border);
-    }
-    .source-divider-label {
-      width: 180px;
-      flex-shrink: 0;
-      padding: 4px 0.6rem;
-      font-size: 0.68rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      color: var(--text-muted);
-      letter-spacing: 0.04em;
-      position: sticky;
-      left: 0;
-      background: var(--bg);
-      border-right: 1px solid var(--border);
-    }
-    .source-divider-fill { flex: 1; }
-
     /* ── Modal ── */
     .modal-overlay {
       display: none; position: fixed; inset: 0; background: var(--overlay, rgba(0,0,0,0.6));
@@ -423,17 +401,7 @@
           </div>
 
           <!-- Channel rows -->
-          {% set ns = namespace(current_source_id=none) %}
           {% for row in guide_rows %}
-            {% if row.channel.source_id != ns.current_source_id %}
-              {% set ns.current_source_id = row.channel.source_id %}
-              {% for src in sources %}{% if src.id == ns.current_source_id %}
-              <div class="source-divider">
-                <div class="source-divider-label">{{ src.display_name }}</div>
-                <div class="source-divider-fill"></div>
-              </div>
-              {% endif %}{% endfor %}
-            {% endif %}
           <div class="guide-row" data-channel-id="{{ row.channel.id }}">
             <div class="ch-cell" onclick="openGuideChannelModal({{ row.channel.id }}, this.closest('.guide-row'))">
               {% if row.channel.logo_url %}<img src="{{ row.channel.logo_url }}" alt="" class="ch-logo">{% endif %}
