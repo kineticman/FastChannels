@@ -1068,7 +1068,8 @@ def custom_segment_proxy():
 @play_bp.route('/play/<source_name>/license', methods=['POST'])
 def license_proxy(source_name: str):
     """DRM license proxy — forwards Widevine challenges to the scraper's license_url
-    with source-specific auth headers so clients don't need credentials."""
+    with source-specific auth headers so clients don't need credentials.
+    Pass ?channel_id=<id> for scrapers that need per-channel auth (e.g. Sling)."""
     from ..models import Source
     scraper_cls = registry.get(source_name)
     if not scraper_cls or not getattr(scraper_cls, 'license_url', None):
@@ -1076,7 +1077,7 @@ def license_proxy(source_name: str):
     source = Source.query.filter_by(name=source_name).first()
     if not source:
         abort(404)
-    challenge = request.get_data(limit=65536)
+    challenge = request.get_data()
     if not challenge:
         abort(400)
     if len(challenge) > 65536:
@@ -1085,11 +1086,12 @@ def license_proxy(source_name: str):
     license_url = scraper_cls.get_license_url(cfg)
     if not license_url:
         abort(404)
-    headers = scraper_cls.license_request_headers(cfg)
+    channel_id = request.args.get('channel_id') or None
+    body, headers = scraper_cls.prepare_license_request(challenge, cfg, channel_id=channel_id)
     headers.setdefault('Content-Type', 'application/octet-stream')
     try:
-        r = _requests.post(license_url, data=challenge, headers=headers, timeout=10)
-        logger.info('[license-proxy] %s -> HTTP %s', source_name, r.status_code)
+        r = _requests.post(license_url, data=body, headers=headers, timeout=15)
+        logger.info('[license-proxy] %s channel=%s -> HTTP %s', source_name, channel_id or '-', r.status_code)
         return Response(r.content, status=r.status_code, content_type=r.headers.get('Content-Type', 'application/octet-stream'))
     except Exception as e:
         logger.warning('[license-proxy] %s request failed: %s', source_name, e)

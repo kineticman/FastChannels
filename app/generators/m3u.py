@@ -748,14 +748,21 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         if guide_cat:
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
         src_name = ch.source.name
-        if src_name not in _kodi_props_cache:
-            scraper_cls = _scraper_registry.get(src_name)
-            if scraper_cls and hasattr(scraper_cls, 'get_kodi_props'):
-                _kodi_props_cache[src_name] = scraper_cls.get_kodi_props(base_url)
-            else:
-                _kodi_props_cache[src_name] = getattr(scraper_cls, 'kodi_props', {}) if scraper_cls else {}
-        for prop_key, prop_val in _kodi_props_cache[src_name].items():
-            lines.append(f'#KODIPROP:{prop_key}={prop_val}')
+        scraper_cls = _scraper_registry.get(src_name)
+        per_ch_props = None
+        if scraper_cls:
+            per_ch_props = scraper_cls.get_kodi_props_for_channel(base_url, ch.source_channel_id)
+        if per_ch_props is not None:
+            for prop_key, prop_val in per_ch_props.items():
+                lines.append(f'#KODIPROP:{prop_key}={prop_val}')
+        else:
+            if src_name not in _kodi_props_cache:
+                if scraper_cls and hasattr(scraper_cls, 'get_kodi_props'):
+                    _kodi_props_cache[src_name] = scraper_cls.get_kodi_props(base_url)
+                else:
+                    _kodi_props_cache[src_name] = getattr(scraper_cls, 'kodi_props', {}) if scraper_cls else {}
+            for prop_key, prop_val in _kodi_props_cache[src_name].items():
+                lines.append(f'#KODIPROP:{prop_key}={prop_val}')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
 

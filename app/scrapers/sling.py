@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
@@ -27,17 +29,15 @@ def _join_categories(values: list[str] | tuple[str, ...] | None) -> str | None:
 
 class SlingScraper(BaseScraper):
     """
-    Best-effort FastChannels scraper for Sling Freestream.
+    FastChannels scraper for Sling Freestream.
 
-    Current status:
-    - Channel inventory: working from Sling's public channel summary feed.
-    - EPG: working from per-channel schedule.qvt windows.
-    - Playback: resolve() returns the current DASH MPD URL when available.
-    - DRM: expected for many channels; this scraper does not acquire licenses.
-
-    Important limitation:
-    - Playback remains DRM-protected for many channels. This scraper only
-      captures metadata/EPG and the current manifest URL.
+    - Channel inventory: public channel summary feed (no auth).
+    - EPG: per-channel schedule.qvt windows (no auth).
+    - Streams: CENC-encrypted DASH (Widevine + PlayReady).
+    - DRM: Widevine proxy at p-drmwv.movetv.com accepts the challenge wrapped in a
+      JSON envelope {"env":..,"user_id":..,"channel_id":..,"message":[bytes]}.
+      No auth token is required for Freestream channels — any UUID works as user_id.
+      The /play/sling/license?channel_id=<guid> proxy handles the envelope wrapping.
     """
 
     source_name = "sling"
@@ -45,6 +45,12 @@ class SlingScraper(BaseScraper):
     scrape_interval = 360
     stream_audit_enabled = True
     epg_quality = 'basic'     # thumbnails only; no program descriptions
+    license_url = 'https://p-drmwv.movetv.com/widevine/proxy'
+    kodi_props = {
+        'inputstream': 'inputstream.adaptive',
+        'inputstream.adaptive.manifest_type': 'mpd',
+        'inputstream.adaptive.license_type': 'com.widevine.alpha',
+    }
     channel_refresh_hours = 12
 
     CMW_FAST = "https://p-cmwnext-fast.movetv.com"
@@ -73,6 +79,39 @@ class SlingScraper(BaseScraper):
                 "features": "enable_ad_tracking,web_browser",
             }
         )
+
+    # ------------------------------------------------------------------ DRM
+
+    @classmethod
+    def prepare_license_request(
+        cls, challenge: bytes, config: dict, channel_id: str | None = None
+    ) -> tuple[bytes, dict]:
+        """Wrap the Widevine challenge in Sling's JSON envelope.
+        No auth token needed — any UUID works as user_id for Freestream channels."""
+        if not channel_id:
+            logger.warning('[sling] license request missing channel_id')
+            return challenge, {}
+        body = json.dumps({
+            'env': 'production',
+            'user_id': str(uuid.uuid4()),
+            'channel_id': channel_id,
+            'message': list(challenge),
+        }).encode()
+        return body, {
+            'Content-Type': 'text/plain;charset=UTF-8',
+            'Origin': 'https://watch.sling.com',
+            'Referer': 'https://watch.sling.com/',
+        }
+
+    @classmethod
+    def get_kodi_props_for_channel(cls, base_url: str, source_channel_id: str) -> dict[str, str]:
+        props = dict(cls.kodi_props)
+        props['inputstream.adaptive.license_key'] = (
+            f'{base_url}/play/sling/license?channel_id={source_channel_id}||R{{SSM}}|'
+        )
+        return props
+
+    # ------------------------------------------------------------------ setup
 
     def pre_run_setup(self) -> None:
         return None

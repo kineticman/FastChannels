@@ -1876,8 +1876,10 @@
   <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
   <script src="{{ url_for('static', filename='js/gracenote_suggest.js') }}"></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
   <script>
-    let _previewHls = null;
+    let _previewHls   = null;
+    let _previewShaka = null;
     let _previewList = null;
     let _previewIndex = -1;
     const _allChannelIds = {{ all_channel_ids | tojson }};
@@ -1984,6 +1986,10 @@
         _previewHls.destroy();
         _previewHls = null;
       }
+      if (_previewShaka) {
+        _previewShaka.destroy();
+        _previewShaka = null;
+      }
       if (video) {
         video.pause();
         video.removeAttribute('src');
@@ -2019,6 +2025,7 @@
       const previewWarning = data.preview_warning || '';
       const playbackMode = String(ch.playback_mode || 'hls').toLowerCase();
       const streamType = String(ch.stream_type || '').toLowerCase();
+      const licenseUrl = String(ch.license_url || '');
       const previewHint = !detecting && previewWarning
         ? `<div class="modal-preview modal-preview--warning">${escapeHtml(previewWarning)}</div>`
         : '';
@@ -2030,7 +2037,7 @@
         : '';
       const playBtn = detecting
         ? `<button class="preview-action-btn primary" disabled>Detecting stream…</button>`
-        : (previewUrl ? `<button class="preview-action-btn primary" onclick="loadPreviewPlayer('${escapeHtml(previewUrl)}', '${escapeHtml(playbackMode)}', '${escapeHtml(streamType)}')">Play Here</button>` : '');
+        : (previewUrl ? `<button class="preview-action-btn primary" onclick="loadPreviewPlayer('${escapeHtml(previewUrl)}', '${escapeHtml(playbackMode)}', '${escapeHtml(streamType)}', '${escapeHtml(licenseUrl)}')">Play Here</button>` : '');
       return `
         ${previewHint}${unsupportedNote}${playbackNote}
         <div class="preview-actions">
@@ -2138,7 +2145,7 @@
       }
     }
 
-    function loadPreviewPlayer(playUrl, playbackMode = 'hls', streamType = '') {
+    function loadPreviewPlayer(playUrl, playbackMode = 'hls', streamType = '', licenseUrl = '') {
       const wrap = document.getElementById('preview-player-wrap');
       const video = document.getElementById('preview-player');
       const status = document.getElementById('preview-player-status');
@@ -2147,6 +2154,10 @@
       if (_previewHls) {
         _previewHls.destroy();
         _previewHls = null;
+      }
+      if (_previewShaka) {
+        _previewShaka.destroy();
+        _previewShaka = null;
       }
       _stopStatsLoop();
       _lastFrag = null;
@@ -2169,6 +2180,70 @@
         return;
       }
 
+      // ── DASH via Shaka Player ─────────────────────────────────────────────
+      if (normalizedMode === 'dash' || normalizedType === 'dash') {
+        if (!window.shaka) {
+          if (status) status.textContent = 'Shaka Player failed to load. Check browser console.';
+          return;
+        }
+        shaka.polyfill.installAll();
+        if (licenseUrl && !navigator.requestMediaKeySystemAccess) {
+          if (status) status.textContent = 'DRM preview requires a secure context. Access the admin via HTTPS or http://localhost to enable Widevine in the browser.';
+          return;
+        }
+        if (!shaka.Player.isBrowserSupported()) {
+          if (status) status.textContent = 'DASH playback is not supported in this browser.';
+          return;
+        }
+        _previewShaka = new shaka.Player();
+        _previewShaka.attach(video).then(() => {
+          if (licenseUrl) {
+            _previewShaka.configure({
+              drm: {
+                servers: {
+                  'com.widevine.alpha':      licenseUrl,
+                  'com.microsoft.playready': licenseUrl,
+                },
+              },
+            });
+            _previewShaka.getNetworkingEngine().registerRequestFilter(
+              (type, request) => {
+                if (type === 2 /* LICENSE */) {
+                  request.uris = [licenseUrl];
+                }
+              }
+            );
+          }
+          _previewShaka.addEventListener('error', (event) => {
+            const err = event.detail;
+            if (status) {
+              if (err.code === 6007 || err.code === 6014) {
+                status.textContent = 'DRM license request failed. The license server rejected the challenge.';
+              } else {
+                status.textContent = `Shaka error ${err.code}: ${err.message || 'playback failed'}`;
+              }
+            }
+          });
+          return _previewShaka.load(playUrl, null, 'application/dash+xml');
+        }).then(() => {
+          if (status) status.textContent = 'Stream loaded with Shaka Player.';
+          video.play().catch(() => {});
+        }).catch((err) => {
+          if (status) {
+            const code = err.code || '';
+            if (code === 6020) {
+              status.textContent = 'DRM preview requires a secure context (HTTPS or http://localhost). Widevine is not available over plain HTTP on a remote host.';
+            } else if (code === 1001 || code === 1002) {
+              status.textContent = 'Could not load stream manifest (network error or CORS restriction on stream CDN).';
+            } else {
+              status.textContent = `Shaka error ${code || err.message || err}: playback failed.`;
+            }
+          }
+        });
+        return;
+      }
+
+      // ── HLS via hls.js ────────────────────────────────────────────────────
       if (window.Hls && window.Hls.isSupported()) {
         _previewHls = new window.Hls({
           enableWorker: true,

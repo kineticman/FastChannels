@@ -435,6 +435,7 @@
 
   <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
   <script>
     const _APP_TZ = {{ app_timezone_name | tojson }};
 
@@ -498,7 +499,8 @@
       document.querySelectorAll('.programs-track[data-channel-id]').forEach(el => observer.observe(el));
     })();
 
-    let _guideHls = null;
+    let _guideHls   = null;
+    let _guideShaka = null;
     let _guideDetectingFor = null;
     let _guideChannelList = null;
     let _guideChannelIndex = -1;
@@ -515,6 +517,7 @@
       _guideChannelIndex = newIndex;
       _guideDetectingFor = null;
       if (_guideHls) { _guideHls.destroy(); _guideHls = null; }
+      if (_guideShaka) { _guideShaka.destroy(); _guideShaka = null; }
       const v = document.getElementById('gm-player');
       if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
       const content = document.getElementById('gm-content');
@@ -705,6 +708,7 @@
       modal.classList.remove('open');
       document.body.style.overflow = '';
       if (_guideHls) { _guideHls.destroy(); _guideHls = null; }
+      if (_guideShaka) { _guideShaka.destroy(); _guideShaka = null; }
       const v = document.getElementById('gm-player');
       if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
     }
@@ -733,6 +737,7 @@
         const previewUrl  = data.preview_url || data.play_url;
         const mode        = String(ch.playback_mode || 'hls').toLowerCase();
         const streamType  = String(ch.stream_type || '').toLowerCase();
+        const licenseUrl  = String(ch.license_url || '');
         const detecting   = data.needs_detection;
 
         // Fall back to current_program from API if no prog data passed
@@ -773,7 +778,7 @@
         const playBtn = detecting
           ? `<button class="preview-action-btn secondary" disabled>Detecting stream…</button>`
           : (previewUrl
-              ? `<button class="preview-action-btn secondary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(streamType)}')">Play Here</button>`
+              ? `<button class="preview-action-btn secondary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(streamType)}','${escapeHtml(licenseUrl)}')">Play Here</button>`
               : '');
         const extBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open Externally</a>` : '';
         const vlcBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
@@ -817,6 +822,7 @@
           </div>
           <div class="gm-player-wrap" id="gm-player-wrap" style="display:none">
             <video id="gm-player" controls playsinline preload="none"></video>
+            <div id="gm-player-status" style="font-size:0.8rem;color:var(--text-muted);padding:0.25rem 0"></div>
             <div class="gm-player-note">Browser playback depends on stream format and source restrictions. If it fails here, try Open Externally or VLC.</div>
           </div>
         `;
@@ -833,22 +839,85 @@
       }
     }
 
-    // ── HLS.js player ────────────────────────────────────────────────
-    function loadGuidePlayer(url, mode, type) {
-      const wrap  = document.getElementById('gm-player-wrap');
-      const video = document.getElementById('gm-player');
+    // ── Player (Shaka for DASH, hls.js for HLS) ──────────────────────
+    function loadGuidePlayer(url, mode, type, licenseUrl = '') {
+      const wrap   = document.getElementById('gm-player-wrap');
+      const video  = document.getElementById('gm-player');
+      const status = document.getElementById('gm-player-status');
       if (!wrap || !video) return;
       wrap.style.display = '';
       video.volume = 0.5;
-      if (_guideHls) { _guideHls.destroy(); _guideHls = null; }
-      if (mode === 'native' || !Hls.isSupported()) {
+      if (_guideHls)   { _guideHls.destroy();   _guideHls   = null; }
+      if (_guideShaka) { _guideShaka.destroy();  _guideShaka = null; }
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+
+      const normalizedMode = String(mode || '').toLowerCase();
+      const normalizedType = String(type || '').toLowerCase();
+
+      if (normalizedMode === 'native' || ['mp4','webm','mov','mkv','direct'].includes(normalizedType)) {
         video.src = url;
         video.play().catch(() => {});
-      } else {
+        return;
+      }
+
+      if (normalizedMode === 'dash' || normalizedType === 'dash') {
+        if (!window.shaka) {
+          if (status) status.textContent = 'Shaka Player not loaded.';
+          return;
+        }
+        shaka.polyfill.installAll();
+        if (licenseUrl && !navigator.requestMediaKeySystemAccess) {
+          if (status) status.textContent = 'DRM requires a secure context (HTTPS or http://localhost).';
+          return;
+        }
+        if (!shaka.Player.isBrowserSupported()) {
+          if (status) status.textContent = 'DASH not supported in this browser.';
+          return;
+        }
+        if (status) status.textContent = 'Loading stream…';
+        _guideShaka = new shaka.Player();
+        _guideShaka.attach(video).then(() => {
+          if (licenseUrl) {
+            _guideShaka.configure({
+              drm: { servers: { 'com.widevine.alpha': licenseUrl, 'com.microsoft.playready': licenseUrl } },
+            });
+            _guideShaka.getNetworkingEngine().registerRequestFilter((reqType, request) => {
+              if (reqType === 2 /* LICENSE */) {
+                request.uris = [licenseUrl];
+              }
+            });
+          }
+          _guideShaka.addEventListener('error', (event) => {
+            const err = event.detail;
+            if (status) status.textContent = `Shaka error ${err.code}: ${err.message || 'playback failed'}`;
+          });
+          return _guideShaka.load(url, null, 'application/dash+xml');
+        }).then(() => {
+          if (status) status.textContent = '';
+          video.play().catch(() => {});
+        }).catch((err) => {
+          if (status) {
+            const code = err.code || '';
+            if (code === 6020) {
+              status.textContent = 'DRM requires a secure context.';
+            } else {
+              status.textContent = `Shaka error ${code || err.message || err}: playback failed.`;
+            }
+          }
+        });
+        return;
+      }
+
+      if (window.Hls && Hls.isSupported()) {
         _guideHls = new Hls({ maxBufferLength: 15 });
         _guideHls.loadSource(url);
         _guideHls.attachMedia(video);
         _guideHls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+      } else {
+        video.src = url;
+        video.play().catch(() => {});
       }
     }
 
@@ -864,10 +933,11 @@
         const previewUrl = data.preview_url || data.play_url;
         const mode       = String(ch.playback_mode || 'hls').toLowerCase();
         const type       = String(ch.stream_type || '').toLowerCase();
+        const licenseUrl = String(ch.license_url || '');
         const actions    = document.getElementById('gm-actions');
         if (!actions) return;
         const playBtn = previewUrl
-          ? `<button class="preview-action-btn secondary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(type)}')">Play Here</button>`
+          ? `<button class="preview-action-btn secondary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(type)}','${escapeHtml(licenseUrl)}')">Play Here</button>`
           : '';
         const extBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open Externally</a>` : '';
         const vlcBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';

@@ -377,6 +377,19 @@ class BaseScraper(ABC):
             )
         return props
 
+    @classmethod
+    def get_kodi_props_for_channel(cls, base_url: str, source_channel_id: str) -> dict[str, str] | None:
+        """Per-channel Kodi props override. Return None to use class-level get_kodi_props."""
+        return None
+
+    @classmethod
+    def prepare_license_request(
+        cls, challenge: bytes, config: dict, channel_id: str | None = None
+    ) -> tuple[bytes, dict]:
+        """Returns (body, headers) for a license request.
+        Override in scrapers that need auth headers or challenge body transforms."""
+        return challenge, cls.license_request_headers(config)
+
     def run(self) -> tuple[list[ChannelData], list[ProgramData]]:
         channels = self.fetch_channels()
         programs = self.fetch_epg(channels)

@@ -1942,8 +1942,21 @@ def preview_channel(channel_id):
         playback_mode = 'native'
     elif stream_type in {'mjpeg', 'jpeg_snapshot'}:
         playback_mode = 'unsupported'
+    elif stream_type == 'dash':
+        playback_mode = 'dash'
     else:
         playback_mode = 'hls'
+
+    license_url = None
+    if ch.source:
+        from ..scrapers.registry import get as _get_scraper
+        _scraper_cls = _get_scraper(ch.source.name)
+        if _scraper_cls:
+            _lu = _scraper_cls.get_license_url(ch.source.config or {})
+            if _lu:
+                from flask import request as _req
+                _base = _req.host_url.rstrip('/')
+                license_url = f'{_base}/play/{ch.source.name}/license?channel_id={ch.source_channel_id}'
 
     current_program = (
         Program.query
@@ -2035,6 +2048,7 @@ def preview_channel(channel_id):
             'is_active': ch.is_active,
             'is_enabled': ch.is_enabled,
             'description': ch.description,
+            'license_url': license_url,
         },
         'current_program': _program_dict(current_program),
         'next_program': _program_dict(next_program),
