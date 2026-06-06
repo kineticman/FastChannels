@@ -238,3 +238,23 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 - **Amazon Prime Free**: without a valid cookie header, channel discovery pagination is limited.
 - **Sling Freestream**: streams are DRM-only for generic IPTV clients.
 - **Samsung TV Plus**: EPG covers approximately the current day. All credit for the data to [Matt Huisman](https://github.com/matthuisman/samsung-tvplus-for-channels).
+
+## Advanced
+
+These settings are only needed in unusual setups and should be left at their defaults for most installs.
+
+### EPG scrape timeout (`SCRAPE_EPG_TIMEOUT`)
+
+FastChannels limits how long the EPG fetch phase can run per source. The default is **900 seconds**, which covers all known sources including per-channel-per-day scrapers like Plex and TCL with multiple days of guide data.
+
+If you're routing traffic through a VPN or have high-latency network conditions and a source's EPG scrape is timing out (you'll see `epg phase timed out` in the logs), you can raise this ceiling:
+
+```yaml
+# docker-compose.yml
+services:
+  fastchannels:
+    environment:
+      SCRAPE_EPG_TIMEOUT: "1800"
+```
+
+The value is in seconds and applies to all sources. Individual sources that need a higher ceiling (Roku, Vidaa) already override it internally — this env var only raises the floor for everything else.

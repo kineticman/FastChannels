@@ -320,7 +320,10 @@ def run_scraper(source_name: str, force_full: bool = False):
         epg_input = None
         _progress = _make_progress_writer(source_name)
         try:
-            phase_timeouts = getattr(scraper_cls, 'phase_timeouts', {}) or {}
+            phase_timeouts = dict(getattr(scraper_cls, 'phase_timeouts', {}) or {})
+            _env_epg = AppSettings._env_int('SCRAPE_EPG_TIMEOUT')
+            if _env_epg:
+                phase_timeouts['epg'] = _env_epg
 
             def _phase_timeout(phase_name: str) -> int | None:
                 value = phase_timeouts.get(phase_name)

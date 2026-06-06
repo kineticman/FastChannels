@@ -277,13 +277,13 @@ class BaseScraper(ABC):
 
     # Per-phase wall-clock limits (seconds). Overriding in a subclass replaces
     # the entire dict — set all keys you need, not just the ones you're changing.
-    # Plex EPG is the heaviest legitimate case at ~65s; 300s gives a 4.5x buffer.
-    # Roku overrides epg=900 for its deep content-proxy fetch.
+    # epg=900 covers per-channel-per-day scrapers (Plex, TCL) even under VPN latency.
+    # Set SCRAPE_EPG_TIMEOUT env var to override the epg ceiling at runtime.
     phase_timeouts: dict = {
         'init':      30,
         'bootstrap': 60,
         'channels':  120,
-        'epg':       300,
+        'epg':       900,
     }
 
     # Declare config fields your scraper needs.
