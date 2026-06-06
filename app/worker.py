@@ -2318,7 +2318,8 @@ if __name__ == '__main__':
             active_urls = [
                 row[0] for row in
                 db.session.query(Channel.logo_url)
-                .filter(Channel.logo_url.isnot(None))
+                .join(Source, Channel.source_id == Source.id)
+                .filter(Channel.logo_url.isnot(None), Source.is_enabled == True)
                 .distinct()
                 .all()
             ]
