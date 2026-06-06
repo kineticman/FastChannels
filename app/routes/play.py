@@ -123,6 +123,12 @@ def _custom_variant_key(channel_id: int, stream_url: str) -> str:
 # a new media sequence whenever the upstream clip URL rotates.
 _CUSTOM_LIVE_SEQ: dict[int, tuple[str, int]] = {}
 
+# Detects frozen SSAI sessions: tracks the last segment URL seen per channel and
+# when we first saw it.  If the last segment hasn't changed for this long, the
+# upstream session has expired and is returning a stale HTTP-200 snapshot.
+_CUSTOM_LAST_FRESH_SEG: dict[int, tuple[str, float]] = {}
+_SESSION_VARIANT_STALE_AFTER = 30.0  # seconds
+
 
 def _get_custom_live_seq(channel_id: int, stream_url: str) -> int:
     last_url, seq = _CUSTOM_LIVE_SEQ.get(channel_id, ('', 0))
@@ -130,6 +136,33 @@ def _get_custom_live_seq(channel_id: int, stream_url: str) -> int:
         seq += 1
         _CUSTOM_LIVE_SEQ[channel_id] = (stream_url, seq)
     return seq
+
+
+def _last_segment_url(manifest_text: str) -> str:
+    """Return the last non-comment segment line in an HLS manifest."""
+    last = ''
+    for line in manifest_text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            last = stripped
+    return last
+
+
+def _variant_is_stale(channel_id: int, last_seg: str) -> bool:
+    """Return True if last_seg hasn't changed for _SESSION_VARIANT_STALE_AFTER seconds.
+
+    Detects SSAI sessions that expired but still return HTTP 200 with a frozen
+    snapshot.  The in-memory tracker is per-worker; any worker that detects
+    staleness invalidates the shared Redis cache so all workers recover.
+    """
+    if not last_seg:
+        return False
+    now = _time.monotonic()
+    prev_seg, first_seen = _CUSTOM_LAST_FRESH_SEG.get(channel_id, ('', 0.0))
+    if last_seg != prev_seg:
+        _CUSTOM_LAST_FRESH_SEG[channel_id] = (last_seg, now)
+        return False
+    return (now - first_seen) > _SESSION_VARIANT_STALE_AFTER
 
 
 def _url_is_hls(url: str) -> bool:
@@ -750,6 +783,18 @@ def custom_manifest_proxy(channel_id: str):
             if cv_r.status_code == 200:
                 text = cv_r.text
                 effective_url = cv_r.url
+                # Detect frozen SSAI sessions: if the last segment URL hasn't changed
+                # for _SESSION_VARIANT_STALE_AFTER seconds the upstream session has
+                # expired and is returning a stale HTTP-200 snapshot.  Force a master
+                # re-fetch to get a new session token.
+                if _variant_is_stale(channel.id, _last_segment_url(text)):
+                    logger.info('[custom-proxy] frozen SSAI session for channel %d (%s), forcing master re-fetch',
+                                channel.id, raw_id[:40])
+                    try:
+                        rdb.delete(rkey)
+                    except Exception:
+                        pass
+                    text = None
             else:
                 logger.info('[custom-proxy] cached variant HTTP %s for channel %d (%s), re-fetching master',
                             cv_r.status_code, channel.id, raw_id[:40])
@@ -806,6 +851,10 @@ def custom_manifest_proxy(channel_id: str):
                         rdb.set(rkey, best, ex=7200)  # 2h; relies on failure path to refresh early
                     except Exception:
                         pass
+                # Reset the stale tracker — fresh content from master, timer starts clean.
+                fresh_seg = _last_segment_url(text)
+                if fresh_seg:
+                    _CUSTOM_LAST_FRESH_SEG[channel.id] = (fresh_seg, _time.monotonic())
             except Exception as e:
                 logger.warning('[custom-proxy] variant fetch failed for %s: %s', raw_id, e)
                 abort(502)
