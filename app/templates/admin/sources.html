@@ -1296,7 +1296,7 @@
       const mobileCheckbox = mobileToggleEl?.querySelector('input[type="checkbox"]');
       const mobileLabelEl  = document.getElementById(`mobile-toggle-label-${sourceId}`);
       const dashRow    = document.getElementById(`dash-row-${sourceId}`);
-      const runBtn     = dashRow?.querySelector('.btn-run');
+      const runBtns    = dashRow?.querySelectorAll('.btn-run') ?? [];
       const auditBtn   = dashRow?.querySelector('.btn-audit');
       const intervalInput   = document.getElementById(`scrape-interval-${sourceId}`);
       const modeSelect      = document.getElementById(`schedule-mode-${sourceId}`);
@@ -1315,7 +1315,7 @@
         mobileLabelEl.className = `toggle-label ${enabled ? 'on' : 'off'}`;
       }
       if (dashRow) dashRow.classList.toggle('disabled', !enabled);
-      if (runBtn) runBtn.disabled = !enabled;
+      runBtns.forEach(btn => { btn.disabled = !enabled; });
       if (auditBtn) auditBtn.disabled = !enabled;
       if (dashRow?.dataset.custom === 'true') {
         document.querySelectorAll(`.configure-btn-display[data-source-id="${sourceId}"]`).forEach(btn => {
