@@ -75,6 +75,7 @@ class _MiniChannel:
     number_pinned: bool
     source_channel_id: str | None
     gracenote_id: str | None
+    gracenote_mode: str | None
     slug: str | None
     source: _MiniSource
 
@@ -210,6 +211,7 @@ def _build_channel_stub_query(filters: dict):
         Channel.number_pinned,
         Channel.source_channel_id,
         Channel.gracenote_id,
+        Channel.gracenote_mode,
         Channel.slug,
         Source.name.label('source_name'),
         Source.display_name.label('source_display_name'),
@@ -261,6 +263,7 @@ def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | No
             number_pinned=bool(row.number_pinned),
             source_channel_id=row.source_channel_id,
             gracenote_id=row.gracenote_id,
+            gracenote_mode=row.gracenote_mode,
             slug=row.slug,
             source=_MiniSource(
                 name=row.source_name,
@@ -523,10 +526,16 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int,
     previously-assigned feed number from `stored_numbers` (persisted in
     FeedChannelNumber) if it is >= feed_chnum_start and still free.  Only new
     or displaced channels get freshly assigned sequential numbers.
+
+    `stored_numbers` may contain entries for channels outside `channels` (e.g.
+    the other M3U partition when called for only the std or gracenote subset).
+    Those numbers are reserved before the cursor runs so new channels never
+    receive a number already claimed by the other partition.
     """
     used_numbers: set[int] = set()
     result: dict[int, int] = {}
     unassigned = []
+    channel_ids = {ch.id for ch in channels}
 
     # First pass: honour pinned channels and preserve valid stored assignments.
     for ch in channels:
@@ -540,6 +549,13 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int,
                 used_numbers.add(stored)
             else:
                 unassigned.append(ch)
+
+    # Reserve numbers held by channels outside this batch (e.g. the other
+    # M3U partition — std vs gracenote) so the cursor never steps on them.
+    if stored_numbers:
+        for cid, num in stored_numbers.items():
+            if cid not in channel_ids:
+                used_numbers.add(num)
 
     # Second pass: assign fresh sequential numbers to new/displaced channels.
     cursor = feed_chnum_start
