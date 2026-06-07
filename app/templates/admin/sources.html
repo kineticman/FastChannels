@@ -319,6 +319,28 @@
     .advanced-chevron { color: var(--text-muted); font-size: 0.76rem; transition: transform 0.2s; }
     .advanced-chevron.open { transform: rotate(180deg); }
 
+    /* Amazon auto-login panel */
+    .amazon-autologin-panel {
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 0.85rem 1rem; background: var(--surface-2);
+    }
+    .amazon-autologin-header {
+      display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+    }
+    .amazon-status-text { font-size: 0.82rem; color: var(--text-soft); flex: 1; }
+    .amazon-otp-row {
+      display: none; align-items: center; gap: 0.6rem;
+      margin-top: 0.75rem; flex-wrap: wrap;
+    }
+    .amazon-otp-row label { font-size: 0.82rem; color: var(--text-soft); white-space: nowrap; }
+    .amazon-otp-row input {
+      width: 9rem; padding: 0.35rem 0.6rem; font-size: 0.9rem;
+      border: 1px solid var(--border); border-radius: 5px;
+      background: var(--bg); color: var(--text);
+    }
+    .amazon-manual-details summary { padding: 0.2rem 0; }
+    .amazon-manual-details[open] summary { margin-bottom: 0.5rem; }
+
     /* Custom channels */
     .custom-channel-card {
       display: flex;
@@ -2254,6 +2276,166 @@
       }
     }
 
+    // ── Amazon auto-login ───────────────────────────────────────────────────
+    let _amazonPollTimer = null;
+
+    function renderAmazonConfig(sourceId, schema, values) {
+      const hasCreds = !!(values.amazon_email || '').trim();
+      const hasCookie = !!(values.cookie_header || '').trim();
+      return `
+        <div class="config-title">Amazon Prime Free Settings</div>
+        <div class="config-note">
+          Enter your Amazon credentials and click <strong>Auto-Login</strong> to obtain
+          session cookies automatically. FastChannels will store a browser session so
+          future refreshes are silent. You can also paste cookies manually as a fallback.
+        </div>
+
+        <div class="fields-grid">
+          <div class="field">
+            <label for="cfg-${sourceId}-amazon_email">Amazon Email</label>
+            <input type="text" id="cfg-${sourceId}-amazon_email" data-key="amazon_email" data-secret="false"
+                   value="${escapeHtml(String(values.amazon_email || ''))}"
+                   placeholder="you@example.com" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="cfg-${sourceId}-amazon_password">Amazon Password</label>
+            <input type="password" id="cfg-${sourceId}-amazon_password" data-key="amazon_password" data-secret="true"
+                   value="${escapeHtml(String(values.amazon_password || ''))}" autocomplete="off">
+          </div>
+        </div>
+
+        <div class="config-actions" style="margin-bottom:0.75rem;">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>
+
+        <div class="amazon-autologin-panel" id="amazon-autologin-${sourceId}">
+          <div class="amazon-autologin-header">
+            <button class="btn btn-run" type="button"
+                    id="amazon-login-btn-${sourceId}"
+                    onclick="amazonStartLogin(${sourceId})">Auto-Login</button>
+            <span class="amazon-status-text" id="amazon-status-${sourceId}">
+              ${hasCookie ? '<span style="color:var(--success-soft)">&#10003; Cookies on file</span>' : (hasCreds ? 'Credentials saved — click Auto-Login to fetch cookies.' : 'Save credentials above, then click Auto-Login.')}
+            </span>
+          </div>
+          <div class="amazon-otp-row" id="amazon-otp-${sourceId}" style="display:none">
+            <label for="amazon-otp-input-${sourceId}">One-time code:</label>
+            <input type="text" id="amazon-otp-input-${sourceId}" placeholder="123456"
+                   maxlength="8" autocomplete="one-time-code"
+                   onkeydown="if(event.key==='Enter') amazonSubmitOtp(${sourceId})">
+            <button class="btn btn-run btn-sm" type="button"
+                    onclick="amazonSubmitOtp(${sourceId})">Submit</button>
+          </div>
+        </div>
+
+        <details class="amazon-manual-details" style="margin-top:1rem;">
+          <summary style="cursor:pointer;color:var(--text-muted);font-size:0.82rem;user-select:none;">
+            Manual cookie (advanced / fallback)
+          </summary>
+          <div style="margin-top:0.6rem;">
+            <div class="field field-full">
+              <label for="cfg-${sourceId}-cookie_header">Cookie Header</label>
+              <input type="password" id="cfg-${sourceId}-cookie_header" data-key="cookie_header" data-secret="true"
+                     value="${escapeHtml(String(values.cookie_header || ''))}"
+                     placeholder="Paste full Cookie: header value" autocomplete="off">
+              <div class="help">Open amazon.com in your browser → DevTools → Network → any request → copy the Cookie header value.</div>
+            </div>
+            <div class="config-actions">
+              <span></span>
+              <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Cookie</button>
+            </div>
+          </div>
+        </details>`;
+    }
+
+    async function amazonStartLogin(sourceId) {
+      const btn = document.getElementById(`amazon-login-btn-${sourceId}`);
+      const statusEl = document.getElementById(`amazon-status-${sourceId}`);
+      const otpRow = document.getElementById(`amazon-otp-${sourceId}`);
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Starting…</span>';
+      otpRow.style.display = 'none';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/amazon-auto-login`, {method: 'POST'});
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(d.error || 'Start failed')}</span>`;
+          btn.disabled = false;
+          return;
+        }
+      } catch(e) {
+        statusEl.innerHTML = `<span style="color:var(--danger)">Network error</span>`;
+        btn.disabled = false;
+        return;
+      }
+      amazonPollStatus(sourceId);
+    }
+
+    function amazonPollStatus(sourceId) {
+      if (_amazonPollTimer) clearInterval(_amazonPollTimer);
+      _amazonPollTimer = setInterval(() => _amazonCheckStatus(sourceId), 2000);
+    }
+
+    async function _amazonCheckStatus(sourceId) {
+      const statusEl = document.getElementById(`amazon-status-${sourceId}`);
+      const otpRow   = document.getElementById(`amazon-otp-${sourceId}`);
+      const btn      = document.getElementById(`amazon-login-btn-${sourceId}`);
+      if (!statusEl) { clearInterval(_amazonPollTimer); return; }
+
+      let data;
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/amazon-auth-status`);
+        data = await r.json();
+      } catch(e) { return; }
+
+      const { status, detail } = data;
+
+      const statusMap = {
+        idle:        null,
+        starting:    '<span style="color:var(--text-muted)">Starting browser…</span>',
+        running:     `<span style="color:var(--text-muted)">${escapeHtml(detail || 'Running…')}</span>`,
+        waiting_otp: `<span style="color:var(--warning-soft)">${escapeHtml(detail || 'Enter the one-time code below.')}</span>`,
+        success:     '<span style="color:var(--success-soft)">&#10003; Logged in — cookies saved.</span>',
+        captcha:     `<span style="color:var(--danger)">CAPTCHA blocked login. Use manual cookie fallback.</span>`,
+        failed:      `<span style="color:var(--danger)">${escapeHtml(detail || 'Login failed.')}</span>`,
+      };
+
+      if (status === 'idle' || !statusMap[status]) return;
+
+      statusEl.innerHTML = statusMap[status] || escapeHtml(status);
+      otpRow.style.display = status === 'waiting_otp' ? 'flex' : 'none';
+
+      if (status === 'success' || status === 'failed' || status === 'captcha') {
+        clearInterval(_amazonPollTimer);
+        _amazonPollTimer = null;
+        btn.disabled = false;
+        if (status === 'success') {
+          // Reload config so cookie badge updates
+          setTimeout(() => loadSourceConfig(sourceId, 'amazon_prime_free'), 500);
+        }
+      }
+    }
+
+    async function amazonSubmitOtp(sourceId) {
+      const input = document.getElementById(`amazon-otp-input-${sourceId}`);
+      const otp = (input?.value || '').trim();
+      if (!otp) return;
+      try {
+        await fetch(`/api/sources/${sourceId}/amazon-auth-otp`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({otp}),
+        });
+        input.value = '';
+        const statusEl = document.getElementById(`amazon-status-${sourceId}`);
+        if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-muted)">OTP submitted…</span>';
+      } catch(e) {
+        alert('Failed to submit OTP: ' + e.message);
+      }
+    }
+    // ── end Amazon auto-login ───────────────────────────────────────────────
+
     function renderFuboConfig(sourceId, schema, values) {
       const fastOnly = values.fast_only !== 'false';
       return `
@@ -2311,6 +2493,8 @@
         return renderPlutoConfig(sourceId, schema, values);
       } else if (sourceName === 'fubo') {
         return renderFuboConfig(sourceId, schema, values);
+      } else if (sourceName === 'amazon_prime_free') {
+        return renderAmazonConfig(sourceId, schema, values);
       }
 
       const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {

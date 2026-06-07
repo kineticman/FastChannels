@@ -1488,6 +1488,79 @@ def save_source_config(source_id):
     })
 
 
+# ── Amazon auto-login ──────────────────────────────────────────────────────────
+
+@api_bp.route('/sources/<int:source_id>/amazon-auto-login', methods=['POST'])
+def amazon_auto_login(source_id):
+    import threading
+    import redis as _redis
+    from ..scrapers.amazon_auth import run_amazon_auth
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'amazon_prime_free':
+        return jsonify({'error': 'not an amazon source'}), 400
+
+    cfg = source.config or {}
+    email = (cfg.get('amazon_email') or '').strip()
+    password = (cfg.get('amazon_password') or '').strip()
+    if not email or not password:
+        return jsonify({'error': 'amazon_email and amazon_password must be saved first'}), 400
+
+    redis_url = current_app.config['REDIS_URL']
+    storage_state_json = cfg.get('browser_storage_state') or None
+
+    t = threading.Thread(
+        target=run_amazon_auth,
+        args=(redis_url, source_id, email, password, storage_state_json),
+        daemon=True,
+    )
+    t.start()
+    return jsonify({'status': 'started'})
+
+
+@api_bp.route('/sources/<int:source_id>/amazon-auth-status')
+def amazon_auth_status(source_id):
+    import redis as _redis
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+
+    raw = r.get(f'amazon:auth:status:{source_id}')
+    if not raw:
+        return jsonify({'status': 'idle'})
+
+    data = json.loads(raw)
+
+    if data.get('status') == 'success':
+        result_raw = r.get(f'amazon:auth:result:{source_id}')
+        if result_raw:
+            try:
+                result = json.loads(result_raw)
+                source = Source.query.get(source_id)
+                if source:
+                    cfg = dict(source.config or {})
+                    cfg['cookie_header'] = result['cookie_header']
+                    cfg['browser_storage_state'] = result['storage_state']
+                    source.config = cfg
+                    db.session.commit()
+                    r.delete(f'amazon:auth:result:{source_id}')
+                    logger.info('[amazon-auth] persisted cookies to source config source_id=%s', source_id)
+            except Exception as exc:
+                logger.error('[amazon-auth] failed to persist result: %s', exc)
+
+    return jsonify(data)
+
+
+@api_bp.route('/sources/<int:source_id>/amazon-auth-otp', methods=['POST'])
+def amazon_auth_otp(source_id):
+    import redis as _redis
+    data = request.get_json() or {}
+    otp = (data.get('otp') or '').strip()
+    if not otp:
+        return jsonify({'error': 'otp required'}), 400
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    r.set(f'amazon:auth:otp:{source_id}', otp, ex=300)
+    return jsonify({'status': 'ok'})
+
+
 @api_bp.route('/channels')
 def list_channels():
     page     = request.args.get('page', 1, type=int)

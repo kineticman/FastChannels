@@ -51,11 +51,25 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
     config_schema = [
         ConfigField(
+            "amazon_email",
+            "Amazon Email",
+            field_type="text",
+            placeholder="you@example.com",
+            help_text="Your Amazon account email. Used with Auto-Login to obtain session cookies automatically.",
+        ),
+        ConfigField(
+            "amazon_password",
+            "Amazon Password",
+            field_type="password",
+            secret=True,
+            help_text="Your Amazon account password. Stored securely alongside other source credentials.",
+        ),
+        ConfigField(
             "cookie_header",
             "Amazon Cookie Header",
             field_type="password",
             secret=True,
-            help_text="Paste a valid Cookie header from a logged-in amazon.com browser session.",
+            help_text="Active session cookies. Populated automatically by Auto-Login, or paste manually from browser DevTools.",
         ),
     ]
 
