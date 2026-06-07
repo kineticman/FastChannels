@@ -431,7 +431,36 @@ def run_scraper(source_name: str, force_full: bool = False):
             else:
                 _progress('channels')
                 channels = _run_phase('channels', scraper.fetch_channels)
+
+                # Commit channels before running EPG so that a timeout in the EPG
+                # phase doesn't discard a successful channel fetch (issue #14 —
+                # first-run users on high-latency VPNs ended up with 0 channels).
+                _active_geos = None
+                if hasattr(scraper, '_geos'):
+                    _active_geos = {g.upper() for g in scraper._geos()}
+                for _attempt in range(3):
+                    try:
+                        _upsert_channels(
+                            source, channels, _gracenote_auto_fill,
+                            active_geos=_active_geos,
+                            miss_threshold=getattr(scraper, 'channel_miss_threshold', _CHANNEL_MISS_THRESHOLD),
+                            rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
+                        )
+                        _apply_scraper_config_updates(source, scraper)
+                        db.session.commit()
+                        break
+                    except _SAOperationalError as _dbe:
+                        db.session.rollback()
+                        if _attempt == 2:
+                            raise
+                        _wait = 5 * (_attempt + 1)
+                        logger.warning('[%s] DB locked (channel upsert, attempt %d/3), retrying in %ds',
+                                       source_name, _attempt + 1, _wait)
+                        time.sleep(_wait)
+
                 _progress('epg', 0, len(channels))
+                # Query enabled_ids after channels are committed so new channels
+                # (added just above) are included and get EPG on the first run.
                 enabled_ids = {
                     sid for (sid,) in (
                         db.session.query(Channel.source_channel_id)
@@ -452,15 +481,6 @@ def run_scraper(source_name: str, force_full: bool = False):
                 )
                 for _attempt in range(3):
                     try:
-                        _active_geos = None
-                        if hasattr(scraper, '_geos'):
-                            _active_geos = {g.upper() for g in scraper._geos()}
-                        _upsert_channels(
-                            source, channels, _gracenote_auto_fill,
-                            active_geos=_active_geos,
-                            miss_threshold=getattr(scraper, 'channel_miss_threshold', _CHANNEL_MISS_THRESHOLD),
-                            rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
-                        )
                         _upsert_programs(source, programs, progress_cb=_progress)
                         _apply_scraper_config_updates(source, scraper)
                         source.last_scraped_at = datetime.now(timezone.utc)
@@ -844,9 +864,10 @@ def run_stream_audit(source_name: str):
                     raise
 
                 if r.status_code in (403, 429, 500, 502, 503, 504):
-                    # After 5 consecutive 403/skip responses the source is likely
-                    # geo-blocked; further backoffs just burn RQ job time.
-                    if consecutive_skipped_403 < 5:
+                    # 403 is an IP-level geo-block; sleeping won't change the IP so
+                    # skip the backoff and retry immediately.  429/5xx may be transient
+                    # rate-limiting or CDN hiccups where a brief pause can help.
+                    if r.status_code != 403 and consecutive_skipped_403 < 5:
                         wait = 30 + skipped_403 * 5
                         logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
                                        source_name, r.status_code, wait)
