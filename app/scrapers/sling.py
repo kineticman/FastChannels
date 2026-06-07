@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,6 +19,9 @@ except ImportError:  # pragma: no cover - local staging outside FastChannels pac
     from app.scrapers.category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
+
+# Matches internal Sling test/slate channel call signs regardless of any display-name overrides.
+_TEST_CHANNEL_RE = re.compile(r'^SLATEPO\d|^HYBRID-SIGNALTEST-', re.IGNORECASE)
 
 
 def _join_categories(values: list[str] | tuple[str, ...] | None) -> str | None:
@@ -248,6 +252,18 @@ class SlingScraper(BaseScraper):
         if item.get("cmw_hide_channel"):
             return None
 
+        # Skip internal test/slate channels.  call_sign is the stable internal
+        # identifier — display names are sometimes overridden with real channel
+        # names (e.g. SLATEPO11 → "Jalsha Movies") which would defeat name-only
+        # filtering.  Genre "Test" is a secondary signal for channels that don't
+        # follow the SLATEPO/HYBRID-SIGNALTEST naming convention.
+        call_sign = metadata.get("call_sign", "")
+        genres = metadata.get("genre", [])
+        if _TEST_CHANNEL_RE.search(call_sign) or _TEST_CHANNEL_RE.search(item.get("title", "")):
+            return None
+        if isinstance(genres, list) and any(g.lower() == "test" for g in genres):
+            return None
+
         name = self._best_summary_channel_name(item)
         if not name:
             return None
@@ -273,8 +289,8 @@ class SlingScraper(BaseScraper):
     def _best_summary_channel_name(self, item: dict[str, Any]) -> str | None:
         metadata = item.get("metadata") or {}
         for candidate in (
-            item.get("network_affiliate_name"),
             metadata.get("channel_name"),
+            item.get("network_affiliate_name"),
             item.get("title"),
             metadata.get("call_sign"),
         ):
