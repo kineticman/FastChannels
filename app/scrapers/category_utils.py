@@ -316,7 +316,11 @@ _CANONICAL_MAP: dict[str, str] = {
 
 
 _PRESENTED_BY_RE = re.compile(r'\s+presented\s+by\s+.+$', re.IGNORECASE)
+_LOCAL_CALL_SIGN_RE = re.compile(r'\([^)]*\b[kw][a-z]{2,4}\b[^)]*\)')
+_NUMBERED_FOX_LOCAL_RE = re.compile(r'^fox \d+\s+local\b')
 _CANONICAL_LOWER: dict[str, str] = {}  # populated lazily on first use
+_NETWORK_NUMBERED_NEWS_RE = re.compile(r'^(abc|cbs|fox|nbc)\d+\s+news\b')
+_CALL_SIGN_LEADING_NEWS_RE = re.compile(r'^[kw][a-z]{2,4}\b.*\bnews\b')
 
 
 def normalize_category(raw: str | None) -> str | None:
@@ -604,6 +608,7 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
 # consistently miscategorized by its upstream source.
 _NAME_OVERRIDES: dict[str, str] = {
     # ── Action & Adventure ───────────────────────────────────────────────────
+    'hunter':                               'Action & Adventure',
     'dangertv':                             'Action & Adventure',
     'universal action':                     'Action & Adventure',
     'xena':                                 'Action & Adventure',
@@ -669,6 +674,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'test my ride':                         'Automotive',
 
     # ── Classic TV ───────────────────────────────────────────────────────────
+    'get':                                  'Classic TV',
     'classic tv':                           'Classic TV',
     'h&i':                                  'Classic TV',
     'shout! factory':                       'Classic TV',
@@ -883,6 +889,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     "are you smarter than a 5th grader?":  'Game Shows',
 
     # ── Gaming ───────────────────────────────────────────────────────────────
+    'esr':                                  'Gaming',
     'gameplay minecraft':                   'Gaming',
     'gameplay roblox':                      'Gaming',
     'estrella games':                       'Gaming',
@@ -1586,8 +1593,96 @@ _NAME_OVERRIDES: dict[str, str] = {
     'rawhide':                              'Westerns',
     'grjngo - películas del oeste':         'Westerns',
     'grjngo - peliculas del oeste':         'Westerns',
+
+    # Amazon Prime Free and Sling Freestream category audit (June 2026)
+    '50 cent action':                       'Action & Adventure',
+    'action plus':                          'Action & Adventure',
+    'danger tv':                            'Action & Adventure',
+    'bewitched':                            'Comedy',
+    'green acres':                          'Comedy',
+    'mr bean live action':                  'Comedy',
+    'rifftrax':                             'Comedy',
+    'the real mccoys':                      'Comedy',
+    'the stand-up channel':                 'Comedy',
+    'the three stooges +':                  'Comedy',
+    'the three stooges+':                   'Comedy',
+    'mayday: air disaster':                 'Documentary',
+    'bold and the beautiful':               'Drama',
+    'the sherlock holmes channel':          'Drama',
+    'weeds/nurse jackie':                   'Drama',
+    'dove tv':                              'Faith',
+    'jewish life television':               'Faith',
+    'pureflix tv':                          'Faith',
+    '$100000 pyramid':                     'Game Shows',
+    'match game / press your luck':         'Game Shows',
+    'dungeons & dragons':                   'Gaming',
+    'graystillplays':                       'Gaming',
+    'preston & brianna':                    'Gaming',
+    'thinknoodles':                         'Gaming',
+    'historian':                            'History',
+    'paranormal files channel':             'Horror',
+    'estrella tv':                          'Latino',
+    'estrellatv':                           'Latino',
+    'las 3 marias':                         'Latino',
+    'max latino east':                      'Latino',
+    '6abc philadelphia':                    'Local News',
+    'filmrise action':                      'Action & Adventure',
+    'filmrise music':                       'Music',
+    'non-stop 90s':                         'Music',
+    'stingray naturescape':                 'Ambiance',
+    'stingray spa':                         'Ambiance',
+    'earth day 365':                        'Nature',
+    'prof g channel':                       'News',
+    'yahoo finance live':                   'News',
+    'all weddings we tv':                   'Reality TV',
+    'all-out alaska':                       'Reality TV',
+    'fear factor: powered by banijay':      'Reality TV',
+    'judge & jury':                         'Reality TV',
+    'judy justice':                         'Reality TV',
+    'personal injury court':                'Reality TV',
+    'wipeout':                              'Reality TV',
+    'air & space channel':                  'Science',
+    'cw presents wwe nxt':                  'Sports',
+    'dp world tour':                        'Sports',
+    'hbcugo':                               'Sports',
+    'hersphere by lionsgate':               'Sports',
+    'motorvision – deutsch':                'Automotive',
+    'motorvision – english':                'Automotive',
+    'nba':                                  'Sports',
+    'pro league network':                   'Sports',
+    'si tv':                                'Sports',
+    'watch aew':                            'Sports',
+    "america's dumbest criminals":        'True Crime',
+    'dr g medical examiner':                'True Crime',
+    'fox justice':                          'True Crime',
+    'love kills':                           'True Crime',
+    'the life and legend of wyatt earp':    'Westerns',
 }
 
+
+_NATIONAL_NETWORK_NEWS = {
+    'abc news live',
+    'cbs news 24/7',
+    'fox news talk',
+    'nbc news now',
+}
+
+
+def _local_news_rule(name_lower: str) -> str | None:
+    if _NETWORK_NUMBERED_NEWS_RE.match(name_lower):
+        return 'network_numbered_news'
+    if _CALL_SIGN_LEADING_NEWS_RE.match(name_lower):
+        return 'leading_call_sign_news'
+    if _NUMBERED_FOX_LOCAL_RE.match(name_lower):
+        return 'numbered_fox_local'
+    if name_lower.startswith(('abc ', 'cbs ', 'fox ', 'nbc ')):
+        if _LOCAL_CALL_SIGN_RE.search(name_lower):
+            return 'network_call_sign'
+        if ' news' in name_lower and name_lower not in _NATIONAL_NETWORK_NEWS:
+            return 'network_city_news'
+    if name_lower.startswith('telemundo noticias ') and name_lower != 'telemundo noticias ahora':
+        return 'telemundo_regional_news'
+    return None
 
 
 def category_for_channel(name: str, raw_category: str | None) -> str | None:
@@ -1620,6 +1715,8 @@ def category_for_channel(name: str, raw_category: str | None) -> str | None:
         return 'Westerns'
 
     # Local News patterns
+    if _local_news_rule(name_lower):
+        return 'Local News'
     # Hearst "Very Local" stations
     if name_lower.startswith('very ') and ' by ' in name_lower:
         return 'Local News'
@@ -1681,6 +1778,13 @@ def explain_category(name: str, raw_category: str | None) -> dict:
     if (name_lower.endswith(' westerns') or name_lower.endswith(' western')
             or name_lower.startswith('western ') or ' western ' in name_lower):
         return {'source': 'name_pattern', 'rule': 'western', 'detail': 'Name contains "Western" → Westerns.'}
+    local_rule = _local_news_rule(name_lower)
+    if local_rule:
+        return {
+            'source': 'name_pattern',
+            'rule': local_rule,
+            'detail': 'Local affiliate naming pattern → Local News.',
+        }
     if name_lower.startswith('very ') and ' by ' in name_lower:
         return {'source': 'name_pattern', 'rule': 'very_local', 'detail': 'Hearst "Very Local by …" station → Local News.'}
     if 'fox local' in name_lower:

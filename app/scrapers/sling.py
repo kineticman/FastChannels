@@ -13,10 +13,10 @@ import requests
 
 try:
     from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
-    from .category_utils import infer_category_from_name
+    from .category_utils import infer_category_from_name, normalize_category
 except ImportError:  # pragma: no cover - local staging outside FastChannels package
     from app.scrapers.base import BaseScraper, ChannelData, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
-    from app.scrapers.category_utils import infer_category_from_name
+    from app.scrapers.category_utils import infer_category_from_name, normalize_category
 
 logger = logging.getLogger(__name__)
 
@@ -307,15 +307,15 @@ class SlingScraper(BaseScraper):
         metadata = item.get("metadata") or {}
         genres = metadata.get("genre") or []
         if isinstance(genres, list):
-            filtered = [
-                genre.strip()
-                for genre in genres
-                if isinstance(genre, str)
-                and genre.strip()
-                and genre.strip().lower() not in {"sling free", "freestream", "international"}
-            ]
-            if filtered:
-                return filtered[0]
+            _skip = {"sling free", "freestream", "international"}
+            for genre in genres:
+                if not isinstance(genre, str) or not genre.strip():
+                    continue
+                if genre.strip().lower() in _skip:
+                    continue
+                normalized = normalize_category(genre.strip())
+                if normalized:
+                    return normalized
         return "Entertainment"
 
     def _program_from_asset(
