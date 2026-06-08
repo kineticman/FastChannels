@@ -382,15 +382,16 @@ class AmazonPrimeFreeScraper(BaseScraper):
         return None
 
     @classmethod
-    def prepare_license_request(cls, challenge: bytes, config: dict, channel_id: str | None = None) -> tuple[bytes, dict]:
+    def prepare_license_request(cls, challenge: bytes, config: dict, channel_id: str | None = None, sht: str | None = None) -> tuple[bytes, dict]:
         import base64 as _b64
         cookie = config.get('cookie_header', '') or ''
         # The license body must carry THIS channel's playbackEnvelope — the one the manifest
         # and SHT were derived from — or Amazon returns 403 Denied.
         playback_envelope = cls._channel_pe_for(config, channel_id) if channel_id else ''
 
-        session_handoff_token = None
-        if playback_envelope and channel_id:
+        # Use pre-fetched SHT if provided (caller cached it); otherwise fetch fresh.
+        session_handoff_token = sht
+        if session_handoff_token is None and playback_envelope and channel_id:
             session_handoff_token = cls._get_session_handoff_token(config, channel_id)
 
         body_dict: dict = {

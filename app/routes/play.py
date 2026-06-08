@@ -607,6 +607,28 @@ def distro_manifest_proxy(channel_id: str):
 
 _STIRR_PROXY_SESSION: _requests.Session | None = None
 
+# Redis client for Amazon SHT (sessionHandoffToken) caching across gunicorn workers.
+# SHT is required in every Widevine license body and normally costs ~500ms to fetch
+# from GetLivePlaybackResources.  Caching it avoids a PRS round-trip on every renewal.
+_AMAZON_SHT_REDIS: 'redis.Redis | None' = None
+
+
+def _amazon_sht_redis() -> 'redis.Redis | None':
+    global _AMAZON_SHT_REDIS
+    if _AMAZON_SHT_REDIS is None:
+        try:
+            import redis as _r
+            from flask import current_app
+            _AMAZON_SHT_REDIS = _r.from_url(
+                current_app.config['REDIS_URL'],
+                decode_responses=True,
+                socket_timeout=1,
+                socket_connect_timeout=1,
+            )
+        except Exception:
+            pass
+    return _AMAZON_SHT_REDIS
+
 
 def _stirr_session() -> _requests.Session:
     """Persistent lax-TLS session for Stirr CDN fetches. Created once, reused per worker."""
@@ -1153,7 +1175,29 @@ def license_proxy(source_name: str):
     license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id)
     if not license_url:
         abort(404)
-    body, headers = scraper_cls.prepare_license_request(challenge, cfg, channel_id=channel_id)
+
+    # Fetch (or reuse) the sessionHandoffToken before building the license body.
+    # _get_session_handoff_token() calls GetLivePlaybackResources (~500ms) on every
+    # invocation because sht_cache is never written anywhere.  Cache the token in
+    # Redis so repeated license renewals skip the PRS round-trip.
+    sht = None
+    if channel_id and source_name == 'amazon_prime_free':
+        rdb = _amazon_sht_redis()
+        _sht_key = f'amz_sht:{channel_id}'
+        if rdb:
+            try:
+                sht = rdb.get(_sht_key)
+            except Exception:
+                pass
+        if not sht:
+            sht = scraper_cls._get_session_handoff_token(cfg, channel_id)
+            if sht and rdb:
+                try:
+                    rdb.setex(_sht_key, 600, sht)
+                except Exception:
+                    pass
+
+    body, headers = scraper_cls.prepare_license_request(challenge, cfg, channel_id=channel_id, sht=sht)
     headers.setdefault('Content-Type', 'application/octet-stream')
     try:
         # Cache the raw challenge in Redis so test scripts can replay it
