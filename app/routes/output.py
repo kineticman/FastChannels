@@ -9,6 +9,7 @@ from ..generators.m3u import (
     feed_gracenote_start,
     feed_to_query_filters,
     _MASTER_GRACENOTE_START,
+    generate_watch_m3u,
 )
 from ..generators.xmltv import generate_xmltv_stream
 from ..models import Feed
@@ -274,4 +275,47 @@ def feed_native_epg(slug):
         path,
         mimetype='application/xml',
         download_name=f'{slug}-native.xml',
+    )
+
+
+@output_bp.route('/m3u/watch')
+def m3u_watch():
+    """Watch-page M3U for browser-based players (e.g. PrismCast). Pair with /epg.xml."""
+    base_url = public_base_url()
+    filters  = _filters()
+    if filters:
+        content = generate_watch_m3u(filters, base_url=base_url)
+        return Response(content, mimetype='application/x-mpegurl',
+                        headers={'Content-Disposition': 'attachment; filename="fastchannels-watch.m3u"'})
+    path = get_artifact('master-watch-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            'Watch M3U artifact is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name='fastchannels-watch.m3u',
+    )
+
+
+@output_bp.route('/feeds/<slug>/m3u/watch')
+def feed_m3u_watch(slug):
+    """Watch-page M3U for a feed. Pair with /feeds/<slug>/epg.xml."""
+    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    path = get_artifact(f'feed-{slug}-watch-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            f'Watch M3U artifact for {feed.slug} is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name=f'{slug}-watch.m3u',
     )
