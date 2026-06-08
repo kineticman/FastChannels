@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 
 
 # Suppress high-frequency / low-signal endpoints from the access log.
@@ -19,6 +20,7 @@ _SUPPRESS_PATTERNS = (
     'GET /api/system-stats',               # polled frequently, low signal
     '/api/sources/chnum',      # overlap-banner polling
     '/api/feeds/chnum-ranges', # feed page chnum conflict checker
+    '/play/amazon_prime_free/license', # Amazon DRM license — fires per key rotation
     'GET /api/sources HTTP',   # sources list fetched on every poll cycle finish
     '"GET /admin/',            # admin page navigation GETs (POSTs still logged)
     'GET /api/logs',           # log viewer polling
@@ -30,8 +32,16 @@ _SUPPRESS_RE = re.compile(r'GET /api/sources/\d+/config |GET /api/channels/\d+/p
 # Suppress feed/M3U/EPG requests — healthy DVR polling, not worth logging
 _SUPPRESS_FEED_RE = re.compile(r'"GET /feeds/|"GET /m3u/|"GET /output/')
 
+# Match Amazon DASH manifest polls: GET /play/amazon_prime_free/<channel_id>/dash.mpd
+_DASH_RE = re.compile(r'GET /play/amazon_prime_free/([^/]+)/dash\.mpd')
+_DASH_COOLDOWN = 120  # seconds — log first request, suppress repeats within this window
+
 
 class _AccessFilter(logging.Filter):
+    def __init__(self):
+        super().__init__()
+        self._dash_last: dict[str, float] = {}
+
     def filter(self, record):
         msg = record.getMessage()
         if any(p in msg for p in _SUPPRESS_PATTERNS):
@@ -40,6 +50,13 @@ class _AccessFilter(logging.Filter):
             return False
         if _SUPPRESS_FEED_RE.search(msg):
             return False
+        m = _DASH_RE.search(msg)
+        if m:
+            channel_id = m.group(1)
+            now = time.monotonic()
+            if now - self._dash_last.get(channel_id, 0) < _DASH_COOLDOWN:
+                return False
+            self._dash_last[channel_id] = now
         return True
 
 

@@ -368,14 +368,14 @@ class AmazonPrimeFreeScraper(BaseScraper):
         if cached and isinstance(cached, dict):
             age = _time.time() - float(cached.get('ts', 0))
             if age < 240 and cached.get('token'):
-                logger.info('[amazon] using cached sessionHandoffToken for %s (age=%.0fs)', channel_id, age)
+                logger.debug('[amazon] using cached sessionHandoffToken for %s (age=%.0fs)', channel_id, age)
                 return cached['token']
         data = cls._get_live_playback_resources(config, channel_id, pe)
         if not data:
             return None
         token = (data.get('sessionization') or {}).get('sessionHandoffToken')
         if token:
-            logger.info('[amazon] fresh SHT via GetLivePlaybackResources for %s (%d chars)',
+            logger.debug('[amazon] fresh SHT via GetLivePlaybackResources for %s (%d chars)',
                         channel_id, len(token))
             return token
         logger.warning('[amazon] GetLivePlaybackResources missing sessionHandoffToken for %s', channel_id)
@@ -536,7 +536,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
                            "(re-scrape to refresh)", self.source_name, station_id[:40])
             return None
 
-        logger.info("[%s] resolving live stream for %s", self.source_name, station_id[:40])
+        logger.debug("[%s] resolving live stream for %s", self.source_name, station_id[:40])
         url = self._resolve_live(station_id, pe)
         if url:
             self._stream_url_cache[station_id] = {
