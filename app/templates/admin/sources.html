@@ -328,6 +328,12 @@
       display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
     }
     .amazon-status-text { font-size: 0.82rem; color: var(--text-soft); flex: 1; }
+    .amazon-account-details {
+      margin-top: 0.9rem; border-top: 1px solid var(--border); padding-top: 0.75rem;
+    }
+    .amazon-account-details summary {
+      cursor: pointer; color: var(--text-muted); font-size: 0.82rem; user-select: none;
+    }
     .amazon-otp-row {
       display: none; align-items: center; gap: 0.6rem;
       margin-top: 0.75rem; flex-wrap: wrap;
@@ -338,8 +344,6 @@
       border: 1px solid var(--border); border-radius: 5px;
       background: var(--bg); color: var(--text);
     }
-    .amazon-manual-details summary { padding: 0.2rem 0; }
-    .amazon-manual-details[open] summary { margin-bottom: 0.5rem; }
 
     /* Custom channels */
     .custom-channel-card {
@@ -2280,43 +2284,26 @@
     let _amazonPollTimer = null;
 
     function renderAmazonConfig(sourceId, schema, values) {
-      const hasCreds = !!(values.amazon_email || '').trim();
+      const hasCreds = !!(
+        (values.amazon_email || '').trim() && (values.amazon_password || '').trim()
+      );
       const hasCookie = !!(values.cookie_header || '').trim();
       return `
         <div class="config-title">Amazon Prime Free Settings</div>
         <div class="config-note">
-          Enter your Amazon credentials and click <strong>Auto-Login</strong> to obtain
-          session cookies automatically. FastChannels will store a browser session so
-          future refreshes are silent. You can also paste cookies manually as a fallback.
-        </div>
-
-        <div class="fields-grid">
-          <div class="field">
-            <label for="cfg-${sourceId}-amazon_email">Amazon Email</label>
-            <input type="text" id="cfg-${sourceId}-amazon_email" data-key="amazon_email" data-secret="false"
-                   value="${escapeHtml(String(values.amazon_email || ''))}"
-                   placeholder="you@example.com" autocomplete="off">
-          </div>
-          <div class="field">
-            <label for="cfg-${sourceId}-amazon_password">Amazon Password</label>
-            <input type="password" id="cfg-${sourceId}-amazon_password" data-key="amazon_password" data-secret="true"
-                   value="${escapeHtml(String(values.amazon_password || ''))}" autocomplete="off">
-          </div>
-        </div>
-
-        <div class="config-actions" style="margin-bottom:0.75rem;">
-          <span class="config-status" id="config-status-${sourceId}"></span>
-          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
-          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+          ${hasCookie
+            ? 'FastChannels has an Amazon session cookie. Refresh it if Amazon playback stops working.'
+            : 'Connect your Amazon account to obtain the session cookie required for playback.'}
         </div>
 
         <div class="amazon-autologin-panel" id="amazon-autologin-${sourceId}">
           <div class="amazon-autologin-header">
             <button class="btn btn-run" type="button"
                     id="amazon-login-btn-${sourceId}"
-                    onclick="amazonStartLogin(${sourceId})">Auto-Login</button>
+                    ${hasCreds ? '' : 'disabled'}
+                    onclick="amazonStartLogin(${sourceId})">${hasCookie ? 'Refresh Cookie' : 'Get Cookie'}</button>
             <span class="amazon-status-text" id="amazon-status-${sourceId}">
-              ${hasCookie ? '<span style="color:var(--success-soft)">&#10003; Cookies on file</span>' : (hasCreds ? 'Credentials saved — click Auto-Login to fetch cookies.' : 'Save credentials above, then click Auto-Login.')}
+              ${hasCookie ? '<span style="color:var(--success-soft)">&#10003; Cookie ready</span>' : (hasCreds ? 'Account saved. Get a cookie to finish setup.' : 'Add your Amazon account below first.')}
             </span>
           </div>
           <div class="amazon-otp-row" id="amazon-otp-${sourceId}" style="display:none">
@@ -2329,27 +2316,25 @@
           </div>
         </div>
 
-        <details class="amazon-manual-details" style="margin-top:1rem;">
-          <summary style="cursor:pointer;color:var(--text-muted);font-size:0.82rem;user-select:none;">
-            Cookie (advanced)
-          </summary>
-          <div style="margin-top:0.6rem;">
-            <div style="font-size:0.82rem;color:var(--text-soft);margin-bottom:0.6rem;">
-              Auto-Login captures the session cookie automatically. You can also paste it manually below. DRM playback envelopes are derived per-channel during the scrape — no separate DRM token is needed.
+        <details class="amazon-account-details" ${hasCreds ? '' : 'open'}>
+          <summary>Account settings</summary>
+          <div class="fields-grid" style="margin-top:0.75rem;">
+            <div class="field">
+              <label for="cfg-${sourceId}-amazon_email">Amazon Email</label>
+              <input type="text" id="cfg-${sourceId}-amazon_email" data-key="amazon_email" data-secret="false"
+                     value="${escapeHtml(String(values.amazon_email || ''))}"
+                     placeholder="you@example.com" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="cfg-${sourceId}-amazon_password">Amazon Password</label>
+              <input type="password" id="cfg-${sourceId}-amazon_password" data-key="amazon_password" data-secret="true"
+                     value="${escapeHtml(String(values.amazon_password || ''))}" autocomplete="off">
             </div>
           </div>
-          <div style="margin-top:0.8rem;">
-            <div class="field field-full">
-              <label for="cfg-${sourceId}-cookie_header">Cookie Header</label>
-              <input type="password" id="cfg-${sourceId}-cookie_header" data-key="cookie_header" data-secret="true"
-                     value="${escapeHtml(String(values.cookie_header || ''))}"
-                     placeholder="Paste full Cookie: header value" autocomplete="off">
-              <div class="help">Open amazon.com in your browser → DevTools → Network → any request → copy the Cookie header value.</div>
-            </div>
-            <div class="config-actions">
-              <span></span>
-              <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Cookie</button>
-            </div>
+          <div class="config-actions">
+            <span class="config-status" id="config-status-${sourceId}"></span>
+            <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+            <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Account</button>
           </div>
         </details>`;
     }
@@ -2401,8 +2386,8 @@
         starting:    '<span style="color:var(--text-muted)">Starting browser…</span>',
         running:     `<span style="color:var(--text-muted)">${escapeHtml(detail || 'Running…')}</span>`,
         waiting_otp: `<span style="color:var(--warning-soft)">${escapeHtml(detail || 'Enter the one-time code below.')}</span>`,
-        success:     '<span style="color:var(--success-soft)">&#10003; Logged in — cookies saved.</span>',
-        captcha:     `<span style="color:var(--danger)">CAPTCHA blocked login. Use manual cookie fallback.</span>`,
+        success:     '<span style="color:var(--success-soft)">&#10003; Cookie refreshed.</span>',
+        captcha:     `<span style="color:var(--danger)">Amazon blocked automatic refresh. Try again later.</span>`,
         failed:      `<span style="color:var(--danger)">${escapeHtml(detail || 'Login failed.')}</span>`,
       };
 
