@@ -24,7 +24,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _STATUS_TTL = 600   # 10 min
-_RESULT_TTL = 120   # 2 min for the caller to consume
+# The result blob (cookies + PE) must outlive a full capture + a lazy poll. Capture alone
+# takes ~90s, so a 120s TTL could expire before amazon-auth-status polled, silently dropping
+# a freshly captured PE. Match the status TTL so the consumer always has time.
+_RESULT_TTL = 600   # 10 min for the caller to consume
 _OTP_TIMEOUT = 300  # seconds to wait for user to enter OTP
 
 _STEALTH_ARGS = [

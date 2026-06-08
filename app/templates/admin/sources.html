@@ -2264,7 +2264,7 @@
         }
 
         if (container) {
-          container.innerHTML = renderConfigFields(sourceId, sourceName, schema, values);
+          container.innerHTML = renderConfigFields(sourceId, sourceName, schema, values, cfg);
           container.classList.remove('hidden');
         }
       } catch (e) {
@@ -2331,9 +2331,14 @@
 
         <details class="amazon-manual-details" style="margin-top:1rem;">
           <summary style="cursor:pointer;color:var(--text-muted);font-size:0.82rem;user-select:none;">
-            Manual cookie (advanced / fallback)
+            Cookie (advanced)
           </summary>
           <div style="margin-top:0.6rem;">
+            <div style="font-size:0.82rem;color:var(--text-soft);margin-bottom:0.6rem;">
+              Auto-Login captures the session cookie automatically. You can also paste it manually below. DRM playback envelopes are derived per-channel during the scrape — no separate DRM token is needed.
+            </div>
+          </div>
+          <div style="margin-top:0.8rem;">
             <div class="field field-full">
               <label for="cfg-${sourceId}-cookie_header">Cookie Header</label>
               <input type="password" id="cfg-${sourceId}-cookie_header" data-key="cookie_header" data-secret="true"
@@ -2473,7 +2478,7 @@
         </div>`;
     }
 
-    function renderConfigFields(sourceId, sourceName, schema, values) {
+    function renderConfigFields(sourceId, sourceName, schema, values, cfg) {
       let primarySchema = schema;
       let advancedSchema = [];
       let advancedTitle = '';

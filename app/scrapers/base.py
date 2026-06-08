@@ -361,10 +361,16 @@ class BaseScraper(ABC):
         return {}
 
     @classmethod
-    def get_license_url(cls, config: dict) -> str | None:
+    def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
         """Returns the full license server URL (with any config-dependent query params).
-        Override in scrapers that need dynamic license URLs. Default uses license_url."""
+        Override in scrapers that need dynamic or per-channel license URLs."""
         return cls.license_url
+
+    @classmethod
+    def process_license_response(cls, response_bytes: bytes) -> bytes:
+        """Transform the raw license server response before returning it to the client.
+        Override in scrapers whose license server returns a non-standard format (e.g. JSON)."""
+        return response_bytes
 
     @classmethod
     def get_kodi_props(cls, base_url: str) -> dict[str, str]:

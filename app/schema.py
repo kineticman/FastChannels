@@ -458,6 +458,15 @@ def ensure_runtime_schema() -> None:
         # merge rows first to avoid violating the unique constraint.
         _merge_source_name(conn, "amazon-prime-free", "amazon_prime_free")
 
+        # Backfill stream_type='dash' for existing Amazon Prime Free channels
+        # so the Shaka player is selected in the preview panel without a re-scrape.
+        if "channels" in tables and "sources" in tables:
+            conn.execute(text(
+                "UPDATE channels SET stream_type = 'dash' "
+                "WHERE (stream_type IS NULL OR stream_type = 'hls') "
+                "AND source_id IN (SELECT id FROM sources WHERE name = 'amazon_prime_free')"
+            ))
+
         feed_rows = conn.execute(text("SELECT id, filters FROM feeds")).fetchall()
         for feed_id, raw_filters in feed_rows:
             if not raw_filters:

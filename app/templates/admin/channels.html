@@ -2206,23 +2206,23 @@
                 },
               },
             });
-            _previewShaka.getNetworkingEngine().registerRequestFilter(
-              (type, request) => {
-                if (type === 2 /* LICENSE */) {
-                  request.uris = [licenseUrl];
-                }
-              }
-            );
           }
           _previewShaka.addEventListener('error', (event) => {
             const err = event.detail;
             if (status) {
-              if (err.code === 6007 || err.code === 6014) {
+              if (err.code === 6007) {
+                status.textContent = 'DRM error: CDM rejected the license response (key may have expired or playback envelope needs refresh).';
+              } else if (err.code === 6008) {
+                status.textContent = 'DRM: license server rejected the request (likely expired playback envelope — re-run the snippet on Amazon\'s live TV page).';
+              } else if (err.code === 6014) {
                 status.textContent = 'DRM license request failed. The license server rejected the challenge.';
+              } else if (err.code === 6020) {
+                status.textContent = 'DRM: failed to fetch server certificate (certUrl may be unreachable).';
               } else {
                 status.textContent = `Shaka error ${err.code}: ${err.message || 'playback failed'}`;
               }
             }
+            console.error('[Shaka] error', err.code, err);
           });
           return _previewShaka.load(playUrl, null, 'application/dash+xml');
         }).then(() => {

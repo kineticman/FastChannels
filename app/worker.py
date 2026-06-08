@@ -2482,6 +2482,10 @@ if __name__ == '__main__':
                           id='dvr_epg_refresh', max_instances=1, coalesce=True,
                           misfire_grace_time=3600)
 
+        # Amazon DRM no longer uses a global playbackEnvelope: each channel's PE is harvested
+        # from the livetv carousel during the normal scrape (and re-minted via enrichItemMetadata
+        # on demand), so there is no separate PE auto-refresh job.
+
         scheduler.start()
         logger.info('Scheduler started — checking sources every 60s')
         with flask_app.app_context():

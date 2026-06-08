@@ -1065,6 +1065,72 @@ def custom_segment_proxy():
         abort(502)
 
 
+@play_bp.route('/play/amazon_prime_free/<channel_id>/dash.mpd')
+def amazon_dash_proxy(channel_id: str):
+    """
+    DASH manifest proxy for Amazon Prime Free channels.
+
+    Amazon's CDN allows only Origin: https://www.amazon.com, so browsers
+    can't fetch the MPD directly.  This endpoint proxies the manifest through
+    our server with permissive CORS headers and rewrites relative <BaseURL>
+    elements to absolute CDN URLs so Shaka can resolve segment URLs.
+    The endpoint is polled every 5 s by Shaka for live content updates.
+    """
+    from urllib.parse import unquote as _unquote, urljoin as _urljoin, quote as _quote
+    from ..scrapers.amazon_prime_free import AmazonPrimeFreeScraper
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'amazon_prime_free', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper = AmazonPrimeFreeScraper(config=channel.source.config or {})
+    dash_url = scraper.resolve(channel.stream_url)
+
+    if scraper._pending_config_updates:
+        try:
+            from app.config_store import persist_source_config_updates
+            persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+        except Exception:
+            pass
+
+    if not dash_url or not dash_url.startswith('http'):
+        logger.warning('[amazon-dash] no resolved URL for %s', raw_id[:40])
+        abort(502)
+
+    try:
+        r = _requests.get(dash_url, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[amazon-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
+        abort(502)
+
+    # Rewrite relative <BaseURL> elements to absolute CDN URLs.
+    # Amazon's MPD uses relative paths (e.g. ../../../../iad-nitro/...) that
+    # Shaka would try to resolve against our proxy origin — not the CDN.
+    def _abs(m):
+        url = m.group(1).strip()
+        if not url.startswith('http'):
+            url = _urljoin(dash_url, url)
+        return f'<BaseURL>{url}</BaseURL>'
+
+    mpd = re.sub(r'<BaseURL>([^<]+)</BaseURL>', _abs, r.text)
+
+    return Response(
+        mpd,
+        mimetype='application/dash+xml',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 @play_bp.route('/play/<source_name>/license', methods=['POST'])
 def license_proxy(source_name: str):
     """DRM license proxy — forwards Widevine challenges to the scraper's license_url
@@ -1083,18 +1149,88 @@ def license_proxy(source_name: str):
     if len(challenge) > 65536:
         abort(413)
     cfg = source.config or {}
-    license_url = scraper_cls.get_license_url(cfg)
+    channel_id = request.args.get('channel_id') or None
+    license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id)
     if not license_url:
         abort(404)
-    channel_id = request.args.get('channel_id') or None
     body, headers = scraper_cls.prepare_license_request(challenge, cfg, channel_id=channel_id)
     headers.setdefault('Content-Type', 'application/octet-stream')
     try:
+        # Cache the raw challenge in Redis so test scripts can replay it
+        try:
+            import redis as _redis, base64 as _b64
+            from flask import current_app as _ca
+            _rc = _redis.from_url(_ca.config['REDIS_URL'])
+            _rc.setex(f'amz_challenge:{channel_id}', 300, _b64.b64encode(challenge))
+        except Exception:
+            pass
         r = _requests.post(license_url, data=body, headers=headers, timeout=15)
-        logger.info('[license-proxy] %s channel=%s -> HTTP %s', source_name, channel_id or '-', r.status_code)
-        return Response(r.content, status=r.status_code, content_type=r.headers.get('Content-Type', 'application/octet-stream'))
+        logger.info('[license-proxy] %s channel=%s -> HTTP %s (%d bytes): %s',
+                    source_name, channel_id or '-', r.status_code,
+                    len(r.content), r.content[:200])
+        response_bytes = scraper_cls.process_license_response(r.content)
+        # If Amazon returned a SERVICE_CERTIFICATE (Widevine type 5), cache it for
+        # the /certificate endpoint so Shaka can pre-fetch it via serverCertificateUri.
+        if response_bytes and response_bytes[:2] == b'\x08\x05':
+            try:
+                import redis as _redis2
+                from flask import current_app as _ca2
+                _rc2 = _redis2.from_url(_ca2.config['REDIS_URL'])
+                _rc2.setex(f'amz_service_cert:{source_name}', 86400, response_bytes)
+            except Exception:
+                pass
+        return Response(response_bytes, status=r.status_code, content_type='application/octet-stream')
     except Exception as e:
         logger.warning('[license-proxy] %s request failed: %s', source_name, e)
+        abort(502)
+
+
+@play_bp.route('/play/<source_name>/certificate', methods=['GET'])
+def license_certificate(source_name: str):
+    """Return the Widevine service certificate for this source so Shaka can configure
+    privacy-mode license requests (serverCertificateUri).  Amazon returns the same static
+    certificate for all channels — we cache it in Redis after the first license round-trip
+    and fall back to fetching it on demand with a dummy SERVICE_CERTIFICATE_REQUEST."""
+    from ..models import Source
+    scraper_cls = registry.get(source_name)
+    if not scraper_cls or not getattr(scraper_cls, 'license_url', None):
+        abort(404)
+    source = Source.query.filter_by(name=source_name).first()
+    if not source:
+        abort(404)
+    # Try cache first
+    try:
+        import redis as _redis
+        from flask import current_app as _ca
+        _rc = _redis.from_url(_ca.config['REDIS_URL'])
+        cached = _rc.get(f'amz_service_cert:{source_name}')
+        if cached:
+            return Response(cached, status=200, content_type='application/octet-stream')
+    except Exception:
+        pass
+    # Not cached — fetch live with a minimal SERVICE_CERTIFICATE_REQUEST challenge
+    cfg = source.config or {}
+    dummy_challenge = b'\x08\x04'  # Widevine SERVICE_CERTIFICATE_REQUEST
+    channel_id = request.args.get('channel_id') or None
+    license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id)
+    if not license_url:
+        abort(404)
+    body, headers = scraper_cls.prepare_license_request(dummy_challenge, cfg, channel_id=channel_id)
+    try:
+        r = _requests.post(license_url, data=body, headers=headers, timeout=15)
+        cert_bytes = scraper_cls.process_license_response(r.content)
+        if cert_bytes and cert_bytes[:2] == b'\x08\x05':
+            try:
+                import redis as _redis2
+                from flask import current_app as _ca2
+                _rc2 = _redis2.from_url(_ca2.config['REDIS_URL'])
+                _rc2.setex(f'amz_service_cert:{source_name}', 86400, cert_bytes)
+            except Exception:
+                pass
+            return Response(cert_bytes, status=200, content_type='application/octet-stream')
+        abort(502)
+    except Exception as e:
+        logger.warning('[cert] %s fetch failed: %s', source_name, e)
         abort(502)
 
 

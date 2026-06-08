@@ -1439,7 +1439,8 @@ def get_source_config(source_id):
         if config_complete else
         ('required' if scraper_cls and getattr(scraper_cls, 'config_required', False) else 'optional')
     )
-    return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete, 'config_status': config_status})
+    return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
+                    'config_status': config_status})
 
 
 @api_bp.route('/sources/<int:source_id>/config', methods=['POST'])
@@ -2089,6 +2090,15 @@ def preview_channel(channel_id):
         play_url = f'/play/{ch.source.name}/{ch.source_channel_id}.m3u8'
     if not preview_url:
         preview_url = play_url
+
+    # Amazon DASH: CDN locks CORS to amazon.com, so route the preview through
+    # our server-side manifest proxy which strips that restriction.
+    if (
+        not preview_url
+        or (ch.source and ch.source.name == 'amazon_prime_free')
+    ) and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/amazon_prime_free/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
     future_count = Program.query.filter(
         Program.channel_id == ch.id,

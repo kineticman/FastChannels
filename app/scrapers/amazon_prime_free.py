@@ -37,9 +37,11 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
     stream_audit_enabled = True
     audit_requires_config = ['cookie_header']
+    license_url = 'https://atv-ps.amazon.com/playback/drm-linear/GetWidevineLicense'
     kodi_props = {
         'inputstream': 'inputstream.adaptive',
         'inputstream.adaptive.manifest_type': 'mpd',
+        'inputstream.adaptive.license_type': 'com.widevine.alpha',
     }
 
     phase_timeouts = {
@@ -187,6 +189,254 @@ class AmazonPrimeFreeScraper(BaseScraper):
             raw_cache if isinstance(raw_cache, dict) else {}
         )
 
+        # Per-channel playback envelopes harvested from the livetv carousel during scrape:
+        # {station_gti: {"pe": str, "expiry": ms, "asin": str}}. Each channel's PE is bound to
+        # THAT channel's content — using one channel's PE for another returns the wrong stream.
+        # The PE TTL is ~3 h and the scrape interval is well under that, so a scraped PE is
+        # normally still valid at play time; if expired we re-mint via enrichItemMetadata (ASIN).
+        raw_cpe = self.config.get("channel_pe") or {}
+        self._channel_pe: dict[str, dict[str, Any]] = (
+            raw_cpe if isinstance(raw_cpe, dict) else {}
+        )
+
+    # ------------------------------------------------------------------
+    # DRM / license support
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
+        from urllib.parse import urlencode
+        import uuid as _uuid
+        params = {
+            'deviceID': config.get('prs_device_id', '') or '',
+            'deviceTypeID': 'AOAGZA014O5RE',
+            'gascEnabled': 'false',
+            'marketplaceID': 'ATVPDKIKX0DER',
+            'uxLocale': 'en_US',
+            'firmware': '1',
+            'nerid': _uuid.uuid4().hex[:18] + '00',
+        }
+        if channel_id:
+            params['titleId'] = channel_id
+        return f'{cls.license_url}?{urlencode(params)}'
+
+    # The player's GetLivePlaybackResources returns a *coherent* session: manifest URLs,
+    # sessionHandoffToken, and the Widevine service certificate all keyed to the same content
+    # keys. The Widevine license server only entitles keys from this endpoint, so both stream
+    # resolution (resolve()) and SHT acquisition use it. The catalog GetPlaybackResources
+    # endpoint returns a manifest with a DIFFERENT, unentitled KID — licensing that KID against
+    # this session's SHT returns 403 Denied. Captured from the real web player; see
+    # dev/lab_notes_amazon_drm.md.
+    _LIVE_PRS_URL = "https://atv-ps.amazon.com/playback/prs/GetLivePlaybackResources"
+
+    @classmethod
+    def _channel_pe_for(cls, config: dict, title_id: str) -> str | None:
+        """Return the playbackEnvelope bound to `title_id`: the value scraped from the livetv
+        carousel if still valid, else a freshly minted one via enrichItemMetadata (cookies
+        only, no browser)."""
+        import time as _time
+        entry = (config.get('channel_pe') or {}).get(title_id) or {}
+        pe = entry.get('pe')
+        # expiry is epoch-ms; refresh a minute early to avoid races
+        if pe and float(entry.get('expiry', 0)) / 1000.0 > _time.time() + 60:
+            return pe
+        fresh = cls._enrich_pe(config, entry.get('asin'))
+        return fresh or pe or None
+
+    @classmethod
+    def _enrich_pe(cls, config: dict, asin: str | None) -> str | None:
+        """Mint a fresh per-channel playbackEnvelope for `asin` via the web enrichItemMetadata
+        API (uses session cookies; no playbackEnvelope or browser required)."""
+        if not asin:
+            return None
+        import requests as _req
+        cookie = config.get('cookie_header', '') or ''
+        ua = ('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+              '(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36')
+        data = {
+            'metadataToEnrich': json.dumps({'placement': 'HOVER', 'playback': True}),
+            'titleIDsToEnrich': json.dumps([asin]),
+            'currentUrl': 'https://www.amazon.com/gp/video/livetv',
+        }
+        try:
+            r = _req.post('https://www.amazon.com/gp/video/api/enrichItemMetadata', data=data,
+                          headers={'Content-Type': 'application/x-www-form-urlencoded',
+                                   'X-Requested-With': 'XMLHttpRequest', 'Cookie': cookie,
+                                   'Referer': 'https://www.amazon.com/gp/video/livetv',
+                                   'User-Agent': ua}, timeout=12)
+            node = (r.json().get('enrichments') or {}).get(asin) or {}
+            for pa in (node.get('playbackActions') or []):
+                pe = (pa.get('playbackExperienceMetadata') or {}).get('playbackEnvelope')
+                if pe:
+                    logger.info('[amazon] minted fresh PE for %s via enrich (%d chars)', asin, len(pe))
+                    return pe
+        except Exception as exc:
+            logger.warning('[amazon] enrichItemMetadata failed for %s: %s', asin, exc)
+        return None
+
+    @classmethod
+    def _get_live_playback_resources(cls, config: dict, title_id: str,
+                                     pe: str | None = None) -> dict | None:
+        """POST GetLivePlaybackResources with the full multi-resource body and return the
+        parsed response (livePlaybackUrls + sessionization + widevineServiceCertificate), or
+        None on error. `pe` must be the per-channel playbackEnvelope for `title_id` — the
+        endpoint returns whatever content the PE is bound to, ignoring title_id otherwise."""
+        import uuid as _uuid
+        import requests as _req
+        pe = pe or cls._channel_pe_for(config, title_id)
+        if not pe:
+            return None
+        cookie = config.get('cookie_header', '') or ''
+        device_id = config.get('prs_device_id', '') or ''
+        ua = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+              '(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36')
+        params = {
+            'deviceID': device_id, 'deviceTypeID': 'AOAGZA014O5RE', 'gascEnabled': 'false',
+            'marketplaceID': 'ATVPDKIKX0DER', 'uxLocale': 'en_US', 'firmware': '1',
+            'titleId': title_id, 'nerid': _uuid.uuid4().hex[:18] + '00',
+        }
+        body = {
+            'globalParameters': {
+                'deviceCapabilityFamily': 'WebPlayer',
+                'playbackEnvelope': pe,
+                'capabilityDiscriminators': {
+                    'operatingSystem': {'name': 'Windows', 'version': 'unknown'},
+                    'middleware': {'name': 'Chrome', 'version': '146.0.0.0'},
+                    'nativeApplication': {'name': 'Chrome', 'version': '146.0.0.0'},
+                    'hfrControlMode': 'Legacy',
+                    'displayResolution': {'height': 1080, 'width': 1920},
+                },
+                'sessionTrackingMode': 'WITH_SESSION_HANDOFF',
+                'userWatchSessionId': str(_uuid.uuid4()),
+            },
+            'widevineServiceCertificateRequest': {},
+            'playbackDataRequest': {},
+            # maxVideoResolution '480p' makes Amazon issue an SD-policy key (single KID, policy
+            # marker "SD", reps up to 576p), which releases to L3 software CDMs (desktop
+            # Chrome/Shaka, Linux Kodi). A higher cap yields an HD-policy key that L3 cannot
+            # license — Amazon then returns 403 {"code":"Downgrade.Sd"}. Real TV clients with L1
+            # hardware are unaffected by the cap beyond the 576p ceiling.
+            'livePlaybackUrlsRequest': {
+                'device': {
+                    'firmwareVersion': 'UNKNOWN', 'hdcpLevel': '1.4',
+                    'liveManifestTypes': ['Accumulating', 'Live'],
+                    'maxVideoResolution': '480p', 'operatingSystem': 'Windows',
+                    'supportedStreamingTechnologies': ['DASH'],
+                    'streamingTechnologies': {'DASH': {
+                        'bitrateAdaptations': ['CBR', 'CVBR'], 'codecs': ['H264'],
+                        'drmKeyScheme': 'DualKey', 'drmType': 'Widevine',
+                        'dynamicRangeFormats': ['None'],
+                        'edgeDeliveryAuthorizationSchemes': ['PVExchangeV1', 'Transparent'],
+                        'fragmentRepresentations': ['ByteOffsetRange', 'SeparateFile'],
+                        'frameRates': ['Standard'],
+                    }},
+                    'thumbnailRepresentations': ['None'],
+                },
+                'playbackSettingsRequest': {
+                    'firmware': 'UNKNOWN', 'playerType': 'xp',
+                    'responseFormatVersion': '1.0.0', 'titleId': title_id,
+                },
+            },
+        }
+        try:
+            r = _req.post(cls._LIVE_PRS_URL, params=params, json=body, headers={
+                'Content-Type': 'application/json', 'Cookie': cookie,
+                'Origin': 'https://www.amazon.com', 'Referer': 'https://www.amazon.com/',
+                'User-Agent': ua,
+            }, timeout=12)
+            data = r.json()
+        except Exception as exc:
+            logger.warning('[amazon] GetLivePlaybackResources failed for %s: %s', title_id[:40], exc)
+            return None
+        if data.get('globalError'):
+            logger.warning('[amazon] GetLivePlaybackResources globalError for %s: %s',
+                           title_id[:40], data['globalError'])
+            return None
+        return data
+
+    @classmethod
+    def _get_session_handoff_token(cls, config: dict, channel_id: str) -> str | None:
+        """Return a sessionHandoffToken coherent with the manifest resolve() serves: use the
+        browser-cached value if fresh (< 4 min), else fetch a fresh one from the same
+        GetLivePlaybackResources endpoint using this channel's playbackEnvelope."""
+        import time as _time
+        pe = cls._channel_pe_for(config, channel_id)
+        if not pe:
+            return None
+        shtc = config.get('sht_cache') or {}
+        cached = shtc.get(channel_id) if channel_id else None
+        if cached and isinstance(cached, dict):
+            age = _time.time() - float(cached.get('ts', 0))
+            if age < 240 and cached.get('token'):
+                logger.info('[amazon] using cached sessionHandoffToken for %s (age=%.0fs)', channel_id, age)
+                return cached['token']
+        data = cls._get_live_playback_resources(config, channel_id, pe)
+        if not data:
+            return None
+        token = (data.get('sessionization') or {}).get('sessionHandoffToken')
+        if token:
+            logger.info('[amazon] fresh SHT via GetLivePlaybackResources for %s (%d chars)',
+                        channel_id, len(token))
+            return token
+        logger.warning('[amazon] GetLivePlaybackResources missing sessionHandoffToken for %s', channel_id)
+        return None
+
+    @classmethod
+    def prepare_license_request(cls, challenge: bytes, config: dict, channel_id: str | None = None) -> tuple[bytes, dict]:
+        import base64 as _b64
+        cookie = config.get('cookie_header', '') or ''
+        # The license body must carry THIS channel's playbackEnvelope — the one the manifest
+        # and SHT were derived from — or Amazon returns 403 Denied.
+        playback_envelope = cls._channel_pe_for(config, channel_id) if channel_id else ''
+
+        session_handoff_token = None
+        if playback_envelope and channel_id:
+            session_handoff_token = cls._get_session_handoff_token(config, channel_id)
+
+        body_dict: dict = {
+            'includeHdcpTestKey': True,
+            'licenseChallenge': _b64.b64encode(challenge).decode('ascii'),
+        }
+        if playback_envelope:
+            body_dict['playbackEnvelope'] = playback_envelope
+        if session_handoff_token:
+            body_dict['sessionHandoffToken'] = session_handoff_token
+
+        body = json.dumps(body_dict).encode('utf-8')
+        headers = {
+            'Cookie': cookie,
+            'Content-Type': 'text/plain',
+            'Origin': 'https://www.amazon.com',
+            'Referer': 'https://www.amazon.com/',
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
+            ),
+        }
+        return body, headers
+
+    @classmethod
+    def process_license_response(cls, response_bytes: bytes) -> bytes:
+        """Amazon returns JSON with base64-encoded license at widevineLicense.license."""
+        try:
+            import base64 as _b64
+            data = json.loads(response_bytes)
+            wv = data.get('widevineLicense') or {}
+            encoded = (wv.get('license') if isinstance(wv, dict) else '') or ''
+            if encoded:
+                return _b64.b64decode(encoded + '==')
+        except Exception:
+            pass
+        return response_bytes
+
+    @classmethod
+    def get_kodi_props_for_channel(cls, base_url: str, source_channel_id: str) -> dict[str, str]:
+        props = dict(cls.kodi_props)
+        props['inputstream.adaptive.license_key'] = (
+            f'{base_url}/play/amazon_prime_free/license?channel_id={source_channel_id}||R{{SSM}}|'
+        )
+        return props
+
     def fetch_channels(self) -> list[ChannelData]:
         self._station_cache = {}
 
@@ -197,6 +447,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
         html = page.text
         stations = self._extract_initial_stations(html)
+        self._harvest_pe_from_html(html)
 
         seed = self._extract_pagination_seed(html)
         if seed:
@@ -218,19 +469,19 @@ class AmazonPrimeFreeScraper(BaseScraper):
         channels.sort(key=lambda c: c.name.lower())
         logger.info("[%s] %d channels", self.source_name, len(channels))
 
-        # Bulk-resolve all stream URLs via direct PRS HTTP calls (~30 s for 884 channels).
-        if self._cookie_header and channels:
-            station_ids = [ch.source_channel_id for ch in channels]
-            url_map = self._resolve_channels(station_ids)
-            if url_map:
-                expires_at = time.time() + self._STREAM_URL_TTL
-                for gip, url in url_map.items():
-                    self._stream_url_cache[gip] = {"url": url, "expires_at": expires_at}
-                self._pending_config_updates["stream_url_cache"] = dict(self._stream_url_cache)
-                logger.info("[%s] cached %d/%d stream URLs (TTL ~%.0f min)",
-                            self.source_name, len(url_map), len(station_ids),
-                            self._STREAM_URL_TTL / 60)
+        # Persist the per-channel playback envelopes harvested from the carousel. Prune entries
+        # for channels no longer present so the map doesn't grow unbounded.
+        if self._channel_pe:
+            live_ids = {c.source_channel_id for c in channels}
+            self._channel_pe = {k: v for k, v in self._channel_pe.items() if k in live_ids}
+            self._pending_config_updates["channel_pe"] = dict(self._channel_pe)
+            logger.info("[%s] harvested playback envelopes for %d/%d channels",
+                        self.source_name, len(self._channel_pe), len(channels))
 
+        # Stream URLs are resolved lazily at play time in resolve() via GetLivePlaybackResources
+        # (the only endpoint whose manifest KID the Widevine license path entitles). No bulk
+        # pre-warm: that requires a valid playbackEnvelope per channel and the catalog URLs it
+        # produced were unplayable (wrong KID → 403 Denied at license time).
         return channels
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -263,6 +514,9 @@ class AmazonPrimeFreeScraper(BaseScraper):
         return programs
 
     def resolve(self, raw_url: str) -> str:
+        """Resolve a playable, DRM-entitled DASH manifest at play time via
+        GetLivePlaybackResources, using THIS channel's playbackEnvelope. The manifest's KID is
+        entitled by the license proxy's SHT session (also fetched with this channel's PE)."""
         if not raw_url.startswith("primefree://"):
             return raw_url
 
@@ -272,16 +526,19 @@ class AmazonPrimeFreeScraper(BaseScraper):
             logger.debug("[%s] resolve cache hit for %s", self.source_name, station_id[:40])
             return cached["url"]
 
-        # Cache miss or expired — resolve single channel on-demand.
         if not self._cookie_header:
             logger.warning("[%s] no cookie_header — cannot resolve stream URL for %s",
                            self.source_name, station_id[:40])
             return raw_url
+        pe = self._channel_pe_for(self.config, station_id)
+        if not pe:
+            logger.warning("[%s] no playback envelope for %s — cannot resolve entitled stream "
+                           "(re-scrape to refresh)", self.source_name, station_id[:40])
+            return None
 
-        logger.info("[%s] cache miss — resolving stream URL for %s", self.source_name, station_id[:40])
-        url_map = self._resolve_channels([station_id])
-        url = url_map.get(station_id, "")
-        if url and not url.startswith("prs_error:"):
+        logger.info("[%s] resolving live stream for %s", self.source_name, station_id[:40])
+        url = self._resolve_live(station_id, pe)
+        if url:
             self._stream_url_cache[station_id] = {
                 "url": url,
                 "expires_at": time.time() + self._STREAM_URL_TTL,
@@ -291,8 +548,55 @@ class AmazonPrimeFreeScraper(BaseScraper):
             self._pending_config_updates["stream_url_cache"] = updated
             return url
 
-        logger.warning("[%s] could not resolve stream URL for %s", self.source_name, station_id[:40])
+        logger.warning("[%s] could not resolve live stream for %s", self.source_name, station_id[:40])
         return None
+
+    def audit_resolve(self, raw_url: str) -> str:
+        """Liveness-only resolution for the stream audit. Uses the catalog endpoint
+        (cookies only, no playbackEnvelope) since the audit just checks the manifest is
+        reachable — it does not exercise DRM. Keeps audits independent of PE freshness."""
+        if not raw_url.startswith("primefree://"):
+            return raw_url
+        station_id = raw_url[len("primefree://"):]
+        if not self._cookie_header:
+            return raw_url
+        url = self._resolve_channels([station_id]).get(station_id, "")
+        return url if (url and not url.startswith("prs_error:")) else None
+
+    def _resolve_live(self, title_id: str, pe: str | None = None) -> str | None:
+        """Resolve the live DASH manifest URL from a GetLivePlaybackResources session."""
+        data = self._get_live_playback_resources(self.config, title_id, pe)
+        if not data:
+            return None
+        url_sets = data.get("livePlaybackUrls", {}).get("urlSets", {})
+        default_id = data.get("livePlaybackUrls", {}).get("defaultUrlSetId", "")
+        url = self._pick_manifest_from_urlsets(url_sets, default_id)
+        if url:
+            return url
+        # Fallback: scan the response for a manifest URL (prefer a Qwilt host for clean URLs).
+        blob = json.dumps(data)
+        mpds = re.findall(r'https://[^"\\]+?\.mpd[^"\\]*', blob)
+        if not mpds:
+            return None
+        return next((u for u in mpds if "qw" in u.lower()), mpds[0])
+
+    @staticmethod
+    def _pick_manifest_from_urlsets(url_sets: dict, default_id: str = "") -> str:
+        """Pick a manifest URL from a PRS urlSets dict: prefer Qwilt CDN (clean URL, no
+        obfuscating auth tokens), then the default set, then the first available."""
+        for sdata in url_sets.values():
+            m = sdata.get("urls", {}).get("manifest", {})
+            if m.get("cdn") == "Qwilt" and m.get("url"):
+                return m["url"]
+        if default_id:
+            u = url_sets.get(default_id, {}).get("urls", {}).get("manifest", {}).get("url", "")
+            if u:
+                return u
+        for sdata in url_sets.values():
+            u = sdata.get("urls", {}).get("manifest", {}).get("url", "")
+            if u:
+                return u
+        return ""
 
     # ------------------------------------------------------------------
     # Direct HTTP stream URL resolution (Amazon PRS endpoint)
@@ -345,7 +649,13 @@ class AmazonPrimeFreeScraper(BaseScraper):
                         "deviceDrmOverride": "CENC",
                         "deviceAdInsertionTypeOverride": "SSAI",
                         "deviceVideoCodecOverride": "H264",
-                        "deviceVideoQualityOverride": "HD",
+                        # SD (not HD): Amazon labels the Widevine key with an HD/SD policy
+                        # marker (PSSH protobuf field 5). HD keys are released only to L1
+                        # hardware CDMs — desktop Chrome/Shaka and Linux Kodi run L3 software
+                        # CDMs and get 403 {"code":"Denied"}. SD-policy keys release to L3,
+                        # so SD plays on every client (capped ~576p vs 1080p). See
+                        # dev/lab_notes_amazon_drm.md.
+                        "deviceVideoQualityOverride": "SD",
                         "liveManifestType": "accumulating,live",
                         "playerAttributes": json.dumps({
                             "middlewareName": "Chrome",
@@ -438,6 +748,54 @@ class AmazonPrimeFreeScraper(BaseScraper):
         logger.info("[%s] extracted %d stations from initial HTML", self.source_name, len(stations))
         return stations
 
+    # ------------------------------------------------------------------
+    # Per-channel playbackEnvelope harvesting
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _asin_from_fallback(url: str) -> str:
+        m = re.search(r'/gp/video/detail/([A-Za-z0-9]{8,})', url or '')
+        return m.group(1) if m else ''
+
+    def _record_pe(self, gti: str, meta: dict, fallback_url: str = '') -> None:
+        pe = (meta or {}).get('playbackEnvelope')
+        if gti and pe:
+            self._channel_pe[str(gti)] = {
+                'pe': pe,
+                'expiry': (meta or {}).get('expiryTime', 0),
+                'asin': self._asin_from_fallback(fallback_url),
+            }
+
+    def _harvest_pe_from_entity(self, entity: dict) -> None:
+        """Capture a channel's playbackEnvelope from a paginate carousel entity."""
+        for pa in (entity.get('playbackActions') or []):
+            meta = pa.get('playbackExperienceMetadata') or {}
+            gti = pa.get('channelId') or meta.get('channelId')
+            if gti and meta.get('playbackEnvelope'):
+                self._record_pe(gti, meta, pa.get('fallbackUrl', ''))
+                return
+
+    def _harvest_pe_from_html(self, html: str) -> None:
+        """Capture playbackEnvelopes for the initial-page channels embedded in the livetv HTML.
+        In a playbackAction object `channelId` and `fallbackUrl` precede the nested
+        `playbackExperienceMetadata.playbackEnvelope`, so associate each envelope with the
+        nearest preceding channelId in the same object."""
+        for m in re.finditer(r'"playbackEnvelope":"([^"]+)"', html):
+            pe = m.group(1)
+            back = html[max(0, m.start() - 1500):m.start()]
+            cids = re.findall(r'"channelId":"(amzn1\.dv\.gti\.[0-9a-f-]+)"', back)
+            if not cids:
+                continue
+            gti = cids[-1]
+            if gti in self._channel_pe:
+                continue
+            exp = re.search(r'"expiryTime":(\d+)', html[m.start():m.start() + 400])
+            fb = re.findall(r'"fallbackUrl":"([^"]+)"', back)
+            self._record_pe(gti, {
+                'playbackEnvelope': pe,
+                'expiryTime': int(exp.group(1)) if exp else 0,
+            }, fb[-1] if fb else '')
+
     def _extract_pagination_seed(self, html: str) -> dict[str, Any] | None:
         # All three fields live in the same JSON object in the page HTML.
         # There may be multiple pagination blocks (e.g. "Live events" and "Your stations").
@@ -509,6 +867,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
                 station_id = self._station_id(station)
                 if station_id:
                     stations[station_id] = station
+                    self._harvest_pe_from_entity(entity)
 
             has_more = bool(payload.get("hasMoreItems"))
 
@@ -599,6 +958,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
             logo_url=station.get("logo"),
             category=category,
             language=infer_language_from_metadata(name, category),
+            stream_type='dash',
         )
 
     def _program_from_schedule(self, source_channel_id: str, airing: dict[str, Any]) -> ProgramData | None:
