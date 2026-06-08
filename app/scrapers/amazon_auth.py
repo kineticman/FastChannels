@@ -400,6 +400,7 @@ def run_amazon_auth(
                 # ── Verify success ─────────────────────────────────────────
                 if not _is_signed_in(page):
                     final_url = page.url
+                    _dump_page_debug(page, 'verify_failed')
                     if _is_captcha_page(page):
                         _write_status(r, source_id, 'captcha',
                                       'Amazon served a CAPTCHA during login. Please paste cookies manually.')
