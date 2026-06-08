@@ -1139,13 +1139,23 @@ def amazon_dash_proxy(channel_id: str):
     # Rewrite relative <BaseURL> elements to absolute CDN URLs.
     # Amazon's MPD uses relative paths (e.g. ../../../../iad-nitro/...) that
     # Shaka would try to resolve against our proxy origin — not the CDN.
+    # The regex handles optional XML attributes (e.g. serviceLocation=, dvb:priority=).
     def _abs(m):
         url = m.group(1).strip()
         if not url.startswith('http'):
             url = _urljoin(dash_url, url)
         return f'<BaseURL>{url}</BaseURL>'
 
-    mpd = re.sub(r'<BaseURL>([^<]+)</BaseURL>', _abs, r.text)
+    mpd = re.sub(r'<BaseURL[^>]*>([^<]+)</BaseURL>', _abs, r.text)
+
+    # Some Amazon manifests have no <BaseURL> at all and use relative paths in
+    # SegmentTemplate media/initialization attributes.  Without a base, the DASH
+    # player resolves those paths against our proxy URL and requests segments from
+    # us (→ 404).  Inject a global <BaseURL> pointing to the CDN directory so
+    # segment requests go directly to the CDN.
+    if not re.search(r'<BaseURL\b', mpd):
+        cdn_base = _urljoin(dash_url, '.')  # CDN directory containing the .mpd
+        mpd = mpd.replace('<Period ', f'<BaseURL>{cdn_base}</BaseURL>\n  <Period ', 1)
 
     return Response(
         mpd,
