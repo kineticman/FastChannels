@@ -88,7 +88,7 @@ class SlingScraper(BaseScraper):
 
     @classmethod
     def prepare_license_request(
-        cls, challenge: bytes, config: dict, channel_id: str | None = None
+        cls, challenge: bytes, config: dict, channel_id: str | None = None, **kwargs
     ) -> tuple[bytes, dict]:
         """Wrap the Widevine challenge in Sling's JSON envelope.
         No auth token needed — any UUID works as user_id for Freestream channels."""

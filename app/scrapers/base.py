@@ -390,7 +390,7 @@ class BaseScraper(ABC):
 
     @classmethod
     def prepare_license_request(
-        cls, challenge: bytes, config: dict, channel_id: str | None = None
+        cls, challenge: bytes, config: dict, channel_id: str | None = None, **kwargs
     ) -> tuple[bytes, dict]:
         """Returns (body, headers) for a license request.
         Override in scrapers that need auth headers or challenge body transforms."""
