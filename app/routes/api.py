@@ -1531,7 +1531,9 @@ def amazon_auth_status(source_id):
     data = json.loads(raw)
 
     if data.get('status') == 'success':
-        result_raw = r.get(f'amazon:auth:result:{source_id}')
+        # Atomically claim the result — only the first poller that wins the
+        # getdel persists the cookies; subsequent polls see None and skip.
+        result_raw = r.getdel(f'amazon:auth:result:{source_id}')
         if result_raw:
             try:
                 result = json.loads(result_raw)
@@ -1542,7 +1544,6 @@ def amazon_auth_status(source_id):
                     cfg['browser_storage_state'] = result['storage_state']
                     source.config = cfg
                     db.session.commit()
-                    r.delete(f'amazon:auth:result:{source_id}')
                     logger.info('[amazon-auth] persisted cookies to source config source_id=%s', source_id)
             except Exception as exc:
                 logger.error('[amazon-auth] failed to persist result: %s', exc)

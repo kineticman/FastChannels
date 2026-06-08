@@ -816,6 +816,10 @@ def custom_manifest_proxy(channel_id: str):
                         rdb.delete(rkey)
                     except Exception:
                         pass
+                    # Clear the stale tracker so the timer restarts after the
+                    # master re-fetch, regardless of whether the new master is a
+                    # true master playlist or a variant-level manifest.
+                    _CUSTOM_LAST_FRESH_SEG.pop(channel.id, None)
                     text = None
             else:
                 logger.info('[custom-proxy] cached variant HTTP %s for channel %d (%s), re-fetching master',
@@ -1199,33 +1203,33 @@ def license_proxy(source_name: str):
 
     body, headers = scraper_cls.prepare_license_request(challenge, cfg, channel_id=channel_id, sht=sht)
     headers.setdefault('Content-Type', 'application/octet-stream')
-    try:
-        # Cache the raw challenge in Redis so test scripts can replay it
-        try:
-            import redis as _redis, base64 as _b64
-            from flask import current_app as _ca
-            _rc = _redis.from_url(_ca.config['REDIS_URL'])
-            _rc.setex(f'amz_challenge:{channel_id}', 300, _b64.b64encode(challenge))
-        except Exception:
-            pass
-        r = _requests.post(license_url, data=body, headers=headers, timeout=15)
-        logger.debug('[license-proxy] %s channel=%s -> HTTP %s (%d bytes)',
-                     source_name, channel_id or '-', r.status_code, len(r.content))
-        response_bytes = scraper_cls.process_license_response(r.content)
-        # If Amazon returned a SERVICE_CERTIFICATE (Widevine type 5), cache it for
-        # the /certificate endpoint so Shaka can pre-fetch it via serverCertificateUri.
-        if response_bytes and response_bytes[:2] == b'\x08\x05':
+    # Cache the raw challenge in Redis so test scripts can replay it
+    if channel_id:
+        _rdb = _amazon_sht_redis()
+        if _rdb:
             try:
-                import redis as _redis2
-                from flask import current_app as _ca2
-                _rc2 = _redis2.from_url(_ca2.config['REDIS_URL'])
-                _rc2.setex(f'amz_service_cert:{source_name}', 86400, response_bytes)
+                import base64 as _b64
+                _rdb.setex(f'amz_challenge:{channel_id}', 300, _b64.b64encode(challenge))
             except Exception:
                 pass
-        return Response(response_bytes, status=r.status_code, content_type='application/octet-stream')
+    try:
+        r = _requests.post(license_url, data=body, headers=headers, timeout=15)
     except Exception as e:
         logger.warning('[license-proxy] %s request failed: %s', source_name, e)
         abort(502)
+    logger.debug('[license-proxy] %s channel=%s -> HTTP %s (%d bytes)',
+                 source_name, channel_id or '-', r.status_code, len(r.content))
+    response_bytes = scraper_cls.process_license_response(r.content)
+    # If Amazon returned a SERVICE_CERTIFICATE (Widevine type 5), cache it for
+    # the /certificate endpoint so Shaka can pre-fetch it via serverCertificateUri.
+    if response_bytes and response_bytes[:2] == b'\x08\x05':
+        _rdb = _amazon_sht_redis()
+        if _rdb:
+            try:
+                _rdb.setex(f'amz_service_cert:{source_name}', 86400, response_bytes)
+            except Exception:
+                pass
+    return Response(response_bytes, status=r.status_code, content_type='application/octet-stream')
 
 
 @play_bp.route('/play/<source_name>/certificate', methods=['GET'])
@@ -1242,15 +1246,14 @@ def license_certificate(source_name: str):
     if not source:
         abort(404)
     # Try cache first
-    try:
-        import redis as _redis
-        from flask import current_app as _ca
-        _rc = _redis.from_url(_ca.config['REDIS_URL'])
-        cached = _rc.get(f'amz_service_cert:{source_name}')
-        if cached:
-            return Response(cached, status=200, content_type='application/octet-stream')
-    except Exception:
-        pass
+    _rdb = _amazon_sht_redis()
+    if _rdb:
+        try:
+            cached = _rdb.get(f'amz_service_cert:{source_name}')
+            if cached:
+                return Response(cached, status=200, content_type='application/octet-stream')
+        except Exception:
+            pass
     # Not cached — fetch live with a minimal SERVICE_CERTIFICATE_REQUEST challenge
     cfg = source.config or {}
     dummy_challenge = b'\x08\x04'  # Widevine SERVICE_CERTIFICATE_REQUEST
@@ -1258,23 +1261,23 @@ def license_certificate(source_name: str):
     license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id)
     if not license_url:
         abort(404)
-    body, headers = scraper_cls.prepare_license_request(dummy_challenge, cfg, channel_id=channel_id)
+    body, headers = scraper_cls.prepare_license_request(dummy_challenge, cfg, channel_id=channel_id, sht='')
     try:
         r = _requests.post(license_url, data=body, headers=headers, timeout=15)
-        cert_bytes = scraper_cls.process_license_response(r.content)
-        if cert_bytes and cert_bytes[:2] == b'\x08\x05':
-            try:
-                import redis as _redis2
-                from flask import current_app as _ca2
-                _rc2 = _redis2.from_url(_ca2.config['REDIS_URL'])
-                _rc2.setex(f'amz_service_cert:{source_name}', 86400, cert_bytes)
-            except Exception:
-                pass
-            return Response(cert_bytes, status=200, content_type='application/octet-stream')
-        abort(502)
     except Exception as e:
         logger.warning('[cert] %s fetch failed: %s', source_name, e)
         abort(502)
+    cert_bytes = scraper_cls.process_license_response(r.content)
+    if cert_bytes and cert_bytes[:2] == b'\x08\x05':
+        rdb = _amazon_sht_redis()
+        if rdb:
+            try:
+                rdb.setex(f'amz_service_cert:{source_name}', 86400, cert_bytes)
+            except Exception:
+                pass
+        return Response(cert_bytes, status=200, content_type='application/octet-stream')
+    logger.warning('[cert] %s returned unexpected response (not a service certificate)', source_name)
+    abort(502)
 
 
 @play_bp.route('/play/<source_name>/<channel_id>.m3u8')

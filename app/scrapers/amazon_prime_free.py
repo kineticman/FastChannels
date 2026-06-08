@@ -781,7 +781,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
         In a playbackAction object `channelId` and `fallbackUrl` precede the nested
         `playbackExperienceMetadata.playbackEnvelope`, so associate each envelope with the
         nearest preceding channelId in the same object."""
-        for m in re.finditer(r'"playbackEnvelope":"([^"]+)"', html):
+        for m in re.finditer(r'"playbackEnvelope":"((?:[^"\\]|\\.)+)"', html):
             pe = m.group(1)
             back = html[max(0, m.start() - 1500):m.start()]
             cids = re.findall(r'"channelId":"(amzn1\.dv\.gti\.[0-9a-f-]+)"', back)

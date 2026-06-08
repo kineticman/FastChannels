@@ -448,6 +448,11 @@ def run_scraper(source_name: str, force_full: bool = False):
                         )
                         _apply_scraper_config_updates(source, scraper)
                         db.session.commit()
+                        # Clear so the EPG commit's _apply_scraper_config_updates
+                        # only persists updates added during the EPG phase, not a
+                        # re-merge of the already-committed channel-phase snapshot.
+                        if hasattr(scraper, '_pending_config_updates'):
+                            scraper._pending_config_updates.clear()
                         break
                     except _SAOperationalError as _dbe:
                         db.session.rollback()
@@ -864,10 +869,13 @@ def run_stream_audit(source_name: str):
                     raise
 
                 if r.status_code in (403, 429, 500, 502, 503, 504):
-                    # 403 is an IP-level geo-block; sleeping won't change the IP so
-                    # skip the backoff and retry immediately.  429/5xx may be transient
-                    # rate-limiting or CDN hiccups where a brief pause can help.
-                    if r.status_code != 403 and consecutive_skipped_403 < 5:
+                    # 403 is an IP-level geo-block; a long sleep won't help, but a
+                    # brief one (10s) avoids hammering the CDN on the first few hits
+                    # before we decide it's a persistent block.  429/5xx get the full
+                    # graduated backoff as before.
+                    if r.status_code == 403 and consecutive_skipped_403 < 5:
+                        _time.sleep(10)
+                    elif r.status_code != 403 and consecutive_skipped_403 < 5:
                         wait = 30 + skipped_403 * 5
                         logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
                                        source_name, r.status_code, wait)

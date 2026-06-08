@@ -612,9 +612,14 @@ def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) ->
 def _resolve_chnum_map(channels, *, feed_chnum_start: int = None,
                        namespace_start: int = None, feed_id: int = None):
     if namespace_start is not None:
-        return _build_feed_chnum_map(channels, namespace_start), []
-    if feed_chnum_start is not None:
         stored_numbers: dict[int, int] = {}
+        if feed_id is not None:
+            from app.models import FeedChannelNumber
+            rows = FeedChannelNumber.query.filter_by(feed_id=feed_id).all()
+            stored_numbers = {r.channel_id: r.number for r in rows}
+        return _build_feed_chnum_map(channels, namespace_start, stored_numbers=stored_numbers), []
+    if feed_chnum_start is not None:
+        stored_numbers = {}
         if feed_id is not None:
             from app.models import FeedChannelNumber
             rows = FeedChannelNumber.query.filter_by(feed_id=feed_id).all()
@@ -773,7 +778,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         src_name = ch.source.name
         scraper_cls = _scraper_registry.get(src_name)
         per_ch_props = None
-        if scraper_cls:
+        if scraper_cls and ch.source_channel_id:
             per_ch_props = scraper_cls.get_kodi_props_for_channel(base_url, ch.source_channel_id)
         if per_ch_props is not None:
             for prop_key, prop_val in per_ch_props.items():
