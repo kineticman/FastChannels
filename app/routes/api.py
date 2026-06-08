@@ -1941,26 +1941,27 @@ def inspect_channel(channel_id):
         return jsonify({'status': 'error', 'detail': str(e)})
 
 
-@api_bp.route('/channels/<int:channel_id>/preview', methods=['GET'])
-def preview_channel(channel_id):
-    ch = Channel.query.get_or_404(channel_id)
-    now = datetime.now(timezone.utc)
+def _get_playback_info(ch, fast_mode=True):
+    """
+    Resolve playback URLs and mode for a channel.
+    Returns dict: stream_type, preview_url, play_url, playback_mode, license_url,
+    preview_warning, preview_warning_kind, needs_detection.
+    Must be called within a Flask request context (license_url uses request.host_url).
+    """
     stream_type = (ch.stream_type or '').strip().lower()
     preview_url = None
     preview_warning = None
     preview_warning_kind = None
     needs_detection = False
 
-    fast_mode = request.args.get('detect', '1') == '0'
-
-    def _host_of(url: str | None) -> str:
+    def _host_of(url):
         return (urlsplit(url or '').netloc or '').lower()
 
-    def _is_youtube_host(url: str | None) -> bool:
+    def _is_youtube_host(url):
         host = _host_of(url)
         return host.endswith('youtube.com') or host.endswith('youtu.be')
 
-    def _is_googlevideo_host(url: str | None) -> bool:
+    def _is_googlevideo_host(url):
         host = _host_of(url)
         return (
             'googlevideo.com' in host
@@ -2033,6 +2034,54 @@ def preview_channel(channel_id):
                 _base = _req.host_url.rstrip('/')
                 license_url = f'{_base}/play/{ch.source.name}/license?channel_id={ch.source_channel_id}'
 
+    play_url = None
+    if (
+        ch.stream_url
+        and ch.source
+        and not ch.source.epg_only
+        and ch.source.name
+        and ch.source_channel_id
+    ):
+        play_url = f'/play/{ch.source.name}/{ch.source_channel_id}.m3u8'
+    if not preview_url:
+        preview_url = play_url
+
+    # Amazon DASH: CDN locks CORS to amazon.com, so route the preview through
+    # our server-side manifest proxy which strips that restriction.
+    if (
+        not preview_url
+        or (ch.source and ch.source.name == 'amazon_prime_free')
+    ) and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/amazon_prime_free/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+
+    return {
+        'stream_type': stream_type,
+        'preview_url': preview_url,
+        'play_url': play_url,
+        'playback_mode': playback_mode,
+        'license_url': license_url,
+        'preview_warning': preview_warning,
+        'preview_warning_kind': preview_warning_kind,
+        'needs_detection': needs_detection,
+    }
+
+
+@api_bp.route('/channels/<int:channel_id>/preview', methods=['GET'])
+def preview_channel(channel_id):
+    ch = Channel.query.get_or_404(channel_id)
+    now = datetime.now(timezone.utc)
+    fast_mode = request.args.get('detect', '1') == '0'
+    info = _get_playback_info(ch, fast_mode=fast_mode)
+    stream_type = info['stream_type']
+    preview_url = info['preview_url']
+    play_url = info['play_url']
+    playback_mode = info['playback_mode']
+    license_url = info['license_url']
+    preview_warning = info['preview_warning']
+    preview_warning_kind = info['preview_warning_kind']
+    needs_detection = info['needs_detection']
+
     current_program = (
         Program.query
         .filter(
@@ -2079,27 +2128,6 @@ def preview_channel(channel_id):
             'original_air_date': p.original_air_date.isoformat() if p.original_air_date else None,
             'poster_url': p.poster_url or None,
         }
-
-    play_url = None
-    if (
-        ch.stream_url
-        and ch.source
-        and not ch.source.epg_only
-        and ch.source.name
-        and ch.source_channel_id
-    ):
-        play_url = f'/play/{ch.source.name}/{ch.source_channel_id}.m3u8'
-    if not preview_url:
-        preview_url = play_url
-
-    # Amazon DASH: CDN locks CORS to amazon.com, so route the preview through
-    # our server-side manifest proxy which strips that restriction.
-    if (
-        not preview_url
-        or (ch.source and ch.source.name == 'amazon_prime_free')
-    ) and ch.source_channel_id:
-        from urllib.parse import quote as _quote
-        preview_url = f'/play/amazon_prime_free/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
     future_count = Program.query.filter(
         Program.channel_id == ch.id,

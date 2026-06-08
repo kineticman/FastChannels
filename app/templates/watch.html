@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ channel.name }}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #player {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+      background: #000;
+    }
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      background: rgba(0, 0, 0, 0.75);
+      color: #fff;
+      cursor: pointer;
+      z-index: 10;
+      font-family: system-ui, -apple-system, sans-serif;
+      user-select: none;
+    }
+    #overlay.hidden { display: none; }
+    #overlay img {
+      max-height: 72px;
+      max-width: 240px;
+      object-fit: contain;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
+    }
+    #overlay h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      text-align: center;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+      max-width: 80vw;
+    }
+    #overlay .hint {
+      font-size: 0.9rem;
+      color: #aaa;
+    }
+    #overlay .hint.error {
+      color: #f88;
+    }
+    #status {
+      position: fixed;
+      bottom: 0.75rem;
+      left: 1rem;
+      right: 1rem;
+      color: rgba(255,255,255,0.55);
+      font-size: 0.75rem;
+      font-family: monospace;
+      pointer-events: none;
+      z-index: 5;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <video id="player" playsinline autoplay muted></video>
+
+  <div id="overlay">
+    {% if channel.logo_display_url %}
+    <img src="{{ channel.logo_display_url }}" alt="">
+    {% elif channel.logo_url %}
+    <img src="{{ channel.logo_url }}" alt="">
+    {% endif %}
+    <h1>{{ channel.name }}</h1>
+    <div class="hint" id="overlay-hint">
+      {% if playback_mode == 'unsupported' %}
+        Stream type ({{ stream_type }}) is not supported for browser playback.
+      {% else %}
+        Click to play fullscreen
+      {% endif %}
+    </div>
+  </div>
+
+  <div id="status"></div>
+
+  <script>
+    const PLAY_URL      = {{ play_url | tojson }};
+    const PLAYBACK_MODE = {{ playback_mode | tojson }};
+    const STREAM_TYPE   = {{ stream_type | tojson }};
+    const LICENSE_URL   = {{ license_url | tojson }};
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
+  <script>
+    const video   = document.getElementById('player');
+    const overlay = document.getElementById('overlay');
+    const hint    = document.getElementById('overlay-hint');
+    const status  = document.getElementById('status');
+
+    let _hls = null, _shaka = null;
+
+    function setStatus(msg) {
+      if (status) status.textContent = msg;
+    }
+
+    function setError(msg) {
+      hint.textContent = msg;
+      hint.className = 'hint error';
+    }
+
+    function initPlayer() {
+      if (PLAYBACK_MODE === 'unsupported' || !PLAY_URL) return;
+
+      const isNative = PLAYBACK_MODE === 'native' ||
+        ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(STREAM_TYPE);
+
+      if (isNative) {
+        video.src = PLAY_URL;
+        video.load();
+        video.play().catch(() => {});
+        return;
+      }
+
+      if (PLAYBACK_MODE === 'dash' || STREAM_TYPE === 'dash') {
+        if (!window.shaka || !shaka.Player.isBrowserSupported()) {
+          setError('DASH playback is not supported in this browser.');
+          return;
+        }
+        if (LICENSE_URL && !window.isSecureContext) {
+          setError('DRM streams require a secure context (HTTPS or a browser-trusted origin).');
+          return;
+        }
+        shaka.polyfill.installAll();
+        _shaka = new shaka.Player();
+        _shaka.attach(video).then(() => {
+          if (LICENSE_URL) {
+            _shaka.configure({
+              drm: {
+                servers: {
+                  'com.widevine.alpha':      LICENSE_URL,
+                  'com.microsoft.playready': LICENSE_URL,
+                },
+              },
+            });
+          }
+          _shaka.addEventListener('error', (e) => {
+            const code = e.detail && e.detail.code;
+            if (code === 6007 || code === 6008) setStatus('DRM: license rejected');
+            else if (code === 6020) setStatus('DRM: requires HTTPS');
+            else if (code === 1001 || code === 1002) setStatus('Network error loading stream');
+            else if (code) setStatus('Shaka error ' + code);
+          });
+          return _shaka.load(PLAY_URL, null, 'application/dash+xml');
+        }).then(() => {
+          video.play().catch(() => {});
+        }).catch((err) => {
+          setError('Could not load stream: ' + (err && err.message || err));
+        });
+        return;
+      }
+
+      // HLS
+      if (window.Hls && window.Hls.isSupported()) {
+        _hls = new window.Hls({ enableWorker: true, lowLatencyMode: false });
+        _hls.loadSource(PLAY_URL);
+        _hls.attachMedia(video);
+        _hls.on(window.Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
+        _hls.on(window.Hls.Events.ERROR, (_e, data) => {
+          if (data.fatal) setStatus('HLS error: ' + data.details);
+        });
+        return;
+      }
+
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = PLAY_URL;
+        video.load();
+        video.play().catch(() => {});
+        return;
+      }
+
+      setError('HLS playback is not supported in this browser.');
+    }
+
+    overlay.addEventListener('click', () => {
+      if (PLAYBACK_MODE === 'unsupported' || !PLAY_URL) return;
+      video.muted = false;
+      video.volume = 1.0;
+      const el = document.documentElement;
+      if (el.requestFullscreen) el.requestFullscreen();
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+      overlay.classList.add('hidden');
+    });
+
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement) overlay.classList.remove('hidden');
+    });
+
+    initPlayer();
+  </script>
+</body>
+</html>

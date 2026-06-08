@@ -15,7 +15,7 @@ from urllib.parse import urljoin, parse_qs as _parse_qs
 
 import requests as _requests
 
-from flask import Blueprint, redirect, abort, request, Response
+from flask import Blueprint, redirect, abort, request, Response, render_template
 from app.config_store import persist_source_config_updates
 from ..hls import inspect_hls_drm
 from ..models import Channel, Source
@@ -1530,3 +1530,18 @@ def play(source_name: str, channel_id: str):
             redirect_kind='direct',
         )
     return redirect(resolved_url, 302)
+
+
+@play_bp.route('/watch/<int:channel_id>')
+def watch(channel_id):
+    from .api import _get_playback_info
+    channel = Channel.query.get_or_404(channel_id)
+    info = _get_playback_info(channel, fast_mode=False)
+    return render_template(
+        'watch.html',
+        channel=channel,
+        play_url=info.get('preview_url') or info.get('play_url') or '',
+        playback_mode=info.get('playback_mode', 'hls'),
+        stream_type=info.get('stream_type', 'hls'),
+        license_url=info.get('license_url') or '',
+    )
