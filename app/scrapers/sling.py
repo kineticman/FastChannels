@@ -216,6 +216,7 @@ class SlingScraper(BaseScraper):
         url = self._channel_schedule_url(channel_guid)
         seen_urls: set[str] = set()
         programs: dict[tuple[str, str], ProgramData] = {}
+        first = True
 
         for _ in range(max_windows):
             if not url or url in seen_urls:
@@ -223,7 +224,13 @@ class SlingScraper(BaseScraper):
             seen_urls.add(url)
 
             resp = session.get(url, timeout=15)
-            resp.raise_for_status()
+            if first:
+                resp.raise_for_status()
+                first = False
+            elif not resp.ok:
+                if resp.status_code != 404:
+                    logger.debug("[%s] EPG window %s returned %s, stopping", self.source_name, url, resp.status_code)
+                break
             payload = resp.json()
             playback = payload.get("playback_info") or {}
             asset = playback.get("asset") or {}
