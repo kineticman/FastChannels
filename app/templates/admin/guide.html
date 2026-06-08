@@ -307,7 +307,8 @@
     .gm-nav-btn:hover:not(:disabled) { border-color: var(--accent-soft); color: var(--accent-soft); background: var(--accent-bg); }
     .gm-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
     .gm-nav-pos { font-size: 0.78rem; color: var(--text-muted); }
-    .gm-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
+    .gm-actions { display: flex; gap: 0.4rem; flex-wrap: nowrap; margin-bottom: 1rem; align-items: center; }
+    .gm-actions .preview-action-btn { white-space: nowrap; padding: 0.35rem 0.6rem; font-size: 0.75rem; }
     .gm-player-wrap { margin-top: 0.25rem; }
     .gm-player-wrap video { width: 100%; border-radius: 6px; background: #000; max-height: 340px; }
     .gm-player-note {
@@ -870,7 +871,7 @@
         }
         shaka.polyfill.installAll();
         if (licenseUrl && !navigator.requestMediaKeySystemAccess) {
-          if (status) status.textContent = 'DRM requires a secure context (HTTPS or http://localhost).';
+          if (status) status.innerHTML = 'DRM requires a secure context. <small>Chrome tip: paste <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> into the address bar, add this origin, and relaunch.</small>';
           return;
         }
         if (!shaka.Player.isBrowserSupported()) {
@@ -902,7 +903,7 @@
           if (status) {
             const code = err.code || '';
             if (code === 6020) {
-              status.textContent = 'DRM requires a secure context.';
+              status.innerHTML = 'DRM requires a secure context. <small>Chrome tip: paste <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> into the address bar, add this origin, and relaunch.</small>';
             } else {
               status.textContent = `Shaka error ${code || err.message || err}: playback failed.`;
             }

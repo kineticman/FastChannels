@@ -924,12 +924,18 @@
     .preview-program-time { color: var(--text-soft); font-size: 0.8rem; margin-bottom: 0.45rem; }
     .preview-program-desc { color: var(--text-subtle); font-size: 0.82rem; line-height: 1.5; }
     .preview-actions {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 0.55rem;
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 0.4rem;
       margin-bottom: 1rem;
     }
-    .preview-actions .preview-action-btn { width: 100%; min-width: 0; }
+    .preview-actions .preview-action-btn {
+      flex: 0 1 auto;
+      white-space: nowrap;
+      padding: 0.35rem 0.6rem;
+      font-size: 0.75rem;
+      min-height: 30px;
+    }
     .preview-nav-row {
       display: flex; align-items: center; justify-content: space-between;
       margin-bottom: 0.85rem; padding-bottom: 0.75rem;
@@ -1225,7 +1231,7 @@
         text-align: left;
         min-width: 0;
       }
-      .preview-actions { grid-template-columns: 1fr; }
+      .preview-actions { flex-wrap: wrap; }
       /* GS modal: overlay scrolls, inner box has no height cap */
       .gs-modal { width: 100%; max-height: none; overflow-y: visible; }
       #gs-suggest-modal { padding: 1rem 0.75rem; }
@@ -2191,7 +2197,7 @@
         }
         shaka.polyfill.installAll();
         if (licenseUrl && !navigator.requestMediaKeySystemAccess) {
-          if (status) status.textContent = 'DRM preview requires a secure context. Access the admin via HTTPS or http://localhost to enable Widevine in the browser.';
+          if (status) status.innerHTML = 'DRM requires a secure context. <small>Chrome tip: paste <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> into the address bar, add this origin, and relaunch.</small>';
           return;
         }
         if (!shaka.Player.isBrowserSupported()) {

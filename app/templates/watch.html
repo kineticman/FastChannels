@@ -105,8 +105,10 @@
       if (status) status.textContent = msg;
     }
 
-    function setError(msg) {
-      hint.textContent = msg;
+    const _chromeDrmTip = '<br><small style="font-size:0.8em;color:#bbb">Chrome tip: paste <code style="background:rgba(255,255,255,0.1);padding:1px 4px;border-radius:3px">chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> into the address bar, add this origin, and relaunch.</small>';
+
+    function setError(msg, includeDrmTip) {
+      hint.innerHTML = msg + (includeDrmTip ? _chromeDrmTip : '');
       hint.className = 'hint error';
     }
 
@@ -129,7 +131,7 @@
           return;
         }
         if (LICENSE_URL && !window.isSecureContext) {
-          setError('DRM streams require a secure context (HTTPS or a browser-trusted origin).');
+          setError('DRM streams require a secure context (HTTPS or a browser-trusted origin).', true);
           return;
         }
         shaka.polyfill.installAll();
