@@ -167,7 +167,14 @@ def _channel_display_name(ch, multi_country_map: dict[str, set[str]] | None = No
 
 def _build_channel_query(filters: dict):
     """Shared filtered query for active, enabled channels."""
-    query = Channel.query.join(Source).options(contains_eager(Channel.source)).filter(
+    query = Channel.query.join(Source).options(
+        contains_eager(Channel.source).load_only(
+            Source.id,
+            Source.name,
+            Source.display_name,
+            Source.chnum_start,
+        ),
+    ).filter(
         Channel.is_active  == True,
         Channel.is_enabled == True,
         Source.is_enabled  == True,
