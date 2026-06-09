@@ -2158,6 +2158,16 @@
           </div>
         </div>` : '';
 
+      const poolField = schema.find(f => f.key === 'pool_size');
+      const poolHtml = poolField ? `
+        <div class="field">
+          <label for="cfg-${sourceId}-pool_size">${escapeHtml(poolField.label)}</label>
+          <input type="number" id="cfg-${sourceId}-pool_size" data-key="pool_size"
+                 data-secret="false" value="${escapeHtml(String(values.pool_size || poolField.default || ''))}"
+                 placeholder="${escapeHtml(String(poolField.placeholder || poolField.default || ''))}" autocomplete="off">
+          <div class="help">${escapeHtml(poolField.help_text || '')}</div>
+        </div>` : '';
+
       return `
         <div class="config-title">Source Settings</div>
         <div class="config-note">Choose one or more Pluto regions. The selector is limited to the live regions we verified.</div>
@@ -2169,6 +2179,7 @@
           </select>
           <div class="help">${escapeHtml(regionField.help_text || '')}</div>
         </div>
+        ${poolHtml ? `<div class="fields-grid">${poolHtml}</div>` : ''}
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
