@@ -2121,7 +2121,7 @@
             </div>
             <div class="preview-volume-row">
               <label for="preview-volume">Volume</label>
-              <input type="range" id="preview-volume" min="0" max="100" value="50" oninput="document.getElementById('preview-player').volume=this.value/100;document.getElementById('preview-volume-pct').textContent=this.value+'%'">
+              <input type="range" id="preview-volume" min="0" max="100" value="50" oninput="const _pv=document.getElementById('preview-player');_pv.muted=false;_pv.volume=this.value/100;document.getElementById('preview-volume-pct').textContent=this.value+'%'">
               <span class="preview-volume-pct" id="preview-volume-pct">50%</span>
               <button class="btn-stats-toggle" id="btn-stats-toggle" onclick="togglePreviewStats()" title="Stats for nerds">Stats</button>
             </div>
@@ -2217,6 +2217,7 @@
         return _previewShaka.load(playUrl, null, mimeType);
       }).then(() => {
         if (status) status.textContent = 'Stream loaded.';
+        video.muted = false;
         video.play().catch(() => {});
       }).catch((err) => {
         if (status) {
