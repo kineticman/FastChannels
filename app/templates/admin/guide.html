@@ -919,6 +919,7 @@
         return _guideShaka.load(url, null, mimeType);
       }).then(() => {
         if (status) status.textContent = '';
+        video.muted = false;
         video.play().catch(() => {});
         if (_guideStatsVisible) _startGuideStatsLoop();
       }).catch((err) => {
