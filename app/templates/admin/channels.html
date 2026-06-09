@@ -233,8 +233,8 @@
     .preview-action-btn:hover { text-decoration: none; color: #fff; }
     .preview-action-btn.primary { background: var(--success-border); border-color: var(--success-border); color: var(--success-contrast); }
     .preview-action-btn.primary:hover { background: var(--success-fill); border-color: var(--success-fill); }
-    .preview-action-btn.secondary { background: var(--info); border-color: var(--info); color: var(--info-contrast); }
-    .preview-action-btn.secondary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+    .preview-action-btn.secondary { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
+    .preview-action-btn.secondary:hover { background: var(--accent-strong-hover, var(--accent-strong)); border-color: var(--accent-strong-hover, var(--accent-strong)); }
     .preview-action-btn.neutral { background: var(--surface); border-color: var(--border); color: var(--text-subtle); }
     .preview-action-btn.neutral:hover { background: var(--surface-4); border-color: var(--text-dim); }
     .preview-action-btn.danger { background: var(--danger-bg-2); border-color: var(--danger-border); color: #fff; }
@@ -2121,7 +2121,7 @@
             </div>
             <div class="preview-volume-row">
               <label for="preview-volume">Volume</label>
-              <input type="range" id="preview-volume" min="0" max="100" value="50" oninput="const _pv=document.getElementById('preview-player');_pv.muted=false;_pv.volume=this.value/100;document.getElementById('preview-volume-pct').textContent=this.value+'%'">
+              <input type="range" id="preview-volume" min="0" max="100" value="50" oninput="const _pv=document.getElementById('preview-player');_pv.muted=false;_pv.volume=this.value/100;document.getElementById('preview-volume-pct').textContent=this.value+'%'" onchange="const _pv=document.getElementById('preview-player');_pv.muted=false;_pv.volume=this.value/100;document.getElementById('preview-volume-pct').textContent=this.value+'%'">
               <span class="preview-volume-pct" id="preview-volume-pct">50%</span>
               <button class="btn-stats-toggle" id="btn-stats-toggle" onclick="togglePreviewStats()" title="Stats for nerds">Stats</button>
             </div>
@@ -2153,6 +2153,7 @@
       const status = document.getElementById('preview-player-status');
       if (!wrap || !video) return;
       video.volume = 0.5;
+      video.muted = false;
       if (_previewShaka) { _previewShaka.destroy(); _previewShaka = null; }
       _stopStatsLoop();
       _droppedFrames0 = null;
