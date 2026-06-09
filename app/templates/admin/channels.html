@@ -1883,10 +1883,8 @@
 
   <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
   <script src="{{ url_for('static', filename='js/gracenote_suggest.js') }}"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
   <script>
-    let _previewHls   = null;
     let _previewShaka = null;
     let _previewList = null;
     let _previewIndex = -1;
@@ -1989,11 +1987,6 @@
       const video = document.getElementById('preview-player');
       _stopStatsLoop();
       _statsVisible = false;
-      _lastFrag = null;
-      if (_previewHls) {
-        _previewHls.destroy();
-        _previewHls = null;
-      }
       if (_previewShaka) {
         _previewShaka.destroy();
         _previewShaka = null;
@@ -2160,16 +2153,8 @@
       const status = document.getElementById('preview-player-status');
       if (!wrap || !video) return;
       video.volume = 0.5;
-      if (_previewHls) {
-        _previewHls.destroy();
-        _previewHls = null;
-      }
-      if (_previewShaka) {
-        _previewShaka.destroy();
-        _previewShaka = null;
-      }
+      if (_previewShaka) { _previewShaka.destroy(); _previewShaka = null; }
       _stopStatsLoop();
-      _lastFrag = null;
       _droppedFrames0 = null;
       if (_statsVisible) _startStatsLoop();
       video.pause();
@@ -2180,8 +2165,8 @@
 
       const normalizedMode = String(playbackMode || '').toLowerCase();
       const normalizedType = String(streamType || '').toLowerCase();
-      const useNativeVideo = normalizedMode === 'native' || ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(normalizedType);
-      if (useNativeVideo) {
+
+      if (normalizedMode === 'native' || ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(normalizedType)) {
         video.src = playUrl;
         video.load();
         if (status) status.textContent = 'Using native video playback for this stream type.';
@@ -2189,124 +2174,68 @@
         return;
       }
 
-      // ── DASH via Shaka Player ─────────────────────────────────────────────
-      if (normalizedMode === 'dash' || normalizedType === 'dash') {
-        if (!window.shaka) {
-          if (status) status.textContent = 'Shaka Player failed to load. Check browser console.';
-          return;
-        }
-        shaka.polyfill.installAll();
-        if (licenseUrl && !navigator.requestMediaKeySystemAccess) {
-          if (status) status.innerHTML = 'DRM requires a secure context. <small>Chrome tip: paste <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> into the address bar, add this origin, and relaunch.</small>';
-          return;
-        }
-        if (!shaka.Player.isBrowserSupported()) {
-          if (status) status.textContent = 'DASH playback is not supported in this browser.';
-          return;
-        }
-        _previewShaka = new shaka.Player();
-        _previewShaka.attach(video).then(() => {
-          if (licenseUrl) {
-            _previewShaka.configure({
-              drm: {
-                servers: {
-                  'com.widevine.alpha':      licenseUrl,
-                  'com.microsoft.playready': licenseUrl,
-                },
+      if (!window.shaka || !shaka.Player.isBrowserSupported()) {
+        if (status) status.textContent = 'Playback is not supported in this browser.';
+        return;
+      }
+
+      shaka.polyfill.installAll();
+      _previewShaka = new shaka.Player();
+      _previewShaka.attach(video).then(() => {
+        if (licenseUrl) {
+          _previewShaka.configure({
+            drm: {
+              servers: {
+                'com.widevine.alpha':      licenseUrl,
+                'com.microsoft.playready': licenseUrl,
               },
-            });
-          }
-          _previewShaka.addEventListener('error', (event) => {
-            const err = event.detail;
-            if (status) {
-              if (err.code === 6007) {
-                status.textContent = 'DRM error: CDM rejected the license response (key may have expired or playback envelope needs refresh).';
-              } else if (err.code === 6008) {
-                status.textContent = 'DRM: license server rejected the request (likely expired playback envelope — re-run the snippet on Amazon\'s live TV page).';
-              } else if (err.code === 6014) {
-                status.textContent = 'DRM license request failed. The license server rejected the challenge.';
-              } else if (err.code === 6020) {
-                status.textContent = 'DRM: failed to fetch server certificate (certUrl may be unreachable).';
-              } else {
-                status.textContent = `Shaka error ${err.code}: ${err.message || 'playback failed'}`;
-              }
-            }
-            console.error('[Shaka] error', err.code, err);
+            },
           });
-          return _previewShaka.load(playUrl, null, 'application/dash+xml');
-        }).then(() => {
-          if (status) status.textContent = 'Stream loaded with Shaka Player.';
-          video.play().catch(() => {});
-        }).catch((err) => {
+        }
+        _previewShaka.addEventListener('error', (event) => {
+          const err = event.detail;
           if (status) {
-            const code = err.code || '';
-            if (code === 6020) {
-              status.textContent = 'DRM preview requires a secure context (HTTPS or http://localhost). Widevine is not available over plain HTTP on a remote host.';
-            } else if (code === 1001 || code === 1002) {
+            if (err.code === 6007) {
+              status.textContent = 'DRM error: CDM rejected the license response (key may have expired or playback envelope needs refresh).';
+            } else if (err.code === 6008) {
+              status.textContent = 'DRM: license server rejected the request (likely expired playback envelope — re-run the snippet on Amazon\'s live TV page).';
+            } else if (err.code === 6014) {
+              status.textContent = 'DRM license request failed. The license server rejected the challenge.';
+            } else if (err.code === 6020) {
+              status.textContent = 'DRM: failed to fetch server certificate (certUrl may be unreachable).';
+            } else if (err.code === 1001 || err.code === 1002) {
               status.textContent = 'Could not load stream manifest (network error or CORS restriction on stream CDN).';
             } else {
-              status.textContent = `Shaka error ${code || err.message || err}: playback failed.`;
+              status.textContent = `Shaka error ${err.code}: ${err.message || 'playback failed'}`;
             }
           }
+          console.error('[Shaka] error', err.code, err);
         });
-        return;
-      }
-
-      // ── HLS via hls.js ────────────────────────────────────────────────────
-      if (window.Hls && window.Hls.isSupported()) {
-        _previewHls = new window.Hls({
-          enableWorker: true,
-          lowLatencyMode: false,
-        });
-        _previewHls.loadSource(playUrl);
-        _previewHls.attachMedia(video);
-        _previewHls.on(window.Hls.Events.MANIFEST_PARSED, () => {
-          if (status) status.textContent = 'Stream loaded with hls.js.';
-          video.play().catch(() => {});
-        });
-        _previewHls.on(window.Hls.Events.ERROR, (_event, data) => {
-          if (status) {
-            const details = data?.details || '';
-            if (details.includes('IncompatibleCodecs') || details.includes('incompatibleCodecs')) {
-              status.textContent = 'Browser preview unavailable: this stream uses a codec (e.g. HEVC/H.265) that your browser cannot decode. Use "Open Externally" to play in VLC or Channels DVR.';
-            } else if (details === 'bufferStalledError') {
-              status.textContent = 'Browser preview stalled: the stream buffer could not be filled. This is common with HEVC/H.265 (4K) channels — use "Open Externally" to play in VLC or Channels DVR.';
-            } else if (details.includes('manifestLoad') || details.includes('manifestParse')) {
-              status.textContent = 'Browser preview unavailable for this source (CORS restriction on stream CDN). Use "Open Externally" to play outside the browser preview.';
-            } else {
-              const fatal = data?.fatal ? 'Fatal — ' : '';
-              status.textContent = `Preview error: ${fatal}${details || 'Unknown hls.js error'}`;
-            }
-          }
-          if (data?.fatal && _previewHls) {
-            _previewHls.destroy();
-            _previewHls = null;
-          }
-        });
-        return;
-      }
-
-      if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = playUrl;
-        video.load();
-        if (status) status.textContent = 'Using native HLS playback.';
+        const mimeType = (normalizedMode === 'dash' || normalizedType === 'dash')
+          ? 'application/dash+xml'
+          : 'application/x-mpegURL';
+        return _previewShaka.load(playUrl, null, mimeType);
+      }).then(() => {
+        if (status) status.textContent = 'Stream loaded.';
         video.play().catch(() => {});
-        return;
-      }
-
-      video.src = playUrl;
-      video.load();
-      if (status) status.textContent = 'This browser does not support HLS playback here.';
+      }).catch((err) => {
+        if (status) {
+          const code = err.code || '';
+          if (code === 6020) {
+            status.textContent = 'DRM preview requires a secure context (HTTPS or http://localhost). Widevine is not available over plain HTTP on a remote host.';
+          } else if (code === 1001 || code === 1002) {
+            status.textContent = 'Could not load stream manifest (network error or CORS restriction on stream CDN).';
+          } else {
+            status.textContent = `Shaka error ${code || err.message || err}: playback failed.`;
+          }
+        }
+      });
     }
 
     // ── Stats for Nerds ──────────────────────────────────────────────────────
     let _statsInterval  = null;
     let _statsVisible   = false;
-    let _lastFrag       = null;
     let _droppedFrames0 = null;
-    let _fragListener   = null;
-
-    _previewHls && void 0; // ensure ref accessible
 
     function togglePreviewStats() {
       _statsVisible = !_statsVisible;
@@ -2327,20 +2256,12 @@
     function _startStatsLoop() {
       _stopStatsLoop();
       _droppedFrames0 = null;
-      if (_previewHls) {
-        _fragListener = (_e, data) => { _lastFrag = data; };
-        _previewHls.on(window.Hls.Events.FRAG_LOADED, _fragListener);
-      }
       _updateStats();
       _statsInterval = setInterval(_updateStats, 1000);
     }
 
     function _stopStatsLoop() {
       if (_statsInterval) { clearInterval(_statsInterval); _statsInterval = null; }
-      if (_fragListener && _previewHls) {
-        _previewHls.off(window.Hls.Events.FRAG_LOADED, _fragListener);
-        _fragListener = null;
-      }
     }
 
     function _updateStats() {
@@ -2348,15 +2269,11 @@
       const video   = document.getElementById('preview-player');
       if (!overlay || !video || !_statsVisible) return;
 
-      const hls = _previewHls;
       const rows = [];
 
-      const fmt = (v, u='') => v != null ? `${v}${u}` : '—';
-
-      // Resolution & frame rate
+      // Resolution
       const vw = video.videoWidth, vh = video.videoHeight;
-      const res = vw ? `${vw}×${vh}` : '—';
-      rows.push(['Resolution', res]);
+      rows.push(['Resolution', vw ? `${vw}×${vh}` : '—']);
 
       // Dropped frames
       if (video.getVideoPlaybackQuality) {
@@ -2366,55 +2283,45 @@
         rows.push(['Dropped Frames', `${dropped} / ${q.totalVideoFrames}`]);
       }
 
-      // Playback rate & current time
+      // Playback state
       rows.push(['Playback', `${video.paused ? 'Paused' : 'Playing'}  ${video.playbackRate}×`]);
 
-      if (hls) {
-        // Bandwidth estimate
-        const bw = hls.bandwidthEstimate;
-        if (bw) rows.push(['Bandwidth Est.', `${(bw / 1000).toFixed(0)} Kbps`]);
+      if (_previewShaka) {
+        const stats = _previewShaka.getStats();
 
-        // Current level
-        const lvl = hls.currentLevel >= 0 ? hls.levels?.[hls.currentLevel] : null;
-        if (lvl) {
-          rows.push(['Stream Bitrate', `${(lvl.bitrate / 1000).toFixed(0)} Kbps`]);
-          if (lvl.attrs?.CODECS) rows.push(['Codecs', lvl.attrs.CODECS]);
-          if (lvl.videoCodec)    rows.push(['Video Codec', lvl.videoCodec]);
-          if (lvl.audioCodec)    rows.push(['Audio Codec', lvl.audioCodec]);
-          if (lvl.attrs?.['FRAME-RATE']) rows.push(['Frame Rate', `${lvl.attrs['FRAME-RATE']} fps`]);
+        if (stats.estimatedBandwidth)
+          rows.push(['Bandwidth Est.', `${(stats.estimatedBandwidth / 1000).toFixed(0)} Kbps`]);
+        if (stats.streamBandwidth)
+          rows.push(['Stream Bitrate', `${(stats.streamBandwidth / 1000).toFixed(0)} Kbps`]);
+
+        // Active variant track for codec / frame rate info
+        const tracks = _previewShaka.getVariantTracks();
+        const active = tracks.find(t => t.active);
+        if (active) {
+          if (active.videoCodec) rows.push(['Video Codec', active.videoCodec]);
+          if (active.audioCodec) rows.push(['Audio Codec', active.audioCodec]);
+          if (active.frameRate)  rows.push(['Frame Rate', `${active.frameRate.toFixed(2)} fps`]);
         }
 
-        // Levels available
-        const levels = hls.levels || [];
-        if (levels.length > 1) {
-          const variants = levels.map(l => l.height ? `${l.height}p` : `${(l.bitrate/1000).toFixed(0)}K`).join(' / ');
-          rows.push(['Variants', variants]);
+        // Available variants
+        if (tracks.length > 1) {
+          const variants = [...new Set(tracks.filter(t => t.height).map(t => `${t.height}p`))].join(' / ');
+          if (variants) rows.push(['Variants', variants]);
         }
 
-        // Buffer health
-        const buf = hls.media?.buffered;
+        // Buffer ahead
+        const buf = video.buffered;
         if (buf && buf.length > 0) {
-          const ct = hls.media.currentTime;
+          const ct = video.currentTime;
           let ahead = 0;
           for (let i = 0; i < buf.length; i++) {
-            if (buf.start(i) <= ct && buf.end(i) >= ct) {
-              ahead = buf.end(i) - ct;
-              break;
-            }
+            if (buf.start(i) <= ct && buf.end(i) >= ct) { ahead = buf.end(i) - ct; break; }
           }
           rows.push(['Buffer', `${ahead.toFixed(1)}s`]);
         }
-
-        // Last fragment
-        if (_lastFrag?.frag) {
-          const f = _lastFrag.frag;
-          const ms = _lastFrag.stats?.loading?.end - _lastFrag.stats?.loading?.start;
-          rows.push(['Last Segment', `sn:${f.sn}  ${ms ? ms.toFixed(0)+'ms' : ''}`]);
-          if (f.url) rows.push(['Segment URL', f.url.split('?')[0].split('/').slice(-1)[0]]);
-        }
       }
 
-      // Network type (if available)
+      // Network type
       const conn = navigator.connection;
       if (conn) {
         const parts = [conn.effectiveType, conn.downlink ? conn.downlink+'Mbps' : ''].filter(Boolean);

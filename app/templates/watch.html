@@ -108,7 +108,6 @@
     const STREAM_TYPE   = {{ stream_type | tojson }};
     const LICENSE_URL   = {{ license_url | tojson }};
   </script>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
   <script>
     const video       = document.getElementById('player');
@@ -117,7 +116,7 @@
     const status      = document.getElementById('status');
     const ccIndicator = document.getElementById('cc-indicator');
 
-    let _hls = null, _shaka = null;
+    let _shaka = null;
 
     function setStatus(msg) {
       if (status) status.textContent = msg;
@@ -143,64 +142,45 @@
         return;
       }
 
-      if (PLAYBACK_MODE === 'dash' || STREAM_TYPE === 'dash') {
-        if (!window.shaka || !shaka.Player.isBrowserSupported()) {
-          setError('DASH playback is not supported in this browser.');
-          return;
-        }
-        if (LICENSE_URL && !window.isSecureContext) {
-          setError('DRM streams require a secure context (HTTPS or a browser-trusted origin).', true);
-          return;
-        }
-        shaka.polyfill.installAll();
-        _shaka = new shaka.Player();
-        _shaka.attach(video).then(() => {
-          if (LICENSE_URL) {
-            _shaka.configure({
-              drm: {
-                servers: {
-                  'com.widevine.alpha':      LICENSE_URL,
-                  'com.microsoft.playready': LICENSE_URL,
-                },
+      if (!window.shaka || !shaka.Player.isBrowserSupported()) {
+        setError('Playback is not supported in this browser.');
+        return;
+      }
+
+      if (LICENSE_URL && !window.isSecureContext) {
+        setError('DRM streams require a secure context (HTTPS or a browser-trusted origin).', true);
+        return;
+      }
+
+      shaka.polyfill.installAll();
+      _shaka = new shaka.Player();
+      _shaka.attach(video).then(() => {
+        if (LICENSE_URL) {
+          _shaka.configure({
+            drm: {
+              servers: {
+                'com.widevine.alpha':      LICENSE_URL,
+                'com.microsoft.playready': LICENSE_URL,
               },
-            });
-          }
-          _shaka.addEventListener('error', (e) => {
-            const code = e.detail && e.detail.code;
-            if (code === 6007 || code === 6008) setStatus('DRM: license rejected');
-            else if (code === 6020) setStatus('DRM: requires HTTPS');
-            else if (code === 1001 || code === 1002) setStatus('Network error loading stream');
-            else if (code) setStatus('Shaka error ' + code);
+            },
           });
-          return _shaka.load(PLAY_URL, null, 'application/dash+xml');
-        }).then(() => {
-          video.play().catch(() => {});
-        }).catch((err) => {
-          setError('Could not load stream: ' + (err && err.message || err));
+        }
+        _shaka.addEventListener('error', (e) => {
+          const code = e.detail && e.detail.code;
+          if (code === 6007 || code === 6008) setStatus('DRM: license rejected');
+          else if (code === 6020) setStatus('DRM: requires HTTPS');
+          else if (code === 1001 || code === 1002) setStatus('Network error loading stream');
+          else if (code) setStatus('Shaka error ' + code);
         });
-        return;
-      }
-
-      // HLS
-      if (window.Hls && window.Hls.isSupported()) {
-        _hls = new window.Hls({ enableWorker: true, lowLatencyMode: false });
-        _hls.loadSource(PLAY_URL);
-        _hls.attachMedia(video);
-        _hls.on(window.Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
-        _hls.on(window.Hls.Events.ERROR, (_e, data) => {
-          if (data.fatal) setStatus('HLS error: ' + data.details);
-        });
-        return;
-      }
-
-      if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = PLAY_URL;
-        video.load();
+        const mimeType = (PLAYBACK_MODE === 'dash' || STREAM_TYPE === 'dash')
+          ? 'application/dash+xml'
+          : 'application/x-mpegURL';
+        return _shaka.load(PLAY_URL, null, mimeType);
+      }).then(() => {
         video.play().catch(() => {});
-        return;
-      }
-
-      setError('HLS playback is not supported in this browser.');
+      }).catch((err) => {
+        setError('Could not load stream: ' + (err && err.message || err));
+      });
     }
 
     function activateFullscreen() {
