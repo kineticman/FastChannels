@@ -539,6 +539,11 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
         logger.debug("[%s] resolving live stream for %s", self.source_name, station_id[:40])
         url = self._resolve_live(station_id, pe)
+        if not url:
+            # PE may have expired server-side before our local expiry. Signal the play
+            # route to trigger a background re-scrape so all PEs are refreshed.
+            self._requested_rescrape = True
+
         if url:
             self._stream_url_cache[station_id] = {
                 "url": url,

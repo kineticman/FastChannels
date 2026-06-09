@@ -538,9 +538,7 @@
       _guideDetectingFor = null;
       _stopGuideStatsLoop();
       _guideDroppedFrames0 = null;
-      if (_guideShaka) { _guideShaka.destroy(); _guideShaka = null; }
-      const v = document.getElementById('gm-player');
-      if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+      _destroyGuidePlayer();
       const content = document.getElementById('gm-content');
       content.innerHTML = '<div class="modal-loading">Loading…</div>';
       await _loadGuideModal(_guideChannelList[_guideChannelIndex], null);
@@ -723,6 +721,18 @@
     }
 
     // ── Core modal open/close ─────────────────────────────────────────
+    function _destroyGuidePlayer() {
+      if (_guideShaka) { _guideShaka.destroy(); _guideShaka = null; }
+      const v = document.getElementById('gm-player');
+      if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+    }
+
+    function _handleLeavePipCleanup() {
+      // Only destroy if the modal wasn't re-opened to a new channel before PIP closed.
+      const modal = document.getElementById('guide-modal');
+      if (!modal.classList.contains('open')) _destroyGuidePlayer();
+    }
+
     function closeGuideModal() {
       _guideDetectingFor = null;
       _guideStatsVisible = false;
@@ -730,9 +740,13 @@
       const modal = document.getElementById('guide-modal');
       modal.classList.remove('open');
       document.body.style.overflow = '';
-      if (_guideShaka) { _guideShaka.destroy(); _guideShaka = null; }
       const v = document.getElementById('gm-player');
-      if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+      if (v && document.pictureInPictureElement === v) {
+        // Stream stays alive for PIP; clean up when the PIP window is closed.
+        v.addEventListener('leavepictureinpicture', _handleLeavePipCleanup, { once: true });
+        return;
+      }
+      _destroyGuidePlayer();
     }
 
     async function openGuideModal(channelId, prog) {
@@ -876,12 +890,9 @@
       if (!wrap || !video) return;
       wrap.style.display = '';
       video.volume = 0.5;
-      if (_guideShaka) { _guideShaka.destroy(); _guideShaka = null; }
+      _destroyGuidePlayer();
       _stopGuideStatsLoop();
       _guideDroppedFrames0 = null;
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
 
       const normalizedMode = String(mode || '').toLowerCase();
       const normalizedType = String(type || '').toLowerCase();

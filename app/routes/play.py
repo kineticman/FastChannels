@@ -1349,6 +1349,13 @@ def play(source_name: str, channel_id: str):
                 except Exception as ce:
                     db.session.rollback()
                     logger.warning('[play] failed to persist config updates: %s', ce)
+            if getattr(scraper, '_requested_rescrape', False):
+                try:
+                    from .tasks import trigger_scrape
+                    trigger_scrape(source_name)
+                    logger.info('[play] triggered background rescrape for %s after resolve failure', source_name)
+                except Exception as rs_e:
+                    logger.warning('[play] trigger_scrape failed for %s: %s', source_name, rs_e)
     else:
         resolved_url = channel.stream_url
 
