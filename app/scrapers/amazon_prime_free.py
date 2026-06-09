@@ -113,6 +113,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
         "widgetScheme": "web-explore-v33",
         "variant": "desktopWindows",
         "journeyIngressContext": "28|CgVQcmltZQoLZnJlZXdpdGhhZHM=",
+        "pageSize": 100,
         "dynamicFeatures": [
             "integration",
             "CLIENT_DECORATION_ENABLE_DAAPI",
