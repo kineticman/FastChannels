@@ -310,10 +310,29 @@
     .gm-actions { display: flex; gap: 0.4rem; flex-wrap: nowrap; margin-bottom: 1rem; align-items: center; }
     .gm-actions .preview-action-btn { white-space: nowrap; padding: 0.35rem 0.6rem; font-size: 0.75rem; }
     .gm-player-wrap { margin-top: 0.25rem; }
+    .gm-video-wrap { position: relative; }
     .gm-player-wrap video { width: 100%; border-radius: 6px; background: #000; max-height: 340px; }
     .gm-player-note {
       font-size: 0.72rem; color: var(--text-muted); margin-top: 0.5rem; line-height: 1.4;
     }
+    .gm-stats-overlay {
+      display: none; position: absolute; top: 8px; left: 8px; z-index: 10;
+      background: rgba(0,0,0,0.75); color: #e8e8e8; font-family: monospace;
+      font-size: 0.72rem; line-height: 1.6; padding: 0.5rem 0.7rem; border-radius: 6px;
+      pointer-events: none; white-space: nowrap; backdrop-filter: blur(2px);
+    }
+    .gm-stats-overlay.visible { display: block; }
+    .gm-stats-overlay .sfn-row { display: flex; gap: 0.6rem; }
+    .gm-stats-overlay .sfn-lbl { color: #aaa; min-width: 110px; }
+    .gm-stats-overlay .sfn-val { color: #fff; font-weight: 600; }
+    .gm-player-foot { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem; }
+    .gm-player-foot #gm-player-status { flex: 1; font-size: 0.8rem; color: var(--text-muted); }
+    .btn-stats-toggle {
+      background: none; border: 1px solid var(--border); color: var(--text-muted);
+      border-radius: 4px; padding: 0.15rem 0.5rem; font-size: 0.72rem; cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .btn-stats-toggle.active { border-color: var(--accent-soft); color: var(--accent-soft); }
 
     @media (max-width: 760px) {
       html { font-size: 16px; }
@@ -515,6 +534,8 @@
       if (newIndex < 0 || newIndex >= _guideChannelList.length) return;
       _guideChannelIndex = newIndex;
       _guideDetectingFor = null;
+      _stopGuideStatsLoop();
+      _guideDroppedFrames0 = null;
       if (_guideShaka) { _guideShaka.destroy(); _guideShaka = null; }
       const v = document.getElementById('gm-player');
       if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
@@ -702,6 +723,8 @@
     // ── Core modal open/close ─────────────────────────────────────────
     function closeGuideModal() {
       _guideDetectingFor = null;
+      _guideStatsVisible = false;
+      _stopGuideStatsLoop();
       const modal = document.getElementById('guide-modal');
       modal.classList.remove('open');
       document.body.style.overflow = '';
@@ -819,8 +842,14 @@
             <button class="preview-action-btn danger" onclick="closeGuideModal()">Close</button>
           </div>
           <div class="gm-player-wrap" id="gm-player-wrap" style="display:none">
-            <video id="gm-player" controls playsinline preload="none"></video>
-            <div id="gm-player-status" style="font-size:0.8rem;color:var(--text-muted);padding:0.25rem 0"></div>
+            <div class="gm-video-wrap">
+              <video id="gm-player" controls playsinline preload="none"></video>
+              <div class="gm-stats-overlay" id="gm-stats-overlay"></div>
+            </div>
+            <div class="gm-player-foot">
+              <div id="gm-player-status"></div>
+              <button class="btn-stats-toggle" id="gm-btn-stats" onclick="toggleGuideStats()" title="Stats for nerds">Stats</button>
+            </div>
             <div class="gm-player-note">Browser playback depends on stream format and source restrictions. If it fails here, try Watch Fullscreen or VLC.</div>
           </div>
         `;
@@ -846,6 +875,8 @@
       wrap.style.display = '';
       video.volume = 0.5;
       if (_guideShaka) { _guideShaka.destroy(); _guideShaka = null; }
+      _stopGuideStatsLoop();
+      _guideDroppedFrames0 = null;
       video.pause();
       video.removeAttribute('src');
       video.load();
@@ -887,6 +918,7 @@
       }).then(() => {
         if (status) status.textContent = '';
         video.play().catch(() => {});
+        if (_guideStatsVisible) _startGuideStatsLoop();
       }).catch((err) => {
         if (status) {
           const code = err.code || '';
@@ -897,6 +929,97 @@
           }
         }
       });
+    }
+
+    // ── Guide stats for nerds ─────────────────────────────────────────
+    let _guideStatsInterval  = null;
+    let _guideStatsVisible   = false;
+    let _guideDroppedFrames0 = null;
+
+    function toggleGuideStats() {
+      _guideStatsVisible = !_guideStatsVisible;
+      const overlay = document.getElementById('gm-stats-overlay');
+      const btn     = document.getElementById('gm-btn-stats');
+      if (!overlay) return;
+      if (_guideStatsVisible) {
+        overlay.classList.add('visible');
+        btn && btn.classList.add('active');
+        _startGuideStatsLoop();
+      } else {
+        overlay.classList.remove('visible');
+        btn && btn.classList.remove('active');
+        _stopGuideStatsLoop();
+      }
+    }
+
+    function _startGuideStatsLoop() {
+      _stopGuideStatsLoop();
+      _guideDroppedFrames0 = null;
+      _updateGuideStats();
+      _guideStatsInterval = setInterval(_updateGuideStats, 1000);
+    }
+
+    function _stopGuideStatsLoop() {
+      if (_guideStatsInterval) { clearInterval(_guideStatsInterval); _guideStatsInterval = null; }
+    }
+
+    function _updateGuideStats() {
+      const overlay = document.getElementById('gm-stats-overlay');
+      const video   = document.getElementById('gm-player');
+      if (!overlay || !video || !_guideStatsVisible) return;
+
+      const rows = [];
+
+      const vw = video.videoWidth, vh = video.videoHeight;
+      rows.push(['Resolution', vw ? `${vw}×${vh}` : '—']);
+
+      if (video.getVideoPlaybackQuality) {
+        const q = video.getVideoPlaybackQuality();
+        if (_guideDroppedFrames0 === null) _guideDroppedFrames0 = q.droppedVideoFrames;
+        rows.push(['Dropped Frames', `${q.droppedVideoFrames - _guideDroppedFrames0} / ${q.totalVideoFrames}`]);
+      }
+
+      rows.push(['Playback', `${video.paused ? 'Paused' : 'Playing'}  ${video.playbackRate}×`]);
+
+      if (_guideShaka) {
+        const stats = _guideShaka.getStats();
+        if (stats.estimatedBandwidth)
+          rows.push(['Bandwidth Est.', `${(stats.estimatedBandwidth / 1000).toFixed(0)} Kbps`]);
+        if (stats.streamBandwidth)
+          rows.push(['Stream Bitrate', `${(stats.streamBandwidth / 1000).toFixed(0)} Kbps`]);
+
+        const tracks = _guideShaka.getVariantTracks();
+        const active = tracks.find(t => t.active);
+        if (active) {
+          if (active.videoCodec) rows.push(['Video Codec', active.videoCodec]);
+          if (active.audioCodec) rows.push(['Audio Codec', active.audioCodec]);
+          if (active.frameRate)  rows.push(['Frame Rate', `${active.frameRate.toFixed(2)} fps`]);
+        }
+        if (tracks.length > 1) {
+          const variants = [...new Set(tracks.filter(t => t.height).map(t => `${t.height}p`))].join(' / ');
+          if (variants) rows.push(['Variants', variants]);
+        }
+
+        const buf = video.buffered;
+        if (buf && buf.length > 0) {
+          const ct = video.currentTime;
+          let ahead = 0;
+          for (let i = 0; i < buf.length; i++) {
+            if (buf.start(i) <= ct && buf.end(i) >= ct) { ahead = buf.end(i) - ct; break; }
+          }
+          rows.push(['Buffer', `${ahead.toFixed(1)}s`]);
+        }
+      }
+
+      const conn = navigator.connection;
+      if (conn) {
+        const parts = [conn.effectiveType, conn.downlink ? conn.downlink+'Mbps' : ''].filter(Boolean);
+        if (parts.length) rows.push(['Network', parts.join('  ')]);
+      }
+
+      overlay.innerHTML = rows.map(([lbl, val]) =>
+        `<div class="sfn-row"><span class="sfn-lbl">${lbl}</span><span class="sfn-val">${val}</span></div>`
+      ).join('');
     }
 
     // ── Background stream detection ───────────────────────────────────
