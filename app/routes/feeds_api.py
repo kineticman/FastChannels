@@ -150,6 +150,15 @@ def create_feed():
     err = _safe_flush()  # make new feed visible to overlap check
     if err:
         return err
+    # A new chnum_start feed needs its FeedChannelNumber store populated before
+    # the overlap check / XML refresh, so its std and gracenote M3Us draw from one
+    # unified pool instead of both numbering from chnum_start and colliding.
+    if feed.chnum_start is not None:
+        from ..worker import _refresh_auto_channel_numbers
+        _refresh_auto_channel_numbers()
+        err = _safe_flush()
+        if err:
+            return err
     new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
     if new_warnings:
         db.session.rollback()
@@ -201,6 +210,18 @@ def update_feed(feed_id):
     err = _safe_flush()  # make changes visible to overlap check
     if err:
         return err
+    # Changing chnum_start or filters alters which channels this feed numbers and
+    # from where.  For unified-pool (chnum_start) feeds the std and gracenote M3Us
+    # rely on the persisted FeedChannelNumber store to avoid colliding with each
+    # other, so the store must be rebuilt BEFORE we regenerate XML or check for
+    # overlaps — otherwise both partitions number sequentially from chnum_start
+    # and every gracenote channel collides with a standard one.
+    if any(k in data for k in ('chnum_start', 'filters', 'is_enabled')):
+        from ..worker import _refresh_auto_channel_numbers
+        _refresh_auto_channel_numbers()
+        err = _safe_flush()
+        if err:
+            return err
     new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
     if new_warnings:
         db.session.rollback()
@@ -241,6 +262,14 @@ def reset_feed_channel_numbers(feed_id):
 
     if feed.slug == 'default':
         _reset_default_channel_numbers()
+        # The default feed can also carry an explicit chnum_start, in which case
+        # it has its own FeedChannelNumber store driving its playlist numbers.
+        # Nulling master Channel.number alone leaves that store untouched, and
+        # _refresh_auto_channel_numbers keeps the old sticky numbers (>= chnum_start)
+        # — making the reset a no-op for this feed.  Clear it so it rebuilds fresh.
+        if feed.chnum_start is not None:
+            for row in FeedChannelNumber.query.filter_by(feed_id=feed.id).all():
+                db.session.delete(row)
     else:
         if feed.chnum_start is None:
             return jsonify({'error': 'Set a Channel Number Start before resetting this feed.'}), 400

@@ -649,6 +649,9 @@ def get_global_chnum_overlaps() -> list[str]:
     """
     master_outputs: list[tuple[str, list, dict[int, int]]] = []
     feed_outputs:   list[tuple[str, list, dict[int, int]]] = []
+    # std/gn output pairs for unified-pool (chnum_start) feeds, which DO share a
+    # single number range and so must be cross-checked against each other.
+    unified_pairs:  list[tuple[tuple, tuple]] = []
 
     master_standard = _selected_channel_stubs({}, gracenote=False)
     master_standard_map, _ = _resolve_chnum_map(master_standard)
@@ -673,7 +676,8 @@ def get_global_chnum_overlaps() -> list[str]:
             namespace_start=std_ns,
             feed_id=feed.id if feed.chnum_start is not None else None,
         )
-        feed_outputs.append((f'feed {feed.slug} /m3u', std_channels, std_map))
+        std_out = (f'feed {feed.slug} /m3u', std_channels, std_map)
+        feed_outputs.append(std_out)
 
         gn_channels = _selected_channel_stubs(filters, gracenote=True)
         gn_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=True)
@@ -683,7 +687,11 @@ def get_global_chnum_overlaps() -> list[str]:
             namespace_start=gn_ns,
             feed_id=feed.id if feed.chnum_start is not None else None,
         )
-        feed_outputs.append((f'feed {feed.slug} /m3u/gracenote', gn_channels, gn_map))
+        gn_out = (f'feed {feed.slug} /m3u/gracenote', gn_channels, gn_map)
+        feed_outputs.append(gn_out)
+
+        if feed.chnum_start is not None:
+            unified_pairs.append((std_out, gn_out))
 
     warnings: list[str] = []
 
@@ -708,10 +716,16 @@ def get_global_chnum_overlaps() -> list[str]:
                     seen[chnum] = (output_name, ch.name, ch.id)
 
     _check(master_outputs)
-    # Check std feeds against each other, gracenote feeds against each other.
-    # Never compare std vs gracenote — users subscribe to one OR the other.
+    # Across different feeds, check std feeds against each other and gracenote
+    # feeds against each other.  Don't compare a std feed against an unrelated
+    # gracenote feed — for namespace-numbered feeds the two live in separate
+    # 100k blocks and a user adds both halves of a feed, not halves of two feeds.
     _check([o for o in feed_outputs if not o[0].endswith('/gracenote')])
     _check([o for o in feed_outputs if o[0].endswith('/gracenote')])
+    # Within a single chnum_start feed, std and gracenote channels DO share one
+    # unified pool, so a number used on both sides is a real collision.
+    for std_out, gn_out in unified_pairs:
+        _check([std_out, gn_out])
     return warnings
 
 
