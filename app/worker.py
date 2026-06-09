@@ -323,7 +323,9 @@ def run_scraper(source_name: str, force_full: bool = False):
             phase_timeouts = dict(getattr(scraper_cls, 'phase_timeouts', {}) or {})
             _env_epg = AppSettings._env_int('SCRAPE_EPG_TIMEOUT')
             if _env_epg:
-                phase_timeouts['epg'] = _env_epg
+                # Raise the ceiling only — never lower a source's own override
+                # (Roku/Vidaa set epg=900) below what it already needs.
+                phase_timeouts['epg'] = max(phase_timeouts.get('epg', 0), _env_epg)
 
             def _phase_timeout(phase_name: str) -> int | None:
                 value = phase_timeouts.get(phase_name)
