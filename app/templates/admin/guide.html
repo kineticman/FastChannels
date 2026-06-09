@@ -284,6 +284,7 @@
       display: inline-flex; align-items: center; justify-content: center;
       padding: 0.45rem 1rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer;
       border: 1px solid transparent; text-decoration: none; font-weight: 500; white-space: nowrap;
+      font: inherit;
     }
     .preview-action-btn.primary { background: var(--success-border); border-color: var(--success-border); color: var(--success-contrast, #fff); }
     .preview-action-btn.primary:hover { opacity: 0.9; }
@@ -307,7 +308,7 @@
     .gm-nav-btn:hover:not(:disabled) { border-color: var(--accent-soft); color: var(--accent-soft); background: var(--accent-bg); }
     .gm-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
     .gm-nav-pos { font-size: 0.78rem; color: var(--text-muted); }
-    .gm-actions { display: flex; gap: 0.4rem; flex-wrap: nowrap; margin-bottom: 1rem; align-items: center; }
+    .gm-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
     .gm-actions .preview-action-btn { white-space: nowrap; padding: 0.35rem 0.6rem; font-size: 0.75rem; }
     .gm-player-wrap { margin-top: 0.25rem; }
     .gm-video-wrap { position: relative; }
@@ -342,6 +343,7 @@
       .container { margin: 1rem auto; padding: 0 0.75rem; }
       .modal-overlay { align-items: flex-start; padding: 0.75rem 0.5rem; }
       .modal-box { width: 100%; max-width: 100%; border-radius: 8px; }
+      .gm-vlc-btn { display: none; }
     }
   </style>
   {% include 'admin/_theme_head.html' %}
@@ -802,7 +804,7 @@
               : '');
         const watchBtn = playUrl ? `<a class="preview-action-btn secondary" href="/watch/${ch.id}" target="_blank" rel="noopener">Watch Fullscreen</a>` : '';
         const extBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open in New Tab</a>` : '';
-        const vlcBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
+        const vlcBtn  = playUrl ? `<a class="preview-action-btn secondary gm-vlc-btn" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
         const noStream = !playUrl && !detecting ? `<span style="font-size:0.8rem;color:var(--text-muted)">No stream available for this source</span>` : '';
 
         const navRow = _guideChannelList && _guideChannelList.length > 1 ? `
@@ -1042,7 +1044,7 @@
           : '';
         const watchBtn = playUrl ? `<a class="preview-action-btn secondary" href="/watch/${channelId}" target="_blank" rel="noopener">Watch Fullscreen</a>` : '';
         const extBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open in New Tab</a>` : '';
-        const vlcBtn  = playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
+        const vlcBtn  = playUrl ? `<a class="preview-action-btn secondary gm-vlc-btn" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
         actions.innerHTML = `${playBtn}${watchBtn}${extBtn}${vlcBtn}<button class="preview-action-btn danger" onclick="closeGuideModal()">Close</button>`;
       } catch (_e) { /* silently ignore — stream detect failed */ }
     }
