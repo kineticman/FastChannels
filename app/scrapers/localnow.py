@@ -27,7 +27,7 @@ _LOCALNOW_EPISODE_ONLY_RE = re.compile(
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote, urljoin
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, infer_language_from_metadata
 from .category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
@@ -115,6 +115,11 @@ class LocalNowScraper(BaseScraper):
 
     HOME_URL = "https://localnow.com/"
     CHANNELS_PAGE_URL = "https://localnow.com/channels"
+    GEO_BLOCK_MESSAGE = (
+        "Local Now is US-only and this server's IP appears to be outside the US — "
+        "the homepage returned no runtime config. Connect through a US VPN/proxy to "
+        "scrape Local Now, or disable this source."
+    )
     EPG_URL_TMPL = "https://{host}/live/epg/US/website"
     PLAY_URL_TMPL = "https://{host}/video/play/{video_id}/{width}/{height}"
     CITY_SEARCH_URL = "https://prod.localnowapi.com/gis/api/v2/City/Search"
@@ -335,9 +340,16 @@ class LocalNowScraper(BaseScraper):
 
         logger.info("[localnow] bootstrapping runtime config from homepage")
         resp = self.session.get(self.HOME_URL, timeout=20)
+        # Non-US visitors are blocked at the edge (403) or served a region page
+        # (200 without the Next.js payload). Treat both as a skippable geo-block
+        # rather than a hard failure so the run records a clear, actionable reason.
+        if resp.status_code in (403, 451):
+            raise ScrapeSkipError(f"[localnow] {self.GEO_BLOCK_MESSAGE}")
         resp.raise_for_status()
 
         next_data = self._extract_next_data(resp.text)
+        if next_data is None:
+            raise ScrapeSkipError(f"[localnow] {self.GEO_BLOCK_MESSAGE}")
         runtime_config = next_data.get("runtimeConfig") or {}
         if not runtime_config:
             raise RuntimeError("Local Now runtimeConfig missing from __NEXT_DATA__")
@@ -394,14 +406,16 @@ class LocalNowScraper(BaseScraper):
         )
 
     @staticmethod
-    def _extract_next_data(html: str) -> Dict[str, Any]:
+    def _extract_next_data(html: str) -> Optional[Dict[str, Any]]:
         m = re.search(
             r'<script id="__NEXT_DATA__" type="application/json">\s*(.*?)\s*</script>',
             html,
             re.S,
         )
         if not m:
-            raise RuntimeError("Could not find __NEXT_DATA__ in Local Now homepage")
+            # Absent on region-blocked pages served to non-US IPs. Caller treats
+            # None as a geo-block and skips the run.
+            return None
         return json.loads(m.group(1))
 
     def _discover_dma_market(self, next_data: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
