@@ -720,6 +720,164 @@ def pluto_variant_proxy():
     )
 
 
+@play_bp.route('/play/fubo/<channel_id>/proxy.m3u8')
+def fubo_manifest_proxy(channel_id: str):
+    from urllib.parse import unquote as _unquote, quote as _quote
+    import re as _re
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'fubo', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper_cls = registry.get('fubo')
+    if not scraper_cls:
+        abort(502)
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        master_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[fubo-proxy] resolve failed for %s: %s', raw_id[:40], e)
+        abort(502)
+
+    if not master_url or not master_url.startswith('http'):
+        abort(502)
+
+    try:
+        from curl_cffi import requests as _cffi
+        r = _cffi.get(master_url, impersonate='chrome', timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[fubo-proxy] master fetch failed for %s: %s', raw_id[:40], e)
+        abort(502)
+
+    effective_url = r.url
+    base_url = request.host_url.rstrip('/')
+
+    def _proxy_url(abs_url: str) -> str:
+        return f'{base_url}/play/fubo/variant?url={_quote(abs_url, safe="")}'
+
+    def _abs(rel: str) -> str:
+        return rel if rel.startswith('http') else urljoin(effective_url, rel)
+
+    def _rewrite_uri(m):
+        return f'URI="{_proxy_url(_abs(m.group(1)))}"'
+
+    lines = []
+    for line in r.text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            line = _proxy_url(_abs(stripped))
+        elif stripped.startswith('#EXT-X-MEDIA') and 'URI=' in stripped:
+            line = _re.sub(r'URI="([^"]+)"', _rewrite_uri, line)
+        lines.append(line)
+
+    return Response(
+        '\n'.join(lines),
+        mimetype='application/vnd.apple.mpegurl',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
+@play_bp.route('/play/fubo/variant')
+def fubo_variant_proxy():
+    from urllib.parse import urlsplit, unquote as _unquote, quote as _quote
+    import re as _re
+
+    raw = request.args.get('url', '')
+    if not raw:
+        abort(400)
+    url = _unquote(raw)
+    parsed = urlsplit(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        abort(400)
+    host = parsed.netloc.split(':')[0].lower()
+    if not host.endswith('.fubo.tv'):
+        logger.warning('[fubo-variant] blocked non-Fubo host: %s', host)
+        abort(403)
+    if _PRIVATE_IP_RE.match(host):
+        abort(403)
+
+    try:
+        from curl_cffi import requests as _cffi
+        r = _cffi.get(url, impersonate='chrome', timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[fubo-variant] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+
+    base_url = request.host_url.rstrip('/')
+
+    def _seg_proxy(abs_url: str) -> str:
+        return f'{base_url}/play/fubo/seg?url={_quote(abs_url, safe="")}'
+
+    def _abs(rel: str) -> str:
+        return rel if rel.startswith('http') else urljoin(url, rel)
+
+    def _rewrite_key_uri(m):
+        return f'URI="{_seg_proxy(_abs(m.group(1)))}"'
+
+    lines = []
+    for line in r.text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            # Segment URL
+            line = _seg_proxy(_abs(stripped))
+        elif stripped.startswith('#EXT-X-KEY') and 'URI=' in stripped:
+            # AES-128 key URI — proxy so it also comes from the server IP
+            line = _re.sub(r'URI="([^"]+)"', _rewrite_key_uri, line)
+        lines.append(line)
+
+    return Response(
+        '\n'.join(lines),
+        mimetype='application/vnd.apple.mpegurl',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
+@play_bp.route('/play/fubo/seg')
+def fubo_segment_proxy():
+    from urllib.parse import urlsplit, unquote as _unquote
+    raw = request.args.get('url', '')
+    if not raw:
+        abort(400)
+    url = _unquote(raw)
+    parsed = urlsplit(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        abort(400)
+    host = parsed.netloc.split(':')[0].lower()
+    if not host.endswith('.fubo.tv'):
+        logger.warning('[fubo-seg] blocked non-Fubo host: %s', host)
+        abort(403)
+    if _PRIVATE_IP_RE.match(host):
+        abort(403)
+
+    try:
+        r = _requests.get(url, timeout=15, stream=True)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[fubo-seg] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+
+    content_type = r.headers.get('Content-Type', 'application/octet-stream')
+    return Response(
+        r.content,
+        mimetype=content_type,
+        headers={'Access-Control-Allow-Origin': '*'},
+    )
+
+
 _STIRR_PROXY_SESSION: _requests.Session | None = None
 
 # Redis client for Amazon SHT (sessionHandoffToken) caching across gunicorn workers.
@@ -1486,6 +1644,17 @@ def play(source_name: str, channel_id: str):
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
             f"{request.host_url.rstrip('/')}/play/pluto/{encoded_id}/proxy.m3u8",
+            302,
+        )
+
+    # Fubo TV: stream-lv.sw.fubo.tv requires Chrome TLS fingerprinting (Safari gets
+    # 403), and Akamai segment tokens are IP-locked to the server's outbound IP.
+    # Proxy the full HLS chain (master → variants → segments/keys) through the server.
+    if source_name == 'fubo':
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/fubo/{encoded_id}/proxy.m3u8",
             302,
         )
 
