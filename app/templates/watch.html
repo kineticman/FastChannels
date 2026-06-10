@@ -152,6 +152,20 @@
         return;
       }
 
+      // Safari/iOS: use native HLS to avoid Shaka error 4042 (AES-128 encrypted TS unsupported by MSE).
+      // Check both canPlayType and UA — canPlayType can return empty in some WKWebView contexts.
+      const _isDash = PLAYBACK_MODE === 'dash' || STREAM_TYPE === 'dash';
+      const _hasNativeHls = !_isDash && !LICENSE_URL && (
+        video.canPlayType('application/x-mpegURL') ||
+        /iPad|iPhone|iPod/.test(navigator.userAgent)
+      );
+      if (_hasNativeHls) {
+        video.src = PLAY_URL;
+        video.load();
+        video.play().catch(() => {});
+        return;
+      }
+
       shaka.polyfill.installAll();
       _shaka = new shaka.Player();
       _shaka.attach(video).then(() => {
@@ -179,7 +193,12 @@
       }).then(() => {
         video.play().catch(() => {});
       }).catch((err) => {
-        setError('Could not load stream: ' + (err && err.message || err));
+        const code = err && err.code;
+        if (code === 4042) {
+          setError('Stream uses AES-128 encryption — requires Safari or a native HLS player.');
+        } else {
+          setError('Could not load stream: ' + (err && err.message || err));
+        }
       });
     }
 

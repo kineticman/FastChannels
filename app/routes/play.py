@@ -605,6 +605,121 @@ def distro_manifest_proxy(channel_id: str):
     )
 
 
+@play_bp.route('/play/pluto/<channel_id>/proxy.m3u8')
+def pluto_manifest_proxy(channel_id: str):
+    """
+    Manifest proxy for Pluto TV channels.
+
+    Pluto's stitcher CDN only echoes the Origin header back for pluto.tv origins;
+    any other origin gets Access-Control-Allow-Origin: http://pluto.tv — a mismatch
+    that blocks Shaka Player.  We proxy both the master and variant manifests so the
+    browser never sends a cross-origin request to the stitcher CDN directly.
+    Segment and AES-key URLs inside variant playlists point to a different CDN
+    (siloh-ns1.plutotv.net) that returns Access-Control-Allow-Origin: * and can be
+    fetched directly by the browser.
+    """
+    from urllib.parse import unquote as _unquote, quote as _quote
+    import re as _re
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'pluto', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper_cls = registry.get('pluto')
+    if not scraper_cls:
+        abort(502)
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        master_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[pluto-proxy] resolve failed for %s: %s', raw_id[:40], e)
+        abort(502)
+
+    if not master_url or not master_url.startswith('http'):
+        abort(502)
+
+    try:
+        r = _requests.get(master_url, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[pluto-proxy] master fetch failed for %s: %s', raw_id[:40], e)
+        abort(502)
+
+    effective_url = r.url
+    base_url = request.host_url.rstrip('/')
+
+    def _proxy_url(abs_url: str) -> str:
+        return f'{base_url}/play/pluto/variant?url={_quote(abs_url, safe="")}'
+
+    def _abs(rel: str) -> str:
+        return rel if rel.startswith('http') else urljoin(effective_url, rel)
+
+    def _rewrite_uri(m):
+        return f'URI="{_proxy_url(_abs(m.group(1)))}"'
+
+    lines = []
+    for line in r.text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            line = _proxy_url(_abs(stripped))
+        elif stripped.startswith('#EXT-X-MEDIA') and 'URI=' in stripped:
+            line = _re.sub(r'URI="([^"]+)"', _rewrite_uri, line)
+        lines.append(line)
+
+    return Response(
+        '\n'.join(lines),
+        mimetype='application/vnd.apple.mpegurl',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
+@play_bp.route('/play/pluto/variant')
+def pluto_variant_proxy():
+    """
+    Proxy a Pluto TV variant/subtitle/audio playlist through the server so the
+    stitcher CDN always sees the server's origin rather than the browser's.
+    Segment and AES-key URLs inside the variant are absolute siloh-ns1.plutotv.net
+    URLs that return ACAO: * and are fetched directly by the browser.
+    """
+    from urllib.parse import urlsplit, unquote as _unquote
+    raw = request.args.get('url', '')
+    if not raw:
+        abort(400)
+    url = _unquote(raw)
+    parsed = urlsplit(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        abort(400)
+    host = parsed.netloc.split(':')[0].lower()
+    if not (host.endswith('.pluto.tv') or host.endswith('.plutotv.net')):
+        logger.warning('[pluto-variant] blocked non-Pluto host: %s', host)
+        abort(403)
+    if _PRIVATE_IP_RE.match(host):
+        abort(403)
+    try:
+        r = _requests.get(url, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[pluto-variant] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+    return Response(
+        r.content,
+        mimetype='application/vnd.apple.mpegurl',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 _STIRR_PROXY_SESSION: _requests.Session | None = None
 
 # Redis client for Amazon SHT (sessionHandoffToken) caching across gunicorn workers.
@@ -1362,6 +1477,18 @@ def play(source_name: str, channel_id: str):
     if not resolved_url or not resolved_url.startswith(('http://', 'https://')):
         abort(502)
 
+    # Pluto TV: CDN uses echo-origin CORS. Browsers send Origin: null when following
+    # a cross-origin 302 redirect, causing the CDN to fall back to
+    # Access-Control-Allow-Origin: http://pluto.tv — a mismatch that blocks Shaka.
+    # Proxy the master manifest so the browser never follows a cross-origin redirect.
+    if source_name == 'pluto':
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/pluto/{encoded_id}/proxy.m3u8",
+            302,
+        )
+
     # STIRR channels resolve to URLs with IP-bound session tokens — proxy all
     # Stirr streams so every manifest fetch goes through the server IP, regardless
     # of which CDN (ssai.aniview.com, weathernationtv.com, etc.) is serving.
@@ -1542,13 +1669,19 @@ def play(source_name: str, channel_id: str):
 @play_bp.route('/watch/<int:channel_id>')
 def watch(channel_id):
     from .api import _get_playback_info
+    from flask import make_response
+    # Version param busts stale browser caches from before this route existed.
+    if '_v' not in request.args:
+        return redirect(f'{request.path}?_v=3', 302)
     channel = Channel.query.get_or_404(channel_id)
     info = _get_playback_info(channel, fast_mode=False)
-    return render_template(
+    resp = make_response(render_template(
         'watch.html',
         channel=channel,
         play_url=info.get('preview_url') or info.get('play_url') or '',
         playback_mode=info.get('playback_mode', 'hls'),
         stream_type=info.get('stream_type', 'hls'),
         license_url=info.get('license_url') or '',
-    )
+    ))
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
