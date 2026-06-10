@@ -625,9 +625,17 @@ def ensure_runtime_schema() -> None:
                         text("UPDATE app_settings SET global_chnum_start = NULL WHERE id = 1")
                     )
 
-        # Clear stale last_scraped_at on sources that are never auto-scraped
-        # (scrape_interval=0). A force-refresh-all could have stamped a timestamp
-        # on these, causing next_scrape_at() to show a perpetually overdue date.
+        # Clear stale state on sources that are never auto-scraped (scrape_interval=0).
+        # A force-refresh-all could have stamped last_scraped_at and incremented
+        # missed_scrapes on their channels (since fetch_channels returns []), causing
+        # a perpetually overdue next-scrape date and false "at risk" channel flags.
         conn.execute(
             text("UPDATE sources SET last_scraped_at = NULL WHERE scrape_interval = 0")
+        )
+        conn.execute(
+            text(
+                "UPDATE channels SET missed_scrapes = 0"
+                " WHERE missed_scrapes > 0"
+                " AND source_id IN (SELECT id FROM sources WHERE scrape_interval = 0)"
+            )
         )

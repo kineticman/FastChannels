@@ -442,12 +442,13 @@ def run_scraper(source_name: str, force_full: bool = False):
                     _active_geos = {g.upper() for g in scraper._geos()}
                 for _attempt in range(3):
                     try:
-                        _upsert_channels(
-                            source, channels, _gracenote_auto_fill,
-                            active_geos=_active_geos,
-                            miss_threshold=getattr(scraper, 'channel_miss_threshold', _CHANNEL_MISS_THRESHOLD),
-                            rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
-                        )
+                        if source.scrape_interval != 0:
+                            _upsert_channels(
+                                source, channels, _gracenote_auto_fill,
+                                active_geos=_active_geos,
+                                miss_threshold=getattr(scraper, 'channel_miss_threshold', _CHANNEL_MISS_THRESHOLD),
+                                rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
+                            )
                         _apply_scraper_config_updates(source, scraper)
                         db.session.commit()
                         # Clear so the EPG commit's _apply_scraper_config_updates
