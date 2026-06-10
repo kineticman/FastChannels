@@ -1635,29 +1635,6 @@ def play(source_name: str, channel_id: str):
     if not resolved_url or not resolved_url.startswith(('http://', 'https://')):
         abort(502)
 
-    # Pluto TV: CDN uses echo-origin CORS. Browsers send Origin: null when following
-    # a cross-origin 302 redirect, causing the CDN to fall back to
-    # Access-Control-Allow-Origin: http://pluto.tv — a mismatch that blocks Shaka.
-    # Proxy the master manifest so the browser never follows a cross-origin redirect.
-    if source_name == 'pluto':
-        from urllib.parse import quote as _quote
-        encoded_id = _quote(channel.source_channel_id, safe='')
-        return redirect(
-            f"{request.host_url.rstrip('/')}/play/pluto/{encoded_id}/proxy.m3u8",
-            302,
-        )
-
-    # Fubo TV: stream-lv.sw.fubo.tv requires Chrome TLS fingerprinting (Safari gets
-    # 403), and Akamai segment tokens are IP-locked to the server's outbound IP.
-    # Proxy the full HLS chain (master → variants → segments/keys) through the server.
-    if source_name == 'fubo':
-        from urllib.parse import quote as _quote
-        encoded_id = _quote(channel.source_channel_id, safe='')
-        return redirect(
-            f"{request.host_url.rstrip('/')}/play/fubo/{encoded_id}/proxy.m3u8",
-            302,
-        )
-
     # STIRR channels resolve to URLs with IP-bound session tokens — proxy all
     # Stirr streams so every manifest fetch goes through the server IP, regardless
     # of which CDN (ssai.aniview.com, weathernationtv.com, etc.) is serving.
