@@ -56,12 +56,14 @@ class Source(db.Model):
                 return croniter(self.scrape_cron, datetime.now(timezone.utc)).get_next(datetime)
             except Exception:
                 return None
+        if not self.scrape_interval:  # 0 means never auto-scraped
+            return None
         if self.last_scraped_at is None:
             return None
         last = self.last_scraped_at
         if last.tzinfo is None:
             last = last.replace(tzinfo=timezone.utc)
-        return last + timedelta(minutes=self.scrape_interval or 360)
+        return last + timedelta(minutes=self.scrape_interval)
 
     def __repr__(self):
         return f'<Source {self.name}>'

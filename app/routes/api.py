@@ -529,6 +529,8 @@ def force_refresh_sources():
     enabled_sources = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
     queued = []
     for source in enabled_sources:
+        if not source.scrape_interval:  # 0 = never auto-scraped (e.g. custom channels)
+            continue
         source.last_scraped_at = None
         source.last_error = None
         queued.append(source.name)

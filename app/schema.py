@@ -624,3 +624,10 @@ def ensure_runtime_schema() -> None:
                     conn.execute(
                         text("UPDATE app_settings SET global_chnum_start = NULL WHERE id = 1")
                     )
+
+        # Clear stale last_scraped_at on sources that are never auto-scraped
+        # (scrape_interval=0). A force-refresh-all could have stamped a timestamp
+        # on these, causing next_scrape_at() to show a perpetually overdue date.
+        conn.execute(
+            text("UPDATE sources SET last_scraped_at = NULL WHERE scrape_interval = 0")
+        )
