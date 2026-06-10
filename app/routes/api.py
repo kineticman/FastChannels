@@ -2059,7 +2059,7 @@ def _get_playback_info(ch, fast_mode=True):
     # server-side proxy.  The play_url (/play/<source>/<id>.m3u8) is left as-is
     # so M3U clients continue to get a direct redirect without passing through the
     # proxy.
-    if ch.source and ch.source.name in ('pluto', 'fubo') and ch.source_channel_id:
+    if ch.source and ch.source.name == 'fubo' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         _enc = _quote(ch.source_channel_id, safe='')
         preview_url = f'/play/{ch.source.name}/{_enc}/proxy.m3u8'
