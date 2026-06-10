@@ -2025,10 +2025,10 @@ def _get_playback_info(ch, fast_mode=True):
     else:
         playback_mode = 'hls'
 
-    # Pluto and Fubo use AES-128 encrypted TS segments; Shaka 4.x cannot decrypt
-    # these via MSE (throws error 4042). Force native mode so the watch page uses
-    # video.src directly and lets the browser's native HLS stack handle decryption.
-    if ch.source and ch.source.name in ('pluto', 'fubo'):
+    # These sources use AES-128 encrypted TS; Shaka 4.x cannot decrypt via MSE
+    # (error 4042). Force native mode so the watch page sets video.src directly
+    # and lets the browser's native HLS stack handle decryption.
+    if ch.source and ch.source.name in ('pluto', 'fubo', 'roku'):
         playback_mode = 'native'
 
     license_url = None
