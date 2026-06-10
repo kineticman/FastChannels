@@ -2055,11 +2055,15 @@ def _get_playback_info(ch, fast_mode=True):
         preview_url = play_url
 
     # For sources whose CDN blocks browser requests (TLS fingerprinting, IP-locked
-    # tokens, or CORS mismatches), route the watch-player preview through our
-    # server-side proxy.  The play_url (/play/<source>/<id>.m3u8) is left as-is
-    # so M3U clients continue to get a direct redirect without passing through the
-    # proxy.
-    if ch.source and ch.source.name in ('fubo', 'tubi') and ch.source_channel_id:
+    # tokens, CORS mismatches, or relative-URL resolution bugs on redirects), route
+    # the watch-player preview through our server-side proxy.  The play_url
+    # (/play/<source>/<id>.m3u8) is left as-is so M3U clients get a direct redirect.
+    # Pluto: stitcher returns relative variant URLs (e.g. "640930/playlist.m3u8");
+    # Chrome's native HLS resolves them against the original video.src URL (before
+    # the 302) rather than the redirect target, sending sub-playlist requests back
+    # to our server.  The proxy fetches the master server-side and rewrites all
+    # variant URLs to absolute proxy URLs, eliminating the relative-URL problem.
+    if ch.source and ch.source.name in ('fubo', 'tubi', 'pluto') and ch.source_channel_id:
         from urllib.parse import quote as _quote
         _enc = _quote(ch.source_channel_id, safe='')
         preview_url = f'/play/{ch.source.name}/{_enc}/proxy.m3u8'

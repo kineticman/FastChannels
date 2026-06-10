@@ -132,8 +132,9 @@
     function initPlayer() {
       if (PLAYBACK_MODE === 'unsupported' || !PLAY_URL) return;
 
-      const isNative = PLAYBACK_MODE === 'native' ||
-        ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(STREAM_TYPE);
+      const _isDirectVideo = ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(STREAM_TYPE);
+      const _isSafariOrIos = (/Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)) || /iPad|iPhone|iPod/.test(navigator.userAgent);
+      const isNative = _isDirectVideo || (PLAYBACK_MODE === 'native' && _isSafariOrIos);
 
       if (isNative) {
         video.src = PLAY_URL;

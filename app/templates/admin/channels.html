@@ -2170,7 +2170,9 @@
       const normalizedMode = String(playbackMode || '').toLowerCase();
       const normalizedType = String(streamType || '').toLowerCase();
 
-      if (normalizedMode === 'native' || ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(normalizedType)) {
+      const _isDirectVideo = ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(normalizedType);
+      const _isSafariOrIos = (/Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)) || /iPad|iPhone|iPod/.test(navigator.userAgent);
+      if (_isDirectVideo || (normalizedMode === 'native' && _isSafariOrIos)) {
         video.src = playUrl;
         video.load();
         if (status) status.textContent = 'Using native video playback for this stream type.';

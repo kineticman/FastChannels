@@ -644,8 +644,22 @@ def pluto_manifest_proxy(channel_id: str):
     if not master_url or not master_url.startswith('http'):
         abort(502)
 
+    from ..scrapers.pluto import X_FORWARD as _PLUTO_X_FORWARD, BOOT_HEADERS as _PLUTO_BOOT_HEADERS
+    _stream_url = channel.stream_url or ''
+    _parts = _stream_url[len('pluto://'):].split('/', 1) if _stream_url.startswith('pluto://') else []
+    _country = _parts[0] if _parts else 'us_east'
+    _master_hdrs = {
+        'accept': '*/*',
+        'accept-language': 'en-US,en;q=0.9',
+        'origin': 'https://pluto.tv',
+        'referer': 'https://pluto.tv/',
+        'user-agent': _PLUTO_BOOT_HEADERS.get('user-agent', ''),
+    }
+    if _country in _PLUTO_X_FORWARD:
+        _master_hdrs.update(_PLUTO_X_FORWARD[_country])
+
     try:
-        r = _requests.get(master_url, timeout=10)
+        r = _requests.get(master_url, headers=_master_hdrs, timeout=10)
         r.raise_for_status()
     except Exception as e:
         logger.warning('[pluto-proxy] master fetch failed for %s: %s', raw_id[:40], e)
@@ -704,8 +718,16 @@ def pluto_variant_proxy():
         abort(403)
     if _PRIVATE_IP_RE.match(host):
         abort(403)
+    from ..scrapers.pluto import BOOT_HEADERS as _PLUTO_BOOT_HEADERS
+    _variant_hdrs = {
+        'accept': '*/*',
+        'accept-language': 'en-US,en;q=0.9',
+        'origin': 'https://pluto.tv',
+        'referer': 'https://pluto.tv/',
+        'user-agent': _PLUTO_BOOT_HEADERS.get('user-agent', ''),
+    }
     try:
-        r = _requests.get(url, timeout=10)
+        r = _requests.get(url, headers=_variant_hdrs, timeout=10)
         r.raise_for_status()
     except Exception as e:
         logger.warning('[pluto-variant] fetch failed for %s: %s', url[:80], e)
