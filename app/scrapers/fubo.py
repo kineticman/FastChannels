@@ -254,7 +254,7 @@ class FuboScraper(BaseScraper):
 
     def fetch_channels(self) -> list[ChannelData]:
         now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-        end = now + timedelta(hours=1)
+        end = now + timedelta(hours=12)
         data = self._epg_request(now, end)
 
         try:
