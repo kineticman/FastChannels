@@ -44,6 +44,21 @@ _XMLTV_CAT_NORM = {
 }
 
 
+def _append_category(el, value: str, seen: set[str]) -> None:
+    """Emit a <category> child, normalized and de-duplicated.
+
+    `seen` holds the casefolded normalized labels already emitted on this
+    programme so the same category isn't repeated (e.g. a "Plex" source name
+    alongside a feed also named "Plex").
+    """
+    normalized = _XMLTV_CAT_NORM.get(value.casefold(), value)
+    norm_key = normalized.casefold()
+    if norm_key in seen:
+        return
+    seen.add(norm_key)
+    SubElement(el, 'category', lang='en').text = normalized
+
+
 def generate_xmltv(filters: dict = None, base_url: str = None, feed_name: str = None) -> str:
     """Compatibility wrapper — full XML as a string. Use streaming for HTTP."""
     return ''.join(generate_xmltv_stream(filters, base_url, feed_name=feed_name))
@@ -166,26 +181,22 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             channel_cat = ch_cat_map.get(prog.channel_id) or ''
             program_cat = prog.category or ''
             combined_cats = [c.strip() for c in f'{program_cat};{channel_cat}'.split(';') if c.strip()]
-            if combined_cats:
-                # Use prog.category if set, fall back to channel category.
-                # Split semicolon-joined strings into multiple <category> tags —
-                # XMLTV allows multiple per programme and clients filter by them.
-                seen_categories: set[str] = set()
-                for cat in combined_cats:
-                    key = cat.casefold()
-                    normalized = _XMLTV_CAT_NORM.get(key, cat)
-                    norm_key = normalized.casefold()
-                    if norm_key in seen_categories:
-                        continue
-                    seen_categories.add(norm_key)
-                    SubElement(el, 'category', lang='en').text = normalized
+            # Track every category emitted (normalized, casefolded) so the source
+            # name, feed name and synthetic Movie tag below don't duplicate one
+            # already present — e.g. a feed named "Plex" on the Plex source.
+            seen_categories: set[str] = set()
+            # Use prog.category if set, fall back to channel category.
+            # Split semicolon-joined strings into multiple <category> tags —
+            # XMLTV allows multiple per programme and clients filter by them.
+            for cat in combined_cats:
+                _append_category(el, cat, seen_categories)
             # Always add source name as a category so clients can filter by provider
             src_name = ch_src_map.get(prog.channel_id)
             if src_name:
-                SubElement(el, 'category', lang='en').text = src_name
+                _append_category(el, src_name, seen_categories)
             # Add feed name as a category when generating a feed-specific EPG
             if feed_name:
-                SubElement(el, 'category', lang='en').text = feed_name
+                _append_category(el, feed_name, seen_categories)
             if prog.poster_url:
                 # Only proxy/cache Roku posters (CDN returns 403 to clients).
                 # All other sources serve artwork directly — no caching overhead.
@@ -207,7 +218,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             # Ensure <category>Movie</category> is emitted when program_type
             # signals a movie but the scraped category doesn't already say so.
             if prog_type == 'movie' and 'movie' not in cats and 'movies' not in cats:
-                SubElement(el, 'category', lang='en').text = 'Movie'
+                _append_category(el, 'Movie', seen_categories)
             if prog.episode_title and not is_movie:
                 SubElement(el, 'sub-title', lang='en').text = _sanitize(prog.episode_title)
             if prog.season and prog.episode and not is_movie:
@@ -249,14 +260,15 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                 SubElement(el, 'title', lang='en').text = _sanitize(ch.name)
                 if ch.description:
                     SubElement(el, 'desc', lang='en').text = _sanitize(ch.description)
+                seen_categories = set()
                 channel_cat = ch_cat_map.get(ch.id) or ''
                 if channel_cat:
-                    SubElement(el, 'category', lang='en').text = _XMLTV_CAT_NORM.get(channel_cat.casefold(), channel_cat)
+                    _append_category(el, channel_cat, seen_categories)
                 src_name = ch_src_map.get(ch.id)
                 if src_name:
-                    SubElement(el, 'category', lang='en').text = src_name
+                    _append_category(el, src_name, seen_categories)
                 if feed_name:
-                    SubElement(el, 'category', lang='en').text = feed_name
+                    _append_category(el, feed_name, seen_categories)
                 if ch.logo_url:
                     SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url)
                 yield tostring(el, encoding='unicode') + '\n'

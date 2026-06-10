@@ -719,10 +719,20 @@ class PlexScraper(BaseScraper):
                         None,
                     )
                 )
-            category = next(
-                (genre.attrib.get("tag") for genre in video.findall("Genre") if genre.attrib.get("tag")),
-                None,
-            )
+            genres = [g.attrib.get("tag") for g in video.findall("Genre") if g.attrib.get("tag")]
+            category = genres[0] if genres else None
+
+            # Plex tags hour-long music-video blocks (Euro Hits, FilmRise Music,
+            # XITE, …) as type="movie", which otherwise leaks a bogus
+            # <category>Movie</category> into the guide. These carry a "Music"
+            # genre; real films — even on a music-misclassified channel like a
+            # "Non-Stop '90s" movie loop — never do (their genres are Action,
+            # Comedy, Movies, …). Keying off the genre rather than the channel
+            # category avoids demoting real movies and works on both the full
+            # and EPG-only scrape paths.
+            program_type = video.attrib.get("type") or None
+            if program_type == "movie" and any((g or "").casefold() == "music" for g in genres):
+                program_type = None
 
             programs.append(ProgramData(
                 source_channel_id = source_channel_id,
@@ -737,7 +747,7 @@ class PlexScraper(BaseScraper):
                 episode           = int(video.attrib["index"]) if video.attrib.get("index", "").isdigit() else None,
                 episode_title     = ep_title,
                 original_air_date = _parse_date(video.attrib.get("originalAvailableAt")),
-                program_type      = video.attrib.get("type") or None,
+                program_type      = program_type,
             ))
 
         return programs
