@@ -720,6 +720,69 @@ def pluto_variant_proxy():
     )
 
 
+@play_bp.route('/play/tubi/<channel_id>/proxy.m3u8')
+def tubi_manifest_proxy(channel_id: str):
+    """
+    Tubi master manifest proxy.
+
+    Shaka follows the 302 redirect from our play route to Tubi's CDN with
+    Origin: null (cross-origin redirect). Even though Tubi returns ACAO: *,
+    some Shaka/Chrome combinations reject null-origin + wildcard ACAO.  Fetching
+    the master server-side and returning it as a same-origin response eliminates
+    the redirect entirely.  Variant playlists and segments are left direct —
+    both use ACAO: * or echo-origin CORS which works fine for Shaka's real origin.
+    """
+    from urllib.parse import unquote as _unquote
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'tubi', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper_cls = registry.get('tubi')
+    if not scraper_cls:
+        abort(502)
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        master_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[tubi-proxy] resolve failed for %s: %s', raw_id[:40], e)
+        abort(502)
+
+    if not master_url or not master_url.startswith('http'):
+        abort(502)
+
+    try:
+        r = _requests.get(master_url, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[tubi-proxy] master fetch failed for %s: %s', raw_id[:40], e)
+        abort(502)
+
+    effective_url = r.url
+
+    lines = []
+    for line in r.text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            line = stripped if stripped.startswith('http') else urljoin(effective_url, stripped)
+        lines.append(line)
+
+    return Response(
+        '\n'.join(lines),
+        mimetype='application/vnd.apple.mpegurl',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 @play_bp.route('/play/fubo/<channel_id>/proxy.m3u8')
 def fubo_manifest_proxy(channel_id: str):
     from urllib.parse import unquote as _unquote, quote as _quote
