@@ -40,11 +40,13 @@ _API = 'https://api.fubo.tv'
 _SIGNIN_URL   = f'{_API}/v2/signin'
 _REFRESH_URL  = f'{_API}/refresh'
 _EPG_URL      = f'{_API}/epg'
+_PAPI_EPG_URL = f'{_API}/papi/v1/guide/epg'
 _ASSET_URL    = f'{_API}/vapi/asset/v1'
 
 _TOKEN_TTL    = 60 * 60 * 8   # refresh access token after 8 hours (issued for 10h)
 _EPG_HOURS    = 6              # hours per EPG request window
-_EPG_DAYS     = 3              # days of EPG to fetch
+_EPG_DAYS     = 7              # days of EPG to fetch
+_RICH_EPG_HOURS = 24           # metadata enrichment window
 
 # Minimal headers for auth calls (PUT /v2/signin, POST /refresh).
 # curl_cffi with Chrome impersonation already injects its own device/OS headers;
@@ -307,6 +309,7 @@ class FuboScraper(BaseScraper):
                 language='es' if 'spanish' in tags_lower else infer_language_from_metadata(name),
                 country='US',
                 stream_type='hls',
+                gracenote_id=gracenote_id,
                 description=desc or None,
                 guide_key=call or None,
                 tags=tags,
@@ -329,87 +332,112 @@ class FuboScraper(BaseScraper):
     # ── EPG ───────────────────────────────────────────────────────────────────
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
-        channel_ids = {ch.source_channel_id for ch in channels}
-        programs: list[ProgramData] = []
-
-        now  = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        resolve_channel_id = _channel_id_resolver(channels)
+        now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         end_total = now + timedelta(days=_EPG_DAYS)
 
+        self._ensure_auth()
+
+        schedule: dict[tuple[str, datetime], dict[str, Any]] = {}
+        papi_ok = True
         window_start = now
         while window_start < end_total:
             window_end = min(window_start + timedelta(hours=_EPG_HOURS), end_total)
             try:
+                data = self._papi_epg_request(window_start, window_end)
+            except Exception as exc:
+                logger.warning('[fubo] PAPI EPG window %s failed: %s', window_start, exc)
+                papi_ok = False
+                break
+
+            for channel in _papi_channels(data):
+                ch_id = resolve_channel_id(
+                    channel.get('id'), _text_value(channel.get('name'))
+                )
+                if not ch_id:
+                    continue
+                for prog in channel.get('components') or []:
+                    if prog.get('type') != 'program-cell':
+                        continue
+                    start_raw = prog.get('start_time')
+                    end_raw = prog.get('end_time')
+                    start_key = _parse_dt(start_raw)
+                    if not start_key or not end_raw:
+                        continue
+                    schedule.setdefault((ch_id, start_key), {
+                        'source_channel_id': ch_id,
+                        'title': _text_value(prog.get('title')) or 'Unknown',
+                        'episode_title': _text_value(prog.get('subtitle')),
+                        'start_time': start_raw,
+                        'end_time': end_raw,
+                        'poster_url': _image_value(prog.get('picture')),
+                    })
+
+            window_start = window_end
+
+        if not papi_ok:
+            schedule.clear()
+
+        rich_schedule: dict[tuple[str, datetime], dict[str, Any]] = {}
+        window_start = now
+        while window_start < end_total:
+            window_end = min(window_start + timedelta(hours=_RICH_EPG_HOURS), end_total)
+            try:
                 data = self._epg_request(window_start, window_end)
             except Exception as exc:
-                logger.warning('[fubo] EPG window %s failed: %s', window_start, exc)
+                logger.warning('[fubo] rich EPG window %s failed: %s', window_start, exc)
                 window_start = window_end
                 continue
 
             for item in data:
-                ch = item['data']['channel']
-                ch_id = str(ch['id'])
-                if ch_id not in channel_ids:
+                ch_data = item.get('data') or {}
+                upstream_channel = ch_data.get('channel') or {}
+                ch_id = resolve_channel_id(
+                    upstream_channel.get('id'),
+                    upstream_channel.get('displayName') or upstream_channel.get('name'),
+                )
+                if not ch_id:
                     continue
-                for entry in item['data'].get('programsWithAssets', []):
-                    prog = entry.get('program') or {}
-                    assets = entry.get('assets') or []
-                    if not assets:
-                        continue
-
-                    # Start/end times are in the first asset's accessRights
-                    rights = (assets[0].get('accessRights') or
-                              (assets[0].get('accessRightsV2') or {}).get('live') or {})
-                    start_raw = rights.get('startTime')
-                    end_raw   = rights.get('endTime')
-                    if not start_raw or not end_raw:
-                        continue
-
-                    start_dt = _parse_dt(start_raw)
-                    end_dt   = _parse_dt(end_raw)
-                    if not start_dt or not end_dt:
-                        continue
-
-                    title    = prog.get('heading') or prog.get('title') or 'Unknown'
-                    ep_title = prog.get('title') if prog.get('title') != title else None
-                    desc     = prog.get('longDescription') or prog.get('shortDescription') or ''
-                    poster   = (prog.get('horizontalImage') or
-                                prog.get('featuredImage') or
-                                prog.get('verticalImage') or '')
-                    rating   = prog.get('rating') or ''
-                    genres   = prog.get('genres') or []
-                    category = _map_genre(genres) or infer_category_from_name(title)
-                    meta     = prog.get('metadata') or {}
-                    season   = meta.get('seasonNumber')
-                    episode  = meta.get('episodeNumber')
-                    orig_air = _parse_date(meta.get('originalAiringDate'))
-                    p_type   = prog.get('metadataType') or prog.get('type') or None
-                    if p_type == 'movie':
-                        p_type = 'movie'
-                    elif p_type in ('episode', 'series'):
-                        p_type = 'episode'
-                    else:
-                        p_type = None
-
-                    programs.append(ProgramData(
-                        source_channel_id=ch_id,
-                        title=title,
-                        start_time=start_dt,
-                        end_time=end_dt,
-                        description=desc or None,
-                        poster_url=poster or None,
-                        category=category,
-                        rating=rating or None,
-                        episode_title=ep_title,
-                        season=season,
-                        episode=episode,
-                        original_air_date=orig_air,
-                        is_live=assets[0].get('qualifiers', {}).get('isLive'),
-                        program_type=p_type,
-                        series_id=str(meta['seriesId']) if meta.get('seriesId') else None,
-                        episode_id=prog.get('programId'),
-                    ))
+                for entry in ch_data.get('programsWithAssets') or []:
+                    parsed = _parse_rich_program(ch_id, entry)
+                    if parsed:
+                        start_key = _parse_dt(parsed['start_time'])
+                        if start_key:
+                            rich_schedule[(ch_id, start_key)] = parsed
 
             window_start = window_end
+
+        for key, rich in rich_schedule.items():
+            if key in schedule:
+                schedule[key].update(rich)
+            else:
+                schedule[key] = rich
+
+        programs: list[ProgramData] = []
+        for raw in schedule.values():
+            start_dt = _parse_dt(raw.get('start_time'))
+            end_dt = _parse_dt(raw.get('end_time'))
+            if not start_dt or not end_dt:
+                continue
+            title = raw.get('title') or 'Unknown'
+            programs.append(ProgramData(
+                source_channel_id=raw['source_channel_id'],
+                title=title,
+                start_time=start_dt,
+                end_time=end_dt,
+                description=raw.get('description') or None,
+                poster_url=raw.get('poster_url') or None,
+                category=raw.get('category') or infer_category_from_name(title),
+                rating=raw.get('rating') or None,
+                episode_title=raw.get('episode_title') or None,
+                season=raw.get('season'),
+                episode=raw.get('episode'),
+                original_air_date=raw.get('original_air_date'),
+                is_live=raw.get('is_live'),
+                program_type=raw.get('program_type'),
+                series_id=raw.get('series_id'),
+                episode_id=raw.get('episode_id'),
+            ))
 
         logger.info('[fubo] fetched %d EPG entries', len(programs))
         return programs
@@ -448,13 +476,122 @@ class FuboScraper(BaseScraper):
             _EPG_URL,
             params={'startTime': fmt(start), 'endTime': fmt(end), 'enrichments': 'follow'},
             headers=_DEFAULT_HEADERS,
-            timeout=30,
+            timeout=120,
         )
         r.raise_for_status()
         return r.json().get('response', [])
 
+    def _papi_epg_request(self, start: datetime, end: datetime) -> dict:
+        fmt = lambda d: d.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        r = self.session.get(
+            _PAPI_EPG_URL,
+            params={'start_time': fmt(start), 'end_time': fmt(end)},
+            headers=self._api_headers,
+            timeout=120,
+        )
+        r.raise_for_status()
+        return r.json()
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _normalize_channel_name(value) -> str:
+    return ' '.join(str(value or '').casefold().split())
+
+
+def _channel_id_resolver(channels: list[ChannelData]):
+    exact_ids = {str(ch.source_channel_id) for ch in channels}
+    names: dict[str, list[str]] = {}
+    for ch in channels:
+        names.setdefault(_normalize_channel_name(ch.name), []).append(str(ch.source_channel_id))
+
+    def resolve(upstream_id, upstream_name=None) -> str | None:
+        raw_id = str(upstream_id or '')
+        if raw_id in exact_ids:
+            return raw_id
+
+        # PAPI appends 4-char suffixes to some IDs (e.g. 1236050001 → 123605);
+        # fetch_channels deduplicates these to the shorter canonical ID.
+        if len(raw_id) > 4 and raw_id[-4:].startswith('000'):
+            base_id = raw_id[:-4]
+            if base_id in exact_ids:
+                return base_id
+
+        name_matches = names.get(_normalize_channel_name(upstream_name), [])
+        if len(name_matches) == 1:
+            return name_matches[0]
+        return None
+
+    return resolve
+
+def _papi_channels(data: dict) -> list[dict]:
+    epg = ((data.get('content') or {}).get('epg')) or {}
+    if isinstance(epg, list):
+        return epg
+    if not isinstance(epg, dict):
+        return []
+    if epg.get('type') == 'channel-cell':
+        return [epg]
+    channels = epg.get('components') or epg.get('channels') or []
+    return channels if isinstance(channels, list) else []
+
+
+def _text_value(value) -> str | None:
+    if isinstance(value, dict):
+        value = value.get('text')
+    value = str(value or '').strip()
+    return value or None
+
+
+def _image_value(value) -> str | None:
+    if isinstance(value, dict):
+        value = value.get('url')
+    value = str(value or '').strip()
+    return value or None
+
+
+def _parse_rich_program(ch_id: str, entry: dict) -> dict[str, Any] | None:
+    prog = entry.get('program') or {}
+    assets = entry.get('assets') or []
+    if not assets:
+        return None
+    asset = assets[0]
+    rights = asset.get('accessRights') or (asset.get('accessRightsV2') or {}).get('live') or {}
+    start_raw = rights.get('startTime')
+    end_raw = rights.get('endTime')
+    if not start_raw or not end_raw:
+        return None
+
+    heading = prog.get('heading') or prog.get('title') or 'Unknown'
+    title = prog.get('title')
+    meta = prog.get('metadata') or {}
+    p_type = prog.get('metadataType') or prog.get('type')
+    if p_type in ('episode', 'series'):
+        p_type = 'episode'
+    elif p_type != 'movie':
+        p_type = None
+
+    return {
+        'source_channel_id': ch_id,
+        'title': heading,
+        'episode_title': title if title and title != heading else None,
+        'start_time': start_raw,
+        'end_time': end_raw,
+        'description': prog.get('longDescription') or prog.get('shortDescription') or None,
+        'poster_url': (
+            prog.get('horizontalImage') or prog.get('featuredImage') or
+            prog.get('verticalImage') or None
+        ),
+        'category': _map_genre(prog.get('genres') or []),
+        'rating': prog.get('rating') or None,
+        'season': meta.get('seasonNumber'),
+        'episode': meta.get('episodeNumber'),
+        'original_air_date': _parse_date(meta.get('originalAiringDate')),
+        'is_live': (asset.get('qualifiers') or {}).get('isLive'),
+        'program_type': p_type,
+        'series_id': str(meta['seriesId']) if meta.get('seriesId') else None,
+        'episode_id': prog.get('programId'),
+    }
 
 def _make_device_id() -> str:
     raw = uuid.uuid4().hex[:18]
