@@ -1847,7 +1847,14 @@ def play(source_name: str, channel_id: str):
     # Fire-and-forget manifest check — detect DRM or dead streams without
     # blocking the redirect. The check runs in a background thread so Channels
     # DVR gets the 302 immediately, avoiding 504s on slow upstream sources.
-    if channel.is_active and resolved_url and resolved_url.startswith('http'):
+    #
+    # Skip for muxed/non-HLS streams (e.g. HDHomeRun MPEG-TS): the probe parses
+    # HLS manifests, so it's useless here, AND a plain GET on a continuous live
+    # TS never trips its inactivity timeout — it would buffer the stream forever
+    # and pin a tuner. LAN OTA streams also can't carry DRM, so there's nothing
+    # to detect.
+    _is_muxed = (channel.stream_type or '').lower() in ('mpegts', 'ts', 'mp4')
+    if channel.is_active and resolved_url and resolved_url.startswith('http') and not _is_muxed:
         from flask import current_app
         _app = current_app._get_current_object()
         _channel_id = channel.id

@@ -592,11 +592,14 @@ def ensure_runtime_schema() -> None:
         # upgrading users don't have to wait for a full re-scrape cycle.
         if "channels" in tables:
             from .scrapers.category_utils import category_for_channel
-            rows = conn.execute(text("SELECT id, name, category FROM channels")).fetchall()
+            rows = conn.execute(text(
+                "SELECT c.id, c.name, c.category, s.name "
+                "FROM channels c JOIN sources s ON c.source_id = s.id"
+            )).fetchall()
             updates = [
-                (category_for_channel(name, cat), row_id)
-                for row_id, name, cat in rows
-                if category_for_channel(name, cat) != cat
+                (category_for_channel(name, cat, source_name), row_id)
+                for row_id, name, cat, source_name in rows
+                if category_for_channel(name, cat, source_name) != cat
             ]
             if updates:
                 conn.execute(

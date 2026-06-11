@@ -24,6 +24,7 @@ CANONICAL_CATEGORIES: tuple[str, ...] = (
     'Ambiance',
     'Anime',
     'Automotive',
+    'Broadcast',
     'Classic TV',
     'Comedy',
     'Documentary',
@@ -321,6 +322,11 @@ _NUMBERED_FOX_LOCAL_RE = re.compile(r'^fox \d+\s+local\b')
 _CANONICAL_LOWER: dict[str, str] = {}  # populated lazily on first use
 _NETWORK_NUMBERED_NEWS_RE = re.compile(r'^(abc|cbs|fox|nbc)\d+\s+news\b')
 _CALL_SIGN_LEADING_NEWS_RE = re.compile(r'^[kw][a-z]{2,4}\b.*\bnews\b')
+
+# Sources whose channels are real OTA broadcast stations (full call signs that
+# span genres), so the bare call-sign → Local News heuristic should NOT apply —
+# their scraper supplies a real genre or the genre-neutral 'Broadcast' category.
+_CALLSIGN_GENRE_TRUSTED_SOURCES: frozenset[str] = frozenset({'hdhomerun'})
 
 
 def normalize_category(raw: str | None) -> str | None:
@@ -1685,7 +1691,7 @@ def _local_news_rule(name_lower: str) -> str | None:
     return None
 
 
-def category_for_channel(name: str, raw_category: str | None) -> str | None:
+def category_for_channel(name: str, raw_category: str | None, source_name: str | None = None) -> str | None:
     """Return the canonical category for a channel, applying hard overrides first.
 
     Priority order:
@@ -1694,6 +1700,12 @@ def category_for_channel(name: str, raw_category: str | None) -> str | None:
       3. normalize_category(raw_category) — scraper-provided value after mapping
 
     This ensures that re-scraping never undoes manual category corrections.
+
+    `source_name` is optional. Sources in `_CALLSIGN_GENRE_TRUSTED_SOURCES`
+    (e.g. HDHomeRun OTA tuners, whose channels are real broadcast call signs
+    spanning genres) skip the bare call-sign → Local News guess, so their
+    scraper-provided category (a real genre, or 'Broadcast') is honoured.
+    For every other source the resolution order is unchanged.
     """
     name_lower = (name or '').strip().lower()
 
@@ -1739,11 +1751,15 @@ def category_for_channel(name: str, raw_category: str | None) -> str | None:
         return 'Local News'
     if name_lower.startswith('abc news ') and name_lower[9:10].isdigit():
         return 'Local News'
-    # US broadcast call-sign stations: K/W + 2-4 letters, then space/digit/end
-    if len(name_lower) >= 3 and name_lower[0] in ('k', 'w') and name_lower[1:4].isalpha():
-        fourth = name_lower[4:5]
-        if not fourth or not fourth.isalpha():
-            return 'Local News'
+    # US broadcast call-sign stations: K/W + 2-4 letters, then space/digit/end.
+    # Skipped for sources trusted to supply a real genre from their own metadata
+    # (HDHomeRun), where these call signs are full stations spanning genres and
+    # should fall through to the scraper-provided category instead of Local News.
+    if source_name not in _CALLSIGN_GENRE_TRUSTED_SOURCES:
+        if len(name_lower) >= 3 and name_lower[0] in ('k', 'w') and name_lower[1:4].isalpha():
+            fourth = name_lower[4:5]
+            if not fourth or not fourth.isalpha():
+                return 'Local News'
     # Numbered local affiliates: "10 NBC ...", "6 NEWS NBC ...", "News 12 ..."
     if name_lower.startswith(('news 12', 'news10', 'news channel', 'newsday')):
         return 'Local News'
@@ -1752,13 +1768,16 @@ def category_for_channel(name: str, raw_category: str | None) -> str | None:
     return normalize_category(raw_category)
 
 
-def explain_category(name: str, raw_category: str | None) -> dict:
+def explain_category(name: str, raw_category: str | None, source_name: str | None = None) -> dict:
     """Return a human-readable explanation of how a channel's category was resolved.
 
     Returns a dict with:
       source   – 'override' | 'name_pattern' | 'scraper' | 'name_inference' | 'unknown'
       rule     – short machine label for the rule that fired
       detail   – human-readable sentence suitable for a tooltip
+
+    Mirrors category_for_channel: `source_name` in _CALLSIGN_GENRE_TRUSTED_SOURCES
+    skips the bare call-sign guess so the scraper-provided category wins.
     """
     name_lower = (name or '').strip().lower()
 
@@ -1799,9 +1818,10 @@ def explain_category(name: str, raw_category: str | None) -> dict:
         return {'source': 'name_pattern', 'rule': 'abc_numbered', 'detail': 'ABC [N] local affiliate pattern → Local News.'}
     if name_lower.startswith('abc news ') and name_lower[9:10].isdigit():
         return {'source': 'name_pattern', 'rule': 'abc_news_numbered', 'detail': 'ABC News [N] local stream → Local News.'}
-    if len(name_lower) >= 3 and name_lower[0] in ('k', 'w') and name_lower[1:4].isalpha():
-        if not name_lower[4:5] or not name_lower[4:5].isalpha():
-            return {'source': 'name_pattern', 'rule': 'call_sign', 'detail': f'Broadcast call sign ({name[:4].upper()}) → Local News.'}
+    if source_name not in _CALLSIGN_GENRE_TRUSTED_SOURCES:
+        if len(name_lower) >= 3 and name_lower[0] in ('k', 'w') and name_lower[1:4].isalpha():
+            if not name_lower[4:5] or not name_lower[4:5].isalpha():
+                return {'source': 'name_pattern', 'rule': 'call_sign', 'detail': f'Broadcast call sign ({name[:4].upper()}) → Local News.'}
     if name_lower.startswith(('news 12', 'news10', 'news channel', 'newsday')):
         return {'source': 'name_pattern', 'rule': 'numbered_local', 'detail': 'Numbered local news affiliate pattern → Local News.'}
 

@@ -89,10 +89,17 @@ def _apply_gracenote_update(channel: Channel, raw_value, raw_mode=None) -> str |
         raise ValueError('Invalid Gracenote ID — must be numeric (e.g. 122912) or start with EP/SH/MV/SP/TR (e.g. EP012345678)')
 
     if mode == 'off':
-        channel.gracenote_id = None
+        # Turning routing off must NOT destroy the stored/suggested ID — keep it
+        # dormant so the channel can be re-enabled later, and so scraper-supplied
+        # suggestions (e.g. HDHomeRun station IDs) survive an off toggle. The
+        # generators already exclude off-mode channels from the Gracenote M3U
+        # regardless of the stored ID. Use the 'clear_ids' bulk action to wipe.
+        # An explicit ID supplied alongside mode=off still updates the value.
         channel.gracenote_mode = 'off'
         channel.gracenote_locked = False
-        return None
+        if raw:
+            channel.gracenote_id = raw
+        return channel.gracenote_id
 
     if mode == 'manual':
         if not raw:
@@ -1645,7 +1652,12 @@ def bulk_update_channel_gracenote():
         elif action == 'set_off':
             _apply_gracenote_update(ch, None, 'off')
         elif action == 'clear_ids':
-            _apply_gracenote_update(ch, None, 'off' if current_mode == 'off' else 'auto')
+            # The only path that actually destroys a stored ID (mode 'off' now
+            # preserves it). Keeps the prior mode-result behaviour: off stays
+            # off, anything else resets to auto.
+            ch.gracenote_id = None
+            ch.gracenote_locked = False
+            ch.gracenote_mode = 'off' if current_mode == 'off' else 'auto'
 
     db.session.commit()
     _invalidate_and_refresh_xml()
@@ -1717,8 +1729,9 @@ def channel_category_explain(channel_id):
         }
     else:
         # explain_category works on the auto-resolved category (before override)
-        auto_cat = category_for_channel(ch.name, ch.category)
-        explanation = explain_category(ch.name, auto_cat)
+        _src_name = ch.source.name if ch.source else None
+        auto_cat = category_for_channel(ch.name, ch.category, _src_name)
+        explanation = explain_category(ch.name, auto_cat, _src_name)
     return jsonify({
         'channel_id': ch.id,
         'channel_name': ch.name,

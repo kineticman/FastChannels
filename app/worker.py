@@ -1916,7 +1916,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                     delete_cached_logo(old_logo_url)
                     logger.debug('[%s] evicted cached logo for %s (URL changed)', source.name, cd.name)
             ch.slug          = cd.slug
-            ch.category      = ch.category_override or category_for_channel(cd.name, cd.category)
+            ch.category      = ch.category_override or category_for_channel(cd.name, cd.category, source.name)
             ch.language      = ch.language_override or cd.language
             ch.country       = cd.country
             ch.tags          = ','.join(cd.tags) if getattr(cd, 'tags', None) else None
@@ -1952,7 +1952,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 stream_type       = cd.stream_type,
                 logo_url          = cd.logo_url,
                 slug              = cd.slug,
-                category          = category_for_channel(cd.name, cd.category),
+                category          = category_for_channel(cd.name, cd.category, source.name),
                 language          = cd.language,
                 country           = cd.country,
                 tags              = ','.join(cd.tags) if getattr(cd, 'tags', None) else None,
@@ -1960,7 +1960,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 number            = None,
                 gracenote_id      = gracenote_id if gracenote_auto_fill else None,
                 gracenote_locked  = False,
-                gracenote_mode    = 'auto',
+                gracenote_mode    = (getattr(cd, 'gracenote_mode', None) or 'auto'),
                 guide_key         = getattr(cd, 'guide_key', None),
                 last_seen_at      = seen_at,
                 missed_scrapes    = 0,
@@ -2280,7 +2280,7 @@ def _schedule_due_scrapes():
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
-        default_disabled_sources = {'amazon_prime_free', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo'}
+        default_disabled_sources = {'amazon_prime_free', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun'}
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():
             db.session.add(Source(
