@@ -905,6 +905,15 @@
         return;
       }
 
+      // Safari/iOS: use native HLS for unencrypted or AES-128 streams that Shaka
+      // can't decrypt via MSE (error 4042). Only skip for DASH or DRM streams.
+      const _isDash = normalizedMode === 'dash' || normalizedType === 'dash';
+      if (!_isDash && !licenseUrl && _isSafariOrIos) {
+        video.src = url;
+        video.play().catch(() => {});
+        return;
+      }
+
       if (!window.shaka || !shaka.Player.isBrowserSupported()) {
         if (status) status.textContent = 'Playback is not supported in this browser.';
         return;
