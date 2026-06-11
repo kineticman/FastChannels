@@ -684,12 +684,9 @@
             <td class="col-actions">
               {% if not is_custom %}
               <div class="dash-actions">
-                <button class="btn btn-run btn-sm" data-label="Quick<br>Scrape" onclick="run({{ source.id }}, this)"
+                <button class="btn btn-run btn-sm" data-label="Scrape<br>Now" onclick="run({{ source.id }}, this)"
                         {% if not source.is_enabled %}disabled{% endif %}
-                        title="Fetch the latest channel list and guide data. If channels were scraped recently, may skip the channel list and only update guide data.">Quick<br>Scrape</button>
-                <button class="btn btn-run btn-sm" data-label="Full<br>Scrape" onclick="forceRefreshSource({{ source.id }}, this)"
-                        {% if not source.is_enabled %}disabled{% endif %}
-                        title="Force a complete refresh — always fetches the full channel list and guide data, even if scraped recently.">Full<br>Scrape</button>
+                        title="Fetch the latest channel list and guide data now.">Scrape<br>Now</button>
                 {% if audit_enabled.get(source.name) %}
                 <button class="btn btn-audit btn-sm" data-label="Stream<br>Audit"
                         onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
@@ -1433,32 +1430,11 @@
           _startPolling(id, btn);
         } else {
           btn.textContent = 'Error';
-          setTimeout(() => { btn.innerHTML = 'Quick<br>Scrape'; btn.disabled = false; }, 3000);
+          setTimeout(() => { btn.innerHTML = 'Scrape<br>Now'; btn.disabled = false; }, 3000);
         }
       } catch (e) {
         btn.textContent = 'Error';
-        setTimeout(() => { btn.innerHTML = 'Quick<br>Scrape'; btn.disabled = false; }, 3000);
-      }
-    }
-
-    async function forceRefreshSource(id, btn) {
-      if (_pollTimers[id]) return;
-      btn.disabled = true;
-      btn.textContent = 'Queued…';
-      try {
-        const r = await fetch(`/api/sources/${id}/force-full`, {method: 'POST'});
-        const d = await r.json();
-        if (d.status === 'queued') {
-          btn.textContent = 'Running…';
-          _scrapeStart[id] = Date.now();
-          _startPolling(id, btn);
-        } else {
-          btn.textContent = 'Error';
-          setTimeout(() => { btn.innerHTML = 'Full<br>Scrape'; btn.disabled = false; }, 3000);
-        }
-      } catch (e) {
-        btn.textContent = 'Error';
-        setTimeout(() => { btn.innerHTML = 'Full<br>Scrape'; btn.disabled = false; }, 3000);
+        setTimeout(() => { btn.innerHTML = 'Scrape<br>Now'; btn.disabled = false; }, 3000);
       }
     }
 
@@ -1737,7 +1713,7 @@
       delete _scrapeStart[sourceId];
       document.getElementById(`dash-row-${sourceId}`)?.classList.remove('scraping');
       const btn = _scrapeBtn[sourceId];
-      if (btn) { btn.innerHTML = btn.dataset.label || 'Quick<br>Scrape'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
+      if (btn) { btn.innerHTML = btn.dataset.label || 'Scrape<br>Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
       const statusEl = document.getElementById(`scrape-status-${sourceId}`);
       if (!statusEl) return;
       if (lastError) {
@@ -1803,7 +1779,7 @@
         } catch (e) {
           delete _pollTimers[sourceId];
           const b = _scrapeBtn[sourceId];
-          if (b) { b.innerHTML = 'Quick<br>Scrape'; b.disabled = false; delete _scrapeBtn[sourceId]; }
+          if (b) { b.innerHTML = 'Scrape<br>Now'; b.disabled = false; delete _scrapeBtn[sourceId]; }
         }
       }
       poll();
@@ -2799,11 +2775,11 @@
               </div>
             </div>
             <div class="custom-channel-actions">
-              <span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:${ch.is_enabled ? 'var(--success-soft)' : 'var(--text-muted)'};border:1px solid var(--border);">${ch.is_enabled ? 'On' : 'Off'}</span>
-              ${ch.stream_type ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--text-soft);border:1px solid var(--border);">' + _esc(_streamTypeLabel(ch.stream_type)) + '</span>' : ''}
-              ${_looksLikeMp4Channel(ch) ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:color-mix(in srgb, var(--danger) 10%, transparent);color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 30%, transparent);">MP4 fragile</span>' : ''}
-              ${ch.proxy_segments ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--accent-soft);border:1px solid var(--border);">Proxied</span>' : ''}
-              ${ch.redetect_on_play ? '<span style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--text-muted);border:1px solid var(--border);">Re-detect</span>' : ''}
+              <span title="${ch.is_enabled ? 'Channel is enabled — included in your M3U playlist and EPG output.' : 'Channel is disabled — hidden from M3U/EPG output. Edit to turn it back on.'}" style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:${ch.is_enabled ? 'var(--success-soft)' : 'var(--text-muted)'};border:1px solid var(--border);cursor:help;">${ch.is_enabled ? 'On' : 'Off'}</span>
+              ${ch.stream_type ? '<span title="Stream format detected for this channel (HLS = .m3u8, MPEG-TS = muxed transport stream, MP4 = progressive file). Determines how the player and Channels DVR handle it." style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--text-soft);border:1px solid var(--border);cursor:help;">' + _esc(_streamTypeLabel(ch.stream_type)) + '</span>' : ''}
+              ${_looksLikeMp4Channel(ch) ? '<span title="This looks like a progressive MP4 stream. MP4 works but is brittle in Channels DVR — prefer HLS or MPEG-TS when available." style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:color-mix(in srgb, var(--danger) 10%, transparent);color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 30%, transparent);cursor:help;">MP4 fragile</span>' : ''}
+              ${ch.proxy_segments ? '<span title="Stream segments are routed through the FastChannels server proxy — handles CORS and custom request headers transparently." style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--accent-soft);border:1px solid var(--border);cursor:help;">Proxied</span>' : ''}
+              ${ch.redetect_on_play ? '<span title="Re-detect on play — the real stream URL is resolved fresh each time the channel is played, instead of using the stored URL. Use for sources whose links expire or rotate." style="font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--surface);color:var(--text-muted);border:1px solid var(--border);cursor:help;">Re-detect</span>' : ''}
               <button class="btn btn-configure btn-sm" onclick="editCustomChannel(${ch.id})">Edit</button>
             </div>
           </div>
