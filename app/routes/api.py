@@ -294,7 +294,7 @@ def _channel_query_summary(query, parse_gracenote) -> tuple[int, bool]:
         return 0, False
 
     candidates = (
-        base_query.with_entities(Channel.gracenote_id, Channel.slug)
+        base_query.with_entities(Channel.gracenote_id, Channel.slug, Channel.gracenote_mode)
         .filter(
             or_(
                 (Channel.gracenote_id != None) & (Channel.gracenote_id != ''),
@@ -305,10 +305,28 @@ def _channel_query_summary(query, parse_gracenote) -> tuple[int, bool]:
         .all()
     )
     has_gracenote = any(
-        parse_gracenote(SimpleNamespace(gracenote_id=row.gracenote_id, slug=row.slug))
+        parse_gracenote(SimpleNamespace(
+            gracenote_id=row.gracenote_id,
+            slug=row.slug,
+            gracenote_mode=row.gracenote_mode,
+        ))
         for row in candidates
     )
     return count, has_gracenote
+
+
+def _dvr_stream_format(query) -> str:
+    """Channels DVR stream format (the source 'type') for an M3U built from `query`.
+
+    Returns 'MPEG-TS' when every channel is a raw transport stream (e.g. an
+    HDHomeRun OTA tuner, stream_type='mpegts') so Channels DVR ingests it via
+    ffmpeg without the user having to flip the format by hand. Otherwise 'HLS' —
+    the correct default for FAST sources whose /play endpoint serves HLS. A
+    source carries a single type, so a mixed feed stays 'HLS' (no regression).
+    """
+    rows = query.order_by(None).with_entities(Channel.stream_type).all()
+    types = {(r[0] or 'hls').lower() for r in rows}
+    return 'MPEG-TS' if types and types <= {'mpegts'} else 'HLS'
 
 
 def _read_int(path: str) -> int | None:
@@ -3063,10 +3081,9 @@ def push_feed_to_dvr(feed_id):
 
     # Check if this feed has any channels with Gracenote IDs using the same
     # logic as generate_gracenote_m3u() so we don't register an empty source.
-    channel_count, has_gracenote = _channel_query_summary(
-        _build_channel_query(feed_to_query_filters(feed.filters or {})),
-        _parse_gracenote_id,
-    )
+    feed_query = _build_channel_query(feed_to_query_filters(feed.filters or {}))
+    channel_count, has_gracenote = _channel_query_summary(feed_query, _parse_gracenote_id)
+    dvr_type = _dvr_stream_format(feed_query)
     if channel_count == 0:
         return jsonify({'error': 'This feed has no eligible channels to add to Channels DVR.'}), 400
 
@@ -3092,7 +3109,7 @@ def push_feed_to_dvr(feed_id):
         safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
         payload = {
             'name':    name,
-            'type':    'HLS',
+            'type':    dvr_type,
             'source':  'URL',
             'url':     url,
             'refresh': '24',
@@ -3141,10 +3158,9 @@ def push_source_to_dvr(source_id):
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
 
     base = public_base_url()
-    channel_count, has_gracenote = _channel_query_summary(
-        _build_channel_query({'source': [source.name]}),
-        _parse_gracenote_id,
-    )
+    source_query = _build_channel_query({'source': [source.name]})
+    channel_count, has_gracenote = _channel_query_summary(source_query, _parse_gracenote_id)
+    dvr_type = _dvr_stream_format(source_query)
     if channel_count == 0:
         return jsonify({'error': f'{source.display_name} has no eligible channels to add to Channels DVR.'}), 400
     force = bool((request.get_json(silent=True) or {}).get('force'))
@@ -3160,7 +3176,7 @@ def push_source_to_dvr(source_id):
         safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
         payload = {
             'name': name,
-            'type': 'HLS',
+            'type': dvr_type,
             'source': 'URL',
             'url': url,
             'refresh': '24',
@@ -3208,10 +3224,9 @@ def push_raw_output_to_dvr():
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
 
     base = public_base_url()
-    channel_count, has_gracenote = _channel_query_summary(
-        _build_channel_query({}),
-        _parse_gracenote_id,
-    )
+    raw_query = _build_channel_query({})
+    channel_count, has_gracenote = _channel_query_summary(raw_query, _parse_gracenote_id)
+    dvr_type = _dvr_stream_format(raw_query)
     if channel_count == 0:
         return jsonify({'error': 'Raw Output has no eligible channels to add to Channels DVR.'}), 400
     force = bool((request.get_json(silent=True) or {}).get('force'))
@@ -3227,7 +3242,7 @@ def push_raw_output_to_dvr():
         safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
         payload = {
             'name': name,
-            'type': 'HLS',
+            'type': dvr_type,
             'source': 'URL',
             'url': url,
             'refresh': '24',
