@@ -2031,21 +2031,30 @@
       const previewHint = !detecting && previewWarning
         ? `<div class="modal-preview modal-preview--warning">${escapeHtml(previewWarning)}</div>`
         : '';
+      // HDHomeRun (and other muxed MPEG-TS) streams can't decode in an HTML5
+      // <video> element. Disable the in-browser playback actions but keep VLC,
+      // which handles MPEG-2/AC-3 natively.
+      const isMuxed = streamType === 'mpegts';
       const unsupportedNote = !detecting && playbackMode === 'unsupported'
         ? `<div class="modal-preview">This stream type is not supported by the built-in browser preview. Use <strong>Open Externally</strong> or VLC for playback.</div>`
+        : '';
+      const muxedNote = isMuxed
+        ? `<div class="modal-preview">Browser playback isn't supported for HDHomeRun (MPEG-TS) channels yet. Use <strong>Open in VLC</strong> below, or play it through Channels DVR.</div>`
         : '';
       const playbackNote = !detecting && !playUrl
         ? `<div class="modal-preview">Browser preview is not available for this source or channel. You can still use the program details here for quick guide verification.</div>`
         : '';
-      const playBtn = detecting
-        ? `<button class="preview-action-btn secondary" disabled>Detecting stream…</button>`
-        : (previewUrl ? `<button class="preview-action-btn secondary" onclick="loadPreviewPlayer('${escapeHtml(previewUrl)}', '${escapeHtml(playbackMode)}', '${escapeHtml(streamType)}', '${escapeHtml(licenseUrl)}')">Play Here</button>` : '');
+      const playBtn = isMuxed
+        ? ''
+        : (detecting
+            ? `<button class="preview-action-btn secondary" disabled>Detecting stream…</button>`
+            : (previewUrl ? `<button class="preview-action-btn secondary" onclick="loadPreviewPlayer('${escapeHtml(previewUrl)}', '${escapeHtml(playbackMode)}', '${escapeHtml(streamType)}', '${escapeHtml(licenseUrl)}')">Play Here</button>` : ''));
       return `
-        ${previewHint}${unsupportedNote}${playbackNote}
+        ${previewHint}${unsupportedNote}${muxedNote}${playbackNote}
         <div class="preview-actions">
           ${playBtn}
-          ${playUrl ? `<a class="preview-action-btn secondary" href="/watch/${ch.id}" target="_blank" rel="noopener">Watch Fullscreen</a>` : ''}
-          ${playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open in New Tab</a>` : ''}
+          ${(playUrl && !isMuxed) ? `<a class="preview-action-btn secondary" href="/watch/${ch.id}" target="_blank" rel="noopener">Watch Fullscreen</a>` : ''}
+          ${(playUrl && !isMuxed) ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open in New Tab</a>` : ''}
           ${playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl.replace('.m3u8', '.m3u'))}" title="Download playlist and open in VLC">Open in VLC</a>` : ''}
           <button class="preview-action-btn danger" onclick="closePreviewModal()">Close</button>
         </div>
