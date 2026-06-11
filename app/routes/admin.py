@@ -291,6 +291,10 @@ def sources():
         name: getattr(cls, 'is_premium', False)
         for name, cls in all_scrapers.items()
     }
+    source_categories = {
+        name: getattr(cls, 'source_category', 'fast')
+        for name, cls in all_scrapers.items()
+    }
     source_interval_meta = {
         name: {
             'recommended': getattr(cls, 'scrape_interval', 360),
@@ -319,6 +323,12 @@ def sources():
         if source_config_status.get(s.id) == 'required' and s.is_enabled
     ]
 
+    _CAT_ORDER = {'fast': 0, 'premium': 1, 'specialty': 2, 'drm': 3}
+    sources_list.sort(key=lambda s: (
+        _CAT_ORDER.get(source_categories.get(s.name, 'fast') if s.name != 'custom' else 'specialty', 99),
+        s.display_name,
+    ))
+
     from ..scrapers.category_utils import CANONICAL_CATEGORIES
     return render_template('admin/sources.html',
                            sources=sources_list,
@@ -326,6 +336,7 @@ def sources():
                            audit_enabled=audit_enabled,
                            config_required=config_required,
                            premium_sources=premium_sources,
+                           source_categories=source_categories,
                            source_interval_meta=source_interval_meta,
                            source_config_status=source_config_status,
                            needs_config=needs_config,

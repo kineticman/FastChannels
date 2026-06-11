@@ -23,6 +23,7 @@ class HallmarkScraper(BaseScraper):
     display_name = "Hallmark"
     scrape_interval = 360
     stream_audit_enabled = True
+    source_category = 'specialty'
 
     config_schema = []
 

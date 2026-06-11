@@ -84,6 +84,7 @@ class FrndlyTVScraper(BaseScraper):
     stream_audit_enabled = True
     config_required = True
     is_premium = True
+    source_category = 'premium'
 
     config_schema = [
         ConfigField('username', 'Username / Email', required=True,

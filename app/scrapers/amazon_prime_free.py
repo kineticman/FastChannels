@@ -36,6 +36,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
     scrape_interval = 100  # minutes — keep well under the 2-hour DASH URL TTL
 
     stream_audit_enabled = True
+    source_category = 'drm'
     audit_requires_config = ['cookie_header']
     license_url = 'https://atv-ps.amazon.com/playback/drm-linear/GetWidevineLicense'
     kodi_props = {

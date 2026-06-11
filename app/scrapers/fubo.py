@@ -154,6 +154,7 @@ class FuboScraper(BaseScraper):
     scrape_interval  = 360
     config_required  = True
     is_premium       = True
+    source_category  = 'premium'
     stream_audit_enabled = True
 
     config_schema = [

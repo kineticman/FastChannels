@@ -49,6 +49,7 @@ class SlingScraper(BaseScraper):
     scrape_interval = 360
     stream_audit_enabled = True
     epg_quality = 'basic'     # thumbnails only; no program descriptions
+    source_category = 'drm'
     license_url = 'https://p-drmwv.movetv.com/widevine/proxy'
     kodi_props = {
         'inputstream': 'inputstream.adaptive',

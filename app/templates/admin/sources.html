@@ -108,6 +108,33 @@
     .col-actions { width: 200px; text-align: right; }
     .col-configure { width: 110px; text-align: right; }
 
+    /* Category section headers */
+    .source-category-header td {
+      padding: 0.55rem 1rem 0.45rem 1.1rem;
+      font-size: 0.7rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase;
+      background: color-mix(in srgb, var(--bg) 55%, var(--surface));
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      border-left: 3px solid transparent;
+    }
+    .source-category-header:first-child td { border-top: none; }
+    .source-category-header.cat-fast td {
+      color: var(--accent-soft);
+      border-left-color: var(--accent-strong);
+    }
+    .source-category-header.cat-premium td {
+      color: #a78bfa;
+      border-left-color: #7c3aed;
+    }
+    .source-category-header.cat-specialty td {
+      color: var(--warning-soft);
+      border-left-color: var(--warning-strong);
+    }
+    .source-category-header.cat-drm td {
+      color: var(--danger-soft);
+      border-left-color: var(--danger-border);
+    }
+
     /* Source cell content */
     .source-name-wrap { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.2rem; }
     .source-name { font-size: 0.95rem; font-weight: 600; }
@@ -579,9 +606,18 @@
           </tr>
         </thead>
         <tbody>
+          {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'specialty': 'Specialty Sources', 'drm': 'DRM Sources'} %}
+          {% set ns = namespace(last_cat=None) %}
           {% for source in sources %}
           {% set cfg_status = source_config_status.get(source.id, 'none') %}
           {% set is_custom = source.name == 'custom' %}
+          {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'specialty' %}
+          {% if this_cat != ns.last_cat %}
+            {% set ns.last_cat = this_cat %}
+            <tr class="source-category-header cat-{{ this_cat }}">
+              <td colspan="4">{{ _CAT_LABELS.get(this_cat, this_cat | title) }}</td>
+            </tr>
+          {% endif %}
 
           <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}"
               {% if is_custom %}data-custom="true"{% endif %}>

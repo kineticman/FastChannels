@@ -29,6 +29,7 @@ class BallysScraper(BaseScraper):
     scrape_interval = 360
     stream_audit_enabled = True
     epg_quality = 'partial'   # descriptions present; no poster artwork
+    source_category = 'specialty'
 
     config_schema = []
 
