@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
-from urllib.parse import urlparse, urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 
@@ -117,6 +117,25 @@ class HDHomeRunScraper(BaseScraper):
                 'reach it. Find it at http://my.hdhomerun.com or on the device.'
             ),
         ),
+        ConfigField(
+            'transcode_profile',
+            'Transcode profile',
+            field_type='select',
+            default='',
+            options=[
+                {'value': '', 'label': 'Native (no transcoding)'},
+                {'value': 'heavy', 'label': 'Heavy'},
+                {'value': 'mobile', 'label': 'Mobile'},
+                {'value': 'internet540', 'label': 'Internet 540p'},
+                {'value': 'internet480', 'label': 'Internet 480p'},
+                {'value': 'internet360', 'label': 'Internet 360p'},
+                {'value': 'internet240', 'label': 'Internet 240p'},
+            ],
+            help_text=(
+                'Optional HDHomeRun EXTEND hardware-transcode profile. Other '
+                'models ignore or reject this setting; leave Native selected.'
+            ),
+        ),
     ]
 
     def __init__(self, config: dict = None):
@@ -136,7 +155,8 @@ class HDHomeRunScraper(BaseScraper):
         parsed = urlsplit(raw)
         if not parsed.hostname:
             return None
-        return f"{parsed.scheme or 'http'}://{parsed.hostname}"
+        host = f"[{parsed.hostname}]" if ':' in parsed.hostname else parsed.hostname
+        return f"{parsed.scheme or 'http'}://{host}"
 
     def _discover(self) -> dict:
         if self._discover_cache is not None:
@@ -154,7 +174,24 @@ class HDHomeRunScraper(BaseScraper):
         if not base:
             return None
         parsed = urlsplit(base)
-        return f"{parsed.scheme}://{parsed.hostname}:{self.STREAM_PORT}/auto/v{guide_number}"
+        host = f"[{parsed.hostname}]" if ':' in parsed.hostname else parsed.hostname
+        url = f"{parsed.scheme}://{host}:{self.STREAM_PORT}/auto/v{guide_number}"
+        transcode_profile = (self.config.get('transcode_profile') or '').strip()
+        if transcode_profile:
+            url = f"{url}?{urlencode({'transcode': transcode_profile})}"
+        return url
+
+    @staticmethod
+    def _lineup_tags(row: dict) -> list[str]:
+        """Normalize lineup.json's comma-separated Tags field."""
+        raw = row.get("Tags")
+        if isinstance(raw, str):
+            values = raw.split(',')
+        elif isinstance(raw, (list, tuple, set)):
+            values = raw
+        else:
+            values = []
+        return [str(value).strip().lower() for value in values if str(value).strip()]
 
     @staticmethod
     def _category_for(affiliate: str | None, name: str | None) -> str:
@@ -210,13 +247,17 @@ class HDHomeRunScraper(BaseScraper):
             guide_number = str(row.get("GuideNumber") or "").strip()
             if not guide_number:
                 continue
+            lineup_tags = self._lineup_tags(row)
             # Encrypted (CableCARD) channels can't be streamed — skip them.
-            if row.get("DRM"):
+            if row.get("DRM") or "drm" in lineup_tags:
                 continue
 
             name = (row.get("GuideName") or f"Channel {guide_number}").strip()
             meta = guide_meta.get(guide_number, {})
             affiliate = (meta.get("Affiliate") or "").strip()
+            tags = list(lineup_tags)
+            if affiliate and affiliate.lower() not in tags:
+                tags.append(affiliate)
 
             channels.append(
                 ChannelData(
@@ -235,7 +276,7 @@ class HDHomeRunScraper(BaseScraper):
                     country="US",
                     language="en",
                     stream_type="mpegts",
-                    tags=[affiliate] if affiliate else [],
+                    tags=tags,
                 )
             )
 
