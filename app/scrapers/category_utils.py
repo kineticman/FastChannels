@@ -1426,6 +1426,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'shop tv':                              'Shopping',
 
     # ── Sports ───────────────────────────────────────────────────────────────
+    'telemundo / peacock':                  'Sports',   # FIFA World Cup 2026 (es)
     'willow tv':                            'Sports',
     'willow xtra':                          'Sports',
     'unbeaten':                             'Sports',
