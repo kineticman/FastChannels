@@ -8,7 +8,7 @@ _DEFAULT_FEEDS = (
         "name": "Default",
         "description": "Built-in feed with all enabled channels.",
         "filters": "{}",
-        "chnum_start": None,
+        "chnum_start": 5000,
         "is_enabled": 1,
     },
 )

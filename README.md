@@ -138,7 +138,7 @@ As you set filters, the feed modal shows a live count of matching channels.
 - *Anime* — filter categories: Anime
 
 **Other feed options:**
-- **Channel Number Start** — numbers all channels sequentially from a given value.
+- **Channel Number Start** — numbers all channels sequentially from a given value. Fresh installs start the built-in Default feed at channel 5000.
 - **Add to Channels DVR** — registers the feed as a custom M3U source in Channels DVR with one click. Configure the DVR server URL in **Settings** first.
 - **Max Channels** — Channels DVR works best with 750 or fewer channels per source. The feed modal warns you if you're over.
 
