@@ -432,10 +432,10 @@
           {% set split = feed_split_counts.get(feed.id, {}) %}
           {% set std_count = split.get('standard_count', feed.channel_count()) %}
           <button class="btn btn-dvr" title="Register this feed as a custom M3U source in Channels DVR"
-                  onclick="pushToDvr({{ feed.id }}, '{{ feed.name|e }}', {{ feed.channel_count() }}, {{ std_count }}, this)"
+                  onclick='pushToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ feed.channel_count() }}, {{ std_count }}, this)'
                   {% if feed.channel_count() == 0 %}disabled title="No channels in this feed"{% endif %}>📺 Add to Channels DVR</button>
           {% if feed.slug != 'default' %}
-          <button class="btn btn-danger" onclick="deleteFeed({{ feed.id }}, '{{ feed.name|e }}', this)">Delete</button>
+          <button class="btn btn-danger" onclick='deleteFeed({{ feed.id }}, {{ feed.name|tojson }}, this)'>Delete</button>
           {% endif %}
         </div>
       </div>
