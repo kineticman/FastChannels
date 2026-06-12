@@ -17,7 +17,12 @@ from ..generators.m3u import (
     feed_to_query_filters,
 )
 from ..scrapers import registry as _scraper_registry
-from ..source_config import build_setup_checklist, has_meaningful_source_config, is_source_config_complete
+from ..source_config import (
+    build_setup_checklist,
+    has_meaningful_source_config,
+    is_source_config_complete,
+    public_base_url_config,
+)
 from ..timezone_utils import timezone_choices
 from ..url import public_base_url, detected_base_url
 
@@ -959,7 +964,8 @@ def settings():
     app_settings = AppSettings.get()
     request_base_url = request.host_url.rstrip('/')
     settings_needs_config = []
-    if not (app_settings.public_base_url or '').strip() and app_settings.env_public_base_url() is None and not (current_app.config.get('PUBLIC_BASE_URL') or '').strip():
+    _eff_url, _url_source, _url_needs_config = public_base_url_config(app_settings)
+    if _url_needs_config:
         settings_needs_config.append({
             'key': 'public_base_url',
             'label': 'FastChannels Server URL',
@@ -977,8 +983,7 @@ def settings():
             'label': 'Time Zone',
             'anchor': 'settings-card-timezone',
         })
-    _eff_url = app_settings.effective_public_base_url() or (current_app.config.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
-    _url_from_env = (not (app_settings.public_base_url or '').strip()) and (app_settings.env_public_base_url() is not None or bool((current_app.config.get('PUBLIC_BASE_URL') or '').strip()))
+    _url_from_env = _url_source in {'FASTCHANNELS_SERVER_URL', 'PUBLIC_BASE_URL'}
     _no_port_warning = False
     if _eff_url and not _url_from_env:
         from urllib.parse import urlsplit as _urlsplit
@@ -995,6 +1000,8 @@ def settings():
                            timezone_choices=timezone_choices(),
                            channels_dvr_url_from_env=(not (app_settings.channels_dvr_url or '').strip()) and app_settings.env_channels_dvr_url() is not None,
                            public_base_url_from_env=_url_from_env,
+                           public_base_url_env_name=_url_source if _url_from_env else None,
+                           public_base_url_needs_config=_url_needs_config,
                            public_base_url_no_port_warning=_no_port_warning,
                            settings_needs_config=settings_needs_config,
                            request_base_url=request_base_url,

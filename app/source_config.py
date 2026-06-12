@@ -1,6 +1,40 @@
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from flask import current_app
+
+
+def is_placeholder_public_base_url(value: str | None) -> bool:
+    raw = (value or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlsplit(raw if "://" in raw else f"http://{raw}")
+        host = (parsed.hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    return (
+        host in {"example.com", "myserver.example.com", "your-server", "your-server-ip", "192.168.1.x"}
+        or host.endswith(".example.com")
+    )
+
+
+def public_base_url_config(app_settings) -> tuple[str, str | None, bool]:
+    db_value = (app_settings.public_base_url or "").strip().rstrip("/")
+    fastchannels_env = app_settings.env_public_base_url()
+    legacy_env = (current_app.config.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+
+    if db_value:
+        value, source = db_value, "database"
+    elif fastchannels_env:
+        value, source = fastchannels_env, "FASTCHANNELS_SERVER_URL"
+    elif legacy_env:
+        value, source = legacy_env, "PUBLIC_BASE_URL"
+    else:
+        value, source = "", None
+
+    return value, source, not value or is_placeholder_public_base_url(value)
 
 
 def has_meaningful_source_config(scraper_cls, values: dict | None) -> bool:
@@ -37,7 +71,8 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
 def build_setup_checklist(app_settings, sources_by_name: dict, scrapers_by_name: dict) -> list[dict]:
     items: list[dict] = []
 
-    if not (app_settings.public_base_url or '').strip() and app_settings.env_public_base_url() is None and not (current_app.config.get('PUBLIC_BASE_URL') or '').strip():
+    _, _, public_base_url_needs_config = public_base_url_config(app_settings)
+    if public_base_url_needs_config:
         items.append({
             'key': 'public_base_url',
             'label': 'Set FastChannels Server URL',

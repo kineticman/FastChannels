@@ -452,7 +452,10 @@
             No port specified — this is fine if you're behind a reverse proxy, but most direct installs need <code>:5523</code>.
           </div>
           {% if public_base_url_from_env %}
-          <div class="help">Currently coming from environment variable <code>FASTCHANNELS_SERVER_URL</code>. Saving here will override it in the database.</div>
+          <div class="help">Currently coming from environment variable <code>{{ public_base_url_env_name }}</code>. Saving here will override it in the database.</div>
+          {% endif %}
+          {% if public_base_url_needs_config and public_base_url %}
+          <div class="help" style="color:var(--warning-soft)">This is still an example placeholder. Replace it with the address other devices use to reach this FastChannels install.</div>
           {% endif %}
           <div class="hint-box">
             Browser address: <code>{{ request_base_url }}</code><br>
@@ -786,6 +789,20 @@ function checkPublicBaseUrlPortWarning() {
   warning.style.display = hasPort ? 'none' : '';
 }
 
+function isPlaceholderPublicBaseUrl(value) {
+  const raw = value.trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw.includes("://") ? raw : "http://" + raw);
+    let host = parsed.hostname.toLowerCase();
+    if (host.endsWith(".")) host = host.slice(0, -1);
+    return ["example.com", "myserver.example.com", "your-server", "your-server-ip", "192.168.1.x"].includes(host)
+      || host.endsWith(".example.com");
+  } catch (_) {
+    return false;
+  }
+}
+
 async function savePublicBaseUrlSettings() {
   const publicBaseUrl = document.getElementById('public-base-url').value.trim();
   const ok = await saveSettings({
@@ -793,7 +810,7 @@ async function savePublicBaseUrlSettings() {
   }, 'public-base-url-status');
   if (ok) {
     checkPublicBaseUrlPortWarning();
-    settingsNeedsConfigState.public_base_url = !publicBaseUrl && {{ 'true' if not public_base_url_from_env else 'false' }};
+    settingsNeedsConfigState.public_base_url = !publicBaseUrl || isPlaceholderPublicBaseUrl(publicBaseUrl);
     refreshSettingsNeedsConfigBanner();
   }
 }
