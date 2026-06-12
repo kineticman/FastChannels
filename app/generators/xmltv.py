@@ -2,11 +2,9 @@
 XMLTV / EPG generator.
 
 Performance design:
-  - JOIN instead of IN(1001 ids) — SQLite handles joins far better than
-    large IN clauses which degrade O(n²).
-  - Keyset pagination (WHERE id > last_id) instead of LIMIT/OFFSET —
-    OFFSET scans all preceding rows on every page, so page 700 of 200
-    scans 140,000 rows just to skip them.
+  - One query per channel (channel_id equality) so SQLite drives
+    idx_programs_channel_end_start — each artifact's cost scales with its
+    own channels, not the whole programs table.
   - Streaming generator — yields chunks so Flask/gunicorn never blocks
     waiting for the full 56MB to build in memory.
   - /epg.xml.gz endpoint serves pre-gzipped content (~5MB vs ~56MB).
@@ -85,10 +83,10 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     """
     Generator — yields UTF-8 text chunks of the XMLTV document.
 
-    Key changes vs previous version:
-      - Programs fetched via IN(non-gracenote channel ids), matching tvg_map exactly.
-      - Keyset pagination: WHERE program.id > last_seen_id ORDER BY id.
-        Avoids the O(n²) OFFSET scan that made page 700 read 140k rows.
+    Programs are fetched one channel at a time (channel_id equality uses the
+    composite (channel_id, end_time, start_time) index), bounded to the same
+    non-gracenote channel set as tvg_map.  Programmes are therefore emitted
+    grouped by channel — XMLTV does not require any particular order.
     """
     filters  = filters or {}
     base_url = (base_url or 'http://localhost:5523').rstrip('/')
@@ -140,30 +138,24 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url)
         yield tostring(el, encoding='unicode') + '\n'
 
-    # ── Programme elements — keyset pagination ────────────────────────────
-    # Keyset: track last Program.id seen, next page = WHERE id > last_id.
-    # This is O(1) per page regardless of offset depth.
-    # channel_id_list is already bounded to XMLTV-visible (non-gracenote) channels.
-    BATCH   = 500
-    last_id = 0
-
-    while True:
-        if not channel_id_list:
-            break
+    # ── Programme elements — one indexed query per channel ───────────────
+    # channel_id equality lets SQLite drive idx_programs_channel_end_start
+    # (channel_id=?, end_time>?), so each artifact's cost is proportional to
+    # its own channels.  The previous global id-keyset walked the entire
+    # programs id range for every artifact regardless of feed size, re-binding
+    # the full channel-id IN list on every page.  A channel's 5-day window is
+    # a few hundred rows, so memory stays bounded per query.
+    for ch_id in channel_id_list:
         programs = (
             db.session.query(Program)
             .filter(
-                Program.channel_id.in_(channel_id_list),
-                Program.id > last_id,
+                Program.channel_id == ch_id,
                 Program.end_time   > epg_start,
                 Program.start_time < epg_end,
             )
             .order_by(Program.id.asc())
-            .limit(BATCH)
             .all()
         )
-        if not programs:
-            break
 
         for prog in programs:
             tvg_id = tvg_map.get(prog.channel_id)
@@ -235,8 +227,6 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                 system = 'dd_progid' if _is_tms_id(episode_id) else 'fastchannels'
                 SubElement(el, 'episode-num', system=system).text = episode_id
             yield tostring(el, encoding='unicode') + '\n'
-
-        last_id = programs[-1].id
 
     # ── Synthetic hourly blocks for custom channels ───────────────────────
     # Custom channels have no scraped Program rows.  Emit repeating 1-hour

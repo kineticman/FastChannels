@@ -1415,6 +1415,11 @@ def _refresh_xml_artifacts_job() -> None:
     logging.root.setLevel(logging.INFO)
     logging.root.addHandler(_h)
     with flask_app.app_context():
+        # The forked child inherits the parent's SQLAlchemy connection pool,
+        # and SQLite connections must never be used across a fork.  Replace
+        # the pool without closing the parent's connections (SQLAlchemy's
+        # documented post-fork recipe).
+        db.engine.dispose(close=False)
         _refresh_xml_artifacts()
 
 
@@ -1431,8 +1436,11 @@ def _refresh_xml_artifacts_subprocess(timeout_seconds: int = 1800) -> None:
 
 
 def run_xml_refresh():
-    with flask_app.app_context():
-        _refresh_xml_artifacts()
+    # Runs on the 'fast' queue, whose SimpleWorker executes jobs in-process
+    # (no fork).  Building ~150-200MB of artifacts inline permanently bloats
+    # the worker's RSS via allocator fragmentation, so do the build in a
+    # short-lived child process instead — the memory dies with the child.
+    _refresh_xml_artifacts_subprocess()
 
 
 def run_tvtv_cache_refresh():
@@ -1467,7 +1475,10 @@ def run_tvtv_cache_refresh():
 
 def _invalidate_and_refresh_xml() -> None:
     invalidate_xml_cache()
-    _refresh_xml_artifacts()
+    # Subprocess so callers on the non-forking 'fast' worker (e.g. channel
+    # auto-disable) don't accumulate the build's RSS.  Maintenance-queue
+    # callers already run in a forked work-horse; the extra fork is free.
+    _refresh_xml_artifacts_subprocess()
 
 
 def _channel_ids_for_filters(filters: dict) -> list[int]:

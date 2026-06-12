@@ -138,9 +138,12 @@ def m3u_gracenote():
     from ..models import Feed
     base_url     = public_base_url()
     filters      = _filters()
-    default_feed = Feed.query.filter_by(slug='default').first()
-    gn_start     = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
     if filters:
+        # feed_gracenote_start runs a full channel query + chnum-map build —
+        # only pay for it on the uncached filtered path, never when serving
+        # the prebuilt artifact below.
+        default_feed = Feed.query.filter_by(slug='default').first()
+        gn_start     = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
         content = generate_gracenote_m3u(filters, base_url=base_url, namespace_start=gn_start)
         return Response(content, mimetype='application/x-mpegurl',
                         headers={'Content-Disposition': 'attachment; filename="fastchannels-gracenote.m3u"'})
