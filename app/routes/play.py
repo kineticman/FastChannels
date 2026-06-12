@@ -956,8 +956,10 @@ def fubo_segment_proxy():
         abort(502)
 
     content_type = r.headers.get('Content-Type', 'application/octet-stream')
+    # Stream the segment chunk-by-chunk; r.content would buffer the whole
+    # (multi-MB) segment into the worker before sending, defeating stream=True.
     return Response(
-        r.content,
+        r.iter_content(65536),
         mimetype=content_type,
         headers={'Access-Control-Allow-Origin': '*'},
     )

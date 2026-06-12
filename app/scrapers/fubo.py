@@ -440,7 +440,17 @@ class FuboScraper(BaseScraper):
                 episode_id=raw.get('episode_id'),
             ))
 
-        logger.info('[fubo] fetched %d EPG entries', len(programs))
+        # Visibility into EPG quality: how many cells got rich enrichment vs
+        # shipped bare (title/times only) from PAPI, and how many channel ids
+        # had to be resolved via the fuzzy suffix/name heuristics.
+        enriched = sum(1 for key in schedule if key in rich_schedule)
+        _rs = resolve_channel_id.stats
+        logger.info(
+            '[fubo] fetched %d EPG entries (%d enriched, %d bare); '
+            'id match: %d exact, %d suffix, %d name, %d unresolved',
+            len(programs), enriched, len(schedule) - enriched,
+            _rs['exact'], _rs['suffix'], _rs['name'], _rs['unresolved'],
+        )
         return programs
 
     # ── Stream resolution ─────────────────────────────────────────────────────
@@ -506,9 +516,14 @@ def _channel_id_resolver(channels: list[ChannelData]):
     for ch in channels:
         names.setdefault(_normalize_channel_name(ch.name), []).append(str(ch.source_channel_id))
 
+    # Track how each upstream id was matched so a high reliance on the fuzzy
+    # heuristics (which can graft EPG onto the wrong channel) is visible in logs.
+    stats = {'exact': 0, 'suffix': 0, 'name': 0, 'unresolved': 0}
+
     def resolve(upstream_id, upstream_name=None) -> str | None:
         raw_id = str(upstream_id or '')
         if raw_id in exact_ids:
+            stats['exact'] += 1
             return raw_id
 
         # PAPI appends 4-char suffixes to some IDs (e.g. 1236050001 → 123605);
@@ -516,13 +531,17 @@ def _channel_id_resolver(channels: list[ChannelData]):
         if len(raw_id) > 4 and raw_id[-4:].startswith('000'):
             base_id = raw_id[:-4]
             if base_id in exact_ids:
+                stats['suffix'] += 1
                 return base_id
 
         name_matches = names.get(_normalize_channel_name(upstream_name), [])
         if len(name_matches) == 1:
+            stats['name'] += 1
             return name_matches[0]
+        stats['unresolved'] += 1
         return None
 
+    resolve.stats = stats
     return resolve
 
 def _papi_channels(data: dict) -> list[dict]:
