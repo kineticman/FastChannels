@@ -10,8 +10,8 @@ self-hosted install on the same network as the tuner.
 Data flow:
   - GET {base}/discover.json   → device identity + DeviceAuth + tuner count
   - GET {base}/lineup.json     → the channel lineup (GuideNumber, GuideName, …)
-  - GET api.hdhomerun.com/api/guide.php?DeviceAuth=… → rich Gracenote-sourced EPG
-    (titles, synopses, S/E numbers, original air dates, series IDs, poster art)
+  - GET api.hdhomerun.com/api/xmltv?DeviceAuth=… → XMLTV guide (Gracenote-sourced;
+    2 days for all users, 14 days with DVR subscription)
 
 Streams are raw MPEG-TS over HTTP at {host}:5004/auto/v{GuideNumber}.  They are
 NOT HLS — they play in VLC/ffmpeg/most TV clients but not HLS-only web players.
@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+import xml.etree.ElementTree as ET
+from datetime import datetime
 from urllib.parse import urlencode, urlsplit
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
@@ -32,10 +33,8 @@ logger = logging.getLogger(__name__)
 
 _EPISODE_RE = re.compile(r'S(\d+)E(\d+)', re.IGNORECASE)
 
-# Gracenote station ID embedded in the cloud-guide channel logo URL,
-# e.g. https://img.hdhomerun.com/channels/US32639.png → "32639".  This is the
-# Gracenote station ID, emitted as tvc-guide-stationid in the Gracenote M3U.
-_STATION_ID_RE = re.compile(r'/channels/[A-Z]{2}(\d+)\.', re.IGNORECASE)
+# Gracenote station ID from the XMLTV channel id, e.g. "US32639.hdhomerun.com" → "32639".
+_XMLTV_CHANNEL_ID_RE = re.compile(r'^[A-Z]{2}(\d+)\.', re.IGNORECASE)
 
 # OTA diginet Affiliate brand → canonical category.  Matched by prefix against
 # the lowercased Affiliate string (so "Dabl Network", "PBS Kids HD", "METVN"
@@ -85,6 +84,12 @@ _NAME_CATEGORY_RULES: tuple[tuple[str, str], ...] = (
 
 _DEFAULT_OTA_CATEGORY = 'Broadcast'
 
+# XMLTV <category> values that are too generic to use as programme category.
+_XMLTV_SKIP_CATEGORIES = frozenset({'Series', 'Movie'})
+
+# Regex for pure channel-number strings like "4.1" or "10" — not a real affiliate.
+_LCN_RE = re.compile(r'^\d+(\.\d+)?$')
+
 
 class HDHomeRunScraper(BaseScraper):
     source_name = "hdhomerun"
@@ -99,10 +104,7 @@ class HDHomeRunScraper(BaseScraper):
     stream_audit_enabled = False
 
     STREAM_PORT = 5004
-    CLOUD_GUIDE_URL = "https://api.hdhomerun.com/api/guide.php"
-    # Each page advances ~4h (the least-covered channel's window); 12 pages
-    # covers ~36-48h of gap-free guide. Each page is one fast HTTP call.
-    GUIDE_MAX_PAGES = 12
+    XMLTV_URL = "https://api.hdhomerun.com/api/xmltv"
 
     config_schema = [
         ConfigField(
@@ -141,7 +143,7 @@ class HDHomeRunScraper(BaseScraper):
     def __init__(self, config: dict = None):
         super().__init__(config)
         self._discover_cache: dict | None = None
-        self._guide_cache: list[dict] | None = None
+        self._xmltv_cache: tuple[dict, list] | None = None
 
     # ── helpers ──────────────────────────────────────────────
 
@@ -211,14 +213,6 @@ class HDHomeRunScraper(BaseScraper):
                 return category
         return _DEFAULT_OTA_CATEGORY
 
-    @staticmethod
-    def _station_id_from_image(url: str | None) -> str | None:
-        """Extract the Gracenote station ID from the cloud-guide logo URL."""
-        if not url:
-            return None
-        m = _STATION_ID_RE.search(url)
-        return m.group(1) if m else None
-
     # ── channels ─────────────────────────────────────────────
 
     def fetch_channels(self) -> list[ChannelData]:
@@ -239,8 +233,8 @@ class HDHomeRunScraper(BaseScraper):
             logger.error("[hdhomerun] invalid lineup JSON: %s", exc)
             return []
 
-        # Channel-level metadata (logo, affiliate) only comes from the cloud guide.
-        guide_meta = self._guide_channel_meta(discover)
+        # Channel-level metadata (logo, affiliate, gracenote_id) from XMLTV.
+        channel_meta, _ = self._fetch_xmltv(discover)
 
         channels: list[ChannelData] = []
         for row in rows:
@@ -253,8 +247,8 @@ class HDHomeRunScraper(BaseScraper):
                 continue
 
             name = (row.get("GuideName") or f"Channel {guide_number}").strip()
-            meta = guide_meta.get(guide_number, {})
-            affiliate = (meta.get("Affiliate") or "").strip()
+            meta = channel_meta.get(guide_number, {})
+            affiliate = (meta.get("affiliate") or "").strip()
             tags = list(lineup_tags)
             if affiliate and affiliate.lower() not in tags:
                 tags.append(affiliate)
@@ -264,13 +258,13 @@ class HDHomeRunScraper(BaseScraper):
                     source_channel_id=guide_number,
                     name=name,
                     stream_url=f"hdhr://{guide_number}",
-                    logo_url=meta.get("ImageURL"),
+                    logo_url=meta.get("logo_url"),
                     category=self._category_for(affiliate, name),
                     number=None,  # GuideNumber ("4.1") isn't an int; let the app assign
                     # Store the Gracenote station ID but default to 'off' so the
                     # channel stays in the standard M3U using the imported HDHR
                     # EPG. Users opt a channel into Gracenote routing via admin.
-                    gracenote_id=self._station_id_from_image(meta.get("ImageURL")),
+                    gracenote_id=meta.get("gracenote_id"),
                     gracenote_mode='off',
                     guide_key=guide_number,
                     country="US",
@@ -291,143 +285,159 @@ class HDHomeRunScraper(BaseScraper):
     # ── EPG ──────────────────────────────────────────────────
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
-        guide = self._cloud_guide(self._discover())
-        if not guide:
-            return []
-
-        programs: list[ProgramData] = []
-        for ch_entry in guide:
-            guide_number = str(ch_entry.get("GuideNumber") or "").strip()
-            if not guide_number:
-                continue
-            for prog in (ch_entry.get("Guide") or []):
-                pd = self._program_from_guide(guide_number, prog)
-                if pd:
-                    programs.append(pd)
-
-        logger.info("[hdhomerun] %d programs across %d channels", len(programs), len(guide))
+        _, programs = self._fetch_xmltv(self._discover())
         return programs
 
-    def _program_from_guide(self, guide_number: str, prog: dict) -> ProgramData | None:
-        title = prog.get("Title")
-        start = self._unix_to_dt(prog.get("StartTime"))
-        end = self._unix_to_dt(prog.get("EndTime"))
-        if not title or not start or not end:
+    # ── XMLTV guide ──────────────────────────────────────────
+
+    def _fetch_xmltv(self, discover: dict) -> tuple[dict, list[ProgramData]]:
+        """Download and parse the SiliconDust XMLTV guide. Cached per run.
+
+        Returns (channel_meta, programs) where channel_meta maps guide number
+        (LCN, e.g. "4.1") to {logo_url, affiliate, gracenote_id}.
+        """
+        if self._xmltv_cache is not None:
+            return self._xmltv_cache
+
+        auth = discover.get("DeviceAuth")
+        if not auth:
+            logger.info("[hdhomerun] no DeviceAuth — skipping cloud EPG")
+            self._xmltv_cache = ({}, [])
+            return self._xmltv_cache
+
+        r = self.get(self.XMLTV_URL, params={"DeviceAuth": auth})
+        if not r:
+            self._xmltv_cache = ({}, [])
+            return self._xmltv_cache
+
+        try:
+            root = ET.fromstring(r.content)
+        except ET.ParseError as exc:
+            logger.error("[hdhomerun] XMLTV parse error: %s", exc)
+            self._xmltv_cache = ({}, [])
+            return self._xmltv_cache
+
+        # Parse <channel> elements: xmltv_channel_id → {lcn, logo_url, affiliate, gracenote_id}
+        xmltv_channels: dict[str, dict] = {}
+        for ch in root.iter("channel"):
+            ch_id = ch.get("id") or ""
+            lcn = (ch.findtext("lcn") or "").strip()
+            if not ch_id or not lcn:
+                continue
+            icon_el = ch.find("icon")
+            logo_url = icon_el.get("src") if icon_el is not None else None
+            # Last display-name is the affiliate/network brand; skip bare LCN strings.
+            display_names = [el.text.strip() for el in ch.findall("display-name") if el.text]
+            affiliate = next(
+                (dn for dn in reversed(display_names) if not _LCN_RE.match(dn)),
+                None,
+            )
+            m = _XMLTV_CHANNEL_ID_RE.match(ch_id)
+            gracenote_id = m.group(1) if m else None
+            xmltv_channels[ch_id] = {
+                "lcn": lcn,
+                "logo_url": logo_url,
+                "affiliate": affiliate,
+                "gracenote_id": gracenote_id,
+            }
+
+        # LCN-keyed map for fetch_channels lookups.
+        channel_meta: dict[str, dict] = {
+            meta["lcn"]: meta for meta in xmltv_channels.values()
+        }
+
+        # Parse <programme> elements.
+        programs: list[ProgramData] = []
+        for prog_el in root.iter("programme"):
+            ch_id = prog_el.get("channel") or ""
+            ch = xmltv_channels.get(ch_id)
+            if not ch:
+                continue
+            pd = self._program_from_xmltv(ch["lcn"], prog_el)
+            if pd:
+                programs.append(pd)
+
+        logger.info("[hdhomerun] XMLTV: %d channels, %d programs", len(channel_meta), len(programs))
+        self._xmltv_cache = (channel_meta, programs)
+        return self._xmltv_cache
+
+    def _program_from_xmltv(self, guide_number: str, prog: ET.Element) -> ProgramData | None:
+        title = prog.findtext("title")
+        start_str = prog.get("start") or ""
+        stop_str = prog.get("stop") or ""
+        if not title or not start_str or not stop_str:
             return None
 
-        season = episode = None
-        m = _EPISODE_RE.search(prog.get("EpisodeNumber") or "")
-        if m:
-            season, episode = int(m.group(1)), int(m.group(2))
+        try:
+            start = datetime.strptime(start_str, "%Y%m%d%H%M%S %z")
+            end = datetime.strptime(stop_str, "%Y%m%d%H%M%S %z")
+        except ValueError:
+            return None
 
-        series_id = prog.get("SeriesID") or None
+        # Season/episode from <episode-num system="onscreen"> (e.g. "S01E06").
+        season = episode = None
+        for ep_el in prog.findall("episode-num"):
+            if ep_el.get("system") == "onscreen":
+                m = _EPISODE_RE.search(ep_el.text or "")
+                if m:
+                    season, episode = int(m.group(1)), int(m.group(2))
+                break
+
+        # Series ID from <series-id system="cseries">.
+        series_id = None
+        for sid_el in prog.findall("series-id"):
+            if sid_el.get("system") == "cseries":
+                series_id = (sid_el.text or "").strip() or None
+                break
+
+        # Per-episode ID from <episode-num system="dd_progid"> (TMS program ID).
+        episode_id = None
+        for ep_el in prog.findall("episode-num"):
+            if ep_el.get("system") == "dd_progid":
+                episode_id = (ep_el.text or "").strip() or None
+                break
+
         if series_id and series_id.startswith("MV"):
             program_type = "movie"
-        elif prog.get("EpisodeNumber"):
+        elif season is not None or episode is not None:
             program_type = "episode"
         else:
             program_type = None
 
-        category = None
-        filt = prog.get("Filter")
-        if isinstance(filt, list) and filt:
-            category = filt[0]
+        # First specific category (skip generic "Series"/"Movie" labels).
+        categories = [el.text.strip() for el in prog.findall("category") if el.text]
+        category = next(
+            (c for c in categories if c not in _XMLTV_SKIP_CATEGORIES),
+            categories[0] if categories else None,
+        )
+
+        date_str = (prog.findtext("date") or "").strip()
+        original_air_date = None
+        if date_str:
+            try:
+                original_air_date = datetime.strptime(date_str[:8], "%Y%m%d").date()
+            except ValueError:
+                pass
+
+        icon_el = prog.find("icon")
+        poster_url = icon_el.get("src") if icon_el is not None else None
 
         return ProgramData(
             source_channel_id=guide_number,
             title=title,
             start_time=start,
             end_time=end,
-            description=prog.get("Synopsis"),
-            poster_url=prog.get("PosterURL") or prog.get("ImageURL"),
+            description=prog.findtext("desc"),
+            poster_url=poster_url,
             category=category,
-            episode_title=prog.get("EpisodeTitle") or None,
+            episode_title=prog.findtext("sub-title") or None,
             season=season,
             episode=episode,
-            original_air_date=self._unix_to_date(prog.get("OriginalAirdate")),
+            original_air_date=original_air_date,
             program_type=program_type,
             series_id=series_id,
-            episode_id=series_id,  # HDHR has no stable per-episode id; series is closest
+            episode_id=episode_id,
         )
-
-    # ── cloud guide ──────────────────────────────────────────
-
-    def _cloud_guide(self, discover: dict) -> list[dict]:
-        """Fetch the SiliconDust cloud guide, paginating forward in time.
-
-        Returns a list of {GuideNumber, GuideName, Affiliate, ImageURL, Guide:[…]}
-        with each channel's Guide arrays merged across pages.  Cached per run.
-        """
-        if self._guide_cache is not None:
-            return self._guide_cache
-
-        auth = discover.get("DeviceAuth")
-        if not auth:
-            logger.info("[hdhomerun] no DeviceAuth — skipping cloud EPG")
-            self._guide_cache = []
-            return self._guide_cache
-
-        # Each guide.php call returns a ~4-7h window per channel, but the window
-        # end varies per channel within a page. Advancing the next Start to the
-        # GLOBAL max end would skip the tail of every channel that ended earlier,
-        # leaving same-time gaps on most channels. Instead advance to the MINIMUM
-        # per-channel frontier so no channel is skipped, and dedup the resulting
-        # overlap by (channel, StartTime).
-        merged: dict[str, dict] = {}
-        seen: dict[str, set] = {}
-        start: int | None = None
-        for _ in range(self.GUIDE_MAX_PAGES):
-            params = {"DeviceAuth": auth}
-            if start is not None:
-                params["Start"] = start
-            r = self.get(self.CLOUD_GUIDE_URL, params=params)
-            if not r:
-                break
-            try:
-                page = r.json()
-            except Exception as exc:
-                logger.debug("[hdhomerun] guide page parse error: %s", exc)
-                break
-            if not page:
-                break
-
-            channel_ends: list[int] = []  # last EndTime seen per channel this page
-            for ch_entry in page:
-                gn = str(ch_entry.get("GuideNumber") or "").strip()
-                if not gn:
-                    continue
-                slot = merged.setdefault(gn, {**ch_entry, "Guide": []})
-                starts = seen.setdefault(gn, set())
-                ch_end = 0
-                for prog in (ch_entry.get("Guide") or []):
-                    st = prog.get("StartTime")
-                    ch_end = max(ch_end, prog.get("EndTime") or 0)
-                    if st in starts:
-                        continue  # already merged from an overlapping page
-                    starts.add(st)
-                    slot["Guide"].append(prog)
-                if ch_end:
-                    channel_ends.append(ch_end)
-
-            # Frontier = the least-covered channel's end this page. Channels that
-            # returned no data (genuine upstream gap) don't drag the frontier.
-            if not channel_ends:
-                break
-            next_start = min(channel_ends)
-            if start is not None and next_start <= start:
-                break
-            start = next_start
-
-        self._guide_cache = list(merged.values())
-        return self._guide_cache
-
-    def _guide_channel_meta(self, discover: dict) -> dict[str, dict]:
-        """Map GuideNumber → channel-level guide metadata (logo, affiliate)."""
-        return {
-            str(c.get("GuideNumber") or "").strip(): c
-            for c in self._cloud_guide(discover)
-            if c.get("GuideNumber")
-        }
 
     # ── resolve ──────────────────────────────────────────────
 
@@ -436,19 +446,3 @@ class HDHomeRunScraper(BaseScraper):
             return raw_url
         guide_number = raw_url[len("hdhr://"):]
         return self._stream_url_for(guide_number) or raw_url
-
-    # ── datetime helpers ─────────────────────────────────────
-
-    @staticmethod
-    def _unix_to_dt(val) -> datetime | None:
-        try:
-            return datetime.fromtimestamp(int(val), tz=timezone.utc)
-        except (TypeError, ValueError, OSError):
-            return None
-
-    @classmethod
-    def _unix_to_date(cls, val):
-        dt = cls._unix_to_dt(val)
-        if not dt or dt.year <= 1970:
-            return None
-        return dt.date()
