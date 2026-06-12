@@ -654,8 +654,14 @@ def guide():
 
     offset_hours     = max(-48, min(48, request.args.get('offset', type=int, default=0)))
     offset           = timedelta(hours=offset_hours)
-    window_start_utc = now_utc + offset - timedelta(minutes=30)
-    window_end_utc   = now_utc + offset + timedelta(hours=4, minutes=30)
+    # Start the window on the previous half-hour boundary (local time) so the
+    # guide's natural left edge lands on a clean :00/:30. Program titles begin
+    # on those boundaries, so this keeps them visible with no client-side
+    # scroll snapping — which never worked reliably on iOS.
+    anchor_local     = (now_utc + offset).astimezone(tz).replace(second=0, microsecond=0)
+    anchor_local    -= timedelta(minutes=anchor_local.minute % 30)
+    window_start_utc = anchor_local.astimezone(timezone.utc)
+    window_end_utc   = window_start_utc + timedelta(hours=5)
     window_seconds   = (window_end_utc - window_start_utc).total_seconds()
 
     window_start_local = window_start_utc.astimezone(tz)
@@ -741,11 +747,19 @@ def guide():
 
     now_pct = round(time_pct(now_local), 4)
 
+    # The window now begins exactly on the half-hour boundary, so the guide's
+    # natural left edge already sits there (snap offset 0). The AJAX program
+    # fetch is pinned to this same anchor so its bar positions stay aligned.
+    snap_pct = 0.0
+    window_anchor_epoch = int(window_start_utc.timestamp())
+
     return render_template(
         'admin/guide.html',
         guide_rows=guide_rows,
         ticks=ticks,
         now_pct=now_pct,
+        snap_pct=snap_pct,
+        window_anchor_epoch=window_anchor_epoch,
         sources=sources,
         feeds=feeds,
         categories=categories,
@@ -776,12 +790,23 @@ def guide_programs():
     offset_hours     = max(-48, min(48, request.args.get('offset', type=int, default=0)))
     now_utc          = datetime.now(timezone.utc)
     offset           = timedelta(hours=offset_hours)
-    window_start_utc = now_utc + offset - timedelta(minutes=30)
-    window_end_utc   = now_utc + offset + timedelta(hours=4, minutes=30)
-    window_seconds   = (window_end_utc - window_start_utc).total_seconds()
 
     app_settings        = AppSettings.get()
     tz                  = ZoneInfo(app_settings.effective_timezone_name())
+
+    # Prefer the anchor the page computed so program bars line up exactly with
+    # the ticks/now-line; fall back to flooring locally (matches the page route)
+    # if it's missing or malformed.
+    anchor = request.args.get('anchor', type=int)
+    if anchor:
+        window_start_utc = datetime.fromtimestamp(anchor, tz=timezone.utc)
+    else:
+        anchor_local     = (now_utc + offset).astimezone(tz).replace(second=0, microsecond=0)
+        anchor_local    -= timedelta(minutes=anchor_local.minute % 30)
+        window_start_utc = anchor_local.astimezone(timezone.utc)
+    window_end_utc   = window_start_utc + timedelta(hours=5)
+    window_seconds   = (window_end_utc - window_start_utc).total_seconds()
+
     window_start_local  = window_start_utc.astimezone(tz)
     window_end_local    = window_end_utc.astimezone(tz)
 

@@ -53,6 +53,7 @@
     }
     .guide-toolbar input[type="text"] { width: 170px; }
     .guide-toolbar-sep { width: 1px; height: 1.4rem; background: var(--border); margin: 0 0.2rem; }
+    .guide-time-nav { display: flex; flex-wrap: nowrap; align-items: center; gap: 0.55rem; }
     .guide-meta {
       font-size: 0.78rem;
       color: var(--text-muted);
@@ -389,13 +390,15 @@
         <button type="submit" class="btn btn-sm">Search</button>
         {% if source_id or feed_id or category or search %}<a href="/admin/guide" class="btn btn-sm btn-ghost">Clear</a>{% endif %}
         <div class="guide-toolbar-sep"></div>
-        <button type="button" class="btn btn-sm btn-ghost" onclick="shiftTime(-2)" title="Go back 2 hours">&#8592; 2h</button>
-        {% if offset_hours != 0 %}
-        <button type="button" class="btn btn-sm" onclick="shiftTime({{ -offset_hours }})" title="Return to live guide">Now</button>
-        {% else %}
-        <button type="button" class="btn btn-sm btn-ghost" onclick="scrollToNow()">Jump to Now</button>
-        {% endif %}
-        <button type="button" class="btn btn-sm btn-ghost" onclick="shiftTime(2)" title="Go forward 2 hours">2h &#8594;</button>
+        <div class="guide-time-nav">
+          <button type="button" class="btn btn-sm btn-ghost" onclick="shiftTime(-2)" title="Go back 2 hours">&#8592; 2h</button>
+          {% if offset_hours != 0 %}
+          <button type="button" class="btn btn-sm" onclick="shiftTime({{ -offset_hours }})" title="Return to live guide">Now</button>
+          {% else %}
+          <button type="button" class="btn btn-sm btn-ghost" onclick="scrollToNow()">Jump to Now</button>
+          {% endif %}
+          <button type="button" class="btn btn-sm btn-ghost" onclick="shiftTime(2)" title="Go forward 2 hours">2h &#8594;</button>
+        </div>
         <span class="guide-meta">
           {% if offset_hours != 0 %}
           <span style="color:var(--warning-soft,var(--warning))">
@@ -459,6 +462,7 @@
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
   <script>
     const _APP_TZ = {{ app_timezone_name | tojson }};
+    const _WINDOW_ANCHOR = {{ window_anchor_epoch }};
 
     // ── Lazy-fetch program tracks ─────────────────────────────────────
     function _renderTrack(track, programs) {
@@ -498,7 +502,7 @@
         if (!pending.size) return;
         const ids = Array.from(pending);
         pending.clear();
-        const url = `/admin/guide/programs?channel_ids=${ids.join(',')}&offset=${_OFFSET_HOURS}`;
+        const url = `/admin/guide/programs?channel_ids=${ids.join(',')}&offset=${_OFFSET_HOURS}&anchor=${_WINDOW_ANCHOR}`;
         fetch(url)
           .then(r => r.json())
           .then(data => {
@@ -545,19 +549,53 @@
     }
 
     // ── Scroll to now ────────────────────────────────────────────────
-    const NOW_PCT = {{ now_pct }};
+    const NOW_PCT  = {{ now_pct }};
+    const SNAP_PCT = {{ snap_pct }};
 
+    // Target scroll offset that lands the half-hour boundary at/before "now"
+    // just right of the sticky channel column, so program titles starting on
+    // the boundary aren't clipped. Derived from scrollWidth (stable once the
+    // container has laid out) rather than per-element rects, which iOS Safari
+    // mis-measures while the momentum-scroll layer is still settling.
+    function snapTarget() {
+      const outer = document.getElementById('guide-outer');
+      if (!outer) return 0;
+      const colW   = document.querySelector('.ch-cell')?.offsetWidth || 180;
+      const trackW = outer.scrollWidth - colW;
+      return Math.max(0, trackW * (SNAP_PCT / 100) - 8);
+    }
     function scrollToNow() {
       const outer = document.getElementById('guide-outer');
-      const hdrLine = document.getElementById('now-line-hdr');
-      if (!hdrLine || !outer) return;
-      const outerRect  = outer.getBoundingClientRect();
-      const lineRect   = hdrLine.getBoundingClientRect();
-      const lineInOuter = lineRect.left - outerRect.left + outer.scrollLeft;
-      outer.scrollLeft = Math.max(0, lineInOuter - outer.clientWidth * 0.28);
+      if (outer) outer.scrollLeft = snapTarget();
     }
 
-    window.addEventListener('load', scrollToNow);
+    // scrollRestoration only governs the document scroll — iOS Safari restores
+    // an overflow container's own offset independently, and does it on a delay
+    // we can't out-wait with fixed timeouts. So instead of guessing when to
+    // re-assert, correct any scroll we didn't cause until the user first
+    // touches the guide, for a short window after each (re)load.
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+    let _snapLockUntil = 0;
+    let _userTouchedGuide = false;
+    function snapGuide() {
+      _snapLockUntil = performance.now() + 1500;
+      scrollToNow();
+      requestAnimationFrame(scrollToNow);
+    }
+    (function () {
+      const outer = document.getElementById('guide-outer');
+      if (!outer) return;
+      ['touchstart', 'pointerdown', 'wheel', 'keydown'].forEach(ev =>
+        outer.addEventListener(ev, () => { _userTouchedGuide = true; }, { passive: true }));
+      outer.addEventListener('scroll', () => {
+        if (_userTouchedGuide || performance.now() > _snapLockUntil) return;
+        const t = snapTarget();
+        if (Math.abs(outer.scrollLeft - t) > 4) outer.scrollLeft = t;
+      }, { passive: true });
+    })();
+    document.addEventListener('DOMContentLoaded', snapGuide);
+    window.addEventListener('load', snapGuide);
+    window.addEventListener('pageshow', e => { if (e.persisted) { _userTouchedGuide = false; snapGuide(); } });
     document.addEventListener('keydown', e => {
       if (e.key === 'Escape') { closeGuideModal(); return; }
       const modal = document.getElementById('guide-modal');
