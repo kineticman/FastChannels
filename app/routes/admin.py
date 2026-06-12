@@ -935,10 +935,20 @@ def feeds():
         feed.id: _feed_split_counts(feed)
         for feed in feeds
     }
+    default_split = feed_split_counts.get(default_feed.id, {}) if default_feed else {}
+    feed_summary = {
+        'total_feeds':   len(feeds),
+        'enabled_feeds': sum(1 for f in feeds if f.is_enabled),
+        'custom_feeds':  sum(1 for f in feeds if f.slug != 'default'),
+        'all_channels':  default_feed.channel_count() if default_feed else 0,
+        'gracenote':     default_split.get('gracenote_count', 0),
+        'sources':       len(sources),
+    }
     return render_template('admin/feeds.html',
                            feeds=feeds, sources=sources,
                            categories=categories, languages=languages, countries=countries,
                            base_url=base_url,
+                           feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
                            default_chnum_from_env=default_feed and default_feed.chnum_start is None and app_settings.env_global_chnum_start() is not None)

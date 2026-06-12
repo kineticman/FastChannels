@@ -35,6 +35,22 @@
     .btn-ghost:hover { color: var(--text); }
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+    /* Summary card */
+    .feed-summary {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 1.1rem 1.5rem; margin-bottom: 1.5rem;
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem;
+    }
+    .summary-stat { display: flex; flex-direction: column; gap: 0.2rem; padding-left: 1rem; }
+    .summary-stat:first-child { padding-left: 0; }
+    .summary-stat + .summary-stat { border-left: 1px solid var(--border); }
+    .summary-stat .num { font-size: 1.5rem; font-weight: 700; color: var(--text); line-height: 1.1; }
+    .summary-stat .num .accent { color: var(--accent); }
+    .summary-stat .lbl {
+      font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .summary-stat .sub { font-size: 0.74rem; color: var(--text-dim); }
+
     /* Feed cards */
     .feed-grid { display: grid; gap: 1rem; }
     .feed-card {
@@ -229,6 +245,13 @@
       .modal-footer { flex-direction: column; align-items: stretch; }
       .page-header .btn { width: auto; }
       .feed-card { padding: 1rem; }
+      .feed-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.85rem 1rem; padding: 1rem;
+      }
+      .summary-stat { padding-left: 0; }
+      .summary-stat + .summary-stat { border-left: none; }
+      .summary-stat .num { font-size: 1.3rem; }
       .feed-meta {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -324,6 +347,31 @@
     </div>
     <button class="btn btn-primary" onclick="openModal()">+ New Feed</button>
   </div>
+
+  {% if feed_summary %}
+  <div class="feed-summary">
+    <div class="summary-stat">
+      <span class="num">{{ feed_summary.total_feeds }}</span>
+      <span class="lbl">Feeds</span>
+      <span class="sub">{{ feed_summary.enabled_feeds }} enabled · {{ feed_summary.custom_feeds }} custom</span>
+    </div>
+    <div class="summary-stat">
+      <span class="num">{{ '{:,}'.format(feed_summary.all_channels) }}</span>
+      <span class="lbl">Channels</span>
+      <span class="sub">all enabled (Default feed)</span>
+    </div>
+    <div class="summary-stat">
+      <span class="num">{{ '{:,}'.format(feed_summary.gracenote) }}</span>
+      <span class="lbl">Gracenote-mapped</span>
+      <span class="sub">routed to Gracenote EPG</span>
+    </div>
+    <div class="summary-stat">
+      <span class="num">{{ feed_summary.sources }}</span>
+      <span class="lbl">Sources</span>
+      <span class="sub">enabled &amp; feeding</span>
+    </div>
+  </div>
+  {% endif %}
 
   <div class="feed-grid" id="feed-grid">
     {% for feed in feeds %}
