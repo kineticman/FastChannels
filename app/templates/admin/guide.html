@@ -953,8 +953,8 @@
         return;
       }
 
-      // Safari/iOS: use native HLS for unencrypted or AES-128 streams that Shaka
-      // can't decrypt via MSE (error 4042). Only skip for DASH or DRM streams.
+      // Safari/iOS: use native HLS for encrypted transport streams that Shaka
+      // can't play through MSE (error 4040). Only skip for DASH or DRM streams.
       const _isDash = normalizedMode === 'dash' || normalizedType === 'dash';
       if (!_isDash && !licenseUrl && _isSafariOrIos) {
         video.src = url;
@@ -981,7 +981,8 @@
         }
         _guideShaka.addEventListener('error', (event) => {
           const err = event.detail;
-          if (status) status.textContent = `Shaka error ${err.code}: ${err.message || 'playback failed'}`;
+          if (status) status.textContent = formatGuideShakaError(err);
+          console.error('[Shaka] guide error', err.code, err);
         });
         const mimeType = (normalizedMode === 'dash' || normalizedType === 'dash')
           ? 'application/dash+xml'
@@ -993,15 +994,64 @@
         video.play().catch(() => {});
         if (_guideStatsVisible) _startGuideStatsLoop();
       }).catch((err) => {
-        if (status) {
-          const code = err.code || '';
-          if (code === 6020) {
-            status.innerHTML = 'DRM requires a secure context. <small>Chrome tip: paste <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> into the address bar, add this origin, and relaunch.</small>';
-          } else {
-            status.textContent = `Shaka error ${code || err.message || err}: playback failed.`;
-          }
-        }
+        if (status) status.textContent = formatGuideShakaError(err);
+        console.error('[Shaka] guide load failed', err);
       });
+    }
+
+    function formatGuideShakaError(err) {
+      if (!err) return 'Shaka playback failed (no error details).';
+
+      const code = err.code || 'unknown';
+      const codeName = Object.entries(window.shaka?.util?.Error?.Code || {})
+        .find(([, value]) => value === err.code)?.[0];
+      const categoryName = Object.entries(window.shaka?.util?.Error?.Category || {})
+        .find(([, value]) => value === err.category)?.[0];
+      const context = [];
+
+      if (err.code === 4042) {
+        context.push(`Web Crypto unavailable (secure context: ${window.isSecureContext}; crypto.subtle: ${Boolean(window.crypto?.subtle)})`);
+      } else if (err.code === 4040) {
+        context.push('encrypted MPEG-TS cannot be played through MediaSource in this browser');
+      } else if (err.code === 6007) {
+        context.push('DRM license request failed; check the license endpoint, authorization, and network response');
+      } else if (err.code === 6008) {
+        context.push('the browser CDM rejected the DRM license response');
+      } else if (err.code === 6014) {
+        context.push('the DRM license has expired');
+      } else if (err.code === 6020) {
+        context.push(`browser DRM APIs unavailable (secure context: ${window.isSecureContext})`);
+      } else if (err.code === 1001 || err.code === 1002) {
+        context.push('manifest or segment request failed; check HTTP status, CORS, and network filtering');
+      }
+
+      const details = formatGuideShakaErrorData(err.data);
+      const identity = [categoryName, codeName].filter(Boolean).join('.');
+      return [
+        `Shaka error ${code}${identity ? ` (${identity})` : ''}: ${err.message || 'playback failed'}.`,
+        ...context,
+        details ? `Details: ${details}` : '',
+      ].filter(Boolean).join(' ');
+    }
+
+    function formatGuideShakaErrorData(data) {
+      if (!Array.isArray(data) || !data.length) return '';
+      try {
+        return JSON.stringify(data, (key, value) => {
+          if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
+            try {
+              const parsed = new URL(value);
+              return `${parsed.origin}${parsed.pathname}`;
+            } catch (_) {
+              return value;
+            }
+          }
+          if (value instanceof Error) return { name: value.name, message: value.message };
+          return value;
+        }).slice(0, 500);
+      } catch (_) {
+        return String(data).slice(0, 500);
+      }
     }
 
     // ── Guide stats for nerds ─────────────────────────────────────────
