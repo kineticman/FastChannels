@@ -586,6 +586,10 @@
           <button class="btn btn-delete" id="restore-db-btn" onclick="uploadDbRestore()" disabled style="margin:0">Restore</button>
           <span class="save-status" id="restore-db-status"></span>
         </div>
+        <div style="margin-top:1rem">
+          <button class="btn btn-audit" id="local-backups-btn" onclick="openLocalBackups()" style="margin:0">Restore from Auto-Backup&hellip;</button>
+          <span class="toggle-row-help" style="display:inline;margin-left:0.6rem">Nightly server-side snapshots (newest 3 kept, written at 3:30&nbsp;AM).</span>
+        </div>
       </div>
     </div>
   </div>
@@ -680,6 +684,23 @@
   </div>
 
   {% include 'admin/_community_map_modals.html' %}
+
+  <!-- Auto-backup restore modal -->
+  <div class="modal-overlay" id="local-backups-modal" onclick="if(event.target===this)closeLocalBackups()">
+    <div class="modal-box" style="max-width:520px">
+      <h3 style="margin:0 0 0.75rem">Restore from Auto-Backup</h3>
+      <p style="color:var(--text-subtle);margin:0 0 1rem;line-height:1.5">
+        These nightly snapshots live on the server in
+        <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">/data/backups</code>.
+        Restoring replaces the current database. <strong>This cannot be undone.</strong>
+        Restart the container afterward so all background workers pick up the restored data.
+      </p>
+      <div id="local-backups-list" style="margin-bottom:1rem">Loading&hellip;</div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <button class="btn-cancel-modal" onclick="closeLocalBackups()">Close</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Gracenote clear confirmation modal -->
   <div class="modal-overlay" id="gracenote-clear-modal" onclick="if(event.target===this)cancelGracenoteClear()">
@@ -947,6 +968,59 @@ async function uploadDbRestore() {
     status.textContent = '✕ ' + e.message;
     btn.disabled = false;
     btn.textContent = originalText;
+  }
+}
+
+function closeLocalBackups() {
+  document.getElementById('local-backups-modal').classList.remove('open');
+}
+
+async function openLocalBackups() {
+  const modal = document.getElementById('local-backups-modal');
+  const list  = document.getElementById('local-backups-list');
+  modal.classList.add('open');
+  list.textContent = 'Loading…';
+  try {
+    const r = await fetch('/api/settings/local-backups');
+    const payload = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(payload.error || `HTTP ${r.status}`);
+    const backups = payload.backups || [];
+    if (!backups.length) {
+      list.innerHTML = '<div style="color:var(--text-muted)">No server-side backups yet — the first one runs overnight at 3:30&nbsp;AM.</div>';
+      return;
+    }
+    list.innerHTML = backups.map(b => {
+      const mb   = (b.size / 1024 / 1024).toFixed(1);
+      const when = new Date(b.mtime * 1000).toLocaleString();
+      const safe = b.name.replace(/'/g, "\\'");
+      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;padding:0.5rem 0;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-size:0.9rem">${when}</div>
+          <div style="color:var(--text-muted);font-size:0.8rem">${mb} MB</div>
+        </div>
+        <button class="btn btn-delete" style="margin:0" onclick="restoreLocalBackup('${safe}')">Restore</button>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<div class="save-status error">✕ ' + e.message + '</div>';
+  }
+}
+
+async function restoreLocalBackup(name) {
+  if (!confirm('Replace the current database with this backup?\n\n' + name + '\n\nThis cannot be undone.')) return;
+  const list = document.getElementById('local-backups-list');
+  list.innerHTML = '<div style="color:var(--text-muted)">Restoring…</div>';
+  try {
+    const r = await fetch('/api/settings/restore-local-backup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const payload = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(payload.error || `HTTP ${r.status}`);
+    list.innerHTML = '<div class="save-status ok">✓ Restore complete — restart the container to finish.</div>';
+  } catch (e) {
+    list.innerHTML = '<div class="save-status error">✕ ' + e.message + '</div>';
   }
 }
 

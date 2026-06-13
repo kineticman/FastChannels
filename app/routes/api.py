@@ -3388,7 +3388,7 @@ def backup_db():
 @api_bp.route('/settings/restore-db', methods=['POST'])
 def restore_db():
     """Accept a .db or .db.gz upload and atomically replace the live database."""
-    import gzip as _gzip, signal as _signal, sqlite3 as _sqlite3
+    import gzip as _gzip
 
     f = request.files.get('db_file')
     if not f:
@@ -3406,9 +3406,24 @@ def restore_db():
         except Exception:
             return jsonify({'error': 'Could not decompress .gz file — is it a valid gzip archive?'}), 400
 
+    ok, err = _write_db_and_reload(data)
+    if not ok:
+        return jsonify({'error': err}), 500
+    return jsonify({'status': 'ok'})
+
+
+def _write_db_and_reload(data: bytes):
+    """Validate SQLite bytes, atomically swap them into the live DB, drop stale
+    WAL/SHM, and SIGHUP gunicorn so workers reopen fresh connections.
+
+    Returns (ok: bool, error_message: str | None). Shared by the upload-restore
+    and on-disk-backup-restore endpoints.
+    """
+    import signal as _signal
+
     SQLITE_MAGIC = b'SQLite format 3\x00'
     if not data.startswith(SQLITE_MAGIC):
-        return jsonify({'error': 'File does not appear to be a valid SQLite database.'}), 400
+        return False, 'File does not appear to be a valid SQLite database.'
 
     db_path  = '/data/fastchannels.db'
     tmp_path = '/data/fastchannels_restore_tmp.db'
@@ -3430,7 +3445,7 @@ def restore_db():
             _os.unlink(tmp_path)
         except OSError:
             pass
-        return jsonify({'error': f'Failed to write database: {exc}'}), 500
+        return False, f'Failed to write database: {exc}'
 
     # Gracefully reload gunicorn workers so they open fresh connections to the new DB
     try:
@@ -3438,6 +3453,64 @@ def restore_db():
     except Exception:
         pass
 
+    return True, None
+
+
+# Directory of nightly on-disk DB backups written by app.worker._rq_db_backup.
+_LOCAL_BACKUP_DIR = '/data/backups'
+
+
+@api_bp.route('/settings/local-backups')
+def list_local_backups():
+    """List the nightly on-disk DB backups in /data/backups, newest first."""
+    import glob as _glob
+
+    out = []
+    try:
+        for path in _glob.glob(_os.path.join(_LOCAL_BACKUP_DIR, 'fastchannels_backup_*.db.gz')):
+            try:
+                st = _os.stat(path)
+            except OSError:
+                continue
+            out.append({
+                'name':  _os.path.basename(path),
+                'size':  st.st_size,
+                'mtime': st.st_mtime,
+            })
+    except Exception:
+        pass
+    out.sort(key=lambda b: b['name'], reverse=True)
+    return jsonify({'backups': out})
+
+
+@api_bp.route('/settings/restore-local-backup', methods=['POST'])
+def restore_local_backup():
+    """Restore the live DB from one of the on-disk nightly backups."""
+    import gzip as _gzip
+
+    payload = request.get_json(silent=True) or {}
+    name = (payload.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'No backup specified.'}), 400
+    # Guard against path traversal — basename only, and must match the expected shape.
+    if (name != _os.path.basename(name)
+            or not name.startswith('fastchannels_backup_')
+            or not name.endswith('.db.gz')):
+        return jsonify({'error': 'Invalid backup name.'}), 400
+
+    path = _os.path.join(_LOCAL_BACKUP_DIR, name)
+    if not _os.path.isfile(path):
+        return jsonify({'error': 'Backup not found.'}), 404
+
+    try:
+        with _gzip.open(path, 'rb') as fp:
+            data = fp.read()
+    except Exception:
+        return jsonify({'error': 'Could not read backup archive — it may be corrupt.'}), 400
+
+    ok, err = _write_db_and_reload(data)
+    if not ok:
+        return jsonify({'error': err}), 500
     return jsonify({'status': 'ok'})
 
 

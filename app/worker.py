@@ -2337,6 +2337,70 @@ def _rq_integrity_cleanup():
         _cleanup_orphans()
 
 
+# Number of nightly DB backups to retain in /data/backups.
+_DB_BACKUP_KEEP = 3
+_DB_BACKUP_DIR  = '/data/backups'
+
+
+def _rq_db_backup():
+    """RQ job target: write a gzip-compressed online backup of the live SQLite DB
+    into /data/backups and prune to the newest _DB_BACKUP_KEEP files.
+
+    Uses sqlite3's online backup API so it is safe to run against the live DB.
+    /data is volume-mounted, so these survive container rebuilds.
+    """
+    import os, shutil, gzip as _gzip, sqlite3 as _sqlite3, tempfile as _tempfile, glob as _glob
+
+    db_path = '/data/fastchannels.db'
+    if not os.path.exists(db_path):
+        logger.warning('[db-backup] database file not found at %s; skipping', db_path)
+        return
+
+    os.makedirs(_DB_BACKUP_DIR, exist_ok=True)
+    ts       = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+    dest     = os.path.join(_DB_BACKUP_DIR, f'fastchannels_backup_{ts}.db.gz')
+    tmp_db   = _tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_db.close()
+    try:
+        # SQLite online backup — consistent snapshot while the DB is live.
+        src = _sqlite3.connect(db_path)
+        dst = _sqlite3.connect(tmp_db.name)
+        src.backup(dst)
+        src.close(); dst.close()
+        # Write compressed to a temp path, then atomically move into place so a
+        # crash mid-write never leaves a truncated .db.gz that looks valid.
+        dest_tmp = dest + '.part'
+        with open(tmp_db.name, 'rb') as f_in, _gzip.open(dest_tmp, 'wb', compresslevel=6) as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        os.replace(dest_tmp, dest)
+        size_mb = os.path.getsize(dest) / 1024 / 1024
+        logger.info('[db-backup] wrote %s (%.1f MB)', dest, size_mb)
+    except Exception as exc:
+        logger.error('[db-backup] backup failed: %s', exc)
+        try:
+            os.unlink(dest + '.part')
+        except OSError:
+            pass
+        return
+    finally:
+        try:
+            os.unlink(tmp_db.name)
+        except OSError:
+            pass
+
+    # Prune to the newest _DB_BACKUP_KEEP backups.
+    try:
+        backups = sorted(_glob.glob(os.path.join(_DB_BACKUP_DIR, 'fastchannels_backup_*.db.gz')))
+        for old in backups[:-_DB_BACKUP_KEEP]:
+            try:
+                os.unlink(old)
+                logger.info('[db-backup] pruned old backup %s', os.path.basename(old))
+            except OSError as exc:
+                logger.warning('[db-backup] could not remove %s: %s', old, exc)
+    except Exception as exc:
+        logger.warning('[db-backup] prune step failed: %s', exc)
+
+
 if __name__ == '__main__':
     import os
 
@@ -2359,6 +2423,15 @@ if __name__ == '__main__':
             logger.info('[scheduler] enqueued _rq_integrity_cleanup job')
         except Exception as e:
             logger.error('[scheduler] could not enqueue integrity_cleanup job: %s', e)
+
+    def _scheduled_db_backup():
+        try:
+            _r = redis.from_url(flask_app.config['REDIS_URL'])
+            _q = Queue('maintenance', connection=_r)
+            _q.enqueue('app.worker._rq_db_backup', job_timeout=600)
+            logger.info('[scheduler] enqueued _rq_db_backup job')
+        except Exception as e:
+            logger.error('[scheduler] could not enqueue db_backup job: %s', e)
 
     def _scheduled_logo_cache_cleanup():
         import os as _os
@@ -2470,6 +2543,14 @@ if __name__ == '__main__':
         scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
                           hour=3, minute=0, timezone=_tz,
                           id='tvtv_cache_refresh_night', max_instances=1, coalesce=True,
+                          misfire_grace_time=3600)
+
+        # Nightly DB backup at 03:30 user-local — staggered 30 min after the tvtv
+        # refresh so they don't both hit the DB at once. Keeps the newest 3 in
+        # /data/backups (volume-mounted, survives container rebuilds).
+        scheduler.add_job(_scheduled_db_backup, 'cron',
+                          hour=3, minute=30, timezone=_tz,
+                          id='db_backup_night', max_instances=1, coalesce=True,
                           misfire_grace_time=3600)
 
         def _scheduled_dvr_epg_refresh():
