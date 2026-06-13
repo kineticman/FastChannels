@@ -1332,7 +1332,6 @@ def _refresh_xml_artifacts() -> None:
     for attempt in range(2):
         base_url = (
             (AppSettings.get().effective_public_base_url() or '').strip().rstrip('/')
-            or (flask_app.config.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
             or 'http://localhost:5523'
         )
         xml_artifacts: list[tuple[str, Callable]] = [
@@ -2386,7 +2385,10 @@ def _rq_db_backup():
     os.makedirs(_DB_BACKUP_DIR, exist_ok=True)
     ts       = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
     dest     = os.path.join(_DB_BACKUP_DIR, f'fastchannels_backup_{ts}.db.gz')
-    tmp_db   = _tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    # Stage the uncompressed snapshot on the /data volume, not the default
+    # tempdir — /tmp is a small tmpfs in many container setups and a large DB
+    # would blow it out with ENOSPC.
+    tmp_db   = _tempfile.NamedTemporaryFile(suffix='.db', dir=_DB_BACKUP_DIR, delete=False)
     tmp_db.close()
     try:
         # SQLite online backup — consistent snapshot while the DB is live.

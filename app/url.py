@@ -4,7 +4,7 @@ import socket
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from flask import current_app, request
+from flask import request
 
 from .models import AppSettings
 
@@ -128,10 +128,6 @@ def public_base_url() -> str:
         # over HTTP while the admin UI is behind an HTTPS reverse proxy) we must
         # not silently upgrade the scheme or feed/play URLs will break.
         return settings_value
-
-    configured = (current_app.config.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
-    if configured:
-        return configured
 
     # No explicit URL configured — fall back to auto-detection. ProxyFix has
     # already corrected request.host_url to reflect the public scheme/host set
