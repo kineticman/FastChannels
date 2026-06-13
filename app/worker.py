@@ -706,10 +706,21 @@ def run_stream_audit(source_name: str):
                 if phase == 'done':
                     _redis_audit.delete(_audit_key)
                 else:
+                    # Surface any active rate-limit cooldown (e.g. Roku 403) so the
+                    # audit modal can show the paused state instead of freezing.
+                    _cd_remaining = None
+                    _cd_reason = None
+                    _cd_active = getattr(scraper, '_cooldown_active', None)
+                    if callable(_cd_active) and _cd_active():
+                        _cd_rem_fn = getattr(scraper, '_cooldown_remaining', None)
+                        _cd_remaining = int(_cd_rem_fn()) if callable(_cd_rem_fn) else None
+                        _cd_reason = getattr(scraper, '_cooldown_reason', None)
                     _redis_audit.setex(_audit_key, 600, _json_audit.dumps({
                         'phase': phase, 'done': done, 'total': total_,
                         'flagged': flagged_, 'dead': dead_, 'vod': vod_, 'errors': errors_,
                         'skipped_403': skipped_403_,
+                        'cooldown_remaining': _cd_remaining,
+                        'cooldown_reason': _cd_reason,
                         'current_index': getattr(_audit_progress, '_current_index', None),
                         'current_channel': getattr(_audit_progress, '_current_channel', None),
                         'ts': _time.time(),
@@ -787,7 +798,18 @@ def run_stream_audit(source_name: str):
                         wait = int((_cooldown_remaining() if callable(_cooldown_remaining) else 60) + 2)
                         logger.warning('[audit] %s: rate-limit cooldown active — waiting %ds',
                                        source_name, wait)
-                        _time.sleep(wait)
+                        # Sleep in short slices, refreshing the progress heartbeat each
+                        # time so the audit modal shows a live "paused — cooldown" state
+                        # instead of going stale (the status endpoint drops us after 90s
+                        # without a heartbeat). Resume early if the cooldown clears.
+                        _waited = 0
+                        while _waited < wait:
+                            _audit_progress(i - 1, total, flagged, dead, vod, errors,
+                                            skipped_403, phase='cooldown')
+                            _time.sleep(min(15, wait - _waited))
+                            _waited += 15
+                            if not _cooldown_active():
+                                break
                         errors += 1
                         continue
                     logger.warning('[audit] resolve failed for %s: %s', ch.name, re_exc)
@@ -2065,11 +2087,16 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     _refresh_auto_channel_numbers()
 
 
-def _prune_old_programs(batch_size: int = 2000):
-    """Delete programs that ended more than 2 hours ago.
+def _prune_old_programs(batch_size: int = 10000):
+    """Delete programs that ended more than 2 hours ago, in batches.
 
     Use timezone-aware UTC to match the rest of the worker's program handling
     and avoid Python 3.12's utcnow() deprecation warning.
+
+    Batches are committed individually so the write lock is held only briefly
+    and never blocks concurrent guide/artifact refreshes for long. The batch
+    size is large enough that a big backlog (e.g. after several missed runs)
+    clears in a handful of commits rather than ~100 tiny ones.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
     total_deleted = 0
@@ -2410,7 +2437,7 @@ if __name__ == '__main__':
         try:
             _r = redis.from_url(flask_app.config['REDIS_URL'])
             _q = Queue('maintenance', connection=_r)
-            _q.enqueue('app.worker._rq_prune', job_timeout=300)
+            _q.enqueue('app.worker._rq_prune', job_timeout=900)
             logger.info('[scheduler] enqueued _rq_prune job')
         except Exception as e:
             logger.error('[scheduler] could not enqueue prune job: %s', e)

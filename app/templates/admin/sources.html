@@ -453,6 +453,13 @@
     .audit-running-note { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.45rem; }
     .audit-progress-bar { background: var(--surface); border-radius: 4px; height: 5px; overflow: hidden; margin: 0.35rem 0; }
     .audit-progress-fill { height: 100%; background: var(--warning); border-radius: 4px; transition: width 0.5s ease; }
+    .audit-cooldown-section { border-color: var(--warning); }
+    .audit-cooldown-section .audit-running-status { color: var(--warning); font-weight: 600; }
+    .audit-progress-fill-cooldown {
+      background: repeating-linear-gradient(45deg, var(--warning) 0, var(--warning) 6px, transparent 6px, transparent 12px);
+      animation: audit-cooldown-stripes 1s linear infinite;
+    }
+    @keyframes audit-cooldown-stripes { from { background-position: 0 0; } to { background-position: 17px 0; } }
     .audit-report { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 0.65rem; }
     .audit-report-group-title {
       font-size: 0.73rem; font-weight: 700; color: var(--text-soft);
@@ -1495,19 +1502,29 @@
         const done  = data.done  || 0;
         const total = data.total || 0;
         const pct   = total ? Math.round(done / total * 100) : 0;
+        const inCooldown = data.phase === 'cooldown' || (data.cooldown_remaining || 0) > 0;
         const bits  = [];
         if (total) bits.push(`${done}/${total} checked`);
         if (data.dead)        bits.push(`<span class="aud-dead">${data.dead} dead</span>`);
         if (data.vod)         bits.push(`<span class="aud-vod">${data.vod} VOD</span>`);
         if (data.flagged)     bits.push(`<span class="aud-drm">${data.flagged} DRM</span>`);
         if (data.skipped_403) bits.push(`<span class="aud-403">${data.skipped_403} rate-limited</span>`);
-        const phaseLabel = data.phase === 'recheck' ? 'Rechecking…' : 'Running…';
-        const statusText = data.status === 'queued' ? 'Queued…' : ('● ' + phaseLabel + (bits.length ? ' ' + bits.join(' · ') : ''));
+        let statusText, note, sectionClass = 'audit-running-section';
+        if (inCooldown) {
+          const mins = Math.max(1, Math.ceil((data.cooldown_remaining || 0) / 60));
+          sectionClass += ' audit-cooldown-section';
+          statusText = `⏳ Paused — rate-limited (403) · cooldown ~${mins} min remaining${bits.length ? ' · ' + bits.join(' · ') : ''}`;
+          note = 'The source is rate-limiting requests. The audit pauses and resumes automatically when the cooldown clears.';
+        } else {
+          const phaseLabel = data.phase === 'recheck' ? 'Rechecking…' : 'Running…';
+          statusText = data.status === 'queued' ? 'Queued…' : ('● ' + phaseLabel + (bits.length ? ' ' + bits.join(' · ') : ''));
+          note = data.phase === 'recheck' ? 'Rate-limited channels are retried after a 30s backoff.' : 'Results will appear when the audit completes.';
+        }
         html += `
-          <div class="audit-running-section">
+          <div class="${sectionClass}">
             <div class="audit-running-status">${statusText}</div>
-            ${total ? `<div class="audit-progress-bar"><div class="audit-progress-fill" style="width:${pct}%"></div></div>` : ''}
-            <div class="audit-running-note">${data.phase === 'recheck' ? 'Rate-limited channels are retried after a 30s backoff.' : 'Results will appear when the audit completes.'}</div>
+            ${total ? `<div class="audit-progress-bar"><div class="audit-progress-fill${inCooldown ? ' audit-progress-fill-cooldown' : ''}" style="width:${pct}%"></div></div>` : ''}
+            <div class="audit-running-note">${note}</div>
           </div>`;
       }
 
