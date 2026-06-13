@@ -491,10 +491,17 @@ def channels():
 
     if resolution_filter == '4k':
         q = q.filter(db.func.json_extract(Channel.stream_info, '$.has_4k') == True)
+    elif resolution_filter == 'fhd':
+        # Full HD: 1080p up to (but not including) 4K — includes 1440p/QHD
+        q = q.filter(
+            db.func.json_extract(Channel.stream_info, '$.max_height') >= 1080,
+            db.func.json_extract(Channel.stream_info, '$.has_4k') != True,
+        )
     elif resolution_filter == 'hd':
+        # HD only: 720p up to (but not including) 1080p
         q = q.filter(
             db.func.json_extract(Channel.stream_info, '$.has_hd') == True,
-            db.func.json_extract(Channel.stream_info, '$.has_4k') != True,
+            db.func.json_extract(Channel.stream_info, '$.max_height') < 1080,
         )
     elif resolution_filter == 'sd':
         q = q.filter(

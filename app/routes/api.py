@@ -23,7 +23,12 @@ from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
 from ..gracenote_suggest import SuggestionChannel, suggest_gracenote_matches
 from ..gracenote_map import lookup_gracenote, fetch_remote_gracenote_map, remote_map_status
-from ..hls import inspect_hls_drm, parse_stream_info as _parse_stream_info
+from ..hls import (
+    inspect_hls_drm,
+    parse_stream_info as _parse_stream_info,
+    estimate_height_from_bandwidth as _estimate_height,
+    nominal_resolution as _nominal_resolution,
+)
 from ..source_config import is_source_config_complete
 try:
     from croniter import croniter as _croniter
@@ -242,6 +247,16 @@ def _parse_hls_variants(master_text: str) -> list[dict]:
         variants.append(v)
 
     variants.sort(key=lambda v: v.get('bandwidth', 0), reverse=True)
+
+    # No variant declared RESOLUTION (e.g. Pluto) — estimate from bitrate so the
+    # inspect popup still shows a quality figure, flagged as approximate.
+    if variants and not any(v.get('resolution') for v in variants):
+        for v in variants:
+            est_h = _estimate_height(v.get('bandwidth'))
+            if est_h:
+                v['resolution'] = _nominal_resolution(est_h)
+                v['resolution_est'] = True
+
     return variants
 
 _CHANNELS_DVR_RECOMMENDED_MAX = 750
@@ -2778,9 +2793,11 @@ def channel_duplicates(channel_id):
             'program_count':  prog_counts.get(c.id, 0),
             'stream_info': {
                 'max_resolution': si.get('max_resolution'),
+                'max_height':     si.get('max_height'),
                 'video_codec':    si.get('video_codec'),
                 'has_4k':         si.get('has_4k', False),
                 'has_hd':         si.get('has_hd', False),
+                'resolution_estimated': si.get('resolution_estimated', False),
                 'drm':            si.get('drm', False),
             } if si else None,
         }

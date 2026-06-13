@@ -26,6 +26,52 @@ def _friendly_codecs(raw: str) -> str:
     return '+'.join(result)
 
 
+# Nominal 16:9 pixel dimensions per frame height, used to label variants that
+# advertise BANDWIDTH but no RESOLUTION (e.g. Pluto's ad-stitched masters).
+# These are estimates — callers flag them with `resolution_estimated`.
+_NOMINAL_DIMS = {
+    240: '426x240',  360: '640x360',  480: '854x480',  540: '960x540',
+    720: '1280x720', 1080: '1920x1080', 1440: '2560x1440', 2160: '3840x2160',
+}
+
+# H.264 bitrate → frame-height ladder (bps, inclusive lower bounds, high → low).
+# Rough mid-ladder cutoffs from typical OTT encoding profiles.
+_BITRATE_HEIGHT_LADDER = (
+    (11_000_000, 2160),
+    (6_000_000,  1440),
+    (4_000_000,  1080),
+    (2_000_000,  720),
+    (1_200_000,  540),
+    (800_000,    480),
+    (450_000,    360),
+    (0,          240),
+)
+
+
+def estimate_height_from_bandwidth(bandwidth, video_codec: str = 'unknown') -> int | None:
+    """
+    Estimate a variant's frame height from its peak BANDWIDTH, for manifests
+    that omit RESOLUTION. Tuned for H.264; HEVC/AV1/VP9 fit more pixels per bit,
+    so their effective bandwidth is scaled up before the ladder lookup. Returns
+    None for missing/zero bandwidth. This is a heuristic — callers should flag
+    the result as estimated (never persist it as a measured resolution).
+    """
+    if not bandwidth or bandwidth <= 0:
+        return None
+    eff = bandwidth
+    if video_codec in ('hevc', 'av1', 'vp9'):
+        eff = int(bandwidth * 1.8)
+    for floor, height in _BITRATE_HEIGHT_LADDER:
+        if eff >= floor:
+            return height
+    return None
+
+
+def nominal_resolution(height) -> str | None:
+    """Nominal 'WxH' string for an estimated frame height (None if unknown)."""
+    return _NOMINAL_DIMS.get(height) if height else None
+
+
 def parse_stream_info(master_text: str) -> dict | None:
     """
     Parse HLS master playlist variant metadata into a stream_info dict.
@@ -94,6 +140,24 @@ def parse_stream_info(master_text: str) -> dict | None:
         if video_codec != 'unknown':
             break
 
+    # No variant advertised RESOLUTION (e.g. Pluto) — estimate height from the
+    # top BANDWIDTH rung so the channel still gets a quality tier. Each variant
+    # is tagged so the UI can mark these as approximate.
+    resolution_estimated = False
+    if not max_h:
+        for v in variants:
+            est_h = estimate_height_from_bandwidth(v.get('bandwidth'), video_codec)
+            if est_h:
+                v['resolution'] = _NOMINAL_DIMS[est_h]
+                v['resolution_est'] = True
+        top_h = estimate_height_from_bandwidth(
+            variants[0].get('bandwidth') if variants else None, video_codec)
+        if top_h:
+            max_h = top_h
+            max_w = int(_NOMINAL_DIMS[top_h].split('x', 1)[0])
+            max_resolution = _NOMINAL_DIMS[top_h]
+            resolution_estimated = True
+
     clean_variants = [{k: val for k, val in v.items() if k != '_raw_codecs'} for v in variants]
 
     return {
@@ -103,6 +167,7 @@ def parse_stream_info(master_text: str) -> dict | None:
         'video_codec':    video_codec,
         'has_4k':         max_h >= 2160 if max_h else False,
         'has_hd':         max_h >= 720  if max_h else False,
+        'resolution_estimated': resolution_estimated,
         'variants':       clean_variants,
     }
 _ATTR_RE = re.compile(r'([A-Z0-9-]+)=(".*?"|[^,]+)', re.IGNORECASE)

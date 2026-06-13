@@ -333,6 +333,12 @@
       background: #2d2000; color: #f5c518; border: 1px solid #5a4200;
       margin-left: 0.35rem; vertical-align: middle;
     }
+    .badge-fhd {
+      display: inline-block; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em;
+      padding: 1px 5px; border-radius: 20px; text-transform: uppercase;
+      background: #052619; color: #3ddc84; border: 1px solid #0b5c3a;
+      margin-left: 0.35rem; vertical-align: middle;
+    }
     .badge-hd {
       display: inline-block; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em;
       padding: 1px 5px; border-radius: 20px; text-transform: uppercase;
@@ -345,6 +351,14 @@
       background: #1a0d2e; color: #b48ef5; border: 1px solid #4a2a7a;
       margin-left: 0.35rem; vertical-align: middle;
     }
+    .badge-sd {
+      display: inline-block; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em;
+      padding: 1px 5px; border-radius: 20px; text-transform: uppercase;
+      background: #1c1c1f; color: var(--text-muted); border: 1px solid #3a3a40;
+      margin-left: 0.35rem; vertical-align: middle;
+    }
+    /* Estimated-from-bitrate resolution (no RESOLUTION in manifest, e.g. Pluto) */
+    .badge-est { border-style: dashed; opacity: 0.85; }
     .btn-clear-dup:disabled { opacity: 0.4; cursor: not-allowed; }
 
     /* Resolve duplicates modal */
@@ -440,6 +454,7 @@
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .dc-sv-4k   { color: #f5c518; }
+    .dc-sv-fhd  { color: #3ddc84; }
     .dc-sv-hd   { color: var(--accent-soft); }
     .dc-sv-sd   { color: var(--text-muted); }
     .dc-sv-rich { color: var(--success); }
@@ -1184,9 +1199,11 @@
       letter-spacing: 0.04em; padding: 1px 4px; border-radius: 20px;
       text-transform: uppercase; border: 1px solid transparent;
     }
+    .mcard-badge-fhd  { background: #052619; color: #3ddc84; border-color: #0b5c3a; }
     .mcard-badge-hd   { background: #001a2d; color: #5bb8f5; border-color: #004470; }
     .mcard-badge-4k   { background: #2d2000; color: #f5c518; border-color: #5a4200; }
     .mcard-badge-hevc { background: #1a0d2e; color: #b48ef5; border-color: #4a2a7a; }
+    .mcard-badge-sd   { background: #1c1c1f; color: var(--text-muted); border-color: #3a3a40; }
     .mcard-badge-dup  { background: var(--warning-bg-2); color: var(--warning); }
     .mcard-badge-inactive {
       font-size: 0.65rem; font-weight: 600; padding: 1px 5px; border-radius: 4px;
@@ -1470,7 +1487,8 @@
             <select id="resolution-filter" name="resolution">
               <option value="">All</option>
               <option value="4k"   {% if resolution_filter == '4k'   %}selected{% endif %}>4K (≥2160p)</option>
-              <option value="hd"   {% if resolution_filter == 'hd'   %}selected{% endif %}>HD (≥720p)</option>
+              <option value="fhd"  {% if resolution_filter == 'fhd'  %}selected{% endif %}>Full HD (1080p+)</option>
+              <option value="hd"   {% if resolution_filter == 'hd'   %}selected{% endif %}>HD (720p)</option>
               <option value="sd"   {% if resolution_filter == 'sd'   %}selected{% endif %}>SD (&lt;720p)</option>
               <option value="hevc" {% if resolution_filter == 'hevc' %}selected{% endif %}>HEVC only</option>
               <option value="known" {% if resolution_filter == 'known' %}selected{% endif %}>Stream info present</option>
@@ -1583,6 +1601,7 @@
               <select class="col-filter-select{% if resolution_filter %} col-filter-active{% endif %}" onchange="filterBy('resolution', this.value)" title="Filter by resolution / codec">
                 <option value="">Res</option>
                 <option value="4k"   {% if resolution_filter == '4k'   %}selected{% endif %}>4K</option>
+                <option value="fhd"  {% if resolution_filter == 'fhd'  %}selected{% endif %}>FHD</option>
                 <option value="hd"   {% if resolution_filter == 'hd'   %}selected{% endif %}>HD</option>
                 <option value="sd"   {% if resolution_filter == 'sd'   %}selected{% endif %}>SD</option>
                 <option value="hevc" {% if resolution_filter == 'hevc' %}selected{% endif %}>HEVC</option>
@@ -1661,7 +1680,7 @@
             </td>
             <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.name in duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Duplicate match found — click to see matches">DUP</span>{% elif ch.name in possible_duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Possible duplicate — click to see matches">DUP?</span>{% elif ch.id in gn_duplicate_ids %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Same Gracenote ID found on another source — click to see matches">GN DUP</span>{% endif %}{% if ch.is_duplicate %}<span class="badge-manual-dup badge-dup-clickable" data-channel-id="{{ ch.id }}" title="Click to see potential duplicates" style="cursor:pointer">DUPL</span>{% endif %}</td>
             <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
-            <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.stream_info %}{% if ch.stream_info.has_4k %}<span class="badge-4k" title="4K stream ({{ ch.stream_info.max_resolution }})">4K</span>{% elif ch.stream_info.has_hd %}<span class="badge-hd" title="HD stream ({{ ch.stream_info.max_resolution }})">HD</span>{% endif %}{% if ch.stream_info.video_codec == 'hevc' %}<span class="badge-hevc" title="H.265/HEVC — may not play in all clients">HEVC</span>{% endif %}{% endif %}</td>
+            <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.stream_info %}{% set _e = ch.stream_info.resolution_estimated %}{% if ch.stream_info.has_4k %}<span class="badge-4k{% if _e %} badge-est{% endif %}" title="4K stream ({{ ch.stream_info.max_resolution }}{% if _e %}, estimated from bitrate{% endif %})">{% if _e %}~{% endif %}4K</span>{% elif ch.stream_info.max_height and ch.stream_info.max_height >= 1080 %}<span class="badge-fhd{% if _e %} badge-est{% endif %}" title="Full HD stream ({{ ch.stream_info.max_resolution }}{% if _e %}, estimated from bitrate{% endif %})">{% if _e %}~{% endif %}FHD</span>{% elif ch.stream_info.has_hd %}<span class="badge-hd{% if _e %} badge-est{% endif %}" title="HD stream ({{ ch.stream_info.max_resolution }}{% if _e %}, estimated from bitrate{% endif %})">{% if _e %}~{% endif %}HD</span>{% else %}<span class="badge-sd{% if _e %} badge-est{% endif %}" title="SD stream{% if ch.stream_info.max_resolution %} ({{ ch.stream_info.max_resolution }}{% if _e %}, estimated from bitrate{% endif %}){% endif %}">{% if _e %}~{% endif %}SD</span>{% endif %}{% if ch.stream_info.video_codec == 'hevc' %}<span class="badge-hevc" title="H.265/HEVC — may not play in all clients">HEVC</span>{% endif %}{% endif %}</td>
             <td data-channel-id="{{ ch.id }}">
               <span class="cat-label{% if ch.category_override %} has-override{% endif %}{% if not ch.category %} cat-empty{% endif %}"
                     style="color:{% if ch.category %}var(--text-soft){% else %}var(--text-dim){% endif %}"
@@ -1775,7 +1794,7 @@
               {% if ch.disable_reason == 'Dead' %}<span class="mcard-flag" title="Stream dead">💀</span>{% endif %}
               {% if ch.disable_reason == 'VOD' %}<span class="mcard-flag" title="VOD only">📼</span>{% endif %}
               {% if ch.stream_info %}
-                {% if ch.stream_info.has_4k %}<span class="mcard-badge mcard-badge-4k">4K</span>{% elif ch.stream_info.has_hd %}<span class="mcard-badge mcard-badge-hd">HD</span>{% endif %}
+                {% set _e = ch.stream_info.resolution_estimated %}{% if ch.stream_info.has_4k %}<span class="mcard-badge mcard-badge-4k{% if _e %} badge-est{% endif %}">{% if _e %}~{% endif %}4K</span>{% elif ch.stream_info.max_height and ch.stream_info.max_height >= 1080 %}<span class="mcard-badge mcard-badge-fhd{% if _e %} badge-est{% endif %}">{% if _e %}~{% endif %}FHD</span>{% elif ch.stream_info.has_hd %}<span class="mcard-badge mcard-badge-hd{% if _e %} badge-est{% endif %}">{% if _e %}~{% endif %}HD</span>{% else %}<span class="mcard-badge mcard-badge-sd{% if _e %} badge-est{% endif %}">{% if _e %}~{% endif %}SD</span>{% endif %}
                 {% if ch.stream_info.video_codec == 'hevc' %}<span class="mcard-badge mcard-badge-hevc">HEVC</span>{% endif %}
               {% endif %}
               {% if ch.name in duplicate_names or ch.name in possible_duplicate_names or ch.id in gn_duplicate_ids %}<span class="mcard-badge mcard-badge-dup">DUP</span>{% endif %}
@@ -2435,7 +2454,7 @@
         let badgeText = label;
         if (status === 'live' && data.variants && data.variants.length > 0) {
           const best = data.variants[0];
-          if (best.resolution) badgeText += `  ${best.resolution}`;
+          if (best.resolution) badgeText += `  ${best.resolution_est ? '~' : ''}${best.resolution}`;
         }
         badge.textContent = badgeText;
 
@@ -2445,7 +2464,7 @@
           tooltip += '\n\nVariants (high → low):';
           data.variants.forEach(v => {
             const mbps  = v.bandwidth ? `${(v.bandwidth/1e6).toFixed(1)} Mbps` : '';
-            const res   = v.resolution || '';
+            const res   = v.resolution ? `${v.resolution_est ? '~' : ''}${v.resolution}` : '';
             const codec = v.codecs || '';
             const fps   = v.fps ? `${v.fps}fps` : '';
             tooltip += '\n  ' + [res, mbps, codec, fps].filter(Boolean).join('  ');
@@ -2963,8 +2982,10 @@
         // Video resolution
         let resLabel = '—', resClass = 'dc-sv-muted';
         if (si.has_4k) { resLabel = si.max_resolution || '4K'; resClass = 'dc-sv-4k'; }
+        else if (si.max_height && si.max_height >= 1080) { resLabel = si.max_resolution || 'FHD'; resClass = 'dc-sv-fhd'; }
         else if (si.has_hd) { resLabel = si.max_resolution || 'HD'; resClass = 'dc-sv-hd'; }
         else if (si.max_resolution) { resLabel = si.max_resolution; resClass = 'dc-sv-sd'; }
+        if (si.resolution_estimated && resLabel !== '—') resLabel = '~' + resLabel;
         stats.push(`<div class="dc-stat"><span class="dc-stat-lbl">Video</span><span class="dc-stat-val ${resClass}">${resLabel}</span></div>`);
         // Codec
         const codecLabel = !si.video_codec ? '—'
