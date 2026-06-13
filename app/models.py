@@ -340,8 +340,14 @@ class AppSettings(db.Model):
         return self.env_global_chnum_start()
 
     def effective_public_base_url(self) -> str | None:
+        # Precedence mirrors public_base_url_config(): DB column, then the
+        # FASTCHANNELS_SERVER_URL env, then the legacy PUBLIC_BASE_URL env.
+        # PUBLIC_BASE_URL must be a first-class fallback here so every consumer
+        # (settings API, M3U/XMLTV artifact builds, play proxy) honours it —
+        # otherwise an env-only PUBLIC_BASE_URL gets ignored and output URLs
+        # fall back to localhost.
         value = (self.public_base_url or '').strip().rstrip('/')
-        return value or self.env_public_base_url()
+        return value or self.env_public_base_url() or self._env_str('PUBLIC_BASE_URL')
 
     def effective_channels_dvr_url(self) -> str | None:
         value = (self.channels_dvr_url or '').strip().rstrip('/')

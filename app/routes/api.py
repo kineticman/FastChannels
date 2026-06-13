@@ -3327,7 +3327,7 @@ def app_settings():
         'gracenote_map_url': row.gracenote_map_url or '',
         'gracenote_contribution_url': row.gracenote_contribution_url or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
-        'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.env_public_base_url() is not None else 'unset'),
+        'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
     })
 
