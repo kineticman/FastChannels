@@ -3633,10 +3633,10 @@ class StreamDetector:
             )
 
         last_error = 'Extraction failed'
-        # Remember the first throttled (n-param unsolved) candidate. If no client
-        # yields a clean URL we hand this back as a degraded result with a specific
-        # reason, instead of swallowing it and reporting a bare "extraction failed".
-        throttled_fallback: tuple[str, str, str] | None = None  # (url, stream_type, client)
+        # Remember the first client that returned only a throttled (n-param
+        # unsolved) URL. If no client yields a clean URL we report a specific
+        # reason instead of swallowing it as a bare "extraction failed".
+        throttled_client: str | None = None
 
         for client in _YT_PLAYER_CLIENTS:
             try:
@@ -3689,12 +3689,12 @@ class StreamDetector:
 
                 if not self._yt_n_ok(stream_url):
                     logger.info(
-                        '[youtube] client=%s n-param unsolved (throttled), pot=%s — keeping as fallback',
+                        '[youtube] client=%s n-param unsolved (throttled), pot=%s',
                         client, pot_used,
                     )
                     last_error = 'Extracted URL appears throttled (n parameter unsolved)'
-                    if throttled_fallback is None:
-                        throttled_fallback = (stream_url, stream_type, client)
+                    if throttled_client is None:
+                        throttled_client = client
                     continue
 
                 logger.info(
@@ -3713,16 +3713,16 @@ class StreamDetector:
                 logger.debug('[youtube] client=%s failed: %s', client, exc)
                 continue
 
-        # Every client either failed or returned only throttled URLs.
-        if throttled_fallback is not None:
-            stream_url, stream_type, client = throttled_fallback
+        # Every client either failed or returned only throttled URLs. We don't
+        # serve the throttled URL (callers gate on success, and throttled
+        # googlevideo URLs are bandwidth-limited) — it's tracked only so we can
+        # report a specific reason instead of a bare "extraction failed".
+        if throttled_client is not None:
             logger.warning(
-                '[youtube] all clients throttled for %s — returning degraded URL from client=%s',
-                url[:80], client,
+                '[youtube] all clients throttled for %s (first throttled client=%s)',
+                url[:80], throttled_client,
             )
             return DetectionResult(
-                stream_url=stream_url,
-                stream_type=stream_type,
                 error=(
                     'YouTube returned only throttled formats (n parameter unsolved) — the JS '
                     'challenge could not be solved. Ensure a supported JS runtime (Node >= 22) '
