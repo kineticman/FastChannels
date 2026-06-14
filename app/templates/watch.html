@@ -109,6 +109,7 @@
     const LICENSE_URL   = {{ license_url | tojson }};
   </script>
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
+  <script src="{{ url_for('static', filename='js/fc_player.js') }}?v={{ app_version }}"></script>
   <script>
     const video       = document.getElementById('player');
     const overlay     = document.getElementById('overlay');
@@ -129,77 +130,39 @@
       hint.className = 'hint error';
     }
 
-    function initPlayer() {
-      if (PLAYBACK_MODE === 'unsupported' || !PLAY_URL) return;
-
-      const _isDirectVideo = ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(STREAM_TYPE);
-      const _isSafariOrIos = (/Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)) || /iPad|iPhone|iPod/.test(navigator.userAgent);
-      const isNative = _isDirectVideo || (PLAYBACK_MODE === 'native' && _isSafariOrIos);
-
-      if (isNative) {
-        video.src = PLAY_URL;
-        video.load();
-        video.play().catch(() => {});
-        return;
-      }
-
-      if (!window.shaka || !shaka.Player.isBrowserSupported()) {
+    function onPlayerError(info) {
+      const { phase, err } = info;
+      if (phase === 'browser-unsupported') {
         setError('Playback is not supported in this browser.');
-        return;
-      }
-
-      if (LICENSE_URL && !window.isSecureContext) {
+      } else if (phase === 'drm-insecure') {
         setError('DRM streams require a secure context (HTTPS or a browser-trusted origin).', true);
-        return;
-      }
-
-      // Safari/iOS: use native HLS to avoid Shaka error 4042 (AES-128 encrypted TS unsupported by MSE).
-      // Check both canPlayType and UA — canPlayType can return empty in some WKWebView contexts.
-      const _isDash = PLAYBACK_MODE === 'dash' || STREAM_TYPE === 'dash';
-      const _hasNativeHls = !_isDash && !LICENSE_URL && (
-        video.canPlayType('application/x-mpegURL') ||
-        /iPad|iPhone|iPod/.test(navigator.userAgent)
-      );
-      if (_hasNativeHls) {
-        video.src = PLAY_URL;
-        video.load();
-        video.play().catch(() => {});
-        return;
-      }
-
-      shaka.polyfill.installAll();
-      _shaka = new shaka.Player();
-      _shaka.attach(video).then(() => {
-        if (LICENSE_URL) {
-          _shaka.configure({
-            drm: {
-              servers: {
-                'com.widevine.alpha':      LICENSE_URL,
-                'com.microsoft.playready': LICENSE_URL,
-              },
-            },
-          });
-        }
-        _shaka.addEventListener('error', (e) => {
-          const code = e.detail && e.detail.code;
-          if (code === 6007 || code === 6008) setStatus('DRM: license rejected');
-          else if (code === 6020) setStatus('DRM: requires HTTPS');
-          else if (code === 1001 || code === 1002) setStatus('Network error loading stream');
-          else if (code) setStatus('Shaka error ' + code);
-        });
-        const mimeType = (PLAYBACK_MODE === 'dash' || STREAM_TYPE === 'dash')
-          ? 'application/dash+xml'
-          : 'application/x-mpegURL';
-        return _shaka.load(PLAY_URL, null, mimeType);
-      }).then(() => {
-        video.play().catch(() => {});
-      }).catch((err) => {
+      } else if (phase === 'event') {
+        // Runtime error during playback — keep the fullscreen overlay clean, use the status line.
+        const code = err && err.code;
+        if (code === 6007 || code === 6008) setStatus('DRM: license rejected');
+        else if (code === 6020) setStatus('DRM: requires HTTPS');
+        else if (code === 1001 || code === 1002) setStatus('Network error loading stream');
+        else if (code) setStatus('Shaka error ' + code);
+      } else if (phase === 'load') {
         const code = err && err.code;
         if (code === 4042) {
           setError('Stream uses AES-128 encryption — requires Safari or a native HLS player.');
         } else {
           setError('Could not load stream: ' + (err && err.message || err));
         }
+      }
+    }
+
+    function initPlayer() {
+      if (PLAYBACK_MODE === 'unsupported' || !PLAY_URL) return;
+      _shaka = FCPlayer.load({
+        video,
+        url: PLAY_URL,
+        mode: PLAYBACK_MODE,
+        type: STREAM_TYPE,
+        license: LICENSE_URL,
+        onStatus: () => {},   // fullscreen overlay stays clean on success / native playback
+        onError: onPlayerError,
       });
     }
 

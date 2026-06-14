@@ -714,12 +714,6 @@
       background: var(--bg); border: 1px solid var(--accent-bg); border-radius: 6px;
       padding: 0.65rem 0.85rem; font-size: 0.8rem; color: var(--accent-soft); margin-bottom: 1.25rem;
     }
-    .modal-preview.modal-preview--warning {
-      background: var(--warning-bg);
-      border-color: var(--warning-border);
-      color: var(--warning-soft);
-      font-weight: 600;
-    }
     .modal-actions { display: flex; gap: 0.6rem; justify-content: flex-end; }
     .modal-actions .btn-cancel-modal {
       background: transparent; color: var(--text-muted); border: 1px solid var(--border);
@@ -1904,6 +1898,7 @@
   <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
   <script src="{{ url_for('static', filename='js/gracenote_suggest.js') }}"></script>
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
+  <script src="{{ url_for('static', filename='js/fc_player.js') }}?v={{ app_version }}"></script>
   <script>
     let _previewShaka = null;
     let _previewList = null;
@@ -2043,13 +2038,9 @@
       const ch = data.channel || {};
       const playUrl = data.play_url;
       const previewUrl = data.preview_url || data.play_url;
-      const previewWarning = data.preview_warning || '';
       const playbackMode = String(ch.playback_mode || 'hls').toLowerCase();
       const streamType = String(ch.stream_type || '').toLowerCase();
       const licenseUrl = String(ch.license_url || '');
-      const previewHint = !detecting && previewWarning
-        ? `<div class="modal-preview modal-preview--warning">${escapeHtml(previewWarning)}</div>`
-        : '';
       // HDHomeRun (and other muxed MPEG-TS) streams can't decode in an HTML5
       // <video> element. Disable the in-browser playback actions but keep VLC,
       // which handles MPEG-2/AC-3 natively.
@@ -2069,7 +2060,7 @@
             ? `<button class="preview-action-btn secondary" disabled>Detecting stream…</button>`
             : (previewUrl ? `<button class="preview-action-btn secondary" onclick="loadPreviewPlayer('${escapeHtml(previewUrl)}', '${escapeHtml(playbackMode)}', '${escapeHtml(streamType)}', '${escapeHtml(licenseUrl)}')">Play Here</button>` : ''));
       return `
-        ${previewHint}${unsupportedNote}${muxedNote}${playbackNote}
+        ${unsupportedNote}${muxedNote}${playbackNote}
         <div class="preview-actions">
           ${playBtn}
           ${(playUrl && !isMuxed) ? `<a class="preview-action-btn secondary" href="/watch/${ch.id}" target="_blank" rel="noopener">Watch Fullscreen</a>` : ''}
@@ -2193,122 +2184,16 @@
       video.removeAttribute('src');
       video.load();
       wrap.classList.add('open');
-      if (status) status.textContent = 'Loading stream…';
 
-      const normalizedMode = String(playbackMode || '').toLowerCase();
-      const normalizedType = String(streamType || '').toLowerCase();
-
-      const _isDirectVideo = ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(normalizedType);
-      const _isSafariOrIos = (/Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)) || /iPad|iPhone|iPod/.test(navigator.userAgent);
-      if (_isDirectVideo || (normalizedMode === 'native' && _isSafariOrIos)) {
-        video.src = playUrl;
-        video.load();
-        if (status) status.textContent = 'Using native video playback for this stream type.';
-        video.play().catch(() => {});
-        return;
-      }
-
-      // Safari/iOS: use native HLS for encrypted transport streams that Shaka
-      // can't play through MSE (error 4040). Only skip for DASH or DRM streams.
-      const _isDash = normalizedMode === 'dash' || normalizedType === 'dash';
-      if (!_isDash && !licenseUrl && _isSafariOrIos) {
-        video.src = playUrl;
-        video.load();
-        if (status) status.textContent = 'Using native HLS playback.';
-        video.play().catch(() => {});
-        return;
-      }
-
-      if (!window.shaka || !shaka.Player.isBrowserSupported()) {
-        if (status) status.textContent = 'Playback is not supported in this browser.';
-        return;
-      }
-
-      shaka.polyfill.installAll();
-      _previewShaka = new shaka.Player();
-      _previewShaka.attach(video).then(() => {
-        if (licenseUrl) {
-          _previewShaka.configure({
-            drm: {
-              servers: {
-                'com.widevine.alpha':      licenseUrl,
-                'com.microsoft.playready': licenseUrl,
-              },
-            },
-          });
-        }
-        _previewShaka.addEventListener('error', (event) => {
-          const err = event.detail;
-          if (status) status.textContent = formatShakaError(err);
-          console.error('[Shaka] error', err.code, err);
-        });
-        const mimeType = (normalizedMode === 'dash' || normalizedType === 'dash')
-          ? 'application/dash+xml'
-          : 'application/x-mpegURL';
-        return _previewShaka.load(playUrl, null, mimeType);
-      }).then(() => {
-        if (status) status.textContent = 'Stream loaded.';
-        video.muted = false;
-        video.play().catch(() => {});
-      }).catch((err) => {
-        if (status) status.textContent = formatShakaError(err);
-        console.error('[Shaka] load failed', err);
+      _previewShaka = FCPlayer.load({
+        video,
+        url: playUrl,
+        mode: playbackMode,
+        type: streamType,
+        license: licenseUrl,
+        onStatus: (text) => { if (status) status.textContent = text; },
+        onError:  (info) => { if (status) status.textContent = info.message; },
       });
-    }
-
-    function formatShakaError(err) {
-      if (!err) return 'Shaka playback failed (no error details).';
-
-      const code = err.code || 'unknown';
-      const codeName = Object.entries(window.shaka?.util?.Error?.Code || {})
-        .find(([, value]) => value === err.code)?.[0];
-      const categoryName = Object.entries(window.shaka?.util?.Error?.Category || {})
-        .find(([, value]) => value === err.category)?.[0];
-      const context = [];
-
-      if (err.code === 4042) {
-        context.push(`Web Crypto unavailable (secure context: ${window.isSecureContext}; crypto.subtle: ${Boolean(window.crypto?.subtle)})`);
-      } else if (err.code === 4040) {
-        context.push('encrypted MPEG-TS cannot be played through MediaSource in this browser');
-      } else if (err.code === 6007) {
-        context.push('DRM license request failed; check the license endpoint, authorization, and network response');
-      } else if (err.code === 6008) {
-        context.push('the browser CDM rejected the DRM license response');
-      } else if (err.code === 6014) {
-        context.push('the DRM license has expired');
-      } else if (err.code === 6020) {
-        context.push(`browser DRM APIs unavailable (secure context: ${window.isSecureContext})`);
-      } else if (err.code === 1001 || err.code === 1002) {
-        context.push('manifest or segment request failed; check HTTP status, CORS, and network filtering');
-      }
-
-      const details = formatShakaErrorData(err.data);
-      const identity = [categoryName, codeName].filter(Boolean).join('.');
-      return [
-        `Shaka error ${code}${identity ? ` (${identity})` : ''}: ${err.message || 'playback failed'}.`,
-        ...context,
-        details ? `Details: ${details}` : '',
-      ].filter(Boolean).join(' ');
-    }
-
-    function formatShakaErrorData(data) {
-      if (!Array.isArray(data) || !data.length) return '';
-      try {
-        return JSON.stringify(data, (key, value) => {
-          if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
-            try {
-              const parsed = new URL(value);
-              return `${parsed.origin}${parsed.pathname}`;
-            } catch (_) {
-              return value;
-            }
-          }
-          if (value instanceof Error) return { name: value.name, message: value.message };
-          return value;
-        }).slice(0, 500);
-      } catch (_) {
-        return String(data).slice(0, 500);
-      }
     }
 
     // ── Stats for Nerds ──────────────────────────────────────────────────────

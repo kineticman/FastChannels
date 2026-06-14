@@ -460,6 +460,7 @@
 
   <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
+  <script src="{{ url_for('static', filename='js/fc_player.js') }}?v={{ app_version }}"></script>
   <script>
     const _APP_TZ = {{ app_timezone_name | tojson }};
     const _WINDOW_ANCHOR = {{ window_anchor_epoch }};
@@ -942,116 +943,16 @@
       _stopGuideStatsLoop();
       _guideDroppedFrames0 = null;
 
-      const normalizedMode = String(mode || '').toLowerCase();
-      const normalizedType = String(type || '').toLowerCase();
-
-      const _isDirectVideo = ['mp4','webm','mov','mkv','direct'].includes(normalizedType);
-      const _isSafariOrIos = (/Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)) || /iPad|iPhone|iPod/.test(navigator.userAgent);
-      if (_isDirectVideo || (normalizedMode === 'native' && _isSafariOrIos)) {
-        video.src = url;
-        video.play().catch(() => {});
-        return;
-      }
-
-      // Safari/iOS: use native HLS for encrypted transport streams that Shaka
-      // can't play through MSE (error 4040). Only skip for DASH or DRM streams.
-      const _isDash = normalizedMode === 'dash' || normalizedType === 'dash';
-      if (!_isDash && !licenseUrl && _isSafariOrIos) {
-        video.src = url;
-        video.play().catch(() => {});
-        return;
-      }
-
-      if (!window.shaka || !shaka.Player.isBrowserSupported()) {
-        if (status) status.textContent = 'Playback is not supported in this browser.';
-        return;
-      }
-
-      shaka.polyfill.installAll();
-      if (status) status.textContent = 'Loading stream…';
-      _guideShaka = new shaka.Player();
-      _guideShaka.attach(video).then(() => {
-        if (licenseUrl) {
-          _guideShaka.configure({
-            drm: { servers: { 'com.widevine.alpha': licenseUrl, 'com.microsoft.playready': licenseUrl } },
-          });
-          _guideShaka.getNetworkingEngine().registerRequestFilter((reqType, request) => {
-            if (reqType === 2 /* LICENSE */) request.uris = [licenseUrl];
-          });
-        }
-        _guideShaka.addEventListener('error', (event) => {
-          const err = event.detail;
-          if (status) status.textContent = formatGuideShakaError(err);
-          console.error('[Shaka] guide error', err.code, err);
-        });
-        const mimeType = (normalizedMode === 'dash' || normalizedType === 'dash')
-          ? 'application/dash+xml'
-          : 'application/x-mpegURL';
-        return _guideShaka.load(url, null, mimeType);
-      }).then(() => {
-        if (status) status.textContent = '';
-        video.muted = false;
-        video.play().catch(() => {});
-        if (_guideStatsVisible) _startGuideStatsLoop();
-      }).catch((err) => {
-        if (status) status.textContent = formatGuideShakaError(err);
-        console.error('[Shaka] guide load failed', err);
+      _guideShaka = FCPlayer.load({
+        video,
+        url,
+        mode,
+        type,
+        license: licenseUrl,
+        onStatus: (text) => { if (status) status.textContent = text; },
+        onError:  (info) => { if (status) status.textContent = info.message; },
       });
-    }
-
-    function formatGuideShakaError(err) {
-      if (!err) return 'Shaka playback failed (no error details).';
-
-      const code = err.code || 'unknown';
-      const codeName = Object.entries(window.shaka?.util?.Error?.Code || {})
-        .find(([, value]) => value === err.code)?.[0];
-      const categoryName = Object.entries(window.shaka?.util?.Error?.Category || {})
-        .find(([, value]) => value === err.category)?.[0];
-      const context = [];
-
-      if (err.code === 4042) {
-        context.push(`Web Crypto unavailable (secure context: ${window.isSecureContext}; crypto.subtle: ${Boolean(window.crypto?.subtle)})`);
-      } else if (err.code === 4040) {
-        context.push('encrypted MPEG-TS cannot be played through MediaSource in this browser');
-      } else if (err.code === 6007) {
-        context.push('DRM license request failed; check the license endpoint, authorization, and network response');
-      } else if (err.code === 6008) {
-        context.push('the browser CDM rejected the DRM license response');
-      } else if (err.code === 6014) {
-        context.push('the DRM license has expired');
-      } else if (err.code === 6020) {
-        context.push(`browser DRM APIs unavailable (secure context: ${window.isSecureContext})`);
-      } else if (err.code === 1001 || err.code === 1002) {
-        context.push('manifest or segment request failed; check HTTP status, CORS, and network filtering');
-      }
-
-      const details = formatGuideShakaErrorData(err.data);
-      const identity = [categoryName, codeName].filter(Boolean).join('.');
-      return [
-        `Shaka error ${code}${identity ? ` (${identity})` : ''}: ${err.message || 'playback failed'}.`,
-        ...context,
-        details ? `Details: ${details}` : '',
-      ].filter(Boolean).join(' ');
-    }
-
-    function formatGuideShakaErrorData(data) {
-      if (!Array.isArray(data) || !data.length) return '';
-      try {
-        return JSON.stringify(data, (key, value) => {
-          if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
-            try {
-              const parsed = new URL(value);
-              return `${parsed.origin}${parsed.pathname}`;
-            } catch (_) {
-              return value;
-            }
-          }
-          if (value instanceof Error) return { name: value.name, message: value.message };
-          return value;
-        }).slice(0, 500);
-      } catch (_) {
-        return String(data).slice(0, 500);
-      }
+      if (_guideShaka && _guideStatsVisible) _startGuideStatsLoop();
     }
 
     // ── Guide stats for nerds ─────────────────────────────────────────

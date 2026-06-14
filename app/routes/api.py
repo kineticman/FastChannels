@@ -1981,30 +1981,12 @@ def _get_playback_info(ch, fast_mode=True):
     """
     Resolve playback URLs and mode for a channel.
     Returns dict: stream_type, preview_url, play_url, playback_mode, license_url,
-    preview_warning, preview_warning_kind, needs_detection.
+    needs_detection.
     Must be called within a Flask request context (license_url uses request.host_url).
     """
     stream_type = (ch.stream_type or '').strip().lower()
     preview_url = None
-    preview_warning = None
-    preview_warning_kind = None
     needs_detection = False
-
-    def _host_of(url):
-        return (urlsplit(url or '').netloc or '').lower()
-
-    def _is_youtube_host(url):
-        host = _host_of(url)
-        return host.endswith('youtube.com') or host.endswith('youtu.be')
-
-    def _is_googlevideo_host(url):
-        host = _host_of(url)
-        return (
-            'googlevideo.com' in host
-            or host.endswith('manifest.googlevideo.com')
-            or 'youtube.com' in host
-            or host.endswith('youtu.be')
-        )
 
     if ch.source and ch.source.name == 'custom':
         if fast_mode and ch.page_url:
@@ -2028,20 +2010,8 @@ def _get_playback_info(ch, fast_mode=True):
                         preview_url = resolved_url
                     elif resolved_type == 'hls':
                         preview_url = f'/play/custom/{ch.source_channel_id}/proxy.m3u8'
-                        if _is_youtube_host(ch.page_url) or _is_googlevideo_host(resolved_url):
-                            preview_warning = (
-                                'This is a YouTube-style HLS stream. '
-                                'The built-in browser preview may not play reliably; use "Open Externally" if preview fails.'
-                            )
-                            preview_warning_kind = 'youtube-hls'
                 elif stream_type == 'hls':
                     preview_url = f'/play/custom/{ch.source_channel_id}/proxy.m3u8'
-                    if _is_youtube_host(ch.page_url) or _is_googlevideo_host(ch.stream_url):
-                        preview_warning = (
-                            'This is a YouTube-style HLS stream. '
-                            'The built-in browser preview may not play reliably; use "Open Externally" if preview fails.'
-                        )
-                        preview_warning_kind = 'youtube-hls'
                 elif stream_type in {'mp4', 'webm', 'mov', 'mkv', 'direct'} and ch.stream_url:
                     preview_url = ch.stream_url
             except Exception:
@@ -2131,8 +2101,6 @@ def _get_playback_info(ch, fast_mode=True):
         'play_url': play_url,
         'playback_mode': playback_mode,
         'license_url': license_url,
-        'preview_warning': preview_warning,
-        'preview_warning_kind': preview_warning_kind,
         'needs_detection': needs_detection,
     }
 
@@ -2148,8 +2116,6 @@ def preview_channel(channel_id):
     play_url = info['play_url']
     playback_mode = info['playback_mode']
     license_url = info['license_url']
-    preview_warning = info['preview_warning']
-    preview_warning_kind = info['preview_warning_kind']
     needs_detection = info['needs_detection']
 
     current_program = (
@@ -2236,8 +2202,6 @@ def preview_channel(channel_id):
         'next_program': _program_dict(next_program),
         'play_url': play_url,
         'preview_url': preview_url,
-        'preview_warning': preview_warning,
-        'preview_warning_kind': preview_warning_kind,
         'needs_detection': needs_detection,
         'epg_programs': future_count,
         'epg_hours': epg_hours,
