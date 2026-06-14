@@ -706,6 +706,10 @@ def guide():
     if category:
         q = q.filter(Channel.category == category)
     if search:
+        # Match channels whose own name matches, OR that air a program whose
+        # title matches within the visible guide window. This way searching
+        # "Star Trek" surfaces dedicated channels even when none of their
+        # currently-airing programs happen to mention the term.
         matching_ch_ids = (
             db.session.query(Program.channel_id)
             .filter(
@@ -716,7 +720,10 @@ def guide():
             .distinct()
             .scalar_subquery()
         )
-        q = q.filter(Channel.id.in_(matching_ch_ids))
+        q = q.filter(db.or_(
+            Channel.name.ilike(f'%{search}%'),
+            Channel.id.in_(matching_ch_ids),
+        ))
     guide_sort_name = case(
         (db.func.lower(Channel.name).like('the %'), db.func.lower(db.func.substr(Channel.name, 5))),
         (db.func.lower(Channel.name).like('an %'),  db.func.lower(db.func.substr(Channel.name, 4))),
