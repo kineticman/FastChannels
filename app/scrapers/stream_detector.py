@@ -22,6 +22,7 @@ import hmac
 import json
 import logging
 import html
+import os
 import re
 import secrets
 import time
@@ -254,7 +255,46 @@ _TWITCH_RE = re.compile(
     r'^https?://(www\.)?(twitch\.tv/(?:videos/|clip/|[^/?#]+)|player\.twitch\.tv/[^?#]+)',
     re.IGNORECASE,
 )
-_YT_PLAYER_CLIENTS = ('tv_embedded', 'web_safari', 'web', 'ios')
+# Player clients tried in order (mirrors SLM's known-working set). tv_embedded
+# was removed from yt-dlp; web_safari/web yield HLS for live, ios is a fallback.
+_YT_PLAYER_CLIENTS = ('web_safari', 'web', 'ios')
+
+
+def _ytdlp_verbose_enabled() -> bool:
+    """yt-dlp's full extractor trace is noisy; gate it behind an env flag so an
+    operator can flip it on (FC_YTDLP_VERBOSE=1) to debug a specific channel
+    without a code change or redeploy."""
+    return (os.environ.get('FC_YTDLP_VERBOSE') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+class _YtdlpLogger:
+    """Bridge yt-dlp's internal logging into our application logger.
+
+    yt-dlp calls debug()/info()/warning()/error() on whatever object is passed
+    as ydl_opts['logger']. Routing those through our logger puts the verbose
+    extractor trace — player-client fallbacks, n-signature solving, JS runtime
+    selection — in the container log right next to our own [youtube] lines.
+    """
+
+    def __init__(self, prefix: str = '[yt-dlp]'):
+        self._prefix = prefix
+
+    def debug(self, msg):
+        # yt-dlp prefixes genuine debug lines with '[debug] '; anything else is a
+        # stdout line (e.g. the format table) it also funnels through debug().
+        if isinstance(msg, str) and msg.startswith('[debug] '):
+            logger.debug('%s %s', self._prefix, msg)
+        else:
+            logger.info('%s %s', self._prefix, msg)
+
+    def info(self, msg):
+        logger.info('%s %s', self._prefix, msg)
+
+    def warning(self, msg):
+        logger.warning('%s %s', self._prefix, msg)
+
+    def error(self, msg):
+        logger.error('%s %s', self._prefix, msg)
 
 # Content-types accepted for non-HLS direct video probing
 _VIDEO_CONTENT_TYPES = ('video/', 'audio/', 'application/octet-stream')
@@ -3281,11 +3321,10 @@ class StreamDetector:
         last_error = 'Extraction failed'
         try:
             ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
                 'skip_download': True,
                 'format': 'best[protocol~=m3u8]/best',
             }
+            ydl_opts.update(self._ytdlp_log_opts('[yt-dlp:twitch]'))
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
 
@@ -3481,11 +3520,10 @@ class StreamDetector:
         last_error = 'Extraction failed'
         try:
             ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
                 'skip_download': True,
                 'format': 'best[protocol~=m3u8]/best',
             }
+            ydl_opts.update(self._ytdlp_log_opts('[yt-dlp:generic]'))
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
 
@@ -3554,6 +3592,31 @@ class StreamDetector:
             return abs_url
         return None
 
+    @staticmethod
+    def _ytdlp_log_opts(prefix: str) -> dict:
+        """Logging-related ydl_opts: full trace when FC_YTDLP_VERBOSE is set,
+        otherwise the usual quiet defaults."""
+        if _ytdlp_verbose_enabled():
+            return {'verbose': True, 'logger': _YtdlpLogger(prefix)}
+        return {'quiet': True, 'no_warnings': True}
+
+    @staticmethod
+    def _info_has_pot(info) -> bool:
+        """Heuristic: did yt-dlp attach a PO token to the chosen format(s)?
+        GVS-bound URLs carry the token as a `pot=` query param (progressive) or a
+        `/pot/<token>/` path segment (HLS manifests). Used only as a log signal."""
+        try:
+            urls: list[str] = []
+            for fmt in info.get('requested_formats') or []:
+                if isinstance(fmt, dict) and fmt.get('url'):
+                    urls.append(str(fmt['url']))
+            for key in ('url', 'manifest_url'):
+                if info.get(key):
+                    urls.append(str(info[key]))
+            return any(('pot=' in u) or ('/pot/' in u) for u in urls)
+        except Exception:
+            return False
+
     def _resolve_youtube(self, url: str) -> DetectionResult:
         """
         Extract a playable stream URL from a YouTube page using yt-dlp.
@@ -3570,50 +3633,74 @@ class StreamDetector:
             )
 
         last_error = 'Extraction failed'
+        # Remember the first throttled (n-param unsolved) candidate. If no client
+        # yields a clean URL we hand this back as a degraded result with a specific
+        # reason, instead of swallowing it and reporting a bare "extraction failed".
+        throttled_fallback: tuple[str, str, str] | None = None  # (url, stream_type, client)
+
         for client in _YT_PLAYER_CLIENTS:
             try:
                 ydl_opts = {
-                    'quiet': True,
-                    'no_warnings': True,
                     'skip_download': True,
                     # Prefer combined HLS (covers m3u8, m3u8_native, etc.), fall back to best
                     'format': 'best[protocol~=m3u8]/best',
+                    # Use Node (installed via NodeSource, >= v22) to solve YouTube's
+                    # n-signature JS challenge. yt-dlp's EJS engine does not enable node
+                    # by default, so we name it explicitly; the distro's older node is
+                    # rejected as "unsupported", which is why the image pins Node 24.
                     'js_runtimes': {'node': {'exe': 'node'}},
                     'extractor_args': {
                         'youtube': {
                             'player_client': [client],
-                            # Include formats that lack a PO token (needed for server-side extraction)
+                            # Accept formats that lack a PO token (we don't run a PO-token
+                            # provider — the JS runtime alone is what unblocks these streams).
                             'formats': ['missing_pot'],
-                            # Skip fetching player config + webpage — fewer bot-trigger requests
+                            # Skip the player config + webpage requests — fewer bot-trigger
+                            # requests; not needed since we don't bind a PO token.
                             'player_skip': ['configs', 'webpage'],
                             'skip': ['dash', 'translated_subs'],
                         }
                     },
                 }
+                ydl_opts.update(self._ytdlp_log_opts(f'[yt-dlp:{client}]'))
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
 
                 if not info:
+                    logger.debug('[youtube] client=%s returned no info', client)
                     continue
 
                 headers = self._extract_http_headers(info)
-                protocol = info.get('protocol', '')
+                protocol = str(info.get('protocol') or '')
                 # Prefer manifest_url for m3u8 protocols (HLS playlist), else url
                 if 'm3u8' in protocol:
                     stream_url = info.get('manifest_url') or info.get('url')
                 else:
                     stream_url = info.get('url') or info.get('manifest_url')
 
-                if not stream_url or not stream_url.startswith('http'):
+                if not stream_url or not str(stream_url).startswith('http'):
+                    last_error = self._yt_dlp_no_stream_error(info, last_error)
+                    logger.debug('[youtube] client=%s no playable url (%s)', client, last_error)
                     continue
+
+                stream_url = str(stream_url)
+                pot_used = self._info_has_pot(info)
+                stream_type = 'hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct')
 
                 if not self._yt_n_ok(stream_url):
-                    logger.debug('[youtube] client=%s n-param unsolved, skipping', client)
-                    last_error = 'Extracted URL appears throttled (n parameter too long)'
+                    logger.info(
+                        '[youtube] client=%s n-param unsolved (throttled), pot=%s — keeping as fallback',
+                        client, pot_used,
+                    )
+                    last_error = 'Extracted URL appears throttled (n parameter unsolved)'
+                    if throttled_fallback is None:
+                        throttled_fallback = (stream_url, stream_type, client)
                     continue
 
-                logger.info('[youtube] resolved via client=%s url=%s…', client, stream_url[:80])
-                stream_type = 'hls' if 'm3u8' in protocol else (self.infer_stream_type(stream_url) or 'direct')
+                logger.info(
+                    '[youtube] resolved via client=%s pot=%s type=%s url=%s…',
+                    client, pot_used, stream_type, stream_url[:80],
+                )
                 return self._finalize_extracted_stream(
                     stream_url,
                     stream_type,
@@ -3626,6 +3713,26 @@ class StreamDetector:
                 logger.debug('[youtube] client=%s failed: %s', client, exc)
                 continue
 
+        # Every client either failed or returned only throttled URLs.
+        if throttled_fallback is not None:
+            stream_url, stream_type, client = throttled_fallback
+            logger.warning(
+                '[youtube] all clients throttled for %s — returning degraded URL from client=%s',
+                url[:80], client,
+            )
+            return DetectionResult(
+                stream_url=stream_url,
+                stream_type=stream_type,
+                error=(
+                    'YouTube returned only throttled formats (n parameter unsolved) — the JS '
+                    'challenge could not be solved. Ensure a supported JS runtime (Node >= 22) '
+                    'is installed.'
+                ),
+                is_youtube=True,
+                resolver='yt-dlp',
+            )
+
+        logger.warning('[youtube] extraction failed for %s: %s', url[:80], last_error)
         return DetectionResult(is_youtube=True, error=f'YouTube extraction failed: {last_error}', resolver='yt-dlp')
 
     @staticmethod
