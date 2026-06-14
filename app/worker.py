@@ -2086,16 +2086,18 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     _refresh_auto_channel_numbers()
 
 
-def _prune_old_programs(batch_size: int = 10000):
+def _prune_old_programs(batch_size: int = 1000):
     """Delete programs that ended more than 2 hours ago, in batches.
 
     Use timezone-aware UTC to match the rest of the worker's program handling
     and avoid Python 3.12's utcnow() deprecation warning.
 
-    Batches are committed individually so the write lock is held only briefly
-    and never blocks concurrent guide/artifact refreshes for long. The batch
-    size is large enough that a big backlog (e.g. after several missed runs)
-    clears in a handful of commits rather than ~100 tiny ones.
+    Batches are committed individually so the SQLite write lock is held only
+    briefly and yielded between batches. The batch size is deliberately small:
+    a 5k+ row DELETE committed in one shot can hold the single writer long
+    enough to exhaust a concurrent scrape's busy_timeout (observed as
+    '[source] DB locked' retries). Keeping each commit sub-second lets any
+    other writer slip in between batches well within busy_timeout.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
     total_deleted = 0
@@ -2438,8 +2440,13 @@ if __name__ == '__main__':
     def _scheduled_prune():
         try:
             _r = redis.from_url(flask_app.config['REDIS_URL'])
-            _q = Queue('maintenance', connection=_r)
-            _q.enqueue('app.worker._rq_prune', job_timeout=900)
+            # Run on the scraper queue (not maintenance) so the prune's writes
+            # never overlap a scrape's writes — the single scraper worker
+            # serializes them, eliminating prune-vs-scrape SQLite write
+            # contention. Stable job_id keeps it identifiable; the hourly
+            # max_instances=1 schedule already prevents pile-ups.
+            _q = Queue('scraper', connection=_r)
+            _q.enqueue('app.worker._rq_prune', job_timeout=900, job_id='prune-epg')
             logger.info('[scheduler] enqueued _rq_prune job')
         except Exception as e:
             logger.error('[scheduler] could not enqueue prune job: %s', e)
