@@ -2102,6 +2102,20 @@ def _get_playback_info(ch, fast_mode=True):
         _enc = _quote(ch.source_channel_id, safe='')
         preview_url = f'/play/{ch.source.name}/{_enc}/proxy.m3u8'
 
+    # Custom YouTube channels: googlevideo's HLS CDN sends no
+    # Access-Control-Allow-Origin for a third-party page, and the playback URL is
+    # locked to the IP that resolved it (our server).  A direct browser fetch
+    # therefore fails CORS (Shaka error 1002) even when the viewer's IP matches.
+    # Route the browser preview through our manifest proxy (browser=1 → variant +
+    # segments re-served same-origin from the server IP).  play_url stays a direct
+    # redirect so IPTV clients, which don't enforce CORS, keep the lighter path.
+    if ch.source and ch.source.name == 'custom' and ch.source_channel_id:
+        from ..scrapers.stream_detector import _YOUTUBE_RE
+        if (ch.page_url and _YOUTUBE_RE.match(ch.page_url)) or 'googlevideo.com' in (ch.stream_url or ''):
+            from urllib.parse import quote as _quote
+            _enc = _quote(ch.source_channel_id, safe='')
+            preview_url = f'/play/custom/{_enc}/proxy.m3u8?browser=1'
+
     # Amazon DASH: CDN locks CORS to amazon.com, so route the preview through
     # our server-side manifest proxy which strips that restriction.
     if (

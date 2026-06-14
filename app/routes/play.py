@@ -1138,7 +1138,11 @@ def custom_manifest_proxy(channel_id: str):
     if not channel or not channel.stream_url:
         abort(404)
 
-    if getattr(channel, 'redetect_on_play', False) and channel.page_url:
+    # browser=1 marks a same-origin browser preview (Shaka).  Re-detect up front
+    # so the variant we proxy is fresh (shares the main path's TTL cache), rather
+    # than fetching a possibly-expired stored URL and waiting on the 403 retry.
+    browser_preview = request.args.get('browser') == '1'
+    if (getattr(channel, 'redetect_on_play', False) or (browser_preview and channel.page_url)) and channel.page_url:
         stream_url, custom_headers = _redetect_custom_stream(channel)
         if not stream_url:
             abort(502)
@@ -1247,11 +1251,14 @@ def custom_manifest_proxy(channel_id: str):
 
     # Unless the channel explicitly requested segment proxying, leave segments
     # as direct absolute URLs.  YouTube/googlevideo HLS segment URLs already
-    # work when fetched directly and the extra proxy hop can introduce 403s.
+    # work when fetched directly (from a matching IP, no CORS) for IPTV clients,
+    # and the extra proxy hop can introduce 403s.  Browser previews (browser=1)
+    # are the exception: the browser enforces CORS that googlevideo doesn't
+    # satisfy, so the segments must come back same-origin through our proxy.
     base_url = request.host_url.rstrip('/')
     variant_base = effective_url.rsplit('/', 1)[0] + '/'
     encoded_id = _quote(raw_id, safe='')
-    proxy_segments = bool(getattr(channel, 'proxy_segments', False))
+    proxy_segments = bool(getattr(channel, 'proxy_segments', False)) or browser_preview
 
     session_variants = bool((channel.custom_headers or {}).get('_session_variants'))
     lines = []
@@ -1397,14 +1404,17 @@ def custom_segment_proxy():
     SSRF protection: requires https, blocks private IP ranges, and validates
     that the segment host shares a domain root with the channel's stored stream_url.
     """
-    from urllib.parse import urlsplit, unquote as _unquote
+    from urllib.parse import urlsplit
 
-    raw_url = request.args.get('url', '')
+    # request.args already percent-decodes the query string once, so use the
+    # value as-is.  A second unquote here corrupts segment URLs that contain
+    # literal %XX sequences (e.g. googlevideo's xpc/…%3D%3D, sgoap/gir%3Dyes),
+    # which mangles the signature and gets the chunk host to 403.
+    url = request.args.get('url', '')
     raw_id = request.args.get('src', '')
-    if not raw_url or not raw_id:
+    if not url or not raw_id:
         abort(400)
 
-    url = _unquote(raw_url)
     parsed = urlsplit(url)
     if parsed.scheme != 'https' or not parsed.netloc:
         abort(400)
@@ -1422,33 +1432,51 @@ def custom_segment_proxy():
         abort(404)
 
     # Validate segment host shares a domain root with the stored stream URL
-    # to prevent this endpoint being used as an open proxy.
+    # to prevent this endpoint being used as an open proxy.  The abort() must
+    # live OUTSIDE the try — abort() raises an HTTPException, and a bare except
+    # here would swallow it and fail the guard open.
+    seg_host = parsed.netloc
     try:
         stored_host = urlsplit(channel.stream_url or '').netloc
-        seg_host = parsed.netloc
-        if stored_host and seg_host != stored_host:
-            def _root(h: str) -> str:
-                parts = h.split('.')
-                return '.'.join(parts[-2:]) if len(parts) >= 2 else h
-            if _root(seg_host) != _root(stored_host):
-                logger.warning('[custom-seg-proxy] host mismatch %s vs %s', seg_host, stored_host)
-                abort(403)
-    except Exception:
-        pass
 
+        def _root(h: str) -> str:
+            parts = h.split('.')
+            return '.'.join(parts[-2:]) if len(parts) >= 2 else h
+
+        host_ok = (
+            not stored_host
+            or seg_host == stored_host
+            or _root(seg_host) == _root(stored_host)
+        )
+    except Exception:
+        host_ok = True  # parse failure — fail open rather than break playback
+        stored_host = '?'
+    if not host_ok:
+        logger.warning('[custom-seg-proxy] host mismatch seg=%s stored=%s', seg_host, stored_host)
+        abort(403)
+
+    # Network/timeout errors → 502.  A non-200 from the CDN is relayed with its
+    # real status (e.g. 403/410) instead of being masked as 502, so players and
+    # logs reflect what the upstream actually returned.
     try:
         r = _requests.get(url, headers=_custom_proxy_headers(channel), timeout=15, stream=True)
-        if r.status_code != 200:
-            abort(r.status_code)
-        return Response(
-            r.iter_content(65536),
-            status=200,
-            content_type=r.headers.get('Content-Type', 'video/MP2T'),
-            headers={'Cache-Control': 'no-cache'},
-        )
     except Exception as e:
-        logger.warning('[custom-seg-proxy] fetch failed for %s: %s', url[:80], e)
+        logger.warning('[custom-seg-proxy] upstream fetch error host=%s url=%s: %s', seg_host, url[:160], e)
         abort(502)
+
+    if r.status_code != 200:
+        logger.warning('[custom-seg-proxy] upstream HTTP %s host=%s url=%s', r.status_code, seg_host, url[:200])
+        status = r.status_code if 400 <= r.status_code <= 599 else 502
+        return Response(f'upstream returned HTTP {r.status_code}', status=status, content_type='text/plain')
+
+    logger.debug('[custom-seg-proxy] 200 host=%s ct=%s len=%s',
+                 seg_host, r.headers.get('Content-Type'), r.headers.get('Content-Length', '?'))
+    return Response(
+        r.iter_content(65536),
+        status=200,
+        content_type=r.headers.get('Content-Type', 'video/MP2T'),
+        headers={'Cache-Control': 'no-cache'},
+    )
 
 
 @play_bp.route('/play/amazon_prime_free/<channel_id>/dash.mpd')
