@@ -52,6 +52,66 @@
       height: 2rem;
     }
     .guide-toolbar input[type="text"] { width: 170px; }
+    .guide-search-wrap { position: relative; display: inline-flex; }
+    .guide-search-history {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      width: 240px;
+      max-width: 80vw;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+      z-index: 60;
+      padding: 0.25rem 0;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .guide-search-history[hidden] { display: none; }
+    .gsh-head {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      padding: 0.2rem 0.65rem 0.3rem;
+    }
+    .gsh-item {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.35rem 0.5rem 0.35rem 0.65rem;
+      cursor: pointer;
+      font-size: 0.85rem;
+      color: var(--text);
+    }
+    .gsh-item:hover, .gsh-item.gsh-active { background: var(--accent-bg); }
+    .gsh-item .gsh-clock { flex: 0 0 auto; opacity: 0.5; }
+    .gsh-term { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .gsh-del {
+      flex: 0 0 auto;
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 1.05rem;
+      line-height: 1;
+      padding: 0 0.25rem;
+      border-radius: 4px;
+    }
+    .gsh-del:hover { color: var(--text); background: var(--border); }
+    .gsh-footer { border-top: 1px solid var(--border); margin-top: 0.25rem; padding-top: 0.25rem; }
+    .gsh-clear {
+      width: 100%;
+      text-align: left;
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.8rem;
+      padding: 0.35rem 0.65rem;
+    }
+    .gsh-clear:hover { color: var(--text); background: var(--accent-bg); }
     .guide-toolbar-sep { width: 1px; height: 1.4rem; background: var(--border); margin: 0 0.2rem; }
     .guide-time-nav { display: flex; flex-wrap: nowrap; align-items: center; gap: 0.55rem; }
     .guide-meta {
@@ -386,7 +446,10 @@
           {% endfor %}
         </select>
         <div class="guide-toolbar-sep"></div>
-        <input type="text" name="search" placeholder="Search what's on…" value="{{ search }}" aria-label="Search programs">
+        <div class="guide-search-wrap">
+          <input type="text" name="search" id="guide-search-input" placeholder="Search what's on…" value="{{ search }}" aria-label="Search programs" autocomplete="off">
+          <div class="guide-search-history" id="guide-search-history" hidden></div>
+        </div>
         <button type="submit" class="btn btn-sm">Search</button>
         {% if source_id or feed_id or category or search %}<a href="/admin/guide" class="btn btn-sm btn-ghost">Clear</a>{% endif %}
         <div class="guide-toolbar-sep"></div>
@@ -464,6 +527,88 @@
   <script>
     const _APP_TZ = {{ app_timezone_name | tojson }};
     const _WINDOW_ANCHOR = {{ window_anchor_epoch }};
+
+    // ── Search history (YouTube-style, localStorage) ──────────────────
+    (function () {
+      const KEY = 'fc_guide_search_history';
+      const CAP = 12;
+      const input = document.getElementById('guide-search-input');
+      const panel = document.getElementById('guide-search-history');
+      const form  = document.getElementById('guide-filter-form');
+      if (!input || !panel || !form) return;
+      let activeIdx = -1;
+
+      const load = () => {
+        try { const v = JSON.parse(localStorage.getItem(KEY)); return Array.isArray(v) ? v : []; }
+        catch (e) { return []; }
+      };
+      const store = (arr) => { try { localStorage.setItem(KEY, JSON.stringify(arr)); } catch (e) {} };
+      const addTerm = (term) => {
+        term = (term || '').trim();
+        if (!term) return;
+        const arr = load().filter(t => t.toLowerCase() !== term.toLowerCase());
+        arr.unshift(term);
+        store(arr.slice(0, CAP));
+      };
+      const removeTerm = (term) => store(load().filter(t => t !== term));
+
+      const hide = () => { panel.hidden = true; activeIdx = -1; };
+
+      function render() {
+        const q = input.value.trim().toLowerCase();
+        const items = load().filter(t => !q || t.toLowerCase().includes(q));
+        activeIdx = -1;
+        if (!items.length) { hide(); return; }
+        let html = '<div class="gsh-head">Recent searches</div>';
+        items.forEach((t, i) => {
+          const safe = t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+          html += '<div class="gsh-item" data-idx="' + i + '" data-term="' + safe + '">'
+                +   '<span class="gsh-clock">↺</span>'
+                +   '<span class="gsh-term">' + safe + '</span>'
+                +   '<button type="button" class="gsh-del" data-term="' + safe + '" aria-label="Remove ' + safe + '">&times;</button>'
+                + '</div>';
+        });
+        html += '<div class="gsh-footer"><button type="button" class="gsh-clear">Clear search history</button></div>';
+        panel.innerHTML = html;
+        panel.hidden = false;
+      }
+
+      const pick = (term) => { input.value = term; addTerm(term); form.submit(); };
+
+      // Persist the term whenever the form is submitted (typed or button).
+      form.addEventListener('submit', () => addTerm(input.value));
+
+      input.addEventListener('focus', render);
+      input.addEventListener('input', render);
+
+      input.addEventListener('keydown', (e) => {
+        const rows = panel.hidden ? [] : Array.from(panel.querySelectorAll('.gsh-item'));
+        if (e.key === 'ArrowDown' && rows.length) {
+          e.preventDefault(); activeIdx = (activeIdx + 1) % rows.length;
+        } else if (e.key === 'ArrowUp' && rows.length) {
+          e.preventDefault(); activeIdx = (activeIdx - 1 + rows.length) % rows.length;
+        } else if (e.key === 'Enter' && activeIdx >= 0 && rows[activeIdx]) {
+          e.preventDefault(); pick(rows[activeIdx].dataset.term); return;
+        } else if (e.key === 'Escape') {
+          hide(); return;
+        } else { return; }
+        rows.forEach((r, i) => r.classList.toggle('gsh-active', i === activeIdx));
+      });
+
+      // Use mousedown so the input doesn't blur-hide before the click lands.
+      panel.addEventListener('mousedown', (e) => e.preventDefault());
+      panel.addEventListener('click', (e) => {
+        const del = e.target.closest('.gsh-del');
+        if (del) { removeTerm(del.dataset.term); render(); input.focus(); return; }
+        if (e.target.closest('.gsh-clear')) { store([]); hide(); input.focus(); return; }
+        const item = e.target.closest('.gsh-item');
+        if (item) pick(item.dataset.term);
+      });
+
+      document.addEventListener('click', (e) => {
+        if (!panel.contains(e.target) && e.target !== input) hide();
+      });
+    })();
 
     // ── Lazy-fetch program tracks ─────────────────────────────────────
     function _renderTrack(track, programs) {
