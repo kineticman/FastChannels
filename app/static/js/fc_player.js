@@ -111,11 +111,10 @@
 
     // Safari/iOS: use native HLS to avoid Shaka errors 4040/4042 on AES-128
     // encrypted transport streams that MediaSource can't decrypt. Skip for DASH
-    // or DRM streams, which Shaka must handle. canPlayType catches Safari even
-    // when the UA sniff misses (e.g. some WKWebView contexts).
+    // or DRM streams, which Shaka must handle. Do not use canPlayType() alone:
+    // some Chrome environments report HLS support but fail on live MPEG-TS.
     const isDash = mode === 'dash' || type === 'dash';
-    const nativeHls = !isDash && !license &&
-      (video.canPlayType('application/x-mpegURL') || safari);
+    const nativeHls = !isDash && !license && safari;
     if (nativeHls) {
       video.src = url;
       video.load();

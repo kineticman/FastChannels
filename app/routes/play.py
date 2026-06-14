@@ -170,6 +170,22 @@ def _url_is_hls(url: str) -> bool:
     return '.m3u8' in urlsplit(url).path.lower()
 
 
+def _absolutize_hls_manifest(manifest_text: str, manifest_url: str) -> str:
+    """Resolve playlist and URI attribute references against the fetched manifest."""
+    def _rewrite_uri(match):
+        return f'URI="{urljoin(manifest_url, match.group(1))}"'
+
+    lines = []
+    for line in manifest_text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            line = urljoin(manifest_url, stripped)
+        elif 'URI="' in line:
+            line = re.sub(r'URI="([^"]+)"', _rewrite_uri, line)
+        lines.append(line)
+    return '\n'.join(lines)
+
+
 def _custom_proxy_headers(channel, extra_headers: dict | None = None) -> dict:
     """
     Build request headers for custom-channel proxy fetches.
@@ -602,6 +618,49 @@ def distro_manifest_proxy(channel_id: str):
         '\n'.join(lines),
         mimetype='application/vnd.apple.mpegurl',
         headers={'Cache-Control': 'no-cache'},
+    )
+
+
+@play_bp.route('/play/samsung/<channel_id>/proxy.m3u8')
+def samsung_manifest_proxy(channel_id: str):
+    """Fetch one Samsung master and make its relative playlist URLs absolute."""
+    from urllib.parse import unquote as _unquote
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'samsung', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    if request.args.get('via') != 'play':
+        logger.info(
+            '[play] request ip=%s source=samsung channel_id=%s channel_name=%s',
+            _client_ip(), raw_id, channel.name,
+        )
+
+    try:
+        r = _requests.get(
+            channel.stream_url,
+            allow_redirects=True,
+            timeout=10,
+            headers={'User-Agent': 'okhttp/4.12.0'},
+        )
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[samsung-proxy] master fetch failed for %s: %s', raw_id[:40], e)
+        abort(502)
+
+    return Response(
+        _absolutize_hls_manifest(r.text, r.url),
+        mimetype='application/vnd.apple.mpegurl',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
     )
 
 
@@ -1707,6 +1766,14 @@ def play(source_name: str, channel_id: str):
         '[play] request ip=%s source=%s channel_id=%s channel_name=%s',
         client_ip, source_name, channel_id, channel.name,
     )
+
+    if source_name == 'samsung':
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/samsung/{encoded_id}/proxy.m3u8?via=play",
+            302,
+        )
 
     scraper_cls = registry.get(source_name)
     scraper = None
