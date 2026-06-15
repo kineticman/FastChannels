@@ -151,14 +151,45 @@ def _is_signed_in(page) -> bool:
     if 'amazon.com' not in url:
         return False
     try:
-        el = page.query_selector('#nav-link-accountList-nav-line-1')
-        if el:
-            text = (el.inner_text() or '').lower().strip()
+        # Primary: the account greeting ("Hello, <name>" when signed in,
+        # "Hello, sign in" when signed out). Check the whole account block so
+        # we catch it whether the greeting sits on line-1 or the container.
+        acct = page.query_selector('#nav-link-accountList-nav-line-1, #nav-link-accountList')
+        if acct:
+            text = (acct.inner_text() or '').lower().strip()
             return 'sign in' not in text
-        # Fallback: presence of sign-out link
-        return bool(page.query_selector('#nav-item-signout, a[href*="/gp/sign-out"]'))
+        # Secondary: a sign-out link (only present once the account flyout DOM
+        # is rendered) or a personalized "Deliver to <name>" glow address.
+        if page.query_selector('#nav-item-signout, a[href*="/gp/sign-out"]'):
+            return True
+        glow = page.query_selector('#glow-ingress-line2, #nav-global-location-popover-link')
+        if glow:
+            loc = (glow.inner_text() or '').lower().strip()
+            # Logged-out default is "select your address" / empty; a name or ZIP
+            # means Amazon recognized the session.
+            return bool(loc) and 'select your address' not in loc and 'update location' not in loc
+        return False
     except Exception:
         return True  # URL check already passed, assume ok
+
+
+def _wait_signed_in(page, timeout: float = 12.0) -> bool:
+    """Poll for a confirmed signed-in state.
+
+    The post-login redirect chain (/ap/signin → openid return_to → amazon.com)
+    plus nav hydration can lag well past the navigation event, so a single
+    immediate check races the page and yields false negatives. Poll until the
+    URL leaves the auth pages and the signed-in markers appear.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if _is_signed_in(page):
+                return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return _is_signed_in(page)
 
 
 # ── Debug helpers ─────────────────────────────────────────────────────────────
@@ -398,7 +429,9 @@ def run_amazon_auth(
                         return
 
                 # ── Verify success ─────────────────────────────────────────
-                if not _is_signed_in(page):
+                # Poll, not a one-shot check: the post-login redirect chain and
+                # nav hydration lag the navigation event by a second or two.
+                if not _wait_signed_in(page):
                     final_url = page.url
                     _dump_page_debug(page, 'verify_failed')
                     if _is_captcha_page(page):
