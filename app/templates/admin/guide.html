@@ -492,7 +492,7 @@
           {% for row in guide_rows %}
           <div class="guide-row" data-channel-id="{{ row.channel.id }}">
             <div class="ch-cell" onclick="openGuideChannelModal({{ row.channel.id }}, this.closest('.guide-row'))">
-              {% if row.channel.logo_url %}<img src="{{ row.channel.logo_url }}" alt="" class="ch-logo">{% endif %}
+              {% if row.channel.logo_url %}<img src="{{ row.channel.logo_display_url or row.channel.logo_url }}" alt="" class="ch-logo">{% endif %}
               <span class="ch-name">{{ row.channel.name }}</span>
             </div>
             <div class="programs-track" data-channel-id="{{ row.channel.id }}">
