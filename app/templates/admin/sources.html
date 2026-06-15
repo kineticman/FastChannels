@@ -3396,7 +3396,7 @@
     }
 
     // ── Custom channel stream preview ─────────────────────────────────────────
-    let _ccPreviewHls = null;
+    let _ccPreviewPlayer = null;   // shared Shaka player (FCPlayer), or null for native
 
     function openCcPreviewModal() {
       const url = _ccDetectedUrl;
@@ -3416,50 +3416,65 @@
 
     function _teardownCcPreviewPlayer() {
       const video = document.getElementById('cc-preview-player');
-      if (_ccPreviewHls) { _ccPreviewHls.destroy(); _ccPreviewHls = null; }
+      if (_ccPreviewPlayer) { try { _ccPreviewPlayer.destroy(); } catch (e) {} _ccPreviewPlayer = null; }
       if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
     }
 
-    function _startCcPreviewPlayer(url, streamType) {
+    async function _startCcPreviewPlayer(url, streamType) {
       const video = document.getElementById('cc-preview-player');
       const status = document.getElementById('cc-preview-status');
       _teardownCcPreviewPlayer();
       video.volume = document.getElementById('cc-preview-volume').value / 100;
       if (status) status.textContent = 'Loading stream…';
 
-      const effectiveType = String(streamType || '').toLowerCase();
-      const useNative = ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(effectiveType);
-      if (useNative) {
-        video.src = url;
-        video.load();
-        video.play().catch(() => {});
-        if (status) status.textContent = 'Using native video playback.';
-        return;
+      let playUrl = null;
+      let mode = '';
+      let type = String(streamType || '').toLowerCase();
+      let license = '';
+
+      // Saved channels: preview through the same re-resolving relay the /watch
+      // player uses. This resolves a fresh stream URL on every preview, so
+      // session-locked/expiring upstreams (lightcast, YouTube/googlevideo, etc.)
+      // don't fail with a stale token — and DRM/YouTube routing is handled
+      // server-side, identical to the guide. Replays of a pinned detected URL
+      // were the cause of the networkError/manifestParsingError on these.
+      if (_ccEditId) {
+        try {
+          const r = await fetch(`/api/channels/${_ccEditId}/preview?detect=0`);
+          const d = await r.json();
+          playUrl = d.preview_url || d.play_url || null;
+          mode = d.playback_mode || '';
+          type = String(d.stream_type || type || '').toLowerCase();
+          license = d.license_url || '';
+        } catch (e) { /* fall through to detected-URL path */ }
       }
 
-      // Always route HLS through server-side proxy — handles CORS and custom headers transparently.
-      const headersJson = JSON.stringify(_ccDetectedHeaders || {});
-      const proxyUrl = `/api/custom-channels/preview-manifest?url=${encodeURIComponent(url)}&h=${encodeURIComponent(headersJson)}`;
-
-      if (window.Hls && window.Hls.isSupported()) {
-        _ccPreviewHls = new window.Hls({ enableWorker: true, lowLatencyMode: false });
-        _ccPreviewHls.loadSource(proxyUrl);
-        _ccPreviewHls.attachMedia(video);
-        _ccPreviewHls.on(window.Hls.Events.MANIFEST_PARSED, () => {
-          video.play().catch(() => {});
-          if (status) status.textContent = 'HLS manifest loaded — playing.';
-        });
-        _ccPreviewHls.on(window.Hls.Events.ERROR, (_e, data) => {
-          if (data.fatal && status) status.textContent = `Playback error: ${data.type} / ${data.details}`;
-        });
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = proxyUrl;
-        video.load();
-        video.play().catch(() => {});
-        if (status) status.textContent = 'Using native HLS playback.';
-      } else {
-        if (status) status.textContent = 'HLS playback not supported in this browser. Try Chrome or a Chromium-based browser.';
+      // Unsaved (mid-add) channels, or fallback: play the freshly-detected URL.
+      // Direct types play natively; HLS routes through the preview proxy
+      // (CORS + custom headers). The detected URL is freshest right after detect.
+      if (!playUrl) {
+        if (['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(type)) {
+          playUrl = url;
+          mode = 'native';
+        } else {
+          const headersJson = JSON.stringify(_ccDetectedHeaders || {});
+          playUrl = `/api/custom-channels/preview-manifest?url=${encodeURIComponent(url)}&h=${encodeURIComponent(headersJson)}`;
+          mode = mode || 'hls';
+          type = type || 'hls';
+        }
       }
+
+      if (!playUrl) { if (status) status.textContent = 'No playable stream URL found.'; return; }
+
+      _ccPreviewPlayer = FCPlayer.load({
+        video,
+        url: playUrl,
+        mode,
+        type,
+        license,
+        onStatus: (text) => { if (status) status.textContent = text; },
+        onError:  (info) => { if (status) status.textContent = info.message; },
+      });
     }
 
     document.getElementById('cc-preview-volume').addEventListener('input', function() {
@@ -3473,7 +3488,8 @@
     // ─────────────────────────────────────────────────────────────────────────
 
   </script>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
+<script src="{{ url_for('static', filename='js/fc_player.js') }}?v={{ app_version }}"></script>
 <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
   {% include 'admin/_update_modal.html' %}
 </body>
