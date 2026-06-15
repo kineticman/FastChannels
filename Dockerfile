@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     redis-server \
     ca-certificates \
+    sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 24 (NodeSource). yt-dlp's EJS engine needs a JS runtime to solve
