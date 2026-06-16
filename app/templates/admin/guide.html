@@ -120,6 +120,67 @@
       margin-left: auto;
     }
 
+    /* ── Alphabet scrubber rail (alphabetical view only) ── */
+    .az-rail {
+      position: fixed;
+      right: 3px;
+      top: 50%;
+      transform: translateY(-50%);
+      height: min(88vh, 780px);
+      z-index: 90;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: space-between;
+      padding: 6px 2px;
+      background: color-mix(in srgb, var(--surface) 72%, transparent);
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      backdrop-filter: blur(5px);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+      user-select: none;
+      touch-action: none;
+    }
+    .az-rail[hidden] { display: none; }
+    .az-letter {
+      flex: 1 1 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      padding: 0 5px;
+      cursor: pointer;
+      text-align: center;
+      transition: color 0.1s;
+    }
+    .az-letter:hover, .az-letter.az-on { color: var(--accent); }
+    .az-bubble {
+      position: fixed;
+      right: 52px;
+      top: 50%;
+      transform: translateY(-50%) scale(0.8);
+      z-index: 91;
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: var(--accent-strong);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.9rem;
+      font-weight: 800;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s, transform 0.15s;
+    }
+    .az-bubble.visible { opacity: 1; transform: translateY(-50%) scale(1); }
+
     /* ── Guide outer scroll container ── */
     .guide-outer {
       overflow-x: auto;
@@ -490,7 +551,7 @@
 
           <!-- Channel rows -->
           {% for row in guide_rows %}
-          <div class="guide-row" data-channel-id="{{ row.channel.id }}">
+          <div class="guide-row" data-channel-id="{{ row.channel.id }}" data-sort-letter="{{ row.sort_letter }}">
             <div class="ch-cell" onclick="openGuideChannelModal({{ row.channel.id }}, this.closest('.guide-row'))">
               {% if row.channel.logo_url %}<img src="{{ row.channel.logo_display_url or row.channel.logo_url }}" alt="" class="ch-logo">{% endif %}
               <span class="ch-name">{{ row.channel.name }}</span>
@@ -511,6 +572,12 @@
       </div>
     </div>
   </div>
+
+  {% if not source_id %}
+  <!-- Alphabet scrubber (alphabetical view only) -->
+  <div class="az-rail" id="az-rail" hidden role="navigation" aria-label="Jump to letter"></div>
+  <div class="az-bubble" id="az-bubble" aria-hidden="true"></div>
+  {% endif %}
 
   <!-- Guide preview modal -->
   <div class="modal-overlay" id="guide-modal" onclick="if(event.target===this)closeGuideModal()">
@@ -1229,6 +1296,121 @@
         });
       } catch (_e) { return ''; }
     }
+
+    // ── Alphabet scrubber rail ────────────────────────────────────────
+    // Only active in the alphabetical (All Sources) view; with a source
+    // selected the guide is number-sorted, so letter jumps wouldn't align.
+    const _ALPHA_MODE = {{ 'true' if not source_id else 'false' }};
+    (function () {
+      if (!_ALPHA_MODE) return;
+      const rail   = document.getElementById('az-rail');
+      const bubble = document.getElementById('az-bubble');
+      if (!rail || !bubble) return;
+
+      const rows = Array.from(document.querySelectorAll('.guide-row[data-sort-letter]'));
+      if (!rows.length) return;
+
+      // First row per letter, in display order (rows are pre-sorted server-side).
+      const firstRowByLetter = new Map();
+      const order = [];
+      rows.forEach(r => {
+        const L = r.dataset.sortLetter || '#';
+        if (!firstRowByLetter.has(L)) { firstRowByLetter.set(L, r); order.push(L); }
+      });
+
+      rail.innerHTML = order
+        .map(L => `<button type="button" class="az-letter" data-letter="${L}">${L}</button>`)
+        .join('');
+      rail.hidden = false;
+
+      // Scroll target must clear the sticky nav + toolbar that overlap the top.
+      function stickyOffset() {
+        const nav = document.querySelector('nav');
+        const tb  = document.getElementById('guide-filter-form');
+        return (nav ? nav.getBoundingClientRect().height : 0)
+             + (tb  ? tb.getBoundingClientRect().height  : 0) + 8;
+      }
+
+      let bubbleTimer = null;
+      function showBubble(L) {
+        bubble.textContent = L;
+        bubble.classList.add('visible');
+        clearTimeout(bubbleTimer);
+        bubbleTimer = setTimeout(() => bubble.classList.remove('visible'), 650);
+      }
+
+      let lastL = null;
+      function jump(L) {
+        const row = firstRowByLetter.get(L);
+        if (!row) return;
+        if (L !== lastL) {
+          const y = row.getBoundingClientRect().top + window.scrollY - stickyOffset();
+          window.scrollTo({ top: Math.max(0, y), behavior: 'auto' });
+        }
+        lastL = L;
+        showBubble(L);
+        rail.querySelectorAll('.az-letter').forEach(b =>
+          b.classList.toggle('az-on', b.dataset.letter === L));
+      }
+
+      // Resolve the letter under a y-coordinate (works during pointer capture,
+      // where move events all target the rail rather than individual buttons).
+      function letterAt(y) {
+        const r = rail.getBoundingClientRect();
+        const el = document.elementFromPoint(r.left + r.width / 2, y);
+        return el && el.classList.contains('az-letter') ? el.dataset.letter : null;
+      }
+
+      let dragging = false;
+      rail.addEventListener('pointerdown', e => {
+        dragging = true;
+        lastL = null;
+        try { rail.setPointerCapture(e.pointerId); } catch (_e) {}
+        const L = (e.target.closest('.az-letter') || {}).dataset?.letter || letterAt(e.clientY);
+        if (L) jump(L);
+        e.preventDefault();
+      });
+      rail.addEventListener('pointermove', e => {
+        if (!dragging) return;
+        const L = letterAt(e.clientY);
+        if (L) jump(L);
+      });
+      const end = () => { dragging = false; };
+      rail.addEventListener('pointerup', end);
+      rail.addEventListener('pointercancel', end);
+
+      // Sit the rail flush just outside the guide panel's right border so it
+      // hugs the grid without covering program blocks. When the margin is too
+      // narrow to fit it (small screens), clamp to the viewport edge — it then
+      // overlays the grid edge, iOS-style, rather than running off-screen.
+      const panel = document.querySelector('.container .section');
+      const RAIL_GAP = 14; // clear gap past the panel's right border
+      function placeRail() {
+        if (!panel) return;
+        const r = panel.getBoundingClientRect();
+        // clientWidth excludes the vertical scrollbar; CSS `right` is measured
+        // from that same inner edge, so using innerWidth here would shove the
+        // rail left by the scrollbar width and back onto the panel border.
+        const vw = document.documentElement.clientWidth;
+        const right = Math.max(3, vw - r.right - RAIL_GAP - rail.offsetWidth);
+        rail.style.right = right + 'px';
+        bubble.style.right = (right + rail.offsetWidth + 10) + 'px';
+
+        // Anchor below the sticky nav+toolbar so the top letters never hide
+        // under that chrome (it's z-index 100, above the rail). A plain
+        // centered rail breaks on short windows — its top slides up under the
+        // nav and the list appears to start at "B". Fill the available space,
+        // centering within it only when there's slack (tall windows).
+        const top = stickyOffset();
+        const avail = window.innerHeight - top - 12;
+        const h = Math.min(780, avail);
+        rail.style.top = (top + Math.max(0, (avail - h) / 2)) + 'px';
+        rail.style.transform = 'none';
+        rail.style.height = Math.max(180, h) + 'px';
+      }
+      placeRail();
+      window.addEventListener('resize', placeRail);
+    })();
   </script>
 
   {% include 'admin/_update_modal.html' %}

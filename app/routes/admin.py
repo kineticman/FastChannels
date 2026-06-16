@@ -656,6 +656,23 @@ def channels():
                            filter_qs=filter_qs)
 
 
+def _guide_sort_letter(name):
+    """First letter a channel sorts under in the alphabetical guide view.
+
+    Mirrors the SQL ``guide_sort_name`` ordering: lowercase and strip a leading
+    ``the ``/``an ``/``a `` article so the rail's jump targets match the actual
+    row order. Non-alphabetic leading characters bucket under ``#``.
+    """
+    s = (name or '').strip().lower()
+    for article in ('the ', 'an ', 'a '):
+        if s.startswith(article):
+            s = s[len(article):].lstrip()
+            break
+    if not s:
+        return '#'
+    return s[0].upper() if s[0].isalpha() else '#'
+
+
 @admin_bp.route('/guide')
 def guide():
     from zoneinfo import ZoneInfo
@@ -749,7 +766,9 @@ def guide():
         if channel_ids else 0
     )
 
-    guide_rows = [{'channel': c} for c in channels]
+    guide_rows = [
+        {'channel': c, 'sort_letter': _guide_sort_letter(c.name)} for c in channels
+    ]
 
     def time_pct(dt_local):
         return (dt_local - window_start_local).total_seconds() / window_seconds * 100
