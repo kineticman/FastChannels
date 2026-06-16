@@ -1693,34 +1693,41 @@ def bulk_update_channel_gracenote():
 def update_channel(channel_id):
     ch   = Channel.query.get_or_404(channel_id)
     data = request.get_json()
-    for field in ('name', 'logo_url', 'logo_url_pinned', 'category', 'category_override', 'language', 'language_override', 'is_active', 'is_enabled', 'scrape_pinned', 'number', 'number_pinned', 'disable_reason', 'is_duplicate', 'user_note'):
-        if field in data:
-            setattr(ch, field, data[field])
-    # Setting a number without explicitly managing the pin auto-pins it.
-    if 'number' in data and data['number'] is not None and 'number_pinned' not in data:
-        ch.number_pinned = True
-    if data.get('is_enabled') is True and 'is_active' not in data:
-        ch.is_active = True
-        if ch.disable_reason in ('Dead', 'VOD') or (ch.disable_reason or '').startswith('DRM'):
-            ch.disable_reason = None
-        ch.last_seen_at = datetime.now(timezone.utc)
-        ch.missed_scrapes = 0
-    if data.get('scrape_pinned') is True and not ch.is_active:
-        ch.is_active = True
-        ch.last_seen_at = datetime.now(timezone.utc)
-    if 'gracenote_id' in data or 'gracenote_mode' in data:
-        try:
+
+    def _apply_changes():
+        """Apply all field mutations to ch. Re-runnable after a rollback."""
+        for field in ('name', 'logo_url', 'logo_url_pinned', 'category', 'category_override', 'language', 'language_override', 'is_active', 'is_enabled', 'scrape_pinned', 'number', 'number_pinned', 'disable_reason', 'is_duplicate', 'user_note'):
+            if field in data:
+                setattr(ch, field, data[field])
+        # Setting a number without explicitly managing the pin auto-pins it.
+        if 'number' in data and data['number'] is not None and 'number_pinned' not in data:
+            ch.number_pinned = True
+        if data.get('is_enabled') is True and 'is_active' not in data:
+            ch.is_active = True
+            if ch.disable_reason in ('Dead', 'VOD') or (ch.disable_reason or '').startswith('DRM'):
+                ch.disable_reason = None
+            ch.last_seen_at = datetime.now(timezone.utc)
+            ch.missed_scrapes = 0
+        if data.get('scrape_pinned') is True and not ch.is_active:
+            ch.is_active = True
+            ch.last_seen_at = datetime.now(timezone.utc)
+        if 'gracenote_id' in data or 'gracenote_mode' in data:
             _apply_gracenote_update(ch, data.get('gracenote_id'), data.get('gracenote_mode'))
-        except ValueError as exc:
-            return jsonify({'error': str(exc)}), 422
+
     # Retry commit up to 3× (1s apart) if SQLite is briefly locked by a worker.
-    # Do NOT rollback between attempts — in autocommit mode the failed flush leaves
-    # the session dirty state intact, so a plain retry will re-attempt the write.
+    # A failed flush poisons the session, so we must rollback and re-apply the
+    # mutations on each attempt — a bare re-commit would raise PendingRollbackError.
     for _attempt in range(3):
+        try:
+            _apply_changes()
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({'error': str(exc)}), 422
         try:
             db.session.commit()
             break
         except OperationalError as _oe:
+            db.session.rollback()
             if 'database is locked' not in str(_oe) or _attempt == 2:
                 raise
             _time.sleep(1)
