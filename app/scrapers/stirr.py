@@ -164,7 +164,12 @@ class StirrScraper(BaseScraper):
                                 logger.debug("[%s] XML parse error for %s: %s", self.source_name, ch.source_channel_id, exc)
                                 root = None
                             if root is not None:
-                                if root.tag == 'xml' and root.find('.//item') is not None:
+                                # ctvcraft feeds use <item> nodes with a <startTime>
+                                # child. This covers both the <xml>-rooted variant and
+                                # the <channels>-rooted /program/export?format=xml variant.
+                                # XMLTV uses <programme>, never <item>, so this won't misfire.
+                                ctv_item = root.find('.//item')
+                                if ctv_item is not None and ctv_item.find('startTime') is not None:
                                     result.extend(self._extract_programs_from_ctvcraft(
                                         ch.source_channel_id, root
                                     ))
