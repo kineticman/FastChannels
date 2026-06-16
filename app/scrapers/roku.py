@@ -846,7 +846,10 @@ class RokuScraper(BaseScraper):
                 f"Roku rate-limited (403) — cooldown active, ~{mins} min remaining. Previous channel data kept."
             )
         if not self._ensure_session():
-            raise ScrapeSkipError("[roku] session bootstrap failed; keeping previous channel data")
+            raise ScrapeSkipError(
+                "[roku] could not establish a session (Roku returned 403 or no data) — "
+                "often a regional/CDN block. Previous channel data kept; try a US VPN if this persists."
+            )
 
         def _fetch_channels_once() -> tuple[list[ChannelData], dict[str, int | str | None]]:
             channels: list[ChannelData] = []

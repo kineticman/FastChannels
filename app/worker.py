@@ -449,6 +449,12 @@ def run_scraper(source_name: str, force_full: bool = False):
                                 miss_threshold=getattr(scraper, 'channel_miss_threshold', _CHANNEL_MISS_THRESHOLD),
                                 rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
                             )
+                            # Stamp last_scraped_at as soon as channels are committed.
+                            # The EPG phase below re-stamps on success, but if it
+                            # instead skips/fails (e.g. Roku's session gets rejected
+                            # before EPG), the source would otherwise keep a full
+                            # channel list while still reporting "Last scraped: Never".
+                            source.last_scraped_at = datetime.now(timezone.utc)
                         _apply_scraper_config_updates(source, scraper)
                         db.session.commit()
                         # Clear so the EPG commit's _apply_scraper_config_updates
