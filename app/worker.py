@@ -846,6 +846,27 @@ def run_stream_audit(source_name: str):
                         ch.is_active = True
                         ch.disable_reason = None
                         logger.info('[audit] re-activated previously dead channel: %s', ch.name)
+                    # Opaque-URL scrapers (stirr/distro/xumo/roku/localnow/plex) confirm
+                    # liveness without fetching the manifest, so stream_info (the
+                    # resolution/codec badge) would otherwise never be populated by an
+                    # audit. Backfill it once when missing via a play-time resolve +
+                    # master parse, so a fresh audit fills in absent resolution badges.
+                    # Best-effort: skip non-HLS sources (e.g. Amazon DASH/DRM) and
+                    # swallow any failure so it never affects the liveness verdict.
+                    if ch.stream_info is None and (ch.stream_type or 'hls').lower() == 'hls':
+                        try:
+                            play_url = scraper.resolve(ch.stream_url)
+                            if play_url and play_url.startswith('http'):
+                                rinfo = sess.get(play_url, timeout=12, allow_redirects=True)
+                                if rinfo.status_code == 200 and '#EXT-X-STREAM-INF' in rinfo.text:
+                                    si = _parse_stream_info(rinfo.text)
+                                    if si:
+                                        ch.stream_info = si
+                                        logger.debug('[audit] backfilled stream_info for %s: %s',
+                                                     ch.name, si.get('max_resolution') or '?')
+                        except Exception as _si_exc:
+                            logger.debug('[audit] stream_info backfill failed for %s: %s',
+                                         ch.name, _si_exc)
                     logger.debug('[audit] %s: opaque URL — existence confirmed by scraper, skipping manifest fetch', ch.name)
                     continue
 

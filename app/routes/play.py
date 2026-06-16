@@ -17,7 +17,7 @@ import requests as _requests
 
 from flask import Blueprint, redirect, abort, request, Response, render_template
 from app.config_store import persist_source_config_updates
-from ..hls import inspect_hls_drm
+from ..hls import inspect_hls_drm, parse_stream_info
 from ..models import Channel, Source
 from ..scrapers import registry
 from ..scrapers.distro import (
@@ -375,25 +375,79 @@ def _client_ip() -> str:
     return request.remote_addr or 'unknown'
 
 
-def _check_manifest(url: str, session) -> str | None:
+def _stream_info_summary(si: dict | None) -> tuple:
+    """Comparable tuple of the badge-relevant fields of a stream_info dict.
+    Used to skip a DB write when only volatile fields (per-session variant
+    bandwidths/ordering) changed but the displayed resolution/codec did not."""
+    si = si or {}
+    return (
+        si.get('max_resolution'), si.get('max_height'), si.get('video_codec'),
+        bool(si.get('has_4k')), bool(si.get('has_hd')), bool(si.get('resolution_estimated')),
+    )
+
+
+def _refresh_stream_info_async(app, channel_id: int, current_stream_info: dict | None, master_text: str) -> None:
+    """Parse stream_info from an already-fetched HLS master playlist and persist it
+    on a background thread when the displayed resolution/codec summary changed.
+
+    Used by the manifest-proxy endpoints (stirr/…), which fetch the master server-side
+    on every poll. The summary guard means a watched channel is written at most once
+    per actual resolution change — the per-poll DB read uses the caller's already-loaded
+    `current_stream_info`, so a steady stream does no DB work at all after the first write.
     """
-    Fetch the HLS manifest at url and return a disable reason string if the
-    stream is unplayable, or None if it looks fine.
-    Returns None on any fetch error (fail open — don't disable on network hiccups).
-    Returns 'Unauthorized' on 401 so callers can handle expired session tokens.
+    new_info = parse_stream_info(master_text)
+    if not new_info:
+        return
+    if _stream_info_summary(current_stream_info) == _stream_info_summary(new_info):
+        return
+
+    def _persist():
+        with app.app_context():
+            try:
+                from ..extensions import db
+                ch = db.session.get(Channel, channel_id)
+                # Re-check under the fresh row to avoid a redundant write if another
+                # worker/thread already refreshed it between the guard and here.
+                if ch is not None and (
+                    _stream_info_summary(ch.stream_info) != _stream_info_summary(new_info)
+                ):
+                    ch.stream_info = new_info
+                    db.session.commit()
+                    logger.debug('[play] refreshed stream_info for channel %s: %s',
+                                 channel_id, new_info.get('max_resolution') or '?')
+            except Exception as exc:
+                from ..extensions import db
+                db.session.rollback()
+                logger.debug('[play] stream_info refresh failed for channel %s: %s', channel_id, exc)
+
+    threading.Thread(target=_persist, daemon=True).start()
+
+
+def _check_manifest(url: str, session) -> tuple[str | None, dict | None]:
     """
+    Fetch the HLS manifest at url and return (reason, stream_info):
+      reason       — a disable reason string if the stream is unplayable, else None.
+                     'Unauthorized' on 401 so callers can handle expired tokens.
+                     None on any fetch error (fail open — don't disable on hiccups).
+      stream_info  — parsed master-playlist variant stats (resolution/codec) when
+                     `url` resolved to a master playlist, else None. Lets the caller
+                     refresh the resolution badge for free off this same fetch.
+    """
+    stream_info = None
     try:
         from urllib.parse import urljoin
         r = session.get(url, timeout=8)
         if r.status_code == 401:
-            return 'Unauthorized'
+            return 'Unauthorized', None
         if r.status_code != 200:
-            return None
+            return None, None
         text = r.text
 
         # EXT-X-KEY and EXT-X-PLAYLIST-TYPE only appear in media playlists,
-        # not master playlists. If we landed on a master, fetch the first variant.
+        # not master playlists. If we landed on a master, parse stream_info from
+        # it (before drilling in) then fetch the first variant for the DRM/VOD check.
         if '#EXT-X-STREAM-INF' in text:
+            stream_info = parse_stream_info(text)
             for line in text.splitlines():
                 line = line.strip()
                 if line and not line.startswith('#'):
@@ -407,15 +461,15 @@ def _check_manifest(url: str, session) -> str | None:
 
         if '#EXT-X-PLAYLIST-TYPE:VOD' in text and '#EXT-X-ENDLIST' in text:
             logger.info('[play] finished VOD playlist in manifest: %s', url[:80])
-            return 'VOD'
+            return 'VOD', stream_info
 
         drm = inspect_hls_drm(text)
         if drm:
             logger.info('[play] DRM detected (%s) in manifest: %s', drm['drm_type'], url[:80])
-            return 'DRM'
+            return 'DRM', stream_info
     except Exception as e:
         logger.debug('[play] manifest check fetch failed (ignoring): %s', e)
-    return None
+    return None, stream_info
 
 
 @play_bp.route('/play/<source_name>/<channel_id>.m3u')
@@ -1106,6 +1160,16 @@ def stirr_manifest_proxy(channel_id: str):
     except Exception as e:
         logger.warning('[stirr-proxy] master fetch failed for %s: %s', channel_id, e)
         abort(502)
+
+    # Refresh the resolution/codec badge off this same master fetch. STIRR redirects
+    # here instead of through the generic play path, so this is the only play-time
+    # hook that sees its manifest — and the lax-TLS session above reaches CDN hosts
+    # (weathernationtv etc.) the audit's plain session can't. Fire-and-forget; the
+    # summary guard means at most one write per actual resolution change.
+    from flask import current_app as _current_app
+    _refresh_stream_info_async(
+        _current_app._get_current_object(), channel.id, channel.stream_info, master_r.text,
+    )
 
     # Rewrite variant playlist lines AND EXT-X-MEDIA URI= attributes to go through
     # this proxy so every manifest fetch uses the server IP.  The URI= attribute in
@@ -1962,7 +2026,29 @@ def play(source_name: str, channel_id: str):
             # Use a plain session without retry adapters — this is a one-shot
             # health probe; retries just add latency in the background thread.
             s = requests.Session()
-            reason = _check_manifest(resolved_url, s)
+            reason, stream_info = _check_manifest(resolved_url, s)
+            # Refresh the resolution/codec badge off the same manifest fetch, for the
+            # redirect-to-CDN sources that reach this generic path (xumo/roku/plex/
+            # localnow). Proxied sources (stirr/distro) refresh in their own proxy
+            # endpoints instead. Only write when the displayed summary changes, so the
+            # per-tune probe doesn't churn the DB on volatile session metadata.
+            if stream_info:
+                with _app.app_context():
+                    try:
+                        from ..extensions import db
+                        _ch = db.session.get(Channel, _channel_id)
+                        if _ch is not None and (
+                            _stream_info_summary(_ch.stream_info) != _stream_info_summary(stream_info)
+                        ):
+                            _ch.stream_info = stream_info
+                            db.session.commit()
+                            logger.debug('[play] refreshed stream_info for channel %s: %s',
+                                         _channel_id, stream_info.get('max_resolution') or '?')
+                    except Exception as _si_exc:
+                        from ..extensions import db
+                        db.session.rollback()
+                        logger.debug('[play] stream_info refresh failed for channel %s: %s',
+                                     _channel_id, _si_exc)
             if not reason:
                 return
             if reason == 'Unauthorized' and _source_name == 'roku':
