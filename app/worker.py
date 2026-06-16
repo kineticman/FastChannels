@@ -1892,6 +1892,86 @@ def _refresh_auto_channel_numbers() -> None:
                 db.session.delete(fcn)
 
 
+_IDENTITY_STOPWORDS = {
+    'the', 'a', 'an', 'and', '&', 'by', 'of', 'tv', 'hd', 'sd', 'uhd', '4k',
+    'channel', 'network', 'live', 'plus', 'es', 'en', 'español', 'espanol',
+}
+
+
+def _name_tokens(name: str) -> set[str]:
+    """Lowercase alphanumeric word set with stopwords removed, for identity comparison."""
+    words = re.findall(r'[a-z0-9]+', (name or '').lower())
+    return {w for w in words if w not in _IDENTITY_STOPWORDS}
+
+
+def _is_identity_swap(old_name: str, new_name: str) -> bool:
+    """True when a channel's name changed enough that it's effectively a different
+    channel occupying the same upstream slot (e.g. Vizio reusing a channelId).
+
+    Conservative: ignores case/stopword/HD-suffix noise and only fires when the
+    two names share almost no meaningful words, so ordinary renames don't trip it.
+    """
+    old = (old_name or '').strip()
+    new = (new_name or '').strip()
+    if not old or not new or old == new:
+        return False
+    a, b = _name_tokens(old), _name_tokens(new)
+    if not a or not b:
+        return False
+    # Substring/superset rename (e.g. "A&E" → "A&E HD") is not a swap.
+    if a <= b or b <= a:
+        return False
+    overlap = len(a & b) / len(a | b)
+    return overlap < 0.34
+
+
+def _extract_gracenote_id(cd):
+    """Gracenote ID a scraper supplied for a channel: the explicit field, or the
+    Roku-style "{play_id}|{gracenote_id}" slug encoding."""
+    gid = getattr(cd, 'gracenote_id', None) or None
+    if not gid and getattr(cd, 'slug', None) and '|' in cd.slug:
+        candidate = cd.slug.split('|', 1)[1].strip()
+        if candidate and candidate.isdigit():
+            gid = candidate
+    return gid
+
+
+def _backfill_stale_native_gracenote(source, channel_data_list):
+    """One-time per source: re-sync auto-mode native Gracenote IDs to the source's
+    current value, clearing IDs left stale on rotating slots that settled before
+    the content-change re-sync existed. CSV and manual IDs are preserved, and no
+    review flag is set (silent correction). Reuses the data this scrape already
+    fetched, so it costs no extra network and retries until a scrape succeeds."""
+    from app.gracenote_map import lookup_gracenote
+    current = {cd.source_channel_id: _extract_gracenote_id(cd)
+               for cd in channel_data_list if cd.source_channel_id is not None}
+    cleared = resynced = 0
+    for ch in source.channels.all():
+        mode = (getattr(ch, 'gracenote_mode', None)
+                or ('manual' if getattr(ch, 'gracenote_locked', False) else 'auto')).strip().lower()
+        if mode != 'auto' or ch.source_channel_id not in current:
+            continue
+        stored = ch.gracenote_id or None
+        if not stored:
+            continue  # never introduce a new ID here
+        csv_match = lookup_gracenote(source.name, ch.source_channel_id)
+        if csv_match and csv_match.get('tmsid') == stored:
+            continue  # community-CSV mapping — preserve
+        new_val = current[ch.source_channel_id]  # source's current native value (may be None)
+        if stored == (new_val or None):
+            continue
+        ch.gracenote_id = new_val
+        if new_val is None:
+            cleared += 1
+            logger.info('[%s] gracenote backfill: cleared stale ID %s on %r (id=%s)',
+                        source.name, stored, ch.name, ch.source_channel_id)
+        else:
+            resynced += 1
+    if cleared or resynced:
+        logger.info('[%s] gracenote backfill: cleared %d stale, re-synced %d native ID(s)',
+                    source.name, cleared, resynced)
+
+
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None,
                      miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
@@ -1945,16 +2025,30 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                     del gk_index[_gk]  # prevent double-rehoming the same slot
                     ch = _candidate
 
-        # Extract gracenote_id from ChannelData if the scraper set it directly,
-        # or fall back to the "{play_id}|{gracenote_id}" slug encoding (Roku).
-        gracenote_id = getattr(cd, 'gracenote_id', None) or None
-        if not gracenote_id and cd.slug and '|' in cd.slug:
-            candidate = cd.slug.split('|', 1)[1].strip()
-            if candidate and candidate.isdigit():
-                gracenote_id = candidate
+        gracenote_id = _extract_gracenote_id(cd)
 
         if ch:
             stream_url_changed = ch.stream_url != cd.stream_url
+            # Detect when a slot now carries *different content* than before — e.g.
+            # Vizio rotating a fixed FEATURED promo slot from "Duck Dynasty by A&E"
+            # to "Garfield and Friends". This invalidates any retained auto
+            # Gracenote ID (otherwise the slot keeps serving the previous
+            # occupant's guide). Prefer guide_key, the source's content/schedule
+            # key, when both sides have one; fall back to a conservative name-swap
+            # heuristic for sources that don't expose a guide_key. A pure rebrand
+            # with a stable guide_key is NOT a content change.
+            old_name = ch.name
+            old_gk   = (ch.guide_key or '').strip()
+            new_gk   = (getattr(cd, 'guide_key', None) or '').strip()
+            if old_gk and new_gk:
+                content_changed = old_gk != new_gk
+            else:
+                content_changed = _is_identity_swap(old_name, cd.name)
+            if content_changed and ch.is_enabled:
+                logger.warning('[%s] enabled slot content changed (id=%s): %r → %r (guide_key %r → %r); flagging for Gracenote review',
+                               source.name, ch.source_channel_id, old_name, cd.name,
+                               old_gk or None, new_gk or None)
+                ch.identity_changed_at = seen_at
             ch.name          = cd.name
             ch.stream_url    = cd.stream_url
             ch.stream_type   = cd.stream_type
@@ -1992,10 +2086,21 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             ch.last_seen_at = seen_at
             ch.missed_scrapes = 0
             mode = (getattr(ch, 'gracenote_mode', None) or ('manual' if getattr(ch, 'gracenote_locked', False) else 'auto')).strip().lower()
-            # Manual/Off modes are authoritative until the user switches back
-            # to Auto, so scraper/helper data only fills gaps on auto rows.
-            if mode == 'auto' and gracenote_id is not None and gracenote_auto_fill:
-                ch.gracenote_id = gracenote_id
+            # Auto mode tracks the source. Normally we keep an existing ID when a
+            # scrape returns nothing (transient source gaps shouldn't wipe a good
+            # ID). But when the slot's *content* changed we must re-sync to the
+            # source's current value — even if that's None — so a rotating slot
+            # can't keep serving the previous occupant's Gracenote schedule.
+            # Manual/Off modes are user-owned and left untouched (the content-change
+            # flag still surfaces so the user can fix a now-wrong manual ID).
+            if mode == 'auto' and gracenote_auto_fill:
+                if content_changed:
+                    if (ch.gracenote_id or None) != (gracenote_id or None):
+                        logger.warning('[%s] re-syncing auto Gracenote ID on content change for %r: %s → %s',
+                                       source.name, cd.name, ch.gracenote_id, gracenote_id)
+                    ch.gracenote_id = gracenote_id  # may be None → drops the stale ID
+                elif gracenote_id is not None:
+                    ch.gracenote_id = gracenote_id
         else:
             db.session.add(Channel(
                 source_id         = source.id,
@@ -2103,6 +2208,15 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                             ch.name,
                             ch.source_channel_id,
                         )
+    # One-time per source: correct Gracenote IDs left stale on rotating slots that
+    # settled before the content-change re-sync existed (e.g. Vizio FEATURED promo
+    # carousels still pointing at a previous occupant's schedule). Gated so it runs
+    # once, only on a scrape that actually returned channels, and only when
+    # auto-fill is enabled — matching the forward-fix's auto-mode semantics.
+    if (gracenote_auto_fill and channel_data_list
+            and not getattr(source, 'gracenote_resync_done', False)):
+        _backfill_stale_native_gracenote(source, channel_data_list)
+        source.gracenote_resync_done = True
     db.session.flush()
     _refresh_auto_channel_numbers()
 

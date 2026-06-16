@@ -115,13 +115,13 @@
     let currentLine = '';
     if (currentId) {
       const badgeMap = {
-        manual: ['manual', 'manual'],
-        native: ['native', 'source-verified'],
-        csv:    ['csv',    'community map'],
+        manual: ['manual', 'manual',          'You set this Gracenote ID by hand.'],
+        native: ['native', 'source-provided', 'Supplied by the source’s own metadata — not independently confirmed against a schedule. Spot-check it.'],
+        csv:    ['csv',    'community map',    'Mapped in the community gracenote_map.csv — not independently verified.'],
       };
-      const [cls, label] = badgeMap[gnSource] || [];
+      const [cls, label, title] = badgeMap[gnSource] || [];
       const badge = cls
-        ? `<span class="gs-source-badge ${escHtml(cls)}">${escHtml(label)}</span>` : '';
+        ? `<span class="gs-source-badge ${escHtml(cls)}" title="${escHtml(title || '')}">${escHtml(label)}</span>` : '';
       currentLine = `<div class="gs-current">Current Gracenote ID: <strong>${escHtml(currentId)}</strong>${badge}</div>`;
     }
 

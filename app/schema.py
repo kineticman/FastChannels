@@ -160,6 +160,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE sources ADD COLUMN scrape_cron TEXT"
                 ))
+            if "gracenote_resync_done" not in src_cols:
+                conn.execute(text(
+                    "ALTER TABLE sources ADD COLUMN gracenote_resync_done BOOLEAN NOT NULL DEFAULT 0"
+                ))
 
         if "channels" in tables:
             ch_cols = {
@@ -251,6 +255,10 @@ def ensure_runtime_schema() -> None:
             if "user_note" not in ch_cols:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN user_note TEXT"
+                ))
+            if "identity_changed_at" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN identity_changed_at DATETIME"
                 ))
             conn.execute(text(
                 "UPDATE channels SET went_inactive_at = last_seen_at "

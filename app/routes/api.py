@@ -93,6 +93,10 @@ def _apply_gracenote_update(channel: Channel, raw_value, raw_mode=None) -> str |
     if raw and not _GRACENOTE_RE.match(raw):
         raise ValueError('Invalid Gracenote ID — must be numeric (e.g. 122912) or start with EP/SH/MV/SP/TR (e.g. EP012345678)')
 
+    # Any explicit user action counts as reviewing an upstream content change,
+    # so dismiss the review marker (the 🔁 flag in the channels list).
+    channel.identity_changed_at = None
+
     if mode == 'off':
         # Turning routing off must NOT destroy the stored/suggested ID — keep it
         # dormant so the channel can be re-enabled later, and so scraper-supplied

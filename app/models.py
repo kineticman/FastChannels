@@ -44,6 +44,7 @@ class Source(db.Model):
     config          = db.Column(db.JSON, default=dict)
     chnum_start     = db.Column(db.Integer, nullable=True)   # starting tvg-chno in combined /m3u output
     epg_only        = db.Column(db.Boolean, default=False)   # if True: excluded from M3U output
+    gracenote_resync_done = db.Column(db.Boolean, default=False, nullable=False)  # one-time stale-native-GNID backfill done
 
     channels = db.relationship('Channel', backref='source', lazy='dynamic',
                                 cascade='all, delete-orphan')
@@ -125,6 +126,7 @@ class Channel(db.Model):
     last_seen_at      = db.Column(db.DateTime(timezone=True), nullable=True)
     went_inactive_at  = db.Column(db.DateTime(timezone=True), nullable=True)
     returned_at       = db.Column(db.DateTime(timezone=True), nullable=True)
+    identity_changed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # set by scraper when an enabled slot's content changed upstream (guide_key/name swap) — needs Gracenote review
     missed_scrapes    = db.Column(db.Integer, default=0, nullable=False)
     created_at        = db.Column(db.DateTime(timezone=True),
                                   default=lambda: datetime.now(timezone.utc))
@@ -184,6 +186,7 @@ class Channel(db.Model):
             'redetect_on_play':  bool(self.redetect_on_play),
             'guide_block_minutes': self.guide_block_minutes,
             'last_seen_at':     self.last_seen_at.isoformat() if self.last_seen_at else None,
+            'identity_changed_at': self.identity_changed_at.isoformat() if self.identity_changed_at else None,
             'missed_scrapes':   self.missed_scrapes or 0,
         }
 
