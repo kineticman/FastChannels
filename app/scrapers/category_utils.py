@@ -1761,6 +1761,11 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
     # Local News patterns
     if _local_news_rule(name_lower):
         return 'Local News'
+    # Local Now local-market feeds, e.g. "Local Now Atlanta" (and the bare
+    # "Local Now"). The Allen Media "Local Now <market>" brand is always a
+    # DMA news/weather feed.
+    if name_lower.startswith('local now'):
+        return 'Local News'
     # Hearst "Very Local" stations
     if name_lower.startswith('very ') and ' by ' in name_lower:
         return 'Local News'
@@ -1836,6 +1841,8 @@ def explain_category(name: str, raw_category: str | None, source_name: str | Non
             'rule': local_rule,
             'detail': 'Local affiliate naming pattern → Local News.',
         }
+    if name_lower.startswith('local now'):
+        return {'source': 'name_pattern', 'rule': 'local_now', 'detail': 'Local Now "<market>" feed → Local News.'}
     if name_lower.startswith('very ') and ' by ' in name_lower:
         return {'source': 'name_pattern', 'rule': 'very_local', 'detail': 'Hearst "Very Local by …" station → Local News.'}
     if 'fox local' in name_lower:
