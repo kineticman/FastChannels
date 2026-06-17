@@ -260,6 +260,14 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN identity_changed_at DATETIME"
                 ))
+            if "previous_name" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN previous_name VARCHAR(256)"
+                ))
+            if "previous_gracenote_id" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN previous_gracenote_id VARCHAR(32)"
+                ))
             conn.execute(text(
                 "UPDATE channels SET went_inactive_at = last_seen_at "
                 "WHERE is_active = 0 AND last_seen_at IS NOT NULL AND went_inactive_at IS NULL"

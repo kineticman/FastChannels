@@ -1110,6 +1110,19 @@ def channel_changes_report():
         .all()
     )
 
+    # Pending-review queue: enabled slots whose upstream content swapped (e.g. a
+    # Vizio FEATURED slot rotating to a different show under the same channelId).
+    # identity_changed_at is cleared the moment the user edits Gracenote, so this
+    # naturally drains as swaps are reviewed — it's a "needs attention" list, not
+    # a complete history.
+    content_swap_rows = (
+        db.session.query(Channel, Source)
+        .join(Source, Source.id == Channel.source_id)
+        .filter(Channel.identity_changed_at >= window_start)
+        .order_by(Channel.identity_changed_at.desc(), Source.display_name.asc(), Channel.name.asc())
+        .all()
+    )
+
     def _group_counts(rows):
         counts: dict[str, int] = defaultdict(int)
         for _channel, source in rows:
@@ -1161,6 +1174,9 @@ def channel_changes_report():
         at_risk_counts=_group_counts(at_risk_rows),
         returned_rows=returned_rows,
         returned_counts=_group_counts(returned_rows),
+        content_swap_rows=content_swap_rows,
+        content_swap_counts=_group_counts(content_swap_rows),
+        content_swap_daily_counts=_daily_counts(content_swap_rows, 'identity_changed_at'),
         source_health=source_health,
         net_change=net_change,
     )

@@ -2055,6 +2055,10 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                                source.name, ch.source_channel_id, old_name, cd.name,
                                old_gk or None, new_gk or None)
                 ch.identity_changed_at = seen_at
+                # Snapshot the prior occupant before name/gracenote_id are overwritten
+                # below, so the changes report can show "was X → now Y" and the old ID.
+                ch.previous_name         = old_name
+                ch.previous_gracenote_id = ch.gracenote_id or None
             ch.name          = cd.name
             ch.stream_url    = cd.stream_url
             ch.stream_type   = cd.stream_type

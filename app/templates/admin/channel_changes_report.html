@@ -271,6 +271,11 @@
         <div class="stat-value">{{ returned_rows|length }}</div>
         <div class="stat-sub">Previously missing channels back in lineup</div>
       </div>
+      <div class="stat">
+        <div class="stat-label">Content Swapped</div>
+        <div class="stat-value" style="color:{% if content_swap_rows %}var(--warning){% else %}var(--text-strong){% endif %}">{{ content_swap_rows|length }}</div>
+        <div class="stat-sub">Enabled slots now airing different content — pending Gracenote review</div>
+      </div>
     </div>
 
     <div class="grid">
@@ -405,6 +410,46 @@
           </div>
           {% else %}
           <div class="empty">No channels returned to the lineup in this window.</div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Content Swapped{% if window_days == 1 %} Today{% else %} in Last {{ window_days }} Days{% endif %}</h2>
+        <div class="section-subtitle">Enabled channels where the upstream slot rotated to different content under the same channel ID (e.g. a Vizio FEATURED slot). These need a Gracenote review — editing the channel's Gracenote mapping clears it from this list.</div>
+        {% if content_swap_daily_counts %}
+        <div class="mini-heading">Daily Buckets</div>
+        <div class="source-list">
+          {% for day, count in content_swap_daily_counts %}
+          <span class="badge"><strong>{{ count }}</strong> {{ day }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+        <div class="mini-heading">By Source</div>
+        <div class="source-list">
+          {% for source, count in content_swap_counts %}
+          <span class="badge"><strong>{{ count }}</strong> {{ source }}</span>
+          {% endfor %}
+          {% if not content_swap_counts %}
+          <span class="badge">No content swaps in window</span>
+          {% endif %}
+        </div>
+        <div class="rows">
+          {% for channel, source in content_swap_rows[:12] %}
+          <div class="row">
+            <div class="row-top">
+              <div class="row-title">🔁 {% if channel.previous_name and channel.previous_name != channel.name %}{{ channel.previous_name }} → {% endif %}{{ channel.name }}</div>
+              <div class="row-source">{{ source.display_name }}</div>
+            </div>
+            <div class="row-meta">
+              Swapped {{ channel.identity_changed_at|localtime }} ·
+              Channel ID <code>{{ channel.source_channel_id }}</code> ·
+              Gracenote {% if channel.previous_gracenote_id and channel.previous_gracenote_id != channel.gracenote_id %}<code>{{ channel.previous_gracenote_id }}</code> → {% endif %}{% if channel.gracenote_id %}<code>{{ channel.gracenote_id }}</code>{% else %}none{% endif %} ({{ channel.gracenote_mode or 'auto' }})
+            </div>
+            <div class="row-note">Now airing different content — review the Gracenote mapping on the Channels page.</div>
+          </div>
+          {% else %}
+          <div class="empty">No enabled channels have swapped content in this window.</div>
           {% endfor %}
         </div>
       </section>
