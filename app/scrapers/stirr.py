@@ -1,11 +1,14 @@
 # app/scrapers/stirr.py
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
 from html import unescape
 from urllib.parse import parse_qsl, urlencode, urlparse
@@ -16,6 +19,37 @@ from requests.adapters import HTTPAdapter
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, format_http_reason
 
 logger = logging.getLogger(__name__)
+
+# STIRR's channel-list API ships descriptions pre-truncated with a trailing
+# "...". The full text lives only in the per-channel watch page (JSON-LD
+# VideoObject / og:description). Fetching that is one HTTP round-trip per
+# channel, so results are cached on disk and only refreshed occasionally.
+_DESC_CACHE_PATH = Path(
+    os.environ.get("FASTCHANNELS_STIRR_DESC_CACHE", "/data/cache/stirr_descriptions.json")
+)
+_DESC_HIT_TTL = timedelta(days=30)   # complete descriptions rarely change
+_DESC_MISS_TTL = timedelta(days=3)   # retry pages that yielded nothing sooner
+
+
+def _read_desc_cache() -> dict:
+    try:
+        if _DESC_CACHE_PATH.exists():
+            data = json.loads(_DESC_CACHE_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        logger.exception("[stirr] failed reading description cache")
+    return {}
+
+
+def _write_desc_cache(payload: dict) -> None:
+    try:
+        _DESC_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(str(_DESC_CACHE_PATH) + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        tmp.replace(_DESC_CACHE_PATH)
+    except Exception:
+        logger.exception("[stirr] failed writing description cache")
 
 
 class StirrScraper(BaseScraper):
@@ -91,6 +125,8 @@ class StirrScraper(BaseScraper):
             return []
 
         rows = self._extract_channel_rows(payload)
+        # Recover full descriptions for rows the API truncated (cached, parallel)
+        enriched = self._enrich_truncated_descriptions(rows)
         channels: list[ChannelData] = []
 
         for row in rows:
@@ -112,16 +148,11 @@ class StirrScraper(BaseScraper):
                 epg_channel_id=row.get("epg_channel_id") or "",
             )
 
-            raw_desc = row.get("description")
-            description = None
-            if isinstance(raw_desc, dict):
-                description = raw_desc.get("value") or raw_desc.get("text")
-            elif isinstance(raw_desc, str):
-                description = raw_desc or None
-            if description:
-                import re as _re
-                description = _re.sub(r'<[^>]+>', ' ', description)
-                description = _re.sub(r'\s+', ' ', description).strip() or None
+            description = self._extract_description(row)
+            if description and self._looks_truncated(description):
+                full = enriched.get(source_channel_id)
+                if full:
+                    description = full
 
             channels.append(
                 ChannelData(
@@ -403,6 +434,147 @@ class StirrScraper(BaseScraper):
             val = row.get(key)
             if val: return str(val).strip()
         return None
+
+    # ── Description enrichment ───────────────────────────────
+
+    def _extract_description(self, row: dict) -> str | None:
+        """Clean description as shipped in the channel-list API row."""
+        raw = row.get("description")
+        desc = None
+        if isinstance(raw, dict):
+            desc = raw.get("value") or raw.get("text")
+        elif isinstance(raw, str):
+            desc = raw or None
+        if desc:
+            desc = re.sub(r'<[^>]+>', ' ', desc)
+            desc = re.sub(r'\s+', ' ', desc).strip() or None
+        return desc
+
+    @staticmethod
+    def _looks_truncated(text: str) -> bool:
+        return text.rstrip().endswith(("...", "…"))
+
+    def _watch_url(self, row: dict) -> str | None:
+        path = row.get("watch_url") or row.get("url")
+        if not path:
+            return None
+        path = str(path).strip()
+        if not path:
+            return None
+        if path.startswith("http"):
+            return path
+        return "https://stirr.com" + (path if path.startswith("/") else "/" + path)
+
+    @staticmethod
+    def _parse_full_description(html: str) -> str | None:
+        """Pull the untruncated description from a watch page.
+
+        Prefers the JSON-LD VideoObject (structured, reliable); falls back to
+        the og:description meta tag.
+        """
+        if not html:
+            return None
+        for block in re.findall(
+            r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+            html, re.S | re.I,
+        ):
+            try:
+                data = json.loads(block.strip())
+            except Exception:
+                continue
+            for obj in (data if isinstance(data, list) else [data]):
+                if isinstance(obj, dict) and obj.get("@type") == "VideoObject":
+                    desc = obj.get("description")
+                    if isinstance(desc, str) and desc.strip():
+                        return unescape(desc.strip())
+        m = re.search(
+            r'<meta[^>]+(?:property|name)=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
+            html, re.S | re.I,
+        )
+        if m and m.group(1).strip():
+            return unescape(m.group(1).strip())
+        return None
+
+    def _cache_entry_fresh(self, entry: dict, now: datetime) -> bool:
+        try:
+            fetched = datetime.fromisoformat(entry.get("fetched_at"))
+        except Exception:
+            return False
+        if fetched.tzinfo is None:
+            fetched = fetched.replace(tzinfo=timezone.utc)
+        ttl = _DESC_HIT_TTL if entry.get("description") else _DESC_MISS_TTL
+        return (now - fetched) < ttl
+
+    def _enrich_truncated_descriptions(self, rows: list[dict]) -> dict[str, str]:
+        """Return {videoid: full_description} for rows the API truncated.
+
+        Only channels whose list-API description ends in an ellipsis are
+        fetched, results are cached on disk, and cold misses run in parallel.
+        Never raises — enrichment is best-effort and must not break scraping.
+        """
+        try:
+            cache = _read_desc_cache()
+            now = datetime.now(timezone.utc)
+            enriched: dict[str, str] = {}
+            misses: list[tuple[str, str]] = []
+            live_vids: set[str] = set()
+
+            for row in rows:
+                vid = self._pick_source_channel_id(row)
+                if not vid:
+                    continue
+                live_vids.add(vid)
+                desc = self._extract_description(row)
+                if not desc or not self._looks_truncated(desc):
+                    continue
+                entry = cache.get(vid)
+                if entry and self._cache_entry_fresh(entry, now):
+                    full = entry.get("description")
+                    if full:
+                        enriched[vid] = full
+                    continue
+                url = self._watch_url(row)
+                if url:
+                    misses.append((vid, url))
+
+            if misses:
+                def _one(item: tuple[str, str]) -> tuple[str, Optional[str]]:
+                    vid, url = item
+                    try:
+                        r = self.get(url)
+                        full = self._parse_full_description(r.text) if r else None
+                    except Exception:
+                        full = None
+                    # Some channels are truncated even on the watch page — STIRR
+                    # simply has no full copy. Treat that as a miss so we keep the
+                    # API text and retry later rather than caching a dead end.
+                    if full and self._looks_truncated(full):
+                        full = None
+                    return vid, full
+
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    for vid, full in pool.map(_one, misses):
+                        cache[vid] = {"description": full, "fetched_at": now.isoformat()}
+                        if full:
+                            enriched[vid] = full
+
+            # Drop cached entries for channels no longer in the feed
+            stale = [vid for vid in cache if vid not in live_vids]
+            for vid in stale:
+                cache.pop(vid, None)
+
+            if misses or stale:
+                _write_desc_cache(cache)
+
+            if enriched:
+                logger.info(
+                    "[%s] enriched %d truncated descriptions (%d fetched)",
+                    self.source_name, len(enriched), len(misses),
+                )
+            return enriched
+        except Exception:
+            logger.exception("[%s] description enrichment failed", self.source_name)
+            return {}
 
     def _pick_logo(self, row: dict) -> str | None:
         if str(row.get("logo", "")).startswith("http"):
