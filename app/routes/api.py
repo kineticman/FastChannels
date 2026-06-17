@@ -715,7 +715,7 @@ def delete_inactive_channels(source_id):
 def inactive_channel_count_global():
     from datetime import timedelta
     from collections import defaultdict
-    days = int(request.args.get('days', 30))
+    days = int(request.args.get('days', 14))
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     rows = (
         Channel.query
@@ -746,7 +746,7 @@ def inactive_channel_count_global():
 @api_bp.route('/channels/delete-inactive', methods=['POST'])
 def delete_inactive_channels_global():
     from datetime import timedelta
-    days = int((request.get_json() or {}).get('days', 30))
+    days = int((request.get_json() or {}).get('days', 14))
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     orphans = Channel.query.filter(
         Channel.is_active == False,

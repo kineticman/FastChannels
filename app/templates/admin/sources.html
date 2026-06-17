@@ -141,6 +141,15 @@
     .err-pip { color: var(--danger); font-size: 0.82rem; cursor: default; }
     .source-meta { font-size: 0.76rem; color: var(--text-muted); }
 
+    /* Inactive-channel nudge pill on the cleanup button */
+    .inactive-pill {
+      display: inline-block; margin-left: 0.5rem; font-size: 0.66rem; font-weight: 700;
+      letter-spacing: 0.02em; padding: 1px 7px; border-radius: 20px; vertical-align: middle;
+      background: color-mix(in srgb, var(--warning-bg) 70%, transparent);
+      color: var(--warning-soft); border: 1px solid var(--warning-border);
+    }
+    .inactive-pill[hidden] { display: none; }
+
     /* Config badges */
     .config-badge {
       display: inline-block; font-size: 0.64rem; font-weight: 700;
@@ -588,7 +597,7 @@
         <button class="btn btn-run actions-btn" id="audit-all-btn" onclick="auditAll()"
                 title="Tests every active channel across all sources for stream health and DRM. Can take several minutes per source.">Audit All Sources</button>
         <button class="btn btn-run actions-btn" id="cleanup-inactive-btn" onclick="openCleanupModal()"
-                title="Permanently delete channels that have been missing from scrapes for a configurable number of days.">Clean Up Inactive Channels</button>
+                title="Permanently delete channels that have been missing from scrapes for a configurable number of days.">Clean Up Inactive Channels<span class="inactive-pill" id="cleanup-inactive-pill" hidden></span></button>
       </div>
       <div class="global-status" id="global-status"></div>
     </div>
@@ -871,7 +880,7 @@
       <p style="margin-bottom:1rem">Delete inactive channels that have not been seen in a scrape for at least the specified number of days. Pinned channels are never removed.</p>
       <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:1rem">
         <label style="font-size:0.85rem;color:var(--text-soft);white-space:nowrap" for="cleanup-days-input">Not seen in</label>
-        <input id="cleanup-days-input" type="number" min="1" max="365" value="30"
+        <input id="cleanup-days-input" type="number" min="1" max="365" value="14"
                style="width:70px;padding:0.3rem 0.5rem;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:0.85rem;text-align:center"
                oninput="clearCleanupPreview()">
         <span style="font-size:0.85rem;color:var(--text-soft)">days</span>
@@ -1217,9 +1226,29 @@
     // ── Clean up inactive channels ────────────────────────────────────────
     let _cleanupPreviewCount = null;
 
+    // Passive nudge: show how many inactive channels are old enough to clean up.
+    // Uses the same window/endpoint as the cleanup modal so the numbers agree.
+    const CLEANUP_PILL_DAYS = 14;
+    async function refreshInactivePill() {
+      const pill = document.getElementById('cleanup-inactive-pill');
+      if (!pill) return;
+      try {
+        const r = await fetch(`/api/channels/inactive-count?days=${CLEANUP_PILL_DAYS}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d.count > 0) {
+          pill.textContent = `${d.count} inactive > ${CLEANUP_PILL_DAYS}d`;
+          pill.hidden = false;
+        } else {
+          pill.hidden = true;
+        }
+      } catch (e) { /* nudge is best-effort */ }
+    }
+    document.addEventListener('DOMContentLoaded', refreshInactivePill);
+
     function openCleanupModal() {
       _cleanupPreviewCount = null;
-      document.getElementById('cleanup-days-input').value = '30';
+      document.getElementById('cleanup-days-input').value = '14';
       document.getElementById('cleanup-preview').textContent = '';
       document.getElementById('cleanup-confirm-btn').disabled = true;
       document.getElementById('cleanup-modal').classList.add('open');
@@ -1253,7 +1282,7 @@
     }
 
     async function previewCleanup() {
-      const days = parseInt(document.getElementById('cleanup-days-input').value) || 30;
+      const days = parseInt(document.getElementById('cleanup-days-input').value) || 14;
       const preview = document.getElementById('cleanup-preview');
       const confirmBtn = document.getElementById('cleanup-confirm-btn');
       preview.innerHTML = '<span style="color:var(--text-soft)">Checking…</span>';
@@ -1299,7 +1328,7 @@
     }
 
     async function confirmCleanup() {
-      const days = parseInt(document.getElementById('cleanup-days-input').value) || 30;
+      const days = parseInt(document.getElementById('cleanup-days-input').value) || 14;
       const confirmBtn = document.getElementById('cleanup-confirm-btn');
       const preview = document.getElementById('cleanup-preview');
       confirmBtn.disabled = true;
@@ -1316,6 +1345,7 @@
         const status = document.getElementById('global-status');
         status.textContent = `Deleted ${d.deleted} inactive channel${d.deleted === 1 ? '' : 's'}.`;
         status.className = 'global-status ok';
+        refreshInactivePill();
       } catch (e) {
         preview.style.color = 'var(--danger)';
         preview.textContent = 'Delete failed.';
