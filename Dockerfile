@@ -41,7 +41,10 @@ RUN printf '%s\n' \
 
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
-# Keep yt-dlp at GitHub master — YouTube extraction breaks on stale PyPI releases
+# Keep yt-dlp at GitHub master — YouTube extraction breaks on stale PyPI releases.
+# This layer is cached, so a plain rebuild reuses whatever master was at first build.
+# Bump YTDLP_REFRESH (e.g. --build-arg YTDLP_REFRESH=$(date +%s)) to force a fresh pull.
+ARG YTDLP_REFRESH=unset
 RUN pip install --force-reinstall "yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
 
 RUN playwright install-deps chromium && playwright install chromium

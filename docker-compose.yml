@@ -1,6 +1,11 @@
 services:
   fastchannels:
-    build: .
+    build:
+      context: .
+      args:
+        # Bump to force a fresh yt-dlp master pull, e.g.:
+        #   YTDLP_REFRESH=$(date +%s) docker compose build
+        YTDLP_REFRESH: ${YTDLP_REFRESH:-unset}
     container_name: fastchannels
     restart: unless-stopped
     ports:
