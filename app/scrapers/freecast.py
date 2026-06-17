@@ -91,6 +91,12 @@ class FreecastScraper(BaseScraper):
     display_name = 'FreeCast'
     scrape_interval = 360
     stream_audit_enabled = True
+    # EPG carries poster artwork (~88%) and episode titles, but only ~43% of
+    # programs have descriptions and there is no structured season/episode
+    # metadata — richer than 'basic', short of a 'full' guide. 'partial' keeps
+    # FreeCast from winning duplicate-resolution EPG tie-breaks over sources
+    # with complete guides.
+    epg_quality = 'partial'
     audit_requires_config = ['username', 'password']
     config_required = True
     is_premium = False
