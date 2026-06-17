@@ -2050,15 +2050,19 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 content_changed = old_gk != new_gk
             else:
                 content_changed = _is_identity_swap(old_name, cd.name)
-            if content_changed and ch.is_enabled:
-                logger.warning('[%s] enabled slot content changed (id=%s): %r → %r (guide_key %r → %r); flagging for Gracenote review',
-                               source.name, ch.source_channel_id, old_name, cd.name,
-                               old_gk or None, new_gk or None)
-                ch.identity_changed_at = seen_at
-                # Snapshot the prior occupant before name/gracenote_id are overwritten
-                # below, so the changes report can show "was X → now Y" and the old ID.
+            if content_changed:
+                # Persistent rotator signal — count every swap regardless of enabled
+                # state, so a rotating slot (Vizio FEATURED*, etc.) is flagged on any
+                # source. Snapshot the prior occupant before name/gracenote_id are
+                # overwritten below (used by the changes report and badge tooltip).
+                ch.content_swap_count    = (ch.content_swap_count or 0) + 1
                 ch.previous_name         = old_name
                 ch.previous_gracenote_id = ch.gracenote_id or None
+                if ch.is_enabled:
+                    logger.warning('[%s] enabled slot content changed (id=%s): %r → %r (guide_key %r → %r); flagging for Gracenote review',
+                                   source.name, ch.source_channel_id, old_name, cd.name,
+                                   old_gk or None, new_gk or None)
+                    ch.identity_changed_at = seen_at
             ch.name          = cd.name
             ch.stream_url    = cd.stream_url
             ch.stream_type   = cd.stream_type

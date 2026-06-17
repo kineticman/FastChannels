@@ -268,6 +268,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN previous_gracenote_id VARCHAR(32)"
                 ))
+            if "content_swap_count" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN content_swap_count INTEGER NOT NULL DEFAULT 0"
+                ))
             conn.execute(text(
                 "UPDATE channels SET went_inactive_at = last_seen_at "
                 "WHERE is_active = 0 AND last_seen_at IS NOT NULL AND went_inactive_at IS NULL"

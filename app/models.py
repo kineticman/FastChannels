@@ -129,6 +129,7 @@ class Channel(db.Model):
     identity_changed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # set by scraper when an enabled slot's content changed upstream (guide_key/name swap) — needs Gracenote review
     previous_name       = db.Column(db.String(256), nullable=True)  # the occupant's name before the last content swap (paired with identity_changed_at)
     previous_gracenote_id = db.Column(db.String(32), nullable=True)  # the Gracenote ID held before the last content swap re-synced it
+    content_swap_count  = db.Column(db.Integer, default=0, nullable=False)  # times this slot's content rotated under a stable ID — marks rotating/featured slots
     missed_scrapes    = db.Column(db.Integer, default=0, nullable=False)
     created_at        = db.Column(db.DateTime(timezone=True),
                                   default=lambda: datetime.now(timezone.utc))
@@ -191,6 +192,7 @@ class Channel(db.Model):
             'identity_changed_at': self.identity_changed_at.isoformat() if self.identity_changed_at else None,
             'previous_name':    self.previous_name,
             'previous_gracenote_id': self.previous_gracenote_id,
+            'content_swap_count': self.content_swap_count or 0,
             'missed_scrapes':   self.missed_scrapes or 0,
         }
 

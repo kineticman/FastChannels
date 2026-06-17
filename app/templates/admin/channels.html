@@ -1360,8 +1360,8 @@
           <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
         </div>
       </div>
-      {% set _adv_count = (1 if feed_filter else 0) + (1 if category_filter else 0) + (1 if enabled_filter else 0) + (1 if presence_filter else 0) + (1 if drm_filter else 0) + (1 if language_filter else 0) + (1 if country_filter else 0) + (1 if gracenote_filter else 0) + (1 if gracenote_mode_filter else 0) + (1 if duplicates_filter else 0) + (1 if new_filter else 0) + (1 if epg_filter else 0) + (1 if resolution_filter else 0) %}
-      <details class="toolbar-advanced" id="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter %}open{% endif %}>
+      {% set _adv_count = (1 if feed_filter else 0) + (1 if category_filter else 0) + (1 if enabled_filter else 0) + (1 if presence_filter else 0) + (1 if drm_filter else 0) + (1 if language_filter else 0) + (1 if country_filter else 0) + (1 if gracenote_filter else 0) + (1 if gracenote_mode_filter else 0) + (1 if duplicates_filter else 0) + (1 if new_filter else 0) + (1 if epg_filter else 0) + (1 if resolution_filter else 0) + (1 if featured_filter else 0) %}
+      <details class="toolbar-advanced" id="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter or featured_filter %}open{% endif %}>
         <summary>More filters{% if _adv_count %} <span class="filter-adv-badge">{{ _adv_count }}</span>{% endif %}</summary>
         <div class="toolbar-secondary">
           <div class="filter-group">
@@ -1488,6 +1488,13 @@
               <option value="known" {% if resolution_filter == 'known' %}selected{% endif %}>Stream info present</option>
             </select>
           </div>
+          <div class="filter-group">
+            <label class="filter-label" for="featured-filter">Channel Type</label>
+            <select id="featured-filter" name="featured">
+              <option value="">All</option>
+              <option value="1" {% if featured_filter == '1' %}selected{% endif %}>♻️ Rotating / featured only</option>
+            </select>
+          </div>
         </div>
       </details>
       <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1540,7 +1547,10 @@
       {% if new_filter %}
       <span class="filter-chip"><strong>New Channels</strong>Last {{ new_filter }} day{{ 's' if new_filter != '1' }}</span>
       {% endif %}
-      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter) %}
+      {% if featured_filter == '1' %}
+      <span class="filter-chip"><strong>Channel Type</strong>♻️ Rotating / featured only</span>
+      {% endif %}
+      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter or featured_filter) %}
       <span class="filter-chip"><strong>View</strong>All channels</span>
       {% endif %}
       <button type="button" class="btn-hide-disabled{% if enabled_filter == '1' %} active{% endif %}" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}◉ Hiding disabled{% else %}○ Hide disabled{% endif %}</button>
@@ -1739,6 +1749,9 @@
                   {% if ch.identity_changed_at %}
                   <span class="flag-icon flag-clickable" onclick="openGracenoteSuggestModal({{ ch.id }}, {onApplied: channelsGnOnApplied})" title="Content changed upstream — this slot now carries a different channel. Review/confirm its Gracenote ID so the guide matches the new content.">🔁</span>
                   {% endif %}
+                  {% if (ch.tags and 'featured' in ch.tags.split(',')) or (ch.content_swap_count or 0) > 0 %}
+                  <span class="flag-icon" title="Rotating / featured slot — {% if (ch.content_swap_count or 0) > 0 %}content has changed {{ ch.content_swap_count }} time{{ 's' if ch.content_swap_count != 1 }} under this channel ID{% else %}the source reuses this channel ID for promo content{% endif %}, so what it airs can change over time. Enable with caution.">♻️</span>
+                  {% endif %}
                   {% if ch.is_duplicate %}
                   <button class="btn-clear-dup" id="cleardup-{{ ch.id }}" onclick="clearManualDup({{ ch.id }}, this)" title="Remove duplicate label">⊘</button>
                   {% endif %}
@@ -1784,10 +1797,12 @@
           <div class="mcard-body">
             <div class="mcard-name">{{ ch.name }}</div>
             <div class="mcard-meta">{{ ch.source.display_name }}{% if ch.category %} · {{ ch.category }}{% endif %}{% if ch.language_override or ch.language %} · {{ ch.language_override or ch.language }}{% endif %}</div>
-            {% set _has_b = ch.disable_reason or ch.identity_changed_at or (ch.stream_info and (ch.stream_info.has_4k or ch.stream_info.has_hd or ch.stream_info.video_codec == 'hevc')) or ch.name in duplicate_names or ch.name in possible_duplicate_names or ch.id in gn_duplicate_ids or (ch.is_enabled and not ch.is_active) %}
+            {% set _is_rotator = (ch.tags and 'featured' in ch.tags.split(',')) or (ch.content_swap_count or 0) > 0 %}
+            {% set _has_b = ch.disable_reason or ch.identity_changed_at or _is_rotator or (ch.stream_info and (ch.stream_info.has_4k or ch.stream_info.has_hd or ch.stream_info.video_codec == 'hevc')) or ch.name in duplicate_names or ch.name in possible_duplicate_names or ch.id in gn_duplicate_ids or (ch.is_enabled and not ch.is_active) %}
             {% if _has_b %}
             <div class="mcard-badges">
               {% if ch.identity_changed_at %}<span class="mcard-flag" title="Content changed upstream — slot now carries a different channel. Review its Gracenote ID.">🔁</span>{% endif %}
+              {% if _is_rotator %}<span class="mcard-flag" title="Rotating / featured slot — content may change over time. Enable with caution.">♻️</span>{% endif %}
               {% if ch.disable_reason and ch.disable_reason.startswith('DRM') %}<span class="mcard-flag" title="{{ ch.disable_reason }}">🔒</span>{% endif %}
               {% if ch.disable_reason == 'Dead' %}<span class="mcard-flag" title="Stream dead">💀</span>{% endif %}
               {% if ch.disable_reason == 'VOD' %}<span class="mcard-flag" title="VOD only">📼</span>{% endif %}

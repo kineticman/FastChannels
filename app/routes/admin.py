@@ -366,6 +366,7 @@ def channels():
     new_filter       = request.args.get('new', '')
     epg_filter       = request.args.get('epg', '')
     resolution_filter = request.args.get('resolution', '')
+    featured_filter  = request.args.get('featured', '')
     sort_by          = request.args.get('sort', 'name')
     sort_dir         = request.args.get('dir', 'asc')
 
@@ -460,6 +461,12 @@ def channels():
         q = q.filter(Channel.category == category_filter)
     if search:
         q = q.filter(Channel.name.ilike(f'%{search}%'))
+
+    if featured_filter == '1':
+        q = q.filter(db.or_(
+            Channel.tags.ilike('%featured%'),
+            Channel.content_swap_count > 0,
+        ))
 
     if duplicates_filter == '1':
         q = q.filter(db.or_(
@@ -625,6 +632,7 @@ def channels():
         'new': new_filter,
         'epg': epg_filter,
         'resolution': resolution_filter,
+        'featured': featured_filter,
         'sort': sort_by, 'dir': sort_dir,
     }.items() if v})
 
@@ -645,6 +653,7 @@ def channels():
                            new_filter=new_filter,
                            epg_filter=epg_filter,
                            resolution_filter=resolution_filter,
+                           featured_filter=featured_filter,
                            duplicate_names=duplicate_names,
                            possible_duplicate_names=possible_duplicate_names,
                            gn_duplicate_ids=gn_duplicate_page_ids,

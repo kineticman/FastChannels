@@ -125,6 +125,11 @@ class VizioScraper(BaseScraper):
             raw_tms      = ch.get('tmsStationId')
             gracenote_id = normalize_gracenote_id(raw_tms) if raw_tms and str(raw_tms) != '-1' else None
 
+            # WatchFree+ reuses FEATURED<n> channelIds as rotating promo slots: the
+            # ID stays fixed while the show in it changes. Tag them so the UI can flag
+            # rotating/featured slots up front (before the first observed rotation).
+            tags = ['featured'] if str(ch_id).upper().startswith('FEATURED') else None
+
             channels.append(ChannelData(
                 source_channel_id = ch_id,
                 name              = name,
@@ -138,6 +143,7 @@ class VizioScraper(BaseScraper):
                 guide_key         = ch.get('airingsKey'),
                 description       = (ch.get('channelDescription') or '').strip() or None,
                 gracenote_id      = gracenote_id,
+                tags              = tags,
             ))
 
         logger.info('[vizio] %d channels', len(channels))
