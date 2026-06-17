@@ -1664,6 +1664,37 @@ _NAME_OVERRIDES: dict[str, str] = {
     'fox justice':                          'True Crime',
     'love kills':                           'True Crime',
     'the life and legend of wyatt earp':    'Westerns',
+
+    # ── FreeCast category audit (June 2026) ──────────────────────────────────
+    # English-language channels parked in Entertainment/International/etc. with a
+    # clear genre home per their upstream description.
+    'law & crime rewind':                   'True Crime',
+    'crime & justice':                      'True Crime',
+    'real crime uncovered':                 'True Crime',
+    'crime & evidence':                     'True Crime',
+    'newsmax2':                             'News',
+    'yahoo finance':                        'News',
+    'property & reno':                      'Home & DIY',
+    'novo comedy':                          'Comedy',
+    'ace tv':                               'Action & Adventure',
+    'retro tv':                             'Classic TV',
+    'the loop':                             'Classic TV',
+    'silverspur tv':                        'Westerns',
+    'icowboy tv':                           'Westerns',
+    'iscifi tv2':                           'Sci-Fi',
+    'gusto tv':                             'Food',
+    'nost':                                 'Movies',
+    'horror machine':                       'Horror',
+    'outdoor action tv':                    'Outdoors',
+    'sport fishing':                        'Outdoors',
+    'wired2fish tv':                        'Outdoors',
+    'outside':                              'Outdoors',
+    'trace urban':                          'Music',
+    'golf network':                         'Sports',
+    'automotion':                           'Automotive',
+    'travel escapes':                       'Travel',
+    'jetset network':                       'Travel',
+    'drone tv':                             'Ambiance',
 }
 
 
