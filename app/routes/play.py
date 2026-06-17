@@ -1211,9 +1211,18 @@ def stirr_variant_proxy():
     """
     Proxy a STIRR variant playlist through the server so the IP-bound session
     token in the URL is always validated against the server's IP.
-    Segment URLs inside the variant are absolute CDN URLs — left as-is.
+
+    Segment URI handling depends on whether the CDN emits absolute or relative
+    references:
+      - Absolute (aniview SSAI): left as-is — the client fetches them directly.
+      - Relative (e.g. stream.weathernationtv.com origin): resolved to absolute
+        and routed through /play/stirr/segment.  These origins require a legacy
+        SECLEVEL=1 TLS handshake many clients can't negotiate, so the server's
+        lax-TLS session must do the fetch.  (Such segments are tokenless, so the
+        relative form is a reliable signal that they share the variant's origin.)
     """
-    from urllib.parse import urlsplit, unquote as _unquote
+    import re as _re
+    from urllib.parse import urlsplit, unquote as _unquote, quote as _quote
     raw = request.args.get('url', '')
     if not raw:
         abort(400)
@@ -1231,10 +1240,77 @@ def stirr_variant_proxy():
     except Exception as e:
         logger.warning('[stirr-variant] fetch failed for %s: %s', url[:80], e)
         abort(502)
+
+    base_url = request.host_url.rstrip('/')
+    effective_url = r.url
+
+    def _seg_proxy(abs_url: str) -> str:
+        return f'{base_url}/play/stirr/segment?url={_quote(abs_url, safe="")}'
+
+    def _rewrite_tag_uri(m):
+        ref = m.group(1)
+        if ref.startswith(('http://', 'https://')):
+            return f'URI="{ref}"'
+        return f'URI="{_seg_proxy(urljoin(effective_url, ref))}"'
+
+    out_lines = []
+    for line in r.text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            out_lines.append(line)
+        elif stripped.startswith('#'):
+            # Relative key/init-segment refs (EXT-X-KEY / EXT-X-MAP) need the same
+            # treatment; absolute ones are left untouched.
+            if 'URI="' in stripped:
+                line = _re.sub(r'URI="([^"]+)"', _rewrite_tag_uri, line)
+            out_lines.append(line)
+        elif stripped.startswith(('http://', 'https://')):
+            out_lines.append(line)
+        else:
+            out_lines.append(_seg_proxy(urljoin(effective_url, stripped)))
+
     return Response(
-        r.content,
+        '\n'.join(out_lines),
         status=200,
         mimetype='application/vnd.apple.mpegurl',
+        headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+    )
+
+
+@play_bp.route('/play/stirr/segment')
+def stirr_segment_proxy():
+    """
+    Proxy a STIRR media segment (or key / init segment) through the server's
+    lax-TLS session.
+
+    Used for CDN origins (e.g. stream.weathernationtv.com) that emit relative
+    segment URIs and require a legacy SECLEVEL=1 TLS handshake.  Fetching these
+    server-side guarantees playback regardless of the client's TLS stack.  The
+    segments carry no session token, so nothing client-specific is forwarded.
+    """
+    from urllib.parse import urlsplit, unquote as _unquote
+    raw = request.args.get('url', '')
+    if not raw:
+        abort(400)
+    url = _unquote(raw)
+    parsed = urlsplit(url)
+    if parsed.scheme != 'https' or not parsed.netloc:
+        abort(400)
+    if _PRIVATE_IP_RE.match(parsed.netloc.split(':')[0]):
+        logger.warning('[stirr-segment] blocked SSRF attempt to: %s', parsed.netloc)
+        abort(403)
+    _hdrs = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    try:
+        r = _stirr_session().get(url, headers=_hdrs, timeout=15, stream=True)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[stirr-segment] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+    content_type = (r.headers.get('Content-Type') or 'video/mp2t').split(';')[0].strip()
+    return Response(
+        r.iter_content(chunk_size=65536),
+        status=200,
+        mimetype=content_type,
         headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
     )
 

@@ -12,6 +12,8 @@ _SUPPRESS_PATTERNS = (
     '/logos/',                 # cached logo file hits — too noisy
     '/posters/',               # cached poster file hits — too noisy
     '/play/custom/segment',    # segment proxy is high-volume by design
+    '/play/stirr/segment',     # stirr relay segments — one per ~5s per viewer
+    '/play/stirr/variant',     # stirr variant manifest refresh every ~5s
     '/proxy.m3u8',             # manifest proxy polls every ~3s during playback
     '"GET /static/',           # static asset cache hits — 304s add no signal
     'GET /api/gracenote/community-summary',  # polled frequently, low signal

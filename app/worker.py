@@ -863,7 +863,13 @@ def run_stream_audit(source_name: str):
                         try:
                             play_url = scraper.resolve(ch.stream_url)
                             if play_url and play_url.startswith('http'):
-                                rinfo = sess.get(play_url, timeout=12, allow_redirects=True)
+                                # Some opaque-URL scrapers (e.g. Stirr's weathernationtv
+                                # CDN) front legacy-cipher hosts that reject the audit
+                                # session's default SECLEVEL=2 handshake. Prefer the
+                                # scraper's lax-TLS CDN session — the same one the play
+                                # proxy uses — so the badge backfill matches playback.
+                                _cdn = getattr(scraper, '_cdn_session', None) or sess
+                                rinfo = _cdn.get(play_url, timeout=12, allow_redirects=True)
                                 if rinfo.status_code == 200 and '#EXT-X-STREAM-INF' in rinfo.text:
                                     si = _parse_stream_info(rinfo.text)
                                     if si:
