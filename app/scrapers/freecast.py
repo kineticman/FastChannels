@@ -384,12 +384,31 @@ class FreecastScraper(BaseScraper):
         if not streams:
             # config.url is the fallback master the player uses when streams is empty.
             cfg_url = (data.get('config') or {}).get('url') if isinstance(data, dict) else None
+            cfg_url = self._pick_stream_url(cfg_url)
             if cfg_url:
                 return cfg_url
             raise StreamDeadError(f'FreeCast channel {slug} returned no streams')
 
         stream = streams[0]
-        url = stream.get('data') or stream.get('url')
+        url = self._pick_stream_url(stream.get('data') or stream.get('url'))
         if not url:
             raise StreamDeadError(f'FreeCast channel {slug} stream has no playable URL')
         return url
+
+    @staticmethod
+    def _pick_stream_url(raw: Any) -> str | None:
+        """Normalize the `data`/`url` field into a single playable URL.
+
+        DAI-backed channels (Publica/FutureToday) pack two `\\r\\n\\r\\n`-separated
+        URLs into one string — a bare master and a fuller one carrying the ad/
+        marker params. Newlines in a redirect Location raise a ValueError in
+        Werkzeug, so split on whitespace and return the most complete URL
+        (the last http(s) token), which is what the web player uses.
+        """
+        if not isinstance(raw, str):
+            return None
+        candidates = [tok for tok in raw.split() if tok.startswith(('http://', 'https://'))]
+        if not candidates:
+            stripped = raw.strip()
+            return stripped or None
+        return candidates[-1]
