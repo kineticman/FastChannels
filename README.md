@@ -1,6 +1,6 @@
 # FastChannels
 
-FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Frndly TV, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
+FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, your own HDHomeRun tuner, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
 
 ## Deploy with Portainer
 
@@ -24,7 +24,7 @@ volumes:
 - Deploy the stack.
 - Open `http://<your-server>:5523/admin/`.
 - On first boot, sources seed automatically and channels begin populating within a few minutes.
-- If you want a specific published version, replace `:latest` with a tag like `:v1.7.0`.
+- If you want a specific published version, replace `:latest` with a tag like `:v4.4.6`.
 - Keep the `/data` volume mount so the SQLite database survives container recreation.
 
 ## Deploy with Docker
@@ -59,7 +59,9 @@ Go to **Admin → Settings** and set two things:
 - **Channels DVR Server URL** — if you use Channels DVR, set this now so the one-click "Add to Channels DVR" button on the Feeds page works.
 
 **3. Configure Sources.**
-Go to **Admin → Sources**. Enable or disable sources to taste, and expand any source card to enter credentials (Pluto TV optional login, Tubi optional email/password, etc.). Changes take effect on the next scrape.
+Go to **Admin → Sources**. Enable or disable sources to taste, and expand any source card to enter credentials. Changes take effect on the next scrape.
+
+Some sources ship **disabled by default** because they need credentials, a local device, or carry mostly DRM content: Pluto TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), and Frndly/Fubo/FreeCast require account credentials. See [Source Notes](#source-notes) for per-source details.
 
 **4. Run Stream Audits.**
 Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
@@ -78,8 +80,10 @@ Go to **Admin → Feeds** and build filtered channel lists for your players (see
 | `/admin/sources` | Enable/disable sources, run scrapes, configure credentials |
 | `/admin/channels` | Browse, enable/disable, inspect, and resolve duplicate channels |
 | `/admin/feeds` | Create and manage named output feeds |
-| `/admin/settings` | Server URLs and system stats |
+| `/admin/guide` | Preview the EPG grid as your players will see it |
+| `/admin/settings` | Server URLs, Gracenote options, and system stats |
 | `/admin/logs` | Live log tail |
+| `/admin/reports/channel-changes` | Inferred New / Now Inactive / At Risk channels (BETA) |
 | `/admin/help` | In-app help and source gotchas |
 
 ## Channels Page
@@ -180,7 +184,7 @@ M3U and EPG XML outputs are cached to disk and served as fast file reads. The ca
 
 ### Stream Audit
 
-Sources that support it have a **📋 Stream Audit** button on the Sources page that health-checks every channel's stream URL and automatically marks dead or DRM-protected channels inactive. Currently supported: Pluto TV, Tubi TV, The Roku Channel, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo Play, Local Now, LG Channels, FreeLiveSports, STIRR, Bally Sports Live, Frndly TV, Hallmark, TCL TV+, Vidaa Free TV.
+Every scraped source has a **📋 Stream Audit** button on the Sources page that health-checks every channel's stream URL and automatically marks dead or DRM-protected channels inactive. (Only the Custom Channels source, which you populate by hand, has no audit.)
 
 Running a Stream Audit after your initial scrape is strongly recommended. It shows a live progress bar and a running count of DRM and dead channels found as it works through the list. Depending on channel count it may take several minutes.
 
@@ -200,6 +204,24 @@ The **Resolve Duplicates** helper on the Channels page works on enabled channels
 - uses source priority as a tie-breaker between otherwise healthy matches
 - disables the whole group if every duplicate is unhealthy
 
+### Custom Channels
+
+A built-in **Custom Channels** source lets you add any HLS/M3U8 stream by URL — a webcam, a personal re-stream, or anything else not covered by a scraper. Add channels from the Channels page; FastChannels auto-detects special stream types and handles polling and header quirks automatically. Custom channels are never auto-scraped and aren't part of the Stream Audit.
+
+### HDHomeRun
+
+If you run an HDHomeRun network tuner, enable the **HDHomeRun** source and point it at the device's LAN address (its `discover.json` BaseURL). FastChannels pulls the lineup and the device's Gracenote-sourced XMLTV guide, and proxies the tuner streams alongside your FAST channels. Note that tuner streams are MPEG-2/AC-3 — fine for Channels DVR, but browser and mobile playback need transcoding; HDHomeRun EXTEND models can transcode in hardware via the **Transcode profile** option.
+
+### Gracenote
+
+Gracenote station IDs link channels to Channels DVR's guide database for rich EPG matching. Each channel has one of three modes:
+
+- **Auto** — a scraper or the community CSV assigns the ID automatically when available (e.g. Pluto's native station IDs)
+- **Manual** — you set the ID yourself; a scrape never overwrites it
+- **Off** — the channel is excluded from Gracenote routing entirely
+
+Feeds expose a `/m3u/gracenote` variant that emits Gracenote IDs for Channels DVR. A curated community CSV fills in IDs for sources that don't expose native ones; configure or browse it from **Settings**.
+
 ### EPG-only sources
 
 A source can be flagged **EPG Only** on the Sources page. EPG-only sources are excluded from M3U output but still scrape and store their guide data. Amazon Prime Free is the primary use case.
@@ -213,26 +235,35 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 
 ## Source Notes
 
+"Default off" sources are seeded disabled — enable them on the Sources page.
+
 | Source | Auth | Notes |
 |--------|------|-------|
-| Pluto TV | Optional login | Session pool size configurable (default 10); per-country feeds; JWT stitcher auth |
+| Pluto TV | Login required | **Default off.** Free Pluto account required; per-country feeds; configurable session pool (default 10); JWT stitcher auth |
 | Tubi TV | Optional email/password | Bearer token auth |
 | The Roku Channel | None | Session cookie auth, HLS variant selection; Cloudflare-sensitive — avoid hammering if you get 403s |
 | Plex | None | Session cookie auth |
 | Xumo Play | None | Public API |
 | Samsung TV Plus | None | Channel data and EPG via [Matt Huisman's public mirror](https://github.com/matthuisman/samsung-tvplus-for-channels). Region configurable (default: `us`). |
-| Sling Freestream | Optional OAuth creds | Streams are DRM-only for generic IPTV clients |
+| Sling Freestream | Optional OAuth creds | **Default off.** Streams are DRM-only for generic IPTV clients |
 | DistroTV | None | Android TV UA required, URL macro substitution |
 | LG Channels | None | Country configurable (default: `US`) |
-| Local Now | None | Public API |
+| Local Now | None | **Default off.** Public API |
 | STIRR | None | Public API |
 | FreeLiveSports | None | Public API |
-| Amazon Prime Free | Optional cookie header | EPG-only by default; streams are DRM-only |
+| Vizio WatchFree+ | None | Public API; clear HLS |
+| Whale TV+ | None | Public API |
+| Adult Swim | None | 24/7 marathon streams |
+| Amazon Prime Free | Optional cookie header | **Default off.** EPG-only by default; streams are DRM-only |
 | Bally Sports Live | None | Free, unauthenticated |
 | Hallmark | None | Free, unauthenticated |
-| TCL TV+ | None | Free, unauthenticated |
+| TCL TV+ | None | Country configurable (default: `US`) |
 | Vidaa Free TV | None | Free, unauthenticated |
-| Frndly TV | Email/password required | Paid subscription required; disabled by default |
+| Frndly TV | Email/password required | **Default off.** Paid subscription required |
+| Fubo TV | Email/password required | **Default off.** Account required |
+| FreeCast | Email/password required | **Default off.** Free account at watch.freecast.com required for playback |
+| HDHomeRun | Device address | **Default off.** Your own LAN tuner; optional hardware transcode (EXTEND models). See [HDHomeRun](#hdhomerun) |
+| Custom Channels | None | User-added HLS/M3U8 streams; never auto-scraped. See [Custom Channels](#custom-channels) |
 
 - **Roku**: Cloudflare rate-limiting can cause occasional 403 errors during scraping or playback. If this happens, wait a few minutes before retrying — repeated attempts make it worse. Some channels also expose sparse future guide data; short EPG windows are expected on those channels.
 - **Amazon Prime Free**: without a valid cookie header, channel discovery pagination is limited.
