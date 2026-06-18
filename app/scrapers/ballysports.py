@@ -16,12 +16,14 @@ class BallysScraper(BaseScraper):
 
     All channels are free / unauthenticated. Channel metadata and EPG are
     embedded in the Next.js RSC payload of any channel page.  The public CDN
-    stream URL (linear{NN}.channels.ballys.tv) requires no auth tokens and is
+    stream URL (<sub>.channels.ballys.tv) requires no auth tokens and is
     stable per channel, so resolve() derives it from the stored opaque URI.
 
-    The CDN uses zero-padded two-digit host numbers (e.g. "linear06"), so
-    resolve() pads the stored number to at least 2 digits.  Old DB rows that
-    stored unpadded numbers ("6") are handled transparently by zfill(2).
+    CDN subdomains vary by channel — observed prefixes include "fast01",
+    "lnr02", and "linear30" — so the stored opaque URI captures the full
+    subdomain plus the path verbatim.  Older DB rows stored only a numeric
+    suffix ("6") and assumed a "linear{NN}" host; resolve() still handles
+    those by zero-padding to two digits.
     """
 
     source_name = "ballysports"
@@ -68,17 +70,16 @@ class BallysScraper(BaseScraper):
             if not uuid_val or not name or not cdn_url:
                 continue
 
-            m = re.match(r'https://linear(\d+)\.channels\.ballys\.tv/', cdn_url)
+            m = re.match(r'https://([a-z0-9]+)\.channels\.ballys\.tv/(.+)$', cdn_url)
             if not m:
                 continue
-            linear_num = m.group(1)  # preserve verbatim (API returns zero-padded, e.g. "06")
-
-            manifest = cdn_url.rsplit("/", 1)[-1] or "index_dvr.m3u8"
+            subdomain = m.group(1)   # e.g. "fast02", "lnr02", "linear30"
+            path = m.group(2)        # e.g. "abr_default/index_dvr.m3u8"
 
             channels.append(ChannelData(
                 source_channel_id=str(uuid_val),
                 name=name,
-                stream_url=f"bally://channel/{linear_num}/{manifest}",
+                stream_url=f"bally://channel/{subdomain}/{path}",
                 logo_url=entry.get("logo") or None,
                 category="Sports",
                 number=entry.get("order"),
@@ -130,15 +131,18 @@ class BallysScraper(BaseScraper):
     def resolve(self, raw_url: str) -> str:
         if not raw_url.startswith("bally://channel/"):
             return raw_url
-        try:
-            parts = raw_url[len("bally://channel/"):].split("/", 1)
-            linear_num = parts[0]
-            if not linear_num.isdigit():
-                return raw_url
-            manifest = parts[1] if len(parts) == 2 else "index_dvr.m3u8"
-        except IndexError:
-            return raw_url
-        return f"https://linear{linear_num.zfill(2)}.channels.ballys.tv/abr_default/{manifest}"
+        parts = raw_url[len("bally://channel/"):].split("/", 1)
+        host = parts[0]
+        path = parts[1] if len(parts) == 2 else ""
+
+        # Legacy rows stored a bare numeric suffix and assumed a "linear{NN}"
+        # host with a fixed abr_default path; the manifest sat in `path`.
+        if host.isdigit():
+            manifest = path or "index_dvr.m3u8"
+            return f"https://linear{host.zfill(2)}.channels.ballys.tv/abr_default/{manifest}"
+
+        path = path or "abr_default/index_dvr.m3u8"
+        return f"https://{host}.channels.ballys.tv/{path}"
 
     # ── Internals ─────────────────────────────────────────────
 
