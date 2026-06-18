@@ -90,6 +90,109 @@ def infer_language_from_metadata(*values: str | None, default: str = 'en') -> st
     return default
 
 
+# Explicit language signals → ISO 639 code, for scrapers that expose a rich
+# description (e.g. FreeCast).  Matched as substrings against the accent-folded,
+# lowercased name + description; the FIRST match in this ordered tuple wins, so
+# keep the most specific markers first.
+#
+# These are deliberately *explicit language statements* or unambiguous
+# language-specific brands — never bare country/region names.  A channel can be
+# English while being about a foreign place ("Discovering China", "True
+# African", "Arirang … English language general entertainment channel from
+# S. Korea"), so country words would mislabel them.
+_LANGUAGE_PHRASE_MARKERS = (
+    ('hausa', 'ha'),
+    ('yoruba', 'yo'),
+    ('haitian creole', 'ht'),
+    ('creole language', 'ht'),
+    ('kreyol', 'ht'),
+    ('russian-language', 'ru'),
+    ('russian language', 'ru'),
+    ('francophone', 'fr'),
+    ('french-language', 'fr'),
+    ('french language', 'fr'),
+    ('francais', 'fr'),          # "3ABN Français" (name)
+    ('mandarin', 'zh'),
+    ('cantonese', 'zh'),
+    ('chinese-language', 'zh'),
+    ('chinese language', 'zh'),
+    ('filipino', 'tl'),
+    ('tagalog', 'tl'),
+    ('korean-language', 'ko'),
+    ('korean language', 'ko'),
+    ('arabic', 'ar'),
+    ('arab world', 'ar'),
+    ('arab movie', 'ar'),
+    ('arab musical', 'ar'),
+    ('arab series', 'ar'),
+    ('al arabiya', 'ar'),        # brand (desc never says "Arabic")
+    ('asharq', 'ar'),            # brand (pan-Arab news)
+    # NOTE: Portuguese is intentionally NOT inferred from country references
+    # ("from Brazil", "Samba"): those are bilingual/Latin-music false positives
+    # (e.g. TRACE Latina lists Samba among Salsa/Reggaeton; 3ABN Latino is
+    # Spanish+Portuguese).  Add 'pt' only on an explicit "Portuguese-language"
+    # style statement if one ever appears.
+    # Spanish phrases the name-based pass (_SPANISH_LANGUAGE_MARKERS) misses
+    # because they live in the description rather than the channel name.
+    ('spanish speaking', 'es'),
+    ('spanish-speaking', 'es'),
+    ('spanish language', 'es'),
+    ('puerto rican', 'es'),
+)
+
+# Unicode script → ISO code, for scripts that map cleanly to a single language
+# in practice.  Latin is intentionally excluded (ambiguous across en/es/fr/pt…).
+_SCRIPT_LANGUAGE_HINTS = (
+    ('CYRILLIC', 'ru'),
+    ('ARABIC', 'ar'),
+    ('HANGUL', 'ko'),
+    ('CJK', 'zh'),
+    ('DEVANAGARI', 'hi'),
+)
+_SCRIPT_MIN_CHARS = 4   # ignore a stray symbol; require a real run of script
+
+
+def _dominant_script_language(text: str | None) -> str | None:
+    """Return an ISO code if `text` is dominated by a single non-Latin script.
+
+    Catches descriptions written in the target language (e.g. 3ABN Russia's
+    Cyrillic blurb) where no English language phrase is present.
+    """
+    if not text:
+        return None
+    counts: dict[str, int] = {}
+    for ch in text:
+        if not ch.isalpha():
+            continue
+        char_name = unicodedata.name(ch, '')
+        for script, code in _SCRIPT_LANGUAGE_HINTS:
+            if script in char_name:
+                counts[code] = counts.get(code, 0) + 1
+                break
+    if not counts:
+        return None
+    code, n = max(counts.items(), key=lambda kv: kv[1])
+    return code if n >= _SCRIPT_MIN_CHARS else None
+
+
+def infer_language(name: str | None, description: str | None = None,
+                   default: str = 'en') -> str:
+    """ISO 639 language code from a channel's name + description.
+
+    Richer than `infer_language_from_metadata` (which only distinguishes
+    Spanish from the default): tries explicit language phrases, then non-Latin
+    script detection on the description, then finally the es/en name heuristic.
+    """
+    folded = f'{fold_language_hint(name)} {fold_language_hint(description)}'
+    for marker, code in _LANGUAGE_PHRASE_MARKERS:
+        if marker in folded:
+            return code
+    script_code = _dominant_script_language(description)
+    if script_code:
+        return script_code
+    return infer_language_from_metadata(name, default=default)
+
+
 _SSL_HANDSHAKE_MARKERS = (
     'handshake failure',
     'handshake_failure',

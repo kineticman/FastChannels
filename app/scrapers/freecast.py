@@ -15,7 +15,7 @@ from .base import (
     ProgramData,
     ScrapeSkipError,
     StreamDeadError,
-    infer_language_from_metadata,
+    infer_language,
 )
 from .category_utils import category_for_channel
 
@@ -262,10 +262,11 @@ class FreecastScraper(BaseScraper):
             raw_cat = _CATEGORY_SLUGS.get(cat_slug, cat_slug)
             category = category_for_channel(name, raw_cat, self.source_name)
 
+            description = (row.get('description') or '').strip() or None
             if cat_slug in _SPANISH_SLUGS:
                 language = 'es'
             else:
-                language = infer_language_from_metadata(name)
+                language = infer_language(name, description)
 
             number = None
             lcn = row.get('lcn')
@@ -287,7 +288,7 @@ class FreecastScraper(BaseScraper):
                 stream_type='hls',
                 number=number,
                 gracenote_id=gracenote_id,
-                description=(row.get('description') or '').strip() or None,
+                description=description,
             ))
 
         channels.sort(key=lambda c: c.name.lower())
