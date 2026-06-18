@@ -1601,7 +1601,9 @@ def run_bulk_channel_update(filters: dict, enable: bool):
         ids = _channel_ids_for_filters(filters or {})
         updated = 0
         if ids:
-            values = {'is_enabled': enable}
+            # Any explicit bulk enable/disable counts as reviewing the channel, so
+            # clear the 'pending' marker — it leaves the "Needs review" filter.
+            values = {'is_enabled': enable, 'review_state': 'approved'}
             if enable:
                 values['is_active'] = True
                 values['disable_reason'] = None
@@ -1955,6 +1957,19 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
 
     logo_validation_cache: dict[str, bool] = {}
     seen_at = datetime.now(timezone.utc)
+
+    # Resolve how newly-discovered channels should enter: 'enabled' (flow straight
+    # into feeds, the historical default) or 'review' (held in the review queue with
+    # is_enabled=False, review_state='pending' — invisible to every feed/M3U/EPG
+    # until a user approves).  Per-source policy wins; 'inherit' defers to the
+    # global AppSettings.auto_allow_new_channels switch.  Only affects true inserts;
+    # returning/rehomed channels keep their prior state.
+    _policy = (getattr(source, 'new_channel_policy', None) or 'inherit')
+    if _policy == 'inherit':
+        _auto_allow = getattr(AppSettings.get(), 'auto_allow_new_channels', True)
+        _policy = 'enabled' if _auto_allow else 'review'
+    _born_pending = _policy == 'review'
+
     for cd in channel_data_list:
         if cd.name:
             try:
@@ -2089,6 +2104,9 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 gracenote_mode    = (getattr(cd, 'gracenote_mode', None) or 'auto'),
                 guide_key         = getattr(cd, 'guide_key', None),
                 last_seen_at      = seen_at,
+                first_seen_at     = seen_at,
+                is_enabled        = not _born_pending,
+                review_state      = 'pending' if _born_pending else 'approved',
                 missed_scrapes    = 0,
             ))
 

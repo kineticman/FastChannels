@@ -146,6 +146,14 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN image_proxy_enabled BOOLEAN NOT NULL DEFAULT 1"
                 ))
+            if "auto_allow_new_channels" not in cols:
+                # Existing installs default ON — preserve current behaviour where
+                # newly-scraped channels flow straight into feeds.  Turning this OFF
+                # makes new channels land in the review queue (per-source override
+                # via Source.new_channel_policy still wins).
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN auto_allow_new_channels BOOLEAN NOT NULL DEFAULT 1"
+                ))
 
         if "sources" in tables:
             src_cols = {
@@ -163,6 +171,14 @@ def ensure_runtime_schema() -> None:
             if "gracenote_resync_done" not in src_cols:
                 conn.execute(text(
                     "ALTER TABLE sources ADD COLUMN gracenote_resync_done BOOLEAN NOT NULL DEFAULT 0"
+                ))
+            if "new_channel_policy" not in src_cols:
+                # 'inherit' = follow AppSettings.auto_allow_new_channels;
+                # 'enabled' = always add new channels enabled;
+                # 'review'  = always hold new channels for review.
+                # Existing sources default to 'inherit' so behaviour is unchanged.
+                conn.execute(text(
+                    "ALTER TABLE sources ADD COLUMN new_channel_policy VARCHAR(16) NOT NULL DEFAULT 'inherit'"
                 ))
 
         if "channels" in tables:
@@ -271,6 +287,23 @@ def ensure_runtime_schema() -> None:
             if "content_swap_count" not in ch_cols:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN content_swap_count INTEGER NOT NULL DEFAULT 0"
+                ))
+            if "review_state" not in ch_cols:
+                # 'approved' = reviewed/auto-allowed and eligible for output;
+                # 'pending'  = newly discovered, held out of all feeds until reviewed.
+                # Existing channels are all 'approved' so nothing disappears on upgrade.
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN review_state VARCHAR(16) NOT NULL DEFAULT 'approved'"
+                ))
+            if "first_seen_at" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN first_seen_at DATETIME"
+                ))
+                # Backfill: treat existing rows' created_at as their first-seen time so
+                # any future "new in last N days" filtering has sane history.
+                conn.execute(text(
+                    "UPDATE channels SET first_seen_at = COALESCE(created_at, CURRENT_TIMESTAMP) "
+                    "WHERE first_seen_at IS NULL"
                 ))
             conn.execute(text(
                 "UPDATE channels SET went_inactive_at = last_seen_at "

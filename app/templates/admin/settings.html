@@ -644,6 +644,35 @@
     </div>
   </div>
 
+  <!-- New Channel Review card -->
+  <div class="source-card">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">🆕</div>
+        <div>
+          <div class="source-name">New Channels</div>
+          <div class="source-meta">Control whether newly discovered channels enter your feeds automatically</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Auto-allow new channels into feeds</div>
+          <div class="toggle-row-help">When enabled (default), channels found by a scrape are added enabled and flow straight into your feeds. When disabled, newly discovered channels are added <strong>disabled</strong> — find them in <a href="/admin/channels?review=pending">Channels</a> under the <em>Review → Needs review</em> filter and enable the ones you want. Individual sources can override this on the <a href="/admin/sources">Sources</a> page.</div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="auto-allow-new-channels" {% if auto_allow_new_channels %}checked{% endif %}
+                   onchange="saveSettings({auto_allow_new_channels: this.checked}, 'auto-allow-status')">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="save-status" id="auto-allow-status"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Image Proxy card -->
   <div class="source-card">
     <div class="source-header" style="cursor:default">

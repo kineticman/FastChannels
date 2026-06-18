@@ -165,6 +165,8 @@ def _apply_channel_filters(q, filters: dict | None = None):
             q = q.filter(Channel.is_enabled == True)
         elif ef in ('0', 'disabled'):
             q = q.filter(Channel.is_enabled == False)
+    if filters.get('review') == 'pending':
+        q = q.filter(Channel.review_state == 'pending')
     if pf := filters.get('presence'):
         if pf == 'inactive':
             q = q.filter(Channel.is_active == False)
@@ -859,6 +861,12 @@ def update_source(source_id):
         changed = True
     if 'epg_only' in data:
         source.epg_only = bool(data['epg_only'])
+        changed = True
+    if 'new_channel_policy' in data:
+        policy = (data['new_channel_policy'] or 'inherit').strip().lower()
+        if policy not in ('inherit', 'enabled', 'review'):
+            return jsonify({'error': 'new_channel_policy must be inherit, enabled, or review'}), 422
+        source.new_channel_policy = policy
         changed = True
     if changed:
         baseline_warnings = set(get_global_chnum_overlaps())
@@ -1702,6 +1710,10 @@ def update_channel(channel_id):
         # Setting a number without explicitly managing the pin auto-pins it.
         if 'number' in data and data['number'] is not None and 'number_pinned' not in data:
             ch.number_pinned = True
+        # Any explicit enable/disable counts as reviewing a new channel — clear the
+        # 'pending' marker so it leaves the "Needs review" filter.
+        if 'is_enabled' in data:
+            ch.review_state = 'approved'
         if data.get('is_enabled') is True and 'is_active' not in data:
             ch.is_active = True
             if ch.disable_reason in ('Dead', 'VOD') or (ch.disable_reason or '').startswith('DRM'):
@@ -3311,6 +3323,8 @@ def app_settings():
             if data.get('timezone_name') and tz_name is None:
                 return jsonify({'error': f"Invalid timezone: {data.get('timezone_name')}"}), 422
             row.timezone_name = tz_name
+        if 'auto_allow_new_channels' in data:
+            row.auto_allow_new_channels = bool(data['auto_allow_new_channels'])
         if 'gracenote_auto_fill' in data:
             row.gracenote_auto_fill = bool(data['gracenote_auto_fill'])
         if 'dvr_epg_auto_refresh' in data:
@@ -3329,6 +3343,7 @@ def app_settings():
         'channels_dvr_url':  row.effective_channels_dvr_url(),
         'public_base_url':   row.effective_public_base_url(),
         'timezone_name':     row.effective_timezone_name(),
+        'auto_allow_new_channels': row.auto_allow_new_channels if row.auto_allow_new_channels is not None else True,
         'gracenote_auto_fill': row.gracenote_auto_fill if row.gracenote_auto_fill is not None else True,
         'dvr_epg_auto_refresh': row.dvr_epg_auto_refresh if row.dvr_epg_auto_refresh is not None else True,
         'image_proxy_enabled': row.image_proxy_enabled if row.image_proxy_enabled is not None else True,

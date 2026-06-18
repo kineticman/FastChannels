@@ -833,6 +833,20 @@
                   </div>
                 </div>
 
+                <div class="interval-control" id="newchan-control-{{ source.id }}">
+                  <label>New channels</label>
+                  <select id="newchan-policy-{{ source.id }}"
+                          onchange="saveNewChannelPolicy({{ source.id }})"
+                          {% if not source.is_enabled %}disabled{% endif %}>
+                    {% set _pol = source.new_channel_policy or 'inherit' %}
+                    <option value="inherit" {% if _pol == 'inherit' %}selected{% endif %}>Default (follow global setting)</option>
+                    <option value="enabled" {% if _pol == 'enabled' %}selected{% endif %}>Always add enabled</option>
+                    <option value="review"  {% if _pol == 'review'  %}selected{% endif %}>Hold for review</option>
+                  </select>
+                  <span class="save-status" id="newchan-status-{{ source.id }}"></span>
+                  <div class="help">How channels found by a scrape enter. "Hold for review" adds them disabled — find them in Channels under the "Needs review" filter and enable the ones you want.</div>
+                </div>
+
                 <div class="delete-inactive-row">
                   <button class="btn-delete-inactive" type="button" onclick="deleteInactiveChannels({{ source.id }})">Delete Inactive</button>
                   <span class="delete-inactive-status" id="delete-status-{{ source.id }}"></span>
@@ -1162,6 +1176,29 @@
 
     function saveScrapeInterval(sourceId) { return saveSchedule(sourceId); }
 
+    async function saveNewChannelPolicy(sourceId) {
+      const sel = document.getElementById(`newchan-policy-${sourceId}`);
+      const status = document.getElementById(`newchan-status-${sourceId}`);
+      if (!sel) return;
+      sel.disabled = true;
+      if (status) status.textContent = 'Saving…';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({new_channel_policy: sel.value}),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        if (status) { status.textContent = 'Saved'; setTimeout(() => { status.textContent = ''; }, 1200); }
+      } catch (e) {
+        if (status) { status.textContent = 'Error'; setTimeout(() => { status.textContent = ''; }, 1800); }
+        console.error('Failed to save new-channel policy:', e);
+      } finally {
+        sel.disabled = false;
+      }
+    }
+
     // ── Force refresh ─────────────────────────────────────────────────────
     async function forceCompleteRefresh() {
       if (!confirm('Force a complete refresh for all enabled sources? This clears the last scrape time and queues a full channel + guide refresh for each enabled source.')) return;
@@ -1354,6 +1391,25 @@
       }
     }
 
+    // ── New-channel review nudge at enable time ───────────────────────────
+    const AUTO_ALLOW_NEW_CHANNELS = {{ 'true' if auto_allow_new_channels else 'false' }};
+
+    async function maybeOfferReviewHold(sourceId) {
+      // Only relevant when the global default would let channels flow straight in
+      // and this source hasn't been given an explicit policy yet.
+      if (!AUTO_ALLOW_NEW_CHANNELS) return;
+      const sel = document.getElementById(`newchan-policy-${sourceId}`);
+      if (!sel || sel.value !== 'inherit') return;
+      const hold = confirm(
+        "Hold this source's new channels for review?\n\n" +
+        "Its next scrape may add many channels. Choose OK to add them disabled (find " +
+        "them later in Channels under the \"Needs review\" filter), or Cancel to add them enabled."
+      );
+      if (!hold) return;
+      sel.value = 'review';
+      await saveNewChannelPolicy(sourceId);
+    }
+
     // ── Source enable/disable ─────────────────────────────────────────────
     function onSourceToggle(sourceId, sourceName, checkbox) {
       const row = document.getElementById(`dash-row-${sourceId}`);
@@ -1441,6 +1497,7 @@
 
         if (!enabled) document.getElementById(`ch-count-${sourceId}`).textContent = '0';
         applySourceEnabledState(sourceId, enabled);
+        if (enabled) maybeOfferReviewHold(sourceId);
 
       } catch (e) {
         applySourceEnabledState(sourceId, !enabled);

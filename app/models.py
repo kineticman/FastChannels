@@ -45,6 +45,7 @@ class Source(db.Model):
     chnum_start     = db.Column(db.Integer, nullable=True)   # starting tvg-chno in combined /m3u output
     epg_only        = db.Column(db.Boolean, default=False)   # if True: excluded from M3U output
     gracenote_resync_done = db.Column(db.Boolean, default=False, nullable=False)  # one-time stale-native-GNID backfill done
+    new_channel_policy = db.Column(db.String(16), default='inherit', nullable=False)  # inherit | enabled | review — how newly-scraped channels enter
 
     channels = db.relationship('Channel', backref='source', lazy='dynamic',
                                 cascade='all, delete-orphan')
@@ -83,6 +84,7 @@ class Source(db.Model):
             'channel_count':  self.channels.filter_by(is_active=True).count(),
             'chnum_start':    self.chnum_start,
             'epg_only':       self.epg_only,
+            'new_channel_policy': self.new_channel_policy or 'inherit',
         }
 
 
@@ -122,8 +124,10 @@ class Channel(db.Model):
     is_duplicate      = db.Column(db.Boolean, default=False)  # set by user — manual duplicate label (does not disable)
     is_active         = db.Column(db.Boolean, default=True)   # set by scraper — channel exists upstream
     is_enabled        = db.Column(db.Boolean, default=True)   # set by user — include in M3U/EPG
+    review_state      = db.Column(db.String(16), default='approved', nullable=False)  # approved | pending — pending channels are held out of all feeds until reviewed
     scrape_pinned     = db.Column(db.Boolean, default=False, nullable=False)  # user override: stay active even if missed by scraper
     last_seen_at      = db.Column(db.DateTime(timezone=True), nullable=True)
+    first_seen_at     = db.Column(db.DateTime(timezone=True), nullable=True)  # set once on true insert; survives guide_key row-rebind
     went_inactive_at  = db.Column(db.DateTime(timezone=True), nullable=True)
     returned_at       = db.Column(db.DateTime(timezone=True), nullable=True)
     identity_changed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # set by scraper when an enabled slot's content changed upstream (guide_key/name swap) — needs Gracenote review
@@ -179,6 +183,8 @@ class Channel(db.Model):
             'description':      self.description,
             'user_note':        self.user_note,
             'is_active':        self.is_active,
+            'review_state':     self.review_state or 'approved',
+            'first_seen_at':    self.first_seen_at.isoformat() if self.first_seen_at else None,
             'scrape_pinned':    bool(self.scrape_pinned),
             'disable_reason':   self.disable_reason,
             'is_duplicate':     self.is_duplicate,
@@ -304,6 +310,7 @@ class AppSettings(db.Model):
     channels_dvr_url     = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
     public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
+    auto_allow_new_channels = db.Column(db.Boolean, nullable=False, default=True)  # newly-scraped channels enter feeds enabled (vs. held for review)
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True)  # scrapers auto-assign Gracenote IDs
     dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True)  # hourly PUT to Channels DVR lineups
     image_proxy_enabled  = db.Column(db.Boolean, nullable=False, default=True)  # proxy/cache logos and posters in output

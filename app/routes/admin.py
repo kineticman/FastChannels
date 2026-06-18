@@ -352,8 +352,10 @@ def sources():
     ))
 
     from ..scrapers.category_utils import CANONICAL_CATEGORIES
+    _app_settings = AppSettings.get()
     return render_template('admin/sources.html',
                            sources=sources_list,
+                           auto_allow_new_channels=_app_settings.auto_allow_new_channels if _app_settings.auto_allow_new_channels is not None else True,
                            chnum_warnings=[],
                            audit_enabled=audit_enabled,
                            config_required=config_required,
@@ -372,6 +374,7 @@ def channels():
     source_filter    = request.args.get('source', '')
     search           = request.args.get('search', '')
     enabled_filter   = request.args.get('enabled', '')
+    review_filter    = request.args.get('review', '')
     presence_filter  = request.args.get('presence', '')
     drm_filter       = request.args.get('drm', '')
     gracenote_filter = request.args.get('gracenote', '')
@@ -423,6 +426,9 @@ def channels():
         q = q.filter(Channel.is_enabled == True)
     elif enabled_filter == '0':
         q = q.filter(Channel.is_enabled == False)
+
+    if review_filter == 'pending':
+        q = q.filter(Channel.review_state == 'pending')
 
     if presence_filter == 'inactive':
         q = q.filter(Channel.is_active == False)
@@ -645,7 +651,7 @@ def channels():
     from urllib.parse import urlencode
     filter_qs = urlencode({k: v for k, v in {
         'feed': feed_filter, 'source': source_filter, 'search': search,
-        'enabled': enabled_filter, 'presence': presence_filter, 'drm': drm_filter,
+        'enabled': enabled_filter, 'review': review_filter, 'presence': presence_filter, 'drm': drm_filter,
         'language': language_filter, 'country': country_filter,
         'gracenote': gracenote_filter, 'gracenote_mode': gracenote_mode_filter,
         'category': category_filter, 'duplicates': duplicates_filter,
@@ -662,6 +668,7 @@ def channels():
                            feed_filter=feed_filter, selected_feed=selected_feed,
                            source_filter=source_filter, search=search,
                            enabled_filter=enabled_filter, drm_filter=drm_filter,
+                           review_filter=review_filter,
                            presence_filter=presence_filter,
                            gracenote_filter=gracenote_filter,
                            gracenote_mode_filter=gracenote_mode_filter,
@@ -1069,6 +1076,7 @@ def settings():
                            settings_needs_config=settings_needs_config,
                            request_base_url=request_base_url,
                            detected_base_url=detected_base_url(),
+                           auto_allow_new_channels=app_settings.auto_allow_new_channels if app_settings.auto_allow_new_channels is not None else True,
                            gracenote_auto_fill=app_settings.gracenote_auto_fill if app_settings.gracenote_auto_fill is not None else True,
                            dvr_epg_auto_refresh=app_settings.dvr_epg_auto_refresh if app_settings.dvr_epg_auto_refresh is not None else True,
                            image_proxy_enabled=app_settings.image_proxy_enabled if app_settings.image_proxy_enabled is not None else True,

@@ -1313,6 +1313,7 @@
       search:     {{ search           | tojson }},
       drm:        {{ drm_filter       | tojson }},
       enabled:    {{ enabled_filter   | tojson }},
+      review:     {{ review_filter    | tojson }},
       presence:   {{ presence_filter  | tojson }},
       gracenote:  {{ gracenote_filter | tojson }},
       gracenote_mode: {{ gracenote_mode_filter | tojson }},
@@ -1390,6 +1391,13 @@
               <option value="" {% if enabled_filter not in ('1', '0') %}selected{% endif %}>Enabled + Disabled</option>
               <option value="1" {% if enabled_filter == '1' %}selected{% endif %}>Enabled only</option>
               <option value="0" {% if enabled_filter == '0' %}selected{% endif %}>Disabled only</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="review-filter">Review</label>
+            <select id="review-filter" name="review">
+              <option value="" {% if review_filter != 'pending' %}selected{% endif %}>All</option>
+              <option value="pending" {% if review_filter == 'pending' %}selected{% endif %}>Needs review (new)</option>
             </select>
           </div>
           <div class="filter-group">
