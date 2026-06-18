@@ -22,7 +22,7 @@ from rq.timeouts import BaseDeathPenalty as _BaseDeathPenalty
 from rq.registry import StartedJobRegistry
 from apscheduler.schedulers.background import BackgroundScheduler
 from croniter import croniter as _croniter
-from sqlalchemy import and_, not_, or_, text
+from sqlalchemy import or_, text
 from sqlalchemy.exc import OperationalError as _SAOperationalError
 from sqlalchemy.orm.attributes import flag_modified as _flag_modified
 from app import create_app
@@ -1536,70 +1536,11 @@ def _invalidate_and_refresh_xml() -> None:
 
 
 def _channel_ids_for_filters(filters: dict) -> list[int]:
-    q = Channel.query.join(Source)
-    if src := filters.get('source'):
-        q = q.filter(Source.name == src)
-    if cat := filters.get('category'):
-        q = q.filter(Channel.category == cat)
-    if lang := filters.get('language'):
-        # '__en'/'__non_en' are the English / Non-English grouping sentinels
-        # used by the admin channels language filter.
-        if lang == '__en':
-            q = q.filter(Channel.language == 'en')
-        elif lang == '__non_en':
-            q = q.filter(Channel.language != 'en')
-        else:
-            q = q.filter(Channel.language == lang)
-    if search := filters.get('search'):
-        q = q.filter(Channel.name.ilike(f'%{search}%'))
-    if drm := filters.get('drm'):
-        if drm == '1':
-            q = q.filter(Channel.disable_reason.like('DRM%'))
-        elif drm == 'dead':
-            q = q.filter(Channel.disable_reason == 'Dead')
-        elif drm == '0':
-            q = q.filter(Channel.disable_reason == None)
-    if ef := filters.get('enabled'):
-        if ef == '1':
-            q = q.filter(Channel.is_enabled == True)
-        elif ef == '0':
-            q = q.filter(Channel.is_enabled == False)
-    if pf := filters.get('presence'):
-        if pf == 'inactive':
-            q = q.filter(Channel.is_active == False)
-        elif pf == 'enabled_inactive':
-            q = q.filter(Channel.is_enabled == True, Channel.is_active == False)
-        elif pf == 'missed':
-            q = q.filter(Channel.missed_scrapes >= 1)
-        elif pf == 'active':
-            q = q.filter(Channel.is_active == True)
-    if gf := filters.get('gracenote'):
-        if gf == '1':
-            q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
-        elif gf == '0':
-            q = q.filter(or_(Channel.gracenote_id == None, Channel.gracenote_id == ''))
-    if gm := filters.get('gracenote_mode'):
-        manual_mode = or_(
-            Channel.gracenote_mode == 'manual',
-            and_(
-                Channel.gracenote_mode == None,
-                Channel.gracenote_locked == True,
-                Channel.gracenote_id != None,
-                Channel.gracenote_id != '',
-            ),
-        )
-        off_mode = Channel.gracenote_mode == 'off'
-        if gm == 'manual':
-            q = q.filter(manual_mode)
-        elif gm == 'off':
-            q = q.filter(off_mode)
-        elif gm == 'auto':
-            q = q.filter(not_(or_(manual_mode, off_mode)))
-    if filters.get('duplicates') == '1':
-        from app.routes.admin import _duplicate_name_sets
-        exact_duplicate_names, possible_duplicate_names, _ = _duplicate_name_sets()
-        all_duplicate_names = exact_duplicate_names | possible_duplicate_names
-        q = q.filter(or_(Channel.name.in_(sorted(all_duplicate_names)), Channel.is_duplicate == True))
+    # Delegates to the canonical bulk-filter helper so this path can't drift
+    # from the API (it previously did — silently ignoring feed/duplicates=unique
+    # /drm=vod/presence=pinned). Lazy import avoids a circular import at load.
+    from app.routes.api import _apply_channel_filters
+    q = _apply_channel_filters(Channel.query.join(Source), filters)
     return [row[0] for row in q.with_entities(Channel.id).all()]
 
 

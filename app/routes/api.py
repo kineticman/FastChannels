@@ -58,7 +58,7 @@ from ..xml_cache import (
     get_xml_artifact,
     invalidate_xml_cache,
 )
-from .admin import _apply_admin_feed_membership_filters, _duplicate_name_sets, _feed_split_counts
+from .admin import _apply_admin_feed_membership_filters, _duplicate_name_sets, _feed_split_counts, _language_clause
 
 api_bp = Blueprint('api', __name__)
 
@@ -147,15 +147,8 @@ def _apply_channel_filters(q, filters: dict | None = None):
         q = q.filter(Source.name == src)
     if cat := filters.get('category'):
         q = q.filter(Channel.category == cat)
-    if lang := filters.get('language'):
-        # '__en'/'__non_en' are the English / Non-English grouping sentinels
-        # used by the admin channels language filter.
-        if lang == '__en':
-            q = q.filter(Channel.language == 'en')
-        elif lang == '__non_en':
-            q = q.filter(Channel.language != 'en')
-        else:
-            q = q.filter(Channel.language == lang)
+    if (lang_clause := _language_clause(filters.get('language'))) is not None:
+        q = q.filter(lang_clause)
     if search := filters.get('search'):
         q = q.filter(Channel.name.ilike(f'%{search}%'))
     if drm := filters.get('drm'):

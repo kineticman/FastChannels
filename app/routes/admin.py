@@ -165,6 +165,23 @@ def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
 
 
+def _language_clause(value):
+    """SQLAlchemy filter for the channels language filter, or None for 'all'.
+
+    Owns the '__en'/'__non_en' English / Non-English grouping sentinels so a
+    future language-grouping option only has to be added in one place (the
+    admin route, the bulk API, and the bulk worker all route through here).
+    '!= en' excludes NULL in SQL, matching the non-English facet count.
+    """
+    if not value:
+        return None
+    if value == '__en':
+        return Channel.language == 'en'
+    if value == '__non_en':
+        return Channel.language != 'en'
+    return Channel.language == value
+
+
 def _apply_admin_feed_membership_filters(query, feed: Feed):
     """Apply a feed's membership rules without forcing enabled/active output constraints."""
     filters = feed_to_query_filters(feed.filters or {})
@@ -449,13 +466,8 @@ def channels():
     if source_filter:
         q = q.filter(Source.name == source_filter)
     q_before_language = q  # snapshot for language facet (exclude own filter)
-    if language_filter == '__en':
-        q = q.filter(Channel.language == 'en')
-    elif language_filter == '__non_en':
-        # '!= en' excludes NULL in SQL, matching the non-English facet count.
-        q = q.filter(Channel.language != 'en')
-    elif language_filter:
-        q = q.filter(Channel.language == language_filter)
+    if (lang_clause := _language_clause(language_filter)) is not None:
+        q = q.filter(lang_clause)
     q_before_country = q  # snapshot for country facet (exclude own filter)
     if country_filter:
         q = q.filter(Channel.country == country_filter)
