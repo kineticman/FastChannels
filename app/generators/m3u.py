@@ -47,7 +47,10 @@ _WIN1252_REMAP = str.maketrans({
     0x9E: 'ž',  # ž
     0x9F: 'Ÿ',  # Ÿ
     0x00A0: ' ',     # NO-BREAK SPACE → regular space
+    0x00AD: None,    # SOFT HYPHEN (invisible)
     0x200B: None,    # ZERO WIDTH SPACE
+    0x2060: None,    # WORD JOINER (invisible)
+    0xFEFF: None,    # ZERO WIDTH NO-BREAK SPACE / BOM
     0xFFFD: None,    # REPLACEMENT CHARACTER
 })
 
