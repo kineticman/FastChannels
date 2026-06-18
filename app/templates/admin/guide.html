@@ -1410,6 +1410,11 @@
       }
       placeRail();
       window.addEventListener('resize', placeRail);
+      // Mobile nav/toolbar wrap to a taller stack whose final height isn't
+      // settled when this runs (web fonts, logo reflow). Re-place after those
+      // events so the rail self-corrects instead of needing a manual refresh.
+      window.addEventListener('orientationchange', placeRail);
+      window.addEventListener('load', placeRail);
     })();
   </script>
 
