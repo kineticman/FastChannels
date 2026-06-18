@@ -449,7 +449,12 @@ def channels():
     if source_filter:
         q = q.filter(Source.name == source_filter)
     q_before_language = q  # snapshot for language facet (exclude own filter)
-    if language_filter:
+    if language_filter == '__en':
+        q = q.filter(Channel.language == 'en')
+    elif language_filter == '__non_en':
+        # '!= en' excludes NULL in SQL, matching the non-English facet count.
+        q = q.filter(Channel.language != 'en')
+    elif language_filter:
         q = q.filter(Channel.language == language_filter)
     q_before_country = q  # snapshot for country facet (exclude own filter)
     if country_filter:
@@ -564,6 +569,9 @@ def channels():
         .group_by(Channel.language)\
         .order_by(Channel.language).all()
     languages = [(lang, count) for lang, count in lang_rows]
+    # English / Non-English grouping for the language filter (sums of the facet).
+    en_count = sum(c for l, c in lang_rows if l == 'en')
+    non_en_count = sum(c for l, c in lang_rows if l != 'en')
 
     cat_facet_ids = q_before_category.with_entities(Channel.id).scalar_subquery()
     cat_rows = db.session.query(Channel.category, db.func.count(Channel.id))\
@@ -646,6 +654,7 @@ def channels():
                            gracenote_filter=gracenote_filter,
                            gracenote_mode_filter=gracenote_mode_filter,
                            language_filter=language_filter, languages=languages,
+                           en_count=en_count, non_en_count=non_en_count,
                            country_filter=country_filter, countries=countries,
                            category_filter=category_filter, categories=categories,
                            missing_category_count=missing_category_count,

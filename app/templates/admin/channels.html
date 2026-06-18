@@ -1417,9 +1417,17 @@
             <label class="filter-label" for="language-filter">Language</label>
             <select id="language-filter" name="language">
               <option value="">All Languages</option>
+              {% if en_count or non_en_count %}
+              <optgroup label="Groups">
+                <option value="__en" {% if language_filter == '__en' %}selected{% endif %}>English ({{ en_count }})</option>
+                <option value="__non_en" {% if language_filter == '__non_en' %}selected{% endif %}>Non-English ({{ non_en_count }})</option>
+              </optgroup>
+              <optgroup label="Specific">
+              {% endif %}
               {% for lang, count in languages %}
               <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }} ({{ count }})</option>
               {% endfor %}
+              {% if en_count or non_en_count %}</optgroup>{% endif %}
             </select>
           </div>
           {% if countries %}
@@ -1525,7 +1533,7 @@
       <span class="filter-chip"><strong>Health</strong>{% if drm_filter == '1' %}DRM only{% elif drm_filter == 'dead' %}Dead only{% elif drm_filter == 'vod' %}VOD only{% elif drm_filter == '0' %}No DRM / Dead / VOD flag{% endif %}</span>
       {% endif %}
       {% if language_filter %}
-      <span class="filter-chip"><strong>Language</strong>{{ language_filter }}</span>
+      <span class="filter-chip"><strong>Language</strong>{% if language_filter == '__en' %}English{% elif language_filter == '__non_en' %}Non-English{% else %}{{ language_filter }}{% endif %}</span>
       {% endif %}
       {% if country_filter %}
       <span class="filter-chip"><strong>Region</strong>{{ country_filter }}</span>
@@ -1624,9 +1632,17 @@
             <th style="width:1px;white-space:nowrap">
               <select class="col-filter-select{% if language_filter %} col-filter-active{% endif %}" onchange="filterBy('language', this.value)" title="Filter by language" style="width:46px">
                 <option value="">LAN</option>
+                {% if en_count or non_en_count %}
+                <optgroup label="Groups">
+                  <option value="__en" {% if language_filter == '__en' %}selected{% endif %}>English</option>
+                  <option value="__non_en" {% if language_filter == '__non_en' %}selected{% endif %}>Non-English</option>
+                </optgroup>
+                <optgroup label="Specific">
+                {% endif %}
                 {% for lang, count in languages %}
                 <option value="{{ lang }}" {% if language_filter == lang %}selected{% endif %}>{{ lang }}</option>
                 {% endfor %}
+                {% if en_count or non_en_count %}</optgroup>{% endif %}
               </select>
             </th>
             <th>

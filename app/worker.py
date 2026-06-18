@@ -1542,7 +1542,14 @@ def _channel_ids_for_filters(filters: dict) -> list[int]:
     if cat := filters.get('category'):
         q = q.filter(Channel.category == cat)
     if lang := filters.get('language'):
-        q = q.filter(Channel.language == lang)
+        # '__en'/'__non_en' are the English / Non-English grouping sentinels
+        # used by the admin channels language filter.
+        if lang == '__en':
+            q = q.filter(Channel.language == 'en')
+        elif lang == '__non_en':
+            q = q.filter(Channel.language != 'en')
+        else:
+            q = q.filter(Channel.language == lang)
     if search := filters.get('search'):
         q = q.filter(Channel.name.ilike(f'%{search}%'))
     if drm := filters.get('drm'):
