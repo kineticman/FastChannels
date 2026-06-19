@@ -129,6 +129,16 @@ def _bulk_job_id(filters: dict, enable: bool) -> str:
     return f'channel-bulk-{digest}'
 
 
+def _bulk_review_job_id(filters: dict) -> str:
+    payload = {
+        'action': 'mark_reviewed',
+        'filters': filters or {},
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+    digest = hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]
+    return f'channel-review-bulk-{digest}'
+
+
 def cancel_source_jobs(source_name: str) -> list[str]:
     """Cancel queued/scheduled scraper jobs for a source.
 
@@ -294,6 +304,27 @@ def trigger_bulk_channel_update(filters: dict, enable: bool):
         import threading
         from app.worker import run_bulk_channel_update
         threading.Thread(target=run_bulk_channel_update, args=(filters or {}, enable), daemon=True).start()
+
+
+def trigger_bulk_channel_review(filters: dict):
+    try:
+        q = get_maintenance_queue()
+        job_id = _bulk_review_job_id(filters or {})
+        if _job_already_active(q, job_id):
+            logger.info('Bulk channel review already queued/running')
+            return
+        q.enqueue(
+            'app.worker.run_bulk_channel_review',
+            filters or {},
+            job_timeout=1800,
+            job_id=job_id,
+        )
+        logger.info('Enqueued bulk channel review')
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for bulk channel review')
+        import threading
+        from app.worker import run_bulk_channel_review
+        threading.Thread(target=run_bulk_channel_review, args=(filters or {},), daemon=True).start()
 
 
 def trigger_gracenote_auto_clear():

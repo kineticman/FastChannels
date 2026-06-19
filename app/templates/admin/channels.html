@@ -743,9 +743,16 @@
     th.toggle-col { padding-left: 0.25rem; padding-right: 0.25rem; }
     tr:last-child td { border-bottom: none; }
     tr.disabled td:not(.toggle-col) { opacity: 0.4; }
+    tr.pending-review td:not(.toggle-col) { opacity: 0.72; }
     tr:hover td { background: var(--accent-row-hover); }
 
-    .ch-name-wrap { max-width: 264px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ch-name-wrap { max-width: 264px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 0.35rem; }
+    .review-badge {
+      display: inline-block; flex-shrink: 0; font-size: 0.58rem; font-weight: 700;
+      line-height: 1; padding: 0.14rem 0.28rem; border-radius: 4px;
+      color: var(--warning); background: var(--warning-bg); border: 1px solid var(--warning-border);
+      letter-spacing: 0.04em;
+    }
     .ch-name-td { cursor: pointer; }
     .ch-name-td:hover .ch-name-wrap strong { text-decoration: underline; text-underline-offset: 2px; }
     .logo { width: 32px; height: 32px; object-fit: contain; border-radius: 4px; background: var(--bg); }
@@ -908,6 +915,13 @@
     }
     .btn-notes:hover { border-color: var(--text-subtle); background: var(--surface-4); opacity: 1; }
     .btn-notes.has-note { border-color: var(--warning-border); background: var(--warning-bg); opacity: 1; }
+    .btn-review-clear {
+      background: var(--warning-bg); border: 1px solid var(--warning-border); color: var(--warning);
+      padding: 0.2rem 0.32rem; border-radius: 4px; cursor: pointer;
+      font-size: 0.78rem; line-height: 1; transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .btn-review-clear:hover { background: var(--warning-bg-2); color: var(--text-strong); }
+    .btn-review-clear:disabled { opacity: 0.45; cursor: wait; }
     .preview-modal { width: 940px; max-width: min(97vw, 940px); }
     .preview-header { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
     .preview-logo {
@@ -1151,6 +1165,7 @@
     }
     .mcard:last-child { border-bottom: none; }
     .mcard.mcard-disabled .mcard-main { opacity: 0.4; }
+    .mcard.mcard-disabled.mcard-pending-review .mcard-main { opacity: 0.72; }
     .mcard-main {
       display: flex;
       align-items: center;
@@ -1208,6 +1223,11 @@
       align-items: center; justify-content: center;
       padding: 0.7rem 0.75rem 0.7rem 0;
       gap: 0.28rem; flex-shrink: 0;
+    }
+    .mcard-review-clear {
+      border: 1px solid var(--warning-border); background: var(--warning-bg); color: var(--warning);
+      border-radius: 4px; padding: 0.18rem 0.35rem; font-size: 0.64rem; font-weight: 700;
+      line-height: 1; cursor: pointer; white-space: nowrap;
     }
 
     @media (max-width: 768px) {
@@ -1534,6 +1554,9 @@
       {% if enabled_filter %}
       <span class="filter-chip"><strong>State</strong>{% if enabled_filter == '1' %}Enabled only{% elif enabled_filter == '0' %}Disabled only{% endif %}</span>
       {% endif %}
+      {% if review_filter == 'pending' %}
+      <span class="filter-chip"><strong>Review</strong>Needs review</span>
+      {% endif %}
       {% if presence_filter %}
       <span class="filter-chip"><strong>Presence</strong>{% if presence_filter == 'active' %}Active only{% elif presence_filter == 'inactive' %}Inactive only{% elif presence_filter == 'enabled_inactive' %}Enabled but inactive{% elif presence_filter == 'missed' %}Missed recently{% elif presence_filter == 'pinned' %}Pinned{% else %}{{ presence_filter }}{% endif %}</span>
       {% endif %}
@@ -1566,7 +1589,7 @@
       {% if featured_filter == '1' %}
       <span class="filter-chip"><strong>Channel Type</strong>♻️ Rotating / featured only</span>
       {% endif %}
-      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter or featured_filter) %}
+      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or review_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter or featured_filter) %}
       <span class="filter-chip"><strong>View</strong>All channels</span>
       {% endif %}
       <button type="button" class="btn-hide-disabled{% if enabled_filter == '1' %} active{% endif %}" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}◉ Hiding disabled{% else %}○ Hide disabled{% endif %}</button>
@@ -1583,7 +1606,11 @@
         <button type="button" class="bulk-select-link" onclick="selectAllMatching()">Select all matching</button>
       </span>
       <button class="btn-enable"  onclick="bulkToggle(true)">Enable Selected</button>
+      {% if review_filter == 'pending' %}
+      <button class="btn-disable" onclick="bulkMarkReviewed()">Keep Disabled</button>
+      {% else %}
       <button class="btn-disable" onclick="bulkToggle(false)">Disable Selected</button>
+      {% endif %}
       {% if gracenote_filter or gracenote_mode_filter %}
       <button class="btn-open-external" onclick="bulkGracenoteAction('set_auto')">Set Auto</button>
       <button class="btn-open-external" onclick="bulkGracenoteAction('set_manual')">Set Manual</button>
@@ -1674,7 +1701,7 @@
             {% set ns.group_idx = (ns.group_idx + 1) % 2 %}
             {% set ns.prev_dup_key = duplicate_group_keys.get(ch.id, '') %}
           {% endif %}
-          <tr id="row-{{ ch.id }}" data-channel-id="{{ ch.id }}" class="{% if not ch.is_enabled %}disabled{% endif %}{% if duplicates_filter == '1' %} dup-group-{{ ns.group_idx }}{% endif %}">
+          <tr id="row-{{ ch.id }}" data-channel-id="{{ ch.id }}" class="{% if not ch.is_enabled %}disabled{% endif %}{% if ch.review_state == 'pending' %} pending-review{% endif %}{% if duplicates_filter == '1' %} dup-group-{{ ns.group_idx }}{% endif %}">
             <td><input type="checkbox" class="row-check" value="{{ ch.id }}" onchange="onRowCheck()"></td>
             <td>
               <span class="logo-wrap" onclick="openLogoModal({{ ch.id }})" title="Edit logo"
@@ -1704,7 +1731,7 @@
             <td class="ch-name-td"
                 title="Click to preview stream{% if hover_parts %} · {{ hover_parts|join(' · ') }}{% endif %}"
                 onclick="openPreview({{ ch.id }})">
-              <div class="ch-name-wrap"><strong>{{ ch.name }}</strong></div>
+              <div class="ch-name-wrap"><strong>{{ ch.name }}</strong>{% if ch.review_state == 'pending' %}<span class="review-badge" title="New channel pending review{% if ch.first_seen_at %} · First added {{ ch.first_seen_at|localtime }}{% endif %}">NEW</span>{% endif %}</div>
             </td>
             <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.name in duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Duplicate match found — click to see matches">DUP</span>{% elif ch.name in possible_duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Possible duplicate — click to see matches">DUP?</span>{% elif ch.id in gn_duplicate_ids %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Same Gracenote ID found on another source — click to see matches">GN DUP</span>{% endif %}{% if ch.is_duplicate %}<span class="badge-manual-dup badge-dup-clickable" data-channel-id="{{ ch.id }}" title="Click to see potential duplicates" style="cursor:pointer">DUPL</span>{% endif %}</td>
             <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
@@ -1780,6 +1807,9 @@
                   <button class="btn-clear-dup" id="cleardup-{{ ch.id }}" onclick="clearManualDup({{ ch.id }}, this)" title="Remove duplicate label">⊘</button>
                   {% endif %}
                 </div>
+                {% if ch.review_state == 'pending' %}
+                <button class="btn-review-clear" id="review-clear-{{ ch.id }}" onclick="markReviewedKeepDisabled({{ ch.id }}, this)" title="Mark reviewed; keep disabled">✓</button>
+                {% endif %}
                 <button class="btn-notes btn-icon{% if ch.user_note %} has-note{% endif %}" data-channel-id="{{ ch.id }}" data-channel-name="{{ ch.name }}" data-user-note="{{ ch.user_note or '' }}" onclick="openNoteModal({{ ch.id }}, this.dataset.channelName, this.dataset.userNote)" title="{% if ch.user_note %}Edit note: {{ ch.user_note|e }}{% else %}Add a note{% endif %}">✏️</button>
                 <button class="btn-inspect" onclick="inspectChannel({{ ch.id }}, this)" title="Test stream: check DRM, liveness, and segment data">&#128269;</button>
                 <button class="btn-pin-feed{% if ch.id not in in_any_feed_ids %} not-in-feed{% endif %}" onclick="openPinFeedMenu({{ ch.id }}, this)" title="{% if ch.id in in_any_feed_ids %}Manage feed membership{% else %}Not in any feed — add to one{% endif %}">🗂️</button>
@@ -1811,7 +1841,7 @@
     <!-- Mobile card list — shown at ≤768px instead of the table -->
     <div class="mobile-cards" id="mobile-cards">
       {% for ch in channels.items %}
-      <div class="mcard{% if not ch.is_enabled %} mcard-disabled{% endif %}" id="mcard-{{ ch.id }}" data-channel-id="{{ ch.id }}">
+      <div class="mcard{% if not ch.is_enabled %} mcard-disabled{% endif %}{% if ch.review_state == 'pending' %} mcard-pending-review{% endif %}" id="mcard-{{ ch.id }}" data-channel-id="{{ ch.id }}">
         <div class="mcard-main" onclick="openPreview({{ ch.id }})">
           {% if ch.logo_url %}
           <img src="{{ ch.logo_display_url or ch.logo_url }}" class="mcard-logo" loading="lazy" onerror="this.style.display='none'">
@@ -1819,7 +1849,7 @@
           <div class="mcard-logo-empty"></div>
           {% endif %}
           <div class="mcard-body">
-            <div class="mcard-name">{{ ch.name }}</div>
+            <div class="mcard-name">{{ ch.name }}{% if ch.review_state == 'pending' %} <span class="review-badge" title="New channel pending review{% if ch.first_seen_at %} · First added {{ ch.first_seen_at|localtime }}{% endif %}">NEW</span>{% endif %}</div>
             <div class="mcard-meta">{{ ch.source.display_name }}{% if ch.category %} · {{ ch.category }}{% endif %}{% if ch.language_override or ch.language %} · {{ ch.language_override or ch.language }}{% endif %}</div>
             {% set _is_rotator = (ch.tags and 'featured' in ch.tags.split(',')) or (ch.content_swap_count or 0) > 0 %}
             {% set _has_b = ch.disable_reason or ch.identity_changed_at or _is_rotator or (ch.stream_info and (ch.stream_info.has_4k or ch.stream_info.has_hd or ch.stream_info.video_codec == 'hevc')) or ch.name in duplicate_names or ch.name in possible_duplicate_names or ch.id in gn_duplicate_ids or (ch.is_enabled and not ch.is_active) %}
@@ -1846,6 +1876,7 @@
                    onchange="toggle({{ ch.id }}, this)">
             <span class="slider"></span>
           </label>
+          {% if ch.review_state == 'pending' %}<button class="mcard-review-clear" onclick="markReviewedKeepDisabled({{ ch.id }}, this)" title="Mark reviewed; keep disabled">Keep</button>{% endif %}
         </div>
       </div>
       {% endfor %}
@@ -2618,8 +2649,17 @@
           body:    JSON.stringify({is_enabled: checkbox.checked}),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        if (row)   row.classList.toggle('disabled', !checkbox.checked);
-        if (mcard) mcard.classList.toggle('mcard-disabled', !checkbox.checked);
+        if (row) {
+          row.classList.toggle('disabled', !checkbox.checked);
+          row.classList.remove('pending-review');
+          row.querySelector('.review-badge')?.remove();
+          row.querySelector('.btn-review-clear')?.remove();
+        }
+        if (mcard) {
+          mcard.classList.toggle('mcard-disabled', !checkbox.checked);
+          mcard.classList.remove('mcard-pending-review');
+          mcard.querySelectorAll('.review-badge, .mcard-review-clear').forEach(el => el.remove());
+        }
         // Sync whichever toggle wasn't the one clicked
         const deskCheck = label?.querySelector('input[type=checkbox]');
         const mobCheck  = mlabel?.querySelector('input[type=checkbox]');
@@ -3479,6 +3519,67 @@
         row?.classList.toggle('disabled', !enable);
       });
       clearSelection();
+      if (_pageFilters.review === 'pending') setTimeout(() => window.location.reload(), 650);
+    }
+
+    async function markReviewedKeepDisabled(channelId, btn) {
+      if (btn) btn.disabled = true;
+      try {
+        const r = await fetch(`/api/channels/${channelId}`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({review_action: 'keep_disabled'}),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        const row = document.getElementById(`row-${channelId}`);
+        row?.classList.remove('pending-review');
+        row?.querySelector('.review-badge')?.remove();
+        row?.querySelector('.btn-review-clear')?.remove();
+        const mcard = document.getElementById(`mcard-${channelId}`);
+        mcard?.classList.remove('mcard-pending-review');
+        mcard?.querySelectorAll('.review-badge, .mcard-review-clear').forEach(el => el.remove());
+        showToast('✓ Marked reviewed');
+        if (_pageFilters.review === 'pending') setTimeout(() => window.location.reload(), 650);
+      } catch (e) {
+        showToast('⚠ Review update failed — ' + e.message);
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function bulkMarkReviewed() {
+      const selectedIds = [...document.querySelectorAll('.row-check:checked')].map(cb => parseInt(cb.value, 10));
+      const usingFilter = _bulkSelectionScope === 'filter';
+      const count = usingFilter ? _pageTotalCount : selectedIds.length;
+      if (!count) return;
+      if (!confirm(`Keep ${count} channel${count === 1 ? '' : 's'} disabled and mark reviewed?`)) return;
+
+      if (usingFilter) {
+        try {
+          const r = await fetch('/api/channels/bulk', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({action: 'mark_reviewed', filters: _pageFilters}),
+          });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+          showToast(`✓ Marked ${data.updated} channel${data.updated !== 1 ? 's' : ''} reviewed`);
+          setTimeout(() => window.location.reload(), 800);
+        } catch (e) {
+          showToast('⚠ Bulk request failed — ' + e.message);
+        }
+        return;
+      }
+
+      await Promise.all(selectedIds.map(id =>
+        fetch(`/api/channels/${id}`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({review_action: 'keep_disabled'}),
+        })
+      ));
+      showToast(`✓ Marked ${selectedIds.length} channel${selectedIds.length !== 1 ? 's' : ''} reviewed`);
+      setTimeout(() => window.location.reload(), 650);
     }
 
     async function bulkGracenoteAction(action) {

@@ -1621,6 +1621,19 @@ def run_bulk_channel_update(filters: dict, enable: bool):
         )
 
 
+def run_bulk_channel_review(filters: dict):
+    with flask_app.app_context():
+        ids = _channel_ids_for_filters(filters or {})
+        updated = 0
+        if ids:
+            updated = Channel.query.filter(Channel.id.in_(ids)).update(
+                {'review_state': 'approved'}, synchronize_session=False
+            )
+            db.session.commit()
+            _invalidate_and_refresh_xml()
+        logger.info('[channel-review-bulk] marked %d channel(s) reviewed', updated)
+
+
 def run_channel_auto_disable(channel_id: int, reason: str):
     with flask_app.app_context():
         ch = Channel.query.get(channel_id)

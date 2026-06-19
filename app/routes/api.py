@@ -37,6 +37,7 @@ except ImportError:
 from ..url import public_base_url
 from .tasks import (
     trigger_bulk_channel_update,
+    trigger_bulk_channel_review,
     cancel_source_jobs,
     trigger_scrape,
     trigger_source_channel_purge,
@@ -1644,15 +1645,16 @@ def bulk_update_channels():
     action  = data.get('action')
     filters = data.get('filters') or {}
 
-    if action not in ('enable', 'disable'):
-        return jsonify({'error': 'action must be enable or disable'}), 400
+    if action not in ('enable', 'disable', 'mark_reviewed'):
+        return jsonify({'error': 'action must be enable, disable, or mark_reviewed'}), 400
 
-    enable = action == 'enable'
     q = _apply_channel_filters(Channel.query.join(Source), filters)
-
     matched = q.count()
     if matched:
-        trigger_bulk_channel_update(filters, enable)
+        if action == 'mark_reviewed':
+            trigger_bulk_channel_review(filters)
+        else:
+            trigger_bulk_channel_update(filters, action == 'enable')
     return jsonify({'status': 'queued' if matched else 'idle', 'updated': matched})
 
 
@@ -1713,6 +1715,8 @@ def update_channel(channel_id):
         # Any explicit enable/disable counts as reviewing a new channel — clear the
         # 'pending' marker so it leaves the "Needs review" filter.
         if 'is_enabled' in data:
+            ch.review_state = 'approved'
+        if data.get('review_action') == 'keep_disabled':
             ch.review_state = 'approved'
         if data.get('is_enabled') is True and 'is_active' not in data:
             ch.is_active = True
