@@ -3529,10 +3529,12 @@
         try {
           const r = await fetch(`/api/channels/${_ccEditId}/preview?detect=0`);
           const d = await r.json();
+          // playback_mode/stream_type/license_url are nested under d.channel.
+          const c = d.channel || {};
           playUrl = d.preview_url || d.play_url || null;
-          mode = d.playback_mode || '';
-          type = String(d.stream_type || type || '').toLowerCase();
-          license = d.license_url || '';
+          mode = c.playback_mode || '';
+          type = String(c.stream_type || type || '').toLowerCase();
+          license = c.license_url || '';
         } catch (e) { /* fall through to detected-URL path */ }
       }
 
