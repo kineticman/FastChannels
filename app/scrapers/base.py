@@ -71,6 +71,7 @@ _SPANISH_LANGUAGE_MARKERS = (
     'miedo',         # Spanish for fear — "Mi Miedo Canal"
     'pelicula',      # fold of película — Spanish for movie
     'corazon',       # fold of corazón — Spanish for heart
+    'tvoai',         # TVOAI Channel (Spanish-language Roku brand)
 )
 
 
