@@ -562,6 +562,12 @@
       </div>
     </div>
     <div class="source-body open">
+      {% if tz_health and tz_health.level == 'warning' %}
+      <div class="needs-config-banner" style="margin-bottom:1rem">
+        <strong>⚠ Timezone is falling back to UTC</strong>
+        <div style="margin-top:0.4rem;font-weight:400">{{ tz_health.message }}</div>
+      </div>
+      {% endif %}
       <div class="fields-grid" style="max-width:480px">
         <div class="field field-full">
           <label for="tz-input">Time Zone</label>
@@ -952,6 +958,18 @@ async function saveDvrSettings() {
 
 async function saveTimezoneSettings() {
   const timezoneName = document.getElementById('tz-input').value.trim();
+  // Reject a typed value that isn't an exact IANA name from the list (e.g. a
+  // legacy alias like "US/Central") before hitting the server, and point the
+  // user at the search so they can pick a canonical name.
+  if (timezoneName && typeof window.fcTimezoneIsValid === 'function' && !window.fcTimezoneIsValid(timezoneName)) {
+    const status = document.getElementById('timezone-settings-status');
+    if (status) {
+      status.className = 'save-status error';
+      status.textContent = `✕ "${timezoneName}" isn't a valid timezone — pick one from the list (try typing a city or "central", "eastern", …)`;
+    }
+    document.getElementById('tz-input').focus();
+    return false;
+  }
   const ok = await saveSettings({
     timezone_name: timezoneName || null,
   }, 'timezone-settings-status');
@@ -1166,6 +1184,11 @@ async function loadLatestBackup() {
       searchText: Array.from(searchTokens).join(' '),
     };
   });
+
+  // Exact-match set so other code (Save) can reject typed-but-invalid values
+  // before they ever reach the server.
+  const TZ_SET = new Set(TZ_LIST);
+  window.fcTimezoneIsValid = (v) => TZ_SET.has(v);
 
   const input    = document.getElementById('tz-input');
   const dropdown = document.getElementById('tz-dropdown');

@@ -103,6 +103,13 @@
     {% if update_status.update_available %}<span class="version" style="cursor:pointer" onclick="openUpdateModal()" title="Update available: v{{ update_status.latest_version }}">v{{ app_version }}<span class="update-pip"></span></span>{% else %}<a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="View FastChannels on GitHub">v{{ app_version }}</a>{% endif %}
   </nav>
   <div class="container">
+    {% if tz_health and tz_health.level == 'warning' %}
+    <div style="background:color-mix(in srgb, var(--warning-bg) 70%, var(--surface));border:1px solid var(--warning-border);border-radius:8px;padding:0.85rem 1.25rem;margin:0 0 1rem;color:var(--warning-soft)">
+      <strong>⚠ Timezone is falling back to UTC.</strong>
+      {{ tz_health.message }}
+      <a href="/admin/settings#settings-card-timezone" style="color:var(--warning-soft);font-weight:600">Fix in Settings →</a>
+    </div>
+    {% endif %}
     {% if setup_checklist %}
     <div class="welcome-panel">
       <h2>Welcome to FastChannels</h2>

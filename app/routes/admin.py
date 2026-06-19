@@ -23,7 +23,7 @@ from ..source_config import (
     is_source_config_complete,
     public_base_url_config,
 )
-from ..timezone_utils import timezone_choices
+from ..timezone_utils import timezone_choices, timezone_health
 from ..url import public_base_url, detected_base_url
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
@@ -295,6 +295,7 @@ def dashboard():
                            setup_checklist=setup_checklist,
                            setup_complete_count=5 - len(setup_checklist),
                            setup_total_count=5,
+                           tz_health=timezone_health(app_settings.timezone_name),
                            now=datetime.now(timezone.utc))
 
 
@@ -1053,6 +1054,7 @@ def settings():
             'label': 'Time Zone',
             'anchor': 'settings-card-timezone',
         })
+    tz_health = timezone_health(app_settings.timezone_name)
     _url_from_env = _url_source in {'FASTCHANNELS_SERVER_URL', 'PUBLIC_BASE_URL'}
     _no_port_warning = False
     if _eff_url and not _url_from_env:
@@ -1068,6 +1070,7 @@ def settings():
                            timezone_name=app_settings.effective_timezone_name(),
                            timezone_name_from_db=(app_settings.timezone_name or '').strip(),
                            timezone_choices=timezone_choices(),
+                           tz_health=tz_health,
                            channels_dvr_url_from_env=(not (app_settings.channels_dvr_url or '').strip()) and app_settings.env_channels_dvr_url() is not None,
                            public_base_url_from_env=_url_from_env,
                            public_base_url_env_name=_url_source if _url_from_env else None,

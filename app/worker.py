@@ -2705,12 +2705,12 @@ if __name__ == '__main__':
         # whatever the user has configured in admin/settings.
         with flask_app.app_context():
             from app.models import AppSettings as _AS
-            import pytz as _pytz
-            _tz_name = (_AS.get().timezone_name or 'UTC')
-            try:
-                _tz = _pytz.timezone(_tz_name)
-            except Exception:
-                _tz = _pytz.utc
+            from app.timezone_utils import current_zoneinfo
+            # Resolve through the same zoneinfo path the rest of the app uses, so a
+            # name that's valid in one tz library but not another (e.g. the legacy
+            # alias 'US/Central', which pytz accepts but this container's zoneinfo
+            # rejects) can't silently diverge between the UI and the scheduler.
+            _tz = current_zoneinfo(_AS.get().timezone_name)
         scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
                           hour=3, minute=0, timezone=_tz,
                           id='tvtv_cache_refresh_night', max_instances=1, coalesce=True,
