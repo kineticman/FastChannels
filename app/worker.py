@@ -1630,7 +1630,8 @@ def run_bulk_channel_review(filters: dict):
                 {'review_state': 'approved'}, synchronize_session=False
             )
             db.session.commit()
-            _invalidate_and_refresh_xml()
+            # No XML refresh: these channels stay is_enabled=False, so M3U/EPG
+            # output is unchanged by clearing the pending marker.
         logger.info('[channel-review-bulk] marked %d channel(s) reviewed', updated)
 
 
