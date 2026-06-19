@@ -193,6 +193,37 @@ def _apply_channel_filters(q, filters: dict | None = None):
             q = q.filter(off_mode)
         elif gm == 'auto':
             q = q.filter(not_(or_(manual_mode, off_mode)))
+    if country := filters.get('country'):
+        q = q.filter(Channel.country == country)
+    if filters.get('featured') == '1':
+        q = q.filter(or_(Channel.tags.ilike('%featured%'), Channel.content_swap_count > 0))
+    if filters.get('new') in ('1', '3', '7', '14'):
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(days=int(filters['new']))
+        q = q.filter(Channel.created_at >= cutoff)
+    if filters.get('epg') in ('0', '1'):
+        has_epg = db.session.query(Program.channel_id).filter(
+            Program.channel_id == Channel.id,
+            Program.end_time > datetime.now(timezone.utc),
+        ).exists()
+        q = q.filter(has_epg if filters['epg'] == '1' else ~has_epg)
+    if res := filters.get('resolution'):
+        _ji = db.func.json_extract
+        if res == '4k':
+            q = q.filter(_ji(Channel.stream_info, '$.has_4k') == True)
+        elif res == 'fhd':
+            q = q.filter(_ji(Channel.stream_info, '$.max_height') >= 1080,
+                         _ji(Channel.stream_info, '$.has_4k') != True)
+        elif res == 'hd':
+            q = q.filter(_ji(Channel.stream_info, '$.has_hd') == True,
+                         _ji(Channel.stream_info, '$.max_height') < 1080)
+        elif res == 'sd':
+            q = q.filter(Channel.stream_info.isnot(None),
+                         _ji(Channel.stream_info, '$.has_hd') != True)
+        elif res == 'hevc':
+            q = q.filter(_ji(Channel.stream_info, '$.video_codec') == 'hevc')
+        elif res == 'known':
+            q = q.filter(Channel.stream_info.isnot(None))
     if filters.get('duplicates') in ('1', 'unique'):
         exact_duplicate_names, possible_duplicate_names, gn_dup_ids = _duplicate_name_sets()
         all_duplicate_names = exact_duplicate_names | possible_duplicate_names

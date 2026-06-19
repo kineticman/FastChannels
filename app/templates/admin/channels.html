@@ -1339,6 +1339,8 @@
       gracenote_mode: {{ gracenote_mode_filter | tojson }},
       new:            {{ new_filter            | tojson }},
       epg:            {{ epg_filter            | tojson }},
+      featured:       {{ featured_filter       | tojson }},
+      resolution:     {{ resolution_filter     | tojson }},
       duplicates: {{ duplicates_filter| tojson }},
     };
     const _pageVisibleCount = {{ channels.items|length }};
