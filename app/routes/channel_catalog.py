@@ -7,6 +7,19 @@
 
 CHANNEL_CATALOG = [
     {
+        "network": "Kaloopy",
+        "channels": [
+            {
+                "name": "Kaloopy",
+                "stream_url": "https://tv.kaloopy.com/",
+                "logo_url": "https://a.jsrdn.com/hls/22868/kaloopy/logo_20231219_214555_68.png",
+                "category": "Ambiance",
+                "language": "en",
+                "redetect_on_play": True,
+            },
+        ],
+    },
+    {
         "network": "myAEW",
         "channels": [
             {
