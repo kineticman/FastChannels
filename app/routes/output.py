@@ -189,6 +189,65 @@ def epg_xml():
     )
 
 
+@output_bp.route('/feeds/threadfin-config.zip')
+def threadfin_config():
+    """
+    Generate a Threadfin restore zip pre-configured for one or more feeds.
+
+    Query: ?feed=<slug>&feed=<slug>...&tuner=<n>  (repeatable feed param).
+    The user restores it in Threadfin (Settings -> Restore) to stand up a
+    Threadfin dedicated to FastChannels with every channel auto-activated,
+    numbered, and EPG-mapped — no manual setup. See app/generators/threadfin.py.
+    """
+    from pathlib import Path
+    from ..generators.threadfin import build_threadfin_zip
+
+    slugs = request.args.getlist('feed')
+    tuner = request.args.get('tuner', default=2, type=int) or 2
+    # Advanced / install-specific overrides (Advanced Settings panel). Blank -> generator defaults.
+    adv = {
+        'ffmpeg_path': (request.args.get('ffmpeg_path') or '').strip(),
+        'vlc_path': (request.args.get('vlc_path') or '').strip(),
+        'temp_path': (request.args.get('temp_path') or '').strip(),
+        'port': (request.args.get('port') or '').strip(),
+    }
+    adv = {k: v for k, v in adv.items() if v}
+    if not slugs:
+        return Response('No feeds selected.', status=400, mimetype='text/plain')
+
+    base_url = public_base_url()
+    feeds = []
+    for slug in slugs:
+        feed = Feed.query.filter_by(slug=slug, is_enabled=True).first()
+        if feed is None:
+            continue
+        m3u_path = get_artifact(f'feed-{slug}-m3u', ext='m3u')
+        epg_path, _ = get_xml_artifact(f'feed-{slug}')
+        if m3u_path is None or epg_path is None:
+            return Response(
+                f'Feed "{slug}" output is still warming. Retry in a few seconds.',
+                status=503, mimetype='text/plain', headers={'Retry-After': '15'},
+            )
+        feeds.append({
+            'slug': slug,
+            'name': feed.name,
+            'm3u_bytes': Path(m3u_path).read_bytes(),
+            'epg_bytes': Path(epg_path).read_bytes(),
+        })
+
+    if not feeds:
+        return Response('No valid enabled feeds selected.', status=400, mimetype='text/plain')
+
+    zip_bytes = build_threadfin_zip(feeds, base_url, tuner=tuner, **adv)
+    fname = ('fastchannels-threadfin.zip' if len(feeds) > 1
+             else f'{feeds[0]["slug"]}-threadfin.zip')
+    return Response(
+        zip_bytes,
+        mimetype='application/zip',
+        headers={'Content-Disposition': f'attachment; filename="{fname}"'},
+    )
+
+
 @output_bp.route('/feeds/<slug>/m3u')
 def feed_m3u(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()

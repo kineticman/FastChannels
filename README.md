@@ -146,6 +146,12 @@ As you set filters, the feed modal shows a live count of matching channels.
 - **Add to Channels DVR** — registers the feed as a custom M3U source in Channels DVR with one click. Configure the DVR server URL in **Settings** first.
 - **Max Channels** — Channels DVR works best with 750 or fewer channels per source. The feed modal warns you if you're over.
 
+### Using with Plex
+
+Jellyfin, Emby, and Channels DVR accept a feed's M3U + EPG URLs directly. **Plex** is the exception
+— its Live TV & DVR only ingests from HDHomeRun-style tuners, so it needs a small bridge
+(Threadfin) in front of FastChannels. See **[docs/plex.md](docs/plex.md)** for the full walkthrough.
+
 ## Configuration
 
 Source credentials and options are configured on the **Sources** page — click into any source card to expand its settings. Changes take effect on the next scrape.
