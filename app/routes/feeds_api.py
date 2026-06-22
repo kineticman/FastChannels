@@ -7,7 +7,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import OperationalError
 from ..extensions import db
 from ..generators.m3u import get_global_chnum_overlaps, _selected_channel_stubs, feed_to_query_filters
-from ..models import AppSettings, Channel, Feed, FeedChannelNumber, Source
+from ..models import Channel, Feed, FeedChannelNumber, Source
 from ..url import public_base_url
 from ..xml_cache import delete_xml_artifact, invalidate_xml_cache
 from .tasks import trigger_xml_refresh, trigger_xml_refresh_catchup
@@ -121,27 +121,6 @@ def list_feeds():
     base_url = public_base_url()
     feeds = Feed.query.order_by(Feed.name).all()
     return jsonify([f.to_dict(base_url) for f in feeds])
-
-
-@feeds_api_bp.route('/plex-settings', methods=['GET', 'POST'])
-def plex_settings():
-    """Toggle Plex (Threadfin) output. When enabled, the post-scrape refresh also
-    writes a description-stripped native M3U variant per feed (served at
-    /feeds/<slug>/native/m3u?description=0). Enabling triggers a refresh so the
-    variants exist immediately."""
-    s = AppSettings.get()
-    if request.method == 'GET':
-        return jsonify({'enabled': bool(s.plex_threadfin_enabled)})
-    data = request.get_json(silent=True) or {}
-    enabled = bool(data.get('enabled'))
-    was = bool(s.plex_threadfin_enabled)
-    s.plex_threadfin_enabled = enabled
-    err = _safe_commit()
-    if err:
-        return err
-    if enabled and not was:
-        _invalidate_and_refresh_xml()
-    return jsonify({'enabled': enabled})
 
 
 @feeds_api_bp.route('', methods=['POST'])

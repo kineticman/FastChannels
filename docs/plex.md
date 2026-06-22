@@ -29,15 +29,24 @@ FastChannels ──(M3U + XMLTV)──▶ Threadfin ──(HDHomeRun + MPEG-TS)�
 
 ## Step 1 — Get your FastChannels feed URLs
 
-Pick the feed you want in Plex (the built-in **Default** feed includes all enabled channels). Each
-feed exposes two stable URLs:
+Pick the feed you want in Plex (the built-in **Default** feed includes all enabled channels). Use
+the feed's **Native** endpoints — find them under each feed's *Native output* section in **Admin →
+Feeds**, or build them by hand:
 
 ```
-http://192.168.1.50:5523/feeds/default/m3u        # playlist
-http://192.168.1.50:5523/feeds/default/epg.xml    # XMLTV guide
+http://192.168.1.50:5523/feeds/default/native/m3u        # playlist
+http://192.168.1.50:5523/feeds/default/native/epg.xml    # XMLTV guide
 ```
 
 Replace `192.168.1.50:5523` with your FastChannels server URL and `default` with your feed slug.
+
+> **Why the *native* endpoints (not `/feeds/<slug>/m3u`)?** Two reasons specific to Plex:
+> 1. The standard M3U **excludes Gracenote-mapped channels** (they're routed to Channels DVR
+>    instead). Plex ignores Gracenote IDs, so those channels would silently vanish. The native
+>    playlist includes **every** channel.
+> 2. The native M3U is **description-stripped** — FastChannels' long, comma-bearing channel blurbs
+>    otherwise bleed into the channel name in Threadfin's M3U parser. Descriptions still ride in the
+>    XMLTV guide, so nothing is lost.
 
 > **Tip — keep the lineup tidy.** Plex/Threadfin work best with a focused channel list. Consider
 > building a dedicated feed in **Admin → Feeds** (filter by source/category/language) and setting a
@@ -82,10 +91,10 @@ Then open the Threadfin UI at `http://<host>:34400/web/`.
 
 In the Threadfin web UI:
 
-1. **Playlist** → add a new M3U source. Type **M3U**, paste your FastChannels **`/feeds/<slug>/m3u`**
-   URL. Save and let it update.
+1. **Playlist** → add a new M3U source. Type **M3U**, paste your FastChannels
+   **`/feeds/<slug>/native/m3u`** URL. Save and let it update.
 2. **XMLTV** → add a new guide source. Type **XMLTV**, paste your FastChannels
-   **`/feeds/<slug>/epg.xml`** URL. Save and update.
+   **`/feeds/<slug>/native/epg.xml`** URL. Save and update.
 3. **Mapping / XEPG** → Threadfin imports the channels (FastChannels' M3U parses cleanly — names,
    logos, `group-title`, and the `tvg-id` that matches the EPG are all picked up). Go to the
    **Mapping** tab, activate the channels you want, and confirm each has its EPG mapped.

@@ -1368,7 +1368,6 @@ def _refresh_xml_artifacts() -> None:
             (_settings.effective_public_base_url() or '').strip().rstrip('/')
             or 'http://localhost:5523'
         )
-        plex_threadfin = bool(_settings.plex_threadfin_enabled)
         xml_artifacts: list[tuple[str, Callable]] = [
             ('master', lambda fp: write_xmltv(fp, {}, base_url=base_url)),
         ]
@@ -1413,28 +1412,18 @@ def _refresh_xml_artifacts() -> None:
                     generate_m3u(filters, base_url=base_url, **std_kw)
                 ),
             ))
-            if plex_threadfin:
-                # Plex/Threadfin uses the NATIVE playlist (all channels incl.
-                # Gracenote-mapped ones, which Plex ignores). Generate it once and
-                # write both the native variant and the Threadfin (description-
-                # stripped) variant from the same string — no second DB query,
-                # both through the atomic pipeline.
-                native_m3u = generate_native_m3u(filters, base_url=base_url, **std_kw)
-                m3u_artifacts.append((
-                    f'feed-{feed.slug}-native-m3u',
-                    lambda fp, s=native_m3u: fp.write(s),
-                ))
-                m3u_artifacts.append((
-                    f'feed-{feed.slug}-threadfin-m3u',
-                    lambda fp, s=native_m3u: fp.write(strip_description_attrs(s)),
-                ))
-            else:
-                m3u_artifacts.append((
-                    f'feed-{feed.slug}-native-m3u',
-                    lambda fp, filters=filters, std_kw=std_kw: fp.write(
-                        generate_native_m3u(filters, base_url=base_url, **std_kw)
-                    ),
-                ))
+            # The native playlist carries all channels (incl. Gracenote-mapped ones
+            # Plex ignores) and is description-stripped: Threadfin's M3U parser bleeds
+            # the long, comma-bearing channel blurb into the channel name. The blurb is
+            # a channel-level attribute only — program data still rides in the EPG XML —
+            # so stripping it is lossless for guides and makes the native M3U import
+            # cleanly into Threadfin/Plex and other bridges.
+            m3u_artifacts.append((
+                f'feed-{feed.slug}-native-m3u',
+                lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                    strip_description_attrs(generate_native_m3u(filters, base_url=base_url, **std_kw))
+                ),
+            ))
             m3u_artifacts.append((
                 f'feed-{feed.slug}-watch-m3u',
                 lambda fp, filters=filters, std_kw=std_kw: fp.write(

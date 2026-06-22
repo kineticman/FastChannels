@@ -189,70 +189,6 @@ def epg_xml():
     )
 
 
-@output_bp.route('/feeds/threadfin-config.zip')
-def threadfin_config():
-    """
-    Generate a Threadfin restore zip pre-configured for one or more feeds.
-
-    Query: ?feed=<slug>&feed=<slug>...&tuner=<n>  (repeatable feed param).
-    The user restores it in Threadfin (Settings -> Restore) to stand up a
-    Threadfin dedicated to FastChannels with every channel auto-activated,
-    numbered, and EPG-mapped — no manual setup. See app/generators/threadfin.py.
-    """
-    from pathlib import Path
-    from ..generators.threadfin import build_threadfin_zip
-
-    slugs = request.args.getlist('feed')
-    tuner = request.args.get('tuner', default=2, type=int) or 2
-    # Advanced / install-specific overrides (Advanced Settings panel). Blank -> generator defaults.
-    adv = {
-        'ffmpeg_path': (request.args.get('ffmpeg_path') or '').strip(),
-        'vlc_path': (request.args.get('vlc_path') or '').strip(),
-        'temp_path': (request.args.get('temp_path') or '').strip(),
-        'port': (request.args.get('port') or '').strip(),
-        'backup_path': (request.args.get('backup_path') or '').strip(),
-    }
-    adv = {k: v for k, v in adv.items() if v}
-    if not slugs:
-        return Response('No feeds selected.', status=400, mimetype='text/plain')
-
-    base_url = public_base_url()
-    feeds = []
-    for slug in slugs:
-        feed = Feed.query.filter_by(slug=slug, is_enabled=True).first()
-        if feed is None:
-            continue
-        # Plex/Threadfin uses the NATIVE pairing (all channels, incl. Gracenote-
-        # mapped ones Plex ignores). Prefer the description-stripped Threadfin
-        # variant; fall back to the full native M3U if it isn't built yet.
-        m3u_path = (get_artifact(f'feed-{slug}-threadfin-m3u', ext='m3u')
-                    or get_artifact(f'feed-{slug}-native-m3u', ext='m3u'))
-        epg_path, _ = get_xml_artifact(f'feed-{slug}-native')
-        if m3u_path is None or epg_path is None:
-            return Response(
-                f'Feed "{slug}" output is still warming. Retry in a few seconds.',
-                status=503, mimetype='text/plain', headers={'Retry-After': '15'},
-            )
-        feeds.append({
-            'slug': slug,
-            'name': feed.name,
-            'm3u_bytes': Path(m3u_path).read_bytes(),
-            'epg_bytes': Path(epg_path).read_bytes(),
-        })
-
-    if not feeds:
-        return Response('No valid enabled feeds selected.', status=400, mimetype='text/plain')
-
-    zip_bytes = build_threadfin_zip(feeds, base_url, tuner=tuner, **adv)
-    fname = ('fastchannels-threadfin.zip' if len(feeds) > 1
-             else f'{feeds[0]["slug"]}-threadfin.zip')
-    return Response(
-        zip_bytes,
-        mimetype='application/zip',
-        headers={'Content-Disposition': f'attachment; filename="{fname}"'},
-    )
-
-
 @output_bp.route('/feeds/<slug>/m3u')
 def feed_m3u(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
@@ -311,16 +247,6 @@ def feed_epg(slug):
 @output_bp.route('/feeds/<slug>/native/m3u')
 def feed_native_m3u(slug):
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    # ?description=0 → Threadfin (description-stripped) native variant, built only
-    # when Plex output is enabled. Falls back to the full native artifact so the
-    # URL never hard-fails if the variant isn't present yet.
-    if request.args.get('description') == '0':
-        tf_path = get_artifact(f'feed-{slug}-threadfin-m3u', ext='m3u')
-        if tf_path is not None:
-            return _send_feed_artifact(
-                tf_path, mimetype='application/x-mpegurl',
-                download_name=f'{slug}-native.m3u',
-            )
     path = get_artifact(f'feed-{slug}-native-m3u', ext='m3u')
     if path is None:
         return Response(

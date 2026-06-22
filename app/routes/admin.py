@@ -1042,7 +1042,6 @@ def feeds():
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
-                           plex_threadfin_enabled=app_settings.plex_threadfin_enabled,
                            default_chnum_from_env=default_feed and default_feed.chnum_start is None and app_settings.env_global_chnum_start() is not None)
 
 
