@@ -739,18 +739,30 @@ def guide():
     feed_id   = request.args.get('feed_id',   type=int)
     category  = request.args.get('category',  type=str, default='').strip()
     search    = request.args.get('search',    type=str, default='').strip()
+    # Channel-state filter (mirrors the Channels tab). Default 'enabled'
+    # preserves the historical guide behavior of showing only the M3U set.
+    # 'is_active' stays pinned True regardless — upstream-gone channels carry
+    # stale EPG and are never shown here.
+    state     = request.args.get('state', type=str, default='enabled').strip()
+    if state not in ('enabled', 'disabled', 'both'):
+        state = 'enabled'
 
     sources    = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
     feeds      = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
     categories = [r[0] for r in (
         db.session.query(Channel.category)
-        .filter(Channel.is_active == True, Channel.is_enabled == True, Channel.category != None)
+        .filter(Channel.is_active == True, Channel.category != None)
         .distinct().order_by(Channel.category).all()
     )]
 
     q = Channel.query.options(load_only(
         Channel.id, Channel.name, Channel.logo_url, Channel.number, Channel.source_id,
-    )).filter_by(is_active=True, is_enabled=True)
+        Channel.is_enabled,
+    )).filter(Channel.is_active == True)
+    if state == 'enabled':
+        q = q.filter(Channel.is_enabled == True)
+    elif state == 'disabled':
+        q = q.filter(Channel.is_enabled == False)
     if source_id:
         q = q.filter(Channel.source_id == source_id)
     if feed_id:
@@ -805,7 +817,9 @@ def guide():
     )
 
     guide_rows = [
-        {'channel': c, 'sort_letter': _guide_sort_letter(c.name)} for c in channels
+        {'channel': c, 'sort_letter': _guide_sort_letter(c.name),
+         'is_enabled': c.is_enabled}
+        for c in channels
     ]
 
     def time_pct(dt_local):
@@ -843,6 +857,7 @@ def guide():
         feed_id=feed_id,
         category=category,
         search=search,
+        state=state,
         offset_hours=offset_hours,
         channel_count=len(channels),
         program_count=program_count,

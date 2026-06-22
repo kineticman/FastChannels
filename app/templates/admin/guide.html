@@ -248,6 +248,23 @@
       -webkit-box-orient: vertical;
     }
 
+    /* ── Disabled channels (visible when state filter includes them) ── */
+    .guide-row.ch-disabled .ch-cell { opacity: 0.55; }
+    .guide-row.ch-disabled .programs-track { opacity: 0.5; }
+    .ch-disabled-tag {
+      display: inline-block;
+      font-size: 0.55rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 0 3px;
+      vertical-align: middle;
+    }
+
     /* ── Time header track ── */
     .time-header-track {
       flex: 1;
@@ -506,13 +523,18 @@
           <option value="{{ cat }}"{% if category == cat %} selected{% endif %}>{{ cat }}</option>
           {% endfor %}
         </select>
+        <select name="state" onchange="this.form.submit()" aria-label="Channel state" title="Channel state">
+          <option value="enabled"{% if state == 'enabled' %} selected{% endif %}>Enabled only</option>
+          <option value="both"{% if state == 'both' %} selected{% endif %}>Enabled + Disabled</option>
+          <option value="disabled"{% if state == 'disabled' %} selected{% endif %}>Disabled only</option>
+        </select>
         <div class="guide-toolbar-sep"></div>
         <div class="guide-search-wrap">
           <input type="text" name="search" id="guide-search-input" placeholder="Search what's on…" value="{{ search }}" aria-label="Search programs" autocomplete="off">
           <div class="guide-search-history" id="guide-search-history" hidden></div>
         </div>
         <button type="submit" class="btn btn-sm">Search</button>
-        {% if source_id or feed_id or category or search %}<a href="/admin/guide" class="btn btn-sm btn-ghost">Clear</a>{% endif %}
+        {% if source_id or feed_id or category or search or state != 'enabled' %}<a href="/admin/guide" class="btn btn-sm btn-ghost">Clear</a>{% endif %}
         <div class="guide-toolbar-sep"></div>
         <div class="guide-time-nav">
           <button type="button" class="btn btn-sm btn-ghost" onclick="shiftTime(-2)" title="Go back 2 hours">&#8592; 2h</button>
@@ -533,7 +555,11 @@
         </span>
       </form>
 
-      <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem">Showing active, enabled channels — the same set included in M3U output. Disable a channel on the <a href="/admin/channels" style="color:var(--accent)">Channels</a> page to hide it here.</p>
+      <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem">
+        {% if state == 'disabled' %}Showing <strong>disabled</strong> channels only — these are excluded from M3U output.
+        {% elif state == 'both' %}Showing enabled <em>and</em> disabled channels; disabled ones are dimmed and excluded from M3U output.
+        {% else %}Showing enabled channels — the same set included in M3U output.{% endif %}
+        Toggle a channel's state on the <a href="/admin/channels" style="color:var(--accent)">Channels</a> page.</p>
 
       <div class="guide-outer" id="guide-outer">
         <div class="guide-inner" id="guide-inner">
@@ -551,10 +577,10 @@
 
           <!-- Channel rows -->
           {% for row in guide_rows %}
-          <div class="guide-row" data-channel-id="{{ row.channel.id }}" data-sort-letter="{{ row.sort_letter }}">
+          <div class="guide-row{% if not row.is_enabled %} ch-disabled{% endif %}" data-channel-id="{{ row.channel.id }}" data-sort-letter="{{ row.sort_letter }}">
             <div class="ch-cell" onclick="openGuideChannelModal({{ row.channel.id }}, this.closest('.guide-row'))">
-              {% if row.channel.logo_url %}<img src="{{ row.channel.logo_display_url or row.channel.logo_url }}" alt="" class="ch-logo">{% endif %}
-              <span class="ch-name">{{ row.channel.name }}</span>
+              {% if row.channel.logo_url %}<img src="{{ row.channel.logo_display_url or row.channel.logo_url }}" alt="" class="ch-logo" loading="lazy" decoding="async">{% endif %}
+              <span class="ch-name">{{ row.channel.name }}{% if not row.is_enabled %} <span class="ch-disabled-tag">disabled</span>{% endif %}</span>
             </div>
             <div class="programs-track" data-channel-id="{{ row.channel.id }}">
               <div class="now-line" style="left:{{ now_pct }}%"></div>
@@ -564,7 +590,7 @@
 
           {% if not guide_rows %}
           <div style="padding: 2rem; text-align: center; color: var(--text-muted); font-size: 0.9rem;">
-            No active channels found{% if source_id %} for the selected source{% endif %}.
+            No {% if state == 'disabled' %}disabled{% elif state == 'both' %}{% else %}enabled{% endif %} channels found{% if source_id %} for the selected source{% endif %}.
           </div>
           {% endif %}
 
