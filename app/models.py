@@ -314,6 +314,7 @@ class AppSettings(db.Model):
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True)  # scrapers auto-assign Gracenote IDs
     dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True)  # hourly PUT to Channels DVR lineups
     image_proxy_enabled  = db.Column(db.Boolean, nullable=False, default=True)  # proxy/cache logos and posters in output
+    plex_threadfin_enabled = db.Column(db.Boolean, nullable=False, default=False)  # generate Threadfin (description-stripped) feed M3U variants for Plex
     gracenote_map_url          = db.Column(db.Text, nullable=True)      # remote community CSV URL (defaults to built-in Gist)
     gracenote_contribution_url = db.Column(db.Text, nullable=True)      # webhook URL for submitting community contributions
     last_contribution_at       = db.Column(db.DateTime, nullable=True)  # server-side rate-limit: last successful submission

@@ -390,77 +390,6 @@
   </div>
   {% endif %}
 
-  <details class="plex-panel">
-    <summary>📺 Connect to Plex (via Threadfin)<span class="badge-pill pill-beta">Beta</span></summary>
-    <div class="plex-panel-body">
-      <p class="help" style="margin:0 0 0.75rem">
-        Plex can't read M3U directly — it only ingests HDHomeRun tuners. Pick the feeds you want in
-        Plex, download a ready-made <strong>Threadfin</strong> config, and restore it in Threadfin
-        (<em>Settings → Restore</em>). Every channel is auto-activated, numbered from its channel
-        number, and EPG-mapped — no manual setup.
-        <a href="#" onclick="event.preventDefault();document.getElementById('plex-doc-note').style.display='block'">Setup notes</a>.
-      </p>
-      <div id="plex-doc-note" class="help" style="display:none;margin:0 0 0.75rem;padding:0.5rem 0.75rem;background:var(--bg-soft,rgba(0,0,0,0.15));border-radius:6px">
-        Full instructions are in <code>docs/plex.md</code> in the FastChannels repo. The key Threadfin
-        setting: in <em>Settings → ffmpeg options</em> use <code>-c:a libmp3lame</code> (Plex DVR
-        can't ingest AAC-in-MPEG-TS). This generated config already sets it for you.
-      </div>
-
-      {% set selectable_feeds = feeds | selectattr('is_enabled') | list %}
-      {% if selectable_feeds %}
-      <div class="tf-feed-list">
-        {% for feed in selectable_feeds %}
-        {% set fcount = feed.channel_count() %}
-        <label class="tf-feed-item">
-          <input type="checkbox" class="tf-feed" value="{{ feed.slug }}" data-count="{{ fcount }}"
-                 onchange="updateThreadfinHint()">
-          <span class="tf-feed-name">{{ feed.name }}</span>
-          <span class="tf-feed-count">{{ '{:,}'.format(fcount) }} ch</span>
-        </label>
-        {% endfor %}
-      </div>
-
-      <div class="tf-controls">
-        <label class="tf-tuner-field">Tuners
-          <input type="number" id="tf-tuner" min="1" max="20" value="2"
-                 title="How many simultaneous live/recording streams Threadfin advertises to Plex.">
-        </label>
-        <button class="btn btn-primary" type="button" onclick="downloadThreadfinConfig()">
-          Download Threadfin config (.zip)
-        </button>
-      </div>
-      <div id="tf-hint" class="help" style="margin-top:0.5rem"></div>
-
-      <details class="tf-advanced" style="margin-top:0.75rem">
-        <summary class="help" style="cursor:pointer">Advanced settings</summary>
-        <div class="help" style="margin-top:0.5rem">
-          Leave blank to use the defaults for the official <code>fyb3roptik/threadfin</code> image.
-          Only change these if your Threadfin runs a different image or a bare-metal install.
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0.5rem;margin-top:0.5rem">
-            <label class="tf-adv-field">FFmpeg path
-              <input type="text" id="tf-ffmpeg-path" placeholder="/usr/bin/ffmpeg"
-                     title="ffmpeg binary path on the target Threadfin. Threadfin clears it if the binary isn't there.">
-            </label>
-            <label class="tf-adv-field">VLC path
-              <input type="text" id="tf-vlc-path" placeholder="/usr/bin/cvlc">
-            </label>
-            <label class="tf-adv-field">Temp dir
-              <input type="text" id="tf-temp-path" placeholder="/tmp/threadfin/">
-            </label>
-            <label class="tf-adv-field">Threadfin port
-              <input type="text" id="tf-port" placeholder="34400">
-            </label>
-          </div>
-          <p style="margin:0.5rem 0 0">⚠ The generated config disables Threadfin's login/auth — fine on
-          a trusted LAN, but don't expose that Threadfin to the internet with it.</p>
-        </div>
-      </details>
-      {% else %}
-      <p class="help" style="margin:0">No enabled feeds to export yet — create one above first.</p>
-      {% endif %}
-    </div>
-  </details>
-
   <div class="feed-grid" id="feed-grid">
     {% for feed in feeds %}
     <div class="feed-card {% if not feed.is_enabled %}disabled{% endif %}" id="card-{{ feed.id }}">
@@ -642,6 +571,84 @@
     </div>
     {% endfor %}
   </div>
+
+  <details class="plex-panel" style="margin-top:1.5rem;margin-bottom:0">
+    <summary>📺 Connect to Plex (via Threadfin)<span class="badge-pill pill-beta">Beta</span></summary>
+    <div class="plex-panel-body">
+      <p class="help" style="margin:0 0 0.75rem">
+        Plex can't read M3U directly — it only ingests HDHomeRun tuners. Pick the feeds you want in
+        Plex, download a ready-made <strong>Threadfin</strong> config, and restore it in Threadfin
+        (<em>Settings → Restore</em>). Every channel is auto-activated, numbered from its channel
+        number, and EPG-mapped — no manual setup.
+      </p>
+
+      <label class="tf-enable" style="display:flex;align-items:center;gap:0.5rem;margin:0 0 0.9rem;font-weight:600">
+        <input type="checkbox" id="tf-enable" {% if plex_threadfin_enabled %}checked{% endif %}
+               onchange="togglePlexEnabled(this.checked)">
+        Enable Plex output
+        <span class="help" style="font-weight:400;margin:0">— builds description-stripped feeds for Threadfin on each refresh</span>
+      </label>
+
+      {% set selectable_feeds = feeds | selectattr('is_enabled') | list %}
+      {% if selectable_feeds %}
+      <div id="tf-plex-body">
+      <div class="tf-feed-list">
+        {% for feed in selectable_feeds %}
+        {% set fcount = feed.channel_count() %}
+        <label class="tf-feed-item">
+          <input type="checkbox" class="tf-feed" value="{{ feed.slug }}" data-count="{{ fcount }}"
+                 onchange="updateThreadfinHint()">
+          <span class="tf-feed-name">{{ feed.name }}</span>
+          <span class="tf-feed-count">{{ '{:,}'.format(fcount) }} ch</span>
+        </label>
+        {% endfor %}
+      </div>
+
+      <div class="tf-controls">
+        <label class="tf-tuner-field">Tuners
+          <input type="number" id="tf-tuner" min="1" max="20" value="2"
+                 title="How many simultaneous live/recording streams Threadfin advertises to Plex.">
+        </label>
+        <button class="btn btn-primary" type="button" onclick="downloadThreadfinConfig()">
+          Download Threadfin config (.zip)
+        </button>
+      </div>
+      <div id="tf-hint" class="help" style="margin-top:0.5rem"></div>
+
+      <details class="tf-advanced" style="margin-top:0.75rem">
+        <summary class="help" style="cursor:pointer">Advanced settings</summary>
+        <div class="help" style="margin-top:0.5rem">
+          Leave blank to use the defaults for the official <code>fyb3roptik/threadfin</code> image.
+          Only change these if your Threadfin runs a different image or a bare-metal install.
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0.5rem;margin-top:0.5rem">
+            <label class="tf-adv-field">FFmpeg path
+              <input type="text" id="tf-ffmpeg-path" placeholder="/usr/bin/ffmpeg"
+                     title="ffmpeg binary path on the target Threadfin. Threadfin clears it if the binary isn't there.">
+            </label>
+            <label class="tf-adv-field">VLC path
+              <input type="text" id="tf-vlc-path" placeholder="/usr/bin/cvlc">
+            </label>
+            <label class="tf-adv-field">Temp dir
+              <input type="text" id="tf-temp-path" placeholder="/tmp/threadfin/">
+            </label>
+            <label class="tf-adv-field">Threadfin port
+              <input type="text" id="tf-port" placeholder="34400">
+            </label>
+            <label class="tf-adv-field">Backup dir
+              <input type="text" id="tf-backup-path" placeholder="/home/threadfin/conf/backup/"
+                     title="Threadfin's backup directory on the target. Must match the install — the UI restore reads it.">
+            </label>
+          </div>
+          <p style="margin:0.5rem 0 0">⚠ The generated config disables Threadfin's login/auth — fine on
+          a trusted LAN, but don't expose that Threadfin to the internet with it.</p>
+        </div>
+      </details>
+      </div><!-- /tf-plex-body -->
+      {% else %}
+      <p class="help" style="margin:0">No enabled feeds to export yet — create one above first.</p>
+      {% endif %}
+    </div>
+  </details>
 </div>
 
 <!-- ── Create / Edit Modal ── -->
@@ -1296,6 +1303,35 @@ async function deleteFeed(id, name, btn) {
 function _tfSelected() {
   return [...document.querySelectorAll('.tf-feed:checked')];
 }
+function applyPlexEnabledState(enabled) {
+  const body = document.getElementById('tf-plex-body');
+  if (!body) return;
+  body.style.opacity = enabled ? '' : '0.45';
+  body.style.pointerEvents = enabled ? '' : 'none';
+  body.querySelectorAll('input, button, summary').forEach(el => {
+    if ('disabled' in el) el.disabled = !enabled;
+  });
+}
+function togglePlexEnabled(enabled) {
+  applyPlexEnabledState(enabled);   // optimistic
+  fetch('/api/feeds/plex-settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: enabled }),
+  }).then(r => r.json()).then(d => {
+    applyPlexEnabledState(!!d.enabled);
+    const cb = document.getElementById('tf-enable');
+    if (cb) cb.checked = !!d.enabled;
+  }).catch(() => {
+    const cb = document.getElementById('tf-enable');
+    if (cb) cb.checked = !enabled;   // revert on failure
+    applyPlexEnabledState(!enabled);
+  });
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const cb = document.getElementById('tf-enable');
+  if (cb) applyPlexEnabledState(cb.checked);
+});
 function updateThreadfinHint() {
   const hint = document.getElementById('tf-hint');
   if (!hint) return;
@@ -1312,6 +1348,12 @@ function updateThreadfinHint() {
   hint.textContent = msg;
 }
 function downloadThreadfinConfig() {
+  const cb = document.getElementById('tf-enable');
+  if (cb && !cb.checked) {
+    const hint = document.getElementById('tf-hint');
+    if (hint) { hint.style.color = 'var(--danger)'; hint.textContent = 'Enable Plex output first.'; }
+    return;
+  }
   const sel = _tfSelected();
   if (!sel.length) {
     const hint = document.getElementById('tf-hint');
@@ -1321,7 +1363,7 @@ function downloadThreadfinConfig() {
   const tuner = document.getElementById('tf-tuner').value || 2;
   let qs = sel.map(c => 'feed=' + encodeURIComponent(c.value)).join('&') + '&tuner=' + encodeURIComponent(tuner);
   // Advanced settings — only sent when filled in (blank => generator defaults).
-  const adv = { ffmpeg_path: 'tf-ffmpeg-path', vlc_path: 'tf-vlc-path', temp_path: 'tf-temp-path', port: 'tf-port' };
+  const adv = { ffmpeg_path: 'tf-ffmpeg-path', vlc_path: 'tf-vlc-path', temp_path: 'tf-temp-path', port: 'tf-port', backup_path: 'tf-backup-path' };
   for (const [param, id] of Object.entries(adv)) {
     const v = (document.getElementById(id)?.value || '').trim();
     if (v) qs += '&' + param + '=' + encodeURIComponent(v);

@@ -210,6 +210,7 @@ def threadfin_config():
         'vlc_path': (request.args.get('vlc_path') or '').strip(),
         'temp_path': (request.args.get('temp_path') or '').strip(),
         'port': (request.args.get('port') or '').strip(),
+        'backup_path': (request.args.get('backup_path') or '').strip(),
     }
     adv = {k: v for k, v in adv.items() if v}
     if not slugs:
@@ -221,8 +222,12 @@ def threadfin_config():
         feed = Feed.query.filter_by(slug=slug, is_enabled=True).first()
         if feed is None:
             continue
-        m3u_path = get_artifact(f'feed-{slug}-m3u', ext='m3u')
-        epg_path, _ = get_xml_artifact(f'feed-{slug}')
+        # Plex/Threadfin uses the NATIVE pairing (all channels, incl. Gracenote-
+        # mapped ones Plex ignores). Prefer the description-stripped Threadfin
+        # variant; fall back to the full native M3U if it isn't built yet.
+        m3u_path = (get_artifact(f'feed-{slug}-threadfin-m3u', ext='m3u')
+                    or get_artifact(f'feed-{slug}-native-m3u', ext='m3u'))
+        epg_path, _ = get_xml_artifact(f'feed-{slug}-native')
         if m3u_path is None or epg_path is None:
             return Response(
                 f'Feed "{slug}" output is still warming. Retry in a few seconds.',
@@ -306,6 +311,16 @@ def feed_epg(slug):
 @output_bp.route('/feeds/<slug>/native/m3u')
 def feed_native_m3u(slug):
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    # ?description=0 → Threadfin (description-stripped) native variant, built only
+    # when Plex output is enabled. Falls back to the full native artifact so the
+    # URL never hard-fails if the variant isn't present yet.
+    if request.args.get('description') == '0':
+        tf_path = get_artifact(f'feed-{slug}-threadfin-m3u', ext='m3u')
+        if tf_path is not None:
+            return _send_feed_artifact(
+                tf_path, mimetype='application/x-mpegurl',
+                download_name=f'{slug}-native.m3u',
+            )
     path = get_artifact(f'feed-{slug}-native-m3u', ext='m3u')
     if path is None:
         return Response(

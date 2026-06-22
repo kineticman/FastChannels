@@ -62,6 +62,19 @@ _REGION_LABEL_SOURCES = {"pluto", "samsung", "tcl"}
 # Gracenote ID prefixes recognised by Channels DVR
 _GRACENOTE_PREFIX_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
 
+# FastChannels writes the channel description into TWO M3U attributes — tvg-description
+# AND tvc-guide-description — both carrying the same long, comma-bearing free text that
+# Threadfin's M3U parser mishandles (it bleeds into the channel display name). Strip BOTH;
+# the description is fully duplicated in the XMLTV <desc>, so this is lossless for EPG.
+# Safe match: _esc() converts any inner double-quote in the value to a single quote, so the
+# value never itself contains '"' (so [^"]* can't run past the real closing quote).
+_DESCRIPTION_ATTR_RE = re.compile(r'\s*(?:tvg-description|tvc-guide-description)="[^"]*"')
+
+
+def strip_description_attrs(m3u_text: str) -> str:
+    """Return an M3U string with the description attributes removed (for Threadfin)."""
+    return _DESCRIPTION_ATTR_RE.sub('', m3u_text)
+
 
 @dataclass(slots=True)
 class _MiniSource:

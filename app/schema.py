@@ -146,6 +146,12 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN image_proxy_enabled BOOLEAN NOT NULL DEFAULT 1"
                 ))
+            if "plex_threadfin_enabled" not in cols:
+                # Off by default — only generate the extra Threadfin (description-
+                # stripped) feed M3U variants once a user opts into Plex output.
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN plex_threadfin_enabled BOOLEAN NOT NULL DEFAULT 0"
+                ))
             if "auto_allow_new_channels" not in cols:
                 # Existing installs default ON — preserve current behaviour where
                 # newly-scraped channels flow straight into feeds.  Turning this OFF

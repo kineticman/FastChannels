@@ -20,11 +20,19 @@ Restore is FULL-REPLACE — this stands up a Threadfin dedicated to FastChannels
 (Merging into an existing Threadfin that already has other sources is a separate
 mode, not handled here.)
 """
+import datetime
 import io
 import json
 import random
 import string
 import zipfile
+
+# Threadfin's UI restore (backup.go ThreadfinRestore) type-asserts these as strings
+# and PANICS if a key is absent (interface conversion: nil is not string), wiping the
+# sources mid-restore. So the generated settings.json MUST carry them. version is the
+# fyb3roptik image's schema version; backup.path is its writable backup dir.
+DEFAULT_THREADFIN_VERSION = "0.5.0"
+DEFAULT_BACKUP_PATH = "/home/threadfin/conf/backup/"
 
 # Threadfin global-settings defaults — the sane shipped values. buffer +
 # ffmpeg.options are what actually matter for FastChannels playback into Plex.
@@ -50,9 +58,9 @@ _SETTINGS_DEFAULTS = {
     "m3u8.adaptive.bandwidth.mbps": 10, "mapping.first.channel": 1000,
     "ssdp": True,
     "update": ["0000"], "user.agent": "Threadfin", "udpxy": "",
-    # NOTE: deliberately NO "version" key — the target Threadfin stamps its own schema version on
-    # load. Hardcoding it risks a wrong/older value vs the target build's schema. Likewise ffmpeg.path,
-    # vlc.path, temp.path and port are install-specific and set per-call (Advanced Settings), not here.
+    # version, uuid, backup.path are REQUIRED by the UI restore (it type-asserts them
+    # as strings) — set per-call in build_threadfin_zip, not here. ffmpeg.path,
+    # vlc.path, temp.path and port are install-specific and also set per-call.
     "xepg.replace.missing.images": True, "xepg.replace.channel.title": False,
     "ThreadfinAutoUpdate": False, "storeBufferInRAM": True,
     "forceHttps": False, "httpsPort": 443, "bindIpAddress": "",
@@ -68,6 +76,14 @@ def _tid() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=20))
 
 
+def _threadfin_uuid() -> str:
+    """A unique Threadfin-style device UUID (YYYY-MM-XXXX-XXXX). Unique per generated
+    config so two FastChannels-built Threadfins never collide as the same HDHomeRun
+    device in Plex."""
+    rnd = lambda: "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+    return f"{datetime.datetime.now():%Y-%m}-{rnd()}-{rnd()}"
+
+
 # Install-specific defaults (overridable via "Advanced Settings" in the export UI). The
 # fyb3roptik/threadfin image ships ffmpeg/cvlc at these paths; bare-metal or other images differ.
 DEFAULT_FFMPEG_PATH = "/usr/bin/ffmpeg"
@@ -80,7 +96,8 @@ def build_threadfin_zip(feeds, base_url: str, tuner: int = 2, *,
                         ffmpeg_path: str = DEFAULT_FFMPEG_PATH,
                         vlc_path: str = DEFAULT_VLC_PATH,
                         temp_path: str = DEFAULT_TEMP_PATH,
-                        port: str = DEFAULT_THREADFIN_PORT) -> bytes:
+                        port: str = DEFAULT_THREADFIN_PORT,
+                        backup_path: str = DEFAULT_BACKUP_PATH) -> bytes:
     """
     Build a Threadfin restore zip for the given feeds.
 
@@ -92,7 +109,8 @@ def build_threadfin_zip(feeds, base_url: str, tuner: int = 2, *,
     Advanced / install-specific (sane defaults for the fyb3roptik/threadfin image):
     ffmpeg_path / vlc_path: binary paths on the TARGET Threadfin (it clears the
                             path if the binary isn't there). temp_path: its buffer
-                            dir. port: its web port.
+                            dir. port: its web port. backup_path: its backup dir
+                            (the UI restore type-asserts this — must be a string).
 
     Returns the zip file as bytes.
     """
@@ -105,6 +123,11 @@ def build_threadfin_zip(feeds, base_url: str, tuner: int = 2, *,
     settings["vlc.path"] = vlc_path or DEFAULT_VLC_PATH
     settings["temp.path"] = temp_path or DEFAULT_TEMP_PATH
     settings["port"] = str(port or DEFAULT_THREADFIN_PORT)
+    # REQUIRED by Threadfin's UI restore (it type-asserts these as strings; absence
+    # panics and wipes the sources). uuid is generated unique per config.
+    settings["version"] = DEFAULT_THREADFIN_VERSION
+    settings["uuid"] = _threadfin_uuid()
+    settings["backup.path"] = backup_path or DEFAULT_BACKUP_PATH
 
     m3u_files: dict = {}
     xmltv_files: dict = {}
@@ -114,8 +137,11 @@ def build_threadfin_zip(feeds, base_url: str, tuner: int = 2, *,
         slug = feed["slug"]
         name = feed["name"]
         pid, xid = _tid(), _tid()
-        m3u_url = f"{base}/feeds/{slug}/m3u"
-        epg_url = f"{base}/feeds/{slug}/epg.xml"
+        # NATIVE pairing: all channels (Plex ignores Gracenote), with the
+        # description-stripped M3U (?description=0) so Threadfin's parser doesn't
+        # bleed tvg-description into channel names.
+        m3u_url = f"{base}/feeds/{slug}/native/m3u?description=0"
+        epg_url = f"{base}/feeds/{slug}/native/epg.xml"
         m3u_files[pid] = {
             "type": "m3u", "name": name, "file.source": m3u_url,
             "file.threadfin": f"{pid}.m3u", "id.provider": pid,
