@@ -29,7 +29,7 @@ class AdultSwimScraper(BaseScraper):
     source_name = "adultswim"
     display_name = "Adult Swim"
     scrape_interval = 180
-    channel_refresh_hours = 12
+    channel_refresh_hours = 0    # fetch channel list every run — only ~13 calls for 12 channels; avoids channel-list staleness
     channel_miss_threshold = 5
     stream_audit_enabled = True
     epg_quality = "partial"

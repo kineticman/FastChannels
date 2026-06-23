@@ -146,7 +146,7 @@ class RokuScraper(BaseScraper):
     source_name           = "roku"
     display_name          = "The Roku Channel"
     scrape_interval       = 60    # EPG refreshed every hour
-    channel_refresh_hours = 6     # refresh channel metadata several times a day to warm Roku caches
+    channel_refresh_hours = 0     # fetch channel list every run — it's only ~2 API calls (the /epg call happens in fetch_epg anyway); skipping it saved ~1 call/run and risked silent staleness
     stream_audit_enabled  = True
     phase_timeouts        = {
         'init': 30,

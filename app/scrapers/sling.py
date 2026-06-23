@@ -56,7 +56,7 @@ class SlingScraper(BaseScraper):
         'inputstream.adaptive.manifest_type': 'mpd',
         'inputstream.adaptive.license_type': 'com.widevine.alpha',
     }
-    channel_refresh_hours = 12
+    channel_refresh_hours = 0    # fetch channel list every run — one summary call; avoids channel-list staleness
 
     CMW_FAST = "https://p-cmwnext-fast.movetv.com"
     CMS = "https://cbd46b77.cdn.cms.movetv.com"
