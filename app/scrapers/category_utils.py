@@ -1287,7 +1287,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'space live powered by sen':            'Science',
     'adventure earth':                      'Nature',
     'terra mater wild':                     'Nature',
-    'weather spy':                          'Nature',
+    'weather spy':                          'News',
 
     # ── News ─────────────────────────────────────────────────────────────────
     'the young turks':                      'News',
@@ -1774,6 +1774,14 @@ _NAME_OVERRIDES: dict[str, str] = {
     'true and the rainbow kingdom':         'Kids',
     'dog the bounty hunter':                'Reality TV',
     'the judge judy channel':               'Reality TV',
+    # Multi-category dedupe: same channel split across buckets by source —
+    # unify each to the home its sibling/variant override already uses.
+    'modern marvels':                       'History',
+    'outersphere':                          'Sci-Fi',
+    'motorvision':                          'Automotive',
+    'dr. g: medical examiner':              'True Crime',
+    'stingray cityscapes':                  'Ambiance',
+    'stingray stargaze':                    'Ambiance',
 }
 
 
