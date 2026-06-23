@@ -140,6 +140,9 @@
     .source-name { font-size: 0.95rem; font-weight: 600; }
     .err-pip { color: var(--danger); font-size: 0.82rem; cursor: default; }
     .source-meta { font-size: 0.76rem; color: var(--text-muted); }
+    .channel-fetch-meta { color: var(--text-muted); }
+    .channel-fetch-meta.pending { color: var(--text-soft); font-style: italic; }
+    .channel-fetch-meta.stale { color: var(--danger); font-weight: 600; }
 
     /* Inactive-channel nudge pill on the cleanup button */
     .inactive-pill {
@@ -663,6 +666,16 @@
                 {% if not is_custom %}
                 <span id="scrape-schedule-part-{{ source.id }}">{% if source.scrape_cron %}Clock-aligned{% else %}Every <span id="scrape-interval-display-{{ source.id }}">{{ source.scrape_interval }}</span> min{% endif %}</span>
                 &nbsp;·&nbsp; Last scraped: {{ source.last_scraped_at | localtime }}
+                {% set cfm = channel_fetch_meta.get(source.id) %}
+                {% if cfm %}
+                  {% if cfm.pending %}
+                    &nbsp;·&nbsp; <span class="channel-fetch-meta pending" title="Channel list will be refreshed on the next scrape.">Channels: refresh pending</span>
+                  {% elif cfm.stale %}
+                    &nbsp;·&nbsp; <span class="channel-fetch-meta stale" title="Channel list hasn't been refreshed in over 2× the {{ cfm.refresh_hours }}h refresh window. EPG may be advancing without channel refresh.">⚠ Channels refreshed: {{ source.last_channel_fetch_at | localtime }}</span>
+                  {% else %}
+                    &nbsp;·&nbsp; <span class="channel-fetch-meta" title="Last full channel-list fetch (runs every {{ cfm.refresh_hours }}h; EPG refreshes more often).">Channels refreshed: {{ source.last_channel_fetch_at | localtime }}</span>
+                  {% endif %}
+                {% endif %}
                 {% endif %}
               </div>
               {% if not is_custom %}

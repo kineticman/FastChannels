@@ -361,11 +361,20 @@ def run_scraper(source_name: str, force_full: bool = False):
             refresh_hours = getattr(scraper_cls, 'channel_refresh_hours', 0)
 
             # Decide whether to skip the channel list fetch this run.
-            # If channel_refresh_hours > 0 and we scraped within that window,
+            # If channel_refresh_hours > 0 and we fetched channels within that window,
             # only refresh EPG using the existing DB channel list.
+            #
+            # This MUST be gated on last_channel_fetch_at, not last_scraped_at:
+            # EPG-only runs bump last_scraped_at every scrape_interval, so for any
+            # source where scrape_interval < channel_refresh_hours, gating on
+            # last_scraped_at meant age_hours never reached the window and
+            # fetch_channels() was permanently skipped (channels went stale, only
+            # resolve() kept streams alive). last_channel_fetch_at is stamped only
+            # when a full channel fetch succeeds. NULL (existing installs / never
+            # fetched) → skip_channels stays False → one full fetch, then self-heals.
             skip_channels = False
-            if refresh_hours > 0 and source.last_scraped_at:
-                last = _utc_aware(source.last_scraped_at)
+            if refresh_hours > 0 and source.last_channel_fetch_at:
+                last = _utc_aware(source.last_channel_fetch_at)
                 age_hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
                 skip_channels = age_hours < refresh_hours
             if force_full:
@@ -455,6 +464,12 @@ def run_scraper(source_name: str, force_full: bool = False):
                             # before EPG), the source would otherwise keep a full
                             # channel list while still reporting "Last scraped: Never".
                             source.last_scraped_at = datetime.now(timezone.utc)
+                            # Stamp the channel-fetch clock too — this (not
+                            # last_scraped_at) gates the channel_refresh_hours skip.
+                            # Set only here, on a successful full fetch; EPG-only
+                            # runs and failed fetches leave it untouched so the next
+                            # scrape retries the full fetch.
+                            source.last_channel_fetch_at = source.last_scraped_at
                         _apply_scraper_config_updates(source, scraper)
                         db.session.commit()
                         # Clear so the EPG commit's _apply_scraper_config_updates
@@ -2501,10 +2516,42 @@ def _rq_prune():
         _prune_old_programs()
 
 
+def _warn_stale_channel_fetches():
+    """Log a WARNING for any enabled source whose channel list hasn't been
+    refreshed in well over its channel_refresh_hours window.
+
+    This is the canary for the class of bug where a source keeps reporting
+    successful scrapes (last_scraped_at advancing via EPG-only runs) while
+    fetch_channels() silently never runs and the channel list rots — invisible
+    because resolve() keeps existing streams playing. A divergence between
+    "scraped recently" and "channels fetched recently" surfaces it within a day.
+    """
+    now = datetime.now(timezone.utc)
+    for source in Source.query.filter_by(is_enabled=True).all():
+        scraper_cls = registry.get(source.name)
+        refresh_hours = getattr(scraper_cls, 'channel_refresh_hours', 0) if scraper_cls else 0
+        if not refresh_hours or not source.scrape_interval:
+            continue
+        last_fetch = _utc_aware(source.last_channel_fetch_at)
+        if last_fetch is None:
+            continue  # never fetched under the new clock — next scrape will do a full fetch
+        age_hours = (now - last_fetch).total_seconds() / 3600
+        if age_hours > 2 * refresh_hours:
+            logger.warning(
+                '[integrity] %s channel list is stale: last full fetch %.1fh ago '
+                '(channel_refresh_hours=%d). EPG may be advancing without channel refresh.',
+                source.name, age_hours, refresh_hours,
+            )
+
+
 def _rq_integrity_cleanup():
     """RQ job target: delete orphan channels/programs. Runs inside the RQ worker process."""
     with flask_app.app_context():
         _cleanup_orphans()
+        try:
+            _warn_stale_channel_fetches()
+        except Exception as exc:
+            logger.warning('[integrity] stale-channel-fetch check failed: %s', exc)
 
 
 # Number of nightly DB backups to retain in /data/backups.

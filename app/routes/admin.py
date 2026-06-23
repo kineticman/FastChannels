@@ -364,6 +364,28 @@ def sources():
         for s in sources_list
         if s.name in all_scrapers
     }
+
+    # Channel-fetch freshness: only meaningful for sources that fetch the channel
+    # list on a slower cadence than EPG (channel_refresh_hours > 0). NULL means
+    # "not yet fetched under the new clock — heals on next scrape"; stale means
+    # the full fetch hasn't run in over 2× the refresh window (the canary for the
+    # EPG-only-runs-bump-the-clock bug).
+    _now = datetime.now(timezone.utc)
+    channel_fetch_meta = {}
+    for s in sources_list:
+        cls = all_scrapers.get(s.name)
+        refresh_hours = getattr(cls, 'channel_refresh_hours', 0) if cls else 0
+        if not refresh_hours or not s.scrape_interval:
+            continue
+        last = s.last_channel_fetch_at
+        if last is not None and last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        age_hours = (_now - last).total_seconds() / 3600 if last else None
+        channel_fetch_meta[s.id] = {
+            'refresh_hours': refresh_hours,
+            'pending': last is None,
+            'stale': age_hours is not None and age_hours > 2 * refresh_hours,
+        }
     needs_config = [
         s for s in sources_list
         if source_config_status.get(s.id) == 'required' and s.is_enabled
@@ -387,6 +409,7 @@ def sources():
                            source_categories=source_categories,
                            source_interval_meta=source_interval_meta,
                            source_config_status=source_config_status,
+                           channel_fetch_meta=channel_fetch_meta,
                            needs_config=needs_config,
                            canonical_categories=CANONICAL_CATEGORIES)
 

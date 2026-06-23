@@ -168,6 +168,13 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE sources ADD COLUMN scrape_cron TEXT"
                 ))
+            if "last_channel_fetch_at" not in src_cols:
+                # Gates the channel_refresh_hours skip independently of last_scraped_at
+                # (which EPG-only runs bump every interval). NULL on existing installs
+                # forces one full fetch_channels() on the next scrape, then self-heals.
+                conn.execute(text(
+                    "ALTER TABLE sources ADD COLUMN last_channel_fetch_at DATETIME"
+                ))
             if "gracenote_resync_done" not in src_cols:
                 conn.execute(text(
                     "ALTER TABLE sources ADD COLUMN gracenote_resync_done BOOLEAN NOT NULL DEFAULT 0"

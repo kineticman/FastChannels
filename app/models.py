@@ -39,6 +39,7 @@ class Source(db.Model):
     scrape_cron     = db.Column(db.Text, nullable=True)
     is_enabled      = db.Column(db.Boolean, default=True)
     last_scraped_at = db.Column(db.DateTime(timezone=True))
+    last_channel_fetch_at = db.Column(db.DateTime(timezone=True))  # last full fetch_channels() — gates channel_refresh_hours skip; distinct from last_scraped_at (bumped by EPG-only runs)
     last_audited_at = db.Column(db.DateTime(timezone=True))
     last_error      = db.Column(db.Text)
     config          = db.Column(db.JSON, default=dict)
@@ -79,6 +80,7 @@ class Source(db.Model):
             'scrape_cron':    self.scrape_cron,
             'is_enabled':     self.is_enabled,
             'last_scraped_at': self.last_scraped_at.isoformat() if self.last_scraped_at else None,
+            'last_channel_fetch_at': self.last_channel_fetch_at.isoformat() if self.last_channel_fetch_at else None,
             'last_audited_at': self.last_audited_at.isoformat() if self.last_audited_at else None,
             'last_error':     self.last_error,
             'channel_count':  self.channels.filter_by(is_active=True).count(),
