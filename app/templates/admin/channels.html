@@ -251,6 +251,48 @@
     }
     .col-filter-select:hover { border-color: var(--border); color: var(--text-soft); }
     .col-filter-select.col-filter-active { color: var(--accent); border-color: var(--accent-border); background: var(--accent-bg-soft); }
+    /* Multi-select checkbox dropdown (Category filter) */
+    .ms-dd { position: relative; }
+    .ms-dd > summary {
+      list-style: none; cursor: pointer; width: 100%;
+      background: var(--surface); border: 1px solid var(--border); color: var(--text);
+      padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.875rem;
+      display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+    }
+    .ms-dd > summary::-webkit-details-marker { display: none; }
+    .ms-dd > summary::after { content: '▾'; font-size: 0.7rem; color: var(--text-muted); }
+    .ms-dd[open] > summary { border-color: var(--accent); }
+    .ms-dd-panel {
+      position: absolute; z-index: 60; top: calc(100% + 4px); left: 0;
+      min-width: 220px; max-width: 320px; max-height: 340px;
+      display: flex; flex-direction: column;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    }
+    .ms-dd-fixed .ms-dd-panel { position: fixed; top: 0; left: 0; }
+    .ms-dd-list { overflow-y: auto; padding: 0.4rem; }
+    .ms-dd-opt {
+      display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.5rem;
+      font-size: 0.85rem; color: var(--text); border-radius: 5px; cursor: pointer;
+      white-space: nowrap; text-transform: none; letter-spacing: normal; font-weight: 400;
+    }
+    .ms-dd-opt:hover { background: var(--accent-bg-soft); }
+    .ms-dd-opt input { width: auto; margin: 0; flex: none; }
+    .ms-dd-actions { display: flex; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid var(--border); }
+    .ms-dd-actions button { flex: 1; cursor: pointer; padding: 0.4rem; border-radius: 5px; font-size: 0.8rem; border: 1px solid var(--border); }
+    .ms-dd-clearbtn { background: var(--surface); color: var(--text-soft); }
+    /* Compact column-header variant */
+    .ms-dd-col > summary {
+      background: var(--bg); border-color: transparent; color: var(--text-muted);
+      font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 0.1rem 0.3rem; max-width: 120px;
+    }
+    .ms-dd-col > summary:hover { border-color: var(--border); color: var(--text-soft); }
+    .ms-dd-col.ms-active > summary { color: var(--accent); border-color: var(--accent-border); background: var(--accent-bg-soft); }
+    /* Stop the toolbar's <summary> color/weight rules from bleeding into the dropdown */
+    #toolbar-advanced .ms-dd > summary,
+    #toolbar-advanced[open] .ms-dd > summary,
+    #toolbar-advanced .ms-dd > summary:hover { color: var(--text); font-weight: 400; }
     .btn-reenable {
       font-size: 0.75rem; padding: 0.15rem 0.35rem; border-radius: 4px; border: none;
       background: var(--accent-bg); color: var(--accent-soft); cursor: pointer;
@@ -1398,14 +1440,24 @@
             </select>
           </div>
           <div class="filter-group">
-            <label class="filter-label" for="category-filter">Category</label>
-            <select id="category-filter" name="category">
-              <option value="">All Categories</option>
-              {% if missing_category_count %}<option value="__none__" {% if category_filter == '__none__' %}selected{% endif %}>Missing category ({{ missing_category_count }})</option>{% endif %}
-              {% for cat, count in categories %}
-              <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }} ({{ count }})</option>
-              {% endfor %}
-            </select>
+            <label class="filter-label">Category</label>
+            <details class="ms-dd" ontoggle="msOnToggle(this)">
+              <summary><span>{% if category_filter %}{{ category_filter|length }} selected{% else %}All Categories{% endif %}</span></summary>
+              <div class="ms-dd-panel">
+                <div class="ms-dd-list">
+                  {% if missing_category_count %}
+                  <label class="ms-dd-opt"><input type="checkbox" name="category" value="__none__" {% if '__none__' in category_filter %}checked{% endif %}><span>Missing category ({{ missing_category_count }})</span></label>
+                  {% endif %}
+                  {% for cat, count in categories %}
+                  <label class="ms-dd-opt"><input type="checkbox" name="category" value="{{ cat }}" {% if cat in category_filter %}checked{% endif %}><span>{{ cat }} ({{ count }})</span></label>
+                  {% endfor %}
+                </div>
+                <div class="ms-dd-actions">
+                  <button type="button" class="btn-apply" onclick="msApply(this)">Apply</button>
+                  <button type="button" class="ms-dd-clearbtn" onclick="msClear(this)">Clear</button>
+                </div>
+              </div>
+            </details>
           </div>
           <div class="filter-group">
             <label class="filter-label" for="enabled-filter">Channel State</label>
@@ -1551,7 +1603,7 @@
       <span class="filter-chip"><strong>Feed</strong>{{ 'Not in any feed' if feed_filter == '__none__' else (selected_feed.name if selected_feed else feed_filter) }}</span>
       {% endif %}
       {% if category_filter %}
-      <span class="filter-chip"><strong>Category</strong>{{ category_filter }}</span>
+      <span class="filter-chip"><strong>Category</strong>{{ (category_filter | join(', ')).replace('__none__', 'Missing category') }}</span>
       {% endif %}
       {% if enabled_filter %}
       <span class="filter-chip"><strong>State</strong>{% if enabled_filter == '1' %}Enabled only{% elif enabled_filter == '0' %}Disabled only{% endif %}</span>
@@ -1658,13 +1710,23 @@
               </select>
             </th>
             <th>
-              <select class="col-filter-select{% if category_filter %} col-filter-active{% endif %}" onchange="filterBy('category', this.value)" title="Filter by category">
-                <option value="">Category</option>
-                {% if missing_category_count %}<option value="__none__" {% if category_filter == '__none__' %}selected{% endif %}>Missing category</option>{% endif %}
-                {% for cat, count in categories %}
-                <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat }}</option>
-                {% endfor %}
-              </select>
+              <details class="ms-dd ms-dd-col ms-dd-fixed{% if category_filter %} ms-active{% endif %}" ontoggle="msOnToggle(this)" title="Filter by category">
+                <summary>Category{% if category_filter %} ({{ category_filter|length }}){% endif %}</summary>
+                <div class="ms-dd-panel">
+                  <div class="ms-dd-list">
+                    {% if missing_category_count %}
+                    <label class="ms-dd-opt"><input type="checkbox" value="__none__" {% if '__none__' in category_filter %}checked{% endif %}><span>Missing category</span></label>
+                    {% endif %}
+                    {% for cat, count in categories %}
+                    <label class="ms-dd-opt"><input type="checkbox" value="{{ cat }}" {% if cat in category_filter %}checked{% endif %}><span>{{ cat }}</span></label>
+                    {% endfor %}
+                  </div>
+                  <div class="ms-dd-actions">
+                    <button type="button" class="btn-apply" onclick="msApply(this)">Apply</button>
+                    <button type="button" class="ms-dd-clearbtn" onclick="msClear(this)">Clear</button>
+                  </div>
+                </div>
+              </details>
             </th>
             <th style="width:1px;white-space:nowrap">
               <select class="col-filter-select{% if language_filter %} col-filter-active{% endif %}" onchange="filterBy('language', this.value)" title="Filter by language" style="width:46px">
@@ -3444,6 +3506,38 @@
       params.set('page', '1');
       window.location.search = params.toString();
     }
+
+    // ── Multi-select checkbox dropdown (Category) ─────────────────────────
+    function msApply(btn) {
+      const dd = btn.closest('.ms-dd');
+      const vals = [...dd.querySelectorAll('.ms-dd-list input[type=checkbox]:checked')].map(c => c.value);
+      const params = new URLSearchParams(window.location.search);
+      params.delete('category');
+      vals.forEach(v => params.append('category', v));
+      params.set('page', '1');
+      window.location.search = params.toString();
+    }
+    function msClear(btn) {
+      btn.closest('.ms-dd').querySelectorAll('.ms-dd-list input[type=checkbox]').forEach(c => c.checked = false);
+      msApply(btn);
+    }
+    function msReposition(dd) {
+      const panel = dd.querySelector('.ms-dd-panel');
+      const s = dd.querySelector('summary').getBoundingClientRect();
+      panel.style.left = Math.max(8, Math.min(s.left, window.innerWidth - panel.offsetWidth - 8)) + 'px';
+      panel.style.top = (s.bottom + 4) + 'px';
+    }
+    function msOnToggle(dd) {
+      if (!dd.open) return;
+      document.querySelectorAll('.ms-dd[open]').forEach(o => { if (o !== dd) o.open = false; });
+      if (dd.classList.contains('ms-dd-fixed')) msReposition(dd);
+    }
+    document.addEventListener('click', e => {
+      document.querySelectorAll('.ms-dd[open]').forEach(dd => { if (!dd.contains(e.target)) dd.open = false; });
+    });
+    window.addEventListener('scroll', () => {
+      document.querySelectorAll('.ms-dd-fixed[open]').forEach(dd => { dd.open = false; });
+    }, true);
 
     function showToast(msg, ms = 3500) {
       const t = document.getElementById('bulk-toast');

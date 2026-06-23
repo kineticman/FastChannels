@@ -182,6 +182,29 @@ def _language_clause(value):
     return Channel.language == value
 
 
+def _category_clause(values):
+    """SQLAlchemy filter for the channels category multi-filter, or None for 'all'.
+
+    `values` is a list of category names (a bare string is also accepted for
+    backward compatibility). The '__none__' sentinel matches channels with no
+    category. Owning the multi-select semantics here keeps the admin route, the
+    bulk API, and the guide route in sync.
+    """
+    if not values:
+        return None
+    if isinstance(values, str):
+        values = [values]
+    named = [v for v in values if v != '__none__']
+    clauses = []
+    if named:
+        clauses.append(Channel.category.in_(named))
+    if '__none__' in values:
+        clauses.append(Channel.category == None)
+    if not clauses:
+        return None
+    return db.or_(*clauses) if len(clauses) > 1 else clauses[0]
+
+
 def _apply_admin_feed_membership_filters(query, feed: Feed):
     """Apply a feed's membership rules without forcing enabled/active output constraints."""
     filters = feed_to_query_filters(feed.filters or {})
@@ -382,7 +405,7 @@ def channels():
     gracenote_mode_filter = request.args.get('gracenote_mode', '')
     language_filter  = request.args.get('language', '')
     country_filter   = request.args.get('country', '')
-    category_filter  = request.args.get('category', '')
+    category_filter  = request.args.getlist('category')
     duplicates_filter = request.args.get('duplicates', '')
     new_filter       = request.args.get('new', '')
     epg_filter       = request.args.get('epg', '')
@@ -479,10 +502,8 @@ def channels():
     if country_filter:
         q = q.filter(Channel.country == country_filter)
     q_before_category = q  # snapshot for category facet (exclude own filter)
-    if category_filter == '__none__':
-        q = q.filter(Channel.category == None)
-    elif category_filter:
-        q = q.filter(Channel.category == category_filter)
+    if (cat_clause := _category_clause(category_filter)) is not None:
+        q = q.filter(cat_clause)
     if search:
         q = q.filter(Channel.name.ilike(f'%{search}%'))
 
@@ -661,7 +682,7 @@ def channels():
         'resolution': resolution_filter,
         'featured': featured_filter,
         'sort': sort_by, 'dir': sort_dir,
-    }.items() if v})
+    }.items() if v}, doseq=True)
 
     return render_template('admin/channels.html',
                            channels=channels, all_channel_ids=all_channel_ids,
@@ -737,7 +758,7 @@ def guide():
 
     source_id = request.args.get('source_id', type=int)
     feed_id   = request.args.get('feed_id',   type=int)
-    category  = request.args.get('category',  type=str, default='').strip()
+    category  = [c.strip() for c in request.args.getlist('category') if c.strip()]
     search    = request.args.get('search',    type=str, default='').strip()
     # Channel-state filter (mirrors the Channels tab). Default 'enabled'
     # preserves the historical guide behavior of showing only the M3U set.
@@ -749,11 +770,18 @@ def guide():
 
     sources    = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
     feeds      = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
-    categories = [r[0] for r in (
-        db.session.query(Channel.category)
+    # (category, count) for the filter dropdown — counts honor the current
+    # channel-state toggle so they match the rows actually shown, mirroring the
+    # facet counts on the Channels tab.
+    cat_count_q = (
+        db.session.query(Channel.category, db.func.count(Channel.id))
         .filter(Channel.is_active == True, Channel.category != None)
-        .distinct().order_by(Channel.category).all()
-    )]
+    )
+    if state == 'enabled':
+        cat_count_q = cat_count_q.filter(Channel.is_enabled == True)
+    elif state == 'disabled':
+        cat_count_q = cat_count_q.filter(Channel.is_enabled == False)
+    categories = cat_count_q.group_by(Channel.category).order_by(Channel.category).all()
 
     q = Channel.query.options(load_only(
         Channel.id, Channel.name, Channel.logo_url, Channel.number, Channel.source_id,
@@ -770,8 +798,8 @@ def guide():
         if selected_feed:
             q = q.join(Source, Channel.source_id == Source.id)
             q = _apply_admin_feed_membership_filters(q, selected_feed)
-    if category:
-        q = q.filter(Channel.category == category)
+    if (cat_clause := _category_clause(category)) is not None:
+        q = q.filter(cat_clause)
     if search:
         # Match channels whose own name matches, OR that air a program whose
         # title matches within the visible guide window. This way searching

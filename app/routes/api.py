@@ -59,7 +59,7 @@ from ..xml_cache import (
     get_xml_artifact,
     invalidate_xml_cache,
 )
-from .admin import _apply_admin_feed_membership_filters, _duplicate_name_sets, _feed_split_counts, _language_clause
+from .admin import _apply_admin_feed_membership_filters, _category_clause, _duplicate_name_sets, _feed_split_counts, _language_clause
 
 api_bp = Blueprint('api', __name__)
 
@@ -146,8 +146,8 @@ def _apply_channel_filters(q, filters: dict | None = None):
             q = _apply_admin_feed_membership_filters(q, feed)
     if src := filters.get('source'):
         q = q.filter(Source.name == src)
-    if cat := filters.get('category'):
-        q = q.filter(Channel.category == cat)
+    if (cat_clause := _category_clause(filters.get('category'))) is not None:
+        q = q.filter(cat_clause)
     if (lang_clause := _language_clause(filters.get('language'))) is not None:
         q = q.filter(lang_clause)
     if search := filters.get('search'):

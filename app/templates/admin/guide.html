@@ -52,6 +52,33 @@
       height: 2rem;
     }
     .guide-toolbar input[type="text"] { width: 170px; }
+    /* Multi-select checkbox dropdown (Category filter) */
+    .ms-dd { position: relative; }
+    .ms-dd > summary {
+      list-style: none; cursor: pointer;
+      padding: 0.35rem 0.65rem; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--text); font-size: 0.85rem; height: 2rem;
+      display: flex; align-items: center; gap: 0.4rem; white-space: nowrap;
+    }
+    .ms-dd > summary::-webkit-details-marker { display: none; }
+    .ms-dd > summary::after { content: '▾'; font-size: 0.65rem; color: var(--text-muted); }
+    .ms-dd[open] > summary { border-color: var(--accent); }
+    .ms-dd-panel {
+      position: absolute; z-index: 60; top: calc(100% + 4px); left: 0;
+      min-width: 220px; max-width: 320px; max-height: 340px;
+      display: flex; flex-direction: column;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    }
+    .ms-dd-list { overflow-y: auto; padding: 0.4rem; }
+    .ms-dd-opt {
+      display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.5rem;
+      font-size: 0.85rem; color: var(--text); border-radius: 5px; cursor: pointer; white-space: nowrap;
+    }
+    .ms-dd-opt:hover { background: var(--accent-bg-soft, rgba(125,125,125,0.15)); }
+    .ms-dd-opt input { width: auto; margin: 0; flex: none; }
+    .ms-dd-actions { display: flex; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid var(--border); }
+    .ms-dd-actions button { flex: 1; }
     .guide-search-wrap { position: relative; display: inline-flex; }
     .guide-search-history {
       position: absolute;
@@ -517,12 +544,20 @@
           <option value="{{ feed.id }}"{% if feed_id == feed.id %} selected{% endif %}>{{ feed.name }}</option>
           {% endfor %}
         </select>
-        <select name="category" onchange="this.form.submit()" aria-label="Category">
-          <option value="">All Categories</option>
-          {% for cat in categories %}
-          <option value="{{ cat }}"{% if category == cat %} selected{% endif %}>{{ cat }}</option>
-          {% endfor %}
-        </select>
+        <details class="ms-dd" ontoggle="msOnToggle(this)" aria-label="Category">
+          <summary>{% if category %}Category ({{ category|length }}){% else %}All Categories{% endif %}</summary>
+          <div class="ms-dd-panel">
+            <div class="ms-dd-list">
+              {% for cat, count in categories %}
+              <label class="ms-dd-opt"><input type="checkbox" name="category" value="{{ cat }}" {% if cat in category %}checked{% endif %}><span>{{ cat }} ({{ count }})</span></label>
+              {% endfor %}
+            </div>
+            <div class="ms-dd-actions">
+              <button type="button" class="btn btn-sm" onclick="msApply(this)">Apply</button>
+              <button type="button" class="btn btn-sm btn-ghost" onclick="msClear(this)">Clear</button>
+            </div>
+          </div>
+        </details>
         <select name="state" onchange="this.form.submit()" aria-label="Channel state" title="Channel state">
           <option value="enabled"{% if state == 'enabled' %} selected{% endif %}>Enabled only</option>
           <option value="both"{% if state == 'both' %} selected{% endif %}>Enabled + Disabled</option>
@@ -934,6 +969,20 @@
     })();
 
     // ── Time navigation ───────────────────────────────────────────────
+    // ── Multi-select checkbox dropdown (Category) ─────────────────────────
+    function msApply() { document.getElementById('guide-filter-form').submit(); }
+    function msClear(btn) {
+      btn.closest('.ms-dd').querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false);
+      msApply();
+    }
+    function msOnToggle(dd) {
+      if (!dd.open) return;
+      document.querySelectorAll('.ms-dd[open]').forEach(o => { if (o !== dd) o.open = false; });
+    }
+    document.addEventListener('click', e => {
+      document.querySelectorAll('.ms-dd[open]').forEach(dd => { if (!dd.contains(e.target)) dd.open = false; });
+    });
+
     function shiftTime(deltaHours) {
       const params = new URLSearchParams(window.location.search);
       const current = parseInt(params.get('offset') || '0', 10);
