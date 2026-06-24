@@ -23,12 +23,6 @@
     /* Header row */
     .page-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
     .page-header h2 { font-size: 1.1rem; font-weight: 600; }
-    .plex-panel { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 1.5rem; background: var(--card, var(--bg-soft)); }
-    .plex-panel > summary { cursor: pointer; padding: 0.85rem 1.1rem; font-weight: 600; font-size: 0.92rem; list-style: none; }
-    .plex-panel > summary::-webkit-details-marker { display: none; }
-    .plex-panel > summary::before { content: "▸"; display: inline-block; margin-right: 0.5rem; color: var(--text-muted); transition: transform 0.15s; }
-    .plex-panel[open] > summary::before { transform: rotate(90deg); }
-    .plex-panel-body { padding: 0 1.1rem 1.1rem; }
     .btn { padding: 0.45rem 1rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; border: none; font-weight: 500; }
     .btn-primary { background: var(--accent-strong); color: #fff; }
     .btn-primary:hover { background: var(--accent-strong-hover); }
@@ -120,9 +114,6 @@
     .pill-blue   { background: var(--accent-bg); color: var(--info); }
     .pill-green  { background: var(--success-bg); color: var(--success); }
     .pill-gray   { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
-    .pill-beta   { background: color-mix(in srgb, var(--warning, #f59e0b) 20%, var(--surface));
-                   color: var(--warning, #f59e0b); text-transform: uppercase; letter-spacing: 0.05em;
-                   font-size: 0.62rem; vertical-align: middle; margin-left: 0.5rem; }
     .filter-tags { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.6rem; }
 
     /* Empty state */
@@ -563,29 +554,6 @@
     </div>
     {% endfor %}
   </div>
-
-  <details class="plex-panel" style="margin-top:1.5rem;margin-bottom:0">
-    <summary>📺 Connect to Plex (via Threadfin)<span class="badge-pill pill-beta">Beta</span></summary>
-    <div class="plex-panel-body">
-      <p class="help" style="margin:0 0 0.75rem">
-        Plex can't read M3U directly — it only ingests HDHomeRun tuners. Run
-        <strong>Threadfin</strong> as a bridge and point it at a feed's <strong>Native</strong>
-        endpoints (under each feed's <em>Native output</em> section above):
-      </p>
-      <ul class="help" style="margin:0 0 0.75rem;padding-left:1.1rem;line-height:1.6">
-        <li><strong>Playlist (M3U):</strong> <code>…/feeds/&lt;slug&gt;/native/m3u</code></li>
-        <li><strong>EPG (XMLTV):</strong> <code>…/feeds/&lt;slug&gt;/native/epg.xml</code></li>
-      </ul>
-      <p class="help" style="margin:0 0 0.5rem">
-        The native playlist includes every channel (Gracenote-mapped ones too, which Plex ignores)
-        and is description-stripped so Threadfin's M3U parser doesn't bleed the channel blurb into
-        the channel name. In Threadfin, set the playlist <strong>buffer to FFmpeg</strong> (per the
-        M3U source, not just globally) and audio to <strong>MP3</strong> so Plex DVR can ingest it,
-        then add Threadfin to Plex as an HDHomeRun device.
-      </p>
-      <p class="help" style="margin:0">📖 Full walkthrough: <code>docs/plex.md</code>.</p>
-    </div>
-  </details>
 </div>
 
 <!-- ── Create / Edit Modal ── -->
