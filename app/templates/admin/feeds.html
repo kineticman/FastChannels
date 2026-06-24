@@ -51,6 +51,39 @@
     }
     .summary-stat .sub { font-size: 0.74rem; color: var(--text-dim); }
 
+    /* Channel number map */
+    .feed-map {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 1.1rem 1.5rem; margin-bottom: 1.5rem;
+    }
+    .feed-map-title {
+      font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;
+      letter-spacing: 0.05em; margin-bottom: 0.85rem;
+    }
+    .feed-map-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 0.2rem 1.5rem;
+    }
+    .map-row {
+      display: flex; align-items: baseline; gap: 0.6rem;
+      padding: 0.3rem 0.4rem; border-radius: 6px; cursor: pointer; text-decoration: none;
+    }
+    .map-row:hover { background: var(--bg); }
+    .map-range {
+      color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    .map-row.auto .map-range { color: var(--text-muted); }
+    .map-name {
+      color: var(--text); font-weight: 600; font-size: 0.92rem;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    @keyframes mapFlash {
+      0%, 70% { box-shadow: 0 0 0 2px var(--accent); }
+      100%    { box-shadow: 0 0 0 2px transparent; }
+    }
+    .feed-card.flash { animation: mapFlash 1.3s ease-out; }
+
     /* Feed cards */
     .feed-grid { display: grid; gap: 1rem; }
     .feed-card {
@@ -372,6 +405,11 @@
     </div>
   </div>
   {% endif %}
+
+  <div class="feed-map" id="feed-map" style="display:none">
+    <div class="feed-map-title">Channel Number Map</div>
+    <div class="feed-map-grid" id="feed-map-grid"></div>
+  </div>
 
   <div class="feed-grid" id="feed-grid">
     {% for feed in feeds %}
@@ -1309,6 +1347,45 @@ async function resetFeedChnums(feedId, feedName, isDefault, btn) {
 document.getElementById('modal-overlay').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeModal();
 });
+
+// ── Channel number map (summary) ──────────────────────────────────────────
+// Reuses the shared /api/feeds/chnum-ranges fetch (_fetchAllRanges) that the
+// conflict checker already loads, so this adds no extra request.
+async function renderChannelMap() {
+  const wrap = document.getElementById('feed-map');
+  const grid = document.getElementById('feed-map-grid');
+  if (!wrap || !grid) return;
+  let ranges;
+  try { ranges = await _fetchAllRanges(); } catch { return; }
+  if (!Array.isArray(ranges) || ranges.length === 0) return;
+
+  ranges = ranges.slice().sort((a, b) => a.start - b.start);
+  grid.innerHTML = '';
+  for (const r of ranges) {
+    const row = document.createElement('a');
+    row.className = 'map-row' + (r.explicit ? '' : ' auto');
+    row.href = `#card-${r.feed_id}`;
+    const range = r.end > r.start
+      ? `${r.start.toLocaleString()}–${r.end.toLocaleString()}`
+      : `${r.start.toLocaleString()}`;
+    row.innerHTML = `<span class="map-range"></span><span class="map-name"></span>`;
+    row.querySelector('.map-range').textContent = range;
+    row.querySelector('.map-name').textContent  = r.feed_name;
+    row.title = r.explicit ? '' : 'Auto-assigned range';
+    row.addEventListener('click', e => {
+      e.preventDefault();
+      const card = document.getElementById(`card-${r.feed_id}`);
+      if (!card) return;
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      card.classList.remove('flash');
+      void card.offsetWidth;  // restart the animation
+      card.classList.add('flash');
+    });
+    grid.appendChild(row);
+  }
+  wrap.style.display = '';
+}
+renderChannelMap();
 
 // Run conflict check on page load to show range bars for all feeds
 document.querySelectorAll('[id^="chnum-"]').forEach(input => {
