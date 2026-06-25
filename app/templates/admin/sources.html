@@ -139,10 +139,19 @@
     .source-name-wrap { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.2rem; }
     .source-name { font-size: 0.95rem; font-weight: 600; }
     .err-pip { color: var(--danger); font-size: 0.82rem; cursor: default; }
-    .source-meta { font-size: 0.76rem; color: var(--text-muted); }
-    .channel-fetch-meta { color: var(--text-muted); }
-    .channel-fetch-meta.pending { color: var(--text-soft); font-style: italic; }
-    .channel-fetch-meta.stale { color: var(--danger); font-weight: 600; }
+    .source-meta {
+      font-size: 0.76rem; color: var(--text-muted);
+      display: flex; flex-wrap: wrap; align-items: center;
+      column-gap: 0; row-gap: 0.1rem; margin-top: 0.1rem;
+    }
+    .source-meta .meta-item { display: inline-flex; align-items: center; white-space: nowrap; }
+    .source-meta .meta-item:not(:first-child)::before {
+      content: "·"; margin: 0 0.5rem; color: var(--border);
+    }
+    .meta-sched { color: var(--text-soft); }
+    .meta-ok { color: var(--success-soft); }
+    .meta-stale { color: var(--danger); font-weight: 600; }
+    .meta-pending { color: var(--text-soft); font-style: italic; }
 
     /* Inactive-channel nudge pill on the cleanup button */
     .inactive-pill {
@@ -664,16 +673,26 @@
               </div>
               <div class="source-meta" id="source-meta-{{ source.id }}">
                 {% if not is_custom %}
-                <span id="scrape-schedule-part-{{ source.id }}">{% if source.scrape_cron %}Clock-aligned{% else %}Every <span id="scrape-interval-display-{{ source.id }}">{{ source.scrape_interval }}</span> min{% endif %}</span>
-                &nbsp;·&nbsp; Last scraped: {{ source.last_scraped_at | localtime }}
+                <span class="meta-item meta-sched" id="scrape-schedule-part-{{ source.id }}">{% if source.scrape_cron %}Clock-aligned{% else %}Every <span id="scrape-interval-display-{{ source.id }}">{{ source.scrape_interval }}</span> min{% endif %}</span>
+                <span class="meta-item" title="Last scrape run (stamped after the channel list is committed, before the guide is fetched).">Scraped {{ source.last_scraped_at | localtime }}</span>
                 {% set cfm = channel_fetch_meta.get(source.id) %}
                 {% if cfm %}
                   {% if cfm.pending %}
-                    &nbsp;·&nbsp; <span class="channel-fetch-meta pending" title="Channel list will be refreshed on the next scrape.">Channels: refresh pending</span>
+                    <span class="meta-item meta-pending" title="Channel list will be refreshed on the next scrape.">Channels pending</span>
                   {% elif cfm.stale %}
-                    &nbsp;·&nbsp; <span class="channel-fetch-meta stale" title="Channel list hasn't been refreshed in over 2× the {{ cfm.refresh_hours }}h refresh window. EPG may be advancing without channel refresh.">⚠ Channels refreshed: {{ source.last_channel_fetch_at | localtime }}</span>
+                    <span class="meta-item meta-stale" title="Channel list hasn't been refreshed in over 2× the {{ cfm.refresh_hours }}h window — last refresh {{ source.last_channel_fetch_at | localtime }}. EPG may be advancing without channel refresh.">⚠ Channels stale</span>
                   {% else %}
-                    &nbsp;·&nbsp; <span class="channel-fetch-meta" title="Last full channel-list fetch (runs every {{ cfm.refresh_hours }}h; EPG refreshes more often).">Channels refreshed: {{ source.last_channel_fetch_at | localtime }}</span>
+                    <span class="meta-item meta-ok" title="Channels last fully refreshed {{ source.last_channel_fetch_at | localtime }} (full fetch runs every {{ cfm.refresh_hours }}h; EPG refreshes more often).">✓ Channels</span>
+                  {% endif %}
+                {% endif %}
+                {% set em = epg_meta.get(source.id) %}
+                {% if em %}
+                  {% if em.pending %}
+                    <span class="meta-item meta-pending" title="Guide (EPG) will be refreshed on the next scrape.">Guide pending</span>
+                  {% elif em.stale %}
+                    <span class="meta-item meta-stale" title="No successful guide refresh in over 2× the scrape interval — last good {{ source.last_epg_success_at | localtime }}. Channels may be refreshing while the EPG phase silently fails or hangs.">⚠ Guide stale</span>
+                  {% else %}
+                    <span class="meta-item meta-ok" title="Guide (EPG) last refreshed {{ source.last_epg_success_at | localtime }}. Distinct from Scraped, which is stamped before the EPG phase runs.">✓ Guide</span>
                   {% endif %}
                 {% endif %}
                 {% endif %}

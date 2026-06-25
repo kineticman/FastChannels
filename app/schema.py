@@ -175,6 +175,16 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE sources ADD COLUMN last_channel_fetch_at DATETIME"
                 ))
+            if "last_epg_success_at" not in src_cols:
+                # Stamped only when the EPG phase commits programs successfully.
+                # last_scraped_at is bumped right after the channel commit (before
+                # EPG runs), so a channels-OK / EPG-failed run looks like a full
+                # success. This distinct clock lets the staleness canary detect EPG
+                # that has silently stopped advancing while channels keep refreshing.
+                # NULL on existing installs → next successful EPG run stamps it.
+                conn.execute(text(
+                    "ALTER TABLE sources ADD COLUMN last_epg_success_at DATETIME"
+                ))
             if "gracenote_resync_done" not in src_cols:
                 conn.execute(text(
                     "ALTER TABLE sources ADD COLUMN gracenote_resync_done BOOLEAN NOT NULL DEFAULT 0"

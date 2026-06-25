@@ -421,8 +421,10 @@ def run_scraper(source_name: str, force_full: bool = False):
                     try:
                         _upsert_programs(source, programs, progress_cb=_progress)
                         _apply_scraper_config_updates(source, scraper)
-                        source.last_scraped_at = datetime.now(timezone.utc)
-                        source.last_error      = None
+                        _now = datetime.now(timezone.utc)
+                        source.last_scraped_at     = _now
+                        source.last_epg_success_at = _now
+                        source.last_error          = None
                         db.session.commit()
                         break
                     except _SAOperationalError:
@@ -512,8 +514,10 @@ def run_scraper(source_name: str, force_full: bool = False):
                     try:
                         _upsert_programs(source, programs, progress_cb=_progress)
                         _apply_scraper_config_updates(source, scraper)
-                        source.last_scraped_at = datetime.now(timezone.utc)
-                        source.last_error      = None
+                        _now = datetime.now(timezone.utc)
+                        source.last_scraped_at     = _now
+                        source.last_epg_success_at = _now
+                        source.last_error          = None
                         db.session.commit()
                         break
                     except _SAOperationalError as _dbe:
@@ -2423,6 +2427,48 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
 # double-queue a source that's still running (last_scraped_at not yet updated).
 _last_enqueued: dict[str, datetime] = {}
 
+# In-memory record of when a source was first seen continuously "active" (a
+# scrape job queued/started that the scheduler keeps skipping). A genuinely hung
+# scrape holds its slot until the RQ job_timeout (up to an hour) with no signal,
+# so we track how long it's been stuck and surface a warning once it crosses the
+# threshold. Cleared as soon as the source is no longer active.
+_active_since: dict[str, datetime] = {}
+# Sources we've already warned about while currently stuck, so each hang logs
+# (and stamps last_error) once rather than every scheduler tick. Cleared on clear.
+_stuck_warned: set[str] = set()
+
+
+def _note_source_stuck(source, now):
+    """Track a source whose scrape slot is held by an active/hung job and warn
+    (once) if it has been stuck well past its interval. Returns nothing."""
+    started = _active_since.setdefault(source.name, now)
+    stuck_min = (now - started).total_seconds() / 60
+    # A normal scrape finishes inside one interval; flag at 2 intervals (floor
+    # 30m) so slow-but-progressing runs don't trip it, but a true hang does.
+    interval = source.scrape_interval or 0
+    threshold = max(2 * interval, 30) if interval else 30
+    if stuck_min > threshold and source.name not in _stuck_warned:
+        _stuck_warned.add(source.name)
+        logger.warning(
+            '[scheduler] %s scrape has held its slot for %.0fm (interval=%dm) — '
+            'job likely hung; not re-enqueuing until it clears.',
+            source.name, stuck_min, interval,
+        )
+        try:
+            source.last_error = (
+                f'Scrape stuck/active for {stuck_min:.0f}m (interval={interval}m) — '
+                f'job likely hung; will not re-enqueue until it clears.'
+            )
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+
+def _clear_source_stuck(source_name):
+    """Forget any stuck-state tracking for a source that is no longer active."""
+    _active_since.pop(source_name, None)
+    _stuck_warned.discard(source_name)
+
 
 def _is_source_due(source, now, last):
     """Return True if this source should be enqueued for a scrape right now."""
@@ -2453,7 +2499,9 @@ def _schedule_due_scrapes():
         for source in sources:
             if _scrape_job_already_active(q, source.name):
                 _last_enqueued[source.name] = now
+                _note_source_stuck(source, now)
                 continue
+            _clear_source_stuck(source.name)
             last_scraped = _utc_aware(source.last_scraped_at)
             last_queued = _utc_aware(_last_enqueued.get(source.name))
             candidates = [t for t in (last_scraped, last_queued) if t is not None]
@@ -2544,6 +2592,38 @@ def _warn_stale_channel_fetches():
             )
 
 
+def _warn_stale_epg_refreshes():
+    """Log a WARNING for any enabled source whose EPG hasn't refreshed in well
+    over its scrape interval, even though it still reports recent scrapes.
+
+    The mirror image of _warn_stale_channel_fetches. last_scraped_at is stamped
+    right after the channel commit, *before* the EPG phase runs — so a run that
+    fetches channels fine but whose EPG phase then hangs or fails looks like a
+    full success. last_epg_success_at is stamped only when programs commit, so a
+    divergence between "scraped recently" and "EPG refreshed recently" surfaces a
+    silently-failing EPG (guide data rotting while channels stay healthy) within
+    a couple of intervals.
+    """
+    now = datetime.now(timezone.utc)
+    for source in Source.query.filter_by(is_enabled=True).all():
+        if not source.scrape_interval:
+            continue  # 0 = never auto-scraped; cron-only sources handled elsewhere
+        if source.scrape_cron:
+            continue  # interval isn't the governing clock for cron sources
+        last_epg = _utc_aware(source.last_epg_success_at)
+        if last_epg is None:
+            continue  # never succeeded under the new clock — next good run stamps it
+        age_min = (now - last_epg).total_seconds() / 60
+        # Two full intervals of grace: a single failed/hung run won't trip it.
+        if age_min > 2 * source.scrape_interval:
+            logger.warning(
+                '[integrity] %s EPG is stale: last successful EPG refresh %.0fm ago '
+                '(scrape_interval=%dm). Channels may be refreshing while EPG silently '
+                'fails or hangs — guide data is going stale.',
+                source.name, age_min, source.scrape_interval,
+            )
+
+
 def _rq_integrity_cleanup():
     """RQ job target: delete orphan channels/programs. Runs inside the RQ worker process."""
     with flask_app.app_context():
@@ -2552,6 +2632,10 @@ def _rq_integrity_cleanup():
             _warn_stale_channel_fetches()
         except Exception as exc:
             logger.warning('[integrity] stale-channel-fetch check failed: %s', exc)
+        try:
+            _warn_stale_epg_refreshes()
+        except Exception as exc:
+            logger.warning('[integrity] stale-epg-refresh check failed: %s', exc)
 
 
 # Number of nightly DB backups to retain in /data/backups.

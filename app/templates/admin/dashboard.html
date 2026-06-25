@@ -70,6 +70,63 @@
     .status-running .status-text { color:var(--accent-soft); }
     .status-queued  .status-text { color:var(--warning-soft); }
     .warn { color: var(--warning); font-size: 0.75rem; }
+    .err-pip { color: var(--danger); font-size: 0.78rem; font-weight: 600; cursor: default; margin-left: 0.3rem; }
+
+    /* Sources status board — each row is a feed; the signal state is the hero. */
+    .src-header-right { display: flex; align-items: center; gap: 0.85rem; }
+    .src-summary { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; }
+    .src-summary.ok { color: var(--success); }
+    .src-summary.attention { color: var(--warning); }
+
+    /* Fixed layout + shared colgroup so the enabled board and the disabled
+       fold (separate tables) keep identical column geometry. */
+    .src-board { table-layout: fixed; }
+    .src-board .c-status  { width: 9.5rem; }
+    .src-board .c-feeds   { width: 6rem; }
+    .src-board .c-updated { width: 8rem; }
+    .src-board .c-act     { width: 8rem; }
+    .src-board td { vertical-align: middle; padding: 0.42rem 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .src-board td:first-child { border-left: 3px solid transparent; }
+    .src-row.state-live    td:first-child { border-left-color: var(--success); }
+    .src-row.state-warn    td:first-child { border-left-color: var(--warning); }
+    .src-row.state-error   td:first-child { border-left-color: var(--danger); }
+    .src-row.state-pending td:first-child { border-left-color: var(--accent); }
+    .src-row.state-custom  td:first-child { border-left-color: var(--border); }
+    .src-row.state-off     td:first-child { border-left-color: var(--border); }
+    .src-row.state-off { opacity: 0.6; }
+    .src-row:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+    .src-name { font-weight: 600; font-size: 0.9rem; }
+
+    /* The signal "lock": a steady dot with a soft halo, plus an explicit label
+       (never colour-only). State priority: error > guide-stale/overdue > others. */
+    .signal { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; font-weight: 600; white-space: nowrap; cursor: default; }
+    .signal .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0;
+                   box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 20%, transparent); }
+    .signal.live    { color: var(--success); }
+    .signal.warn    { color: var(--warning); }
+    .signal.error   { color: var(--danger); }
+    .signal.pending { color: var(--accent-soft, var(--accent)); }
+    .signal.custom  { color: var(--text-muted); }
+    .signal.off     { color: var(--text-dim); }
+
+    /* Instrument-readout type for the data cells — one line each. */
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+    .ch-count { font-size: 0.9rem; font-weight: 700; color: var(--text); }
+    .upd { font-size: 0.78rem; color: var(--text-soft); }
+    .upd.due { color: var(--warning); font-weight: 600; }
+    .upd.muted { color: var(--text-dim); }
+    .act-cell { text-align: right; }
+    .act-cell .scrape-status { justify-content: flex-end; margin-top: 0.1rem; }
+
+    /* Disabled sources folded out of the snapshot. */
+    .disabled-fold { margin-top: 0.6rem; }
+    .disabled-fold > summary {
+      cursor: pointer; font-size: 0.76rem; color: var(--text-muted);
+      padding: 0.35rem 0; list-style-position: inside; user-select: none;
+    }
+    .disabled-fold > summary:hover { color: var(--text-soft); }
+    .disabled-fold[open] > summary { margin-bottom: 0.2rem; }
+    .disabled-fold .src-board td { padding-top: 0.34rem; padding-bottom: 0.34rem; }
     @media (max-width: 760px) {
       html { font-size: 16px; }
       nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
@@ -170,41 +227,79 @@
       {% endif %}
     </div>
 
+    {% macro source_row(source) %}
+      {% set h = source_health.get(source.id, {'state': 'off', 'label': 'Off'}) %}
+      {% set meta = source_output_meta[source.id] %}
+      {% set u = source_updated.get(source.id, {'rel': 'never', 'due': false}) %}
+      {% set nxt = source.next_scrape_at() %}
+      <tr class="src-row state-{{ h.state }}">
+        <td class="src-cell"><span class="src-name">{{ source.display_name }}</span></td>
+        <td>
+          <span class="signal {{ h.state }}"{% if h.state == 'error' and source.last_error %} title="{{ source.last_error }}"{% elif h.state == 'warn' and h.label == 'Guide stale' %} title="No successful guide refresh in over 2× the scrape interval — guide data may be going stale while channels keep refreshing."{% endif %}>
+            <span class="dot"></span>{{ h.label }}
+          </span>
+        </td>
+        <td class="ch-cell">
+          <span class="ch-count mono" title="{{ meta.feed_channel_count }} of this source's {{ meta.channel_count }} output channel{{ 's' if meta.channel_count != 1 else '' }} are in a feed (the default all-channels feed is excluded)">{{ meta.feed_channel_count }}</span>{% if meta.channel_count > 750 %} <span class="warn" title="{{ meta.channel_count }} output channels available — large; may slow some clients">⚠</span>{% endif %}
+        </td>
+        <td class="upd-cell">
+          {% if source.name == 'custom' %}
+            <span class="upd muted">manual</span>
+          {% else %}
+            <span class="upd {% if u.due %}due{% endif %}" id="last-scraped-{{ source.id }}"
+                  title="Last scraped {{ source.last_scraped_at | localtime }}{% if source.is_enabled and nxt %} · next {{ nxt | localtime }}{% endif %}">{{ u.rel }}</span>
+          {% endif %}
+        </td>
+        <td class="act-cell">
+          {% if source.name != 'custom' %}
+          <button class="btn btn-sm" onclick="run({{ source.id }}, this)"{% if not source.is_enabled %} disabled title="Enable this source to scrape"{% endif %}>Scrape</button>
+          <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
+          {% endif %}
+        </td>
+      </tr>
+    {% endmacro %}
+
     <!-- Sources -->
     <div class="section">
       <div class="section-header">
         <h2>Sources</h2>
-        <a href="/admin/sources" class="btn btn-sm">Manage</a>
+        <div class="src-header-right">
+          {% if health_summary.attention %}
+            <span class="src-summary attention">{{ health_summary.attention }} need{{ 's' if health_summary.attention == 1 else '' }} attention</span>
+          {% elif health_summary.live %}
+            <span class="src-summary ok">All healthy</span>
+          {% endif %}
+          <a href="/admin/sources" class="btn btn-sm">Manage</a>
+        </div>
       </div>
       <div class="table-wrap">
-      <table>
-        <thead><tr><th>Source</th><th>Status</th><th title="Channels currently eligible for output (active, enabled, source enabled, and streamable)">Output Channels</th><th title="Distinct output channels from this source that appear in at least one non-default feed">In a Feed</th><th>Last Scraped</th><th>Next Scrape</th><th>Action</th></tr></thead>
+      <table class="src-board">
+        <colgroup><col><col class="c-status"><col class="c-feeds"><col class="c-updated"><col class="c-act"></colgroup>
+        <thead><tr>
+          <th>Source</th>
+          <th>Status</th>
+          <th title="Channels from this source that are in a feed — excludes the default all-channels feed">In Feeds</th>
+          <th title="Time since the last completed scrape">Updated</th>
+          <th></th>
+        </tr></thead>
         <tbody>
-          {% for source in sources %}
-          <tr>
-            <td><strong>{{ source.display_name }}</strong></td>
-            <td><span class="badge {% if source.is_enabled %}badge-green{% else %}badge-red{% endif %}">{% if source.is_enabled %}Enabled{% else %}Disabled{% endif %}</span></td>
-            <td>
-              {{ source_output_meta[source.id].channel_count }}
-              {% if source_output_meta[source.id].channel_count > 750 %}<span class="warn">⚠</span>{% endif %}
-            </td>
-            <td style="color:{% if source_output_meta[source.id].feed_channel_count %}var(--text){% else %}var(--text-muted){% endif %}">
-              {{ source_output_meta[source.id].feed_channel_count or '—' }}
-            </td>
-            <td style="color:var(--text-muted)" id="last-scraped-{{ source.id }}">{{ source.last_scraped_at | localtime }}</td>
-            {% set nxt = source.next_scrape_at() %}
-            <td style="color:{% if not source.is_enabled %}var(--text-dim){% elif nxt and nxt < now %}var(--warning){% else %}var(--text-muted){% endif %}" id="next-scrape-{{ source.id }}">{% if not source.is_enabled %}Disabled{% else %}{{ nxt | localtime }}{% endif %}</td>
-            <td>
-              {% if source.name != 'custom' %}
-              <button class="btn btn-sm" onclick="run({{ source.id }}, this)"{% if not source.is_enabled %} disabled title="Enable this source to scrape"{% endif %}>Scrape Now</button>
-              <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
-              {% endif %}
-            </td>
-          </tr>
-          {% endfor %}
+          {% for source in enabled_sources %}{{ source_row(source) }}{% endfor %}
         </tbody>
       </table>
       </div>
+      {% if disabled_sources %}
+      <details class="disabled-fold">
+        <summary>{{ disabled_sources|length }} disabled source{{ '' if disabled_sources|length == 1 else 's' }}</summary>
+        <div class="table-wrap">
+        <table class="src-board disabled">
+          <colgroup><col><col class="c-status"><col class="c-feeds"><col class="c-updated"><col class="c-act"></colgroup>
+          <tbody>
+            {% for source in disabled_sources %}{{ source_row(source) }}{% endfor %}
+          </tbody>
+        </table>
+        </div>
+      </details>
+      {% endif %}
     </div>
   </div>
 
@@ -235,6 +330,19 @@
       }).replace(',', '').replace(/^(\d{2})\/(\d{2})\/(\d{4})/, '$3-$1-$2');
     }
 
+    // Mirror of the server _humanize_age() so a just-scraped row matches the
+    // rest of the Updated column ("just now" / "5m ago") instead of an absolute
+    // timestamp, until the next page load re-renders it server-side.
+    function _relTime(ms) {
+      if (!ms) return 'never';
+      const secs = Math.max(0, (Date.now() - ms) / 1000);
+      if (secs < 90) return 'just now';
+      if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+      if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
+      if (secs < 604800) return Math.floor(secs / 86400) + 'd ago';
+      return _formatAppTime(ms);
+    }
+
     function _statusText(data) {
       if (data.status === 'queued') return { cls:'status-queued', text:'Queued' };
       if (data.status === 'running') {
@@ -261,7 +369,11 @@
       if (btn) { btn.textContent = 'Scrape Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
       if (lastScrapedMs) {
         const cell = document.getElementById(`last-scraped-${sourceId}`);
-        if (cell) cell.textContent = _formatAppTime(lastScrapedMs);
+        if (cell) {
+          cell.textContent = _relTime(lastScrapedMs);
+          cell.classList.remove('due');               // no longer overdue
+          cell.title = 'Last scraped ' + _formatAppTime(lastScrapedMs);
+        }
       }
       const el = document.getElementById(`scrape-status-${sourceId}`);
       if (!el) return;

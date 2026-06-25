@@ -256,6 +256,74 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
     }
 
 
+def _epg_freshness_meta(sources, now=None):
+    """Per-source EPG freshness keyed by source id.
+
+    'pending' = EPG has never succeeded under the last_epg_success_at clock
+    (NULL on fresh installs; heals on the next successful EPG run). 'stale' =
+    the last successful EPG refresh is older than 2× the scrape interval, i.e.
+    channels may keep refreshing while the EPG phase silently fails or hangs.
+    Only meaningful for interval-scheduled sources (cron / never-scraped skipped).
+    """
+    now = now or datetime.now(timezone.utc)
+    meta = {}
+    for s in sources:
+        # Staleness only matters for sources actively expected to scrape on an
+        # interval — skip disabled sources (won't scrape) and cron/never-scraped.
+        if not s.is_enabled or not s.scrape_interval or s.scrape_cron:
+            continue
+        last = s.last_epg_success_at
+        if last is not None and last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        age_min = (now - last).total_seconds() / 60 if last else None
+        meta[s.id] = {
+            'pending': last is None,
+            'stale': age_min is not None and age_min > 2 * s.scrape_interval,
+        }
+    return meta
+
+
+# Priority-ordered signal states for a source, worst first. Drives the
+# dashboard status board: ('state', 'label') where state is the colour key.
+def _source_health(s, epg_stale, now):
+    if s.name == 'custom':
+        return ('custom', 'Custom') if s.is_enabled else ('off', 'Off')
+    if not s.is_enabled:
+        return ('off', 'Off')
+    if s.last_error:
+        return ('error', 'Error')
+    if epg_stale:
+        return ('warn', 'Guide stale')
+    if s.last_scraped_at is None:
+        return ('pending', 'Pending')
+    nxt = s.next_scrape_at()
+    if nxt is not None:
+        if nxt.tzinfo is None:
+            nxt = nxt.replace(tzinfo=timezone.utc)
+        # >10m past due means it isn't merely queued behind another scrape.
+        if (now - nxt).total_seconds() > 600:
+            return ('warn', 'Overdue')
+    return ('live', 'Active')
+
+
+def _humanize_age(dt, now):
+    """Short relative time for the dashboard snapshot: 'just now', '7m', '3h', '5d'."""
+    if dt is None:
+        return 'never'
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = max(0, (now - dt).total_seconds())
+    if secs < 90:
+        return 'just now'
+    if secs < 3600:
+        return f'{int(secs // 60)}m ago'
+    if secs < 86400:
+        return f'{int(secs // 3600)}h ago'
+    if secs < 604800:
+        return f'{int(secs // 86400)}d ago'
+    return dt.strftime('%b %-d')
+
+
 @admin_bp.route('/')
 def dashboard():
     sources        = Source.query.order_by(Source.display_name).all()
@@ -312,14 +380,40 @@ def dashboard():
         }
         for source in sources
     }
+    _now = datetime.now(timezone.utc)
+    epg_meta = _epg_freshness_meta(sources, _now)
+    source_health = {}
+    source_updated = {}
+    attention = live = 0
+    for source in sources:
+        state, label = _source_health(source, bool(epg_meta.get(source.id, {}).get('stale')), _now)
+        source_health[source.id] = {'state': state, 'label': label}
+        nxt = source.next_scrape_at()
+        if nxt is not None and nxt.tzinfo is None:
+            nxt = nxt.replace(tzinfo=timezone.utc)
+        source_updated[source.id] = {
+            'rel': _humanize_age(source.last_scraped_at, _now),
+            'due': bool(source.is_enabled and nxt and nxt < _now),
+        }
+        if state in ('error', 'warn'):
+            attention += 1
+        elif state in ('live', 'pending', 'custom'):
+            live += 1
+    health_summary = {'attention': attention, 'live': live}
+    enabled_sources = [s for s in sources if s.is_enabled]
+    disabled_sources = [s for s in sources if not s.is_enabled]
     return render_template('admin/dashboard.html', sources=sources,
+                           enabled_sources=enabled_sources, disabled_sources=disabled_sources,
                            total_channels=total_channels, base_url=base_url,
                            feeds=feeds, source_output_meta=source_output_meta,
+                           epg_meta=epg_meta, source_health=source_health,
+                           source_updated=source_updated,
+                           health_summary=health_summary,
                            setup_checklist=setup_checklist,
                            setup_complete_count=5 - len(setup_checklist),
                            setup_total_count=5,
                            tz_health=timezone_health(app_settings.timezone_name),
-                           now=datetime.now(timezone.utc))
+                           now=_now)
 
 
 @admin_bp.route('/sources')
@@ -410,6 +504,7 @@ def sources():
                            source_interval_meta=source_interval_meta,
                            source_config_status=source_config_status,
                            channel_fetch_meta=channel_fetch_meta,
+                           epg_meta=_epg_freshness_meta(sources_list, _now),
                            needs_config=needs_config,
                            canonical_categories=CANONICAL_CATEGORIES)
 
