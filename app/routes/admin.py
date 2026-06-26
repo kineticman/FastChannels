@@ -4,7 +4,7 @@ import re
 import unicodedata
 from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case
-from sqlalchemy.orm import load_only
+from sqlalchemy.orm import load_only, defer
 from ..extensions import db
 from ..models import Source, Channel, Feed, AppSettings, Program
 from ..generators.m3u import (
@@ -1284,9 +1284,15 @@ def channel_changes_report():
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     window_start = today_start - timedelta(days=window_days - 1)
 
+    # NOTE: defer(Source.config) is load-bearing. Source.config is JSON and the
+    # Roku source's is ~1.2MB; without deferring it, this (Channel, Source) join
+    # carries+deserializes that blob on every joined row (hundreds of Roku rows
+    # in a wide window), spiking the worker to >2GB. The report only reads
+    # source.display_name / scrape_interval, so config is never needed here.
     new_rows = (
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
+        .options(defer(Source.config))
         .filter(Channel.created_at >= window_start)
         .order_by(Channel.created_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
@@ -1295,6 +1301,7 @@ def channel_changes_report():
     inferred_lost_rows = (
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
+        .options(defer(Source.config))
         .filter(
             Channel.is_active == False,
             Channel.went_inactive_at >= window_start,
@@ -1306,6 +1313,7 @@ def channel_changes_report():
     at_risk_rows = (
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
+        .options(defer(Source.config))
         .filter(
             Channel.is_active == True,
             Channel.missed_scrapes > 0,
@@ -1317,6 +1325,7 @@ def channel_changes_report():
     returned_rows = (
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
+        .options(defer(Source.config))
         .filter(
             Channel.is_active == True,
             Channel.returned_at >= window_start,
@@ -1333,6 +1342,7 @@ def channel_changes_report():
     content_swap_rows = (
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
+        .options(defer(Source.config))
         .filter(Channel.identity_changed_at >= window_start)
         .order_by(Channel.identity_changed_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
