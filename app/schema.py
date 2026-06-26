@@ -106,6 +106,27 @@ def ensure_runtime_schema() -> None:
         if "feeds" not in tables:
             return
 
+        # source_cache: key/value home for large regenerable scraper caches that
+        # used to bloat Source.config (see models.SourceCache). Fresh installs get
+        # this via db.create_all(); existing installs need the guard so the table
+        # exists before the workers start writing caches.
+        if "source_cache" not in tables:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS source_cache ("
+                " id INTEGER PRIMARY KEY,"
+                " source_id INTEGER NOT NULL REFERENCES sources(id),"
+                " cache_key VARCHAR(64) NOT NULL,"
+                " value JSON,"
+                " updated_at DATETIME,"
+                " CONSTRAINT uq_source_cache_key UNIQUE (source_id, cache_key)"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_source_cache_source"
+                " ON source_cache (source_id)"
+            ))
+            tables.add("source_cache")
+
         if "app_settings" in tables:
             cols = {
                 row[1]

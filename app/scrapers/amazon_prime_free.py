@@ -185,8 +185,9 @@ class AmazonPrimeFreeScraper(BaseScraper):
         self._station_cache: dict[str, dict[str, Any]] = {}
 
         # Stream URL cache: {station_id: {"url": str, "expires_at": float}}
-        # Persisted in source.config["stream_url_cache"] across scrapes.
-        raw_cache = self.config.get("stream_url_cache") or {}
+        # Persisted in the source_cache table across scrapes (kept out of config so
+        # Source-entity loads never deserialize it).
+        raw_cache = self.cache.get("stream_url_cache") or {}
         self._stream_url_cache: dict[str, dict[str, Any]] = (
             raw_cache if isinstance(raw_cache, dict) else {}
         )
@@ -196,7 +197,8 @@ class AmazonPrimeFreeScraper(BaseScraper):
         # THAT channel's content — using one channel's PE for another returns the wrong stream.
         # The PE TTL is ~3 h and the scrape interval is well under that, so a scraped PE is
         # normally still valid at play time; if expired we re-mint via enrichItemMetadata (ASIN).
-        raw_cpe = self.config.get("channel_pe") or {}
+        # channel_pe lives in the source_cache table (regenerable, pruned each scrape).
+        raw_cpe = self.cache.get("channel_pe") or {}
         self._channel_pe: dict[str, dict[str, Any]] = (
             raw_cpe if isinstance(raw_cpe, dict) else {}
         )
@@ -477,7 +479,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
         if self._channel_pe:
             live_ids = {c.source_channel_id for c in channels}
             self._channel_pe = {k: v for k, v in self._channel_pe.items() if k in live_ids}
-            self._pending_config_updates["channel_pe"] = dict(self._channel_pe)
+            self._update_cache("channel_pe", dict(self._channel_pe))
             logger.info("[%s] harvested playback envelopes for %d/%d channels",
                         self.source_name, len(self._channel_pe), len(channels))
 
@@ -533,7 +535,9 @@ class AmazonPrimeFreeScraper(BaseScraper):
             logger.warning("[%s] no cookie_header — cannot resolve stream URL for %s",
                            self.source_name, station_id[:40])
             return raw_url
-        pe = self._channel_pe_for(self.config, station_id)
+        # _channel_pe_for reads channel_pe (now in self.cache) plus config creds (cookie_header);
+        # pass a merged view so the classmethod sees both.
+        pe = self._channel_pe_for({**self.config, **self.cache}, station_id)
         if not pe:
             logger.warning("[%s] no playback envelope for %s — cannot resolve entitled stream "
                            "(re-scrape to refresh)", self.source_name, station_id[:40])
@@ -551,9 +555,9 @@ class AmazonPrimeFreeScraper(BaseScraper):
                 "url": url,
                 "expires_at": time.time() + self._STREAM_URL_TTL,
             }
-            updated = dict(self.config.get("stream_url_cache") or {})
+            updated = dict(self.cache.get("stream_url_cache") or {})
             updated[station_id] = self._stream_url_cache[station_id]
-            self._pending_config_updates["stream_url_cache"] = updated
+            self._update_cache("stream_url_cache", updated)
             return url
 
         logger.warning("[%s] could not resolve live stream for %s", self.source_name, station_id[:40])

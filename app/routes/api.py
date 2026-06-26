@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from sqlalchemy import and_, not_, or_, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import defer
-from app.config_store import persist_source_config_updates
+from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
 from app.config import VERSION
 from ..extensions import db
 from ..models import Source, Channel, Program, AppSettings, Feed
@@ -843,8 +843,9 @@ def audit_status(source_id):
                 pass
     except Exception:
         pass
-    last_result = (source.config or {}).get('last_audit_result')
-    last_report = (source.config or {}).get('last_audit_report')
+    _audit_cache = load_source_cache(source.id)
+    last_result = _audit_cache.get('last_audit_result')
+    last_report = _audit_cache.get('last_audit_report')
     return jsonify({'status': 'idle', 'last_result': last_result, 'last_report': last_report})
 
 
@@ -1879,6 +1880,14 @@ def inspect_channel(channel_id):
                     persist_source_config_updates(
                         source.id,
                         scraper._pending_config_updates,
+                    )
+                except Exception:
+                    db.session.rollback()
+            if getattr(scraper, '_pending_cache_updates', None):
+                try:
+                    persist_source_cache_updates(
+                        source.id,
+                        scraper._pending_cache_updates,
                     )
                 except Exception:
                     db.session.rollback()

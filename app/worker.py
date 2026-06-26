@@ -26,7 +26,11 @@ from sqlalchemy import or_, text
 from sqlalchemy.exc import OperationalError as _SAOperationalError
 from sqlalchemy.orm.attributes import flag_modified as _flag_modified
 from app import create_app
-from app.config_store import persist_source_config_updates
+from app.config_store import (
+    persist_source_config_updates,
+    persist_source_cache_updates,
+    load_source_cache,
+)
 from app.extensions import db
 from app.hls import inspect_hls_drm, parse_stream_info as _parse_stream_info
 from app.models import Source, Channel, Program, Feed, AppSettings
@@ -479,6 +483,8 @@ def run_scraper(source_name: str, force_full: bool = False):
                         # re-merge of the already-committed channel-phase snapshot.
                         if hasattr(scraper, '_pending_config_updates'):
                             scraper._pending_config_updates.clear()
+                        if hasattr(scraper, '_pending_cache_updates'):
+                            scraper._pending_cache_updates.clear()
                         break
                     except _SAOperationalError as _dbe:
                         db.session.rollback()
@@ -665,14 +671,10 @@ def run_stream_audit(source_name: str):
         if _missing:
             _skip_msg = f"Required config missing: {', '.join(_missing)}"
             logger.warning('[audit] %s: %s — skipping audit', source_name, _skip_msg)
-            _skip_cfg = dict(source.config or {})
-            _skip_cfg['last_audit_result'] = {
+            persist_source_cache_updates(source.id, {'last_audit_result': {
                 'skipped_reason': _skip_msg,
                 'ts': datetime.now(timezone.utc).isoformat(),
-            }
-            source.config = _skip_cfg
-            _flag_modified(source, 'config')
-            db.session.commit()
+            }})
             return
 
         scraper = scraper_cls(config=source.config or {})
@@ -1118,17 +1120,14 @@ def run_stream_audit(source_name: str):
 
             finally:
                 if i % 25 == 0:
-                    _partial_cfg = dict(source.config or {})
-                    _partial_cfg['last_audit_result'] = {
+                    source.last_audited_at = datetime.now(timezone.utc)
+                    db.session.commit()
+                    persist_source_cache_updates(source.id, {'last_audit_result': {
                         'total': i, 'checked': checked, 'flagged': flagged,
                         'dead': dead, 'vod': vod, 'errors': errors, 'skipped_403': skipped_403,
                         'ts': datetime.now(timezone.utc).isoformat(),
                         'partial': True,
-                    }
-                    source.last_audited_at = datetime.now(timezone.utc)
-                    source.config = _partial_cfg
-                    _flag_modified(source, 'config')
-                    db.session.commit()
+                    }})
                     _audit_progress(i, total, flagged, dead, vod, errors, skipped_403)
                     logger.info('[audit] %s: %d/%d — checked=%d flagged=%d dead=%d vod=%d errors=%d skipped_403=%d',
                                 source_name, i, total, checked, flagged, dead, vod, errors, skipped_403)
@@ -1141,19 +1140,18 @@ def run_stream_audit(source_name: str):
                 _time.sleep(0.3)
 
         source.last_audited_at = datetime.now(timezone.utc)
-        cfg = dict(source.config or {})
-        cfg['last_audit_result'] = {
-            'total': total, 'checked': checked, 'flagged': flagged,
-            'dead': dead, 'vod': vod, 'errors': errors, 'skipped_403': skipped_403,
-            'ts': datetime.now(timezone.utc).isoformat(),
-        }
-        cfg['last_audit_report'] = {
-            'channels': report_channels,
-            'ts': datetime.now(timezone.utc).isoformat(),
-        }
-        source.config = cfg
-        _flag_modified(source, 'config')
         db.session.commit()
+        persist_source_cache_updates(source.id, {
+            'last_audit_result': {
+                'total': total, 'checked': checked, 'flagged': flagged,
+                'dead': dead, 'vod': vod, 'errors': errors, 'skipped_403': skipped_403,
+                'ts': datetime.now(timezone.utc).isoformat(),
+            },
+            'last_audit_report': {
+                'channels': report_channels,
+                'ts': datetime.now(timezone.utc).isoformat(),
+            },
+        })
         _audit_progress(0, 0, phase='done')
         logger.info('[audit] %s: done — total=%d checked=%d flagged=%d dead=%d vod=%d errors=%d skipped_403=%d',
                     source_name, total, checked, flagged, dead, vod, errors, skipped_403)
@@ -1287,9 +1285,9 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
 
         db.session.commit()
 
-        # Merge recheck results back into the saved report
-        cfg = dict(source.config or {})
-        report = dict(cfg.get('last_audit_report') or {})
+        # Merge recheck results back into the saved report (now in source_cache)
+        _audit_cache = load_source_cache(source.id)
+        report = dict(_audit_cache.get('last_audit_report') or {})
         existing = {c['id']: c for c in (report.get('channels') or []) if c.get('id')}
         for ch_id, result in recheck_results.items():
             if result is None:
@@ -1302,18 +1300,17 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
 
         report['channels'] = list(existing.values())
         report['ts'] = datetime.now(timezone.utc).isoformat()
-        cfg['last_audit_report'] = report
 
         # Update result summary skipped_403 count
-        result_summary = dict(cfg.get('last_audit_result') or {})
+        result_summary = dict(_audit_cache.get('last_audit_result') or {})
         still_limited = sum(1 for r in recheck_results.values() if r and r['status'] == 'rate-limited')
         result_summary['skipped_403'] = still_limited
         result_summary['ts'] = datetime.now(timezone.utc).isoformat()
-        cfg['last_audit_result'] = result_summary
 
-        source.config = cfg
-        _flag_modified(source, 'config')
-        db.session.commit()
+        persist_source_cache_updates(source.id, {
+            'last_audit_report': report,
+            'last_audit_result': result_summary,
+        })
         _rc_progress(0, 0, phase='done')
         logger.info('[audit-recheck] %s: done — rechecked=%d still_limited=%d',
                     source_name, total, still_limited)
@@ -1342,12 +1339,22 @@ def _make_progress_writer(source_name: str):
 
 
 def _apply_scraper_config_updates(source, scraper) -> None:
-    """Merge any config updates the scraper queued back into source.config."""
-    if scraper and scraper._pending_config_updates:
+    """Persist any config + cache updates the scraper queued.
+
+    Config updates merge into source.config; cache updates upsert into the
+    source_cache table (so they never bloat the config blob)."""
+    if not scraper:
+        return
+    if scraper._pending_config_updates:
         persist_source_config_updates(source.id, scraper._pending_config_updates)
         logger.debug('[%s] persisting %d config update(s): %s',
                      source.name, len(scraper._pending_config_updates),
                      list(scraper._pending_config_updates.keys()))
+    if getattr(scraper, '_pending_cache_updates', None):
+        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+        logger.debug('[%s] persisting %d cache update(s): %s',
+                     source.name, len(scraper._pending_cache_updates),
+                     list(scraper._pending_cache_updates.keys()))
 
 
 def _epg_channels_for_source(source) -> list[Channel]:

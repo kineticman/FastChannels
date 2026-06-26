@@ -92,6 +92,37 @@ class Source(db.Model):
         }
 
 
+class SourceCache(db.Model):
+    """
+    Key/value store for a Source's large, regenerable runtime caches
+    (e.g. Roku's description_cache / stream_url_cache).  These used to live
+    inside Source.config, but that JSON column is loaded — and deserialized —
+    by any query that materializes a Source entity (incl. (Channel, Source)
+    report joins), so a ~1.24 MB Roku config spiked a worker to 2.4 GB.
+
+    One row per (source_id, cache_key) keeps cache data out of the config
+    blob entirely: no Source-entity load pays to deserialize it, and each
+    cache can be pruned/rewritten independently of the others.
+    """
+    __tablename__ = 'source_cache'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    source_id  = db.Column(db.Integer, db.ForeignKey('sources.id'), nullable=False)
+    cache_key  = db.Column(db.String(64), nullable=False)
+    value      = db.Column(db.JSON, nullable=True)
+    updated_at = db.Column(db.DateTime(timezone=True),
+                           default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.UniqueConstraint('source_id', 'cache_key', name='uq_source_cache_key'),
+        db.Index('idx_source_cache_source', 'source_id'),
+    )
+
+    def __repr__(self):
+        return f'<SourceCache source_id={self.source_id} key={self.cache_key}>'
+
+
 class Channel(db.Model):
     __tablename__ = 'channels'
 

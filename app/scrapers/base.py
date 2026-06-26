@@ -412,6 +412,12 @@ class BaseScraper(ABC):
         # in-place before the caller explicitly saves pending updates.
         self.config  = copy.deepcopy(config or {})
         self._pending_config_updates: dict = {}
+        # Large regenerable caches live in the source_cache table, NOT in config,
+        # so Source-entity loads (incl. report joins) never deserialize them.
+        # Populated from the DB for this scraper's source; empty if unavailable.
+        self.cache: dict = {}
+        self._pending_cache_updates: dict = {}
+        self._load_source_cache()
         self._progress_cb = None   # optional callable(phase, done, total) set by worker
         self.session = requests.Session()
         self._configure_session(self.session)
@@ -448,6 +454,29 @@ class BaseScraper(ABC):
         Also updates self.config so the value is usable within the current run."""
         self.config[key] = value
         self._pending_config_updates[key] = value
+
+    def _load_source_cache(self) -> None:
+        """Populate self.cache from the source_cache table for this scraper's source.
+
+        Caches live outside Source.config so Source-entity loads never pay to
+        deserialize them. Guarded: with no DB/app context (e.g. ad-hoc
+        instantiation) the cache simply stays empty and the scraper re-fetches.
+        """
+        try:
+            from app.config_store import load_source_cache_by_name
+            self.cache = load_source_cache_by_name(self.source_name) or {}
+        except Exception:
+            logger.debug("[%s] could not load source cache; starting empty",
+                         getattr(self, 'source_name', '?'), exc_info=True)
+            self.cache = {}
+
+    def _update_cache(self, key: str, value) -> None:
+        """Queue a cache key/value to be persisted (to the source_cache table)
+        by the worker/play path after this run. Also updates self.cache so the
+        value is usable within the current run. Mirrors _update_config but for
+        large regenerable caches that must stay out of the config blob."""
+        self.cache[key] = value
+        self._pending_cache_updates[key] = value
 
     def pre_run_setup(self) -> None:
         """Called by the worker before fetch_channels/fetch_epg.

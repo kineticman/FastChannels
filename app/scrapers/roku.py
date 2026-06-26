@@ -266,7 +266,7 @@ class RokuScraper(BaseScraper):
             self._persist_403_cooldown()
 
     def _load_play_id_cache(self) -> None:
-        raw = self.config.get("play_id_cache") or {}
+        raw = self.cache.get("play_id_cache") or {}
         if not isinstance(raw, dict):
             return
         now = time.time()
@@ -285,7 +285,7 @@ class RokuScraper(BaseScraper):
             }
 
     def _persist_play_id_cache(self) -> None:
-        self._update_config("play_id_cache", self._play_id_cache)
+        self._update_cache("play_id_cache", self._play_id_cache)
 
     def _cache_play_id(self, station_id: str, play_id: str | None) -> None:
         if not station_id or not play_id:
@@ -316,7 +316,7 @@ class RokuScraper(BaseScraper):
             self._persist_play_id_cache()
 
     def _load_selector_url_cache(self) -> None:
-        raw = self.config.get("selector_url_cache") or {}
+        raw = self.cache.get("selector_url_cache") or {}
         if not isinstance(raw, dict):
             return
         now = time.time()
@@ -335,7 +335,7 @@ class RokuScraper(BaseScraper):
             }
 
     def _persist_selector_url_cache(self) -> None:
-        self._update_config("selector_url_cache", self._selector_url_cache)
+        self._update_cache("selector_url_cache", self._selector_url_cache)
 
     def _cache_selector_url(self, station_id: str, selector_url: str | None) -> None:
         if not station_id or not selector_url:
@@ -381,7 +381,7 @@ class RokuScraper(BaseScraper):
         )
 
     def _load_stream_url_cache(self) -> None:
-        raw = self.config.get("stream_url_cache") or {}
+        raw = self.cache.get("stream_url_cache") or {}
         if not isinstance(raw, dict):
             return
         now = time.time()
@@ -408,16 +408,16 @@ class RokuScraper(BaseScraper):
         # stream-URL timestamp so we don't falsely extend the token's apparent age.
         # Skip if osm_session key is explicitly present (even as None) — that means it
         # was deliberately cleared (expired token) and should not be re-populated here.
-        if self._osm_session and "osm_session" not in self.config and best_cached_at:
+        if self._osm_session and "osm_session" not in self.cache and best_cached_at:
             session_token, trace_id = self._osm_session
-            self._update_config("osm_session", {
+            self._update_cache("osm_session", {
                 "session_token": session_token,
                 "trace_id": trace_id,
                 "cached_at": best_cached_at,
             })
 
     def _persist_stream_url_cache(self) -> None:
-        self._update_config("stream_url_cache", self._stream_url_cache)
+        self._update_cache("stream_url_cache", self._stream_url_cache)
 
     def _try_update_osm_session(self, stream_url: str) -> None:
         """Extract session_token+traceId from an OSM stream URL and update _osm_session."""
@@ -427,8 +427,8 @@ class RokuScraper(BaseScraper):
             self._osm_session = (m.group(2), trace)
 
     def _load_osm_session(self) -> None:
-        """Load a previously persisted OSM session token from sources.config."""
-        raw = self.config.get("osm_session") or {}
+        """Load a previously persisted OSM session token from the source cache."""
+        raw = self.cache.get("osm_session") or {}
         if not isinstance(raw, dict):
             return
         session_token = raw.get("session_token")
@@ -442,11 +442,11 @@ class RokuScraper(BaseScraper):
         logger.debug("[roku] loaded persisted osm_session (age=%.0fs)", time.time() - float(cached_at))
 
     def _persist_osm_session(self) -> None:
-        """Save the current OSM session token to sources.config so it survives restarts."""
+        """Save the current OSM session token to the source cache so it survives restarts."""
         if not self._osm_session:
             return
         session_token, trace_id = self._osm_session
-        self._update_config("osm_session", {
+        self._update_cache("osm_session", {
             "session_token": session_token,
             "trace_id": trace_id,
             "cached_at": time.time(),
@@ -483,7 +483,7 @@ class RokuScraper(BaseScraper):
             self._persist_stream_url_cache()
 
     def _load_description_cache(self) -> None:
-        raw = self.config.get("description_cache") or {}
+        raw = self.cache.get("description_cache") or {}
         if isinstance(raw, str):
             try:
                 raw = json.loads(raw)
@@ -521,10 +521,11 @@ class RokuScraper(BaseScraper):
             cid: {"d": desc, "t": times.get(cid, time.time())}
             for cid, desc in cache.items()
         }
-        # Store as a JSON string, not a dict — merge_config_updates replaces strings
-        # but recursively merges dicts, which would prevent expired entries from ever
-        # being pruned from Source.config.
-        self._update_config("description_cache", json.dumps(serialized))
+        # Stored in the source_cache table, which fully replaces the row value on
+        # every write (no recursive merge), so expired entries prune correctly even
+        # as a plain dict. _load_description_cache still accepts the legacy JSON-string
+        # form so values copied verbatim from the old config by the migration load fine.
+        self._update_cache("description_cache", serialized)
 
     def _cache_descriptions(self, new_descs: dict[str, str]) -> None:
         if not new_descs:

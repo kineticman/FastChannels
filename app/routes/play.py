@@ -16,7 +16,7 @@ from urllib.parse import urljoin, parse_qs as _parse_qs
 import requests as _requests
 
 from flask import Blueprint, redirect, abort, request, Response, render_template
-from app.config_store import persist_source_config_updates
+from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
 from ..hls import inspect_hls_drm, parse_stream_info
 from ..models import Channel, Source
 from ..scrapers import registry
@@ -1707,8 +1707,12 @@ def amazon_dash_proxy(channel_id: str):
 
     if scraper._pending_config_updates:
         try:
-            from app.config_store import persist_source_config_updates
             persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+        except Exception:
+            pass
+    if getattr(scraper, '_pending_cache_updates', None):
+        try:
+            persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
         except Exception:
             pass
 
@@ -1771,7 +1775,9 @@ def license_proxy(source_name: str):
         abort(400)
     if len(challenge) > 65536:
         abort(413)
-    cfg = source.config or {}
+    # Merge source_cache (e.g. Amazon's channel_pe) over config so the scraper
+    # classmethods that read playback envelopes see them — they moved out of config.
+    cfg = {**(source.config or {}), **load_source_cache(source.id)}
     channel_id = request.args.get('channel_id') or None
     license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id)
     if not license_url:
@@ -1851,8 +1857,9 @@ def license_certificate(source_name: str):
                 return Response(cached, status=200, content_type='application/octet-stream')
         except Exception:
             pass
-    # Not cached — fetch live with a minimal SERVICE_CERTIFICATE_REQUEST challenge
-    cfg = source.config or {}
+    # Not cached — fetch live with a minimal SERVICE_CERTIFICATE_REQUEST challenge.
+    # Merge source_cache (Amazon channel_pe) over config — see license_proxy.
+    cfg = {**(source.config or {}), **load_source_cache(source.id)}
     dummy_challenge = b'\x08\x04'  # Widevine SERVICE_CERTIFICATE_REQUEST
     channel_id = request.args.get('channel_id') or None
     license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id)
@@ -1944,6 +1951,15 @@ def play(source_name: str, channel_id: str):
                 except Exception as ce:
                     db.session.rollback()
                     logger.warning('[play] failed to persist config updates: %s', ce)
+            if getattr(scraper, '_pending_cache_updates', None):
+                try:
+                    persist_source_cache_updates(
+                        channel.source_id,
+                        scraper._pending_cache_updates,
+                    )
+                except Exception as ce:
+                    db.session.rollback()
+                    logger.warning('[play] failed to persist cache updates: %s', ce)
             if getattr(scraper, '_requested_rescrape', False):
                 try:
                     from .tasks import trigger_scrape
@@ -2135,9 +2151,11 @@ def play(source_name: str, channel_id: str):
                 logger.warning('[play] Roku OSM token expired (401) — clearing osm_session and stream_url_cache')
                 with _app.app_context():
                     try:
-                        persist_source_config_updates(_source_id, {
+                        # osm_session + stream_url_cache now live in source_cache;
+                        # None overwrites the row value, which the loaders treat as empty.
+                        persist_source_cache_updates(_source_id, {
                             'osm_session': None,
-                            'stream_url_cache': None,  # None replaces; {} would merge (no-op)
+                            'stream_url_cache': None,
                         })
                     except Exception as e:
                         logger.warning('[play] failed to clear osm_session: %s', e)

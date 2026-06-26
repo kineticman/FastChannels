@@ -37,7 +37,7 @@ _EPG_DAYS = 3
 _GUIDE_CHUNK = 20       # channel IDs per guide request
 _ENRICH_WORKERS = 2    # conservative concurrency for template/data enrichment
 _ENRICH_DELAY = 0.4    # seconds between requests per worker to avoid rate-limiting
-_CACHE_MAX = 8000      # max content_cache entries to keep in source config
+_CACHE_MAX = 8000      # max content_cache entries to keep in the source_cache table
 
 # "S2 Ep14 | Manager Meltdown"  or  "S1 Ep3"  (no episode title)
 _SE_RE = re.compile(r'S(\d+)\s+Ep(\d+)(?:\s*\|\s*(.+))?', re.IGNORECASE)
@@ -371,8 +371,8 @@ class FrndlyTVScraper(BaseScraper):
         if not content_map:
             return
 
-        # Load persistent cache (content_id → metadata dict).
-        cache: dict[str, dict] = self.config.get('content_cache') or {}
+        # Load persistent cache (content_id → metadata dict) from the source_cache table.
+        cache: dict[str, dict] = self.cache.get('content_cache') or {}
         cache_hits = 0
 
         # Apply cache hits immediately; collect misses for network fetch.
@@ -444,7 +444,7 @@ class FrndlyTVScraper(BaseScraper):
             for k in keys[:len(cache) - _CACHE_MAX]:
                 del cache[k]
 
-        self._update_config('content_cache', cache)
+        self._update_cache('content_cache', cache)
 
     # ── resolve ────────────────────────────────────────────────────────────────
 
