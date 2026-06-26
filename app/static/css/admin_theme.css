@@ -325,3 +325,43 @@ nav,
     order: 98;
   }
 }
+
+/* Count pill on nav links (e.g. channels pending review). */
+.nav-badge {
+  display: inline-block;
+  min-width: 1.1rem;
+  padding: 0 0.35rem;
+  margin-left: 0.3rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.1rem;
+  text-align: center;
+  color: var(--bg);
+  background: var(--warning);
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+/* Nudge banner on the channels page when channels are pending review. */
+.review-nudge {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 1rem;
+  padding: 0.7rem 1rem;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.review-nudge:hover { border-color: var(--warning-strong); }
+.review-nudge-icon { font-size: 1.05rem; line-height: 1; }
+.review-nudge-text strong { color: var(--warning-strong); }
+.review-nudge-cta {
+  margin-left: auto;
+  font-weight: 700;
+  color: var(--warning-strong);
+  white-space: nowrap;
+}

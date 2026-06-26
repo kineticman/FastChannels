@@ -5,7 +5,7 @@ from .extensions import db
 from .config import Config, VERSION
 from . import logfile
 from .schema import ensure_runtime_schema
-from .models import AppSettings
+from .models import AppSettings, Channel
 from .timezone_utils import format_datetime, write_timezone_cache
 from .version_check import get_version_status
 
@@ -40,9 +40,19 @@ def create_app(config_class=Config):
     @app.context_processor
     def inject_version():
         settings = AppSettings.get()
+        try:
+            pending_review_count = (
+                Channel.query
+                .filter(Channel.review_state == 'pending')
+                .count()
+            )
+        except Exception:
+            # Never let a count query break page rendering (e.g. mid-migration).
+            pending_review_count = 0
         return {
             'app_version': VERSION,
             'app_timezone_name': settings.effective_timezone_name(),
+            'pending_review_count': pending_review_count,
             'update_status': get_version_status(
                 VERSION,
                 enabled=app.config.get('VERSION_CHECK_ENABLED', True),

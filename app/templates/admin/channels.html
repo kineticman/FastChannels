@@ -1393,7 +1393,7 @@
     <h1>⚡ FastChannels</h1>
     <a href="/admin/">Dashboard</a>
     <a href="/admin/sources">Sources</a>
-    <a href="/admin/channels" class="active">Channels</a>
+    <a href="/admin/channels" class="active">Channels{% if pending_review_count %}<span class="nav-badge" title="{{ pending_review_count }} channel(s) awaiting review">{{ pending_review_count }}</span>{% endif %}</a>
     <a href="/admin/guide">Guide</a>
     <a href="/admin/feeds">Feeds</a>
     <a href="/admin/settings">Settings</a>
@@ -1590,6 +1590,14 @@
       <input type="hidden" name="sort" value="{{ sort_by }}">
       <input type="hidden" name="dir" value="{{ sort_dir }}">
     </form>
+
+    {% if pending_review_count and review_filter != 'pending' %}
+    <a class="review-nudge" href="/admin/channels?review=pending">
+      <span class="review-nudge-icon">🔔</span>
+      <span class="review-nudge-text"><strong>{{ pending_review_count }}</strong> new channel{{ 's' if pending_review_count != 1 }} awaiting review — held out of all feeds until approved.</span>
+      <span class="review-nudge-cta">Review now →</span>
+    </a>
+    {% endif %}
 
     <div class="filter-summary">
       <span class="filter-summary-label">Active Filters</span>

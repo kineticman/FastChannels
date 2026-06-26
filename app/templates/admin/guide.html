@@ -519,7 +519,7 @@
     <h1>⚡ FastChannels</h1>
     <a href="/admin/">Dashboard</a>
     <a href="/admin/sources">Sources</a>
-    <a href="/admin/channels">Channels</a>
+    <a href="/admin/channels">Channels{% if pending_review_count %}<span class="nav-badge" title="{{ pending_review_count }} channel(s) awaiting review">{{ pending_review_count }}</span>{% endif %}</a>
     <a href="/admin/guide" class="active">Guide</a>
     <a href="/admin/feeds">Feeds</a>
     <a href="/admin/settings">Settings</a>
