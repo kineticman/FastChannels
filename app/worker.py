@@ -2798,7 +2798,17 @@ if __name__ == '__main__':
         )
 
     def _run_scheduler():
-        scheduler = BackgroundScheduler(daemon=True)
+        # Resolve the scheduler's default timezone through our guarded path BEFORE
+        # constructing it. APScheduler defaults to tzlocal.get_localzone(), which
+        # HARD-RAISES on a legacy/invalid container TZ (e.g. TZ=US/Eastern) — that
+        # would crash this whole worker on startup and silently stop all scrapes.
+        # current_zoneinfo() never raises (falls back to system tz, then UTC), and
+        # the same value drives the cron jobs below so the UI and scheduler agree.
+        with flask_app.app_context():
+            from app.models import AppSettings as _AS
+            from app.timezone_utils import current_zoneinfo
+            _tz = current_zoneinfo(_AS.get().timezone_name)
+        scheduler = BackgroundScheduler(daemon=True, timezone=_tz)
         scheduler.add_job(_schedule_due_scrapes, 'interval', minutes=1, id='auto_scrape',
                           max_instances=1, coalesce=True, misfire_grace_time=60)
         scheduler.add_job(_scheduled_prune, 'interval', hours=1, id='epg_prune',
@@ -2839,16 +2849,9 @@ if __name__ == '__main__':
                 logger.warning('[tvtv-cache] could not enqueue via RQ: %s', exc)
                 return 'error'
 
-        # 03:00 user local time — reads timezone from AppSettings so it follows
-        # whatever the user has configured in admin/settings.
-        with flask_app.app_context():
-            from app.models import AppSettings as _AS
-            from app.timezone_utils import current_zoneinfo
-            # Resolve through the same zoneinfo path the rest of the app uses, so a
-            # name that's valid in one tz library but not another (e.g. the legacy
-            # alias 'US/Central', which pytz accepts but this container's zoneinfo
-            # rejects) can't silently diverge between the UI and the scheduler.
-            _tz = current_zoneinfo(_AS.get().timezone_name)
+        # 03:00 user local time — _tz (resolved at construction above) follows the
+        # timezone configured in admin/settings, via the same guarded zoneinfo path
+        # the rest of the app uses, so the UI and scheduler can't silently diverge.
         scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
                           hour=3, minute=0, timezone=_tz,
                           id='tvtv_cache_refresh_night', max_instances=1, coalesce=True,
