@@ -961,8 +961,8 @@ function buildRangeHint(explicitRanges, myStart, myEnd, conflictIds) {
 
   const parts = explicitRanges.map(r => {
     const isConflict = conflictIds.has(r.feed_id);
-    const totalEnd = r.end + (r.gn_count || 0);
-    const range    = `${r.start.toLocaleString()} to ${totalEnd.toLocaleString()}`;
+    // r.end already covers std + gracenote channels (api: start + std + gn - 1).
+    const range    = `${r.start.toLocaleString()} to ${r.end.toLocaleString()}`;
     const color    = isConflict ? 'var(--danger)' : 'var(--text-soft)';
     return `<span style="color:${color}">${isConflict ? '⚠ ' : ''}${r.feed_name} – ${range}${isConflict ? ' (overlaps)' : ''}</span>`;
   });

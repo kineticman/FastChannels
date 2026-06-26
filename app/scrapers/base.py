@@ -414,10 +414,11 @@ class BaseScraper(ABC):
         self._pending_config_updates: dict = {}
         # Large regenerable caches live in the source_cache table, NOT in config,
         # so Source-entity loads (incl. report joins) never deserialize them.
-        # Populated from the DB for this scraper's source; empty if unavailable.
-        self.cache: dict = {}
+        # Lazily loaded on first `self.cache` access (see the property below) so the
+        # play/resolve hot path doesn't pay a DB join for sources that never use a
+        # cache (xumo, distro, pluto, tubi, …) — they just never touch self.cache.
+        self._cache: dict | None = None
         self._pending_cache_updates: dict = {}
-        self._load_source_cache()
         self._progress_cb = None   # optional callable(phase, done, total) set by worker
         self.session = requests.Session()
         self._configure_session(self.session)
@@ -455,8 +456,17 @@ class BaseScraper(ABC):
         self.config[key] = value
         self._pending_config_updates[key] = value
 
-    def _load_source_cache(self) -> None:
-        """Populate self.cache from the source_cache table for this scraper's source.
+    @property
+    def cache(self) -> dict:
+        """Lazily-loaded {cache_key: value} from the source_cache table for this
+        scraper's source. The DB query is deferred to first access so scrapers that
+        never use a cache pay nothing on the per-request play/resolve path."""
+        if self._cache is None:
+            self._cache = self._load_source_cache()
+        return self._cache
+
+    def _load_source_cache(self) -> dict:
+        """Read this source's source_cache rows into a dict.
 
         Caches live outside Source.config so Source-entity loads never pay to
         deserialize them. Guarded: with no DB/app context (e.g. ad-hoc
@@ -464,11 +474,11 @@ class BaseScraper(ABC):
         """
         try:
             from app.config_store import load_source_cache_by_name
-            self.cache = load_source_cache_by_name(self.source_name) or {}
+            return load_source_cache_by_name(self.source_name) or {}
         except Exception:
             logger.debug("[%s] could not load source cache; starting empty",
                          getattr(self, 'source_name', '?'), exc_info=True)
-            self.cache = {}
+            return {}
 
     def _update_cache(self, key: str, value) -> None:
         """Queue a cache key/value to be persisted (to the source_cache table)

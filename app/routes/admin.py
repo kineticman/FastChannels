@@ -194,6 +194,11 @@ def _category_clause(values):
         return None
     if isinstance(values, str):
         values = [values]
+    # Drop empty/blank entries: a stray `?category=` would otherwise become
+    # `IN ('')` and match zero rows instead of meaning "no category filter".
+    values = [v for v in values if v and v.strip()]
+    if not values:
+        return None
     named = [v for v in values if v != '__none__']
     clauses = []
     if named:
@@ -536,7 +541,7 @@ def channels():
     gracenote_mode_filter = request.args.get('gracenote_mode', '')
     language_filter  = request.args.get('language', '')
     country_filter   = request.args.get('country', '')
-    category_filter  = request.args.getlist('category')
+    category_filter  = [c for c in request.args.getlist('category') if c.strip()]
     duplicates_filter = request.args.get('duplicates', '')
     new_filter       = request.args.get('new', '')
     epg_filter       = request.args.get('epg', '')

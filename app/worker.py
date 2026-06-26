@@ -464,6 +464,14 @@ def run_scraper(source_name: str, force_full: bool = False):
                                 miss_threshold=getattr(scraper, 'channel_miss_threshold', _CHANNEL_MISS_THRESHOLD),
                                 rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
                             )
+                        # Persist scraper config/cache FIRST. persist_*() call
+                        # db.session.expire_all(), which DISCARDS unflushed attribute
+                        # writes — so the timestamp stamps must come AFTER it (the
+                        # EPG-commit path below already orders them this way). Doing it
+                        # the other way silently dropped last_channel_fetch_at for every
+                        # scraper that queues config/cache updates in the channel phase.
+                        _apply_scraper_config_updates(source, scraper)
+                        if source.scrape_interval != 0:
                             # Stamp last_scraped_at as soon as channels are committed.
                             # The EPG phase below re-stamps on success, but if it
                             # instead skips/fails (e.g. Roku's session gets rejected
@@ -476,7 +484,6 @@ def run_scraper(source_name: str, force_full: bool = False):
                             # runs and failed fetches leave it untouched so the next
                             # scrape retries the full fetch.
                             source.last_channel_fetch_at = source.last_scraped_at
-                        _apply_scraper_config_updates(source, scraper)
                         db.session.commit()
                         # Clear so the EPG commit's _apply_scraper_config_updates
                         # only persists updates added during the EPG phase, not a
@@ -2444,6 +2451,10 @@ _active_since: dict[str, datetime] = {}
 # (and stamps last_error) once rather than every scheduler tick. Cleared on clear.
 _stuck_warned: set[str] = set()
 
+# Prefix that tags the last_error WE set for a hung scrape, so _clear_source_stuck
+# can recognise and retract its own message without touching a real scraper error.
+_STUCK_ERROR_PREFIX = 'Scrape stuck/active'
+
 
 def _note_source_stuck(source, now):
     """Track a source whose scrape slot is held by an active/hung job and warn
@@ -2461,20 +2472,35 @@ def _note_source_stuck(source, now):
             'job likely hung; not re-enqueuing until it clears.',
             source.name, stuck_min, interval,
         )
+        # Don't clobber a genuine scraper error with the generic stuck message —
+        # only surface "stuck" when nothing more specific is already recorded.
+        if not (source.last_error or '').strip():
+            try:
+                source.last_error = (
+                    f'{_STUCK_ERROR_PREFIX} for {stuck_min:.0f}m (interval={interval}m) — '
+                    f'job likely hung; will not re-enqueue until it clears.'
+                )
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+
+
+def _clear_source_stuck(source):
+    """Forget stuck-state tracking for a source that is no longer active, and
+    retract a stale stuck-message we set. A successful scrape resets last_error to
+    None on its own, but a hang killed by RQ's job_timeout never runs that path, so
+    the message would otherwise leave the source pinned red in the dashboard."""
+    name = getattr(source, 'name', source)
+    was_tracked = name in _active_since or name in _stuck_warned
+    _active_since.pop(name, None)
+    _stuck_warned.discard(name)
+    if was_tracked and hasattr(source, 'last_error') \
+            and (source.last_error or '').startswith(_STUCK_ERROR_PREFIX):
         try:
-            source.last_error = (
-                f'Scrape stuck/active for {stuck_min:.0f}m (interval={interval}m) — '
-                f'job likely hung; will not re-enqueue until it clears.'
-            )
+            source.last_error = None
             db.session.commit()
         except Exception:
             db.session.rollback()
-
-
-def _clear_source_stuck(source_name):
-    """Forget any stuck-state tracking for a source that is no longer active."""
-    _active_since.pop(source_name, None)
-    _stuck_warned.discard(source_name)
 
 
 def _is_source_due(source, now, last):
@@ -2513,7 +2539,7 @@ def _schedule_due_scrapes():
                 _last_enqueued[source.name] = now
                 _note_source_stuck(source, now)
                 continue
-            _clear_source_stuck(source.name)
+            _clear_source_stuck(source)
             last_scraped = _utc_aware(source.last_scraped_at)
             last_queued = _utc_aware(_last_enqueued.get(source.name))
             candidates = [t for t in (last_scraped, last_queued) if t is not None]

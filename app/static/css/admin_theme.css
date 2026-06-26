@@ -365,3 +365,24 @@ nav,
   color: var(--warning-strong);
   white-space: nowrap;
 }
+
+/* Multi-select checkbox dropdown (Category filter) — shared structure used by the
+   Channels and Guide toolbars. The <summary> trigger and the per-page apply/clear
+   button styling stay inline in each template (they differ by toolbar). */
+.ms-dd { position: relative; }
+.ms-dd-panel {
+  position: absolute; z-index: 60; top: calc(100% + 4px); left: 0;
+  min-width: 220px; max-width: 320px; max-height: 340px;
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+.ms-dd-list { overflow-y: auto; padding: 0.4rem; }
+.ms-dd-opt {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.5rem;
+  font-size: 0.85rem; color: var(--text); border-radius: 5px; cursor: pointer;
+  white-space: nowrap; text-transform: none; letter-spacing: normal; font-weight: 400;
+}
+.ms-dd-opt:hover { background: var(--accent-bg-soft, rgba(125,125,125,0.15)); }
+.ms-dd-opt input { width: auto; margin: 0; flex: none; }
+.ms-dd-actions { display: flex; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid var(--border); }

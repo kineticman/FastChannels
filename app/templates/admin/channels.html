@@ -251,8 +251,9 @@
     }
     .col-filter-select:hover { border-color: var(--border); color: var(--text-soft); }
     .col-filter-select.col-filter-active { color: var(--accent); border-color: var(--accent-border); background: var(--accent-bg-soft); }
-    /* Multi-select checkbox dropdown (Category filter) */
-    .ms-dd { position: relative; }
+    /* Multi-select checkbox dropdown (Category filter) — shared structure
+       (.ms-dd, .ms-dd-panel, .ms-dd-list, .ms-dd-opt, .ms-dd-actions) lives in
+       admin_theme.css; only the page-specific summary/column styling is here. */
     .ms-dd > summary {
       list-style: none; cursor: pointer; width: 100%;
       background: var(--surface); border: 1px solid var(--border); color: var(--text);
@@ -262,23 +263,7 @@
     .ms-dd > summary::-webkit-details-marker { display: none; }
     .ms-dd > summary::after { content: '▾'; font-size: 0.7rem; color: var(--text-muted); }
     .ms-dd[open] > summary { border-color: var(--accent); }
-    .ms-dd-panel {
-      position: absolute; z-index: 60; top: calc(100% + 4px); left: 0;
-      min-width: 220px; max-width: 320px; max-height: 340px;
-      display: flex; flex-direction: column;
-      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-    }
     .ms-dd-fixed .ms-dd-panel { position: fixed; top: 0; left: 0; }
-    .ms-dd-list { overflow-y: auto; padding: 0.4rem; }
-    .ms-dd-opt {
-      display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.5rem;
-      font-size: 0.85rem; color: var(--text); border-radius: 5px; cursor: pointer;
-      white-space: nowrap; text-transform: none; letter-spacing: normal; font-weight: 400;
-    }
-    .ms-dd-opt:hover { background: var(--accent-bg-soft); }
-    .ms-dd-opt input { width: auto; margin: 0; flex: none; }
-    .ms-dd-actions { display: flex; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid var(--border); }
     .ms-dd-actions button { flex: 1; cursor: pointer; padding: 0.4rem; border-radius: 5px; font-size: 0.8rem; border: 1px solid var(--border); }
     .ms-dd-clearbtn { background: var(--surface); color: var(--text-soft); }
     /* Compact column-header variant */
@@ -3518,6 +3503,18 @@
     // ── Multi-select checkbox dropdown (Category) ─────────────────────────
     function msApply(btn) {
       const dd = btn.closest('.ms-dd');
+      const form = dd.closest('form');
+      if (form) {
+        // Toolbar dropdown: its checkboxes carry name="category" and the form
+        // holds the rest of the active filters (incl. anything typed but not yet
+        // submitted, like Search) — submit it so none of them get dropped.
+        const pageInput = form.querySelector('[name="page"]');
+        if (pageInput) pageInput.value = '1';
+        form.submit();
+        return;
+      }
+      // Column-header dropdown (outside any form): rebuild the URL, preserving the
+      // other query params already in the address bar.
       const vals = [...dd.querySelectorAll('.ms-dd-list input[type=checkbox]:checked')].map(c => c.value);
       const params = new URLSearchParams(window.location.search);
       params.delete('category');
