@@ -402,6 +402,18 @@ def dashboard():
     health_summary = {'attention': attention, 'live': live}
     enabled_sources = [s for s in sources if s.is_enabled]
     disabled_sources = [s for s in sources if not s.is_enabled]
+
+    # Scheduler liveness: the scheduler runs in its own supervised process, so the
+    # only way the web app knows it's alive is the heartbeat it stamps each tick.
+    # Alarm if the heartbeat went stale, or never appeared while scrapes are
+    # expected (enabled sources exist) — i.e. a crash loop that never ticked.
+    from app.scheduler_health import read_heartbeat, STALE_AFTER_SECONDS
+    _hb = read_heartbeat(current_app.config['REDIS_URL'])
+    scheduler_health = {'ok': True, 'minutes': None}
+    if _hb['stale']:
+        scheduler_health = {'ok': False, 'minutes': int(_hb['age_seconds'] // 60)}
+    elif not _hb['present'] and enabled_sources:
+        scheduler_health = {'ok': False, 'minutes': None}
     return render_template('admin/dashboard.html', sources=sources,
                            enabled_sources=enabled_sources, disabled_sources=disabled_sources,
                            total_channels=total_channels, base_url=base_url,
@@ -413,6 +425,7 @@ def dashboard():
                            setup_complete_count=5 - len(setup_checklist),
                            setup_total_count=5,
                            tz_health=timezone_health(app_settings.timezone_name),
+                           scheduler_health=scheduler_health,
                            now=_now)
 
 

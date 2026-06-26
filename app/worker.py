@@ -2495,6 +2495,11 @@ def _schedule_due_scrapes():
             logger.error('[scheduler] Redis unavailable: %s', e)
             return
 
+        # Stamp the liveness heartbeat on every healthy tick. The dashboard reads
+        # this to alarm if the scheduler stops ticking (crash loop / hang / bad TZ).
+        from app.scheduler_health import write_heartbeat
+        write_heartbeat(flask_app.config['REDIS_URL'])
+
         sources = Source.query.filter_by(is_enabled=True).all()
         for source in sources:
             if _scrape_job_already_active(q, source.name):
@@ -2909,6 +2914,11 @@ if __name__ == '__main__':
         # on demand), so there is no separate PE auto-refresh job.
 
         scheduler.start()
+        # Mark the scheduler alive the instant it starts, so the dashboard's
+        # liveness check has a fresh heartbeat before the first 60s tick — a
+        # crash loop never reaches this line, so it can't fake liveness.
+        from app.scheduler_health import write_heartbeat
+        write_heartbeat(flask_app.config['REDIS_URL'])
         logger.info('Scheduler started — checking sources every 60s')
         with flask_app.app_context():
             try:
@@ -3032,7 +3042,21 @@ if __name__ == '__main__':
             worker.work(logging_level=logging.WARNING)
 
     if role == 'scheduler':
-        _run_scheduler()
+        try:
+            _run_scheduler()
+        except Exception:
+            # The scheduler is the only thing that enqueues scrapes/EPG refreshes.
+            # If it dies at startup (bad TZ, import error, DB hiccup) the supervisor
+            # in entrypoint.sh restarts it every 5s — a crash loop that scrolls past
+            # as a benign-looking warning while NOTHING scrapes. Make it unmistakable
+            # in the logs, and back off so the loop doesn't flood them. The stale
+            # heartbeat will also light up the dashboard banner.
+            logger.critical(
+                'Scheduler worker crashed during startup — NO scrapes or EPG '
+                'refreshes will run until this is fixed. Backing off 60s before the '
+                'supervisor restarts it.', exc_info=True)
+            time.sleep(60)
+            raise
     elif role == 'fast':
         _run_fast_worker()
     elif role == 'maintenance':

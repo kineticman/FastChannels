@@ -160,6 +160,19 @@
     {% if update_status.update_available %}<span class="version" style="cursor:pointer" onclick="openUpdateModal()" title="Update available: v{{ update_status.latest_version }}">v{{ app_version }}<span class="update-pip"></span></span>{% else %}<a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="View FastChannels on GitHub">v{{ app_version }}</a>{% endif %}
   </nav>
   <div class="container">
+    {% if scheduler_health and not scheduler_health.ok %}
+    <div style="background:color-mix(in srgb, var(--danger-bg) 70%, var(--surface));border:1px solid var(--danger-border);border-radius:8px;padding:0.85rem 1.25rem;margin:0 0 1rem;color:var(--danger-soft)">
+      <strong>⛔ Scheduler is not running — scrapes and EPG refreshes are stopped.</strong>
+      {% if scheduler_health.minutes is not none %}
+      The scheduler hasn't ticked in about {{ scheduler_health.minutes }} min (it should tick every minute).
+      {% else %}
+      The scheduler has never reported a healthy tick since boot.
+      {% endif %}
+      It runs in a separate process that restarts itself, so check the container logs for a repeating
+      <code>⚠ Scheduler worker exited</code> line or a <code>CRITICAL</code> startup error (a bad container
+      <code>TZ</code> is a common cause). Channel guide and streams will go stale until it recovers.
+    </div>
+    {% endif %}
     {% if tz_health and tz_health.level == 'warning' %}
     <div style="background:color-mix(in srgb, var(--warning-bg) 70%, var(--surface));border:1px solid var(--warning-border);border-radius:8px;padding:0.85rem 1.25rem;margin:0 0 1rem;color:var(--warning-soft)">
       <strong>⚠ Timezone is falling back to UTC.</strong>
