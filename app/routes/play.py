@@ -82,6 +82,28 @@ _BROWSER_UA = (
     'Chrome/145.0.0.0 Safari/537.36'
 )
 
+
+def _gone_response() -> Response:
+    """410 for a confirmed-dead channel (which is also being auto-disabled).
+    Tells clients the resource is permanently gone so they stop retrying."""
+    return Response(
+        'Channel is no longer available.\n',
+        status=410,
+        mimetype='text/plain',
+    )
+
+
+def _unavailable_response() -> Response:
+    """503 + Retry-After for a transient upstream failure (timeout, CDN hiccup,
+    expired token). Well-behaved clients back off and retry instead of hammering
+    or giving up permanently."""
+    return Response(
+        'Stream temporarily unavailable.\n',
+        status=503,
+        mimetype='text/plain',
+        headers={'Retry-After': '30'},
+    )
+
 # TTL-cache for custom channel re-detection results.
 # Key: channel.id  Value: (stream_url, headers, monotonic_timestamp, resolver)
 _CUSTOM_STREAM_CACHE: dict[int, tuple[str, dict, float, str]] = {}
@@ -639,7 +661,7 @@ def distro_manifest_proxy(channel_id: str):
     scraper = DistroScraper()
     upstream_url = _distro_resolve_from_feed(scraper, geo, raw_id)
     if not upstream_url:
-        abort(502)
+        return _unavailable_response()
 
     result = _distro_fetch_variant(upstream_url, channel_id)
     if result is None:
@@ -648,7 +670,7 @@ def distro_manifest_proxy(channel_id: str):
         if upstream_url:
             result = _distro_fetch_variant(upstream_url, channel_id)
     if result is None:
-        abort(502)
+        return _unavailable_response()
 
     best_variant, variant_r = result
 
@@ -706,7 +728,7 @@ def samsung_manifest_proxy(channel_id: str):
         r.raise_for_status()
     except Exception as e:
         logger.warning('[samsung-proxy] master fetch failed for %s: %s', raw_id[:40], e)
-        abort(502)
+        return _unavailable_response()
 
     return Response(
         _absolutize_hls_manifest(r.text, r.url),
@@ -746,16 +768,16 @@ def pluto_manifest_proxy(channel_id: str):
 
     scraper_cls = registry.get('pluto')
     if not scraper_cls:
-        abort(502)
+        return _unavailable_response()
     scraper = scraper_cls(config=channel.source.config or {})
     try:
         master_url = scraper.resolve(channel.stream_url)
     except Exception as e:
         logger.warning('[pluto-proxy] resolve failed for %s: %s', raw_id[:40], e)
-        abort(502)
+        return _unavailable_response()
 
     if not master_url or not master_url.startswith('http'):
-        abort(502)
+        return _unavailable_response()
 
     from ..scrapers.pluto import X_FORWARD as _PLUTO_X_FORWARD, BOOT_HEADERS as _PLUTO_BOOT_HEADERS
     _stream_url = channel.stream_url or ''
@@ -776,7 +798,7 @@ def pluto_manifest_proxy(channel_id: str):
         r.raise_for_status()
     except Exception as e:
         logger.warning('[pluto-proxy] master fetch failed for %s: %s', raw_id[:40], e)
-        abort(502)
+        return _unavailable_response()
 
     effective_url = r.url
     base_url = request.host_url.rstrip('/')
@@ -881,23 +903,23 @@ def tubi_manifest_proxy(channel_id: str):
 
     scraper_cls = registry.get('tubi')
     if not scraper_cls:
-        abort(502)
+        return _unavailable_response()
     scraper = scraper_cls(config=channel.source.config or {})
     try:
         master_url = scraper.resolve(channel.stream_url)
     except Exception as e:
         logger.warning('[tubi-proxy] resolve failed for %s: %s', raw_id[:40], e)
-        abort(502)
+        return _unavailable_response()
 
     if not master_url or not master_url.startswith('http'):
-        abort(502)
+        return _unavailable_response()
 
     try:
         r = _requests.get(master_url, timeout=10)
         r.raise_for_status()
     except Exception as e:
         logger.warning('[tubi-proxy] master fetch failed for %s: %s', raw_id[:40], e)
-        abort(502)
+        return _unavailable_response()
 
     effective_url = r.url
 
@@ -935,16 +957,20 @@ def fubo_manifest_proxy(channel_id: str):
 
     scraper_cls = registry.get('fubo')
     if not scraper_cls:
-        abort(502)
+        return _unavailable_response()
     scraper = scraper_cls(config=channel.source.config or {})
     try:
         master_url = scraper.resolve(channel.stream_url)
+    except StreamDeadError as e:
+        logger.error('[fubo-proxy] channel confirmed dead for %s: %s', raw_id[:40], e)
+        trigger_channel_auto_disable(channel.id, 'Dead')
+        return _gone_response()
     except Exception as e:
         logger.warning('[fubo-proxy] resolve failed for %s: %s', raw_id[:40], e)
-        abort(502)
+        return _unavailable_response()
 
     if not master_url or not master_url.startswith('http'):
-        abort(502)
+        return _unavailable_response()
 
     try:
         from curl_cffi import requests as _cffi
@@ -952,7 +978,7 @@ def fubo_manifest_proxy(channel_id: str):
         r.raise_for_status()
     except Exception as e:
         logger.warning('[fubo-proxy] master fetch failed for %s: %s', raw_id[:40], e)
-        abort(502)
+        return _unavailable_response()
 
     effective_url = r.url
     base_url = request.host_url.rstrip('/')
@@ -1138,13 +1164,17 @@ def stirr_manifest_proxy(channel_id: str):
     scraper = StirrScraper(config=channel.source.config or {})
     try:
         master_url = scraper.resolve(channel.stream_url)
+    except StreamDeadError as e:
+        logger.error('[stirr-proxy] channel confirmed dead for %s: %s', channel_id, e)
+        trigger_channel_auto_disable(channel.id, 'Dead')
+        return _gone_response()
     except Exception as e:
         logger.warning('[stirr-proxy] resolve failed for %s: %s', channel_id, e)
-        abort(502)
+        return _unavailable_response()
 
     if not master_url or not master_url.startswith(('http://', 'https://')):
         logger.warning('[stirr-proxy] resolve returned non-HTTP URL for %s: %s', channel_id, (master_url or '')[:60])
-        abort(502)
+        return _unavailable_response()
 
     # Stirr SSAI URLs contain an unfilled nonce template [vx_nonce] that must be
     # substituted before the request — aniview returns 422 if it's left as-is.
@@ -1159,7 +1189,7 @@ def stirr_manifest_proxy(channel_id: str):
         master_r.raise_for_status()
     except Exception as e:
         logger.warning('[stirr-proxy] master fetch failed for %s: %s', channel_id, e)
-        abort(502)
+        return _unavailable_response()
 
     # Refresh the resolution/codec badge off this same master fetch. STIRR redirects
     # here instead of through the generic play path, so this is the only play-time
@@ -1344,7 +1374,7 @@ def custom_manifest_proxy(channel_id: str):
     if (getattr(channel, 'redetect_on_play', False) or (browser_preview and channel.page_url)) and channel.page_url:
         stream_url, custom_headers = _redetect_custom_stream(channel)
         if not stream_url:
-            abort(502)
+            return _unavailable_response()
     else:
         custom_headers = channel.custom_headers or {}
         stream_url = channel.stream_url
@@ -1420,7 +1450,7 @@ def custom_manifest_proxy(channel_id: str):
             master_r.raise_for_status()
         except Exception as e:
             logger.warning('[custom-proxy] master fetch failed for %s: %s', raw_id, e)
-            abort(502)
+            return _unavailable_response()
 
         text = master_r.text
         effective_url = master_r.url
@@ -1429,7 +1459,7 @@ def custom_manifest_proxy(channel_id: str):
         if '#EXT-X-STREAM-INF' in text:
             best = _distro_pick_best_variant(text, effective_url)
             if not best:
-                abort(502)
+                return _unavailable_response()
             try:
                 variant_r = _requests.get(best, headers=proxy_hdrs, timeout=10)
                 variant_r.raise_for_status()
@@ -1446,7 +1476,7 @@ def custom_manifest_proxy(channel_id: str):
                     _CUSTOM_LAST_FRESH_SEG[channel.id] = (fresh_seg, _time.monotonic())
             except Exception as e:
                 logger.warning('[custom-proxy] variant fetch failed for %s: %s', raw_id, e)
-                abort(502)
+                return _unavailable_response()
 
     # Unless the channel explicitly requested segment proxying, leave segments
     # as direct absolute URLs.  YouTube/googlevideo HLS segment URLs already
@@ -1511,7 +1541,7 @@ def custom_direct_proxy(channel_id: str):
     if getattr(channel, 'redetect_on_play', False) and channel.page_url:
         stream_url, custom_headers = _redetect_custom_stream(channel)
         if not stream_url:
-            abort(502)
+            return _unavailable_response()
     else:
         custom_headers = channel.custom_headers or {}
         stream_url = channel.stream_url
@@ -1539,7 +1569,7 @@ def custom_direct_proxy(channel_id: str):
         )
     except Exception as e:
         logger.warning('[custom-direct] fetch failed for %s: %s', raw_id, e)
-        abort(502)
+        return _unavailable_response()
 
 
 @play_bp.route('/play/custom/<channel_id>/live.m3u8')
@@ -1571,7 +1601,7 @@ def custom_live_manifest(channel_id: str):
         custom_headers = channel.custom_headers or {}
 
     if not stream_url:
-        abort(502)
+        return _unavailable_response()
 
     seq = _get_custom_live_seq(channel.id, stream_url)
     use_proxy = bool(custom_headers)
@@ -1718,14 +1748,14 @@ def amazon_dash_proxy(channel_id: str):
 
     if not dash_url or not dash_url.startswith('http'):
         logger.warning('[amazon-dash] no resolved URL for %s', raw_id[:40])
-        abort(502)
+        return _unavailable_response()
 
     try:
         r = _requests.get(dash_url, timeout=10)
         r.raise_for_status()
     except Exception as e:
         logger.warning('[amazon-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
-        abort(502)
+        return _unavailable_response()
 
     # Rewrite relative <BaseURL> elements to absolute CDN URLs.
     # Amazon's MPD uses relative paths (e.g. ../../../../iad-nitro/...) that
@@ -1924,6 +1954,10 @@ def play(source_name: str, channel_id: str):
 
     scraper_cls = registry.get(source_name)
     scraper = None
+    # Distinguish a confirmed-dead channel (permanent — being auto-disabled) from
+    # a transient resolve failure (timeout, CDN hiccup, expired token). They get
+    # different HTTP responses below so clients back off correctly.
+    resolve_dead = False
     if scraper_cls:
         scraper = scraper_cls(config=channel.source.config or {})
         try:
@@ -1935,6 +1969,7 @@ def play(source_name: str, channel_id: str):
             )
             trigger_channel_auto_disable(channel.id, 'Dead')
             resolved_url = None
+            resolve_dead = True
         except Exception as e:
             logger.error(
                 '[play] resolve failed ip=%s source=%s channel_id=%s channel_name=%s: %s',
@@ -1971,7 +2006,7 @@ def play(source_name: str, channel_id: str):
         resolved_url = channel.stream_url
 
     if not resolved_url or not resolved_url.startswith(('http://', 'https://')):
-        abort(502)
+        return _gone_response() if resolve_dead else _unavailable_response()
 
     # STIRR channels resolve to URLs with IP-bound session tokens — proxy all
     # Stirr streams so every manifest fetch goes through the server IP, regardless
