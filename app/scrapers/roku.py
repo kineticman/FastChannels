@@ -96,6 +96,7 @@ _CACHE_WARM_RETRY_WORKERS = 3
 _EPG_WORKERS = 3
 _DESC_WORKERS = 3
 _ROKU_403_COOLDOWN = 5 * 60
+_PREWARM_SEED_MAX_ATTEMPTS = 5  # best-effort osm seed: try a few channels, then give up
 _DESC_CACHE_TTL = 14 * 24 * 60 * 60  # keep descriptions for 14 days; content doesn't change
 
 
@@ -606,12 +607,20 @@ class RokuScraper(BaseScraper):
             url += f"?traceId={trace_id}"
         return url
 
-    def _seed_osm_session(self, channels: list[ChannelData]) -> bool:
+    def _seed_osm_session(self, channels: list[ChannelData],
+                          enabled_ids: set[str] | None = None) -> bool:
         """Call the playback API for one channel to seed _osm_session.
 
         Used when _osm_session is None (cold start / cache flush) so prewarm
-        can proceed without waiting for a user tune.  Makes exactly one
-        playback API call.  Returns True if the session was seeded.
+        can proceed without waiting for a user tune.  Best-effort: tries up to
+        _PREWARM_SEED_MAX_ATTEMPTS channels until one succeeds.  Returns True
+        if the session was seeded.
+
+        Only enabled channels are considered — disabled channels are frequently
+        DRM-locked or dead and reliably 403 on playback, which would otherwise
+        waste every seed attempt on a channel that can never succeed.  And
+        because a per-channel playback 403 is not a site-wide rate-limit, the
+        seed never trips the global cooldown (set_cooldown_on_403=False).
         """
         if self._cooldown_active():
             logger.debug("[roku] prewarm seed skipped — cooldown active")
@@ -621,8 +630,11 @@ class RokuScraper(BaseScraper):
             return False
 
         session_id = self.session.cookies.get("_usn", "roku-scraper")
+        attempts = 0
         for ch in channels:
             sid = ch.source_channel_id
+            if enabled_ids is not None and sid not in enabled_ids:
+                continue
             play_id = self._cached_play_id(sid)
             selector_url = self._cached_selector_url(sid)
             if not play_id or not selector_url:
@@ -649,17 +661,19 @@ class RokuScraper(BaseScraper):
                     "&isNewSession=0&idType=roku-trc"
                 ),
             }
-            r = self._api_post(_PLAYBACK, json_body=body, timeout=10, label=f"prewarm seed for {sid}")
+            r = self._api_post(_PLAYBACK, json_body=body, timeout=10,
+                               label=f"prewarm seed for {sid}", set_cooldown_on_403=False)
             if r and r.status_code == 200:
                 stream_url = r.json().get("url", "")
                 if stream_url:
                     self._cache_stream_url(sid, stream_url)
                     logger.info("[roku] prewarm seed: seeded osm_session from %s", sid)
                     return True
-            if self._cooldown_active():
-                return False
-            # If this channel failed (404, 401, etc.) try the next one
-        logger.warning("[roku] prewarm seed: could not seed osm_session — no channel succeeded")
+            # This channel failed (404, 401, 403 DRM, etc.) — try the next one.
+            attempts += 1
+            if attempts >= _PREWARM_SEED_MAX_ATTEMPTS:
+                break
+        logger.debug("[roku] prewarm seed: could not seed osm_session in %d attempt(s)", attempts)
         return False
 
     def _validate_stream_url(self, stream_url: str) -> bool:
@@ -773,12 +787,16 @@ class RokuScraper(BaseScraper):
                 return response
         return None
 
-    def _api_post(self, url: str, *, json_body: dict, timeout: int, label: str):
+    def _api_post(self, url: str, *, json_body: dict, timeout: int, label: str,
+                  set_cooldown_on_403: bool = True):
         for attempt in range(2):
             headers = self._api_headers()
             response = self.session.post(url, headers=headers, json=json_body, timeout=timeout)
             if response.status_code == 403:
-                self._set_403_cooldown(label)
+                # A per-channel 403 (e.g. a DRM-locked channel) is not a reliable
+                # site-wide rate-limit signal; best-effort callers opt out of the cooldown.
+                if set_cooldown_on_403:
+                    self._set_403_cooldown(label)
                 return response
             if response.status_code not in (401, 403) or attempt == 1:
                 return response
@@ -1045,6 +1063,8 @@ class RokuScraper(BaseScraper):
         import threading
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        enabled_ids = kwargs.get("enabled_ids")
+
         if self._cooldown_active():
             remaining = self._cooldown_remaining()
             mins = max(1, (remaining + 59) // 60)
@@ -1095,12 +1115,21 @@ class RokuScraper(BaseScraper):
             if no_schedule_ids:
                 logger.debug("[roku] %d stations have shouldRequestSchedule=False, skipping content proxy for those", len(no_schedule_ids))
 
-        effective_skip = (skip_ids or set()) | no_schedule_ids
+        # Disabled channels are never served in M3U/EPG output and never tuned,
+        # so they need no EPG fetch and no metadata warm — skip them entirely.
+        # (enabled_ids is None only when fetch_epg is called without the worker's
+        # context, e.g. a manual run; then fall back to processing all channels.)
+        if enabled_ids is not None:
+            disabled_skip = {ch.source_channel_id for ch in channels
+                             if ch.source_channel_id not in enabled_ids}
+        else:
+            disabled_skip = set()
+        effective_skip = (skip_ids or set()) | no_schedule_ids | disabled_skip
         channel_ids = {ch.source_channel_id for ch in channels}
         skipped = len(effective_skip & channel_ids) if effective_skip else 0
         total = len(channels) - skipped  # only count channels that will hit the network
         if skipped:
-            logger.info("[roku] EPG skip: %d/%d channels (fresh programs or no-schedule flag), skipping content proxy", skipped, len(channels))
+            logger.info("[roku] EPG skip: %d/%d channels (fresh, no-schedule, or disabled), skipping content proxy", skipped, len(channels))
         if self._progress_cb:
             self._progress_cb('epg', 0, total)
         # Snapshot merged headers (session defaults + API-specific) and cookies
@@ -1185,7 +1214,8 @@ class RokuScraper(BaseScraper):
 
         missing_channels = [
             ch for ch in channels
-            if not self._cached_play_id(ch.source_channel_id) or not self._cached_selector_url(ch.source_channel_id)
+            if ch.source_channel_id not in disabled_skip
+            and (not self._cached_play_id(ch.source_channel_id) or not self._cached_selector_url(ch.source_channel_id))
         ]
         retried_play = 0
         retried_selector = 0
@@ -1230,7 +1260,7 @@ class RokuScraper(BaseScraper):
             if self._cached_stream_url(sid):
                 stream_cached += 1
         if not self._cached_osm_session():
-            self._seed_osm_session(channels)
+            self._seed_osm_session(channels, enabled_ids=enabled_ids)
         n_channels = len(channels)
         logger.debug(
             "[roku] cache warm summary: play_id=%d/%d selector=%d/%d stream_url=%d/%d retry_play=%d retry_selector=%d",
