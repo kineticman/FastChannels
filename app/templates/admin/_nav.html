@@ -1,0 +1,19 @@
+{# Shared admin nav. Each page sets `active_page` before including this, e.g.
+   {% set active_page = 'channels' %}{% include 'admin/_nav.html' %}
+   Order: workflow (Dashboard → Channels → Guide → Feeds → Sources) then a
+   divider, then the utilities (Settings, Logs, Help). pending_review_count,
+   update_status and app_version come from the inject_version context processor. #}
+  <nav>
+    <h1>⚡ FastChannels</h1>
+    <a href="/admin/"{% if active_page == 'dashboard' %} class="active"{% endif %}>Dashboard</a>
+    <a href="/admin/channels"{% if active_page == 'channels' %} class="active"{% endif %}>Channels{% if pending_review_count %}<span class="nav-badge" title="{{ pending_review_count }} channel(s) awaiting review">{{ pending_review_count }}</span>{% endif %}</a>
+    <a href="/admin/guide"{% if active_page == 'guide' %} class="active"{% endif %}>Guide</a>
+    <a href="/admin/feeds"{% if active_page == 'feeds' %} class="active"{% endif %}>Feeds</a>
+    <a href="/admin/sources"{% if active_page == 'sources' %} class="active"{% endif %}>Sources</a>
+    <span class="nav-sep" aria-hidden="true"></span>
+    <a href="/admin/settings"{% if active_page == 'settings' %} class="active"{% endif %}>Settings</a>
+    <a href="/admin/logs"{% if active_page == 'logs' %} class="active"{% endif %}>Logs</a>
+    <a href="/admin/help"{% if active_page == 'help' %} class="active"{% endif %}>Help</a>
+    {% include 'admin/_theme_toggle.html' %}
+    {% if update_status.update_available %}<span class="version" style="cursor:pointer" onclick="openUpdateModal()" title="Update available: v{{ update_status.latest_version }}">v{{ app_version }}<span class="update-pip"></span></span>{% else %}<a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="View FastChannels on GitHub">v{{ app_version }}</a>{% endif %}
+  </nav>

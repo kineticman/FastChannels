@@ -326,6 +326,18 @@ nav,
   }
 }
 
+/* Divider in the admin nav between the workflow tabs (Dashboard…Sources) and
+   the utility tabs (Settings/Logs/Help). Hidden once the nav wraps on mobile. */
+.nav-sep {
+  width: 1px;
+  align-self: stretch;
+  min-height: 1.1rem;
+  background: var(--border);
+}
+@media (max-width: 760px) {
+  .nav-sep { display: none; }
+}
+
 /* Count pill on nav links (e.g. channels pending review). */
 .nav-badge {
   display: inline-block;

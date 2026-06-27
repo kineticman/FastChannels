@@ -146,19 +146,8 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/community_map.css') }}">
 </head>
 <body>
-  <nav>
-    <h1>⚡ FastChannels</h1>
-    <a href="/admin/" class="active">Dashboard</a>
-    <a href="/admin/sources">Sources</a>
-    <a href="/admin/channels">Channels{% if pending_review_count %}<span class="nav-badge" title="{{ pending_review_count }} channel(s) awaiting review">{{ pending_review_count }}</span>{% endif %}</a>
-    <a href="/admin/guide">Guide</a>
-    <a href="/admin/feeds">Feeds</a>
-    <a href="/admin/settings">Settings</a>
-    <a href="/admin/logs">Logs</a>
-    <a href="/admin/help">Help</a>
-    {% include 'admin/_theme_toggle.html' %}
-    {% if update_status.update_available %}<span class="version" style="cursor:pointer" onclick="openUpdateModal()" title="Update available: v{{ update_status.latest_version }}">v{{ app_version }}<span class="update-pip"></span></span>{% else %}<a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="View FastChannels on GitHub">v{{ app_version }}</a>{% endif %}
-  </nav>
+  {% set active_page = 'dashboard' %}
+  {% include 'admin/_nav.html' %}
   <div class="container">
     {% if scheduler_health and not scheduler_health.ok %}
     <div style="background:color-mix(in srgb, var(--danger-bg) 70%, var(--surface));border:1px solid var(--danger-border);border-radius:8px;padding:0.85rem 1.25rem;margin:0 0 1rem;color:var(--danger-soft)">
