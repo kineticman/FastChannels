@@ -132,7 +132,7 @@ class Channel(db.Model):
     name              = db.Column(db.String(256), nullable=False)
     slug              = db.Column(db.String(256))
     logo_url          = db.Column(db.Text)
-    logo_url_pinned   = db.Column(db.Boolean, default=False, nullable=False)  # True when user has manually pinned a logo URL
+    logo_url_pinned   = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # True when user has manually pinned a logo URL
     stream_url        = db.Column(db.Text)
     stream_type       = db.Column(db.String(16), default='hls')
     category          = db.Column(db.String(128))
@@ -142,25 +142,25 @@ class Channel(db.Model):
     country           = db.Column(db.String(8), default='US')
     tags              = db.Column(db.Text, nullable=True)          # comma-separated raw tags/groups from source
     number            = db.Column(db.Integer)
-    number_pinned     = db.Column(db.Boolean, default=False, nullable=False)  # True when user has manually set/locked this channel number
+    number_pinned     = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # True when user has manually set/locked this channel number
     gracenote_id      = db.Column(db.String(32), nullable=True)   # e.g. EP012345678; set by scraper or user
-    gracenote_locked  = db.Column(db.Boolean, default=False, nullable=False)  # True when user manually sets/locks Gracenote ID
-    gracenote_mode    = db.Column(db.String(16), default='auto', nullable=False)  # auto | manual | off
+    gracenote_locked  = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # True when user manually sets/locks Gracenote ID
+    gracenote_mode    = db.Column(db.String(16), default='auto', nullable=False, server_default='auto')  # auto | manual | off
     guide_key         = db.Column(db.String(256), nullable=True)  # provider-specific guide lookup key (e.g. Plex gridKey)
     description       = db.Column(db.Text, nullable=True)         # optional channel description from scraper
     user_note         = db.Column(db.Text, nullable=True)         # free-form note set by user
     disable_reason    = db.Column(db.String(64), nullable=True)  # e.g. 'DRM'; set by play proxy
     stream_info       = db.Column(db.JSON, nullable=True)        # populated by audit/inspect: max_resolution, video_codec, has_4k, variants
     custom_headers    = db.Column(db.JSON, nullable=True)       # headers required to access stream (custom channels)
-    proxy_segments    = db.Column(db.Boolean, default=False, nullable=False)  # route segments through FC proxy
+    proxy_segments    = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # route segments through FC proxy
     page_url          = db.Column(db.Text, nullable=True)                     # original page URL for re-detection
-    redetect_on_play  = db.Column(db.Boolean, default=False, nullable=False)  # re-scrape page_url at play time (TTL 5 min)
+    redetect_on_play  = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # re-scrape page_url at play time (TTL 5 min)
     guide_block_minutes = db.Column(db.Integer, nullable=True)               # EPG placeholder block size for custom channels (None = 60)
-    is_duplicate      = db.Column(db.Boolean, default=False)  # set by user — manual duplicate label (does not disable)
-    is_active         = db.Column(db.Boolean, default=True)   # set by scraper — channel exists upstream
-    is_enabled        = db.Column(db.Boolean, default=True)   # set by user — include in M3U/EPG
-    review_state      = db.Column(db.String(16), default='approved', nullable=False)  # approved | pending — pending channels are held out of all feeds until reviewed
-    scrape_pinned     = db.Column(db.Boolean, default=False, nullable=False)  # user override: stay active even if missed by scraper
+    is_duplicate      = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # set by user — manual duplicate label (does not disable)
+    is_active         = db.Column(db.Boolean, default=True, nullable=False, server_default=db.text('1'))   # set by scraper — channel exists upstream
+    is_enabled        = db.Column(db.Boolean, default=True, nullable=False, server_default=db.text('1'))   # set by user — include in M3U/EPG
+    review_state      = db.Column(db.String(16), default='approved', nullable=False, server_default='approved')  # approved | pending — pending channels are held out of all feeds until reviewed
+    scrape_pinned     = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # user override: stay active even if missed by scraper
     last_seen_at      = db.Column(db.DateTime(timezone=True), nullable=True)
     first_seen_at     = db.Column(db.DateTime(timezone=True), nullable=True)  # set once on true insert; survives guide_key row-rebind
     went_inactive_at  = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -168,8 +168,8 @@ class Channel(db.Model):
     identity_changed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # set by scraper when an enabled slot's content changed upstream (guide_key/name swap) — needs Gracenote review
     previous_name       = db.Column(db.String(256), nullable=True)  # the occupant's name before the last content swap (paired with identity_changed_at)
     previous_gracenote_id = db.Column(db.String(32), nullable=True)  # the Gracenote ID held before the last content swap re-synced it
-    content_swap_count  = db.Column(db.Integer, default=0, nullable=False)  # times this slot's content rotated under a stable ID — marks rotating/featured slots
-    missed_scrapes    = db.Column(db.Integer, default=0, nullable=False)
+    content_swap_count  = db.Column(db.Integer, default=0, nullable=False, server_default=db.text('0'))  # times this slot's content rotated under a stable ID — marks rotating/featured slots
+    missed_scrapes    = db.Column(db.Integer, default=0, nullable=False, server_default=db.text('0'))
     created_at        = db.Column(db.DateTime(timezone=True),
                                   default=lambda: datetime.now(timezone.utc))
     updated_at        = db.Column(db.DateTime(timezone=True),

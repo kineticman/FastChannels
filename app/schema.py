@@ -353,6 +353,20 @@ def ensure_runtime_schema() -> None:
             conn.execute(text(
                 "UPDATE channels SET gracenote_locked = 0 WHERE gracenote_locked IS NULL"
             ))
+            # Backfill the user/scraper flag columns. The oldest installs created these
+            # as nullable (create_all before they gained nullable=False) and schema.py
+            # never ALTERed them, so a stray NULL is possible — and a NULL is_enabled /
+            # is_active reads as falsy, silently dropping the channel from M3U/EPG.
+            # No-op on any install that never had NULLs.
+            conn.execute(text(
+                "UPDATE channels SET is_enabled = 1 WHERE is_enabled IS NULL"
+            ))
+            conn.execute(text(
+                "UPDATE channels SET is_active = 1 WHERE is_active IS NULL"
+            ))
+            conn.execute(text(
+                "UPDATE channels SET is_duplicate = 0 WHERE is_duplicate IS NULL"
+            ))
             conn.execute(text(
                 "UPDATE channels SET gracenote_mode = 'manual' "
                 "WHERE gracenote_locked = 1 AND gracenote_id IS NOT NULL AND TRIM(gracenote_id) != ''"
