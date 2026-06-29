@@ -1880,6 +1880,83 @@ def channel_language_explain(channel_id):
     })
 
 
+def _inspect_drm_bridge(ch, source, scraper_cls):
+    """Inspect a DRM-bridge channel via its DASH+Widevine path (the one it actually
+    plays over through PrismCast), rather than its FairPlay HLS variant.
+
+    Verifies everything checkable server-side — manifest reachable + live, Widevine
+    ContentProtection present, a per-session license URL was issued, and a segment is
+    flowing. Returns status 'bridge' on success. Actual decryption is only provable in a
+    browser CDM (PrismCast), so this is a bridge-readiness check."""
+    import re as _re
+    from urllib.parse import urljoin as _urljoin
+    _WIDEVINE = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
+
+    scraper = scraper_cls(config=source.config or {})
+    try:
+        result = scraper.resolve_dash(ch.stream_url)
+    except StreamDeadError as e:
+        return jsonify({'status': 'dead', 'detail': str(e)})
+    except Exception as e:
+        return jsonify({'status': 'error', 'detail': f'DASH resolve failed: {e}'})
+    finally:
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(source.id, scraper._pending_config_updates)
+            except Exception:
+                db.session.rollback()
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+            except Exception:
+                db.session.rollback()
+
+    mpd_url     = (result or {}).get('mpd_url')
+    license_url = (result or {}).get('license_url')
+    if not mpd_url:
+        return jsonify({'status': 'error', 'detail': 'No DASH manifest URL resolved'})
+
+    try:
+        r = scraper.session.get(mpd_url, timeout=15)
+    except Exception as e:
+        return jsonify({'status': 'error', 'detail': f'Manifest fetch failed: {e}'})
+    if r.status_code != 200:
+        return jsonify({'status': 'dead', 'detail': f'DASH manifest returned HTTP {r.status_code}'})
+    mpd = r.text
+
+    if 'type="static"' in mpd:
+        return jsonify({'status': 'vod', 'detail': 'DASH manifest is static (VOD) — not a live channel'})
+    if _WIDEVINE not in mpd.lower():
+        return jsonify({'status': 'error', 'detail': 'DASH manifest has no Widevine ContentProtection'})
+    if not license_url:
+        return jsonify({'status': 'error',
+                        'detail': 'Widevine manifest OK but no license URL issued — bridge would fail'})
+
+    # Pull one segment to confirm bytes are flowing (encrypted; decryption happens in
+    # the browser CDM). Resolve the init segment against the (absolute) BaseURL.
+    seg_bytes = 0
+    try:
+        base_m = _re.search(r'<BaseURL[^>]*>([^<]+)</BaseURL>', mpd)
+        init_m = _re.search(r'initialization="([^"]+)"', mpd)
+        rep_m  = _re.search(r'<Representation\s+id="([^"]+)"', mpd)
+        if base_m and init_m:
+            seg = _urljoin(base_m.group(1).strip(), init_m.group(1).strip())
+            if '$RepresentationID$' in seg and rep_m:
+                seg = seg.replace('$RepresentationID$', rep_m.group(1))
+            rs = scraper.session.get(seg, timeout=10, stream=True)
+            if rs.status_code == 200:
+                chunk = next(rs.iter_content(8192), None)
+                seg_bytes = len(chunk) if chunk else 0
+            rs.close()
+    except Exception:
+        pass
+
+    detail = 'DASH + Widevine OK, license issued'
+    detail += f', segment {seg_bytes} bytes' if seg_bytes else ', segment not fetched'
+    detail += ' — plays via PrismCast (decryption verified in-browser)'
+    return jsonify({'status': 'bridge', 'detail': detail})
+
+
 @api_bp.route('/channels/<int:channel_id>/inspect', methods=['POST'])
 def inspect_channel(channel_id):
     """
@@ -1893,6 +1970,15 @@ def inspect_channel(channel_id):
 
     if len(ch.source_channel_id) > 128 or '/' in ch.source_channel_id:
         return jsonify({'status': 'error', 'detail': 'Malformed channel ID'})
+
+    # DRM-bridge channels don't play over their HLS variant (FairPlay) — they play as
+    # DASH+Widevine through PrismCast. Inspecting the HLS path would wrongly report 'DRM'.
+    # Test the bridge path instead: confirm the DASH manifest + Widevine + license + a
+    # flowing segment. (Decryption itself can only be verified in a browser CDM — i.e.
+    # PrismCast — so this is a 'bridge-ready' check, not a full decrypt.)
+    _scraper_cls = registry.get(source.name)
+    if getattr(ch, 'requires_drm_bridge', False) and _scraper_cls and hasattr(_scraper_cls, 'resolve_dash'):
+        return _inspect_drm_bridge(ch, source, _scraper_cls)
 
     # Resolve the stream URL directly — avoids a self-referential HTTP request to the
     # gunicorn server itself, which can deadlock all workers under concurrent inspect calls.

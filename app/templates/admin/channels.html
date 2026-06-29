@@ -921,6 +921,7 @@
       white-space: nowrap;
     }
     .inspect-badge.live    { background: var(--success-bg-2); color: var(--success-soft); }
+    .inspect-badge.bridge  { background: var(--accent-bg, var(--success-bg-2)); color: var(--accent-soft, var(--success-soft)); }
     .inspect-badge.drm     { background: var(--danger-bg); color: var(--danger); }
     .inspect-badge.dead    { background: color-mix(in srgb, var(--surface) 70%, var(--bg)); color: var(--text-soft); }
     .inspect-badge.vod     { background: color-mix(in srgb, var(--surface) 70%, var(--bg)); color: var(--text-soft); }
@@ -2434,6 +2435,7 @@
     // ── Channel inspector ─────────────────────────────────────────────────
     const INSPECT_LABELS = {
       live:    '✓ Live',
+      bridge:  '🌉 Bridge OK',
       drm:     '🔒 DRM',
       dead:    '💀 Dead',
       vod:     '📼 VOD',
