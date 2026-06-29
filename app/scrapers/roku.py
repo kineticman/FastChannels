@@ -732,8 +732,15 @@ class RokuScraper(BaseScraper):
                     self._clear_403_cooldown()
                     break
                 if r1.status_code == 403:
-                    self._set_403_cooldown("bootstrap")
                     self._log_bootstrap_403(r1)
+                    # CloudFront 403s are often edge-specific; retry on a fresh
+                    # connection (drop keep-alive so DNS/edge re-resolves) before
+                    # giving up and arming the cooldown.
+                    if attempt < _LIVE_TV_403_RETRIES:
+                        self.session.close()
+                        time.sleep(2 ** attempt)
+                        continue
+                    self._set_403_cooldown("bootstrap")
                 logger.error("[roku] home bootstrap returned %d", r1.status_code)
                 return False
 
