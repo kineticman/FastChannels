@@ -1049,14 +1049,30 @@ def run_stream_audit(source_name: str):
                     _playready = '9a04f079-9840-4286-ab92-e65be0885f95'
                     if _widevine in manifest_text.lower() or _playready in manifest_text.lower():
                         _dash_drm_type = 'Widevine' if _widevine in manifest_text.lower() else 'PlayReady'
-                        ch.is_active      = False
-                        ch.is_enabled     = False
-                        ch.disable_reason = f'DRM:{_dash_drm_type}'
-                        flagged += 1
-                        report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': _dash_drm_type})
-                        logger.info('[audit] DASH DRM: %s  →  %s (%s)', ch.name, manifest_url[:80], _dash_drm_type)
+                        if _bridge_capable and _drm_bridge_mode:
+                            # DASH+Widevine (e.g. Amazon, Sling) plays via the browser/EME
+                            # PrismCast bridge — keep it active and mark it for the bridge
+                            # rather than disabling.
+                            ch.requires_drm_bridge = True
+                            if not ch.is_active:
+                                ch.is_active = True
+                            ch.disable_reason = None
+                            bridged += 1
+                            report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm_bridge', 'reason': _dash_drm_type})
+                            logger.info('[audit] DASH DRM→PrismCast bridge: %s (%s)', ch.name, _dash_drm_type)
+                        else:
+                            ch.requires_drm_bridge = False
+                            ch.is_active      = False
+                            ch.is_enabled     = False
+                            ch.disable_reason = f'DRM:{_dash_drm_type}'
+                            flagged += 1
+                            report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': _dash_drm_type})
+                            logger.info('[audit] DASH DRM: %s  →  %s (%s)', ch.name, manifest_url[:80], _dash_drm_type)
                     else:
-                        # DASH alive (no VOD, no DRM)
+                        # DASH alive (no VOD, no DRM) — clear any stale bridge marker and
+                        # re-activate if it was previously dead.
+                        if getattr(ch, 'requires_drm_bridge', False):
+                            ch.requires_drm_bridge = False
                         if not ch.is_active:
                             ch.is_active = True
                             ch.disable_reason = None

@@ -1882,19 +1882,28 @@ def channel_language_explain(channel_id):
 
 def _inspect_drm_bridge(ch, source, scraper_cls):
     """Inspect a DRM-bridge channel via its DASH+Widevine path (the one it actually
-    plays over through PrismCast), rather than its FairPlay HLS variant.
+    plays over through PrismCast), rather than reporting its protected variant as broken.
 
+    Handles both shapes: scrapers with a dedicated resolve_dash() (Roku — returns the MPD
+    plus a per-session license URL) and scrapers that natively resolve to DASH (Amazon,
+    Sling — resolve() returns the MPD; license is served by the source's license proxy).
     Verifies everything checkable server-side — manifest reachable + live, Widevine
-    ContentProtection present, a per-session license URL was issued, and a segment is
-    flowing. Returns status 'bridge' on success. Actual decryption is only provable in a
-    browser CDM (PrismCast), so this is a bridge-readiness check."""
+    ContentProtection present, the source has license handling, and a segment is flowing.
+    Returns status 'bridge'. Actual decryption is only provable in a browser CDM
+    (PrismCast), so this is a bridge-readiness check."""
     import re as _re
     from urllib.parse import urljoin as _urljoin
     _WIDEVINE = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
 
     scraper = scraper_cls(config=source.config or {})
+    per_session_license = None
     try:
-        result = scraper.resolve_dash(ch.stream_url)
+        if hasattr(scraper_cls, 'resolve_dash'):
+            result = scraper.resolve_dash(ch.stream_url)
+            mpd_url = (result or {}).get('mpd_url')
+            per_session_license = (result or {}).get('license_url')
+        else:
+            mpd_url = scraper.resolve(ch.stream_url)
     except StreamDeadError as e:
         return jsonify({'status': 'dead', 'detail': str(e)})
     except Exception as e:
@@ -1911,10 +1920,18 @@ def _inspect_drm_bridge(ch, source, scraper_cls):
             except Exception:
                 db.session.rollback()
 
-    mpd_url     = (result or {}).get('mpd_url')
-    license_url = (result or {}).get('license_url')
     if not mpd_url:
         return jsonify({'status': 'error', 'detail': 'No DASH manifest URL resolved'})
+
+    # Does the source have a working license path? Per-session URL (Roku) or a license
+    # proxy keyed on the channel (Amazon/Sling get_license_url).
+    has_license = bool(per_session_license)
+    if not has_license:
+        try:
+            has_license = bool(scraper_cls.get_license_url(source.config or {}, channel_id=ch.source_channel_id)
+                               or getattr(scraper_cls, 'license_url', None))
+        except Exception:
+            has_license = bool(getattr(scraper_cls, 'license_url', None))
 
     try:
         r = scraper.session.get(mpd_url, timeout=15)
@@ -1928,19 +1945,21 @@ def _inspect_drm_bridge(ch, source, scraper_cls):
         return jsonify({'status': 'vod', 'detail': 'DASH manifest is static (VOD) — not a live channel'})
     if _WIDEVINE not in mpd.lower():
         return jsonify({'status': 'error', 'detail': 'DASH manifest has no Widevine ContentProtection'})
-    if not license_url:
+    if not has_license:
         return jsonify({'status': 'error',
-                        'detail': 'Widevine manifest OK but no license URL issued — bridge would fail'})
+                        'detail': 'Widevine manifest OK but source has no license path — bridge would fail'})
 
-    # Pull one segment to confirm bytes are flowing (encrypted; decryption happens in
-    # the browser CDM). Resolve the init segment against the (absolute) BaseURL.
+    # Pull one segment to confirm bytes are flowing (encrypted; decryption happens in the
+    # browser CDM). Resolve the init segment against the BaseURL, which may be relative
+    # (Amazon) or absolute (Roku) — urljoin against the manifest URL handles both.
     seg_bytes = 0
     try:
         base_m = _re.search(r'<BaseURL[^>]*>([^<]+)</BaseURL>', mpd)
         init_m = _re.search(r'initialization="([^"]+)"', mpd)
         rep_m  = _re.search(r'<Representation\s+id="([^"]+)"', mpd)
-        if base_m and init_m:
-            seg = _urljoin(base_m.group(1).strip(), init_m.group(1).strip())
+        if init_m:
+            base = _urljoin(mpd_url, base_m.group(1).strip()) if base_m else mpd_url
+            seg = _urljoin(base, init_m.group(1).strip())
             if '$RepresentationID$' in seg and rep_m:
                 seg = seg.replace('$RepresentationID$', rep_m.group(1))
             rs = scraper.session.get(seg, timeout=10, stream=True)
@@ -1951,7 +1970,7 @@ def _inspect_drm_bridge(ch, source, scraper_cls):
     except Exception:
         pass
 
-    detail = 'DASH + Widevine OK, license issued'
+    detail = 'DASH + Widevine OK, license path present'
     detail += f', segment {seg_bytes} bytes' if seg_bytes else ', segment not fetched'
     detail += ' — plays via PrismCast (decryption verified in-browser)'
     return jsonify({'status': 'bridge', 'detail': detail})
@@ -1977,7 +1996,7 @@ def inspect_channel(channel_id):
     # flowing segment. (Decryption itself can only be verified in a browser CDM — i.e.
     # PrismCast — so this is a 'bridge-ready' check, not a full decrypt.)
     _scraper_cls = registry.get(source.name)
-    if getattr(ch, 'requires_drm_bridge', False) and _scraper_cls and hasattr(_scraper_cls, 'resolve_dash'):
+    if getattr(ch, 'requires_drm_bridge', False) and _scraper_cls:
         return _inspect_drm_bridge(ch, source, _scraper_cls)
 
     # Resolve the stream URL directly — avoids a self-referential HTTP request to the
