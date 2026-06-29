@@ -1535,6 +1535,7 @@ def save_source_config(source_id):
     secret_keys = {f.key for f in schema if f.secret}
     data        = request.get_json() or {}
     current     = dict(source.config or {})
+    old         = dict(source.config or {})
     for field in schema:
         key = field.key
         if key not in data:
@@ -1546,6 +1547,30 @@ def save_source_config(source_id):
             current.pop(key, None)
         else:
             current[key] = val
+    # If login credentials changed, purge any cached auth state so the next run
+    # is forced through a fresh login. Otherwise scrapers that cache auth in
+    # config keep authenticating as the *old* account — the new credentials are
+    # never exercised until the stale token/cookie finally fails:
+    #   Fubo   — access_token/refresh_token/token_time (refresh valid ~1 year)
+    #   Frndly — session_id/login_time
+    #   Amazon — cookie_header (session cookies) + browser_storage_state
+    # Pluto fetches session tokens live and Tubi caches its bearer in-memory, so
+    # those self-heal with no cached state to clear. Stable per-install
+    # identifiers (device_id, freecast client_id) are NOT account-bound and are
+    # left untouched. An auth key the user explicitly set in this same save
+    # (e.g. a freshly pasted Amazon cookie_header) is preserved.
+    _CRED_KEYS  = {'username', 'password', 'email', 'amazon_email', 'amazon_password'}
+    _AUTH_STATE = ('access_token', 'refresh_token', 'token_time',
+                   'session_id', 'login_time',
+                   'cookie_header', 'browser_storage_state')
+    creds_changed = any(
+        f.key in _CRED_KEYS and old.get(f.key) != current.get(f.key)
+        for f in schema
+    )
+    if creds_changed:
+        for tk in _AUTH_STATE:
+            if data.get(tk) in (None, '', '••••••••'):  # skip values set in this save
+                current.pop(tk, None)
     source.config = current
     auto_enabled = False
     if (
