@@ -208,19 +208,19 @@
   {% include 'admin/_nav.html' %}
 
   <div class="page">
-    <div class=”hero”>
+    <div class="hero">
       <div>
-        <h1>Channel Changes Report <span style=”font-size:0.65rem;font-weight:600;background:var(--accent-bg);color:var(--accent-soft);border:1px solid var(--info);border-radius:999px;padding:0.15rem 0.55rem;vertical-align:middle;letter-spacing:0.05em”>BETA</span></h1>
-        <p class=”subtitle”>
+        <h1>Channel Changes Report <span style="font-size:0.65rem;font-weight:600;background:var(--accent-bg);color:var(--accent-soft);border:1px solid var(--info);border-radius:999px;padding:0.15rem 0.55rem;vertical-align:middle;letter-spacing:0.05em">BETA</span></h1>
+        <p class="subtitle">
           Track channel lineup changes across your sources — new arrivals, channels that have gone inactive, and channels at risk of dropping out.
         </p>
       </div>
-      <div class=”timestamp”>
+      <div class="timestamp">
         Generated {{ now|localtime }}
       </div>
     </div>
 
-    <div class=”banner”>
+    <div class="banner">
       <p><strong>Note:</strong> this report is in beta. Inactive channel timing is approximate — it reflects when FastChannels detected the change, not necessarily when the channel disappeared. Accuracy improves over time as more scrape history is collected.</p>
     </div>
 
@@ -474,7 +474,7 @@
     </section>
     {% endif %}
 
-    <p class=”footer-note”>
+    <p class="footer-note">
       ⚠️ This report is in beta — data shown is based on what FastChannels currently tracks during scrapes. Have feedback? Let us know on the forum.
     </p>
   </div>
