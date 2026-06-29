@@ -112,6 +112,75 @@ def parse_stream_info(master_text: str) -> dict | None:
             v['fps'] = round(float(m.group(1)), 3)
         variants.append(v)
 
+    return _build_stream_info(variants)
+
+
+def parse_dash_stream_info(mpd_text: str) -> dict | None:
+    """Parse a DASH MPD's video Representations into the same stream_info dict shape as
+    parse_stream_info (HLS), so DASH sources (Amazon, Sling) get the resolution/codec
+    badge too. Returns None if not a parseable MPD with video representations.
+
+    width/height/codecs/frameRate may sit on the <AdaptationSet> or the <Representation>;
+    Representation values win, AdaptationSet values are the fallback."""
+    if '<MPD' not in mpd_text:
+        return None
+    import xml.etree.ElementTree as _ET
+    try:
+        root = _ET.fromstring(mpd_text)
+    except Exception:
+        return None
+
+    def _local(tag: str) -> str:
+        return tag.rsplit('}', 1)[-1]
+
+    def _fps(raw: str | None):
+        if not raw:
+            return None
+        try:
+            if '/' in raw:
+                num, den = raw.split('/', 1)
+                return round(int(num) / int(den), 3)
+            return round(float(raw), 3)
+        except Exception:
+            return None
+
+    variants = []
+    for aset in root.iter():
+        if _local(aset.tag) != 'AdaptationSet':
+            continue
+        a_mime, a_ct = aset.get('mimeType', ''), aset.get('contentType', '')
+        a_w, a_h = aset.get('width'), aset.get('height')
+        a_codecs, a_fr = aset.get('codecs'), aset.get('frameRate')
+        for rep in list(aset):
+            if _local(rep.tag) != 'Representation':
+                continue
+            w = rep.get('width') or a_w
+            h = rep.get('height') or a_h
+            mime = rep.get('mimeType') or a_mime
+            if 'video' not in mime and 'video' not in a_ct and not (w and h):
+                continue  # audio/text/thumbnail rep
+            v: dict = {}
+            bw = rep.get('bandwidth')
+            if bw and bw.isdigit():
+                v['bandwidth'] = int(bw)
+            if w and h:
+                v['resolution'] = f'{w}x{h}'
+            codecs = rep.get('codecs') or a_codecs
+            if codecs:
+                v['_raw_codecs'] = codecs
+                v['codecs'] = _friendly_codecs(codecs)
+            fps = _fps(rep.get('frameRate') or a_fr)
+            if fps:
+                v['fps'] = fps
+            variants.append(v)
+
+    return _build_stream_info(variants)
+
+
+def _build_stream_info(variants: list[dict]) -> dict | None:
+    """Shared finalizer: take per-variant dicts (resolution/bandwidth/codecs/fps) and
+    derive the max-resolution / codec / quality-tier summary. Used by both the HLS and
+    DASH parsers so their output is identical."""
     if not variants:
         return None
 

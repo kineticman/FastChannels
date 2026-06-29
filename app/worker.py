@@ -32,7 +32,7 @@ from app.config_store import (
     load_source_cache,
 )
 from app.extensions import db
-from app.hls import inspect_hls_drm, parse_stream_info as _parse_stream_info
+from app.hls import inspect_hls_drm, parse_stream_info as _parse_stream_info, parse_dash_stream_info as _parse_dash_stream_info
 from app.models import Source, Channel, Program, Feed, AppSettings
 import time as _time
 from urllib.parse import urljoin as _urljoin
@@ -1045,6 +1045,11 @@ def run_stream_audit(source_name: str):
                         report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'vod', 'reason': 'VOD'})
                         logger.info('[audit] DASH VOD (not live): %s', ch.name)
                         continue
+                    # Resolution/codec badge from the MPD's video Representations — the DASH
+                    # equivalent of the HLS stream_info parse below (Amazon, Sling, etc.).
+                    _dash_info = _parse_dash_stream_info(manifest_text)
+                    if _dash_info:
+                        ch.stream_info = _dash_info
                     _widevine  = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
                     _playready = '9a04f079-9840-4286-ab92-e65be0885f95'
                     if _widevine in manifest_text.lower() or _playready in manifest_text.lower():
