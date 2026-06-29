@@ -155,13 +155,19 @@ def _apply_channel_filters(q, filters: dict | None = None):
         q = q.filter(Channel.name.ilike(f'%{search}%'))
     if drm := filters.get('drm'):
         if drm == '1':
-            q = q.filter(Channel.disable_reason.like('DRM%'))
+            # DRM: both disabled-DRM channels and active-but-bridged (PrismCast) ones.
+            q = q.filter(db.or_(Channel.disable_reason.like('DRM%'),
+                                Channel.requires_drm_bridge == True))
+        elif drm == 'bridge':
+            q = q.filter(Channel.requires_drm_bridge == True)
         elif drm == 'dead':
             q = q.filter(Channel.disable_reason == 'Dead')
         elif drm == 'vod':
             q = q.filter(Channel.disable_reason == 'VOD')
         elif drm == '0':
-            q = q.filter(Channel.disable_reason == None)
+            q = q.filter(Channel.disable_reason == None,
+                         db.or_(Channel.requires_drm_bridge == False,
+                                Channel.requires_drm_bridge == None))
     if ef := filters.get('enabled'):
         if ef in ('1', 'enabled'):
             q = q.filter(Channel.is_enabled == True)
@@ -2130,17 +2136,30 @@ def _get_playback_info(ch, fast_mode=True):
     else:
         playback_mode = 'hls'
 
+    # Roku DRM channels: the HLS variant is FairPlay (Chrome can't decrypt it), but
+    # the same channel has a CENC DASH+Widevine variant Chrome CAN handle. Serve that
+    # via EME so the watch page — and the PrismCast bridge that captures it — can play.
+    roku_drm = bool(
+        ch.source and ch.source.name == 'roku'
+        and (getattr(ch, 'requires_drm_bridge', False)
+             or (ch.disable_reason or '').startswith('DRM'))
+    )
+
     # These sources use AES-128 encrypted TS; Shaka 4.x cannot decrypt via MSE
     # (error 4042). Force native mode so the watch page sets video.src directly
     # and lets the browser's native HLS stack handle decryption.
-    if ch.source and ch.source.name in ('pluto', 'fubo', 'roku'):
+    if ch.source and ch.source.name in ('pluto', 'fubo', 'roku') and not roku_drm:
         playback_mode = 'native'
+    if roku_drm:
+        playback_mode = 'dash'
 
     license_url = None
     if ch.source:
         from ..scrapers.registry import get as _get_scraper
         _scraper_cls = _get_scraper(ch.source.name)
-        if _scraper_cls:
+        # Roku is DRM-capable per-channel: only DRM-flagged Roku channels use the
+        # license path; plain Roku channels stay native HLS with no license URL.
+        if _scraper_cls and not (ch.source.name == 'roku' and not roku_drm):
             _lu = _scraper_cls.get_license_url(ch.source.config or {})
             if _lu:
                 from flask import request as _req
@@ -2195,6 +2214,13 @@ def _get_playback_info(ch, fast_mode=True):
     ) and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/amazon_prime_free/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+
+    # Roku DRM → the DASH+Widevine variant. Set last so no earlier proxy special-case
+    # (which all target other sources) clobbers it. Roku's MPD CDN is CORS-open and
+    # uses an absolute BaseURL, so the route just 302s Shaka to the live manifest.
+    if roku_drm and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/roku/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
     return {
         'stream_type': stream_type,
@@ -3387,6 +3413,46 @@ def dvr_test_connection():
         return jsonify({'error': str(exc)}), 502
 
 
+def _drm_bridge_capable_sources() -> list[str]:
+    """Source names whose scraper has DRM license handling (can be PrismCast-bridged)."""
+    from ..scrapers.registry import get_all
+    return [name for name, cls in get_all().items() if getattr(cls, 'license_url', None)]
+
+
+def _reconcile_drm_bridge_mode(enabled: bool) -> None:
+    """Apply a DRM-bridge mode change to existing channels so it takes effect at once.
+
+    bridge ON : disabled-DRM channels on bridge-capable sources are recovered — kept
+                active and marked requires_drm_bridge (excluded from standard, bridged in
+                PrismCast).
+    bridge OFF: bridged channels are dropped back to the legacy disabled state.
+    """
+    if enabled:
+        capable = _drm_bridge_capable_sources()
+        if not capable:
+            return
+        rows = (Channel.query.join(Source)
+                .filter(Source.name.in_(capable),
+                        Channel.disable_reason.like('DRM%'),
+                        Channel.is_active == False)
+                .all())
+        for ch in rows:
+            ch.requires_drm_bridge = True
+            ch.is_active = True
+            ch.is_enabled = True
+            ch.disable_reason = None
+        logger.info('[drm-bridge] mode ON — recovered %d disabled-DRM channels to bridge', len(rows))
+    else:
+        rows = Channel.query.filter(Channel.requires_drm_bridge == True).all()
+        for ch in rows:
+            ch.requires_drm_bridge = False
+            ch.is_active = False
+            ch.is_enabled = False
+            ch.disable_reason = ch.disable_reason or 'DRM'
+        logger.info('[drm-bridge] mode OFF — disabled %d bridged channels', len(rows))
+    db.session.flush()
+
+
 @api_bp.route('/settings', methods=['GET', 'POST'])
 def app_settings():
     row = AppSettings.get()
@@ -3400,6 +3466,13 @@ def app_settings():
             row.prismcast_url = _normalize_server_url(data['prismcast_url'], default_port=None)
         if 'prismcast_inner_url' in data:
             row.prismcast_inner_url = _normalize_server_url(data['prismcast_inner_url'], default_port=None)
+        if 'drm_bridge_enabled' in data:
+            _new_drm_bridge = bool(data['drm_bridge_enabled'])
+            if _new_drm_bridge != bool(row.drm_bridge_enabled):
+                row.drm_bridge_enabled = _new_drm_bridge
+                # Reconcile existing DRM channels immediately so the toggle takes effect
+                # without waiting for the next stream audit.
+                _reconcile_drm_bridge_mode(_new_drm_bridge)
         if 'timezone_name' in data:
             tz_name = normalize_timezone_name(data.get('timezone_name'))
             if data.get('timezone_name') and tz_name is None:
@@ -3433,6 +3506,7 @@ def app_settings():
         'gracenote_contribution_url': row.gracenote_contribution_url or '',
         'prismcast_url': row.effective_prismcast_url() or '',
         'prismcast_inner_url': row.prismcast_inner_url or '',
+        'drm_bridge_enabled': bool(row.drm_bridge_enabled),
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',

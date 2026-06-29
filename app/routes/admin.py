@@ -574,13 +574,18 @@ def channels():
 
     # Status filter — admin always shows all channels regardless of is_active
     if drm_filter == '1':
-        q = q.filter(Channel.disable_reason.like('DRM%'))
+        q = q.filter(db.or_(Channel.disable_reason.like('DRM%'),
+                            Channel.requires_drm_bridge == True))
+    elif drm_filter == 'bridge':
+        q = q.filter(Channel.requires_drm_bridge == True)
     elif drm_filter == 'dead':
         q = q.filter(Channel.disable_reason == 'Dead')
     elif drm_filter == 'vod':
         q = q.filter(Channel.disable_reason == 'VOD')
     elif drm_filter == '0':
-        q = q.filter(Channel.disable_reason == None)
+        q = q.filter(Channel.disable_reason == None,
+                     db.or_(Channel.requires_drm_bridge == False,
+                            Channel.requires_drm_bridge == None))
 
     if enabled_filter == '1':
         q = q.filter(Channel.is_enabled == True)
@@ -1210,6 +1215,20 @@ def feeds():
                            default_chnum_from_env=default_feed and default_feed.chnum_start is None and app_settings.env_global_chnum_start() is not None)
 
 
+def _drm_bridge_recoverable_count() -> int:
+    """How many disabled-DRM channels (on DRM-capable sources) turning on bridge mode
+    would recover. Drives the Settings nudge."""
+    from ..scrapers.registry import get_all
+    capable = [name for name, cls in get_all().items() if getattr(cls, 'license_url', None)]
+    if not capable:
+        return 0
+    return (Channel.query.join(Source)
+            .filter(Source.name.in_(capable),
+                    Channel.disable_reason.like('DRM%'),
+                    Channel.is_active == False)
+            .count())
+
+
 @admin_bp.route('/settings')
 def settings():
     app_settings = AppSettings.get()
@@ -1265,6 +1284,8 @@ def settings():
                            image_proxy_enabled=app_settings.image_proxy_enabled if app_settings.image_proxy_enabled is not None else True,
                            prismcast_url=app_settings.effective_prismcast_url() or '',
                            prismcast_inner_url=app_settings.prismcast_inner_url or '',
+                           drm_bridge_enabled=bool(app_settings.drm_bridge_enabled),
+                           drm_bridge_recoverable_count=_drm_bridge_recoverable_count(),
                            gracenote_contribution_url=app_settings.gracenote_contribution_url or '')
 
 

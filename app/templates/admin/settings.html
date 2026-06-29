@@ -522,6 +522,25 @@
           <div class="help" style="color:var(--warning-soft)">Plain <code>http://</code> on a LAN IP is <em>not</em> a secure context — DRM channels won't decrypt there. Use loopback or HTTPS.</div>
         </div>
       </div>
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Bridge DRM channels (keep them active)</div>
+          <div class="toggle-row-help">When <strong>on</strong>, DRM channels the stream audit detects (e.g. Roku FairPlay) are kept active and routed through the PrismCast feed instead of being disabled — held out of the standard feed (a normal client can't decrypt them) and badged 🔒🌉. When <strong>off</strong> (default), DRM channels are disabled and drop out of all output. Only sources with DRM license handling can be bridged.</div>
+          {% if not prismcast_url %}
+          <div class="help" style="color:var(--warning-soft)">Bridging needs the PrismCast Server URL above — set it first, or bridged channels won't be playable anywhere.</div>
+          {% endif %}
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="drm-bridge-enabled" {% if drm_bridge_enabled %}checked{% endif %}
+                   onchange="saveDrmBridge()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      {% if prismcast_url and not drm_bridge_enabled and drm_bridge_recoverable_count %}
+      <div class="help" style="color:var(--accent-soft)">💡 You have PrismCast configured and {{ drm_bridge_recoverable_count }} DRM channel{{ 's' if drm_bridge_recoverable_count != 1 else '' }} currently disabled. Turn on “Bridge DRM channels” to recover {{ 'them' if drm_bridge_recoverable_count != 1 else 'it' }} via PrismCast.</div>
+      {% endif %}
       <div class="field-actions">
         <span class="save-status" id="prismcast-status"></span>
         <button class="btn btn-primary" onclick="savePrismcastSettings()">Save</button>
@@ -951,6 +970,14 @@ async function savePrismcastSettings() {
     prismcast_url:       url || null,
     prismcast_inner_url: inner || null,
   }, 'prismcast-status');
+}
+
+async function saveDrmBridge() {
+  const enabled = document.getElementById('drm-bridge-enabled').checked;
+  await saveSettings({ drm_bridge_enabled: enabled }, 'prismcast-status');
+  // The toggle reconciles existing DRM channels server-side; reload so the nudge,
+  // badges, and counts reflect the new state.
+  setTimeout(() => location.reload(), 700);
 }
 
 async function testDvrConnection() {

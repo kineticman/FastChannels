@@ -1788,6 +1788,56 @@ def amazon_dash_proxy(channel_id: str):
     )
 
 
+@play_bp.route('/play/roku/<channel_id>/dash.mpd')
+def roku_dash_proxy(channel_id: str):
+    """DASH (Widevine) variant for a Roku channel — the browser/EME path that the
+    watch page and PrismCast bridge use when the HLS variant is FairPlay.
+
+    Unlike Amazon, Roku's MPD CDN sends Access-Control-Allow-Origin and uses an
+    absolute <BaseURL>, so no body proxy/rewrite is needed — we 302-redirect Shaka
+    straight to the osm MPD. resolve_dash() also caches the per-session Widevine
+    license URL (persisted to source_cache) so /play/roku/license can read it back.
+    """
+    from urllib.parse import unquote as _unquote
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'roku', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper_cls = registry.get('roku')
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        result = scraper.resolve_dash(channel.stream_url)
+    except Exception as e:
+        logger.warning('[roku-dash] resolve failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    finally:
+        # Persist the dash_cache (license URL) so the license proxy — a separate
+        # request — can read the per-session URL just resolved here.
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            except Exception:
+                pass
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+            except Exception:
+                pass
+
+    mpd_url = (result or {}).get('mpd_url')
+    if not mpd_url or not mpd_url.startswith('http'):
+        logger.warning('[roku-dash] no DASH URL for %s', raw_id[:40])
+        return _unavailable_response()
+    return redirect(mpd_url, code=302)
+
+
 @play_bp.route('/play/<source_name>/license', methods=['POST'])
 def license_proxy(source_name: str):
     """DRM license proxy — forwards Widevine challenges to the scraper's license_url

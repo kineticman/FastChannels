@@ -179,6 +179,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_url TEXT"))
             if "prismcast_inner_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_inner_url TEXT"))
+            if "drm_bridge_enabled" not in cols:
+                # False = audit disables DRM channels (legacy); True = keep them active and
+                # bridge via PrismCast. Default off so non-PrismCast users are unaffected.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN drm_bridge_enabled BOOLEAN NOT NULL DEFAULT 0"))
 
         if "sources" in tables:
             src_cols = {
@@ -243,6 +247,13 @@ def ensure_runtime_schema() -> None:
             if "is_duplicate" not in ch_cols:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN is_duplicate BOOLEAN NOT NULL DEFAULT 0"
+                ))
+            if "requires_drm_bridge" not in ch_cols:
+                # Channel is DRM (e.g. Roku FairPlay) but a DRM-capable source can serve a
+                # browser-decryptable variant: it stays is_active=True, is excluded from the
+                # standard feed (unplayable on normal clients) and bridged in the PrismCast feed.
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN requires_drm_bridge BOOLEAN NOT NULL DEFAULT 0"
                 ))
             if "last_seen_at" not in ch_cols:
                 conn.execute(text(

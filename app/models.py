@@ -86,6 +86,7 @@ class Source(db.Model):
             'last_audited_at': self.last_audited_at.isoformat() if self.last_audited_at else None,
             'last_error':     self.last_error,
             'channel_count':  self.channels.filter_by(is_active=True).count(),
+            'drm_bridge_count': self.channels.filter_by(requires_drm_bridge=True).count(),
             'chnum_start':    self.chnum_start,
             'epg_only':       self.epg_only,
             'new_channel_policy': self.new_channel_policy or 'inherit',
@@ -159,6 +160,7 @@ class Channel(db.Model):
     is_duplicate      = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # set by user — manual duplicate label (does not disable)
     is_active         = db.Column(db.Boolean, default=True, nullable=False, server_default=db.text('1'))   # set by scraper — channel exists upstream
     is_enabled        = db.Column(db.Boolean, default=True, nullable=False, server_default=db.text('1'))   # set by user — include in M3U/EPG
+    requires_drm_bridge = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # set by audit — DRM channel served only via the PrismCast bridge (excluded from standard feed, kept is_active)
     review_state      = db.Column(db.String(16), default='approved', nullable=False, server_default='approved')  # approved | pending — pending channels are held out of all feeds until reviewed
     scrape_pinned     = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # user override: stay active even if missed by scraper
     last_seen_at      = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -222,6 +224,7 @@ class Channel(db.Model):
             'first_seen_at':    self.first_seen_at.isoformat() if self.first_seen_at else None,
             'scrape_pinned':    bool(self.scrape_pinned),
             'disable_reason':   self.disable_reason,
+            'requires_drm_bridge': bool(self.requires_drm_bridge),
             'is_duplicate':     self.is_duplicate,
             'is_enabled':       self.is_enabled,
             'custom_headers':    self.custom_headers or {},
@@ -354,6 +357,7 @@ class AppSettings(db.Model):
     last_contribution_at       = db.Column(db.DateTime, nullable=True)  # server-side rate-limit: last successful submission
     prismcast_url        = db.Column(db.Text, nullable=True)     # PrismCast capture server, e.g. http://192.168.1.x:5589 (DRM bridge)
     prismcast_inner_url  = db.Column(db.Text, nullable=True)     # base URL PrismCast's Chrome uses to reach /watch (loopback/HTTPS for EME secure-context); falls back to public_base_url
+    drm_bridge_enabled   = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # False=disable DRM channels (audit drops them); True=keep DRM channels active + route via PrismCast bridge
 
     @staticmethod
     def _env_int(name: str) -> int | None:

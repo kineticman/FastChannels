@@ -658,7 +658,9 @@
                 {% else %}
                   <span class="config-badge auto" style="font-style:italic">User-defined</span>
                 {% endif %}
-                <span class="config-badge auto"><span id="ch-count-{{ source.id }}">{{ source.to_dict().channel_count }}</span> channels</span>
+                {% set _sd = source.to_dict() %}
+                <span class="config-badge auto"><span id="ch-count-{{ source.id }}">{{ _sd.channel_count }}</span> channels</span>
+                {% if _sd.drm_bridge_count %}<a class="config-badge auto" href="/admin/channels?source={{ source.name }}&drm=bridge" title="DRM channels bridged via PrismCast — click to view"><span id="bridge-count-{{ source.id }}">🌉 {{ _sd.drm_bridge_count }}</span> bridged</a>{% endif %}
               </div>
               <div class="source-meta" id="source-meta-{{ source.id }}">
                 {% if not is_custom %}

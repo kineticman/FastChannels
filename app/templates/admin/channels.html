@@ -1464,6 +1464,7 @@
             <select id="drm-filter" name="drm">
               <option value="">All stream states</option>
               <option value="1" {% if drm_filter == '1' %}selected{% endif %}>🔒 DRM only</option>
+              <option value="bridge" {% if drm_filter == 'bridge' %}selected{% endif %}>🌉 DRM — bridged (PrismCast)</option>
               <option value="dead" {% if drm_filter == 'dead' %}selected{% endif %}>💀 Dead only</option>
               <option value="vod" {% if drm_filter == 'vod' %}selected{% endif %}>📼 VOD only</option>
               <option value="0" {% if drm_filter == '0' %}selected{% endif %}>No DRM / Dead / VOD flag</option>
@@ -1597,7 +1598,7 @@
       <span class="filter-chip"><strong>Presence</strong>{% if presence_filter == 'active' %}Active only{% elif presence_filter == 'inactive' %}Inactive only{% elif presence_filter == 'enabled_inactive' %}Enabled but inactive{% elif presence_filter == 'missed' %}Missed recently{% elif presence_filter == 'pinned' %}Pinned{% else %}{{ presence_filter }}{% endif %}</span>
       {% endif %}
       {% if drm_filter %}
-      <span class="filter-chip"><strong>Health</strong>{% if drm_filter == '1' %}DRM only{% elif drm_filter == 'dead' %}Dead only{% elif drm_filter == 'vod' %}VOD only{% elif drm_filter == '0' %}No DRM / Dead / VOD flag{% endif %}</span>
+      <span class="filter-chip"><strong>Health</strong>{% if drm_filter == '1' %}DRM only{% elif drm_filter == 'bridge' %}DRM — bridged{% elif drm_filter == 'dead' %}Dead only{% elif drm_filter == 'vod' %}VOD only{% elif drm_filter == '0' %}No DRM / Dead / VOD flag{% endif %}</span>
       {% endif %}
       {% if language_filter %}
       <span class="filter-chip"><strong>Language</strong>{% if language_filter == '__en' %}English{% elif language_filter == '__non_en' %}Non-English{% else %}{{ language_filter }}{% endif %}</span>
@@ -1836,7 +1837,9 @@
             <td id="inspect-cell-{{ ch.id }}" class="actions-col">
               <div class="channel-actions">
                 <div id="flags-cell-{{ ch.id }}" class="flag-group">
-                  {% if ch.disable_reason and ch.disable_reason.startswith('DRM') %}
+                  {% if ch.requires_drm_bridge %}
+                  <span class="flag-icon" title="DRM (e.g. FairPlay) — excluded from the standard feed (won't play on a normal client) but bridged into the PrismCast feed, which decrypts it in a browser.">🔒🌉</span>
+                  {% elif ch.disable_reason and ch.disable_reason.startswith('DRM') %}
                   <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'DRM')" title="{{ ch.disable_reason }} — stream is protected, not playable in generic IPTV clients. Click to re-enable.">🔒</span>
                   {% elif ch.disable_reason == 'Dead' %}
                   <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'Dead', {{ ch.missed_scrapes or 0 }})" title="Dead — stream audit found this channel not currently playable. Click to re-enable or delete.">💀</span>
@@ -1898,11 +1901,12 @@
             <div class="mcard-name">{{ ch.name }}{% if ch.review_state == 'pending' %} <span class="review-badge" title="New channel pending review{% if ch.first_seen_at %} · First added {{ ch.first_seen_at|localtime }}{% endif %}">NEW</span>{% endif %}</div>
             <div class="mcard-meta">{{ ch.source.display_name }}{% if ch.category %} · {{ ch.category }}{% endif %}{% if ch.language_override or ch.language %} · {{ ch.language_override or ch.language }}{% endif %}</div>
             {% set _is_rotator = (ch.tags and 'featured' in ch.tags.split(',')) or (ch.content_swap_count or 0) > 0 %}
-            {% set _has_b = ch.disable_reason or ch.identity_changed_at or _is_rotator or (ch.stream_info and (ch.stream_info.has_4k or ch.stream_info.has_hd or ch.stream_info.video_codec == 'hevc')) or ch.name in duplicate_names or ch.name in possible_duplicate_names or ch.id in gn_duplicate_ids or (ch.is_enabled and not ch.is_active) %}
+            {% set _has_b = ch.disable_reason or ch.requires_drm_bridge or ch.identity_changed_at or _is_rotator or (ch.stream_info and (ch.stream_info.has_4k or ch.stream_info.has_hd or ch.stream_info.video_codec == 'hevc')) or ch.name in duplicate_names or ch.name in possible_duplicate_names or ch.id in gn_duplicate_ids or (ch.is_enabled and not ch.is_active) %}
             {% if _has_b %}
             <div class="mcard-badges">
               {% if ch.identity_changed_at %}<span class="mcard-flag" title="Content changed upstream — slot now carries a different channel. Review its Gracenote ID.">🔁</span>{% endif %}
               {% if _is_rotator %}<span class="mcard-flag" title="Rotating / featured slot — content may change over time. Enable with caution.">♻️</span>{% endif %}
+              {% if ch.requires_drm_bridge %}<span class="mcard-flag" title="DRM — bridged via PrismCast (excluded from standard feed)">🔒🌉</span>{% endif %}
               {% if ch.disable_reason and ch.disable_reason.startswith('DRM') %}<span class="mcard-flag" title="{{ ch.disable_reason }}">🔒</span>{% endif %}
               {% if ch.disable_reason == 'Dead' %}<span class="mcard-flag" title="Stream dead">💀</span>{% endif %}
               {% if ch.disable_reason == 'VOD' %}<span class="mcard-flag" title="VOD only">📼</span>{% endif %}

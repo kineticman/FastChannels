@@ -711,10 +711,17 @@ def run_stream_audit(source_name: str):
         total    = len(channels)
         checked  = 0
         flagged  = 0
+        bridged  = 0   # DRM channels kept active and routed via the PrismCast bridge
         dead     = 0
         vod      = 0
         errors   = 0
         skipped_403 = 0
+        # A DRM (FairPlay) channel is bridged — kept active + marked requires_drm_bridge so
+        # it flows into the PrismCast feed — only when BOTH the global DRM-bridge mode is on
+        # AND the source has license handling. Otherwise it keeps the legacy disable
+        # behavior (is_active=False). Default-off means non-PrismCast users are unaffected.
+        _bridge_capable = bool(getattr(scraper_cls, 'license_url', None))
+        _drm_bridge_mode = bool(AppSettings.get().drm_bridge_enabled)
         consecutive_errors = 0
         consecutive_skipped_403 = 0  # geo-block detector
         consecutive_transient_errors = 0  # resolve-timeout detector
@@ -1104,17 +1111,37 @@ def run_stream_audit(source_name: str):
                 drm = inspect_hls_drm(manifest_text)
                 if drm:
                     _drm_type = drm.get('drm_type', 'DRM')
-                    ch.is_active      = False
-                    ch.is_enabled     = False
-                    ch.disable_reason = f'DRM:{_drm_type}'
-                    flagged += 1
-                    report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': _drm_type})
-                    logger.info('[audit] DRM: %s  →  %s (%s)', ch.name, manifest_url[:80], _drm_type)
-                elif not ch.is_active:
-                    # HLS alive — re-activate previously dead channel
-                    ch.is_active = True
-                    ch.disable_reason = None
-                    logger.info('[audit] re-activated previously dead channel: %s', ch.name)
+                    if _bridge_capable and _drm_bridge_mode:
+                        # Bridge mode + source can serve a browser-decryptable variant:
+                        # keep the channel active and mark it for the PrismCast bridge — it's
+                        # held out of the standard feed (unplayable on a normal client) but
+                        # bridged in the PrismCast feed.
+                        ch.requires_drm_bridge = True
+                        if not ch.is_active:
+                            ch.is_active = True
+                        ch.disable_reason = None
+                        bridged += 1
+                        report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm_bridge', 'reason': _drm_type})
+                        logger.info('[audit] DRM→PrismCast bridge: %s (%s)', ch.name, _drm_type)
+                    else:
+                        # Disable mode (or non-bridge-capable source): drop it as before.
+                        ch.requires_drm_bridge = False
+                        ch.is_active      = False
+                        ch.is_enabled     = False
+                        ch.disable_reason = f'DRM:{_drm_type}'
+                        flagged += 1
+                        report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm', 'reason': _drm_type})
+                        logger.info('[audit] DRM: %s  →  %s (%s)', ch.name, manifest_url[:80], _drm_type)
+                else:
+                    # Clear HLS — plays directly. Clear any stale bridge marker so the
+                    # channel returns to the standard feed, and re-activate if it was dead.
+                    if getattr(ch, 'requires_drm_bridge', False):
+                        ch.requires_drm_bridge = False
+                        logger.info('[audit] DRM-bridge cleared (now clear HLS): %s', ch.name)
+                    if not ch.is_active:
+                        ch.is_active = True
+                        ch.disable_reason = None
+                        logger.info('[audit] re-activated previously dead channel: %s', ch.name)
 
             except Exception as e:
                 if _is_transient_network_error(e):
@@ -1130,7 +1157,7 @@ def run_stream_audit(source_name: str):
                     source.last_audited_at = datetime.now(timezone.utc)
                     db.session.commit()
                     persist_source_cache_updates(source.id, {'last_audit_result': {
-                        'total': i, 'checked': checked, 'flagged': flagged,
+                        'total': i, 'checked': checked, 'flagged': flagged, 'bridged': bridged,
                         'dead': dead, 'vod': vod, 'errors': errors, 'skipped_403': skipped_403,
                         'ts': datetime.now(timezone.utc).isoformat(),
                         'partial': True,
@@ -1150,7 +1177,7 @@ def run_stream_audit(source_name: str):
         db.session.commit()
         persist_source_cache_updates(source.id, {
             'last_audit_result': {
-                'total': total, 'checked': checked, 'flagged': flagged,
+                'total': total, 'checked': checked, 'flagged': flagged, 'bridged': bridged,
                 'dead': dead, 'vod': vod, 'errors': errors, 'skipped_403': skipped_403,
                 'ts': datetime.now(timezone.utc).isoformat(),
             },
@@ -1160,8 +1187,8 @@ def run_stream_audit(source_name: str):
             },
         })
         _audit_progress(0, 0, phase='done')
-        logger.info('[audit] %s: done — total=%d checked=%d flagged=%d dead=%d vod=%d errors=%d skipped_403=%d',
-                    source_name, total, checked, flagged, dead, vod, errors, skipped_403)
+        logger.info('[audit] %s: done — total=%d checked=%d flagged=%d bridged=%d dead=%d vod=%d errors=%d skipped_403=%d',
+                    source_name, total, checked, flagged, bridged, dead, vod, errors, skipped_403)
 
 
 def run_stream_audit_recheck(source_name: str, channel_ids: list):
@@ -1365,7 +1392,10 @@ def _apply_scraper_config_updates(source, scraper) -> None:
 
 
 def _epg_channels_for_source(source) -> list[Channel]:
-    """Return DB channels that should participate in EPG refreshes."""
+    """Return DB channels that should participate in EPG refreshes.
+
+    DRM-bridge channels stay is_active=True (they're only held out of the standard
+    feed, not disabled), so they're naturally included here and keep their guide."""
     return source.channels.filter(Channel.is_active == True).all()
 
 

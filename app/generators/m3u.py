@@ -183,8 +183,30 @@ def _channel_display_name(ch, multi_country_map: dict[str, set[str]] | None = No
     return name
 
 
-def _build_channel_query(filters: dict):
-    """Shared filtered query for active, enabled channels."""
+def _build_channel_query(filters: dict, *, activity: str = 'active'):
+    """Shared filtered query for channels.
+
+    activity='active'      -> the standard set: active + enabled, EXCLUDING DRM-bridge
+                              channels (a normal client can't decrypt those).
+    activity='drm_bridge'  -> active + enabled channels the audit marked
+                              requires_drm_bridge (DRM, e.g. Roku FairPlay). A normal
+                              client can't play them, so they're held out of standard
+                              output, but a browser (PrismCast) can — the PrismCast feed
+                              unions them back in and bridges them.
+    """
+    if activity == 'drm_bridge':
+        activity_predicates = (
+            Channel.is_active  == True,
+            Channel.is_enabled == True,
+            Channel.requires_drm_bridge == True,
+        )
+    else:
+        activity_predicates = (
+            Channel.is_active  == True,
+            Channel.is_enabled == True,
+            db.or_(Channel.requires_drm_bridge == False,
+                   Channel.requires_drm_bridge == None),
+        )
     query = Channel.query.join(Source).options(
         contains_eager(Channel.source).load_only(
             Source.id,
@@ -193,8 +215,7 @@ def _build_channel_query(filters: dict):
             Source.chnum_start,
         ),
     ).filter(
-        Channel.is_active  == True,
-        Channel.is_enabled == True,
+        *activity_predicates,
         Source.is_enabled  == True,
         Source.epg_only    == False,
         Channel.stream_url != None,
@@ -965,14 +986,33 @@ _PRISMCAST_INCAPABLE_SOURCES = {'pluto', 'fubo', 'roku'}
 _PRISMCAST_UNSUPPORTED_TYPES = {'mjpeg', 'jpeg_snapshot', 'mpegts', 'ts'}
 
 
+def _source_is_drm_capable(source_name: str | None) -> bool:
+    """True if the source's scraper exposes license handling (a license_url), so the
+    watch page can complete the EME handshake and PrismCast gets decrypted video."""
+    if not source_name:
+        return False
+    from ..scrapers import registry as _reg
+    scr = _reg.get(source_name)
+    return bool(scr and getattr(scr, 'license_url', None))
+
+
 def _prismcast_capturable(ch) -> bool:
     """True if PrismCast's headless Chrome can render+capture this channel's
-    /watch page. False for AES-128 native-HLS sources (Chrome can't play native
-    HLS) and non-browser stream types. Gates whether a DRM channel is routed
-    through the PrismCast wrapper vs. left as a direct play URL."""
-    if ch.source and ch.source.name in _PRISMCAST_INCAPABLE_SOURCES:
+    /watch page.
+
+    DRM / DASH channels are served to the watch page as DASH+Widevine (EME), which
+    Chrome renders regardless of the native-HLS source exclusion — but only when the
+    source actually has license handling, else EME can't complete and capture is black.
+    Plain channels fall back to the source rule: AES-128 native-HLS sources can't play
+    in Chrome, and non-browser stream types (snapshot/MPEG-TS) never can."""
+    stype = (ch.stream_type or '').strip().lower()
+    if stype in _PRISMCAST_UNSUPPORTED_TYPES:
         return False
-    if (ch.stream_type or '').strip().lower() in _PRISMCAST_UNSUPPORTED_TYPES:
+    drm = bool(getattr(ch, 'requires_drm_bridge', False)) \
+        or (getattr(ch, 'disable_reason', None) or '').startswith('DRM')
+    if drm or stype == 'dash':
+        return _source_is_drm_capable(ch.source.name if ch.source else None)
+    if ch.source and ch.source.name in _PRISMCAST_INCAPABLE_SOURCES:
         return False
     return True
 
@@ -984,7 +1024,9 @@ def _needs_prismcast_bridge(ch) -> bool:
     entirely — no capture slot, no transcode, full quality."""
     if (ch.stream_type or '').strip().lower() == 'dash':
         return True
-    if (getattr(ch, 'disable_reason', None) or '') == 'DRM':
+    if getattr(ch, 'requires_drm_bridge', False):
+        return True
+    if (getattr(ch, 'disable_reason', None) or '').startswith('DRM'):
         return True
     return False
 
@@ -1020,6 +1062,16 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
 
     channels = _selected_channels(filters, gracenote=None)
+
+    # Union in channels the audit disabled purely for DRM but which a browser can
+    # decrypt (DRM-capable source). They're absent from the standard feed (a normal
+    # client can't play them) but the PrismCast feed bridges them via /watch. Append
+    # after the active set, deduped, capturable-only.
+    _seen = {ch.id for ch in channels}
+    for ch in _build_channel_query(filters, activity='drm_bridge').all():
+        if ch.id not in _seen and _prismcast_capturable(ch):
+            channels.append(ch)
+            _seen.add(ch.id)
 
     chnum_map, warnings = _resolve_chnum_map(
         channels,

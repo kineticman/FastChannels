@@ -87,6 +87,15 @@ _SESSION_TTL = 55 * 60  # seconds before we refresh cookies + csrf
 _SESSION_HARD_TTL = 12 * 60 * 60  # discard persisted session state after 12h
 _PLAY_ID_TTL = 6 * 60 * 60  # reuse playIds for a few hours to reduce tune-time content lookups
 _STREAM_URL_TTL = 5 * 60 * 60  # reuse exact HLS URLs; Roku traceId URLs stay valid ~6h
+# DASH+Widevine variant (browser/EME → PrismCast bridge). Roku's playback API will
+# serve a CENC DASH manifest (Widevine+PlayReady) for the same channels whose HLS
+# variant carries FairPlay (unplayable in Chrome). The Widevine license server URL,
+# carrying a per-session token, comes back IN the playback response (not the MPD), so
+# the manifest URL and license URL are a matched pair cached together per station.
+_DASH_TTL = 5 * 60 * 60  # match HLS TTL — both derive from the same playback session JWT
+# Base license host (presence flags the source DRM-capable; real per-session URL is
+# captured in resolve_dash() and surfaced via get_license_url()).
+_WV_LICENSE_BASE = "https://wv-license.sr.roku.com/license/v2/license/wv"
 _OSM_BASE = "https://osm.sr.roku.com"
 # OSM stream URL pattern: /osm/v1/hls/master/{selector_uuid}/{session_token}/index.m3u8
 _OSM_STREAM_RE = re.compile(r"/osm/v1/hls/master/([0-9a-f-]{36})/([0-9a-f]+)/index\.m3u8")
@@ -149,6 +158,10 @@ class RokuScraper(BaseScraper):
     scrape_interval       = 60    # EPG refreshed every hour
     channel_refresh_hours = 0     # fetch channel list every run — it's only ~2 API calls (the /epg call happens in fetch_epg anyway); skipping it saved ~1 call/run and risked silent staleness
     stream_audit_enabled  = True
+    # Presence of license_url marks the source DRM-capable and enables the generic
+    # /play/roku/license proxy. The real per-session license URL (with token) is
+    # captured in resolve_dash() and returned by get_license_url() keyed by station.
+    license_url           = _WV_LICENSE_BASE
     phase_timeouts        = {
         'init': 30,
         'bootstrap': 60,
@@ -194,6 +207,7 @@ class RokuScraper(BaseScraper):
         self._cooldown_reason: str | None = None
         self._description_cache: dict[str, str] = {}       # content_id → description text
         self._description_cache_times: dict[str, float] = {}  # content_id → epoch when cached
+        self._dash_cache: dict[str, dict[str, object]] = {}  # station_id → {mpd_url, license_url, cached_at}
         self._load_cached_session()
         self._load_play_id_cache()
         self._load_selector_url_cache()
@@ -201,6 +215,7 @@ class RokuScraper(BaseScraper):
         self._load_stream_url_cache()
         self._load_403_cooldown()
         self._load_description_cache()
+        self._load_dash_cache()
 
     # ── Session management ─────────────────────────────────────────────────────
 
@@ -1558,6 +1573,150 @@ class RokuScraper(BaseScraper):
         The JWT in the stream URL is short-lived so we always fetch fresh.
         """
         return self._resolve_stream_url(raw_url, allow_cached_stream_url=True)
+
+    # ── DASH + Widevine (browser/EME → PrismCast bridge) ────────────────────────
+    # The HLS variant Roku serves can carry FairPlay (Apple-only; Chrome can't
+    # decrypt it), which is what trips the DRM auto-disable. The SAME channel has a
+    # CENC DASH variant with Widevine that Chrome CAN decrypt — we just have to ask
+    # for mediaFormat='mpeg-dash'. resolve_dash() returns the MPD URL and stashes the
+    # per-session Widevine license URL so get_license_url() can hand it to the license
+    # proxy. Kept entirely separate from the HLS stream_url cache (whose OSM-session
+    # extraction parses HLS URL shapes).
+
+    def _load_dash_cache(self) -> None:
+        raw = self.cache.get("dash_cache") or {}
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        for sid, entry in raw.items():
+            if not isinstance(sid, str) or not isinstance(entry, dict):
+                continue
+            cached_at = entry.get("cached_at")
+            if not entry.get("mpd_url") or not isinstance(cached_at, (int, float)):
+                continue
+            if (now - float(cached_at)) >= _DASH_TTL:
+                continue
+            self._dash_cache[sid] = {
+                "mpd_url": entry.get("mpd_url"),
+                "license_url": entry.get("license_url"),
+                "cached_at": float(cached_at),
+            }
+
+    def _cache_dash(self, sid: str, mpd_url: str, license_url: str | None) -> None:
+        if not sid or not mpd_url:
+            return
+        self._dash_cache[sid] = {
+            "mpd_url": mpd_url,
+            "license_url": license_url,
+            "cached_at": time.time(),
+        }
+        self._update_cache("dash_cache", self._dash_cache)
+
+    def _cached_dash(self, sid: str) -> dict | None:
+        entry = self._dash_cache.get(sid)
+        if not entry:
+            return None
+        cached_at = entry.get("cached_at")
+        if not entry.get("mpd_url") or not isinstance(cached_at, (int, float)):
+            return None
+        if (time.time() - float(cached_at)) >= _DASH_TTL:
+            self._dash_cache.pop(sid, None)
+            self._update_cache("dash_cache", self._dash_cache)
+            return None
+        return entry
+
+    def resolve_dash(self, raw_url: str, *, allow_cached: bool = True) -> dict:
+        """Resolve a Roku channel to its CENC DASH variant for browser EME playback.
+
+        Returns {'mpd_url': str, 'license_url': str|None}. The license URL carries a
+        per-session token bound to the SAME playback call as the manifest, so both are
+        cached together and expire together.
+        """
+        if not raw_url.startswith("roku://"):
+            return {"mpd_url": raw_url, "license_url": None}
+        station_id = raw_url[len("roku://"):]
+
+        if allow_cached:
+            cached = self._cached_dash(station_id)
+            if cached:
+                logger.info("[roku] resolve_dash %s via dash cache", station_id)
+                return {"mpd_url": cached["mpd_url"], "license_url": cached.get("license_url")}
+
+        if self._cooldown_active():
+            raise RuntimeError(
+                f"[roku] resolve_dash blocked by 403 cooldown for {self._cooldown_remaining()}s"
+            )
+        if not self._ensure_session():
+            raise RuntimeError(f"[roku] resolve_dash — could not obtain session for {station_id}")
+
+        play_id = self._cached_play_id(station_id)
+        if not play_id:
+            content_data = self._fetch_content(station_id, _raise_on_404=True)
+            if content_data:
+                view_opts = content_data.get("viewOptions") or [{}]
+                play_id = view_opts[0].get("playId") if view_opts else None
+                self._cache_play_id(station_id, play_id)
+        if not play_id:
+            raise RuntimeError(f"[roku] resolve_dash — no playId for {station_id}")
+
+        session_id = self.session.cookies.get("_usn", "roku-scraper")
+        body = {
+            "rokuId":      station_id,
+            "playId":      play_id,
+            "mediaFormat": "mpeg-dash",   # force DASH even when the play_id hints m3u
+            "drmType":     "widevine",
+            "quality":     "fhd",
+            "bifUrl":      None,
+            "adPolicyId":  "",
+            "providerId":  "rokuavod",
+            "playbackContextParams": (
+                f"sessionId={session_id}"
+                "&pageId=trc-us-live-ml-page-en-current"
+                "&isNewSession=0&idType=roku-trc"
+            ),
+        }
+        r = self._api_post(_PLAYBACK, json_body=body, timeout=12, label=f"dash playback for {station_id}")
+        if r.status_code != 200:
+            if r.status_code in (401, 403, 404, 502):
+                self._invalidate_play_id(station_id)
+            raise RuntimeError(f"[roku] resolve_dash playback returned {r.status_code} for {station_id}")
+        data = r.json()
+        mpd_url = data.get("url", "")
+        license_url = (((data.get("drm") or {}).get("widevine") or {}).get("licenseServer")) or None
+        if not mpd_url:
+            raise RuntimeError(f"[roku] resolve_dash — no DASH url for {station_id}")
+        self._persist_session()
+        self._cache_dash(station_id, mpd_url, license_url)
+        logger.info("[roku] resolve_dash %s via playback_api (license=%s)",
+                    station_id, "yes" if license_url else "no")
+        return {"mpd_url": mpd_url, "license_url": license_url}
+
+    @classmethod
+    def license_request_headers(cls, config: dict) -> dict:
+        # Roku's Widevine server authenticates via the per-session token in the URL
+        # query string; it just needs a browser-shaped Origin/UA. The raw EME challenge
+        # is forwarded as the POST body (default prepare_license_request) and the raw
+        # license is returned verbatim (default process_license_response).
+        return {
+            "Origin":  _BASE,
+            "Referer": f"{_BASE}/",
+            "User-Agent": _UA,
+        }
+
+    @classmethod
+    def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
+        """Per-session Widevine license URL captured by resolve_dash(), keyed by station.
+
+        With no channel_id this returns the bare host as a truthy "DRM-capable" signal.
+        With a channel_id it returns the cached per-session URL (token included), or None
+        when no DASH session has been resolved yet — never the tokenless base, so we don't
+        issue an unauthorized request to Roku's license server."""
+        if channel_id:
+            entry = (config.get("dash_cache") or {}).get(channel_id)
+            if isinstance(entry, dict) and entry.get("license_url"):
+                return entry["license_url"]
+            return None
+        return cls.license_url
 
     # ── M3U extras ─────────────────────────────────────────────────────────────
     # FastChannels calls generate_m3u() which uses ChannelData fields.

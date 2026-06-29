@@ -21,7 +21,8 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from ..extensions import db
 from ..models import Program, AppSettings
 from ..url import proxy_logo_url
-from .m3u import _selected_channels, _tvg_id, _channel_display_name, _source_multi_country_map, _sanitize
+from .m3u import (_selected_channels, _tvg_id, _channel_display_name, _source_multi_country_map,
+                  _sanitize, _build_channel_query, _prismcast_capturable)
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +100,16 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     # Native mode includes all channels and uses scraped EPG for everything.
     gracenote_filter = None if native else False
     channels = _selected_channels(filters, gracenote=gracenote_filter)
+
+    # Include DRM channels the audit disabled but which the PrismCast feed bridges —
+    # they share this XMLTV, so emit their guide too (a superset is harmless for the
+    # standard feed, which simply doesn't reference them).
+    _seen = {ch.id for ch in channels}
+    for ch in _build_channel_query(filters, activity='drm_bridge').all():
+        if ch.id not in _seen and _prismcast_capturable(ch):
+            channels.append(ch)
+            _seen.add(ch.id)
+
     multi_country_map = _source_multi_country_map(channels)
 
     tvg_map      = {ch.id: _tvg_id(ch) for ch in channels}
