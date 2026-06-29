@@ -352,6 +352,8 @@ class AppSettings(db.Model):
     gracenote_map_url          = db.Column(db.Text, nullable=True)      # remote community CSV URL (defaults to built-in Gist)
     gracenote_contribution_url = db.Column(db.Text, nullable=True)      # webhook URL for submitting community contributions
     last_contribution_at       = db.Column(db.DateTime, nullable=True)  # server-side rate-limit: last successful submission
+    prismcast_url        = db.Column(db.Text, nullable=True)     # PrismCast capture server, e.g. http://192.168.1.x:5589 (DRM bridge)
+    prismcast_inner_url  = db.Column(db.Text, nullable=True)     # base URL PrismCast's Chrome uses to reach /watch (loopback/HTTPS for EME secure-context); falls back to public_base_url
 
     @staticmethod
     def _env_int(name: str) -> int | None:
@@ -403,6 +405,26 @@ class AppSettings(db.Model):
     def effective_channels_dvr_url(self) -> str | None:
         value = (self.channels_dvr_url or '').strip().rstrip('/')
         return value or self.env_channels_dvr_url()
+
+    @classmethod
+    def env_prismcast_url(cls) -> str | None:
+        return cls._env_str('PRISMCAST_URL')
+
+    @classmethod
+    def env_prismcast_inner_url(cls) -> str | None:
+        return cls._env_str('PRISMCAST_INNER_URL')
+
+    def effective_prismcast_url(self) -> str | None:
+        value = (self.prismcast_url or '').strip().rstrip('/')
+        return value or self.env_prismcast_url()
+
+    def effective_prismcast_inner_url(self) -> str | None:
+        # Base URL PrismCast's headless Chrome uses to load this server's /watch
+        # pages. For DRM (EME) it must be a browser-trusted SECURE CONTEXT:
+        # loopback (http://127.0.0.1:<port>) when co-located, or trusted HTTPS.
+        # Falls back to public_base_url (fine for non-DRM channels).
+        value = (self.prismcast_inner_url or '').strip().rstrip('/')
+        return value or self.env_prismcast_inner_url() or self.effective_public_base_url()
 
     _DEFAULT_GRACENOTE_MAP_URL = (
         'https://gist.githubusercontent.com/kineticman/'

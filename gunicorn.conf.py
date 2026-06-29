@@ -34,6 +34,12 @@ _SUPPRESS_RE = re.compile(r'GET /api/sources/\d+/config |GET /api/channels/\d+/p
 # Suppress feed/M3U/EPG requests — healthy DVR polling, not worth logging
 _SUPPRESS_FEED_RE = re.compile(r'"GET /feeds/|"GET /m3u/|"GET /output/')
 
+# Suppress fullscreen player-page hits. PrismCast's headless Chrome (and browser
+# players) load /watch/<id> on every tune — HEAD+GET, each doubled by the ?_v
+# cache-bust redirect = 4 lines per channel. The actual channel resolution is
+# still logged by the app.routes.play logger, so these access lines add no signal.
+_SUPPRESS_WATCH_RE = re.compile(r'"(?:GET|HEAD) /watch/\d+')
+
 # Match Amazon DASH manifest polls: GET /play/amazon_prime_free/<channel_id>/dash.mpd
 _DASH_RE = re.compile(r'GET /play/amazon_prime_free/([^/]+)/dash\.mpd')
 _DASH_COOLDOWN = 120  # seconds — log first request, suppress repeats within this window
@@ -51,6 +57,8 @@ class _AccessFilter(logging.Filter):
         if _SUPPRESS_RE.search(msg):
             return False
         if _SUPPRESS_FEED_RE.search(msg):
+            return False
+        if _SUPPRESS_WATCH_RE.search(msg):
             return False
         m = _DASH_RE.search(msg)
         if m:

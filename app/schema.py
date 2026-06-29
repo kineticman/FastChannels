@@ -175,6 +175,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN auto_allow_new_channels BOOLEAN NOT NULL DEFAULT 1"
                 ))
+            if "prismcast_url" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_url TEXT"))
+            if "prismcast_inner_url" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_inner_url TEXT"))
 
         if "sources" in tables:
             src_cols = {

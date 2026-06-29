@@ -1203,6 +1203,7 @@ def feeds():
                            feeds=feeds, sources=sources,
                            categories=categories, languages=languages, countries=countries,
                            base_url=base_url,
+                           prismcast_enabled=bool((app_settings.effective_prismcast_url() or '').strip()),
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
@@ -1262,6 +1263,8 @@ def settings():
                            gracenote_auto_fill=app_settings.gracenote_auto_fill if app_settings.gracenote_auto_fill is not None else True,
                            dvr_epg_auto_refresh=app_settings.dvr_epg_auto_refresh if app_settings.dvr_epg_auto_refresh is not None else True,
                            image_proxy_enabled=app_settings.image_proxy_enabled if app_settings.image_proxy_enabled is not None else True,
+                           prismcast_url=app_settings.effective_prismcast_url() or '',
+                           prismcast_inner_url=app_settings.prismcast_inner_url or '',
                            gracenote_contribution_url=app_settings.gracenote_contribution_url or '')
 
 

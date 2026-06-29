@@ -3396,6 +3396,10 @@ def app_settings():
             row.channels_dvr_url = _normalize_server_url(data['channels_dvr_url'], default_port=8089)
         if 'public_base_url' in data:
             row.public_base_url = _normalize_server_url(data['public_base_url'], default_port=None)
+        if 'prismcast_url' in data:
+            row.prismcast_url = _normalize_server_url(data['prismcast_url'], default_port=None)
+        if 'prismcast_inner_url' in data:
+            row.prismcast_inner_url = _normalize_server_url(data['prismcast_inner_url'], default_port=None)
         if 'timezone_name' in data:
             tz_name = normalize_timezone_name(data.get('timezone_name'))
             if data.get('timezone_name') and tz_name is None:
@@ -3427,6 +3431,8 @@ def app_settings():
         'image_proxy_enabled': row.image_proxy_enabled if row.image_proxy_enabled is not None else True,
         'gracenote_map_url': row.gracenote_map_url or '',
         'gracenote_contribution_url': row.gracenote_contribution_url or '',
+        'prismcast_url': row.effective_prismcast_url() or '',
+        'prismcast_inner_url': row.prismcast_inner_url or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',

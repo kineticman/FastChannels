@@ -495,6 +495,40 @@
     </div>
   </div>
 
+  <!-- PrismCast (DRM bridge) card -->
+  <div class="source-card" id="settings-card-prismcast">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">🔓</div>
+        <div>
+          <div class="source-name">PrismCast (DRM bridge)</div>
+          <div class="source-meta">Route DRM channels through a PrismCast capture server so they play in Channels DVR</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="fields-grid" style="max-width:480px">
+        <div class="field field-full">
+          <label for="prismcast-url">PrismCast Server URL</label>
+          <input type="text" id="prismcast-url"
+                 placeholder="http://192.168.1.50:5589" value="{{ prismcast_url }}">
+          <div class="help">Base address of your <a href="https://github.com/hjdhjd/prismcast" target="_blank">PrismCast</a> server (default port <code>:5589</code>). When set, a PrismCast M3U is published at <code>{{ request_base_url }}/m3u/prismcast</code> (and per-feed at <code>/feeds/&lt;slug&gt;/m3u/prismcast</code>). It's a complete one-import feed: <strong>DRM</strong> channels are wrapped through PrismCast's <code>/play?url=</code> (its headless Chrome decrypts via EME and re-streams clean HLS), while every other channel is left as a normal direct stream — no capture slot, no transcode, full quality.</div>
+        </div>
+        <div class="field field-full">
+          <label for="prismcast-inner-url">Watch-page URL for PrismCast's browser <span style="color:var(--text-muted);font-weight:400">(optional)</span></label>
+          <input type="text" id="prismcast-inner-url"
+                 placeholder="defaults to FastChannels Server URL" value="{{ prismcast_inner_url }}">
+          <div class="help">The address <strong>PrismCast's Chrome</strong> uses to reach this server's <code>/watch</code> pages. For <strong>DRM</strong> this must be a browser <em>secure context</em>: if PrismCast runs on the same host as FastChannels, use loopback like <code>http://127.0.0.1:5523</code> (Chrome trusts loopback, so Widevine/EME works with no HTTPS). Otherwise serve FastChannels over trusted HTTPS. Leave blank to reuse the FastChannels Server URL (fine for non-DRM channels).</div>
+          <div class="help" style="color:var(--warning-soft)">Plain <code>http://</code> on a LAN IP is <em>not</em> a secure context — DRM channels won't decrypt there. Use loopback or HTTPS.</div>
+        </div>
+      </div>
+      <div class="field-actions">
+        <span class="save-status" id="prismcast-status"></span>
+        <button class="btn btn-primary" onclick="savePrismcastSettings()">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Channels DVR card -->
   <div class="source-card" id="settings-card-channels-dvr">
     <div class="source-header" style="cursor:default">
@@ -908,6 +942,15 @@ async function savePublicBaseUrlSettings() {
     settingsNeedsConfigState.public_base_url = !publicBaseUrl || isPlaceholderPublicBaseUrl(publicBaseUrl);
     refreshSettingsNeedsConfigBanner();
   }
+}
+
+async function savePrismcastSettings() {
+  const url   = document.getElementById('prismcast-url').value.trim();
+  const inner = document.getElementById('prismcast-inner-url').value.trim();
+  await saveSettings({
+    prismcast_url:       url || null,
+    prismcast_inner_url: inner || null,
+  }, 'prismcast-status');
 }
 
 async function testDvrConnection() {

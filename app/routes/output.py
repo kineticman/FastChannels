@@ -9,7 +9,7 @@ from ..generators.m3u import (
     feed_gracenote_start,
     feed_to_query_filters,
     _MASTER_GRACENOTE_START,
-    generate_watch_m3u,
+    generate_prismcast_m3u,
 )
 from ..generators.xmltv import generate_xmltv_stream
 from ..models import Feed
@@ -281,38 +281,36 @@ def feed_native_epg(slug):
     )
 
 
-@output_bp.route('/m3u/watch')
-def m3u_watch():
-    """Watch-page M3U for browser-based players (e.g. PrismCast). Pair with /epg.xml."""
-    base_url = public_base_url()
-    filters  = _filters()
-    if filters:
-        content = generate_watch_m3u(filters, base_url=base_url)
-        return Response(content, mimetype='application/x-mpegurl',
-                        headers={'Content-Disposition': 'attachment; filename="fastchannels-watch.m3u"'})
-    path = get_artifact('master-watch-m3u', ext='m3u')
-    if path is None:
-        return Response(
-            'Watch M3U artifact is warming. Retry shortly.',
-            status=503,
-            mimetype='text/plain',
-            headers={'Retry-After': '15'},
-        )
-    return _send_feed_artifact(
-        path,
-        mimetype='application/x-mpegurl',
-        download_name='fastchannels-watch.m3u',
+def _prismcast_not_configured():
+    return Response(
+        'PrismCast is not configured. Set the PrismCast server URL in Settings.\n',
+        status=409,
+        mimetype='text/plain',
     )
 
 
-@output_bp.route('/feeds/<slug>/m3u/watch')
-def feed_m3u_watch(slug):
-    """Watch-page M3U for a feed. Pair with /feeds/<slug>/epg.xml."""
-    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-watch-m3u', ext='m3u')
+@output_bp.route('/m3u/prismcast')
+def m3u_prismcast():
+    """PrismCast DRM-bridge M3U: each entry routes through PrismCast's /play?url=
+    so its headless Chrome renders /watch/<id> (decrypting DRM) and re-streams to
+    Channels DVR. Pair with /epg.xml."""
+    from ..models import AppSettings
+    settings = AppSettings.get()
+    prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
+    if not prismcast_url:
+        return _prismcast_not_configured()
+    base_url = public_base_url()
+    filters  = _filters()
+    if filters:
+        inner = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
+        content = generate_prismcast_m3u(filters, base_url=base_url,
+                                         prismcast_url=prismcast_url, inner_base_url=inner)
+        return Response(content, mimetype='application/x-mpegurl',
+                        headers={'Content-Disposition': 'attachment; filename="fastchannels-prismcast.m3u"'})
+    path = get_artifact('master-prismcast-m3u', ext='m3u')
     if path is None:
         return Response(
-            f'Watch M3U artifact for {feed.slug} is warming. Retry shortly.',
+            'PrismCast M3U artifact is warming. Retry shortly.',
             status=503,
             mimetype='text/plain',
             headers={'Retry-After': '15'},
@@ -320,5 +318,27 @@ def feed_m3u_watch(slug):
     return _send_feed_artifact(
         path,
         mimetype='application/x-mpegurl',
-        download_name=f'{slug}-watch.m3u',
+        download_name='fastchannels-prismcast.m3u',
+    )
+
+
+@output_bp.route('/feeds/<slug>/m3u/prismcast')
+def feed_m3u_prismcast(slug):
+    """PrismCast DRM-bridge M3U for a feed. Pair with /feeds/<slug>/epg.xml."""
+    from ..models import AppSettings
+    if not (AppSettings.get().effective_prismcast_url() or '').strip():
+        return _prismcast_not_configured()
+    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    path = get_artifact(f'feed-{slug}-prismcast-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            f'PrismCast M3U artifact for {feed.slug} is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name=f'{slug}-prismcast.m3u',
     )

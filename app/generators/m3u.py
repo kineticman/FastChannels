@@ -956,19 +956,65 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
     return '\n'.join(lines)
 
 
-def generate_watch_m3u(filters: dict = None, base_url: str = None,
-                       feed_chnum_start: int = None, namespace_start: int = None,
-                       feed_id: int = None) -> str:
-    """
-    Watch-page playlist for browser-based players (e.g. PrismCast).
+# Sources FastChannels forces to native-HLS playback (AES-128; see
+# api.py _get_playback_info ~ "playback_mode = 'native'"). Chrome has no native
+# HLS, so PrismCast's headless Chrome can't play them — exclude from the bridge.
+_PRISMCAST_INCAPABLE_SOURCES = {'pluto', 'fubo', 'roku'}
+# Stream types with no browser playback path: snapshot feeds, and muxed MPEG-TS
+# (e.g. HDHomeRun OTA — MPEG-2/AC-3, which Chrome can't decode).
+_PRISMCAST_UNSUPPORTED_TYPES = {'mjpeg', 'jpeg_snapshot', 'mpegts', 'ts'}
 
-    All channels regardless of Gracenote status; stream URLs point to the
-    fullscreen /watch/<id> page instead of the HLS play proxy.  tvg-id values
-    match the standard XMLTV output so the same EPG file can be paired with
-    this playlist.
+
+def _prismcast_capturable(ch) -> bool:
+    """True if PrismCast's headless Chrome can render+capture this channel's
+    /watch page. False for AES-128 native-HLS sources (Chrome can't play native
+    HLS) and non-browser stream types. Gates whether a DRM channel is routed
+    through the PrismCast wrapper vs. left as a direct play URL."""
+    if ch.source and ch.source.name in _PRISMCAST_INCAPABLE_SOURCES:
+        return False
+    if (ch.stream_type or '').strip().lower() in _PRISMCAST_UNSUPPORTED_TYPES:
+        return False
+    return True
+
+
+def _needs_prismcast_bridge(ch) -> bool:
+    """True only for channels a normal IPTV client can't play directly — i.e. DRM,
+    which needs a browser (EME) to decrypt. Everything else (plain/AES-128 HLS,
+    MP4, MPEG-TS) plays fine straight from the /play proxy, so it skips PrismCast
+    entirely — no capture slot, no transcode, full quality."""
+    if (ch.stream_type or '').strip().lower() == 'dash':
+        return True
+    if (getattr(ch, 'disable_reason', None) or '') == 'DRM':
+        return True
+    return False
+
+
+def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
+                           prismcast_url: str, inner_base_url: str = None,
+                           feed_chnum_start: int = None, namespace_start: int = None,
+                           feed_id: int = None) -> str:
+    """
+    Hybrid PrismCast playlist — a single complete feed where each channel takes
+    the cheapest viable path:
+
+      * DRM channels (browser/EME required) are wrapped through PrismCast's
+        `/play?url=` endpoint, so its headless Chrome renders the fullscreen
+        /watch/<id> page (decrypting via EME) and re-streams clean HLS.
+      * Everything else (plain/AES-128 HLS, MP4, MPEG-TS) is emitted as the
+        normal direct /play/<source>/<id>.m3u8 URL — no capture slot, no
+        transcode, full quality — exactly what the standard M3U would send.
+
+    tvg-id matches the standard XMLTV output, so the same EPG pairs.
+
+    prismcast_url   — PrismCast base, e.g. http://192.168.1.x:5589
+    inner_base_url  — base URL PrismCast's Chrome uses to reach this server's
+                      /watch pages; should be a secure context for DRM (loopback
+                      or HTTPS). Falls back to base_url.
     """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
+    prismcast_url  = (prismcast_url or '').rstrip('/')
+    inner_base_url = (inner_base_url or base_url).rstrip('/')
 
     _s = AppSettings.get()
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
@@ -983,7 +1029,7 @@ def generate_watch_m3u(filters: dict = None, base_url: str = None,
     )
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
-            log.warning('chnum overlap (watch): %s', w)
+            log.warning('chnum overlap (prismcast): %s', w)
 
     multi_country_map = _source_multi_country_map(channels)
     lines = ['#EXTM3U']
@@ -1008,7 +1054,13 @@ def generate_watch_m3u(filters: dict = None, base_url: str = None,
         if guide_cat:
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
-        lines.append(f'{base_url}/watch/{ch.id}')
+        if _needs_prismcast_bridge(ch) and _prismcast_capturable(ch):
+            # DRM → route through PrismCast's headless Chrome (EME decrypt + capture).
+            watch_url = f'{inner_base_url}/watch/{ch.id}'
+            lines.append(f'{prismcast_url}/play?url={_url_quote(watch_url, safe="")}')
+        else:
+            # Non-DRM → direct play proxy, same URL the standard M3U emits.
+            lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
 
     return '\n'.join(lines)
 

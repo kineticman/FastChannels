@@ -24,6 +24,11 @@ done
 # Ensure the default SQLite data directory exists before app startup.
 mkdir -p /data
 
+# One-time cleanup: the legacy watch-M3U output was replaced by the PrismCast
+# hybrid feed, so its artifacts are no longer generated. Remove any orphans left
+# by older builds (harmless if absent; nothing regenerates them).
+rm -f /data/cache/xml/*watch-m3u.m3u 2>/dev/null || true
+
 # Create DB tables and run schema migrations (once, before worker/gunicorn start).
 # Setting FC_SCHEMA_READY=1 tells create_app() to skip ensure_runtime_schema()
 # so the worker and gunicorn don't race each other for the SQLite write lock.
