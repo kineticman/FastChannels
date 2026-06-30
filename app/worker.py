@@ -1749,21 +1749,45 @@ def run_channel_auto_disable(channel_id: int, reason: str):
         ch_name = ch.name
         ch_source_name = ch.source.name if ch.source else '?'
         ch_source_channel_id = ch.source_channel_id
+
+        def _commit_with_retry():
+            for _attempt in range(3):
+                try:
+                    db.session.commit()
+                    return
+                except _SAOperationalError:
+                    db.session.rollback()
+                    if _attempt == 2:
+                        raise
+                    time.sleep(3 * (_attempt + 1))
+
+        # DRM caught at play time: if bridge mode is on and the source can be bridged, keep
+        # the channel active and route it to the PrismCast feed (same as the audit) instead
+        # of disabling it. Otherwise fall through to the legacy disable.
+        if reason.startswith('DRM') and bool(AppSettings.get().drm_bridge_enabled):
+            scraper_cls = registry.get(ch_source_name)
+            if scraper_cls and getattr(scraper_cls, 'license_url', None):
+                if ch.requires_drm_bridge and ch.is_active:
+                    return  # already bridged
+                ch.requires_drm_bridge = True
+                ch.is_active = True
+                ch.disable_reason = None
+                _commit_with_retry()
+                _invalidate_and_refresh_xml()
+                logger.info(
+                    '[play] %s detected — bridged channel %s (%s/%s) via PrismCast',
+                    reason, ch_name, ch_source_name, ch_source_channel_id,
+                )
+                return
+
         was_active = ch.is_active
+        ch.requires_drm_bridge = False
         ch.is_active = False
         ch.is_enabled = False
         ch.disable_reason = reason
         if was_active:
             ch.went_inactive_at = datetime.now(timezone.utc)
-        for _attempt in range(3):
-            try:
-                db.session.commit()
-                break
-            except _SAOperationalError:
-                db.session.rollback()
-                if _attempt == 2:
-                    raise
-                time.sleep(3 * (_attempt + 1))
+        _commit_with_retry()
         _invalidate_and_refresh_xml()
         logger.warning(
             '[play] %s detected — auto-disabled channel %s (%s/%s)',
