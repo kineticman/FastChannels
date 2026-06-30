@@ -2075,6 +2075,27 @@ def _backfill_stale_native_gracenote(source, channel_data_list):
                     source.name, cleared, resynced)
 
 
+def _sync_intrinsic_drm_bridge(source) -> None:
+    """A DASH channel from a DRM-capable source (e.g. Amazon, Sling) is intrinsically
+    bridge-only — it can never play on a normal client. Mirror that in the
+    requires_drm_bridge flag (gated on bridge mode) so the admin badge/filter/count match
+    the feed routing without needing an audit. The standard feed already excludes these by
+    stream type; this just keeps the flag — and its UI — in sync. Only flips the flag,
+    never is_active (the audit owns disable)."""
+    scraper_cls = registry.get(source.name)
+    if not (scraper_cls and getattr(scraper_cls, 'license_url', None)):
+        return
+    want = bool(AppSettings.get().drm_bridge_enabled)
+    changed = 0
+    for ch in source.channels.filter(Channel.stream_type == 'dash').all():
+        if bool(ch.requires_drm_bridge) != want:
+            ch.requires_drm_bridge = want
+            changed += 1
+    if changed:
+        logger.info('[%s] requires_drm_bridge synced on %d DASH channel(s) (bridge=%s)',
+                    source.name, changed, want)
+
+
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None,
                      miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
@@ -2344,6 +2365,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             and not getattr(source, 'gracenote_resync_done', False)):
         _backfill_stale_native_gracenote(source, channel_data_list)
         source.gracenote_resync_done = True
+    _sync_intrinsic_drm_bridge(source)
     db.session.flush()
     _refresh_auto_channel_numbers()
 

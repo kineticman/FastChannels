@@ -3546,7 +3546,18 @@ def _reconcile_drm_bridge_mode(enabled: bool) -> None:
             ch.is_active = True
             ch.is_enabled = True
             ch.disable_reason = None
-        logger.info('[drm-bridge] mode ON — recovered %d disabled-DRM channels to bridge', len(rows))
+        # Also flag DASH channels from capable sources (Amazon/Sling) — intrinsically
+        # bridge-only, so the flag should match without waiting for a scrape/audit.
+        dash_rows = (Channel.query.join(Source)
+                     .filter(Source.name.in_(capable),
+                             Channel.stream_type == 'dash',
+                             Channel.is_active == True,
+                             Channel.requires_drm_bridge == False)
+                     .all())
+        for ch in dash_rows:
+            ch.requires_drm_bridge = True
+        logger.info('[drm-bridge] mode ON — recovered %d disabled-DRM + flagged %d intrinsic-DASH channels',
+                    len(rows), len(dash_rows))
     else:
         rows = Channel.query.filter(Channel.requires_drm_bridge == True).all()
         for ch in rows:
