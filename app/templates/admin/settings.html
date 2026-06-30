@@ -543,6 +543,7 @@
       {% endif %}
       <div class="field-actions">
         <span class="save-status" id="prismcast-status"></span>
+        <button class="btn btn-secondary" onclick="testPrismcast()">Test setup</button>
         <button class="btn btn-primary" onclick="savePrismcastSettings()">Save</button>
       </div>
     </div>
@@ -829,6 +830,21 @@
     </div>
   </div>
 
+  <!-- PrismCast setup test modal -->
+  <div class="modal-overlay" id="prismcast-test-modal" onclick="if(event.target===this)this.classList.remove('open')">
+    <div class="modal-box" style="max-width:580px">
+      <h3 style="margin:0 0 0.25rem">PrismCast setup test</h3>
+      <p style="color:var(--text-subtle);margin:0 0 1rem;font-size:0.85rem;line-height:1.5">
+        Checks reachability, the watch-page secure context, and runs a real capture end-to-end.
+      </p>
+      <div id="prismcast-test-body" style="margin-bottom:1rem;line-height:1.4">&hellip;</div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <button class="btn btn-secondary" id="prismcast-test-rerun" onclick="testPrismcast()">Re-run</button>
+        <button class="btn-cancel-modal" onclick="document.getElementById('prismcast-test-modal').classList.remove('open')">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Gracenote clear confirmation modal -->
   <div class="modal-overlay" id="gracenote-clear-modal" onclick="if(event.target===this)cancelGracenoteClear()">
     <div class="modal-box" style="max-width:440px">
@@ -970,6 +986,41 @@ async function savePrismcastSettings() {
     prismcast_url:       url || null,
     prismcast_inner_url: inner || null,
   }, 'prismcast-status');
+}
+
+async function testPrismcast() {
+  const modal = document.getElementById('prismcast-test-modal');
+  const body  = document.getElementById('prismcast-test-body');
+  const rerun = document.getElementById('prismcast-test-rerun');
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  modal.classList.add('open');
+  rerun.disabled = true;
+  body.innerHTML = '<div style="color:var(--text-subtle)">Running checks — this takes ~15–30s (it does a real capture)…</div>';
+  try {
+    const r = await fetch('/api/settings/prismcast/test', { method: 'POST' });
+    if (r.status === 400) {
+      const e = await r.json();
+      body.innerHTML = `<div style="color:var(--warning-soft)">${esc(e.error || 'PrismCast is not configured.')}</div>`;
+      return;
+    }
+    const data = await r.json();
+    const icon  = { ok:'✓', warn:'⚠', fail:'✗', skip:'–', info:'ℹ' };
+    const color = { ok:'var(--success-soft)', warn:'var(--warning-soft)', fail:'var(--danger)', skip:'var(--text-muted)', info:'var(--accent-soft)' };
+    const overall = (data.overall || 'ok');
+    let html = `<div style="color:${color[overall]||''};font-weight:700;font-size:1.05rem;margin-bottom:0.6rem">Overall: ${overall.toUpperCase()}</div>`;
+    (data.checks || []).forEach(c => {
+      html += `<div style="padding:0.55rem 0;border-bottom:1px solid var(--border)">`
+            +   `<div style="color:${color[c.status]||''};font-weight:600">${icon[c.status]||'?'} ${esc(c.name)}</div>`
+            +   `<div style="color:var(--text-subtle);font-size:0.85rem;margin-top:0.2rem">${esc(c.detail)}</div>`
+            +   (c.fix ? `<div style="color:var(--text-muted);font-size:0.8rem;margin-top:0.25rem">→ ${esc(c.fix)}</div>` : '')
+            + `</div>`;
+    });
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = `<div style="color:var(--danger)">Test failed to run: ${esc(e)}</div>`;
+  } finally {
+    rerun.disabled = false;
+  }
 }
 
 async function saveDrmBridge() {

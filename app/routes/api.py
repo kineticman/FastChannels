@@ -3518,6 +3518,148 @@ def dvr_test_connection():
         return jsonify({'error': str(exc)}), 502
 
 
+@api_bp.route('/settings/prismcast/test', methods=['POST'])
+def test_prismcast():
+    """End-to-end diagnostic for a PrismCast setup. Runs a series of checks — server
+    reachable, watch-page URL is a secure context, a real capture flows, and a
+    cross-host firewall note — and returns a per-check pass/warn/fail/info result.
+    Designed to catch the common setup mistakes (host networking, loopback secure
+    context, blocked ports, wrong URLs)."""
+    from urllib.parse import urlparse, quote as _quote
+    import time as _time
+
+    settings = AppSettings.get()
+    prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
+    if not prismcast_url:
+        return jsonify({'error': 'PrismCast Server URL is not set.'}), 400
+    inner = (settings.effective_prismcast_inner_url() or public_base_url() or '').strip().rstrip('/')
+
+    checks = []
+    def add(name, status, detail, fix=None):
+        checks.append({'name': name, 'status': status, 'detail': detail, 'fix': fix})
+
+    # 1) PrismCast server reachable + healthy (from FastChannels' vantage point)
+    health_ok = False
+    try:
+        r = _req.get(f'{prismcast_url}/health', timeout=8)
+        if r.status_code == 200:
+            try:
+                healthy = (r.json().get('status') == 'healthy')
+            except Exception:
+                healthy = True
+            health_ok = healthy
+            add('PrismCast server reachable', 'ok' if healthy else 'warn',
+                f'{prismcast_url} responded' + ('' if healthy else ' but status is not "healthy"'))
+        else:
+            add('PrismCast server reachable', 'fail',
+                f'{prismcast_url}/health returned HTTP {r.status_code}')
+    except Exception as e:
+        add('PrismCast server reachable', 'fail',
+            f'Could not reach {prismcast_url} ({type(e).__name__}).',
+            fix='Check the URL and that PrismCast is running. If PrismCast uses Docker host '
+                'networking, its ports are subject to the host firewall — open it (e.g. '
+                '`sudo ufw allow 5589/tcp`).')
+
+    # 2) Watch-page URL is a browser secure context (required for Widevine/EME)
+    host = (urlparse(inner).hostname or '').lower()
+    scheme = (urlparse(inner).scheme or '').lower()
+    if scheme == 'https' or host == 'localhost' or host.startswith('127.'):
+        add('Watch-page URL is a secure context', 'ok',
+            f'{inner} — ' + ('trusted HTTPS' if scheme == 'https' else 'loopback') + ', so DRM can decrypt.')
+    else:
+        add('Watch-page URL is a secure context', 'warn',
+            f'{inner} is a plain http:// LAN address — not a secure context, so Widevine/EME will not decrypt (black capture).',
+            fix='If PrismCast runs on the same host as FastChannels, set the Watch-page URL to '
+                'loopback (http://127.0.0.1:<port>) and run PrismCast with host networking. '
+                'Otherwise serve FastChannels over trusted HTTPS.')
+
+    # 3) End-to-end capture: the chain-validating test. Try one bridged channel per
+    # capable source so a single channel's resolution hiccup (e.g. a stale Roku session)
+    # doesn't fail the whole SETUP test — pass if ANY channel captures.
+    test_channels = []
+    for _sname in _drm_bridge_capable_sources():
+        _c = (Channel.query.join(Source)
+              .filter(Source.name == _sname, Channel.requires_drm_bridge == True,
+                      Channel.is_active == True)
+              .order_by(Channel.id).first())
+        if _c:
+            test_channels.append(_c)
+        if len(test_channels) >= 4:
+            break
+    if not test_channels:
+        test_channels = (Channel.query.filter(Channel.is_active == True, Channel.is_enabled == True)
+                         .order_by(Channel.id).limit(2).all())
+
+    def _try_capture(tc):
+        """Returns (ok, detail). Drives PrismCast and waits for segments to flow."""
+        watch = f'{inner}/watch/{tc.id}'
+        play = f'{prismcast_url}/play?url={_quote(watch, safe="")}'
+        t0 = _time.time()
+        try:
+            r = _req.get(play, timeout=25, allow_redirects=False)
+        except _req.exceptions.Timeout:
+            return False, f'"{tc.name}": PrismCast /play timed out (couldn\'t reach the watch page or reach a playable state).'
+        except Exception as e:
+            return False, f'"{tc.name}": {type(e).__name__}.'
+        if r.status_code not in (301, 302) or not r.headers.get('Location'):
+            return False, f'"{tc.name}": PrismCast /play returned HTTP {r.status_code}.'
+        hls = r.headers['Location']
+        if not hls.startswith('http'):
+            hls = prismcast_url + hls
+        segs = 0
+        deadline = _time.time() + 12
+        while _time.time() < deadline:
+            _time.sleep(3)
+            try:
+                segs = _req.get(hls, timeout=8).text.count('.m4s')
+            except Exception:
+                pass
+            if segs >= 2:
+                break
+        if segs >= 2:
+            return True, f'Captured "{tc.name}" in {_time.time()-t0:.0f}s — {segs}+ segments flowing. The full chain works.'
+        return False, f'"{tc.name}": session started but produced no video.'
+
+    if not health_ok:
+        add('End-to-end capture', 'skip', 'Skipped — PrismCast is not reachable.')
+    elif not test_channels:
+        add('End-to-end capture', 'skip', 'Skipped — no active channel available to test.')
+    else:
+        attempts = []
+        captured = None
+        for tc in test_channels:
+            ok_cap, detail = _try_capture(tc)
+            attempts.append(detail)
+            if ok_cap:
+                captured = detail
+                break
+        if captured:
+            add('End-to-end capture', 'ok', captured)
+        else:
+            add('End-to-end capture', 'fail',
+                'No test channel captured. Tried: ' + ' | '.join(attempts),
+                fix='If channels reach a playable state nowhere, it\'s usually a secure-context/DRM '
+                    'issue — confirm the Watch-page URL is loopback or HTTPS and that PrismCast '
+                    '(Chrome) can reach it. If only some channels fail, those channels couldn\'t '
+                    'resolve right now (not a PrismCast problem).')
+
+    # 4) Cross-host firewall note (FastChannels can't test the DVR→PrismCast path directly)
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
+    dvr_host = (urlparse(dvr_url).hostname or '') if dvr_url else ''
+    pc_host = (urlparse(prismcast_url).hostname or '')
+    if dvr_host and pc_host and dvr_host != pc_host:
+        _port = urlparse(prismcast_url).port or 5589
+        add('Channels DVR → PrismCast reachability', 'info',
+            f'Your DVR ({dvr_host}) and PrismCast ({pc_host}) are on different hosts. FastChannels '
+            'reached PrismCast, but your DVR must reach it too — this test can\'t verify that hop.',
+            fix=f'If streams time out, open PrismCast’s port on its host: `sudo ufw allow {_port}/tcp`.')
+
+    overall = ('fail' if any(c['status'] == 'fail' for c in checks)
+               else 'warn' if any(c['status'] == 'warn' for c in checks)
+               else 'ok')
+    return jsonify({'checks': checks, 'overall': overall})
+
+
 def _drm_bridge_capable_sources() -> list[str]:
     """Source names whose scraper has DRM license handling (can be PrismCast-bridged)."""
     from ..scrapers.registry import get_all
