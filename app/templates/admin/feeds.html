@@ -969,21 +969,16 @@ async function checkInlineChnumConflict(feedId) {
   const el    = document.getElementById(`chnum-conflict-${feedId}`);
   if (!input || !el) return;
 
+  const val = parseInt(input.value, 10);
+  if (isNaN(val)) { el.innerHTML = ''; return; }
+
   if (!_inlineRangeCache[feedId]) {
     try {
       const r = await fetch(`/api/feeds/chnum-ranges?exclude_id=${feedId}`);
       _inlineRangeCache[feedId] = await r.json();
     } catch { _inlineRangeCache[feedId] = []; }
   }
-
-  const ranges   = _inlineRangeCache[feedId];
-  const val      = parseInt(input.value, 10);
-  const explicit = ranges.filter(r => r.explicit);
-
-  if (isNaN(val)) {
-    el.innerHTML = buildRangeHint(explicit, NaN, NaN, new Set());
-    return;
-  }
+  const explicit = _inlineRangeCache[feedId].filter(r => r.explicit);
 
   let myCount = 100;
   try {
@@ -991,10 +986,16 @@ async function checkInlineChnumConflict(feedId) {
     const mine = allRanges.find(r => r.feed_id === feedId);
     if (mine) myCount = (mine.count || 0) + (mine.gn_count || 0);
   } catch { /* keep fallback */ }
-  const myEnd       = val + Math.max(myCount, 1) - 1;
-  const conflictIds = new Set(explicit.filter(r => val <= r.end && myEnd >= r.start).map(r => r.feed_id));
+  const myEnd = val + Math.max(myCount, 1) - 1;
 
-  el.innerHTML = buildRangeHint(explicit, val, myEnd, conflictIds);
+  // Only surface actual overlaps inline. The full Channel Number Map lives in the
+  // top card, so we don't repeat the whole list of ranges on every feed card.
+  const conflicts = explicit.filter(r => val <= r.end && myEnd >= r.start);
+  if (!conflicts.length) { el.innerHTML = ''; return; }
+  const sep = `<span style="color:var(--text-dim)"> · </span>`;
+  el.innerHTML = `<div style="font-size:0.75rem;margin-top:0.35rem;line-height:1.6;color:var(--danger)">⚠ Overlaps `
+    + conflicts.map(r => `${r.feed_name} (${r.start.toLocaleString()}–${r.end.toLocaleString()})`).join(sep)
+    + `</div>`;
 }
 
 async function loadChnumRanges(excludeId) {
@@ -1378,7 +1379,7 @@ async function renderChannelMap() {
 }
 renderChannelMap();
 
-// Run conflict check on page load to show range bars for all feeds
+// Run conflict check on page load so any existing overlaps surface on their card
 document.querySelectorAll('[id^="chnum-"]').forEach(input => {
   const m = input.id.match(/^chnum-(\d+)$/);
   if (m) checkInlineChnumConflict(parseInt(m[1], 10));
