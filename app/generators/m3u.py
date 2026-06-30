@@ -186,27 +186,40 @@ def _channel_display_name(ch, multi_country_map: dict[str, set[str]] | None = No
 def _build_channel_query(filters: dict, *, activity: str = 'active'):
     """Shared filtered query for channels.
 
-    activity='active'      -> the standard set: active + enabled, EXCLUDING DRM-bridge
-                              channels (a normal client can't decrypt those).
-    activity='drm_bridge'  -> active + enabled channels the audit marked
-                              requires_drm_bridge (DRM, e.g. Roku FairPlay). A normal
-                              client can't play them, so they're held out of standard
-                              output, but a browser (PrismCast) can — the PrismCast feed
-                              unions them back in and bridges them.
+    A channel is "bridge-only" — kept out of standard output, carried only by the
+    PrismCast feed — when EITHER the audit flagged it (requires_drm_bridge) OR it's a
+    DASH stream from a DRM-capable source (e.g. Amazon, Sling). The latter is
+    intrinsically un-playable on a normal client, so we don't need an audit to know it.
+
+    activity='active'      -> the standard set: active + enabled, EXCLUDING bridge-only.
+    activity='drm_bridge'  -> active + enabled, ONLY the bridge-only channels. The
+                              PrismCast feed and shared EPG union these back in.
     """
+    _capable = _drm_bridge_capable_source_names()
+    _intrinsic_dash = db.and_(
+        db.func.lower(db.func.coalesce(Channel.stream_type, '')) == 'dash',
+        Source.name.in_(_capable),
+    ) if _capable else None
+
     if activity == 'drm_bridge':
+        _bridge_only = Channel.requires_drm_bridge == True
+        if _intrinsic_dash is not None:
+            _bridge_only = db.or_(_bridge_only, _intrinsic_dash)
         activity_predicates = (
             Channel.is_active  == True,
             Channel.is_enabled == True,
-            Channel.requires_drm_bridge == True,
+            _bridge_only,
         )
     else:
-        activity_predicates = (
+        _preds = [
             Channel.is_active  == True,
             Channel.is_enabled == True,
             db.or_(Channel.requires_drm_bridge == False,
                    Channel.requires_drm_bridge == None),
-        )
+        ]
+        if _intrinsic_dash is not None:
+            _preds.append(db.not_(_intrinsic_dash))
+        activity_predicates = tuple(_preds)
     query = Channel.query.join(Source).options(
         contains_eager(Channel.source).load_only(
             Source.id,
@@ -994,6 +1007,14 @@ def _source_is_drm_capable(source_name: str | None) -> bool:
     from ..scrapers import registry as _reg
     scr = _reg.get(source_name)
     return bool(scr and getattr(scr, 'license_url', None))
+
+
+def _drm_bridge_capable_source_names() -> list[str]:
+    """Source names whose scraper has DRM license handling. A DASH channel from one of
+    these is bridge-only — it can never play on a normal client, so we treat it as a
+    bridge channel intrinsically (no audit needed) and keep it out of the standard feed."""
+    from ..scrapers import registry as _reg
+    return [name for name, cls in _reg.get_all().items() if getattr(cls, 'license_url', None)]
 
 
 def _prismcast_capturable(ch) -> bool:
