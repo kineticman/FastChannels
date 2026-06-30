@@ -512,22 +512,22 @@
           <label for="prismcast-url">PrismCast Server URL</label>
           <input type="text" id="prismcast-url"
                  placeholder="http://192.168.1.50:5589" value="{{ prismcast_url }}">
-          <div class="help">Base address of your <a href="https://github.com/hjdhjd/prismcast" target="_blank">PrismCast</a> server (default port <code>:5589</code>). When set, a PrismCast M3U is published at <code>{{ request_base_url }}/m3u/prismcast</code> (and per-feed at <code>/feeds/&lt;slug&gt;/m3u/prismcast</code>). It's a complete one-import feed: <strong>DRM</strong> channels are wrapped through PrismCast's <code>/play?url=</code> (its headless Chrome decrypts via EME and re-streams clean HLS), while every other channel is left as a normal direct stream — no capture slot, no transcode, full quality.</div>
+          <div class="help">Your <a href="https://github.com/hjdhjd/prismcast" target="_blank">PrismCast</a> server (default port <code>:5589</code>). Publishes a complete playlist at <code>{{ request_base_url }}/m3u/prismcast</code> — DRM channels go through PrismCast, everything else streams direct.</div>
         </div>
         <div class="field field-full">
           <label for="prismcast-inner-url">Watch-page URL for PrismCast's browser <span style="color:var(--text-muted);font-weight:400">(optional)</span></label>
           <input type="text" id="prismcast-inner-url"
                  placeholder="defaults to FastChannels Server URL" value="{{ prismcast_inner_url }}">
-          <div class="help">The address <strong>PrismCast's Chrome</strong> uses to reach this server's <code>/watch</code> pages. For <strong>DRM</strong> this must be a browser <em>secure context</em>: if PrismCast runs on the same host as FastChannels, use loopback like <code>http://127.0.0.1:5523</code> (Chrome trusts loopback, so Widevine/EME works with no HTTPS). Otherwise serve FastChannels over trusted HTTPS. Leave blank to reuse the FastChannels Server URL (fine for non-DRM channels).</div>
-          <div class="help" style="color:var(--warning-soft)">Plain <code>http://</code> on a LAN IP is <em>not</em> a secure context — DRM channels won't decrypt there. Use loopback or HTTPS.</div>
+          <div class="help">Where PrismCast's Chrome reaches this server's <code>/watch</code> pages. DRM needs a secure context: use loopback (<code>http://127.0.0.1:5523</code>) if PrismCast is on this host, else trusted HTTPS. Blank reuses the Server URL.</div>
+          <div class="help" style="color:var(--warning-soft)">A plain <code>http://</code> LAN IP isn't a secure context — DRM won't decrypt.</div>
         </div>
       </div>
       <div class="toggle-row">
         <div class="toggle-row-text">
           <div class="toggle-row-label">Bridge DRM channels (keep them active)</div>
-          <div class="toggle-row-help">When <strong>on</strong>, DRM channels the stream audit detects (e.g. Roku FairPlay) are kept active and routed through the PrismCast feed instead of being disabled — held out of the standard feed (a normal client can't decrypt them) and badged 🔒🌉. When <strong>off</strong> (default), DRM channels are disabled and drop out of all output. Only sources with DRM license handling can be bridged.</div>
+          <div class="toggle-row-help"><strong>On:</strong> DRM channels (e.g. Roku FairPlay) stay active and route through the PrismCast feed — kept out of the standard feed, badged 🔒🌉. <strong>Off</strong> (default): they're disabled and dropped. Only DRM-capable sources can bridge.</div>
           {% if not prismcast_url %}
-          <div class="help" style="color:var(--warning-soft)">Bridging needs the PrismCast Server URL above — set it first, or bridged channels won't be playable anywhere.</div>
+          <div class="help" style="color:var(--warning-soft)">Set the PrismCast Server URL above first, or bridged channels won't play.</div>
           {% endif %}
         </div>
         <div class="toggle-row-control">
