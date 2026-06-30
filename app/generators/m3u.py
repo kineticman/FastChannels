@@ -236,26 +236,36 @@ def _build_channel_query(filters: dict, *, activity: str = 'active'):
     if channel_ids := filters.get('channel_ids'):
         query = query.filter(Channel.id.in_(channel_ids))
     else:
+        _match = []
         if sources := filters.get('source'):
-            query = query.filter(Source.name.in_(sources))
+            _match.append(Source.name.in_(sources))
         if categories := filters.get('category'):
-            query = query.filter(Channel.category.in_(categories))
+            _match.append(Channel.category.in_(categories))
         if languages := filters.get('languages'):
-            query = query.filter(Channel.language.in_(languages))
+            _match.append(Channel.language.in_(languages))
         elif language := filters.get('language'):
-            query = query.filter(Channel.language == language)
+            _match.append(Channel.language == language)
         if countries := filters.get('countries'):
-            query = query.filter(Channel.country.in_(countries))
+            _match.append(Channel.country.in_(countries))
         if gracenote := filters.get('gracenote'):
             if gracenote == 'has':
-                query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+                _match.append(db.and_(Channel.gracenote_id != None, Channel.gracenote_id != ''))
             elif gracenote == 'missing':
-                query = query.filter(
-                    (Channel.gracenote_id == None) | (Channel.gracenote_id == ''),
+                _match.append(db.and_(
+                    db.or_(Channel.gracenote_id == None, Channel.gracenote_id == ''),
                     ~Channel.slug.like('%|%'),
-                )
+                ))
         if search := filters.get('search'):
-            query = query.filter(Channel.name.ilike(f'%{search}%'))
+            _match.append(Channel.name.ilike(f'%{search}%'))
+        _match_expr = db.and_(*_match) if _match else None
+        # Pinned channels join the feed regardless of the source/category filters above
+        # (still subject to the active/enabled/bridge predicates), so the counts and the
+        # actual M3U/PrismCast output agree on what a pin adds.
+        if pinned_ids := filters.get('pinned_channel_ids'):
+            _pin = Channel.id.in_(pinned_ids)
+            query = query.filter(db.or_(_match_expr, _pin) if _match_expr is not None else _pin)
+        elif _match_expr is not None:
+            query = query.filter(_match_expr)
         if excluded_ids := filters.get('excluded_channel_ids'):
             query = query.filter(Channel.id.notin_(excluded_ids))
     return query.order_by(Channel.number.asc().nullslast(), Channel.name.asc())
@@ -285,26 +295,36 @@ def _build_channel_stub_query(filters: dict):
     if channel_ids := filters.get('channel_ids'):
         query = query.filter(Channel.id.in_(channel_ids))
     else:
+        _match = []
         if sources := filters.get('source'):
-            query = query.filter(Source.name.in_(sources))
+            _match.append(Source.name.in_(sources))
         if categories := filters.get('category'):
-            query = query.filter(Channel.category.in_(categories))
+            _match.append(Channel.category.in_(categories))
         if languages := filters.get('languages'):
-            query = query.filter(Channel.language.in_(languages))
+            _match.append(Channel.language.in_(languages))
         elif language := filters.get('language'):
-            query = query.filter(Channel.language == language)
+            _match.append(Channel.language == language)
         if countries := filters.get('countries'):
-            query = query.filter(Channel.country.in_(countries))
+            _match.append(Channel.country.in_(countries))
         if gracenote := filters.get('gracenote'):
             if gracenote == 'has':
-                query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+                _match.append(db.and_(Channel.gracenote_id != None, Channel.gracenote_id != ''))
             elif gracenote == 'missing':
-                query = query.filter(
-                    (Channel.gracenote_id == None) | (Channel.gracenote_id == ''),
+                _match.append(db.and_(
+                    db.or_(Channel.gracenote_id == None, Channel.gracenote_id == ''),
                     ~Channel.slug.like('%|%'),
-                )
+                ))
         if search := filters.get('search'):
-            query = query.filter(Channel.name.ilike(f'%{search}%'))
+            _match.append(Channel.name.ilike(f'%{search}%'))
+        _match_expr = db.and_(*_match) if _match else None
+        # Pinned channels join the feed regardless of the source/category filters above
+        # (still subject to the active/enabled/bridge predicates), so the counts and the
+        # actual M3U/PrismCast output agree on what a pin adds.
+        if pinned_ids := filters.get('pinned_channel_ids'):
+            _pin = Channel.id.in_(pinned_ids)
+            query = query.filter(db.or_(_match_expr, _pin) if _match_expr is not None else _pin)
+        elif _match_expr is not None:
+            query = query.filter(_match_expr)
         if excluded_ids := filters.get('excluded_channel_ids'):
             query = query.filter(Channel.id.notin_(excluded_ids))
     return query.order_by(Channel.number.asc().nullslast(), Channel.name.asc())
