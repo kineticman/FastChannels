@@ -363,11 +363,18 @@ class VidaaScraper(BaseScraper):
 
         total = len(channels)
         done = 0
+        # Track chunk health so a total EPG outage surfaces as a scrape error
+        # instead of a silent 0-program "success". Partial failures stay
+        # best-effort (return what we got); a full wipeout raises below.
+        chunks_total = 0
+        chunks_failed = 0
+        last_epg_exc: Exception | None = None
         all_entries: list[tuple[str, dict]] = []
         for geo, station_map in qualified_by_geo.items():
             station_ids = list(station_map.keys())
             for i in range(0, len(station_ids), _EPG_CHUNK_SIZE):
                 chunk = station_ids[i : i + _EPG_CHUNK_SIZE]
+                chunks_total += 1
                 epg_url = (
                     f"{self._bo_url}/catalogue-search/{self._tenant}"
                     f"/search/public/usercontext/epg/grid"
@@ -380,10 +387,24 @@ class VidaaScraper(BaseScraper):
                     if isinstance(chunk_data, list):
                         all_entries.extend((geo, entry) for entry in chunk_data)
                 except Exception as exc:
+                    chunks_failed += 1
+                    last_epg_exc = exc
                     logger.warning("[vidaa] EPG chunk %d-%d failed for geo=%s: %s", i, i + _EPG_CHUNK_SIZE, geo, exc)
                 done += len(chunk)
                 if self._progress_cb:
                     self._progress_cb('epg', min(done, total), total)
+
+        # Total wipeout (every chunk failed) → raise so the worker records
+        # last_error and leaves last_epg_success_at stale (visible on the
+        # sources page), rather than stamping a false success with 0 programs.
+        if chunks_total and chunks_failed == chunks_total:
+            raise RuntimeError(
+                f"Vidaa EPG unavailable: all {chunks_total} grid chunk(s) failed "
+                f"(last error: {last_epg_exc})"
+            )
+        if chunks_failed:
+            logger.warning("[vidaa] EPG partial: %d/%d grid chunk(s) failed",
+                            chunks_failed, chunks_total)
 
         programs: list[ProgramData] = []
         for geo, entry in all_entries:
