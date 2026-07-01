@@ -27,6 +27,7 @@ from ..gracenote_map import lookup_gracenote, fetch_remote_gracenote_map, remote
 from ..hls import (
     inspect_hls_drm,
     parse_stream_info as _parse_stream_info,
+    parse_dash_stream_info as _parse_dash_stream_info,
     estimate_height_from_bandwidth as _estimate_height,
     nominal_resolution as _nominal_resolution,
 )
@@ -1943,6 +1944,17 @@ def _inspect_drm_bridge(ch, source, scraper_cls):
 
     if 'type="static"' in mpd:
         return jsonify({'status': 'vod', 'detail': 'DASH manifest is static (VOD) — not a live channel'})
+
+    # Populate the resolution/codec badge from the MPD's video Representations — the same
+    # parse the stream audit does (worker.py), so hitting the inspector fills it in too.
+    _dash_info = _parse_dash_stream_info(mpd)
+    if _dash_info:
+        ch.stream_info = _dash_info
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
     if _WIDEVINE not in mpd.lower():
         return jsonify({'status': 'error', 'detail': 'DASH manifest has no Widevine ContentProtection'})
     if not has_license:
@@ -2111,6 +2123,14 @@ def inspect_channel(channel_id):
             # VOD check
             if 'type="static"' in manifest_text:
                 return jsonify({'status': 'vod', 'detail': 'DASH VOD stream — not a live channel'})
+            # Resolution/codec badge from the MPD's video Representations (same as the audit).
+            _dash_info = _parse_dash_stream_info(manifest_text)
+            if _dash_info:
+                ch.stream_info = _dash_info
+                try:
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
             # DRM check (Widevine / PlayReady)
             widevine_uuid = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
             playready_uuid = '9a04f079-9840-4286-ab92-e65be0885f95'
