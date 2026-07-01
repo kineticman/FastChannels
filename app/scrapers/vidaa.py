@@ -13,8 +13,22 @@ from .category_utils import category_for_channel, infer_category_from_name
 logger = logging.getLogger(__name__)
 
 _USER_AGENT   = "NitroX/1.17.0-2 (Google sdk_gphone_x86; Android 11; mobile; release)"
-_CONFIG_URL   = "https://vtvapp-ovp.vidaahub.com/cms/vidaa-adrenalin8/clientconfiguration/versions/2"
-_LOCATION_URL = "https://vtvapp-ovp.vidaahub.com/sso-login/location"
+
+# VIDAA is migrating backends. `vtvapp-ovp` was the (now-closed) web-player
+# backend and is still the current prod host per client-config v7; `tvch`
+# ("TV Channels") is the on-TV-app backend introduced in config v5 — it serves
+# the SAME public catalogue/EPG/drmproxy surface with no auth. VIDAA flip-flopped
+# the config between them (v5→tvch, v6/v7→vtvapp-ovp) during the 2026-06-30
+# cutover, so we don't trust "latest config version" (v10 even points at a demo
+# host). Instead we try these known-good hosts in order and use whichever
+# ANSWERS as the API base — so the scraper self-heals if vtvapp-ovp is finally
+# retired. To force a host, reorder this tuple.
+_API_HOSTS = (
+    "https://vtvapp-ovp.vidaahub.com",
+    "https://tvch.vidaahub.com",
+)
+_CONFIG_PATH   = "/cms/vidaa-adrenalin8/clientconfiguration/versions/2"
+_LOCATION_PATH = "/sso-login/location"
 _STATIONS_FIELDS = (
     "taxonomyTerms,title,uid,assetType,externalResources,relations,"
     "channelNumber,isFast,externalIds,language,taxonomyParentTerms,"
@@ -218,23 +232,43 @@ class VidaaScraper(BaseScraper):
     # ── bootstrap ─────────────────────────────────────────────────────────────
 
     def _bootstrap(self) -> None:
-        r = self.session.get(_CONFIG_URL, timeout=30)
-        r.raise_for_status()
-        outer = r.json()
-        raw_inner = outer.get("configuration")
-        if not raw_inner:
-            raise RuntimeError("Vidaa client configuration missing 'configuration' key")
-        app_config = json.loads(raw_inner)
-        self._bo_url = app_config["Environment"]["BOURL"]
-        self._tenant = app_config["Environment"]["Tenant"]
+        # Try each known host in order; use the first that serves the client
+        # config as the API base. We deliberately use the *serving* host rather
+        # than the config's Environment.BOURL, because BOURL is version-bound and
+        # can name an already-dead host (v7 still says vtvapp-ovp even when served
+        # from tvch). This keeps current behaviour (vtvapp-ovp first) but fails
+        # over to tvch automatically if vtvapp-ovp stops answering.
+        last_exc: Exception | None = None
+        for host in _API_HOSTS:
+            try:
+                r = self.session.get(host + _CONFIG_PATH, timeout=30)
+                r.raise_for_status()
+                raw_inner = r.json().get("configuration")
+                if not raw_inner:
+                    raise RuntimeError("Vidaa client configuration missing 'configuration' key")
+                app_config = json.loads(raw_inner)
+                self._tenant = app_config["Environment"]["Tenant"]
+                self._bo_url = host
+                break
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("[vidaa] bootstrap config failed for %s: %s", host, exc)
+        if self._bo_url is None:
+            raise RuntimeError(f"Vidaa bootstrap failed on all hosts: {last_exc}")
 
-        r = self.session.get(
-            _LOCATION_URL, timeout=15,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        r.raise_for_status()
-        self._detected_geo_code = _normalize_geo(r.json().get("geo_code", _DEFAULT_GEOS[0]))
-        logger.info("[vidaa] bootstrap — BOURL=%s tenant=%s geo=%s",
+        # Geo detection is best-effort — _geos() falls back to configured/default
+        # geos, so a location hiccup must not abort the whole scrape.
+        self._detected_geo_code = _DEFAULT_GEOS[0]
+        try:
+            r = self.session.get(
+                self._bo_url + _LOCATION_PATH, timeout=15,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            r.raise_for_status()
+            self._detected_geo_code = _normalize_geo(r.json().get("geo_code", _DEFAULT_GEOS[0]))
+        except Exception as exc:
+            logger.warning("[vidaa] location detect failed on %s: %s", self._bo_url, exc)
+        logger.info("[vidaa] bootstrap — base=%s tenant=%s geo=%s",
                     self._bo_url, self._tenant, self._detected_geo_code)
 
     def _ensure_bootstrap(self) -> None:
