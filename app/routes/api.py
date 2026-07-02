@@ -325,15 +325,20 @@ def _isoformat_utc(dt):
     return dt.isoformat()
 
 
-def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool) -> None:
+def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool,
+                               prismcast: bool = False) -> None:
     """Wait briefly for feed artifacts to exist before handing URLs to Channels DVR."""
+    std_key = f'feed-{feed.slug}-prismcast-m3u' if prismcast else f'feed-{feed.slug}-m3u'
+    gn_key  = (f'feed-{feed.slug}-prismcast-gracenote-m3u' if prismcast
+               else f'feed-{feed.slug}-gracenote-m3u')
+
     def _ready() -> bool:
         xml_path, _ = get_xml_artifact(f'feed-{feed.slug}')
-        if get_artifact(f'feed-{feed.slug}-m3u', ext='m3u') is None:
+        if get_artifact(std_key, ext='m3u') is None:
             return False
         if xml_path is None:
             return False
-        if has_gracenote and get_artifact(f'feed-{feed.slug}-gracenote-m3u', ext='m3u') is None:
+        if has_gracenote and get_artifact(gn_key, ext='m3u') is None:
             return False
         return True
 
@@ -3372,6 +3377,99 @@ def push_feed_to_dvr(feed_id):
             r2 = _put(epg_name, f"{base}/feeds/{feed.slug}/m3u", f"{base}/feeds/{feed.slug}/epg.xml")
             r2.raise_for_status()
             sources_added.append(epg_name)
+    except _req.exceptions.ConnectionError:
+        return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
+    except _req.exceptions.Timeout:
+        return jsonify({'error': 'Channels DVR timed out.'}), 504
+    except _req.exceptions.HTTPError as exc:
+        resp = exc.response
+        return jsonify({'error': f'DVR {resp.status_code}: {resp.text[:300]}'}), 502
+
+    return jsonify({'ok': True, 'sources_added': sources_added})
+
+
+@api_bp.route('/feeds/<int:feed_id>/push-prismcast-to-dvr', methods=['POST'])
+def push_feed_prismcast_to_dvr(feed_id):
+    """Register this feed's PrismCast (DRM-bridge) output as custom M3U source(s)
+    in Channels DVR.
+
+    Registers up to two sources, named distinctly from the standard push so they
+    sit alongside it rather than overwriting it (Channels DVR keys a source by its
+    alphanumeric-stripped name):
+    - "… PrismCast Gracenote" (no EPG URL): only if the feed has Gracenote channels
+      that PrismCast carries — DVR fetches guide data via tvc-guide-stationid.
+    - "… PrismCast" (with our EPG XML): the standard-guide DRM-bridge playlist.
+    """
+    import re as _re
+    from ..generators.m3u import _build_channel_query, _parse_gracenote_id, feed_to_query_filters
+
+    feed = Feed.query.get_or_404(feed_id)
+    settings = AppSettings.get()
+
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
+    if not (settings.effective_prismcast_url() or '').strip():
+        return jsonify({'error': 'PrismCast is not configured. Set the PrismCast server URL in Settings.'}), 400
+
+    base = public_base_url()
+
+    feed_query = _build_channel_query(feed_to_query_filters(feed.filters or {}))
+    dvr_type = _dvr_stream_format(feed_query)
+
+    # PrismCast partitions the same way as the standard feed; use the same counts.
+    split = _feed_split_counts(feed)
+    std_count = split.get('prismcast_count', 0)
+    gn_count  = split.get('prismcast_gracenote_count', 0)
+    has_gracenote = gn_count > 0
+    if std_count == 0 and gn_count == 0:
+        return jsonify({'error': 'This feed has no eligible PrismCast channels to add to Channels DVR.'}), 400
+
+    # Each partition registers as its own DVR source, so gate the recommended-max
+    # warning on the larger of the two.
+    largest = max(std_count, gn_count)
+    force = bool((request.get_json(silent=True) or {}).get('force'))
+    if largest > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
+        return jsonify({
+            'error': f'This PrismCast feed has {largest} channels in one source. Channels DVR usually works best at 750 or fewer.',
+            'requires_confirm': True,
+            'channel_count': largest,
+            'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
+        }), 409
+
+    try:
+        _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote, prismcast=True)
+    except TimeoutError:
+        return jsonify({'error': 'Timed out waiting for PrismCast feed artifacts to build. Try again in a moment.'}), 503
+
+    def _put(name, url, xmltv_url=''):
+        safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
+        payload = {
+            'name':    name,
+            'type':    dvr_type,
+            'source':  'URL',
+            'url':     url,
+            'refresh': '24',
+        }
+        if xmltv_url:
+            payload['xmltv_url']     = xmltv_url
+            payload['xmltv_refresh'] = '3600'
+        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=30, verify=False)
+
+    gn_name  = f"FastChannels {feed.name} PrismCast Gracenote"
+    std_name = f"FastChannels {feed.name} PrismCast"
+    sources_added = []
+
+    try:
+        if has_gracenote:
+            r1 = _put(gn_name, f"{base}/feeds/{feed.slug}/m3u/prismcast/gracenote")
+            r1.raise_for_status()
+            sources_added.append(gn_name)
+
+        if std_count > 0:
+            r2 = _put(std_name, f"{base}/feeds/{feed.slug}/m3u/prismcast", f"{base}/feeds/{feed.slug}/epg.xml")
+            r2.raise_for_status()
+            sources_added.append(std_name)
     except _req.exceptions.ConnectionError:
         return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
     except _req.exceptions.Timeout:

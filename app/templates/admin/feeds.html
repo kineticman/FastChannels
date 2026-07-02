@@ -586,7 +586,14 @@
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
           </div>
         </div>
-        <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}DRM channels are routed through your PrismCast server, everything else served direct. Like the regular feed, PrismCast splits into a standard M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote) — import whichever fits your DVR. Import only one per source to avoid duplicate channels.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
+        {% if prismcast_enabled %}
+        <div style="margin-top:0.6rem">
+          <button class="btn btn-dvr" title="Register this feed's PrismCast output as a custom M3U source in Channels DVR"
+                  onclick='pushPrismcastToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("prismcast_count", 0) }}, {{ split.get("prismcast_gracenote_count", 0) }}, this)'
+                  {% if not split.get('prismcast_count', 0) and not split.get('prismcast_gracenote_count', 0) %}disabled title="No PrismCast channels in this feed"{% endif %}>📺 Add PrismCast to Channels DVR</button>
+        </div>
+        {% endif %}
+        <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}DRM channels are routed through your PrismCast server, everything else served direct. Like the regular feed, PrismCast splits into a standard M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote) — import whichever fits your DVR. Import only one per source to avoid duplicate channels. The button above registers both as distinct sources (named "… PrismCast") separate from the standard push.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
       </details>
     </div>
     {% endfor %}
@@ -1205,6 +1212,60 @@ async function pushToDvr(id, name, count, standardCount, btn, force = false) {
         btn.disabled = false;
         btn.textContent = orig;
         return pushToDvr(id, name, count, standardCount, btn, true);
+      } else {
+        alert('Failed: ' + (data.error || `HTTP ${r.status}`));
+      }
+      btn.disabled = false;
+      btn.textContent = orig;
+      return;
+    }
+    btn.textContent = '✓ Added!';
+    btn.style.background = 'var(--success-bg-2)';
+    btn.style.color = 'var(--success-soft)';
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.style.background = '';
+      btn.style.color = '';
+      btn.disabled = false;
+    }, 3000);
+  } catch(e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+// ── Push PrismCast output to Channels DVR ──────────────────────────────────
+async function pushPrismcastToDvr(id, name, stdCount, gnCount, btn, force = false) {
+  // Each partition registers as its own DVR source; warn on the larger one.
+  const largest = Math.max(stdCount || 0, gnCount || 0);
+  if (largest > 750 && !force) {
+    const ok = confirm(
+      `${name}'s PrismCast output has ${largest} channels in one source.\n\nChannels DVR usually works best at 750 or fewer.\n\nAdd it anyway?`
+    );
+    if (!ok) return;
+  }
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Adding…';
+  try {
+    const r = await fetch(`/api/feeds/${id}/push-prismcast-to-dvr`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(force || largest > 750 ? {force: true} : {}),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      if (r.status === 400 && data.error?.includes('not configured')) {
+        alert(data.error + '\n\nGo to Settings to configure it.');
+      } else if (r.status === 504 || (r.status === 502 && /could not connect|timed out/i.test(data.error || ''))) {
+        alert('Could not reach Channels DVR.\n\nGo to Settings → Channels DVR and use the Test Connection button to verify your server URL is correct and reachable.\n\nNote: if FastChannels and Channels DVR are on the same machine, use its LAN IP address — not localhost or 127.0.0.1.');
+      } else if (r.status === 502 && data.error) {
+        alert('Channels DVR rejected the request:\n\n' + data.error);
+      } else if (r.status === 409 && data.requires_confirm && !force) {
+        btn.disabled = false;
+        btn.textContent = orig;
+        return pushPrismcastToDvr(id, name, stdCount, gnCount, btn, true);
       } else {
         alert('Failed: ' + (data.error || `HTTP ${r.status}`));
       }
