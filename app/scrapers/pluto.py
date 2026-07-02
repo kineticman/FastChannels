@@ -153,7 +153,15 @@ class _StreamSession:
         if cached and (now - self._cached_at.get(country_code, datetime.min.replace(tzinfo=pytz.utc))) < timedelta(hours=4):
             return cached, None
 
-        params = {**BOOT_PARAMS_BASE, 'clientID': self.client_id}
+        # clientTime: Pluto's own web/app clients now send the current wall-clock
+        # time on boot. It's accepted-but-not-required today; sending it keeps us
+        # aligned if Pluto ever starts gating on clock skew. Must be computed
+        # per-request (not stored in the static BOOT_PARAMS_BASE dict).
+        params = {
+            **BOOT_PARAMS_BASE,
+            'clientID': self.client_id,
+            'clientTime': now.strftime('%Y-%m-%dT%H:%M:%S.000Z'),
+        }
         if self.username and self.password:
             params['username'] = self.username
             params['password'] = self.password
