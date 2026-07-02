@@ -1065,10 +1065,9 @@ def _needs_prismcast_bridge(ch) -> bool:
 def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
                            prismcast_url: str, inner_base_url: str = None,
                            feed_chnum_start: int = None, namespace_start: int = None,
-                           feed_id: int = None) -> str:
+                           feed_id: int = None, gracenote: bool = False) -> str:
     """
-    Hybrid PrismCast playlist — a single complete feed where each channel takes
-    the cheapest viable path:
+    Hybrid PrismCast playlist where each channel takes the cheapest viable path:
 
       * DRM channels (browser/EME required) are wrapped through PrismCast's
         `/play?url=` endpoint, so its headless Chrome renders the fullscreen
@@ -1077,7 +1076,15 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
         normal direct /play/<source>/<id>.m3u8 URL — no capture slot, no
         transcode, full quality — exactly what the standard M3U would send.
 
-    tvg-id matches the standard XMLTV output, so the same EPG pairs.
+    Guide routing partitions the same way as generate_m3u / generate_gracenote_m3u:
+
+      * gracenote=False — excludes channels with a Gracenote ID; emits tvg-id so
+        the guide pairs with our XMLTV /epg.xml.
+      * gracenote=True  — only channels with a Gracenote ID; emits
+        tvc-guide-stationid so Channels DVR routes guide data through Gracenote.
+
+    The URL (bridge vs. direct) is orthogonal to guide routing — both partitions
+    apply the same DRM-bridge selection.
 
     prismcast_url   — PrismCast base, e.g. http://192.168.1.x:5589
     inner_base_url  — base URL PrismCast's Chrome uses to reach this server's
@@ -1092,17 +1099,22 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
     _s = AppSettings.get()
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
 
-    channels = _selected_channels(filters, gracenote=None)
+    channels = _selected_channels(filters, gracenote=gracenote)
 
     # Union in channels the audit disabled purely for DRM but which a browser can
     # decrypt (DRM-capable source). They're absent from the standard feed (a normal
     # client can't play them) but the PrismCast feed bridges them via /watch. Append
-    # after the active set, deduped, capturable-only.
+    # after the active set, deduped, capturable-only, honoring the Gracenote partition.
     _seen = {ch.id for ch in channels}
     for ch in _build_channel_query(filters, activity='drm_bridge').all():
-        if ch.id not in _seen and _prismcast_capturable(ch):
-            channels.append(ch)
-            _seen.add(ch.id)
+        if ch.id in _seen or not _prismcast_capturable(ch):
+            continue
+        if gracenote and not _parse_gracenote_id(ch):
+            continue
+        if not gracenote and _has_gracenote_claim(ch):
+            continue
+        channels.append(ch)
+        _seen.add(ch.id)
 
     chnum_map, warnings = _resolve_chnum_map(
         channels,
@@ -1119,9 +1131,12 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
     for ch in channels:
         tvg_id = _tvg_id(ch)
         display_name = _channel_display_name(ch, multi_country_map)
+        # Guide routing: tvc-guide-stationid → Gracenote, tvg-id → our XMLTV.
+        guide_attr = (f'tvc-guide-stationid="{_parse_gracenote_id(ch)}"'
+                      if gracenote else f'tvg-id="{tvg_id}"')
         attrs = [
             f'channel-id="{tvg_id}"',
-            f'tvg-id="{tvg_id}"',
+            guide_attr,
             f'tvg-name="{_esc(display_name)}"',
             f'group-title="{_esc(ch.category or ch.source.display_name)}"',
         ]

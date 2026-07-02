@@ -570,6 +570,14 @@
             <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast')">Copy</button>
           </div>
+          {% if split.get('prismcast_gracenote_count', 0) %}
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/gracenote')">
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">PrismCast Gracenote M3U ({{ split.get('prismcast_gracenote_count', 0) }})</span>
+            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/gracenote</span>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/gracenote" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/gracenote')">Copy</button>
+          </div>
+          {% endif %}
           {% endif %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
             <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
@@ -578,7 +586,7 @@
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
           </div>
         </div>
-        <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}Complete feed ready to import into Channels DVR — DRM channels routed through your PrismCast server, everything else served direct. EPG is shared with the standard feed.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
+        <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}DRM channels are routed through your PrismCast server, everything else served direct. Like the regular feed, PrismCast splits into a standard M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote) — import whichever fits your DVR. Import only one per source to avoid duplicate channels.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
       </details>
     </div>
     {% endfor %}

@@ -1474,6 +1474,13 @@ def _refresh_xml_artifacts() -> None:
             'master-gracenote-m3u',
             lambda fp: fp.write(generate_gracenote_m3u({}, base_url=base_url, namespace_start=default_gn_start)),
         ))
+        if prismcast_url:
+            m3u_artifacts.append((
+                'master-prismcast-gracenote-m3u',
+                lambda fp: fp.write(generate_prismcast_m3u(
+                    {}, base_url=base_url, prismcast_url=prismcast_url, inner_base_url=prismcast_inner,
+                    namespace_start=default_gn_start, gracenote=True)),
+            ))
         for feed in Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all():
             filters = feed_to_query_filters(feed.filters or {})
             xml_artifacts.append((
@@ -1536,6 +1543,15 @@ def _refresh_xml_artifacts() -> None:
                     generate_gracenote_m3u(filters, base_url=base_url, **gn_kw)
                 ),
             ))
+            if prismcast_url:
+                m3u_artifacts.append((
+                    f'feed-{feed.slug}-prismcast-gracenote-m3u',
+                    lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
+                        generate_prismcast_m3u(
+                            filters, base_url=base_url, prismcast_url=prismcast_url,
+                            inner_base_url=prismcast_inner, gracenote=True, **gn_kw)
+                    ),
+                ))
 
         rebuilt_xml = 0
         for cache_key, writer in xml_artifacts:

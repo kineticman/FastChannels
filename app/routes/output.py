@@ -322,6 +322,42 @@ def m3u_prismcast():
     )
 
 
+@output_bp.route('/m3u/prismcast/gracenote')
+def m3u_prismcast_gracenote():
+    """Gracenote-guide variant of the PrismCast M3U: only channels with a
+    Gracenote ID, emitted with tvc-guide-stationid so Channels DVR routes guide
+    data through Gracenote. DRM channels still bridge through PrismCast."""
+    from ..models import AppSettings, Feed
+    settings = AppSettings.get()
+    prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
+    if not prismcast_url:
+        return _prismcast_not_configured()
+    base_url = public_base_url()
+    filters  = _filters()
+    if filters:
+        inner        = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
+        default_feed = Feed.query.filter_by(slug='default').first()
+        gn_start     = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
+        content = generate_prismcast_m3u(filters, base_url=base_url,
+                                         prismcast_url=prismcast_url, inner_base_url=inner,
+                                         namespace_start=gn_start, gracenote=True)
+        return Response(content, mimetype='application/x-mpegurl',
+                        headers={'Content-Disposition': 'attachment; filename="fastchannels-prismcast-gracenote.m3u"'})
+    path = get_artifact('master-prismcast-gracenote-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            'PrismCast Gracenote M3U artifact is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name='fastchannels-prismcast-gracenote.m3u',
+    )
+
+
 @output_bp.route('/m3u/watch')
 def m3u_watch_compat():
     """Backward-compat alias: the watch-page M3U was renamed to /m3u/prismcast.
@@ -355,4 +391,27 @@ def feed_m3u_prismcast(slug):
         path,
         mimetype='application/x-mpegurl',
         download_name=f'{slug}-prismcast.m3u',
+    )
+
+
+@output_bp.route('/feeds/<slug>/m3u/prismcast/gracenote')
+def feed_m3u_prismcast_gracenote(slug):
+    """Gracenote-guide variant of the PrismCast DRM-bridge M3U for a feed.
+    Pair with the Gracenote guide, not /feeds/<slug>/epg.xml."""
+    from ..models import AppSettings
+    if not (AppSettings.get().effective_prismcast_url() or '').strip():
+        return _prismcast_not_configured()
+    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    path = get_artifact(f'feed-{slug}-prismcast-gracenote-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            f'PrismCast Gracenote M3U artifact for {feed.slug} is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name=f'{slug}-prismcast-gracenote.m3u',
     )

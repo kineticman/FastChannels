@@ -254,15 +254,28 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
         .one()
     )
     total, gn_count = row.total, row.gn_count
-    # The PrismCast feed is the standard set PLUS the DRM-bridge channels (which the
-    # standard query excludes) — so its count is higher than channel_count().
-    bridged_count = _build_channel_query(filters, activity='drm_bridge').count()
+    # The PrismCast feeds are the standard/gracenote sets PLUS the DRM-bridge channels
+    # (which the standard query excludes) — so their counts run higher than
+    # channel_count(). Partition the bridged set the same way for accurate per-feed
+    # counts, since PrismCast now splits into standard + gracenote like the regular feed.
+    bridged_row = (
+        _build_channel_query(filters, activity='drm_bridge')
+        .order_by(None)
+        .with_entities(
+            func.count().label('total'),
+            func.count(case((has_gracenote, Channel.id))).label('gn_count'),
+        )
+        .one()
+    )
+    bridged_count, bridged_gn = bridged_row.total, bridged_row.gn_count
+    std_count = max(total - gn_count, 0)
     return {
-        'standard_count': max(total - gn_count, 0),
+        'standard_count': std_count,
         'gracenote_count': gn_count,
         'total_count': total,
         'bridged_count': bridged_count,
-        'prismcast_count': total + bridged_count,
+        'prismcast_count': std_count + (bridged_count - bridged_gn),
+        'prismcast_gracenote_count': gn_count + bridged_gn,
     }
 
 
