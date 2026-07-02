@@ -136,8 +136,8 @@ class SlingScraper(BaseScraper):
         return result
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
-        max_windows = 4
-        max_workers = 20
+        max_windows = 48   # walk ~48 schedule.qvt windows → ~22h floor (p10), ~40h median guide
+        max_workers = 100  # channels walked in parallel; 100 keeps a full-EPG scrape ≈ 1.8 min
         selected    = channels
         total       = len(selected)
 
