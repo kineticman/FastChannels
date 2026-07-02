@@ -1,6 +1,13 @@
 import re
 
 
+# DRM system UUIDs (canonical lowercase form), used to detect ContentProtection /
+# KEYFORMAT in both HLS and DASH manifests. Single source of truth — importers must
+# lowercase the text they scan before matching.
+WIDEVINE_UUID  = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
+PLAYREADY_UUID = '9a04f079-9840-4286-ab92-e65be0885f95'
+
+
 _VIDEO_CODEC_MAP = {
     'avc1': 'h264', 'avc3': 'h264',
     'hvc1': 'hevc', 'hev1': 'hevc',
@@ -157,7 +164,13 @@ def parse_dash_stream_info(mpd_text: str) -> dict | None:
             w = rep.get('width') or a_w
             h = rep.get('height') or a_h
             mime = rep.get('mimeType') or a_mime
-            if 'video' not in mime and 'video' not in a_ct and not (w and h):
+            # Skip audio/text/image reps. Trickmode/thumbnail sets carry width/height
+            # too, so an explicit non-video marker must win over the dimension check;
+            # the (w and h) fallback only rescues video reps whose set omitted a type.
+            _mime_l, _ct_l = (mime or '').lower(), (a_ct or '').lower()
+            _is_nonvideo = any(t in _mime_l or t in _ct_l for t in ('image', 'audio', 'text'))
+            _is_video = 'video' in _mime_l or 'video' in _ct_l
+            if _is_nonvideo or (not _is_video and not (w and h)):
                 continue  # audio/text/thumbnail rep
             v: dict = {}
             bw = rep.get('bandwidth')
@@ -286,12 +299,12 @@ def inspect_hls_drm(manifest_text: str) -> dict | None:
         drm_type = None
         keyformat_lower = keyformat.lower()
         if keyformat and keyformat_lower != 'identity':
-            if 'widevine' in keyformat_lower or 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed' in keyformat_lower:
+            if 'widevine' in keyformat_lower or WIDEVINE_UUID in keyformat_lower:
                 drm_type = 'Widevine'
                 has_widevine = True
             elif 'fairplay' in keyformat_lower or 'apple' in keyformat_lower or 'com.apple.streamingkeydelivery' in keyformat_lower:
                 drm_type = 'FairPlay'
-            elif 'playready' in keyformat_lower or 'microsoft' in keyformat_lower or '9a04f079-9840-4286-ab92-e65be0885f95' in keyformat_lower:
+            elif 'playready' in keyformat_lower or 'microsoft' in keyformat_lower or PLAYREADY_UUID in keyformat_lower:
                 drm_type = 'PlayReady'
             else:
                 drm_type = f'Unknown (KEYFORMAT={keyformat})'

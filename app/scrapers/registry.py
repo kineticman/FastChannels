@@ -32,3 +32,22 @@ def get_all() -> dict[str, type[BaseScraper]]:
 
 def get(source_name: str) -> type[BaseScraper] | None:
     return get_all().get(source_name)
+
+
+def drm_capable_source_names() -> list[str]:
+    """Source names whose scraper exposes DRM license handling (a `license_url`).
+
+    A DASH channel from one of these is bridge-only — it can never play on a normal
+    client — so it's treated as an intrinsic PrismCast-bridge channel (no audit needed)
+    and kept out of the standard feed. Single source of truth for "is this source
+    bridgeable"; callers in the feed query, audit, PrismCast test, and Settings nudge
+    all route through here so they can never disagree."""
+    return [name for name, cls in get_all().items() if getattr(cls, 'license_url', None)]
+
+
+def source_is_drm_capable(source_name: str | None) -> bool:
+    """True if this source's scraper exposes license handling (a `license_url`)."""
+    if not source_name:
+        return False
+    cls = get(source_name)
+    return bool(cls and getattr(cls, 'license_url', None))

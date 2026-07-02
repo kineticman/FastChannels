@@ -1223,8 +1223,8 @@ def feeds():
 def _drm_bridge_recoverable_count() -> int:
     """How many disabled-DRM channels (on DRM-capable sources) turning on bridge mode
     would recover. Drives the Settings nudge."""
-    from ..scrapers.registry import get_all
-    capable = [name for name, cls in get_all().items() if getattr(cls, 'license_url', None)]
+    from ..scrapers.registry import drm_capable_source_names
+    capable = drm_capable_source_names()
     if not capable:
         return 0
     return (Channel.query.join(Source)

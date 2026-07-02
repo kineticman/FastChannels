@@ -62,22 +62,6 @@ _REGION_LABEL_SOURCES = {"pluto", "samsung", "tcl"}
 # Gracenote ID prefixes recognised by Channels DVR
 _GRACENOTE_PREFIX_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
 
-# FastChannels writes the channel description into TWO M3U attributes — tvg-description
-# AND tvc-guide-description — both carrying the same long, comma-bearing free text. Some
-# M3U parsers (notably Threadfin, the Plex bridge) mishandle it and bleed the value into
-# the channel display name. The native M3U strips BOTH so it imports cleanly into Plex
-# bridges and other clients; the blurb is a channel-level attribute only (program data
-# lives in the XMLTV <desc>), so this is lossless for the guide.
-# Safe match: _esc() converts any inner double-quote in the value to a single quote, so the
-# value never itself contains '"' (so [^"]* can't run past the real closing quote).
-_DESCRIPTION_ATTR_RE = re.compile(r'\s*(?:tvg-description|tvc-guide-description)="[^"]*"')
-
-
-def strip_description_attrs(m3u_text: str) -> str:
-    """Return an M3U string with the channel-description attributes removed."""
-    return _DESCRIPTION_ATTR_RE.sub('', m3u_text)
-
-
 @dataclass(slots=True)
 class _MiniSource:
     name: str
@@ -194,6 +178,9 @@ def _build_channel_query(filters: dict, *, activity: str = 'active'):
     activity='active'      -> the standard set: active + enabled, EXCLUDING bridge-only.
     activity='drm_bridge'  -> active + enabled, ONLY the bridge-only channels. The
                               PrismCast feed and shared EPG union these back in.
+    activity='any'         -> active + enabled, WITHOUT the bridge split (standard +
+                              bridge-only together). Use for membership/count checks
+                              that ask "does this feed carry the channel at all?".
     """
     _capable = _drm_bridge_capable_source_names()
     _intrinsic_dash = db.and_(
@@ -201,7 +188,12 @@ def _build_channel_query(filters: dict, *, activity: str = 'active'):
         Source.name.in_(_capable),
     ) if _capable else None
 
-    if activity == 'drm_bridge':
+    if activity == 'any':
+        activity_predicates = (
+            Channel.is_active  == True,
+            Channel.is_enabled == True,
+        )
+    elif activity == 'drm_bridge':
         _bridge_only = Channel.requires_drm_bridge == True
         if _intrinsic_dash is not None:
             _bridge_only = db.or_(_bridge_only, _intrinsic_dash)
@@ -885,13 +877,19 @@ def generate_m3u(filters: dict = None, base_url: str = None,
 
 def generate_native_m3u(filters: dict = None, base_url: str = None,
                         feed_chnum_start: int = None, namespace_start: int = None,
-                        feed_id: int = None) -> str:
+                        feed_id: int = None, include_description: bool = True) -> str:
     """
     Native (scraped-only) playlist — all feed channels, standard play URLs.
 
     Includes channels regardless of Gracenote status; uses scraped EPG data.
     Intended to be paired with the native XMLTV endpoint, not the Gracenote
     or standard split variants.
+
+    include_description=False omits the tvg-description/tvc-guide-description
+    attributes entirely (the blurb is channel-level only; program data rides in
+    the EPG XML). Threadfin/Plex bridges bleed that long comma-bearing value into
+    the channel name, so the native artifact is generated without it — cleaner than
+    emitting-then-stripping the rendered text.
     """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
@@ -927,7 +925,7 @@ def generate_native_m3u(filters: dict = None, base_url: str = None,
         chnum = chnum_map.get(ch.id)
         if chnum:
             attrs.append(f'tvg-chno="{chnum}"')
-        if ch.description:
+        if ch.description and include_description:
             attrs.append(f'tvg-description="{_esc(ch.description)}"')
             attrs.append(f'tvc-guide-description="{_esc(ch.description)}"')
         if ch.stream_info:
@@ -1020,21 +1018,13 @@ _PRISMCAST_UNSUPPORTED_TYPES = {'mjpeg', 'jpeg_snapshot', 'mpegts', 'ts'}
 
 
 def _source_is_drm_capable(source_name: str | None) -> bool:
-    """True if the source's scraper exposes license handling (a license_url), so the
-    watch page can complete the EME handshake and PrismCast gets decrypted video."""
-    if not source_name:
-        return False
     from ..scrapers import registry as _reg
-    scr = _reg.get(source_name)
-    return bool(scr and getattr(scr, 'license_url', None))
+    return _reg.source_is_drm_capable(source_name)
 
 
 def _drm_bridge_capable_source_names() -> list[str]:
-    """Source names whose scraper has DRM license handling. A DASH channel from one of
-    these is bridge-only — it can never play on a normal client, so we treat it as a
-    bridge channel intrinsically (no audit needed) and keep it out of the standard feed."""
     from ..scrapers import registry as _reg
-    return [name for name, cls in _reg.get_all().items() if getattr(cls, 'license_url', None)]
+    return _reg.drm_capable_source_names()
 
 
 def _prismcast_capturable(ch) -> bool:

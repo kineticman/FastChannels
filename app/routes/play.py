@@ -1811,6 +1811,8 @@ def roku_dash_proxy(channel_id: str):
         abort(404)
 
     scraper_cls = registry.get('roku')
+    if not scraper_cls:
+        return _unavailable_response()
     scraper = scraper_cls(config=channel.source.config or {})
     try:
         result = scraper.resolve_dash(channel.stream_url)

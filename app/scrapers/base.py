@@ -465,20 +465,41 @@ class BaseScraper(ABC):
             self._cache = self._load_source_cache()
         return self._cache
 
+    # Cache keys that are large and only needed on the scrape/EPG path — never on the
+    # play/resolve hot path. Excluded from the eager `self.cache` load so a tune doesn't
+    # deserialize them; fetch on demand via load_lazy_cache_key() where they ARE needed.
+    LAZY_CACHE_KEYS: frozenset = frozenset()
+
     def _load_source_cache(self) -> dict:
         """Read this source's source_cache rows into a dict.
 
         Caches live outside Source.config so Source-entity loads never pay to
         deserialize them. Guarded: with no DB/app context (e.g. ad-hoc
         instantiation) the cache simply stays empty and the scraper re-fetches.
+        Large EPG-only caches (LAZY_CACHE_KEYS) are skipped here and loaded on demand.
         """
         try:
             from app.config_store import load_source_cache_by_name
-            return load_source_cache_by_name(self.source_name) or {}
+            return load_source_cache_by_name(
+                self.source_name, exclude=self.LAZY_CACHE_KEYS or None) or {}
         except Exception:
             logger.debug("[%s] could not load source cache; starting empty",
                          getattr(self, 'source_name', '?'), exc_info=True)
             return {}
+
+    def load_lazy_cache_key(self, key: str):
+        """Fetch one cache key on demand (for LAZY_CACHE_KEYS excluded from the eager
+        load) and merge it into self.cache. Call before reading a large EPG-only cache."""
+        if key in self.cache:
+            return self.cache[key]
+        try:
+            from app.config_store import load_source_cache_by_name
+            value = load_source_cache_by_name(self.source_name, keys=[key]).get(key)
+        except Exception:
+            logger.debug("[%s] could not load cache key %s", self.source_name, key, exc_info=True)
+            value = None
+        self.cache[key] = value
+        return value
 
     def _update_cache(self, key: str, value) -> None:
         """Queue a cache key/value to be persisted (to the source_cache table)

@@ -58,16 +58,24 @@ def load_source_cache(source_id: int) -> dict:
     return {key: value for key, value in rows}
 
 
-def load_source_cache_by_name(source_name: str) -> dict:
+def load_source_cache_by_name(source_name: str, *, keys=None, exclude=None) -> dict:
     """Like load_source_cache but keyed by Source.name — used by BaseScraper,
-    which knows its source_name but not its source_id at init time."""
-    rows = (
+    which knows its source_name but not its source_id at init time.
+
+    `keys`    — if given, load only these cache keys (a single-key fetch never
+                deserializes the large cold caches, e.g. Roku's description_cache).
+    `exclude` — if given, load every key EXCEPT these (used to keep large EPG-only
+                caches off the play/resolve hot path)."""
+    q = (
         db.session.query(SourceCache.cache_key, SourceCache.value)
         .join(Source, Source.id == SourceCache.source_id)
         .filter(Source.name == source_name)
-        .all()
     )
-    return {key: value for key, value in rows}
+    if keys is not None:
+        q = q.filter(SourceCache.cache_key.in_(list(keys)))
+    if exclude:
+        q = q.filter(SourceCache.cache_key.notin_(list(exclude)))
+    return {key: value for key, value in q.all()}
 
 
 # Caches that ACCUMULATE entries keyed by station/content id and prune only via
@@ -79,7 +87,9 @@ def load_source_cache_by_name(source_name: str) -> dict:
 # both survive — restoring the recursive-merge behaviour the old config path had.
 # Caches NOT listed here (description_cache, content_cache, channel_pe, osm_session,
 # audit reports) prune by deleting keys, so they MUST fully replace the row value.
-_MERGE_CACHE_KEYS = frozenset({"stream_url_cache", "play_id_cache", "selector_url_cache"})
+_MERGE_CACHE_KEYS = frozenset({
+    "stream_url_cache", "play_id_cache", "selector_url_cache", "dash_cache",
+})
 
 
 def persist_source_cache_updates(source_id: int, updates: dict | None) -> bool:

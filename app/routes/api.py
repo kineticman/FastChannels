@@ -30,6 +30,8 @@ from ..hls import (
     parse_dash_stream_info as _parse_dash_stream_info,
     estimate_height_from_bandwidth as _estimate_height,
     nominal_resolution as _nominal_resolution,
+    WIDEVINE_UUID,
+    PLAYREADY_UUID,
 )
 from ..source_config import is_source_config_complete
 try:
@@ -1894,7 +1896,7 @@ def _inspect_drm_bridge(ch, source, scraper_cls):
     (PrismCast), so this is a bridge-readiness check."""
     import re as _re
     from urllib.parse import urljoin as _urljoin
-    _WIDEVINE = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
+    _WIDEVINE = WIDEVINE_UUID
 
     scraper = scraper_cls(config=source.config or {})
     per_session_license = None
@@ -2132,9 +2134,7 @@ def inspect_channel(channel_id):
                 except Exception:
                     db.session.rollback()
             # DRM check (Widevine / PlayReady)
-            widevine_uuid = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
-            playready_uuid = '9a04f079-9840-4286-ab92-e65be0885f95'
-            if widevine_uuid in manifest_text.lower() or playready_uuid in manifest_text.lower():
+            if WIDEVINE_UUID in manifest_text.lower() or PLAYREADY_UUID in manifest_text.lower():
                 return jsonify({'status': 'drm', 'detail': 'DASH DRM detected (Widevine/PlayReady)'})
             return jsonify({'status': 'live', 'detail': 'DASH manifest OK (live)'})
 
@@ -3058,7 +3058,9 @@ def channel_feed_membership(channel_id):
             status = 'excluded'
         else:
             q_filters = feed_to_query_filters(filters)
-            in_filter = _build_channel_query(q_filters).filter(Channel.id == channel_id).count() > 0
+            # activity='any' so a bridge-only channel (carried by the feed's PrismCast
+            # variant) still counts as a member rather than reporting 'absent'.
+            in_filter = _build_channel_query(q_filters, activity='any').filter(Channel.id == channel_id).count() > 0
             status = 'filtered' if in_filter else 'absent'
         feed_channel_number = None
         if status != 'absent':
@@ -3682,8 +3684,8 @@ def test_prismcast():
 
 def _drm_bridge_capable_sources() -> list[str]:
     """Source names whose scraper has DRM license handling (can be PrismCast-bridged)."""
-    from ..scrapers.registry import get_all
-    return [name for name, cls in get_all().items() if getattr(cls, 'license_url', None)]
+    from ..scrapers.registry import drm_capable_source_names
+    return drm_capable_source_names()
 
 
 def _reconcile_drm_bridge_mode(enabled: bool) -> None:

@@ -162,6 +162,9 @@ class RokuScraper(BaseScraper):
     # /play/roku/license proxy. The real per-session license URL (with token) is
     # captured in resolve_dash() and returned by get_license_url() keyed by station.
     license_url           = _WV_LICENSE_BASE
+    # description_cache is large (~1.5MB) and only used on the EPG path, so keep it off
+    # the play/resolve hot path — loaded lazily in fetch_epg, not on every tune.
+    LAZY_CACHE_KEYS       = frozenset({"description_cache"})
     phase_timeouts        = {
         'init': 30,
         'bootstrap': 60,
@@ -214,7 +217,8 @@ class RokuScraper(BaseScraper):
         self._load_osm_session()
         self._load_stream_url_cache()
         self._load_403_cooldown()
-        self._load_description_cache()
+        # description_cache is loaded lazily at the start of fetch_epg (see LAZY_CACHE_KEYS)
+        # so the play/resolve hot path never deserializes its ~1.5MB blob.
         self._load_dash_cache()
 
     # ── Session management ─────────────────────────────────────────────────────
@@ -499,7 +503,7 @@ class RokuScraper(BaseScraper):
             self._persist_stream_url_cache()
 
     def _load_description_cache(self) -> None:
-        raw = self.cache.get("description_cache") or {}
+        raw = self.load_lazy_cache_key("description_cache") or {}
         if isinstance(raw, str):
             try:
                 raw = json.loads(raw)
@@ -1086,6 +1090,11 @@ class RokuScraper(BaseScraper):
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         enabled_ids = kwargs.get("enabled_ids")
+
+        # Load the large description_cache now (deferred from __init__ so the play/resolve
+        # hot path never pays for it); the EPG fanout below reuses cached descriptions.
+        if not self._description_cache:
+            self._load_description_cache()
 
         if self._cooldown_active():
             remaining = self._cooldown_remaining()

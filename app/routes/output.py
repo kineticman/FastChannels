@@ -1,7 +1,7 @@
 import logging
 import os
 
-from flask import Blueprint, Response, request, send_file, stream_with_context
+from flask import Blueprint, Response, redirect, request, send_file, stream_with_context
 from ..generators.m3u import (
     generate_m3u,
     generate_gracenote_m3u,
@@ -320,6 +320,20 @@ def m3u_prismcast():
         mimetype='application/x-mpegurl',
         download_name='fastchannels-prismcast.m3u',
     )
+
+
+@output_bp.route('/m3u/watch')
+def m3u_watch_compat():
+    """Backward-compat alias: the watch-page M3U was renamed to /m3u/prismcast.
+    308-redirect so existing DVR/player bookmarks keep working (query string preserved)."""
+    return redirect('/m3u/prismcast' + (f'?{request.query_string.decode()}' if request.query_string else ''), code=308)
+
+
+@output_bp.route('/feeds/<slug>/m3u/watch')
+def feed_m3u_watch_compat(slug):
+    """Backward-compat alias for the renamed /feeds/<slug>/m3u/prismcast route."""
+    qs = f'?{request.query_string.decode()}' if request.query_string else ''
+    return redirect(f'/feeds/{slug}/m3u/prismcast{qs}', code=308)
 
 
 @output_bp.route('/feeds/<slug>/m3u/prismcast')

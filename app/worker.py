@@ -32,7 +32,7 @@ from app.config_store import (
     load_source_cache,
 )
 from app.extensions import db
-from app.hls import inspect_hls_drm, parse_stream_info as _parse_stream_info, parse_dash_stream_info as _parse_dash_stream_info
+from app.hls import inspect_hls_drm, parse_stream_info as _parse_stream_info, parse_dash_stream_info as _parse_dash_stream_info, WIDEVINE_UUID, PLAYREADY_UUID
 from app.models import Source, Channel, Program, Feed, AppSettings
 import time as _time
 from urllib.parse import urljoin as _urljoin
@@ -1050,8 +1050,8 @@ def run_stream_audit(source_name: str):
                     _dash_info = _parse_dash_stream_info(manifest_text)
                     if _dash_info:
                         ch.stream_info = _dash_info
-                    _widevine  = 'edef8ba9-79d6-4ace-a3c8-27dcd51d21ed'
-                    _playready = '9a04f079-9840-4286-ab92-e65be0885f95'
+                    _widevine  = WIDEVINE_UUID
+                    _playready = PLAYREADY_UUID
                     if _widevine in manifest_text.lower() or _playready in manifest_text.lower():
                         _dash_drm_type = 'Widevine' if _widevine in manifest_text.lower() else 'PlayReady'
                         if _bridge_capable and _drm_bridge_mode:
@@ -1443,7 +1443,7 @@ def _prewarm_logos(source_name: str, logo_urls: list[str], progress_cb=None) -> 
 
 def _refresh_xml_artifacts() -> None:
     """Refresh master/feed XML and M3U artifacts after scrape commits land."""
-    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_prismcast_m3u, strip_description_attrs, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_prismcast_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app.generators.xmltv import write_xmltv
 
     for attempt in range(2):
@@ -1514,7 +1514,7 @@ def _refresh_xml_artifacts() -> None:
             m3u_artifacts.append((
                 f'feed-{feed.slug}-native-m3u',
                 lambda fp, filters=filters, std_kw=std_kw: fp.write(
-                    strip_description_attrs(generate_native_m3u(filters, base_url=base_url, **std_kw))
+                    generate_native_m3u(filters, base_url=base_url, include_description=False, **std_kw)
                 ),
             ))
             if prismcast_url:
