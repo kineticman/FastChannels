@@ -362,7 +362,7 @@
               <div class="row-source">{{ source.display_name }}</div>
             </div>
             <div class="row-meta">
-              Missed {{ channel.missed_scrapes or 0 }} scrape{{ 's' if (channel.missed_scrapes or 0) != 1 }}{% if source.scrape_interval %} (every {{ source.scrape_interval }}m){% endif %} ·
+              Missed {{ channel.missed_scrapes or 0 }} scrape{{ 's' if (channel.missed_scrapes or 0) != 1 }}{% if source.scrape_cron %} (cron <code>{{ source.scrape_cron }}</code>){% elif source.scrape_interval %} (every {{ source.scrape_interval }}m){% endif %} ·
               Last seen {% if channel.last_seen_at %}{{ channel.last_seen_at|localtime }}{% else %}unknown{% endif %} ·
               <code>{{ channel.source_channel_id }}</code>
             </div>
@@ -465,7 +465,7 @@
             <td style="padding:0.4rem 0.6rem;text-align:right;color:{% if src.at_risk > 0 %}var(--warning){% else %}var(--text-dim){% endif %}">
               {% if src.at_risk > 0 %}{{ src.at_risk }}{% else %}—{% endif %}
             </td>
-            <td style="padding:0.4rem 0.6rem;color:var(--text-muted)">{% if src.scrape_interval %}{{ src.scrape_interval }}m{% else %}—{% endif %}</td>
+            <td style="padding:0.4rem 0.6rem;color:var(--text-muted)">{% if src.scrape_cron %}<code style="font-size:0.82em">{{ src.scrape_cron }}</code>{% elif src.scrape_interval %}{{ src.scrape_interval }}m{% else %}—{% endif %}</td>
             <td style="padding:0.4rem 0.6rem;color:var(--text-muted)">{% if src.last_scraped_at %}{{ src.last_scraped_at|localtime }}{% else %}Never{% endif %}</td>
           </tr>
           {% endfor %}

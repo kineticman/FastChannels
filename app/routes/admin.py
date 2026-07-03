@@ -1424,6 +1424,7 @@ def channel_changes_report():
             'at_risk': at_risk,
             'last_scraped_at': src.last_scraped_at,
             'scrape_interval': src.scrape_interval,
+            'scrape_cron': src.scrape_cron,
         })
 
     net_change = len(new_rows) - len(inferred_lost_rows)
