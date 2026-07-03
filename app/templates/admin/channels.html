@@ -264,7 +264,7 @@
     .ms-dd > summary::after { content: '▾'; font-size: 0.7rem; color: var(--text-muted); }
     .ms-dd[open] > summary { border-color: var(--accent); }
     .ms-dd-fixed .ms-dd-panel { position: fixed; top: 0; left: 0; }
-    .ms-dd-actions button { flex: 1; cursor: pointer; padding: 0.4rem; border-radius: 5px; font-size: 0.8rem; border: 1px solid var(--border); }
+    .ms-dd-actions button { flex: 1; cursor: pointer; padding: 0.4rem; border-radius: 5px; font-size: 0.8rem; border: 1px solid var(--border); white-space: nowrap; }
     .ms-dd-clearbtn { background: var(--surface); color: var(--text-soft); }
     /* Compact column-header variant */
     .ms-dd-col > summary {
@@ -1428,6 +1428,7 @@
                   {% endfor %}
                 </div>
                 <div class="ms-dd-actions">
+                  <button type="button" class="ms-dd-clearbtn" onclick="msSelectAll(this)">Select all</button>
                   <button type="button" class="btn-apply" onclick="msApply(this)">Apply</button>
                   <button type="button" class="ms-dd-clearbtn" onclick="msClear(this)">Clear</button>
                 </div>
@@ -1706,6 +1707,7 @@
                     {% endfor %}
                   </div>
                   <div class="ms-dd-actions">
+                    <button type="button" class="ms-dd-clearbtn" onclick="msSelectAll(this)">Select all</button>
                     <button type="button" class="btn-apply" onclick="msApply(this)">Apply</button>
                     <button type="button" class="ms-dd-clearbtn" onclick="msClear(this)">Clear</button>
                   </div>
@@ -3519,6 +3521,10 @@
     }
     function msClear(btn) {
       btn.closest('.ms-dd').querySelectorAll('.ms-dd-list input[type=checkbox]').forEach(c => c.checked = false);
+      msApply(btn);
+    }
+    function msSelectAll(btn) {
+      btn.closest('.ms-dd').querySelectorAll('.ms-dd-list input[type=checkbox]').forEach(c => c.checked = true);
       msApply(btn);
     }
     function msReposition(dd) {

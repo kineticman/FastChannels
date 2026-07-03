@@ -528,6 +528,7 @@
               {% endfor %}
             </div>
             <div class="ms-dd-actions">
+              <button type="button" class="btn btn-sm btn-ghost" onclick="msSelectAll(this)">Select all</button>
               <button type="button" class="btn btn-sm" onclick="msApply(this)">Apply</button>
               <button type="button" class="btn btn-sm btn-ghost" onclick="msClear(this)">Clear</button>
             </div>
@@ -948,6 +949,10 @@
     function msApply() { document.getElementById('guide-filter-form').submit(); }
     function msClear(btn) {
       btn.closest('.ms-dd').querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false);
+      msApply();
+    }
+    function msSelectAll(btn) {
+      btn.closest('.ms-dd').querySelectorAll('input[type=checkbox]').forEach(c => c.checked = true);
       msApply();
     }
     function msOnToggle(dd) {
