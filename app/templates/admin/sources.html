@@ -892,7 +892,7 @@
   <div class="modal-overlay" id="cleanup-modal" onclick="closeCleanupModal(event)">
     <div class="modal" onclick="event.stopPropagation()" style="max-width:460px">
       <h2>Clean Up Inactive Channels</h2>
-      <p style="margin-bottom:1rem">Delete inactive channels that have not been seen in a scrape for at least the specified number of days. Pinned channels are never removed.</p>
+      <p style="margin-bottom:1rem">Delete inactive channels that have not been seen in a scrape for at least the specified number of days. Pinned channels are never removed. Click Preview first to see exactly what would be deleted.</p>
       <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:1rem">
         <label style="font-size:0.85rem;color:var(--text-soft);white-space:nowrap" for="cleanup-days-input">Not seen in</label>
         <input id="cleanup-days-input" type="number" min="1" max="365" value="14"
