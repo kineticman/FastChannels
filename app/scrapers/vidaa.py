@@ -34,7 +34,13 @@ _STATIONS_FIELDS = (
     "channelNumber,isFast,externalIds,language,taxonomyParentTerms,"
     "androidDeeplinkBaseUrl,organizationDomainUrl"
 )
-_EPG_CHUNK_SIZE = 50
+# 25, not 50: the grid endpoint 500/503s when a chunk's total EPG payload
+# (stations × 168h × event-density) exceeds a backend materialization ceiling.
+# A 50-station chunk of dense channels sits over that ceiling; 25 clears it with
+# margin (proven 5/5 vs 0/5 in dev/temp/vidaa_warmup_probe.py). Warm-up and
+# retry do NOT help — only shrinking the query does. _fetch_epg_chunk() splits
+# further on failure, so this is the starting size, not a hard limit.
+_EPG_CHUNK_SIZE = 25
 _EPG_HOURS      = 168  # ~7-day window; actual upstream horizon is ~5 days
 
 _MACRO_RE       = re.compile(r'^\[.*\]$|^REPLACEME$|^\{.*\}$')
@@ -214,7 +220,7 @@ class VidaaScraper(BaseScraper):
         ),
     ]
 
-    # EPG fetches ~4 chunked requests for 191 stations; give it room
+    # EPG fetches ~8 chunked requests for 191 stations (25/chunk, more on splits)
     phase_timeouts = {
         "init":      30,
         "bootstrap": 60,
@@ -374,6 +380,36 @@ class VidaaScraper(BaseScraper):
 
     # ── fetch_epg ──────────────────────────────────────────────────────────────
 
+    def _fetch_epg_chunk(
+        self, geo: str, chunk: list[str], start_str: str, end_str: str,
+    ) -> tuple[list[dict], int, int, Exception | None]:
+        """Fetch one EPG grid chunk. On HTTP failure (VIDAA 500/503s when the
+        chunk's payload exceeds the backend ceiling) split it in half and retry
+        the halves, down to a single station. Returns
+        (entries, ok_leaves, failed_leaves, last_exc) where the leaf counts are
+        the number of terminal grid requests that succeeded/failed — used by the
+        caller to distinguish a partial outage from a total wipeout."""
+        epg_url = (
+            f"{self._bo_url}/catalogue-search/{self._tenant}"
+            f"/search/public/usercontext/epg/grid"
+            f"?{urlencode({'stationIds': ','.join(chunk), 'startTime': start_str, 'endTime': end_str})}"
+        )
+        try:
+            r = self.session.get(epg_url, timeout=60, headers=self._station_headers(geo))
+            r.raise_for_status()
+            data = r.json()
+            return (list(data) if isinstance(data, list) else []), 1, 0, None
+        except Exception as exc:
+            if len(chunk) <= 1:
+                logger.warning("[vidaa] EPG chunk (1 station) failed for geo=%s: %s", geo, exc)
+                return [], 0, 1, exc
+            mid = len(chunk) // 2
+            logger.info("[vidaa] EPG chunk of %d failed for geo=%s (%s); splitting %d+%d",
+                        len(chunk), geo, exc, mid, len(chunk) - mid)
+            l_entries, l_ok, l_fail, l_exc = self._fetch_epg_chunk(geo, chunk[:mid], start_str, end_str)
+            r_entries, r_ok, r_fail, r_exc = self._fetch_epg_chunk(geo, chunk[mid:], start_str, end_str)
+            return l_entries + r_entries, l_ok + r_ok, l_fail + r_fail, (r_exc or l_exc)
+
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         self._ensure_bootstrap()
 
@@ -408,22 +444,13 @@ class VidaaScraper(BaseScraper):
             station_ids = list(station_map.keys())
             for i in range(0, len(station_ids), _EPG_CHUNK_SIZE):
                 chunk = station_ids[i : i + _EPG_CHUNK_SIZE]
-                chunks_total += 1
-                epg_url = (
-                    f"{self._bo_url}/catalogue-search/{self._tenant}"
-                    f"/search/public/usercontext/epg/grid"
-                    f"?{urlencode({'stationIds': ','.join(chunk), 'startTime': start_str, 'endTime': end_str})}"
-                )
-                try:
-                    r = self.session.get(epg_url, timeout=60, headers=self._station_headers(geo))
-                    r.raise_for_status()
-                    chunk_data = r.json()
-                    if isinstance(chunk_data, list):
-                        all_entries.extend((geo, entry) for entry in chunk_data)
-                except Exception as exc:
-                    chunks_failed += 1
+                entries, ok_leaves, failed_leaves, exc = self._fetch_epg_chunk(
+                    geo, chunk, start_str, end_str)
+                all_entries.extend((geo, entry) for entry in entries)
+                chunks_total  += ok_leaves + failed_leaves
+                chunks_failed += failed_leaves
+                if exc is not None:
                     last_epg_exc = exc
-                    logger.warning("[vidaa] EPG chunk %d-%d failed for geo=%s: %s", i, i + _EPG_CHUNK_SIZE, geo, exc)
                 done += len(chunk)
                 if self._progress_cb:
                     self._progress_cb('epg', min(done, total), total)
