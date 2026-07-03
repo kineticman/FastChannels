@@ -95,6 +95,7 @@ _CANONICAL_MAP: dict[str, str] = {
     'en español':                   'Latino',
     'home':                         'Home & DIY',
     'featured':                     'Entertainment',
+    'creators':                     'Entertainment',   # WatchFree+ YouTube-creator bucket
 
     # Samsung TV Plus raw group labels (localized / regional)
     'actualités':                   'News',
@@ -1251,6 +1252,11 @@ _NAME_OVERRIDES: dict[str, str] = {
     'allhiphop':                            'Music',
     'time2rlx':                             'Ambiance',
 
+    # ── Ambiance ─────────────────────────────────────────────────────────────
+    # Seasonal Yule-log loop; Pluto only files it under the rotating
+    # "Christmas In July" promo bucket, so no genre reaches us upstream.
+    'festive fireplace':                    'Ambiance',
+
     # ── Nature ───────────────────────────────────────────────────────────────
     'bbc travel':                           'Travel',
     'gousa tv':                             'Travel',
@@ -1889,7 +1895,13 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
         return 'Local News'
 
     # 3. Scraper-provided category, normalized
-    return normalize_category(raw_category)
+    normalized = normalize_category(raw_category)
+    if normalized:
+        return normalized
+
+    # 4. Last resort: keyword inference from the channel name. Only reached when
+    # the scraper supplied no usable category, so it can never overwrite one.
+    return infer_category_from_name(name_lower)
 
 
 def explain_category(name: str, raw_category: str | None, source_name: str | None = None) -> dict:
@@ -1965,6 +1977,15 @@ def explain_category(name: str, raw_category: str | None, source_name: str | Non
             'source': 'scraper',
             'rule': 'scraper_normalized',
             'detail': f'Scraper provided "{raw_display}", normalized to "{normalized}".',
+        }
+
+    # 4. Last resort: keyword inference from the channel name.
+    inferred = infer_category_from_name(name_lower)
+    if inferred:
+        return {
+            'source': 'name_inference',
+            'rule': 'name_keyword',
+            'detail': f'No scraper category; inferred "{inferred}" from a keyword in the channel name.',
         }
 
     return {
