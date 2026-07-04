@@ -1015,6 +1015,10 @@ _PRISMCAST_INCAPABLE_SOURCES = {'pluto', 'fubo', 'roku'}
 # Stream types with no browser playback path: snapshot feeds, and muxed MPEG-TS
 # (e.g. HDHomeRun OTA — MPEG-2/AC-3, which Chrome can't decode).
 _PRISMCAST_UNSUPPORTED_TYPES = {'mjpeg', 'jpeg_snapshot', 'mpegts', 'ts'}
+# PrismCast site profile for the /watch page: presses 'f' to trigger fullscreen so
+# the captured video fills the frame (otherwise the tab stays windowed and the
+# picture is letterboxed inside the output). See /play?url=...&profile=<name>.
+_PRISMCAST_PROFILE = 'keyboardFullscreen'
 
 
 def _source_is_drm_capable(source_name: str | None) -> bool:
@@ -1070,8 +1074,9 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
     Hybrid PrismCast playlist where each channel takes the cheapest viable path:
 
       * DRM channels (browser/EME required) are wrapped through PrismCast's
-        `/play?url=` endpoint, so its headless Chrome renders the fullscreen
-        /watch/<id> page (decrypting via EME) and re-streams clean HLS.
+        `/play?url=` endpoint with a fullscreen profile, so its headless Chrome
+        renders the /watch/<id> page fullscreen (decrypting via EME) and
+        re-streams clean, full-frame HLS.
       * Everything else (plain/AES-128 HLS, MP4, MPEG-TS) is emitted as the
         normal direct /play/<source>/<id>.m3u8 URL — no capture slot, no
         transcode, full quality — exactly what the standard M3U would send.
@@ -1154,8 +1159,11 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         if _needs_prismcast_bridge(ch) and _prismcast_capturable(ch):
             # DRM → route through PrismCast's headless Chrome (EME decrypt + capture).
+            # profile=keyboardFullscreen makes PrismCast press 'f', which the /watch
+            # page turns into a real fullscreen — without it the captured tab stays
+            # windowed and the video is letterboxed/pillarboxed inside the frame.
             watch_url = f'{inner_base_url}/watch/{ch.id}'
-            lines.append(f'{prismcast_url}/play?url={_url_quote(watch_url, safe="")}')
+            lines.append(f'{prismcast_url}/play?url={_url_quote(watch_url, safe="")}&profile={_PRISMCAST_PROFILE}')
         else:
             # Non-DRM → direct play proxy, same URL the standard M3U emits.
             lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')

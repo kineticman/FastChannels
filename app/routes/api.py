@@ -3713,7 +3713,7 @@ def test_prismcast():
     def _try_capture(tc):
         """Returns (ok, detail). Drives PrismCast and waits for segments to flow."""
         watch = f'{inner}/watch/{tc.id}'
-        play = f'{prismcast_url}/play?url={_quote(watch, safe="")}'
+        play = f'{prismcast_url}/play?url={_quote(watch, safe="")}&profile=keyboardFullscreen'
         t0 = _time.time()
         try:
             r = _req.get(play, timeout=25, allow_redirects=False)
