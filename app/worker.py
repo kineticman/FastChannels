@@ -2488,7 +2488,10 @@ def _prune_bogus_programs(batch_size: int = 1000):
         ids = [
             row[0] for row in (
                 Program.query
-                .filter(or_(Program.end_time > hi, Program.end_time < lo))
+                .filter(or_(
+                    Program.end_time > hi, Program.end_time < lo,
+                    Program.start_time > hi, Program.start_time < lo,
+                ))
                 .with_entities(Program.id)
                 .limit(batch_size)
                 .all()
