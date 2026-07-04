@@ -85,6 +85,11 @@
     }
     .badge-anon       { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
     .badge-noconfig   { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
+    .badge-beta {
+      background: color-mix(in srgb, var(--warning-bg) 70%, transparent);
+      color: var(--warning-soft);
+      border: 1px solid var(--warning-border);
+    }
     .chevron { color: var(--text-dim); transition: transform 0.2s; font-size: 0.8rem; }
     .chevron.open { transform: rotate(180deg); }
 
@@ -585,7 +590,7 @@
       <div class="source-title">
         <div class="source-icon">🔓</div>
         <div>
-          <div class="source-name">PrismCast (DRM bridge)</div>
+          <div class="source-name">PrismCast (DRM bridge) <span class="badge badge-beta">Beta</span></div>
           <div class="source-meta">Route DRM channels through a PrismCast capture server so they play in Channels DVR</div>
         </div>
       </div>
