@@ -72,6 +72,7 @@ _SPANISH_LANGUAGE_MARKERS = (
     'pelicula',      # fold of película — Spanish for movie
     'corazon',       # fold of corazón — Spanish for heart
     'tvoai',         # TVOAI Channel (Spanish-language Roku brand)
+    'ciencia',       # Spanish for science — "Astro Ciencia"
 )
 
 
