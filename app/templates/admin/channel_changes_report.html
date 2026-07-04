@@ -210,7 +210,7 @@
   <div class="page">
     <div class="hero">
       <div>
-        <h1>Channel Changes Report <span style="font-size:0.65rem;font-weight:600;background:var(--accent-bg);color:var(--accent-soft);border:1px solid var(--info);border-radius:999px;padding:0.15rem 0.55rem;vertical-align:middle;letter-spacing:0.05em">BETA</span></h1>
+        <h1>Channel Changes Report</h1>
         <p class="subtitle">
           Track channel lineup changes across your sources — new arrivals, channels that have gone inactive, and channels at risk of dropping out.
         </p>
@@ -221,7 +221,7 @@
     </div>
 
     <div class="banner">
-      <p><strong>Note:</strong> this report is in beta. Inactive channel timing is approximate — it reflects when FastChannels detected the change, not necessarily when the channel disappeared. Accuracy improves over time as more scrape history is collected.</p>
+      <p><strong>Note:</strong> Inactive channel timing is approximate — it reflects when FastChannels detected the change, not necessarily when the channel disappeared. Accuracy improves over time as more scrape history is collected.</p>
     </div>
 
     <div class="toolbar">
@@ -455,6 +455,7 @@
             <th style="text-align:right;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">At Risk</th>
             <th style="text-align:left;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">Interval</th>
             <th style="text-align:left;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">Last Scraped</th>
+            <th style="text-align:left;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">Next Scrape</th>
           </tr>
         </thead>
         <tbody>
@@ -467,6 +468,7 @@
             </td>
             <td style="padding:0.4rem 0.6rem;color:var(--text-muted)">{% if src.scrape_cron %}<code style="font-size:0.82em">{{ src.scrape_cron }}</code>{% elif src.scrape_interval %}{{ src.scrape_interval }}m{% else %}—{% endif %}</td>
             <td style="padding:0.4rem 0.6rem;color:var(--text-muted)">{% if src.last_scraped_at %}{{ src.last_scraped_at|localtime }}{% else %}Never{% endif %}</td>
+            <td style="padding:0.4rem 0.6rem;color:var(--text-muted)">{% if src.next_scrape_at %}{{ src.next_scrape_at|localtime }}{% else %}Manual{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -475,7 +477,7 @@
     {% endif %}
 
     <p class="footer-note">
-      ⚠️ This report is in beta — data shown is based on what FastChannels currently tracks during scrapes. Have feedback? Let us know on the forum.
+      Data shown is based on what FastChannels currently tracks during scrapes. Have feedback? Let us know on the forum.
     </p>
   </div>
 <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>

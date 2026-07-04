@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import re
 import unicodedata
+from croniter import croniter as _croniter
 from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case
 from sqlalchemy.orm import load_only, defer
@@ -1410,7 +1411,26 @@ def channel_changes_report():
             counts[dt.date().isoformat()] += 1
         return sorted(counts.items(), key=lambda item: item[0], reverse=True)
 
+    def _next_scrape_estimate(src, now_utc):
+        # Mirrors app/worker.py _is_source_due's due-check, but solves for the
+        # next run time instead of a boolean, for display purposes only.
+        last = src.last_scraped_at
+        if last is not None and last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        if src.scrape_cron:
+            try:
+                return _croniter(src.scrape_cron, now_utc).get_next(datetime)
+            except Exception:
+                return None
+        if not src.scrape_interval:
+            return None  # scrape_interval=0 means never auto-scrapes
+        if last is None:
+            return now_utc
+        next_time = last + timedelta(minutes=src.scrape_interval)
+        return next_time if next_time > now_utc else now_utc
+
     # Per-source health summary
+    now_utc = datetime.now(timezone.utc)
     all_sources = Source.query.filter(Source.is_enabled == True).order_by(Source.display_name).all()
     source_health = []
     for src in all_sources:
@@ -1425,6 +1445,7 @@ def channel_changes_report():
             'last_scraped_at': src.last_scraped_at,
             'scrape_interval': src.scrape_interval,
             'scrape_cron': src.scrape_cron,
+            'next_scrape_at': _next_scrape_estimate(src, now_utc),
         })
 
     net_change = len(new_rows) - len(inferred_lost_rows)
