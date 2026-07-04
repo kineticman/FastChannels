@@ -876,8 +876,17 @@ class StirrScraper(BaseScraper):
     def _parse_dt(self, val: Any) -> datetime | None:
         if not val: return None
         if isinstance(val, (int, float)):
-            if val > 2e12: val /= 1000
-            return datetime.fromtimestamp(val, tz=timezone.utc)
+            # A valid seconds-since-epoch value doesn't reach 1e11 until the
+            # year ~5138, so anything above that can only be milliseconds.
+            # The previous threshold (2e12) missed this: today's ms-epoch
+            # ("now" is ~1.75e12) already sits under it, so real millisecond
+            # timestamps were left un-divided and parsed as seconds —
+            # landing thousands of years in the future.
+            if val > 1e11: val /= 1000
+            try:
+                return datetime.fromtimestamp(val, tz=timezone.utc)
+            except (ValueError, OverflowError, OSError):
+                return None
         if isinstance(val, str):
             try:
                 dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
@@ -889,6 +898,17 @@ class StirrScraper(BaseScraper):
     def _parse_xmltv_dt(self, val: str | None) -> datetime | None:
         if not val: return None
         s = val.strip()
+        # Some providers (e.g. OTTera/imagicomm) violate the XMLTV spec and put
+        # a raw Unix epoch-seconds value in start/stop instead of the standard
+        # YYYYMMDDHHMMSS stamp. A bare digit string that short can't be a real
+        # YYYYMMDDHHMM(SS) timestamp (those need 12-14 digits), but strptime
+        # matches the leading digits anyway instead of raising — e.g.
+        # "1783129645" silently parses as year 1783 rather than failing.
+        if s.isdigit() and len(s) <= 10:
+            try:
+                return datetime.fromtimestamp(int(s), tz=timezone.utc)
+            except (ValueError, OverflowError, OSError):
+                return None
         # Standard XMLTV: YYYYMMDDHHMMSS (14 digits)
         try:
             return datetime.strptime(s[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)

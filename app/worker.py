@@ -2472,6 +2472,46 @@ def _prune_old_programs(batch_size: int = 1000):
         logger.info('[worker] pruned %d expired EPG entries', total_deleted)
 
 
+def _prune_bogus_programs(batch_size: int = 1000):
+    """Delete EPG rows with impossible timestamps a scraper mis-parsed.
+
+    _prune_old_programs only trims the past; a scraper timestamp bug (observed:
+    stirr emitting end_time values around year 8390) can leave far-future junk
+    that the normal prune never touches and that sits in the table forever.
+    """
+    now = datetime.now(timezone.utc)
+    hi = now + timedelta(days=90)   # nothing legitimate is scheduled >90d out
+    lo = now - timedelta(days=7)    # anything this old should already be gone
+    total_deleted = 0
+
+    while True:
+        ids = [
+            row[0] for row in (
+                Program.query
+                .filter(or_(Program.end_time > hi, Program.end_time < lo))
+                .with_entities(Program.id)
+                .limit(batch_size)
+                .all()
+            )
+        ]
+        if not ids:
+            break
+
+        deleted = (
+            Program.query
+            .filter(Program.id.in_(ids))
+            .delete(synchronize_session=False)
+        ) or 0
+        db.session.commit()
+        total_deleted += deleted
+
+        if deleted < batch_size:
+            break
+
+    if total_deleted:
+        logger.info('[worker] pruned %d bogus-timestamp EPG entries', total_deleted)
+
+
 def _cleanup_orphans(batch_size: int = 2000):
     """Delete rows whose parent records no longer exist, in small batches.
 
@@ -2533,12 +2573,33 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=2)
 
+    # Reject programs with impossible timestamps before they influence anything
+    # below — scraper-side date parsing bugs (unit-ambiguous epoch values,
+    # corrupt upstream feed data) have produced multi-millennium start/end
+    # times in the past (e.g. stirr ~year 8390, freelivesports ~year 1783). A
+    # bogus far-future end_time left in would also blow out the delete-window
+    # calculation just below, since win_end takes the max end_time seen.
+    sanity_hi = now + timedelta(days=90)
+    sanity_lo = now - timedelta(days=7)
+    bogus_skipped = 0
+
     incoming_by_channel_id: dict[int, list] = {}
     for pd in program_data_list:
         ch = channels.get(pd.source_channel_id)
         if not ch:
             continue
+        start = _utc_aware(pd.start_time)
+        end = _utc_aware(pd.end_time)
+        if start is None or end is None or not (sanity_lo <= start <= sanity_hi) or not (sanity_lo <= end <= sanity_hi):
+            bogus_skipped += 1
+            continue
         incoming_by_channel_id.setdefault(ch.id, []).append(pd)
+
+    if bogus_skipped:
+        logger.warning(
+            '[%s] rejected %d program(s) with out-of-range start/end timestamps',
+            source.name, bogus_skipped,
+        )
 
     # Delete only the time window covered by the incoming batch, so programs
     # beyond that window (fetched in earlier runs) are preserved.  This lets
@@ -2571,28 +2632,26 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
     db.session.commit()
 
     rows = []
-    for pd in program_data_list:
-        ch = channels.get(pd.source_channel_id)
-        if not ch:
-            continue
-        rows.append({
-            'channel_id':    ch.id,
-            'title':         pd.title,
-            'description':   _sanitize_description(pd.description),
-            'start_time':    pd.start_time,
-            'end_time':      pd.end_time,
-            'poster_url':    pd.poster_url,
-            'category':      pd.category,
-            'rating':        pd.rating,
-            'episode_title': pd.episode_title,
-            'season':        pd.season,
-            'episode':       pd.episode,
-            'original_air_date': pd.original_air_date,
-            'is_live':           pd.is_live,
-            'program_type':      getattr(pd, 'program_type', None),
-            'series_id':         getattr(pd, 'series_id',    None),
-            'episode_id':        getattr(pd, 'episode_id',   None),
-        })
+    for channel_id, pd_list in incoming_by_channel_id.items():
+        for pd in pd_list:
+            rows.append({
+                'channel_id':    channel_id,
+                'title':         pd.title,
+                'description':   _sanitize_description(pd.description),
+                'start_time':    pd.start_time,
+                'end_time':      pd.end_time,
+                'poster_url':    pd.poster_url,
+                'category':      pd.category,
+                'rating':        pd.rating,
+                'episode_title': pd.episode_title,
+                'season':        pd.season,
+                'episode':       pd.episode,
+                'original_air_date': pd.original_air_date,
+                'is_live':           pd.is_live,
+                'program_type':      getattr(pd, 'program_type', None),
+                'series_id':         getattr(pd, 'series_id',    None),
+                'episode_id':        getattr(pd, 'episode_id',   None),
+            })
     # Commit in chunks so the write lock isn't held for the full batch.
     _CHUNK = 2000
     total_rows = len(rows)
@@ -2909,6 +2968,32 @@ def _rq_db_backup():
         logger.warning('[db-backup] prune step failed: %s', exc)
 
 
+# Only VACUUM when the free-page fraction exceeds this — avoids paying the
+# full-file rewrite cost every week for a DB that isn't actually fragmented.
+_VACUUM_FREE_PAGE_THRESHOLD = 0.25
+
+
+def _rq_weekly_maintenance():
+    """RQ job target: sanity-prune bogus EPG rows, then VACUUM if the live DB
+    file is heavily fragmented. Runs on the scraper queue so its exclusive
+    VACUUM lock is serialized against scrapes, same as _rq_prune.
+    """
+    with flask_app.app_context():
+        _prune_bogus_programs()
+
+        free = db.session.execute(text('PRAGMA freelist_count')).scalar() or 0
+        total = db.session.execute(text('PRAGMA page_count')).scalar() or 1
+        frac = free / total
+        if frac > _VACUUM_FREE_PAGE_THRESHOLD:
+            logger.info('[maint] VACUUM: %d/%d pages free (%.0f%%)', free, total, 100 * frac)
+            # Engine is isolation_level=None (autocommit), so VACUUM runs outside
+            # any open transaction as SQLite requires.
+            db.session.execute(text('VACUUM'))
+            logger.info('[maint] VACUUM complete')
+        else:
+            logger.info('[maint] VACUUM skipped: only %.0f%% free', 100 * frac)
+
+
 if __name__ == '__main__':
     import os
 
@@ -2945,6 +3030,18 @@ if __name__ == '__main__':
             logger.info('[scheduler] enqueued _rq_db_backup job')
         except Exception as e:
             logger.error('[scheduler] could not enqueue db_backup job: %s', e)
+
+    def _scheduled_weekly_maintenance():
+        try:
+            _r = redis.from_url(flask_app.config['REDIS_URL'])
+            # Scraper queue, not maintenance — same reasoning as _scheduled_prune:
+            # the single scraper worker serializes VACUUM's exclusive lock away
+            # from any concurrent scrape write.
+            _q = Queue('scraper', connection=_r)
+            _q.enqueue('app.worker._rq_weekly_maintenance', job_timeout=1800, job_id='weekly-maint')
+            logger.info('[scheduler] enqueued _rq_weekly_maintenance job')
+        except Exception as e:
+            logger.error('[scheduler] could not enqueue weekly_maintenance job: %s', e)
 
     def _scheduled_logo_cache_cleanup():
         import os as _os
@@ -3067,6 +3164,13 @@ if __name__ == '__main__':
         scheduler.add_job(_scheduled_db_backup, 'cron',
                           hour=3, minute=30, timezone=_tz,
                           id='db_backup_night', max_instances=1, coalesce=True,
+                          misfire_grace_time=3600)
+
+        # Weekly, Sunday 04:30 user-local — after the nightly backup so a fresh
+        # backup exists before VACUUM rewrites the live file.
+        scheduler.add_job(_scheduled_weekly_maintenance, 'cron',
+                          day_of_week='sun', hour=4, minute=30, timezone=_tz,
+                          id='weekly_maint', max_instances=1, coalesce=True,
                           misfire_grace_time=3600)
 
         def _scheduled_dvr_epg_refresh():
