@@ -243,6 +243,7 @@ class VidaaScraper(BaseScraper):
         self._detected_geo_code: str = _DEFAULT_GEOS[0]
         self._epg_leaf_failures: int = 0
         self._epg_circuit_open: bool = False
+        self._epg_circuit_exc: Exception | None = None
 
     # ── bootstrap ─────────────────────────────────────────────────────────────
 
@@ -399,7 +400,7 @@ class VidaaScraper(BaseScraper):
         the number of terminal grid requests that succeeded/failed — used by the
         caller to distinguish a partial outage from a total wipeout."""
         if self._epg_circuit_open:
-            return [], 0, len(chunk), RuntimeError("Vidaa EPG grid circuit open (repeated single-station failures)")
+            return [], 0, len(chunk), self._epg_circuit_exc
 
         epg_url = (
             f"{self._bo_url}/catalogue-search/{self._tenant}"
@@ -417,6 +418,7 @@ class VidaaScraper(BaseScraper):
                 self._epg_leaf_failures += 1
                 if self._epg_leaf_failures >= _EPG_CIRCUIT_THRESHOLD:
                     self._epg_circuit_open = True
+                    self._epg_circuit_exc = exc
                     logger.error(
                         "[vidaa] EPG grid failing even at single-station granularity "
                         "(%d consecutive) — not the chunk-size ceiling, it's an outage; "
