@@ -42,6 +42,13 @@ _STATIONS_FIELDS = (
 # further on failure, so this is the starting size, not a hard limit.
 _EPG_CHUNK_SIZE = 25
 _EPG_HOURS      = 168  # ~7-day window; actual upstream horizon is ~5 days
+# If the grid endpoint 500s even at single-station granularity, that's proof
+# the failure isn't the payload-size ceiling _EPG_CHUNK_SIZE works around —
+# it's a real outage, and bisecting the remaining ~270 stations down to
+# leaves would fire 500+ requests over ~20 minutes for no benefit (observed
+# 2026-07-04: 1197s, all failed). Trip a circuit after a few confirmed leaf
+# failures and fail the rest without further requests.
+_EPG_CIRCUIT_THRESHOLD = 3
 
 _MACRO_RE       = re.compile(r'^\[.*\]$|^REPLACEME$|^\{.*\}$')
 _GENRE_PARAM_RE = re.compile(r'(?:AV_CONTENT_GENRE|content_genre|_fw_content_genre)=([^&]+)', re.I)
@@ -234,6 +241,8 @@ class VidaaScraper(BaseScraper):
         self._bo_url: str | None = None
         self._tenant: str | None = None
         self._detected_geo_code: str = _DEFAULT_GEOS[0]
+        self._epg_leaf_failures: int = 0
+        self._epg_circuit_open: bool = False
 
     # ── bootstrap ─────────────────────────────────────────────────────────────
 
@@ -389,6 +398,9 @@ class VidaaScraper(BaseScraper):
         (entries, ok_leaves, failed_leaves, last_exc) where the leaf counts are
         the number of terminal grid requests that succeeded/failed — used by the
         caller to distinguish a partial outage from a total wipeout."""
+        if self._epg_circuit_open:
+            return [], 0, len(chunk), RuntimeError("Vidaa EPG grid circuit open (repeated single-station failures)")
+
         epg_url = (
             f"{self._bo_url}/catalogue-search/{self._tenant}"
             f"/search/public/usercontext/epg/grid"
@@ -402,6 +414,15 @@ class VidaaScraper(BaseScraper):
         except Exception as exc:
             if len(chunk) <= 1:
                 logger.warning("[vidaa] EPG chunk (1 station) failed for geo=%s: %s", geo, exc)
+                self._epg_leaf_failures += 1
+                if self._epg_leaf_failures >= _EPG_CIRCUIT_THRESHOLD:
+                    self._epg_circuit_open = True
+                    logger.error(
+                        "[vidaa] EPG grid failing even at single-station granularity "
+                        "(%d consecutive) — not the chunk-size ceiling, it's an outage; "
+                        "aborting remaining chunks without further requests",
+                        self._epg_leaf_failures,
+                    )
                 return [], 0, 1, exc
             mid = len(chunk) // 2
             logger.info("[vidaa] EPG chunk of %d failed for geo=%s (%s); splitting %d+%d",
