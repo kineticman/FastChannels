@@ -3541,8 +3541,11 @@
     document.addEventListener('click', e => {
       document.querySelectorAll('.ms-dd[open]').forEach(dd => { if (!dd.contains(e.target)) dd.open = false; });
     });
-    window.addEventListener('scroll', () => {
-      document.querySelectorAll('.ms-dd-fixed[open]').forEach(dd => { dd.open = false; });
+    window.addEventListener('scroll', e => {
+      document.querySelectorAll('.ms-dd-fixed[open]').forEach(dd => {
+        if (dd.contains(e.target)) return; // scrolling the dropdown's own option list shouldn't close it
+        dd.open = false;
+      });
     }, true);
 
     function showToast(msg, ms = 3500) {
