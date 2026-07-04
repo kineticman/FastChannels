@@ -7,7 +7,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
+from .base import (
+    BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError,
+    infer_language_from_metadata,
+)
 from .category_utils import category_for_channel, infer_category_from_name
 
 logger = logging.getLogger(__name__)
@@ -478,11 +481,13 @@ class VidaaScraper(BaseScraper):
                 if self._progress_cb:
                     self._progress_cb('epg', min(done, total), total)
 
-        # Total wipeout (every chunk failed) → raise so the worker records
-        # last_error and leaves last_epg_success_at stale (visible on the
-        # sources page), rather than stamping a false success with 0 programs.
+        # Total wipeout (every chunk failed) — this is an upstream VIDAA outage,
+        # not a bug, so skip (clean warning log, no traceback) rather than raise
+        # a hard error. The worker still records last_error and leaves
+        # last_epg_success_at stale (visible on the sources page), rather than
+        # stamping a false success with 0 programs.
         if chunks_total and chunks_failed == chunks_total:
-            raise RuntimeError(
+            raise ScrapeSkipError(
                 f"Vidaa EPG unavailable: all {chunks_total} grid chunk(s) failed "
                 f"(last error: {last_epg_exc})"
             )
