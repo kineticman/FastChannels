@@ -106,6 +106,25 @@ def _run_with_signal_timeout(label: str, timeout_seconds: int | None, fn):
             signal.setitimer(signal.ITIMER_REAL, max(1, parent_remaining - step_elapsed))
 
 
+_STATUS_CODE_RE = re.compile(r'\b(?:HTTP\s+|returned\s+|status\s+)(\d{3})\b')
+_GEO_BLOCK_STATUS_CODES = (403, 451)
+
+
+def _http_status_from_exception(exc: Exception) -> int | None:
+    """Best-effort HTTP status extraction from a scraper's raised message text."""
+    match = _STATUS_CODE_RE.search(str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _is_geo_block_error(exc: Exception) -> bool:
+    """True for a resolve()-time exception signalling an IP-level geo/legal
+    block (403/451). Covers scrapers that embed the status in the message
+    (e.g. Roku's raw RuntimeError) as well as ones that raise ScrapeSkipError
+    with a static message and no status code at all (e.g. LocalNow's shared
+    403/451 homepage-bootstrap check)."""
+    return isinstance(exc, ScrapeSkipError) or _http_status_from_exception(exc) in _GEO_BLOCK_STATUS_CODES
+
+
 def _audit_reason_from_exception(exc: Exception) -> str:
     message = str(exc).strip()
     name = type(exc).__name__
@@ -113,7 +132,7 @@ def _audit_reason_from_exception(exc: Exception) -> str:
         return name
     if message == name or message.startswith(f'{name}:'):
         return message
-    http_match = re.search(r'\bHTTP\s+(\d{3})\b', message)
+    http_match = _STATUS_CODE_RE.search(message)
     if http_match:
         return f'HTTP {http_match.group(1)}: {message}'
     return f'{name}: {message}'
@@ -853,6 +872,27 @@ def run_stream_audit(source_name: str):
                                 break
                         errors += 1
                         continue
+                    if _is_geo_block_error(re_exc):
+                        # 403/451 (and scrapers that raise ScrapeSkipError for the same
+                        # reason, e.g. LocalNow) are IP-level geo/legal blocks — skip,
+                        # don't penalize (GH #22).
+                        skipped_403 += 1
+                        consecutive_skipped_403 += 1
+                        consecutive_errors = 0
+                        report_channels.append({
+                            'id': ch.id,
+                            'name': ch.name,
+                            'status': 'rate-limited',
+                            'reason': _audit_reason_from_exception(re_exc),
+                        })
+                        logger.info('[audit] %s: resolve hit a geo/legal block for %s, skipping: %s',
+                                    source_name, ch.name, re_exc)
+                        if consecutive_skipped_403 >= 30:
+                            logger.warning('[audit] %s: %d consecutive 403/skip responses — '
+                                           'source appears geo-blocked, aborting audit.',
+                                           source_name, consecutive_skipped_403)
+                            break
+                        continue
                     logger.warning('[audit] resolve failed for %s: %s', ch.name, re_exc)
                     errors += 1
                     consecutive_errors += 1
@@ -995,10 +1035,11 @@ def run_stream_audit(source_name: str):
                     logger.info('[audit] dead stream: %s  (HTTP %d)', ch.name, r.status_code)
                     continue
 
-                if r.status_code in (403, 429, 500, 502, 503, 504):
+                if r.status_code in (*_GEO_BLOCK_STATUS_CODES, 429, 500, 502, 503, 504):
                     # Still rate-limited or transient server error after backoff —
                     # skip without penalising the consecutive-error budget.
-                    # 500/502/504 are CDN hiccups, not stream problems.
+                    # 500/502/504 are CDN hiccups, not stream problems. 451 is
+                    # permanent so it's deliberately excluded from the backoff tuple above.
                     skipped_403 += 1
                     consecutive_skipped_403 += 1
                     consecutive_errors = 0
