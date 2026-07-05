@@ -773,8 +773,9 @@ class PlexScraper(BaseScraper):
             _PLEX_GUIDE_WORKERS,
         )
 
-        def _fetch_one(ch: ChannelData, day_offset: int) -> list[ProgramData]:
+        def _fetch_one(ch: ChannelData, day_offset: int) -> tuple[list[ProgramData], float, str]:
             target_date = (today + timedelta(days=day_offset)).strftime("%Y-%m-%d")
+            t0 = time.monotonic()
             try:
                 r = requests.get(
                     f"{_EPG_HOST}/grid",
@@ -783,34 +784,68 @@ class PlexScraper(BaseScraper):
                     timeout=10,
                 )
                 r.raise_for_status()
+            except requests.exceptions.Timeout:
+                return [], time.monotonic() - t0, "timeout"
             except Exception as exc:
                 logger.debug("[plex] targeted grid fetch failed for %s day+%d: %s", ch.name, day_offset, exc)
-                return []
-            return self._parse_grid_xml_programs(ch.source_channel_id, r.text)
+                return [], time.monotonic() - t0, "error"
+            return self._parse_grid_xml_programs(ch.source_channel_id, r.text), time.monotonic() - t0, "ok"
 
         start_t = time.monotonic()
         futures = []
         n_days = _PLEX_EXTRA_DAYS + 1  # today (0) + extra days
         total_tasks = len(guide_channels) * n_days
         done_tasks = 0
+        ok_count = timeout_count = error_count = 0
+        durations: list[float] = []
+        last_heartbeat = start_t
+        heartbeat_interval = 30.0  # log progress periodically so a phase-timeout abort still leaves a trail
         with ThreadPoolExecutor(max_workers=_PLEX_GUIDE_WORKERS) as pool:
             for day_offset in range(0, _PLEX_EXTRA_DAYS + 1):
                 for ch in guide_channels:
                     futures.append(pool.submit(_fetch_one, ch, day_offset))
             for future in as_completed(futures):
                 try:
-                    results.extend(future.result())
+                    progs, elapsed, outcome = future.result()
+                    durations.append(elapsed)
+                    if outcome == "timeout":
+                        timeout_count += 1
+                    elif outcome == "error":
+                        error_count += 1
+                    else:
+                        ok_count += 1
+                    results.extend(progs)
                 except Exception:
                     logger.debug("[plex] targeted guide future failed", exc_info=True)
+                    error_count += 1
                 done_tasks += 1
                 if self._progress_cb:
                     self._progress_cb('epg', done_tasks, total_tasks)
 
+                now = time.monotonic()
+                if now - last_heartbeat >= heartbeat_interval:
+                    logger.info(
+                        "[plex] targeted guide fetch progress: %d/%d done (ok=%d timeout=%d error=%d) elapsed=%.0fs",
+                        done_tasks, total_tasks, ok_count, timeout_count, error_count, now - start_t,
+                    )
+                    last_heartbeat = now
+
+        if durations:
+            sorted_d = sorted(durations)
+            avg_d = sum(sorted_d) / len(sorted_d)
+            p95_d = sorted_d[max(0, int(len(sorted_d) * 0.95) - 1)]
+            max_d = sorted_d[-1]
+        else:
+            avg_d = p95_d = max_d = 0.0
+
         logger.info(
-            "[plex] targeted guide fetch complete: channels=%d days=%d programs=%d in %.1fs",
+            "[plex] targeted guide fetch complete: channels=%d days=%d programs=%d ok=%d timeouts=%d errors=%d "
+            "latency avg=%.2fs p95=%.2fs max=%.2fs in %.1fs",
             len(guide_channels),
             n_days,
             len(results),
+            ok_count, timeout_count, error_count,
+            avg_d, p95_d, max_d,
             time.monotonic() - start_t,
         )
         return results
