@@ -3685,7 +3685,9 @@ def test_prismcast():
     scheme = (urlparse(inner).scheme or '').lower()
     if scheme == 'https' or host == 'localhost' or host.startswith('127.'):
         add('Watch-page URL is a secure context', 'ok',
-            f'{inner} — ' + ('trusted HTTPS' if scheme == 'https' else 'loopback') + ', so DRM can decrypt.')
+            f'{inner} — ' + ('trusted HTTPS' if scheme == 'https' else 'loopback')
+            + ' — a valid secure-context address. This only checks the URL\'s shape; see '
+              '"End-to-end capture" below to confirm PrismCast can actually reach it.')
     else:
         add('Watch-page URL is a secure context', 'warn',
             f'{inner} is a plain http:// LAN address — not a secure context, so Widevine/EME will not decrypt (black capture).',
@@ -3756,12 +3758,20 @@ def test_prismcast():
         if captured:
             add('End-to-end capture', 'ok', captured)
         else:
+            is_loopback = (host == 'localhost' or host.startswith('127.'))
+            fix = ('If channels reach a playable state nowhere, PrismCast\'s Chrome is usually '
+                   'failing to reach the Watch-page URL at all, not decrypting it. ')
+            if is_loopback:
+                fix += ('The Watch-page URL is loopback — if PrismCast runs in Docker, confirm '
+                        'it\'s using `network_mode: host`. Without it, `127.0.0.1` resolves '
+                        'inside PrismCast\'s own container, not this host, so the connection is '
+                        'refused. Being on the same physical host is not enough.')
+            else:
+                fix += ('Confirm the Watch-page URL is loopback (with PrismCast on host '
+                        'networking) or trusted HTTPS, and that PrismCast (Chrome) can reach it.')
+            fix += ' If only some channels fail, those channels couldn\'t resolve right now (not a PrismCast problem).'
             add('End-to-end capture', 'fail',
-                'No test channel captured. Tried: ' + ' | '.join(attempts),
-                fix='If channels reach a playable state nowhere, it\'s usually a secure-context/DRM '
-                    'issue — confirm the Watch-page URL is loopback or HTTPS and that PrismCast '
-                    '(Chrome) can reach it. If only some channels fail, those channels couldn\'t '
-                    'resolve right now (not a PrismCast problem).')
+                'No test channel captured. Tried: ' + ' | '.join(attempts), fix=fix)
 
     # 4) Cross-host firewall note (FastChannels can't test the DVR→PrismCast path directly)
     dvr_url = (settings.effective_channels_dvr_url() or '').strip()
