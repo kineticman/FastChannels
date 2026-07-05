@@ -179,6 +179,11 @@ class FuboScraper(BaseScraper):
             **_DEFAULT_HEADERS,
             'x-device-id': self.config['device_id'],
         }
+        # Set once a fresh full login has been forced this run (e.g. after a
+        # 'not in allowed list' 403) so repeated resolves against other
+        # channels in the same scrape/audit reuse it instead of re-logging in
+        # per channel.
+        self._forced_relogin = False
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 
@@ -467,8 +472,31 @@ class FuboScraper(BaseScraper):
         if not r.ok:
             err = r.json().get('error', {}).get('message', '') if r.content else ''
             if 'not in allowed list' in err or r.status_code == 403:
+                # The cached access/refresh token pair carries the entitlements
+                # from whenever it was first issued — refreshing it just mints
+                # a new access token off the same session, it doesn't re-check
+                # the account's current plan. A user who upgraded Fubo (same
+                # login, no credential change) keeps getting the pre-upgrade
+                # 403 forever otherwise. Force one real re-login per run before
+                # concluding the channel is genuinely not entitled.
+                if not self._forced_relogin:
+                    self._forced_relogin = True
+                    logger.info('[fubo] %s not in allowed list — forcing fresh login to rule out a stale entitlement', ch_id)
+                    self._login()
+                    r = self._cffi_request(
+                        'GET', _ASSET_URL,
+                        params={'channelId': ch_id, 'type': 'live'},
+                        headers=self._api_headers,
+                        timeout=15,
+                    )
+                    if r.ok:
+                        return self._extract_stream_url(r, ch_id)
+                    err = r.json().get('error', {}).get('message', '') if r.content else ''
                 raise StreamDeadError(f'Fubo channel {ch_id} not in subscription: {err}')
             raise RuntimeError(f'Fubo stream resolution failed for channel {ch_id}: {err or r.status_code}')
+        return self._extract_stream_url(r, ch_id)
+
+    def _extract_stream_url(self, r, ch_id: str) -> str:
         stream = r.json().get('stream') or {}
         if stream.get('drmProvider') == 'wurl':
             raise StreamDeadError(
