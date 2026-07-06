@@ -244,9 +244,11 @@ class VidaaScraper(BaseScraper):
         self._bo_url: str | None = None
         self._tenant: str | None = None
         self._detected_geo_code: str = _DEFAULT_GEOS[0]
-        self._epg_leaf_failures: int = 0
-        self._epg_circuit_open: bool = False
-        self._epg_circuit_exc: Exception | None = None
+        # Keyed per-geo: an outage in one geo's EPG grid must not short-circuit
+        # requests for a different, healthy geo in the same fetch_epg() call.
+        self._epg_leaf_failures: dict[str, int] = {}
+        self._epg_circuit_open: dict[str, bool] = {}
+        self._epg_circuit_exc: dict[str, Exception | None] = {}
 
     # ── bootstrap ─────────────────────────────────────────────────────────────
 
@@ -402,8 +404,8 @@ class VidaaScraper(BaseScraper):
         (entries, ok_leaves, failed_leaves, last_exc) where the leaf counts are
         the number of terminal grid requests that succeeded/failed — used by the
         caller to distinguish a partial outage from a total wipeout."""
-        if self._epg_circuit_open:
-            return [], 0, len(chunk), self._epg_circuit_exc
+        if self._epg_circuit_open.get(geo):
+            return [], 0, len(chunk), self._epg_circuit_exc.get(geo)
 
         epg_url = (
             f"{self._bo_url}/catalogue-search/{self._tenant}"
@@ -418,20 +420,21 @@ class VidaaScraper(BaseScraper):
             # endpoint is reachable right now, so a prior failure wasn't the
             # start of a real outage — only a genuine run of *consecutive*
             # leaf failures with no success in between should trip the circuit.
-            self._epg_leaf_failures = 0
+            self._epg_leaf_failures[geo] = 0
             return (list(data) if isinstance(data, list) else []), 1, 0, None
         except Exception as exc:
             if len(chunk) <= 1:
                 logger.warning("[vidaa] EPG chunk (1 station) failed for geo=%s: %s", geo, exc)
-                self._epg_leaf_failures += 1
-                if self._epg_leaf_failures >= _EPG_CIRCUIT_THRESHOLD:
-                    self._epg_circuit_open = True
-                    self._epg_circuit_exc = exc
+                failures = self._epg_leaf_failures.get(geo, 0) + 1
+                self._epg_leaf_failures[geo] = failures
+                if failures >= _EPG_CIRCUIT_THRESHOLD:
+                    self._epg_circuit_open[geo] = True
+                    self._epg_circuit_exc[geo] = exc
                     logger.error(
                         "[vidaa] EPG grid failing even at single-station granularity "
-                        "(%d consecutive) — not the chunk-size ceiling, it's an outage; "
-                        "aborting remaining chunks without further requests",
-                        self._epg_leaf_failures,
+                        "(%d consecutive) for geo=%s — not the chunk-size ceiling, it's an "
+                        "outage; aborting remaining chunks for this geo without further requests",
+                        failures, geo,
                     )
                 return [], 0, 1, exc
             mid = len(chunk) // 2

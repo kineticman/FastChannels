@@ -2,7 +2,6 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import re
 import unicodedata
-from croniter import croniter as _croniter
 from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case
 from sqlalchemy.orm import load_only, defer
@@ -1417,27 +1416,14 @@ def channel_changes_report():
         return sorted(counts.items(), key=lambda item: item[0], reverse=True)
 
     def _next_scrape_estimate(src, now_utc):
-        # Mirrors app/worker.py _is_source_due's due-check, but solves for the
-        # next run time instead of a boolean, for display purposes only.
+        # Shares its due-check math with app/worker.py's _is_source_due via
+        # _scrape_due_calc, so the two never drift on cron/interval semantics.
+        from ..worker import _scrape_due_calc
         last = src.last_scraped_at
         if last is not None and last.tzinfo is None:
             last = last.replace(tzinfo=timezone.utc)
-        if src.scrape_cron:
-            try:
-                # croniter's cursor moves with each get_prev/get_next call, so
-                # use separate instances rather than reusing one for both.
-                prev = _croniter(src.scrape_cron, now_utc).get_prev(datetime)
-                if last is None or prev >= last:
-                    return now_utc  # already due, per _is_source_due's own check
-                return _croniter(src.scrape_cron, now_utc).get_next(datetime)
-            except Exception:
-                return None
-        if not src.scrape_interval:
-            return None  # scrape_interval=0 means never auto-scrapes
-        if last is None:
-            return now_utc
-        next_time = last + timedelta(minutes=src.scrape_interval)
-        return next_time if next_time > now_utc else now_utc
+        _is_due, next_run = _scrape_due_calc(src, now_utc, last)
+        return next_run
 
     # Per-source health summary
     now_utc = datetime.now(timezone.utc)

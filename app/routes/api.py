@@ -1573,8 +1573,11 @@ def save_source_config(source_id):
     # identifiers (device_id, freecast client_id) are NOT account-bound and are
     # left untouched. An auth key the user explicitly set in this same save
     # (e.g. a freshly pasted Amazon cookie_header) is preserved.
-    _CRED_KEYS   = {'username', 'password', 'email', 'amazon_email', 'amazon_password'}
-    _CRED_SECRET = {'password', 'amazon_password'}
+    # secret_keys (schema-derived, computed above) is unioned in here so any
+    # scraper's field marked secret=True is automatically watched for changes
+    # — a hardcoded list would silently miss a future credential field.
+    _CRED_IDENTITY_KEYS = {'username', 'email', 'amazon_email'}
+    _CRED_KEYS   = _CRED_IDENTITY_KEYS | secret_keys
     _AUTH_STATE  = ('access_token', 'refresh_token', 'token_time',
                     'session_id', 'login_time',
                     'cookie_header', 'browser_storage_state')
@@ -1582,10 +1585,10 @@ def save_source_config(source_id):
     def _norm_cred(key: str, val) -> str:
         # Whitespace from autofill/paste shouldn't read as a credential change
         # for any field. Case only gets folded for identity fields (username/
-        # email) — a password's case always matters, so folding it there would
-        # mask a real password change and skip the auth-state purge below.
+        # email) — a secret's case always matters, so folding it there would
+        # mask a real credential change and skip the auth-state purge below.
         s = str(val or '').strip()
-        return s if key in _CRED_SECRET else s.casefold()
+        return s if key in secret_keys else s.casefold()
 
     creds_changed = any(
         f.key in _CRED_KEYS and _norm_cred(f.key, old.get(f.key)) != _norm_cred(f.key, current.get(f.key))

@@ -909,9 +909,17 @@ class StirrScraper(BaseScraper):
         # misread as an epoch value landing in the early 1970s.
         if s.isdigit() and 9 <= len(s) <= 10:
             try:
-                return datetime.fromtimestamp(int(s), tz=timezone.utc)
+                dt = datetime.fromtimestamp(int(s), tz=timezone.utc)
             except (ValueError, OverflowError, OSError):
                 return None
+            # EPG program times are always close to "now" — a value that
+            # decodes to a date far outside that window is more likely some
+            # other 9-10-digit non-epoch string (e.g. a YYMMDDHHMM-style
+            # feed) that happened to pass the digit-length check, so don't
+            # trust it as an epoch timestamp.
+            if abs((dt - datetime.now(timezone.utc)).days) > 730:
+                return None
+            return dt
         # Standard XMLTV: YYYYMMDDHHMMSS (14 digits)
         try:
             return datetime.strptime(s[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)

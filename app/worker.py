@@ -1735,25 +1735,32 @@ def run_gracenote_clear_all():
         logger.info('[gracenote-clear-all] set %d channels to off mode', count)
 
 
+def _purge_source_channels_and_programs(source) -> tuple[int, int]:
+    """Delete all channels and programs belonging to `source`. Batches the
+    channel-id IN-clause to stay under SQLite's default variable limit."""
+    ch_ids = [row[0] for row in source.channels.with_entities(Channel.id).all()]
+    deleted_programs = 0
+    _ID_BATCH = 900
+    for i in range(0, len(ch_ids), _ID_BATCH):
+        deleted_programs += Program.query.filter(
+            Program.channel_id.in_(ch_ids[i:i + _ID_BATCH])
+        ).delete(synchronize_session=False)
+    deleted_channels = source.channels.delete(synchronize_session=False)
+    return deleted_channels or 0, deleted_programs
+
+
 def run_source_channel_purge(source_id: int):
     with flask_app.app_context():
         source = Source.query.get(source_id)
         if not source:
             logger.warning('[source-purge] source_id=%s not found', source_id)
             return
-        ch_ids = [row[0] for row in source.channels.with_entities(Channel.id).all()]
-        deleted_programs = 0
-        deleted_channels = 0
-        if ch_ids:
-            deleted_programs = Program.query.filter(
-                Program.channel_id.in_(ch_ids)
-            ).delete(synchronize_session=False)
-            deleted_channels = source.channels.delete(synchronize_session=False)
+        deleted_channels, deleted_programs = _purge_source_channels_and_programs(source)
         db.session.commit()
         _invalidate_and_refresh_xml()
         logger.info(
             '[source-purge] source=%s deleted %d channels and %d programs',
-            source.name, deleted_channels or 0, deleted_programs or 0,
+            source.name, deleted_channels, deleted_programs,
         )
 
 
@@ -2744,18 +2751,33 @@ def _clear_source_stuck(source):
             db.session.rollback()
 
 
-def _is_source_due(source, now, last):
-    """Return True if this source should be enqueued for a scrape right now."""
+def _scrape_due_calc(source, now, last):
+    """Shared cron/interval due-check math. Returns (is_due, next_run_estimate).
+    next_run_estimate is None when scrape_interval=0 (never) or the cron
+    expression is invalid; used both to decide whether to enqueue a scrape
+    now (_is_source_due) and to display an estimated next-scrape time
+    (app/routes/admin.py's _next_scrape_estimate)."""
     if source.scrape_cron:
         try:
             prev = _croniter(source.scrape_cron, now).get_prev(datetime)
-            return last is None or prev >= last
+            is_due = last is None or prev >= last
+            next_run = now if is_due else _croniter(source.scrape_cron, now).get_next(datetime)
+            return is_due, next_run
         except Exception:
             logger.warning('[scheduler] Invalid cron expression for %s: %r', source.name, source.scrape_cron)
-            return False
+            return False, None
     if not source.scrape_interval:
-        return False  # scrape_interval=0 means never auto-scrape
-    return last is None or (now - last).total_seconds() >= source.scrape_interval * 60
+        return False, None  # scrape_interval=0 means never auto-scrape
+    if last is None:
+        return True, now
+    is_due = (now - last).total_seconds() >= source.scrape_interval * 60
+    next_run = now if is_due else last + timedelta(minutes=source.scrape_interval)
+    return is_due, next_run
+
+
+def _is_source_due(source, now, last):
+    """Return True if this source should be enqueued for a scrape right now."""
+    return _scrape_due_calc(source, now, last)[0]
 
 
 def _schedule_due_scrapes():
@@ -2882,13 +2904,7 @@ def purge_orphaned_sources():
                 continue
 
             source_id, source_name = source.id, source.name
-            ch_ids = [row[0] for row in source.channels.with_entities(Channel.id).all()]
-            deleted_programs = 0
-            if ch_ids:
-                deleted_programs = Program.query.filter(
-                    Program.channel_id.in_(ch_ids)
-                ).delete(synchronize_session=False)
-            deleted_channels = source.channels.delete(synchronize_session=False)
+            deleted_channels, deleted_programs = _purge_source_channels_and_programs(source)
             SourceCache.query.filter_by(source_id=source_id).delete(synchronize_session=False)
             db.session.delete(source)
             db.session.commit()
@@ -2896,7 +2912,7 @@ def purge_orphaned_sources():
             logger.warning(
                 '[source-orphan-check] purged orphaned source=%s (id=%s): scraper class '
                 'missing for %.1fd, deleted %d channels and %d programs',
-                source_name, source_id, age_days, deleted_channels or 0, deleted_programs or 0,
+                source_name, source_id, age_days, deleted_channels, deleted_programs,
             )
 
 
