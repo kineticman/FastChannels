@@ -2978,6 +2978,13 @@ def _rq_integrity_cleanup():
             _warn_stale_epg_refreshes()
         except Exception as exc:
             logger.warning('[integrity] stale-epg-refresh check failed: %s', exc)
+    # Runs on this job's own daily cadence rather than only at container boot --
+    # a long-lived container that never restarts would otherwise never advance
+    # (or ever clear) an orphaned source's grace period.
+    try:
+        purge_orphaned_sources()
+    except Exception as exc:
+        logger.warning('[integrity] orphaned-source purge check failed: %s', exc)
 
 
 # Number of nightly DB backups to retain in /data/backups.
