@@ -836,7 +836,7 @@
   </div>
 
   <!-- PrismCast setup test modal -->
-  <div class="modal-overlay" id="prismcast-test-modal">
+  <div class="modal-overlay" id="prismcast-test-modal" onclick="if(event.target===this)this.classList.remove('open')">
     <div class="modal-box" style="max-width:760px;max-height:85vh;display:flex;flex-direction:column">
       <h3 style="margin:0 0 0.25rem">PrismCast setup test</h3>
       <p style="color:var(--text-subtle);margin:0 0 1rem;font-size:0.85rem;line-height:1.5">

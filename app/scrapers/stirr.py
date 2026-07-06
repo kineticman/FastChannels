@@ -904,7 +904,10 @@ class StirrScraper(BaseScraper):
         # YYYYMMDDHHMM(SS) timestamp (those need 12-14 digits), but strptime
         # matches the leading digits anyway instead of raising — e.g.
         # "1783129645" silently parses as year 1783 rather than failing.
-        if s.isdigit() and len(s) <= 10:
+        # Lower-bounded at 9 digits (current-era epoch-seconds are always
+        # 9-10 digits) so a spec-legal 8-digit YYYYMMDD-only date isn't
+        # misread as an epoch value landing in the early 1970s.
+        if s.isdigit() and 9 <= len(s) <= 10:
             try:
                 return datetime.fromtimestamp(int(s), tz=timezone.utc)
             except (ValueError, OverflowError, OSError):

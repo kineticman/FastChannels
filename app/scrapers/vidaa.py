@@ -414,6 +414,11 @@ class VidaaScraper(BaseScraper):
             r = self.session.get(epg_url, timeout=60, headers=self._station_headers(geo))
             r.raise_for_status()
             data = r.json()
+            # Any successful response (any chunk size, any geo) proves the
+            # endpoint is reachable right now, so a prior failure wasn't the
+            # start of a real outage — only a genuine run of *consecutive*
+            # leaf failures with no success in between should trip the circuit.
+            self._epg_leaf_failures = 0
             return (list(data) if isinstance(data, list) else []), 1, 0, None
         except Exception as exc:
             if len(chunk) <= 1:

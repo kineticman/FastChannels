@@ -832,8 +832,14 @@ class PlexScraper(BaseScraper):
 
         if durations:
             sorted_d = sorted(durations)
-            avg_d = sum(sorted_d) / len(sorted_d)
-            p95_d = sorted_d[max(0, int(len(sorted_d) * 0.95) - 1)]
+            n = len(sorted_d)
+            avg_d = sum(sorted_d) / n
+            # Nearest-rank percentile: ceil(n * 0.95) as a 1-based rank, -1 for
+            # the 0-based index. A plain int() truncates instead of rounding
+            # up, silently underestimating p95 for most n (e.g. n=3 would
+            # index the median instead of the max).
+            p95_rank = -(-n * 95 // 100)  # ceil(n * 0.95) using integer math
+            p95_d = sorted_d[min(n, max(1, p95_rank)) - 1]
             max_d = sorted_d[-1]
         else:
             avg_d = p95_d = max_d = 0.0

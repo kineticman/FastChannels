@@ -1419,6 +1419,11 @@ def channel_changes_report():
             last = last.replace(tzinfo=timezone.utc)
         if src.scrape_cron:
             try:
+                # croniter's cursor moves with each get_prev/get_next call, so
+                # use separate instances rather than reusing one for both.
+                prev = _croniter(src.scrape_cron, now_utc).get_prev(datetime)
+                if last is None or prev >= last:
+                    return now_utc  # already due, per _is_source_due's own check
                 return _croniter(src.scrape_cron, now_utc).get_next(datetime)
             except Exception:
                 return None

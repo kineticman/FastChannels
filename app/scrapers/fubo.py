@@ -492,6 +492,10 @@ class FuboScraper(BaseScraper):
                     if r.ok:
                         return self._extract_stream_url(r, ch_id)
                     err = r.json().get('error', {}).get('message', '') if r.content else ''
+                    if not ('not in allowed list' in err or r.status_code == 403):
+                        # Retry failed for an unrelated reason (transient 500,
+                        # rate limit, etc.) — not a real entitlement loss.
+                        raise RuntimeError(f'Fubo stream resolution failed for channel {ch_id}: {err or r.status_code}')
                 raise StreamDeadError(f'Fubo channel {ch_id} not in subscription: {err}')
             raise RuntimeError(f'Fubo stream resolution failed for channel {ch_id}: {err or r.status_code}')
         return self._extract_stream_url(r, ch_id)

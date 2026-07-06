@@ -2472,6 +2472,12 @@ def _prune_old_programs(batch_size: int = 1000):
         logger.info('[worker] pruned %d expired EPG entries', total_deleted)
 
 
+# Shared by _prune_bogus_programs and _upsert_programs, which must agree on
+# what counts as a "sane" program timestamp.
+_BOGUS_TIMESTAMP_FUTURE_DAYS = 90  # nothing legitimate is scheduled >90d out
+_BOGUS_TIMESTAMP_PAST_DAYS   = 7   # anything this old should already be gone
+
+
 def _prune_bogus_programs(batch_size: int = 1000):
     """Delete EPG rows with impossible timestamps a scraper mis-parsed.
 
@@ -2480,23 +2486,32 @@ def _prune_bogus_programs(batch_size: int = 1000):
     that the normal prune never touches and that sits in the table forever.
     """
     now = datetime.now(timezone.utc)
-    hi = now + timedelta(days=90)   # nothing legitimate is scheduled >90d out
-    lo = now - timedelta(days=7)    # anything this old should already be gone
+    hi = now + timedelta(days=_BOGUS_TIMESTAMP_FUTURE_DAYS)
+    lo = now - timedelta(days=_BOGUS_TIMESTAMP_PAST_DAYS)
     total_deleted = 0
 
     while True:
-        ids = [
+        # Two single-column queries (each a seekable indexed range scan) instead
+        # of one OR spanning both end_time and start_time — SQLite's OR
+        # optimization only produces indexed seeks when every term shares a
+        # column; mixing columns forces a full index scan on every batch.
+        ids = sorted({
             row[0] for row in (
                 Program.query
-                .filter(or_(
-                    Program.end_time > hi, Program.end_time < lo,
-                    Program.start_time > hi, Program.start_time < lo,
-                ))
+                .filter(or_(Program.end_time > hi, Program.end_time < lo))
                 .with_entities(Program.id)
                 .limit(batch_size)
                 .all()
             )
-        ]
+        } | {
+            row[0] for row in (
+                Program.query
+                .filter(or_(Program.start_time > hi, Program.start_time < lo))
+                .with_entities(Program.id)
+                .limit(batch_size)
+                .all()
+            )
+        })
         if not ids:
             break
 
@@ -2507,9 +2522,6 @@ def _prune_bogus_programs(batch_size: int = 1000):
         ) or 0
         db.session.commit()
         total_deleted += deleted
-
-        if deleted < batch_size:
-            break
 
     if total_deleted:
         logger.info('[worker] pruned %d bogus-timestamp EPG entries', total_deleted)
@@ -2582,8 +2594,8 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
     # times in the past (e.g. stirr ~year 8390, freelivesports ~year 1783). A
     # bogus far-future end_time left in would also blow out the delete-window
     # calculation just below, since win_end takes the max end_time seen.
-    sanity_hi = now + timedelta(days=90)
-    sanity_lo = now - timedelta(days=7)
+    sanity_hi = now + timedelta(days=_BOGUS_TIMESTAMP_FUTURE_DAYS)
+    sanity_lo = now - timedelta(days=_BOGUS_TIMESTAMP_PAST_DAYS)
     bogus_skipped = 0
 
     incoming_by_channel_id: dict[int, list] = {}
