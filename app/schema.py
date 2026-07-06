@@ -226,6 +226,16 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE sources ADD COLUMN new_channel_policy VARCHAR(16) NOT NULL DEFAULT 'inherit'"
                 ))
+            if "scraper_missing_since" not in src_cols:
+                # Stamped by purge_orphaned_sources() the first boot it finds no
+                # registered scraper class for this source (module deleted, or a
+                # broken import). NULL means "not missing" and clears itself the
+                # moment the scraper reappears. A grace period elapses before the
+                # source's channels/programs/row are force-deleted, so a transient
+                # import failure (bad deploy, missing dep) doesn't nuke real data.
+                conn.execute(text(
+                    "ALTER TABLE sources ADD COLUMN scraper_missing_since DATETIME"
+                ))
 
         if "channels" in tables:
             ch_cols = {

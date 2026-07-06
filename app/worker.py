@@ -33,7 +33,7 @@ from app.config_store import (
 )
 from app.extensions import db
 from app.hls import inspect_hls_drm, parse_stream_info as _parse_stream_info, parse_dash_stream_info as _parse_dash_stream_info, WIDEVINE_UUID, PLAYREADY_UUID
-from app.models import Source, Channel, Program, Feed, AppSettings
+from app.models import Source, Channel, Program, Feed, AppSettings, SourceCache
 import time as _time
 from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
@@ -64,6 +64,7 @@ _setup_logfile()
 logger = logging.getLogger(__name__)
 _CHANNEL_MISS_THRESHOLD = 3
 _STALE_STARTED_JOB_GRACE_SECONDS = 300
+_SCRAPER_MISSING_GRACE_DAYS = 7
 
 flask_app = create_app()
 from app.config import VERSION as _VERSION
@@ -2834,6 +2835,69 @@ def seed_sources():
         Source.query.filter_by(epg_only=True).update({'epg_only': False}, synchronize_session=False)
         db.session.commit()
         logger.info(f'Seeded {len(seeded_names)} sources')
+
+
+def purge_orphaned_sources():
+    """Force-purge a source (and its channels/programs) once its scraper class has
+    been absent from the registry for _SCRAPER_MISSING_GRACE_DAYS straight boots.
+
+    registry._discover() swallows import errors for a broken scraper module the
+    same way it does for a deleted one, so a single missing-from-registry check
+    can't tell "file removed" from "file present but failing to import" (bad
+    deploy, missing dependency). The grace period buys time for a transient
+    import failure to get fixed before real data is deleted; scraper_missing_since
+    clears itself the moment the class reappears in the registry.
+    """
+    with flask_app.app_context():
+        known = set(registry.get_all().keys())
+        now = datetime.now(timezone.utc)
+        for source in Source.query.all():
+            if source.name in known:
+                if source.scraper_missing_since is not None:
+                    source.scraper_missing_since = None
+                    db.session.commit()
+                    logger.info('[source-orphan-check] %s scraper reappeared in registry; cleared missing marker', source.name)
+                continue
+
+            if source.scraper_missing_since is None:
+                source.scraper_missing_since = now
+                db.session.commit()
+                logger.warning(
+                    '[source-orphan-check] %s has no registered scraper class; starting '
+                    '%dd grace period before its channels/programs are purged',
+                    source.name, _SCRAPER_MISSING_GRACE_DAYS,
+                )
+                continue
+
+            missing_since = source.scraper_missing_since
+            if missing_since.tzinfo is None:
+                missing_since = missing_since.replace(tzinfo=timezone.utc)
+            age_days = (now - missing_since).total_seconds() / 86400
+            if age_days < _SCRAPER_MISSING_GRACE_DAYS:
+                logger.warning(
+                    '[source-orphan-check] %s still has no registered scraper class '
+                    '(%.1fd of %dd grace elapsed)',
+                    source.name, age_days, _SCRAPER_MISSING_GRACE_DAYS,
+                )
+                continue
+
+            source_id, source_name = source.id, source.name
+            ch_ids = [row[0] for row in source.channels.with_entities(Channel.id).all()]
+            deleted_programs = 0
+            if ch_ids:
+                deleted_programs = Program.query.filter(
+                    Program.channel_id.in_(ch_ids)
+                ).delete(synchronize_session=False)
+            deleted_channels = source.channels.delete(synchronize_session=False)
+            SourceCache.query.filter_by(source_id=source_id).delete(synchronize_session=False)
+            db.session.delete(source)
+            db.session.commit()
+            _invalidate_and_refresh_xml()
+            logger.warning(
+                '[source-orphan-check] purged orphaned source=%s (id=%s): scraper class '
+                'missing for %.1fd, deleted %d channels and %d programs',
+                source_name, source_id, age_days, deleted_channels or 0, deleted_programs or 0,
+            )
 
 
 def _rq_prune():

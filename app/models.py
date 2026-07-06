@@ -48,6 +48,7 @@ class Source(db.Model):
     epg_only        = db.Column(db.Boolean, default=False)   # if True: excluded from M3U output
     gracenote_resync_done = db.Column(db.Boolean, default=False, nullable=False)  # one-time stale-native-GNID backfill done
     new_channel_policy = db.Column(db.String(16), default='inherit', nullable=False)  # inherit | enabled | review — how newly-scraped channels enter
+    scraper_missing_since = db.Column(db.DateTime(timezone=True), nullable=True)  # set when no scraper class is registered for this source; cleared if it reappears
 
     channels = db.relationship('Channel', backref='source', lazy='dynamic',
                                 cascade='all, delete-orphan')

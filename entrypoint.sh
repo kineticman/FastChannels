@@ -42,6 +42,11 @@ echo "✅ DB ready"
 python -c "from app.worker import seed_sources; seed_sources()" || true
 echo "✅ Sources seeded"
 
+# Force-purge any source whose scraper class has been missing from the
+# registry for longer than its grace period (see purge_orphaned_sources).
+python -c "from app.worker import purge_orphaned_sources; purge_orphaned_sources()" || true
+echo "✅ Orphaned sources checked"
+
 wait_for_network() {
     echo "⏳ Waiting for outbound network and DNS..."
     for i in $(seq 1 30); do
