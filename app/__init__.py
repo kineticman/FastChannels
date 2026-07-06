@@ -82,6 +82,14 @@ def create_app(config_class=Config):
         # Fresh installs need the base tables before any startup path queries
         # AppSettings (for timezone cache, template globals, etc.).
         db.create_all()
+        # Create the app_settings singleton row (with correct ORM-side defaults)
+        # before any schema migration below. Migrations gate their one-time work
+        # on raw-SQL *_done flags read/written against this row; if it doesn't
+        # exist yet, those reads/writes silently no-op (a raw INSERT can't supply
+        # NOT NULL defaults that only exist as Python-side `default=`), so a
+        # migration never actually marks itself done and re-runs destructively
+        # on the next restart.
+        AppSettings.get()
         # Skip schema migration if the entrypoint already ran it (FC_SCHEMA_READY=1).
         # This prevents write-write lock contention when the worker and gunicorn
         # both call create_app() simultaneously at container startup.
