@@ -469,7 +469,10 @@
       </div>
 
       <div class="feed-meta">
-        <div class="feed-stat"><strong>{{ feed.channel_count() }}</strong> channels</div>
+        {% set _bridged = feed_split_counts.get(feed.id, {}).get('bridged_count', 0) %}
+        <div class="feed-stat" title="{% if prismcast_enabled and _bridged %}Standard channels only — excludes {{ _bridged }} DRM-protected channel{{ 's' if _bridged != 1 else '' }} that {{ 'requires' if _bridged == 1 else 'require' }} PrismCast's DRM Bridge to play (see PrismCast output below).{% else %}Active channels in this feed's standard M3U/EPG.{% endif %}">
+          <strong>{{ feed.channel_count() }}</strong> channels
+        </div>
         <div class="feed-stat">
           <strong>{% if feed.is_enabled %}Enabled{% else %}Disabled{% endif %}</strong>
         </div>
@@ -562,7 +565,7 @@
       </details>
 
       <details class="native-endpoints">
-        <summary>PrismCast output <span class="badge-pill pill-beta">Beta</span></summary>
+        <summary>PrismCast output <span class="badge-pill pill-beta">Beta</span>{% if prismcast_enabled and split.get('bridged_count', 0) %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">— adds {{ split.get('bridged_count', 0) }} DRM Bridge channel{{ 's' if split.get('bridged_count', 0) != 1 else '' }} on top of the {{ feed.channel_count() }} standard channels above</span>{% endif %}</summary>
         <div class="feed-urls" style="margin-top:0.5rem">
           {% if prismcast_enabled %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast')">
@@ -594,7 +597,7 @@
                   {% if not split.get('prismcast_count', 0) and not split.get('prismcast_gracenote_count', 0) %}disabled title="No PrismCast channels in this feed"{% endif %}>📺 Add PrismCast to Channels DVR</button>
         </div>
         {% endif %}
-        <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}DRM channels are routed through your PrismCast server, everything else served direct. Like the regular feed, PrismCast splits into a standard M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote) — import whichever fits your DVR. Import only one per source to avoid duplicate channels. The button above registers both as distinct sources (named "… PrismCast") separate from the standard push.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
+        <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}DRM channels are routed through your PrismCast server, everything else served direct — so PrismCast M3U counts run higher than the feed's standard channel count above, which excludes DRM-only channels entirely. Like the regular feed, PrismCast splits into a standard M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote) — import whichever fits your DVR. Import only one per source to avoid duplicate channels. The button above registers both as distinct sources (named "… PrismCast") separate from the standard push.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
       </details>
     </div>
     {% endfor %}
