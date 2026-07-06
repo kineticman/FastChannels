@@ -18,11 +18,12 @@ cur.execute("""
     DELETE FROM feed_channel_numbers
     WHERE feed_id NOT IN (SELECT id FROM feeds)
 """)
+deleted = cur.rowcount
 cur.execute("""
     DELETE FROM feed_channel_numbers
     WHERE channel_id NOT IN (SELECT id FROM channels)
 """)
-deleted = cur.rowcount
+deleted += cur.rowcount
 con.commit()
 print(f"Migration 021 done — removed {deleted} orphaned feed_channel_numbers rows.")
 con.close()

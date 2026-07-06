@@ -88,6 +88,10 @@ def _merge_source_name(conn, old_name: str, new_name: str) -> None:
 
 
 def ensure_runtime_schema() -> None:
+    # NOTE: the "Migration NNN" labels used in comments/flags below (migration_011_done,
+    # migration_012_done, migration_025_done, ...) are this function's own numbering and
+    # are unrelated to migrations/NNN_*.py — the numbers don't correspond to each other
+    # (e.g. migration_012_done here has no relation to migrations/012_tvtv_program_cache.py).
     engine = db.engine
     if engine.dialect.name != "sqlite":
         return
@@ -143,6 +147,10 @@ def ensure_runtime_schema() -> None:
                 ))
             if "gracenote_map_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN gracenote_map_url TEXT"))
+            if "migration_011_done" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN migration_011_done BOOLEAN NOT NULL DEFAULT 0"
+                ))
             if "migration_012_done" not in cols:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN migration_012_done BOOLEAN NOT NULL DEFAULT 0"
@@ -415,12 +423,14 @@ def ensure_runtime_schema() -> None:
             # the cross-source name-matching feature (commit f6d5cd4, reverted).  Set
             # gracenote_mode='off' on those channels so they stay out of Gracenote
             # routing even if name matching is re-introduced.
-            # Guard: only run if any gracenote_ids exist — when auto-fill is OFF this
-            # is a no-op and avoids incorrectly setting channels to 'off' on restart.
-            _has_gn = conn.execute(text(
+            # This migration is one-time: once applied it is marked done so it doesn't
+            # keep re-flipping deliberately re-'auto'd channels back to 'off' on restart.
+            _m011_done = conn.execute(
+                text("SELECT migration_011_done FROM app_settings WHERE id = 1")
+            ).fetchone()
+            if (not _m011_done or not _m011_done[0]) and conn.execute(text(
                 "SELECT 1 FROM channels WHERE gracenote_id IS NOT NULL AND gracenote_id != '' LIMIT 1"
-            )).fetchone()
-            if _has_gn:
+            )).fetchone():
                 conn.execute(text(
                     "UPDATE channels "
                     "SET gracenote_mode = 'off' "
@@ -431,6 +441,7 @@ def ensure_runtime_schema() -> None:
                     "    WHERE gracenote_id IS NOT NULL AND gracenote_id != ''"
                     ")"
                 ))
+                conn.execute(text("UPDATE app_settings SET migration_011_done = 1 WHERE id = 1"))
 
         # Migration 012: clear gracenote_ids that came from the community CSV rather
         # than the native scraper API.  Channels with gracenote_mode='manual' are left
@@ -528,9 +539,6 @@ def ensure_runtime_schema() -> None:
                         "Migration 025: merged %d / renamed %d Vidaa channel ID(s)",
                         _m025_merged, _m025_renamed,
                     )
-                conn.execute(text(
-                    "INSERT OR IGNORE INTO app_settings (id, migration_025_done) VALUES (1, 0)"
-                ))
                 conn.execute(text("UPDATE app_settings SET migration_025_done = 1 WHERE id = 1"))
 
         if "tvtv_program_cache" in tables:
