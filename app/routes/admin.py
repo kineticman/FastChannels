@@ -149,9 +149,14 @@ def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
     if not default_feed:
         return _page_source_chnum_map(page_items)
 
-    filters = feed_to_query_filters(default_feed.filters or {})
-    std_channels = _selected_channel_stubs(filters, gracenote=False)
-    gn_channels  = _selected_channel_stubs(filters, gracenote=True)
+    # Number every enabled channel with the default feed's numbering scheme
+    # (chnum_start / sticky assignment), not just channels that happen to
+    # match the default feed's own membership filters — otherwise a channel
+    # excluded from that filter (but still shown on this admin page) gets no
+    # entry here and renders as a blank dash, even though it's numbered fine
+    # in whichever feed actually generates the user's CDVR/M3U import.
+    std_channels = _selected_channel_stubs({}, gracenote=False)
+    gn_channels  = _selected_channel_stubs({}, gracenote=True)
 
     if default_feed.chnum_start is not None:
         full_map = _build_feed_chnum_map(std_channels, default_feed.chnum_start) if std_channels else {}
