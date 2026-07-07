@@ -59,6 +59,16 @@ _MASTER_GRACENOTE_START = 100000
 _FEED_NAMESPACE_BASE = 200000
 _REGION_LABEL_SOURCES = {"pluto", "samsung", "tcl"}
 
+# Backstop cursor for _build_source_chnum_map's no-config-at-all branch: mints a
+# number for a channel that has never had ANY number (not from pinning, not
+# preserved, nothing) when neither the default feed's chnum_start nor
+# MASTER_CHANNEL_NUMBER_START is set. Never used to reassign a channel that
+# already has some number, however it got there — only to keep a genuinely
+# never-numbered channel from staying permanently blank. Matches the value
+# schema.py seeds fresh installs' default feed chnum_start with, so a number
+# from here reads the same as one from that seed if anyone goes looking.
+_UNCONFIGURED_CHNUM_FALLBACK_START = 5000
+
 # Gracenote ID prefixes recognised by Channels DVR
 _GRACENOTE_PREFIX_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
 
@@ -545,6 +555,11 @@ def _build_source_chnum_map(channels):
     chnum_map: dict[int, int] = {}
     used_numbers: set[int] = set(pinned_numbers)
     global_cursor = global_start  # tracks next number for ungrouped sources
+    # Backstop cursor for the no-config-at-all branch below — only ever draws
+    # from here for a channel with no number at all, never to reassign one
+    # that already has some number. Shared across every source that falls into
+    # that branch so two such channels can't collide with each other.
+    fallback_cursor = _UNCONFIGURED_CHNUM_FALLBACK_START
     ordered_sources = sorted(
         by_source,
         key=lambda src: (
@@ -595,6 +610,34 @@ def _build_source_chnum_map(channels):
                 chnum_map[ch.id] = global_cursor
                 used_numbers.add(global_cursor)
                 global_cursor += 1
+        else:
+            # Neither this source nor AppSettings has a chnum_start configured.
+            # Docstring above promises these channels "fall back to their
+            # existing Channel.number (unchanged from scraper output)" — but
+            # until this branch existed, they were silently skipped entirely
+            # (missing tvg-chno in the real M3U, blank Ch# in the admin list).
+            # Same shape as the two branches above, just with no floor on what
+            # counts as a valid existing number (min_value=None) and drawing
+            # any genuinely-unassigned channel from the fallback cursor instead
+            # of a configured one — a channel that already has a number never
+            # gets reassigned just because this branch exists.
+            unassigned = []
+            for ch in chs:
+                if getattr(ch, 'number_pinned', False) and ch.number is not None:
+                    chnum_map[ch.id] = ch.number
+                    used_numbers.add(ch.number)
+                    continue
+                if _is_usable_number(ch, ch.number, min_value=None) and ch.number not in used_numbers:
+                    chnum_map[ch.id] = ch.number
+                    used_numbers.add(ch.number)
+                else:
+                    unassigned.append(ch)
+            for ch in unassigned:
+                while fallback_cursor in used_numbers:
+                    fallback_cursor += 1
+                chnum_map[ch.id] = fallback_cursor
+                used_numbers.add(fallback_cursor)
+                fallback_cursor += 1
 
     return chnum_map, warnings
 
