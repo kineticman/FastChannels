@@ -16,6 +16,7 @@ EPG requests are unauthenticated and work with plain requests.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 import uuid
@@ -47,6 +48,33 @@ _TOKEN_TTL    = 60 * 60 * 8   # refresh access token after 8 hours (issued for 1
 _EPG_HOURS    = 6              # hours per EPG request window
 _EPG_DAYS     = 7              # days of EPG to fetch
 _RICH_EPG_HOURS = 24           # metadata enrichment window
+
+# Play-time resolve() forces one real login to rule out a stale entitlement on a
+# 403 (see resolve()). Each play request builds a fresh FuboScraper instance, so
+# an in-memory per-instance guard doesn't bound repeat logins across requests —
+# a channel stuck 403ing would get a real login PUT per client request/reconnect,
+# risking Fubo flagging the account for anomalous login activity. Gate with a
+# Redis cooldown shared across all gunicorn workers/processes instead.
+_FORCED_RELOGIN_COOLDOWN = 300  # seconds; one forced relogin attempt per account per window
+_redis_client = None
+
+
+def _get_redis():
+    """Lazy Redis client for cross-process forced-relogin cooldown. Returns None
+    if unavailable (falls back to a per-instance-only guard)."""
+    global _redis_client
+    if _redis_client is None:
+        try:
+            import redis as _r
+            _redis_client = _r.from_url(
+                os.environ.get('REDIS_URL', 'redis://localhost:6379/0'),
+                decode_responses=True,
+                socket_timeout=1,
+                socket_connect_timeout=1,
+            )
+        except Exception:
+            pass
+    return _redis_client
 
 # Minimal headers for auth calls (PUT /v2/signin, POST /refresh).
 # curl_cffi with Chrome impersonation already injects its own device/OS headers;
@@ -179,11 +207,31 @@ class FuboScraper(BaseScraper):
             **_DEFAULT_HEADERS,
             'x-device-id': self.config['device_id'],
         }
-        # Set once a fresh full login has been forced this run (e.g. after a
-        # 'not in allowed list' 403) so repeated resolves against other
-        # channels in the same scrape/audit reuse it instead of re-logging in
-        # per channel.
+        # Fallback-only guard for when Redis is unavailable (see
+        # _claim_forced_relogin): still bounds repeated resolves against other
+        # channels within this one instance's lifetime (a scrape/audit run).
         self._forced_relogin = False
+
+    def _claim_forced_relogin(self) -> bool:
+        """Atomically claim the right to force one fresh login to rule out a
+        stale entitlement, at most once per _FORCED_RELOGIN_COOLDOWN across all
+        processes/requests for this account. Falls back to a per-instance flag
+        if Redis is unavailable."""
+        username = (self.config.get('username') or '').strip().lower()
+        rdb = _get_redis()
+        if rdb:
+            try:
+                return bool(rdb.set(
+                    f'fubo:forced_relogin:{username}', '1',
+                    nx=True, ex=_FORCED_RELOGIN_COOLDOWN,
+                ))
+            except Exception:
+                logger.debug('[fubo] Redis unavailable for forced-relogin cooldown, '
+                             'falling back to per-instance guard', exc_info=True)
+        if not self._forced_relogin:
+            self._forced_relogin = True
+            return True
+        return False
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 
@@ -477,10 +525,13 @@ class FuboScraper(BaseScraper):
                 # a new access token off the same session, it doesn't re-check
                 # the account's current plan. A user who upgraded Fubo (same
                 # login, no credential change) keeps getting the pre-upgrade
-                # 403 forever otherwise. Force one real re-login per run before
-                # concluding the channel is genuinely not entitled.
-                if not self._forced_relogin:
-                    self._forced_relogin = True
+                # 403 forever otherwise. Force one real re-login before
+                # concluding the channel is genuinely not entitled — but at
+                # most once per cooldown window account-wide, since play-time
+                # resolve() gets a fresh scraper instance per request and a
+                # persistently-403ing channel must not trigger a real login on
+                # every single client request/reconnect.
+                if self._claim_forced_relogin():
                     logger.info('[fubo] %s not in allowed list — forcing fresh login to rule out a stale entitlement', ch_id)
                     self._login()
                     r = self._cffi_request(
