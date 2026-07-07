@@ -115,10 +115,20 @@ def _has_gracenote_claim(ch) -> bool:
     """
     True if a channel should be excluded from the standard M3U partition.
 
-    Uses a broader check than _parse_gracenote_id: any non-empty gracenote_id
-    (even one that fails the format regex) or a slug with '|' counts as a
-    Gracenote claim.  This prevents channels with malformed gracenote_id values
-    from bleeding into the standard M3U while they wait to be corrected.
+    Broader than _parse_gracenote_id only for the dedicated gracenote_id
+    column: any non-empty value there (even one that fails the format regex)
+    counts as a claim, so a malformed-but-deliberately-set gracenote_id
+    doesn't bleed into the standard M3U while it waits to be corrected.
+
+    The slug-based fallback must stay as strict as _parse_gracenote_id's own
+    check, though — a bare '|' in the slug isn't a reliable signal on its
+    own, since ordinary channel names containing a literal pipe (e.g. "FOX
+    LOCAL Dallas | Fort Worth") slugify to the same shape as the legacy Roku
+    "{play_id}|{gracenote_id}" encoding this fallback exists for. Without
+    requiring the part after '|' to actually look like a gracenote ID, such
+    a channel claims Gracenote here but fails to parse in
+    _parse_gracenote_id, falling through both partitions — dropped from the
+    M3U entirely, not just blank in the admin Ch# column.
     """
     if getattr(ch, 'gracenote_mode', None) == 'off':
         return False
@@ -126,7 +136,8 @@ def _has_gracenote_claim(ch) -> bool:
         return True
     slug = (getattr(ch, 'slug', None) or '')
     if '|' in slug:
-        return bool(slug.split('|', 1)[1].strip())
+        candidate = slug.split('|', 1)[1].strip()
+        return bool(candidate and _GRACENOTE_PREFIX_RE.match(candidate))
     return False
 
 
