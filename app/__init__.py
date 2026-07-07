@@ -82,23 +82,26 @@ def create_app(config_class=Config):
         # Fresh installs need the base tables before any startup path queries
         # AppSettings (for timezone cache, template globals, etc.).
         db.create_all()
-        # Ensure the app_settings singleton row exists before any schema migration
-        # below runs. Migrations gate their one-time work on raw-SQL *_done flags
-        # UPDATEd against this row; if the row doesn't exist yet, the UPDATE
-        # affects 0 rows and silently no-ops, so a migration never actually marks
-        # itself done and re-runs destructively on the next restart. This must be
-        # a raw INSERT touching only the guaranteed-safe `id` column — not
-        # AppSettings.get(), which SELECTs every ORM-mapped column and raises
-        # "no such column" on upgrades where ensure_runtime_schema() (below) hasn't
-        # added the newest ones yet.
-        from sqlalchemy import text as _text
-        db.session.execute(_text("INSERT OR IGNORE INTO app_settings (id) VALUES (1)"))
-        db.session.commit()
         # Skip schema migration if the entrypoint already ran it (FC_SCHEMA_READY=1).
         # This prevents write-write lock contention when the worker and gunicorn
-        # both call create_app() simultaneously at container startup.
+        # both call create_app() simultaneously at container startup — and, since
+        # every request-time `import app.worker` re-triggers this module's
+        # `create_app()` too, it must stay a no-op write on the hot path or every
+        # such call takes a DB write lock and can stall concurrent requests.
         import os as _os
         if not _os.environ.get('FC_SCHEMA_READY'):
+            # Ensure the app_settings singleton row exists before any schema
+            # migration below runs. Migrations gate their one-time work on raw-SQL
+            # *_done flags UPDATEd against this row; if the row doesn't exist yet,
+            # the UPDATE affects 0 rows and silently no-ops, so a migration never
+            # actually marks itself done and re-runs destructively on the next
+            # restart. This must be a raw INSERT touching only the guaranteed-safe
+            # `id` column — not AppSettings.get(), which SELECTs every ORM-mapped
+            # column and raises "no such column" on upgrades where
+            # ensure_runtime_schema() hasn't added the newest ones yet.
+            from sqlalchemy import text as _text
+            db.session.execute(_text("INSERT OR IGNORE INTO app_settings (id) VALUES (1)"))
+            db.session.commit()
             ensure_runtime_schema()
         write_timezone_cache(AppSettings.get().timezone_name)
 
