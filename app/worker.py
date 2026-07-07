@@ -2982,8 +2982,16 @@ def _warn_stale_epg_refreshes():
             )
 
 
-def _rq_integrity_cleanup():
-    """RQ job target: delete orphan channels/programs. Runs inside the RQ worker process."""
+def _rq_integrity_cleanup(include_orphan_purge: bool = True):
+    """RQ job target: delete orphan channels/programs. Runs inside the RQ worker process.
+
+    include_orphan_purge=False is used only by the boot-time immediate enqueue
+    (see scheduler startup below) — entrypoint.sh already runs
+    purge_orphaned_sources() synchronously before any worker starts, so redoing
+    it here on every single boot would just be duplicate scanning/logging. The
+    recurring daily job (the default) still runs it, since that's what lets a
+    long-lived container that never restarts advance/clear a grace period.
+    """
     with flask_app.app_context():
         _cleanup_orphans()
         try:
@@ -2994,13 +3002,11 @@ def _rq_integrity_cleanup():
             _warn_stale_epg_refreshes()
         except Exception as exc:
             logger.warning('[integrity] stale-epg-refresh check failed: %s', exc)
-    # Runs on this job's own daily cadence rather than only at container boot --
-    # a long-lived container that never restarts would otherwise never advance
-    # (or ever clear) an orphaned source's grace period.
-    try:
-        purge_orphaned_sources()
-    except Exception as exc:
-        logger.warning('[integrity] orphaned-source purge check failed: %s', exc)
+    if include_orphan_purge:
+        try:
+            purge_orphaned_sources()
+        except Exception as exc:
+            logger.warning('[integrity] orphaned-source purge check failed: %s', exc)
 
 
 # Number of nightly DB backups to retain in /data/backups.
@@ -3329,7 +3335,9 @@ if __name__ == '__main__':
             try:
                 _r = redis.from_url(flask_app.config['REDIS_URL'])
                 _q = Queue('maintenance', connection=_r)
-                _q.enqueue('app.worker._rq_integrity_cleanup', job_timeout=300)
+                # Skip the orphan-source purge here — entrypoint.sh already ran it
+                # synchronously moments ago, before this scheduler process even started.
+                _q.enqueue('app.worker._rq_integrity_cleanup', False, job_timeout=300)
             except Exception as _e:
                 logger.warning('[scheduler] could not enqueue startup integrity cleanup: %s', _e)
             enabled_sources = Source.query.filter_by(is_enabled=True).count()
