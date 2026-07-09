@@ -255,9 +255,14 @@ _TWITCH_RE = re.compile(
     r'^https?://(www\.)?(twitch\.tv/(?:videos/|clip/|[^/?#]+)|player\.twitch\.tv/[^?#]+)',
     re.IGNORECASE,
 )
-# Player clients tried in order (mirrors SLM's known-working set). tv_embedded
-# was removed from yt-dlp; web_safari/web yield HLS for live, ios is a fallback.
-_YT_PLAYER_CLIENTS = ('web_safari', 'web', 'ios')
+# Player clients tried in order. YouTube expanded its GVS PO Token requirement
+# to web_safari/web/ios/tv/mweb in mid-2026 — without a PO token provider those
+# clients now return zero formats ("No video formats found!") for ordinary
+# videos, not just live streams. android_vr is (as of 2026-07) the only client
+# yt-dlp ships that still has no PO token policy at all, so it goes first; the
+# old web-based clients stay as a fallback for content android_vr can't serve
+# (e.g. it excludes "made for kids" videos).
+_YT_PLAYER_CLIENTS = ('android_vr', 'web_safari', 'web', 'ios')
 
 
 def _ytdlp_verbose_enabled() -> bool:
@@ -3656,8 +3661,11 @@ class StreamDetector:
                             # provider — the JS runtime alone is what unblocks these streams).
                             'formats': ['missing_pot'],
                             # Skip the player config + webpage requests — fewer bot-trigger
-                            # requests; not needed since we don't bind a PO token.
-                            'player_skip': ['configs', 'webpage'],
+                            # requests; not needed since we don't bind a PO token. android_vr
+                            # is the exception: skipping the webpage fetch there trips
+                            # YouTube's "Sign in to confirm you're not a bot" check, so it
+                            # still needs that request to establish a visitor context.
+                            'player_skip': ['configs'] if client == 'android_vr' else ['configs', 'webpage'],
                             'skip': ['dash', 'translated_subs'],
                         }
                     },
