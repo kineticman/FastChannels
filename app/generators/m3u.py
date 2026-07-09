@@ -468,6 +468,57 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
     return f
 
 
+def _is_usable_number(ch, candidate: int | None, *, min_value: int | None) -> bool:
+    if candidate is None:
+        return False
+    if min_value is not None and candidate < min_value:
+        return False
+    return True
+
+
+def _partition_unassigned(chs, min_value, used_numbers, out):
+    """
+    Split `chs` into channels whose existing Channel.number can be claimed
+    directly (recorded into `out`/`used_numbers` immediately) and those still
+    needing a fresh sequential number (returned as a list).
+
+    A pinned channel always keeps its number. A non-pinned channel keeps its
+    existing number only if `_is_usable_number` accepts it (non-null and
+    >= min_value) and no earlier channel already claimed it.
+    """
+    unassigned = []
+    for ch in chs:
+        if getattr(ch, 'number_pinned', False) and ch.number is not None:
+            out[ch.id] = ch.number
+            used_numbers.add(ch.number)
+            continue
+        if _is_usable_number(ch, ch.number, min_value=min_value) and ch.number not in used_numbers:
+            out[ch.id] = ch.number
+            used_numbers.add(ch.number)
+        else:
+            unassigned.append(ch)
+    return unassigned
+
+
+def _assign_sequential(unassigned, cursor, used_numbers, out):
+    """
+    Assign each channel in `unassigned` the next number >= cursor that isn't
+    in `used_numbers`, in order, recording into `out`/`used_numbers`.
+
+    Returns the cursor position to resume from — callers that share one
+    cursor across multiple calls (e.g. the same global/fallback cursor
+    reused for each source in turn) pass the returned value back in as the
+    next call's `cursor`.
+    """
+    for ch in unassigned:
+        while cursor in used_numbers:
+            cursor += 1
+        out[ch.id] = cursor
+        used_numbers.add(cursor)
+        cursor += 1
+    return cursor
+
+
 def _build_source_chnum_map(channels):
     """
     Build a channel-number assignment map using Source.chnum_start values.
@@ -487,13 +538,6 @@ def _build_source_chnum_map(channels):
             (ch.name or '').lower(),
             ch.source_channel_id or '',
         )
-
-    def _is_usable_number(ch, candidate: int | None, *, min_value: int | None) -> bool:
-        if candidate is None:
-            return False
-        if min_value is not None and candidate < min_value:
-            return False
-        return True
 
     # Group channels by source, then sort each source's channels independently.
     # This keeps the global tvg-chno blocks stable even when the mixed query
@@ -574,42 +618,11 @@ def _build_source_chnum_map(channels):
         chs = by_source[src]
         if src in source_starts:
             start = source_starts[src]
-            cursor = start
-            unassigned = []
-            for ch in chs:
-                if getattr(ch, 'number_pinned', False) and ch.number is not None:
-                    chnum_map[ch.id] = ch.number
-                    used_numbers.add(ch.number)
-                    continue
-                if _is_usable_number(ch, ch.number, min_value=start) and ch.number not in used_numbers:
-                    chnum_map[ch.id] = ch.number
-                    used_numbers.add(ch.number)
-                else:
-                    unassigned.append(ch)
-            for ch in unassigned:
-                while cursor in used_numbers:
-                        cursor += 1
-                chnum_map[ch.id] = cursor
-                used_numbers.add(cursor)
-                cursor += 1
+            unassigned = _partition_unassigned(chs, start, used_numbers, chnum_map)
+            _assign_sequential(unassigned, start, used_numbers, chnum_map)
         elif global_cursor is not None:
-            unassigned = []
-            for ch in chs:
-                if getattr(ch, 'number_pinned', False) and ch.number is not None:
-                    chnum_map[ch.id] = ch.number
-                    used_numbers.add(ch.number)
-                    continue
-                if _is_usable_number(ch, ch.number, min_value=global_start) and ch.number not in used_numbers:
-                    chnum_map[ch.id] = ch.number
-                    used_numbers.add(ch.number)
-                else:
-                    unassigned.append(ch)
-            for ch in unassigned:
-                while global_cursor in used_numbers:
-                        global_cursor += 1
-                chnum_map[ch.id] = global_cursor
-                used_numbers.add(global_cursor)
-                global_cursor += 1
+            unassigned = _partition_unassigned(chs, global_start, used_numbers, chnum_map)
+            global_cursor = _assign_sequential(unassigned, global_cursor, used_numbers, chnum_map)
         else:
             # Neither this source nor AppSettings has a chnum_start configured.
             # Docstring above promises these channels "fall back to their
@@ -621,23 +634,8 @@ def _build_source_chnum_map(channels):
             # any genuinely-unassigned channel from the fallback cursor instead
             # of a configured one — a channel that already has a number never
             # gets reassigned just because this branch exists.
-            unassigned = []
-            for ch in chs:
-                if getattr(ch, 'number_pinned', False) and ch.number is not None:
-                    chnum_map[ch.id] = ch.number
-                    used_numbers.add(ch.number)
-                    continue
-                if _is_usable_number(ch, ch.number, min_value=None) and ch.number not in used_numbers:
-                    chnum_map[ch.id] = ch.number
-                    used_numbers.add(ch.number)
-                else:
-                    unassigned.append(ch)
-            for ch in unassigned:
-                while fallback_cursor in used_numbers:
-                    fallback_cursor += 1
-                chnum_map[ch.id] = fallback_cursor
-                used_numbers.add(fallback_cursor)
-                fallback_cursor += 1
+            unassigned = _partition_unassigned(chs, None, used_numbers, chnum_map)
+            fallback_cursor = _assign_sequential(unassigned, fallback_cursor, used_numbers, chnum_map)
 
     return chnum_map, warnings
 
@@ -683,13 +681,7 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int,
                 used_numbers.add(num)
 
     # Second pass: assign fresh sequential numbers to new/displaced channels.
-    cursor = feed_chnum_start
-    for ch in unassigned:
-        while cursor in used_numbers:
-            cursor += 1
-        result[ch.id] = cursor
-        used_numbers.add(cursor)
-        cursor += 1
+    _assign_sequential(unassigned, feed_chnum_start, used_numbers, result)
 
     return result
 
@@ -717,13 +709,7 @@ def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) ->
             used_numbers.add(ch.number)
         else:
             unassigned.append(ch)
-    cursor = gn_start
-    for ch in unassigned:
-        while cursor in used_numbers:
-            cursor += 1
-        result[ch.id] = cursor
-        used_numbers.add(cursor)
-        cursor += 1
+    _assign_sequential(unassigned, gn_start, used_numbers, result)
     return result
 
 
