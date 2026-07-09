@@ -138,6 +138,7 @@ exec gunicorn \
     --keep-alive 0 \
     --max-requests "$GUNICORN_MAX_REQUESTS" \
     --max-requests-jitter "$GUNICORN_MAX_REQUESTS_JITTER" \
+    --pid /tmp/gunicorn.pid \
     --worker-tmp-dir /dev/shm \
     --access-logfile - \
     --access-logformat '%(h)s "%(r)s" %(s)s %(b)s %(T)ss' \

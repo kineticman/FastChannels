@@ -3084,14 +3084,48 @@ _VACUUM_FREE_PAGE_THRESHOLD = 0.25
 _YTDLP_MASTER_REQ = 'yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz'
 
 
+def _reload_gunicorn_workers():
+    """Gracefully recycle gunicorn's worker processes via SIGHUP.
+
+    yt_dlp is imported lazily (see stream_detector._resolve_youtube) and
+    every real caller of it — app.routes.play, app.routes.api — runs inline
+    inside a long-lived gunicorn/gevent request worker, never inside an RQ
+    job. A worker that already imported yt_dlp keeps that in-memory copy
+    for its whole life (up to GUNICORN_MAX_REQUESTS), so a pip upgrade on
+    disk alone doesn't reach play-time resolution until a worker happens to
+    recycle naturally. SIGHUP tells the arbiter to gracefully replace all
+    workers with fresh ones, which pick up the just-installed code on their
+    own first (lazy) import.
+    """
+    import os
+
+    pidfile = '/tmp/gunicorn.pid'
+    try:
+        with open(pidfile) as f:
+            pid = int(f.read().strip())
+    except (FileNotFoundError, ValueError) as e:
+        logger.warning('[maint] gunicorn pidfile unreadable (%s), skipping worker reload', e)
+        return
+    try:
+        os.kill(pid, signal.SIGHUP)
+        logger.info('[maint] sent SIGHUP to gunicorn master (pid %d) to recycle workers', pid)
+    except ProcessLookupError:
+        logger.warning('[maint] gunicorn master pid %d not found, skipping worker reload', pid)
+    except Exception as e:
+        logger.error('[maint] failed to signal gunicorn master: %s', e)
+
+
 def _rq_ytdlp_upgrade():
     """RQ job target: refresh yt-dlp from GitHub master in the running
     container. The Dockerfile installs from master too, but only at image
     build time — YouTube's extractor breaks often enough that a container
-    left running for weeks between rebuilds drifts stale. yt_dlp is imported
-    lazily per-job (see stream_detector._resolve_youtube), and this queue's
-    worker forks a fresh child process per job, so the next YouTube job to
-    run after this completes picks up the new install automatically.
+    left running for weeks between rebuilds drifts stale.
+
+    subprocess's own timeout is kept well under this job's RQ job_timeout so
+    pip's timeout handler (which kills its child on expiry) always fires
+    first — if the two timeouts raced, RQ's SIGALRM-based job_timeout could
+    interrupt the pip child mid `--force-reinstall` and leave it running
+    orphaned, unsupervised, partway through rewriting yt-dlp's package files.
     """
     import subprocess
     from importlib.metadata import version as _pkg_version, PackageNotFoundError
@@ -3101,10 +3135,14 @@ def _rq_ytdlp_upgrade():
     except PackageNotFoundError:
         old = 'unknown'
 
-    result = subprocess.run(
-        ['pip', 'install', '--quiet', '--force-reinstall', _YTDLP_MASTER_REQ],
-        capture_output=True, text=True, timeout=300,
-    )
+    try:
+        result = subprocess.run(
+            ['pip', 'install', '--quiet', '--force-reinstall', _YTDLP_MASTER_REQ],
+            capture_output=True, text=True, timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error('[maint] yt-dlp upgrade timed out after 300s')
+        return
     if result.returncode != 0:
         logger.error('[maint] yt-dlp upgrade failed: %s', (result.stderr or '')[-2000:])
         return
@@ -3118,6 +3156,11 @@ def _rq_ytdlp_upgrade():
         logger.info('[maint] yt-dlp upgraded %s -> %s', old, new)
     else:
         logger.info('[maint] yt-dlp already at latest (%s)', new)
+
+    # Reinstall succeeded either way — the version string alone doesn't prove
+    # nothing changed (yt-dlp only bumps it at tagged releases, not per master
+    # commit), so always recycle workers rather than trusting the comparison.
+    _reload_gunicorn_workers()
 
 
 def _rq_weekly_maintenance():
@@ -3181,8 +3224,14 @@ if __name__ == '__main__':
     def _scheduled_ytdlp_upgrade():
         try:
             _r = redis.from_url(flask_app.config['REDIS_URL'])
-            _q = Queue('maintenance', connection=_r)
-            _q.enqueue('app.worker._rq_ytdlp_upgrade', job_timeout=300, job_id='ytdlp-upgrade')
+            # Scraper queue, not maintenance — same reasoning as _scheduled_prune:
+            # the single scraper worker serializes this pip reinstall away from
+            # any concurrent scrape's `import yt_dlp`, which would otherwise race
+            # a mid-write package directory on the maintenance queue's own worker.
+            # job_timeout is well above the subprocess's own 300s timeout so pip's
+            # timeout handler (which kills its child) always fires first.
+            _q = Queue('scraper', connection=_r)
+            _q.enqueue('app.worker._rq_ytdlp_upgrade', job_timeout=600, job_id='ytdlp-upgrade')
             logger.info('[scheduler] enqueued _rq_ytdlp_upgrade job')
         except Exception as e:
             logger.error('[scheduler] could not enqueue ytdlp_upgrade job: %s', e)
