@@ -258,11 +258,16 @@ _TWITCH_RE = re.compile(
 # Player clients tried in order. YouTube expanded its GVS PO Token requirement
 # to web_safari/web/ios/tv/mweb in mid-2026 — without a PO token provider those
 # clients now return zero formats ("No video formats found!") for ordinary
-# videos, not just live streams. android_vr is (as of 2026-07) the only client
-# yt-dlp ships that still has no PO token policy at all, so it goes first; the
-# old web-based clients stay as a fallback for content android_vr can't serve
-# (e.g. it excludes "made for kids" videos).
-_YT_PLAYER_CLIENTS = ('android_vr', 'web_safari', 'web', 'ios')
+# videos, not just live streams. android_vr and android are (as of 2026-07)
+# the only clients yt-dlp ships with no PO token requirement for HLS, so they
+# go first; android_vr is preferred (no PO token needed for HTTPS/DASH either),
+# android is the second string. `tv` looked promising on paper (also no PO
+# token policy) but empirically only returns storyboard-image formats for
+# every live stream tested — useless here since custom YouTube channels are
+# almost always live — so it's deliberately left out. The old web-based
+# clients stay as a last-resort fallback for content android_vr/android can't
+# serve (e.g. android_vr excludes "made for kids" videos).
+_YT_PLAYER_CLIENTS = ('android_vr', 'android', 'web_safari', 'web', 'ios')
 
 
 def _ytdlp_verbose_enabled() -> bool:

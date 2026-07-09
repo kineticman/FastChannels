@@ -3081,6 +3081,45 @@ def _rq_db_backup():
 _VACUUM_FREE_PAGE_THRESHOLD = 0.25
 
 
+_YTDLP_MASTER_REQ = 'yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz'
+
+
+def _rq_ytdlp_upgrade():
+    """RQ job target: refresh yt-dlp from GitHub master in the running
+    container. The Dockerfile installs from master too, but only at image
+    build time — YouTube's extractor breaks often enough that a container
+    left running for weeks between rebuilds drifts stale. yt_dlp is imported
+    lazily per-job (see stream_detector._resolve_youtube), and this queue's
+    worker forks a fresh child process per job, so the next YouTube job to
+    run after this completes picks up the new install automatically.
+    """
+    import subprocess
+    from importlib.metadata import version as _pkg_version, PackageNotFoundError
+
+    try:
+        old = _pkg_version('yt-dlp')
+    except PackageNotFoundError:
+        old = 'unknown'
+
+    result = subprocess.run(
+        ['pip', 'install', '--quiet', '--force-reinstall', _YTDLP_MASTER_REQ],
+        capture_output=True, text=True, timeout=300,
+    )
+    if result.returncode != 0:
+        logger.error('[maint] yt-dlp upgrade failed: %s', (result.stderr or '')[-2000:])
+        return
+
+    try:
+        new = _pkg_version('yt-dlp')
+    except PackageNotFoundError:
+        new = 'unknown'
+
+    if new != old:
+        logger.info('[maint] yt-dlp upgraded %s -> %s', old, new)
+    else:
+        logger.info('[maint] yt-dlp already at latest (%s)', new)
+
+
 def _rq_weekly_maintenance():
     """RQ job target: sanity-prune bogus EPG rows, then VACUUM if the live DB
     file is heavily fragmented. Runs on the scraper queue so its exclusive
@@ -3138,6 +3177,15 @@ if __name__ == '__main__':
             logger.info('[scheduler] enqueued _rq_db_backup job')
         except Exception as e:
             logger.error('[scheduler] could not enqueue db_backup job: %s', e)
+
+    def _scheduled_ytdlp_upgrade():
+        try:
+            _r = redis.from_url(flask_app.config['REDIS_URL'])
+            _q = Queue('maintenance', connection=_r)
+            _q.enqueue('app.worker._rq_ytdlp_upgrade', job_timeout=300, job_id='ytdlp-upgrade')
+            logger.info('[scheduler] enqueued _rq_ytdlp_upgrade job')
+        except Exception as e:
+            logger.error('[scheduler] could not enqueue ytdlp_upgrade job: %s', e)
 
     def _scheduled_weekly_maintenance():
         try:
@@ -3279,6 +3327,13 @@ if __name__ == '__main__':
         scheduler.add_job(_scheduled_weekly_maintenance, 'cron',
                           day_of_week='sun', hour=4, minute=30, timezone=_tz,
                           id='weekly_maint', max_instances=1, coalesce=True,
+                          misfire_grace_time=3600)
+
+        # Weekly, Sunday 02:00 user-local — independent of the DB backup/VACUUM
+        # window above; this just refreshes a pip package.
+        scheduler.add_job(_scheduled_ytdlp_upgrade, 'cron',
+                          day_of_week='sun', hour=2, minute=0, timezone=_tz,
+                          id='ytdlp_upgrade', max_instances=1, coalesce=True,
                           misfire_grace_time=3600)
 
         def _scheduled_dvr_epg_refresh():
