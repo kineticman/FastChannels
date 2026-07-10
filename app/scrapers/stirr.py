@@ -853,10 +853,32 @@ class StirrScraper(BaseScraper):
         walk(payload)
         return rows
 
+    def _entry_time(self, entry: dict, primary_key: str, numeric_key: str, fallback_key: str) -> datetime | None:
+        dt = self._parse_dt(entry.get(primary_key))
+        if dt is not None and 2000 <= dt.year <= 2100:
+            return dt
+        # STIRR's own /api/epg fallback endpoint occasionally ships a corrupted
+        # human-readable start/end string alongside a correct compact
+        # YYYYMMDDHHMM(SS) integer in start_time/end_time (its backend appears
+        # to run that integer through an epoch-seconds conversion it shouldn't,
+        # landing dates thousands of years out — e.g. year 8387). Recover from
+        # the compact field instead of silently dropping the program.
+        raw = entry.get(numeric_key)
+        if raw is not None:
+            s = str(int(raw)) if isinstance(raw, (int, float)) else str(raw).strip()
+            if s.isdigit() and len(s) in (12, 14):
+                recovered = self._parse_xmltv_dt(s)
+                if recovered is not None:
+                    return recovered
+            recovered = self._parse_dt(raw)
+            if recovered is not None and 2000 <= recovered.year <= 2100:
+                return recovered
+        return dt if dt is not None else self._parse_dt(entry.get(fallback_key))
+
     def _program_from_entry(self, channel_id: str, entry: dict) -> ProgramData | None:
         title = entry.get("title") or entry.get("program_title") or entry.get("name")
-        start = self._parse_dt(entry.get("start") or entry.get("start_time") or entry.get("airing_start_time"))
-        end   = self._parse_dt(entry.get("end") or entry.get("end_time") or entry.get("airing_end_time"))
+        start = self._entry_time(entry, "start", "start_time", "airing_start_time")
+        end   = self._entry_time(entry, "end", "end_time", "airing_end_time")
         if not title or not start or not end: return None
         
         return ProgramData(
@@ -920,13 +942,21 @@ class StirrScraper(BaseScraper):
             if abs((dt - datetime.now(timezone.utc)).days) > 730:
                 return None
             return dt
-        # Standard XMLTV: YYYYMMDDHHMMSS (14 digits)
-        try:
-            return datetime.strptime(s[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-        except ValueError:
-            pass
+        # Standard XMLTV: YYYYMMDDHHMMSS (14 digits). Gated on length before
+        # attempting the parse — strptime's %M/%S fields match 1-2 digits via
+        # backtracking, so feeding a 12-digit (no-seconds) string into the
+        # 14-digit format doesn't raise, it silently misassigns digits (e.g.
+        # "202511030459" == 04:59 comes out as 04:05:09 instead of failing
+        # over to the correct 12-digit branch below).
+        if len(s) >= 14:
+            try:
+                return datetime.strptime(s[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
         # Some feeds omit seconds: YYYYMMDDHHMM (12 digits)
-        try:
-            return datetime.strptime(s[:12], "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
-        except ValueError:
-            return None
+        if len(s) >= 12:
+            try:
+                return datetime.strptime(s[:12], "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+            except ValueError:
+                return None
+        return None
