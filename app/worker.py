@@ -3401,10 +3401,29 @@ if __name__ == '__main__':
                     for f in _Feed.query.filter_by(is_enabled=True).all()
                 ]
             import time as _time
+            # Ask the DVR which lineups actually exist so DVR-side source names
+            # that don't match the "FastChannels <feed>" template (e.g. the
+            # "... PrismCast" DRM-bridge sources) are still covered, and lineups
+            # with no DVR source aren't blindly PUT (the DVR 200s unknown IDs,
+            # so those phantom pushes never surface as errors).
+            lineup_ids = None
+            try:
+                r = _requests.get(f'{dvr_url}/dvr/lineups', timeout=15, verify=False)
+                r.raise_for_status()
+                lineup_ids = sorted({
+                    lid for lid in r.json().values()
+                    if isinstance(lid, str) and lid.startswith('XMLTV-FastChannels')
+                })
+            except Exception as exc:
+                logger.warning('[dvr-epg] lineup discovery failed (%s); '
+                               'falling back to feed-name construction', exc)
+            if lineup_ids is None:
+                lineup_ids = [
+                    'XMLTV-' + _re.sub(r'[^a-zA-Z0-9]', '', name)
+                    for name in feed_names
+                ]
             refreshed, errors = [], []
-            for name in feed_names:
-                safe      = _re.sub(r'[^a-zA-Z0-9]', '', name)
-                lineup_id = f'XMLTV-{safe}'
+            for lineup_id in lineup_ids:
                 try:
                     r = _requests.put(f'{dvr_url}/dvr/lineups/{lineup_id}', timeout=15, verify=False)
                     if r.ok:
