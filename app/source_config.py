@@ -65,6 +65,11 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
     if source_name == 'localnow':
         return bool((saved.get('dma') or '').strip() or (saved.get('market') or '').strip())
 
+    # Philo is passwordless — "configured" means a signed-in session exists
+    # (set by the in-app email→code flow), not any typed field.
+    if source_name == 'philo':
+        return bool(saved.get('session_cookies'))
+
     return has_meaningful_source_config(scraper_cls, saved)
 
 

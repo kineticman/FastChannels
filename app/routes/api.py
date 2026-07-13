@@ -1655,6 +1655,64 @@ def amazon_auto_login(source_id):
     return jsonify({'status': 'started'})
 
 
+@api_bp.route('/sources/<int:source_id>/philo-login/send-code', methods=['POST'])
+def philo_login_send_code(source_id):
+    """Step 1 of Philo's passwordless sign-in: email/phone → Philo sends a 6-digit code.
+
+    Stashes the sign-in context (anon cookies + device_ident) in Redis, keyed by
+    source, so the verify step can complete the exchange."""
+    import redis as _redis
+    from ..scrapers.philo import PhiloScraper
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'philo':
+        return jsonify({'error': 'not a philo source'}), 400
+    data = request.get_json() or {}
+    ident = (data.get('ident') or '').strip()
+    if not ident:
+        # Fall back to the email saved on the source, if any.
+        ident = ((source.config or {}).get('email') or '').strip()
+    try:
+        ctx = PhiloScraper.request_login_code(ident, voice=bool(data.get('voice')))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    r.setex(f'philo:login:ctx:{source_id}', 900, json.dumps(ctx))
+    return jsonify({'status': 'sent', 'ident': ident, 'can_resend': ctx.get('can_resend', True)})
+
+
+@api_bp.route('/sources/<int:source_id>/philo-login/verify', methods=['POST'])
+def philo_login_verify(source_id):
+    """Step 2: submit the code → persist the (~1-year) session cookies to the source."""
+    import redis as _redis
+    from ..scrapers.philo import PhiloScraper
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'philo':
+        return jsonify({'error': 'not a philo source'}), 400
+    data = request.get_json() or {}
+    code = (data.get('code') or '').strip()
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw = r.get(f'philo:login:ctx:{source_id}')
+    if not raw:
+        return jsonify({'error': 'Sign-in session expired — request a new code.'}), 400
+    try:
+        result = PhiloScraper.verify_login_code(json.loads(raw), code)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    cfg = dict(source.config or {})
+    cfg['session_cookies'] = result['session_cookies']
+    cfg['session_born'] = _time.time()
+    if result.get('user_id'):
+        cfg['philo_user_id'] = result['user_id']
+    cfg.pop('player_id', None)   # re-mint a player for the new session on next resolve
+    source.config = cfg
+    db.session.commit()
+    r.delete(f'philo:login:ctx:{source_id}')
+    config_complete = bool(is_source_config_complete('philo', registry.get('philo'), cfg))
+    return jsonify({'status': 'signed_in', 'config_complete': config_complete})
+
+
 @api_bp.route('/sources/<int:source_id>/amazon-auth-status')
 def amazon_auth_status(source_id):
     import redis as _redis
@@ -2364,6 +2422,13 @@ def _get_playback_info(ch, fast_mode=True):
     if roku_drm and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/roku/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+
+    # Philo → DASH+Widevine. Philo's MPD CDN locks CORS to philo.com, so the
+    # route proxies the manifest body with permissive CORS (segments are CORS-*
+    # so Shaka fetches them direct).
+    if ch.source and ch.source.name == 'philo' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/philo/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
     return {
         'stream_type': stream_type,

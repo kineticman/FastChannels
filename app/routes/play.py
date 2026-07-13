@@ -1840,6 +1840,79 @@ def roku_dash_proxy(channel_id: str):
     return redirect(mpd_url, code=302)
 
 
+@play_bp.route('/play/philo/<channel_id>/dash.mpd')
+def philo_dash_proxy(channel_id: str):
+    """DASH (Widevine) manifest proxy for a Philo channel — the browser/EME path
+    the watch page and PrismCast bridge use.
+
+    Philo's MPD is served from www.philo.com with CORS locked to its own origin,
+    so Shaka can't fetch it cross-origin — we proxy the manifest body here with
+    permissive CORS.  Segment URLs in the MPD are absolute CDN URLs whose hosts
+    send Access-Control-Allow-Origin: * , so Shaka fetches those directly (no
+    body rewrite needed).  resolve() also caches the per-session x-dt-auth-token
+    (persisted to source_cache) so /play/philo/license can read it back.
+    """
+    from urllib.parse import unquote as _unquote
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'philo', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper_cls = registry.get('philo')
+    if not scraper_cls:
+        return _unavailable_response()
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        dash_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[philo-dash] resolve failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    finally:
+        # Persist the dash_cache (auth token) so the license proxy — a separate
+        # request — can read the per-session token just resolved here.
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            except Exception:
+                pass
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+            except Exception:
+                pass
+
+    if not dash_url or not dash_url.startswith('http'):
+        logger.warning('[philo-dash] no DASH URL for %s', raw_id[:40])
+        return _unavailable_response()
+
+    try:
+        r = _requests.get(dash_url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+            'Origin': 'https://www.philo.com',
+            'Referer': 'https://www.philo.com/',
+        })
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[philo-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+
+    return Response(
+        r.text,
+        mimetype='application/dash+xml',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 @play_bp.route('/play/<source_name>/license', methods=['POST'])
 def license_proxy(source_name: str):
     """DRM license proxy — forwards Widevine challenges to the scraper's license_url

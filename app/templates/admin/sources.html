@@ -393,6 +393,11 @@
       border: 1px solid var(--border); border-radius: 5px;
       background: var(--bg); color: var(--text);
     }
+    .philo-ident-input {
+      flex: 1 1 14rem; min-width: 12rem; padding: 0.4rem 0.6rem;
+      font-size: 0.9rem; border: 1px solid var(--border); border-radius: 5px;
+      background: var(--bg); color: var(--text);
+    }
 
     /* Custom channels */
     .custom-channel-card {
@@ -2577,6 +2582,91 @@
     }
     // ── end Amazon auto-login ───────────────────────────────────────────────
 
+    // ── Philo passwordless sign-in (email → code) ────────────────────────────
+    function renderPhiloConfig(sourceId, schema, values) {
+      const signedIn = !!(values.session_cookies);
+      const email = String(values.email || '');
+      return `
+        <div class="config-title">Philo Settings</div>
+        <div class="config-note">
+          ${signedIn
+            ? 'Signed in to Philo. Your session lasts about a year and refreshes automatically. Sign in again if playback ever stops.'
+            : 'Philo has no password. Enter your account email or mobile number, and Philo will text/email you a 6-digit code to sign in.'}
+        </div>
+
+        <div class="amazon-autologin-panel" id="philo-login-${sourceId}">
+          <div class="amazon-autologin-header">
+            <input type="text" id="philo-ident-${sourceId}" class="philo-ident-input"
+                   value="${escapeHtml(email)}" placeholder="Email or mobile number"
+                   autocomplete="username"
+                   onkeydown="if(event.key==='Enter') philoSendCode(${sourceId})">
+            <button class="btn btn-run" type="button" id="philo-send-btn-${sourceId}"
+                    onclick="philoSendCode(${sourceId})">${signedIn ? 'Sign in again' : 'Send code'}</button>
+          </div>
+          <span class="amazon-status-text" id="philo-status-${sourceId}">
+            ${signedIn ? '<span style="color:var(--success-soft)">&#10003; Signed in</span>' : ''}
+          </span>
+          <div class="amazon-otp-row" id="philo-code-${sourceId}" style="display:none">
+            <label for="philo-code-input-${sourceId}">Code:</label>
+            <input type="text" id="philo-code-input-${sourceId}" placeholder="123456"
+                   maxlength="8" autocomplete="one-time-code" inputmode="numeric"
+                   onkeydown="if(event.key==='Enter') philoVerifyCode(${sourceId})">
+            <button class="btn btn-run btn-sm" type="button"
+                    onclick="philoVerifyCode(${sourceId})">Verify</button>
+            <button class="btn btn-cancel btn-sm" type="button"
+                    onclick="philoSendCode(${sourceId})">Resend</button>
+          </div>
+        </div>`;
+    }
+
+    async function philoSendCode(sourceId) {
+      const identEl  = document.getElementById(`philo-ident-${sourceId}`);
+      const btn      = document.getElementById(`philo-send-btn-${sourceId}`);
+      const statusEl = document.getElementById(`philo-status-${sourceId}`);
+      const codeRow  = document.getElementById(`philo-code-${sourceId}`);
+      const ident = (identEl?.value || '').trim();
+      if (!ident) { statusEl.innerHTML = '<span style="color:var(--warning-soft)">Enter your email or mobile number.</span>'; return; }
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Sending code…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/philo-login/send-code`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ident}),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not send code.')}</span>`; btn.disabled = false; return; }
+        statusEl.innerHTML = `<span style="color:var(--success-soft)">Code sent to ${escapeHtml(d.ident || ident)}. Enter it below.</span>`;
+        codeRow.style.display = 'flex';
+        document.getElementById(`philo-code-input-${sourceId}`)?.focus();
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error sending code.</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function philoVerifyCode(sourceId) {
+      const codeEl   = document.getElementById(`philo-code-input-${sourceId}`);
+      const statusEl = document.getElementById(`philo-status-${sourceId}`);
+      const code = (codeEl?.value || '').trim();
+      if (!code) return;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Verifying…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/philo-login/verify`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({code}),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Verification failed.')}</span>`; return; }
+        statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
+        // Reload the config panel so it reflects the signed-in state.
+        setTimeout(() => loadSourceConfig(sourceId, 'philo'), 600);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error verifying code.</span>';
+      }
+    }
+    // ── end Philo sign-in ─────────────────────────────────────────────────────
+
     function renderFuboConfig(sourceId, schema, values) {
       const fastOnly = values.fast_only !== 'false';
       return `
@@ -2636,6 +2726,8 @@
         return renderFuboConfig(sourceId, schema, values);
       } else if (sourceName === 'amazon_prime_free') {
         return renderAmazonConfig(sourceId, schema, values);
+      } else if (sourceName === 'philo') {
+        return renderPhiloConfig(sourceId, schema, values);
       }
 
       const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {
