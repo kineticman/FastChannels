@@ -2589,6 +2589,23 @@ def _cleanup_orphans(batch_size: int = 2000):
         )
 
 
+def _normalize_episode(season, episode):
+    """Strip season-prefixed compound episode codes (S3E07 arriving as 307).
+
+    Several upstreams (Plex, TCL, Tubi, Pluto) send production-code style
+    episode numbers where the season is prepended: S1E18 → 118, S4E01 → 401.
+    Detect via episode // 100 == season and keep only the episode part.
+    Exact multiples of 100 are left alone — E00 doesn't exist in the compound
+    scheme, so a value like 100 with season 1 is a genuine episode 100.
+    Genuine large numbers (S5 E105, S12 E4991) fail the // 100 check and pass
+    through untouched.
+    """
+    if (season and season > 0 and episode and episode >= 100
+            and episode // 100 == season and episode % 100 != 0):
+        return episode % 100
+    return episode
+
+
 def _upsert_programs(source, program_data_list, progress_cb=None):
     if not program_data_list:
         return
@@ -2668,7 +2685,7 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
                 'rating':        pd.rating,
                 'episode_title': pd.episode_title,
                 'season':        pd.season,
-                'episode':       pd.episode,
+                'episode':       _normalize_episode(pd.season, pd.episode),
                 'original_air_date': pd.original_air_date,
                 'is_live':           pd.is_live,
                 'program_type':      getattr(pd, 'program_type', None),
