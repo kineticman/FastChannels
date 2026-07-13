@@ -1,555 +1,325 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
-import re
-from datetime import UTC, datetime, timedelta
-from typing import Any
-from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
+import time
+import uuid
+from datetime import UTC, datetime
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from .base import (
-    BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError,
+    BaseScraper, ChannelData, ProgramData, ScrapeSkipError,
     infer_language_from_metadata,
 )
 from .category_utils import category_for_channel, infer_category_from_name
 
 logger = logging.getLogger(__name__)
 
-_USER_AGENT   = "NitroX/1.17.0-2 (Google sdk_gphone_x86; Android 11; mobile; release)"
+# ── In-place upgrade to the VIDAA 2.0 backend ────────────────────────────────
+# The old vtvapp-ovp/tvch `catalogue-search` stack this scraper used to target is
+# orphaned/dying (its `epg/grid` service 500s indefinitely). The real production
+# app — Hisense Channels (net.vidaatv.hisense.android.tv) — talks to a completely
+# different signed backend, reverse-engineered from the decompiled APK and
+# verified live. We keep source_name="vidaa" so this replaces the existing source
+# in place: the 2.0 channels arrive with new numeric ids and the old 1.0 channels
+# (UUID ids) fall off inactive via normal reconcile once they stop being listed.
+# Full writeup, including how each constant/endpoint was derived:
+# dev/vidaa/MIGRATION_RESEARCH.md.
 
-# VIDAA is migrating backends. `vtvapp-ovp` was the (now-closed) web-player
-# backend and is still the current prod host per client-config v7; `tvch`
-# ("TV Channels") is the on-TV-app backend introduced in config v5 — it serves
-# the SAME public catalogue/EPG/drmproxy surface with no auth. VIDAA flip-flopped
-# the config between them (v5→tvch, v6/v7→vtvapp-ovp) during the 2026-06-30
-# cutover, so we don't trust "latest config version" (v10 even points at a demo
-# host). Instead we try these known-good hosts in order and use whichever
-# ANSWERS as the API base — so the scraper self-heals if vtvapp-ovp is finally
-# retired. To force a host, reorder this tuple.
-_API_HOSTS = (
-    "https://vtvapp-ovp.vidaahub.com",
-    "https://tvch.vidaahub.com",
-)
-_CONFIG_PATH   = "/cms/vidaa-adrenalin8/clientconfiguration/versions/2"
-_LOCATION_PATH = "/sso-login/location"
-_STATIONS_FIELDS = (
-    "taxonomyTerms,title,uid,assetType,externalResources,relations,"
-    "channelNumber,isFast,externalIds,language,taxonomyParentTerms,"
-    "androidDeeplinkBaseUrl,organizationDomainUrl"
-)
-# 25, not 50: the grid endpoint 500/503s when a chunk's total EPG payload
-# (stations × 168h × event-density) exceeds a backend materialization ceiling.
-# A 50-station chunk of dense channels sits over that ceiling; 25 clears it with
-# margin (proven 5/5 vs 0/5 in dev/temp/vidaa_warmup_probe.py). Warm-up and
-# retry do NOT help — only shrinking the query does. _fetch_epg_chunk() splits
-# further on failure, so this is the starting size, not a hard limit.
-_EPG_CHUNK_SIZE = 25
-_EPG_HOURS      = 168  # ~7-day window; actual upstream horizon is ~5 days
-# If the grid endpoint 500s even at single-station granularity, that's proof
-# the failure isn't the payload-size ceiling _EPG_CHUNK_SIZE works around —
-# it's a real outage, and bisecting the remaining ~270 stations down to
-# leaves would fire 500+ requests over ~20 minutes for no benefit (observed
-# 2026-07-04: 1197s, all failed). Trip a circuit after a few confirmed leaf
-# failures and fail the rest without further requests.
-_EPG_CIRCUIT_THRESHOLD = 3
+_APP_KEY             = "1204099470"
+_APP_SECRET          = "64nprh5fhk2syebs6qlkmmpt3l7s3ljg"  # MD5 request-signing secret
+_OAUTH_CLIENT_SECRET = "28B3E8943D6FADFB28071C303EF3F26AAC634B4BA1F9937FFD725F0ED516CA1952237D39DC2460219C46E0B7170577AD"
+_OAUTH_URL           = "https://partner.vidaahub.com/ns/account/oauth2.0/access_token"
+_LAYOUT_UI           = "https://partner-layout-ui.vidaahub.com"
+_DETAIL_UI           = "https://partner-detail-ui.vidaahub.com"
 
-_MACRO_RE       = re.compile(r'^\[.*\]$|^REPLACEME$|^\{.*\}$')
-_GENRE_PARAM_RE = re.compile(r'(?:AV_CONTENT_GENRE|content_genre|_fw_content_genre)=([^&]+)', re.I)
-_RATING_PARAM_RE = re.compile(r'(?:AV_CONTENT_RATING|content_rating|_fw_content_rating)=([^&]+)', re.I)
-_IAB_PARAM_RE   = re.compile(r'(?:AV_CONTENT_CAT|content_category|_fw_content_category)=([^&]+)', re.I)
-_GEO_SPLIT_RE   = re.compile(r"[,|/\s]+")
+_LIVE_TYPE_CODE      = "600007"   # tile/media typeCode for linear channels (VOD tiles are 600001)
+_MEDIAS_BATCH_SIZE   = 5          # server hard-caps mediasInfo: 6+ ids -> "Exceeds the limit of quantity"
+_EPG_STEP_HOURS      = 12         # relatedDate stride; each call returns ~13h so this keeps coverage gap-free
+_EPG_HORIZON_DAYS    = 5          # confirmed live: schedule data stops between +5 and +6 days out
+_EPG_CIRCUIT_THRESHOLD = 5        # consecutive failed EPG batches before giving up without more requests
+_SPANISH_COLUMN_TITLE = "In Spanish"  # a language grouping, not a genre — forces language='es' instead of category
 
-_IAB_GENRES: dict[str, str] = {
-    "IAB1":     "Entertainment",
-    "IAB1-5":   "Movies",
-    "IAB1-6":   "Music",
-    "IAB1-7":   "Entertainment",
-    "IAB6":     "Kids",
-    "IAB12":    "News",
-    "IAB12-1":  "News",
-    "IAB17":    "Sports",
-    "IAB17-6":  "Sports",
-    "IAB17-9":  "Sports",
-    "IAB17-10": "Sports",
-    "IAB17-44": "Sports",
-    "IAB18":    "Lifestyle",
-    "IAB20":    "Travel",
-    "IAB22":    "Shopping",
-    "IAB23-2":  "Faith",
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+# deviceId isn't a capability gate (auth is accessToken + request signature) —
+# it's an analytics/context field the backend expects present. Reusing a fixed
+# captured value is fine; it doesn't need to be unique per install.
+_DEVICE_ID = "002003059003001007000128pngito97hw8ktrcmhh4njsaof802ig"
+
+_COMMON_PARAMS = {
+    "appPackageName":      "net.vidaatv.hisense.android.tv",
+    "appVersion":          "os_t.atvchannels.1.00.0.0.Q030800",
+    "language":            "eng",
+    "locale":              "USA",
+    "country":             "USA",
+    "brand":               "his",
+    "capabilityCode":      "2026031101",
+    "playerFamilyName":    "VDAndroid_TV",
+    "playerFamilyVersion": "006110000",
+    "deviceType":          "1",
+    "appOwnership":        "oem",
+    "personalizedRec":     "1",
+    "localeLanguage":      "eng",
 }
 
-_GENRE_NORM: dict[str, str] = {
-    "television":    "Entertainment",
-    "entertainment": "Entertainment",
-    "movies":        "Movies",
-    "movie":         "Movies",
-    "gameshow":      "Game Shows",
-    "realitytv":     "Reality TV",
-    "reality":       "Reality TV",
-    "music":         "Music",
-    "sports":        "Sports",
-    "sport":         "Sports",
-    "soccer":        "Sports",
-    "news":          "News",
-    "religious":     "Faith",
-    "religion":      "Faith",
-    "animation":     "Kids",
-    "shopping":      "Shopping",
-    "lifestyle":     "Lifestyle",
-    "drama":         "Drama",
-    "comedy":        "Comedy",
-    "variedades":    "Entertainment",
-    "soapopera":     "Drama",
-    "daytimadrama":  "Drama",
-}
 
-_US_TV_RATINGS = {"TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"}
-_MPAA_RATINGS  = {"G", "PG", "PG-13", "R", "NC-17"}
-_DEFAULT_GEOS  = ("us", "ca")
+def _sign_query(params: dict[str, str]) -> str:
+    keys = sorted(k for k, v in params.items() if v not in (None, ""))
+    sign_data = "&".join(f"{k}={params[k]}" for k in keys)
+    return base64.b64encode(hashlib.md5((sign_data + _APP_SECRET).encode()).digest()).decode()
 
 
-def _normalize_geo(value: str | None) -> str:
-    geo = (value or _DEFAULT_GEOS[0]).strip().lower()
-    return geo or _DEFAULT_GEOS[0]
-
-
-def _qualified_channel_id(geo: str, channel_id: str) -> str:
-    return f"{_normalize_geo(geo).upper()}:{channel_id}"
-
-
-def _split_qualified_channel_id(source_channel_id: str) -> tuple[str, str]:
-    raw = (source_channel_id or "").strip()
-    if ":" not in raw:
-        return _DEFAULT_GEOS[0], raw
-    geo, channel_id = raw.split(":", 1)
-    return _normalize_geo(geo), channel_id.strip()
-
-
-def _normalize_genre(raw: str) -> str | None:
-    raw = unquote(raw).strip()
-    first = re.split(r',', raw)[0].strip()
-    key = re.sub(r'[\s_-]', '', first.lower())
-    return _GENRE_NORM.get(key, first if first else None)
-
-
-def _extract_genre(station: dict[str, Any], stream_url: str) -> str | None:
-    tax = station.get("taxonomyTerms") or {}
-    if isinstance(tax, dict):
-        genres = list((tax.get("genres") or {}).values())
-        if genres:
-            return _normalize_genre(genres[0]) or genres[0]
-    m = _GENRE_PARAM_RE.search(stream_url)
-    if m:
-        raw = unquote(m.group(1)).strip()
-        if not _MACRO_RE.match(raw):
-            g = _normalize_genre(raw)
-            if g:
-                return g
-    m = _IAB_PARAM_RE.search(stream_url)
-    if m:
-        iab = unquote(m.group(1)).strip().upper()
-        if not _MACRO_RE.match(iab):
-            return _IAB_GENRES.get(iab)
-    return None
-
-
-def _extract_rating(stream_url: str) -> str | None:
-    m = _RATING_PARAM_RE.search(stream_url)
-    if not m:
-        return None
-    raw = unquote(m.group(1)).strip().upper().replace("TVG", "TV-G").replace("TV14", "TV-14")
-    if raw in _US_TV_RATINGS or raw in _MPAA_RATINGS:
-        return raw
-    return None
-
-
-def _event_genre(event: dict[str, Any]) -> str | None:
-    tax = event.get("taxonomyTerms") or {}
-    if isinstance(tax, dict):
-        genres = list((tax.get("genres") or {}).values())
-        if genres:
-            return genres[0]
-    return None
-
-
-def _event_rating(event: dict[str, Any]) -> str | None:
-    for r in event.get("parentalRatings") or []:
-        if not isinstance(r, dict):
-            continue
-        val = (r.get("rating") or "").upper().replace("TVG", "TV-G")
-        if val in _US_TV_RATINGS or val in _MPAA_RATINGS:
-            return val
-    return None
+def _sign_body(body: str) -> str:
+    return base64.b64encode(hashlib.md5((body + _APP_SECRET).encode()).digest()).decode()
 
 
 def _clean_stream_url(url: str) -> str:
-    """Strip ad-macro placeholder params and fix the Triton Poker malformed URL."""
+    """Strip unfilled ad-macro placeholders (`[PLATFORM]`, `{ADS.DEVICE_COUNTRY}`)
+    from the streamingParam manifest URL — real values (e.g. `ads.vauth=...`)
+    are left untouched, only bracket/brace-delimited placeholders are dropped."""
     parsed = urlparse(url)
     params = parse_qsl(parsed.query, keep_blank_values=True)
-    seen: set[str] = set()
-    clean = []
-    for k, v in params:
-        # Triton Poker has raw JSON appended after an unescaped '"' — truncate at it
-        if '"' in v:
-            v = v[:v.index('"')]
-        if not _MACRO_RE.match(v) and k not in seen:
-            clean.append((k, v))
-            seen.add(k)
+    clean = [(k, v) for k, v in params
+             if not ((v.startswith('[') and v.endswith(']')) or (v.startswith('{') and v.endswith('}')))]
     return urlunparse(parsed._replace(query=urlencode(clean)))
 
 
-def _pick_logo(station: dict[str, Any]) -> str | None:
-    imgs = (station.get("externalResources") or {}).get("image") or []
-    if not imgs:
-        return None
-    def _norm(ar: str | None) -> str:
-        return (ar or "").replace(":", "x").lower()
-    for preferred in ("1x1", "16x9"):
-        for img in imgs:
-            if _norm((img.get("metadata") or {}).get("aspectRatio")) == preferred:
-                return img.get("cdnUrl")
-    return imgs[0].get("cdnUrl")
+def _chunk(seq: list, size: int):
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
 
 
 class VidaaScraper(BaseScraper):
-    source_name          = "vidaa"
-    display_name         = "Vidaa Free TV"
-    scrape_interval         = 720   # 12 hours; EPG horizon is ~5 days
-    stream_audit_enabled    = True
-    channel_miss_threshold  = 5    # Vidaa rotates channel content with new UUIDs; allow 60h before deactivating
-    rehome_by_guide_key     = True  # migrate existing rows when UUID changes but tva-stationId is stable
-    config_schema        = [
-        ConfigField(
-            "geo",
-            "Geo Feeds",
-            field_type="text",
-            required=False,
-            default="us,ca",
-            placeholder="us,ca",
-            help_text="One or more VIDAA geo codes separated by commas. Examples: us, ca, mx, br, ar, de, fr, it, es, nl, pl.",
-        ),
-    ]
+    source_name           = "vidaa"
+    display_name          = "Vidaa Free TV"
+    scrape_interval        = 720   # 12 hours
+    stream_audit_enabled   = True
+    channel_miss_threshold = 5
 
-    # EPG fetches ~8 chunked requests for 191 stations (25/chunk, more on splits)
+    # Channel discovery: 1 category-list call + ~15 paginated columnData calls +
+    # ~55 batched mediasInfo POSTs (257 channels / 5 per batch). EPG: same batches
+    # x 10 relatedDate steps (5-day horizon / 12h stride) — several hundred POSTs.
     phase_timeouts = {
         "init":      30,
         "bootstrap": 60,
-        "channels":  120,
-        "epg":       900,
+        "channels":  180,
+        "epg":       1800,
     }
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
-        self.session.headers.update({"User-Agent": _USER_AGENT})
-        self._bo_url: str | None = None
-        self._tenant: str | None = None
-        self._detected_geo_code: str = _DEFAULT_GEOS[0]
-        # Keyed per-geo: an outage in one geo's EPG grid must not short-circuit
-        # requests for a different, healthy geo in the same fetch_epg() call.
-        self._epg_leaf_failures: dict[str, int] = {}
-        self._epg_circuit_open: dict[str, bool] = {}
-        self._epg_circuit_exc: dict[str, Exception | None] = {}
+        self.session.headers.update({"User-Agent": _UA})
+        self._access_token: str | None = None
+        self._token_expires_at: float = 0.0
 
-    # ── bootstrap ─────────────────────────────────────────────────────────────
+    # ── auth ─────────────────────────────────────────────────────────────────
 
-    def _bootstrap(self) -> None:
-        # Try each known host in order; use the first that serves the client
-        # config as the API base. We deliberately use the *serving* host rather
-        # than the config's Environment.BOURL, because BOURL is version-bound and
-        # can name an already-dead host (v7 still says vtvapp-ovp even when served
-        # from tvch). This keeps current behaviour (vtvapp-ovp first) but fails
-        # over to tvch automatically if vtvapp-ovp stops answering.
-        last_exc: Exception | None = None
-        for host in _API_HOSTS:
-            try:
-                r = self.session.get(host + _CONFIG_PATH, timeout=30)
-                r.raise_for_status()
-                raw_inner = r.json().get("configuration")
-                if not raw_inner:
-                    raise RuntimeError("Vidaa client configuration missing 'configuration' key")
-                app_config = json.loads(raw_inner)
-                self._tenant = app_config["Environment"]["Tenant"]
-                self._bo_url = host
+    def _ensure_token(self) -> None:
+        if self._access_token and time.monotonic() < self._token_expires_at:
+            return
+        r = self.session.get(_OAUTH_URL, params={
+            "client_id": _APP_KEY,
+            "client_secret": _OAUTH_CLIENT_SECRET,
+            "grant_type": "client_credentials",
+        }, timeout=20)
+        r.raise_for_status()
+        data = r.json()
+        token = data.get("access_token")
+        if not token:
+            raise RuntimeError(f"Vidaa OAuth token missing in response: {data}")
+        self._access_token = token
+        expires_in = int(data.get("expires_in") or 3600)
+        self._token_expires_at = time.monotonic() + max(expires_in - 120, 60)
+
+    def _base_params(self, **extra: str) -> dict[str, str]:
+        self._ensure_token()
+        params = dict(_COMMON_PARAMS)
+        params["deviceId"] = _DEVICE_ID
+        params["accessToken"] = self._access_token
+        params["commonRandomId"] = uuid.uuid4().hex
+        params.update(extra)
+        return params
+
+    def _get(self, host: str, path: str, params: dict[str, str]) -> dict:
+        signature = _sign_query(params)
+        r = self.session.get(f"{host}{path}", params=params,
+                              headers={"appKey": _APP_KEY, "x-sign-for": signature}, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    def _post(self, host: str, path: str, params: dict[str, str], body: dict) -> dict:
+        body_str = json.dumps(body, separators=(",", ":"))
+        signature = _sign_body(body_str)
+        r = self.session.post(f"{host}{path}", params=params, data=body_str.encode(), headers={
+            "appKey": _APP_KEY, "x-sign-for": signature, "Content-Type": "application/json",
+        }, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    def _fetch_medias_info(self, channel_ids: list[int], related_date: int) -> dict:
+        params = self._base_params(sceneCode="ottChannel", relatedDate=str(related_date))
+        body = {"medias": [{"id": cid, "typeCode": _LIVE_TYPE_CODE} for cid in channel_ids]}
+        return self._post(_DETAIL_UI, "/api/v1.0.0/detailApi/mediasInfo", params, body)
+
+    # ── fetch_channels ───────────────────────────────────────────────────────
+
+    def _discover_columns(self) -> list[dict]:
+        # scene=osPagingChannel + resourceType=1, no columnId -> the Live TV tab's
+        # category list (Movies/Entertainment/News & Opinion/Sports/Kids/Music/In
+        # Spanish, each with a real column id). Column ids are catalogue data, not
+        # a fixed schema — always discovered fresh, never hardcoded.
+        params = self._base_params(scene="osPagingChannel", resourceType="1")
+        data = self._get(_LAYOUT_UI, "/api/v1.0.0/layoutApi/activityResources", params)
+        columns = data.get("columns") or []
+        if not columns:
+            raise RuntimeError(f"Vidaa category discovery returned no columns: {data}")
+        return columns
+
+    def _fetch_column_tiles(self, column_id) -> list[dict]:
+        tiles_by_id: dict[int, dict] = {}
+        page = 1
+        while page <= 20:  # safety cap; real columns top out well under this
+            params = self._base_params(columnId=str(column_id), scene="osPagingChannel", ratio="16:9")
+            if page > 1:
+                params["metaInfo"] = f"page={page},oneMoreTile=1"
+            data = self._get(_LAYOUT_UI, "/api/v1.0.0/layoutApi/columnData", params)
+            tiles = (data.get("column") or {}).get("tiles") or []
+            if not tiles:
                 break
-            except Exception as exc:
-                last_exc = exc
-                logger.warning("[vidaa] bootstrap config failed for %s: %s", host, exc)
-        if self._bo_url is None:
-            raise RuntimeError(f"Vidaa bootstrap failed on all hosts: {last_exc}")
+            for tile in tiles:
+                if tile.get("typeCode") == _LIVE_TYPE_CODE and tile.get("id") is not None:
+                    tiles_by_id[tile["id"]] = tile
+            page += 1
+        return list(tiles_by_id.values())
 
-        # Geo detection is best-effort — _geos() falls back to configured/default
-        # geos, so a location hiccup must not abort the whole scrape.
-        self._detected_geo_code = _DEFAULT_GEOS[0]
-        try:
-            r = self.session.get(
-                self._bo_url + _LOCATION_PATH, timeout=15,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-            r.raise_for_status()
-            self._detected_geo_code = _normalize_geo(r.json().get("geo_code", _DEFAULT_GEOS[0]))
-        except Exception as exc:
-            logger.warning("[vidaa] location detect failed on %s: %s", self._bo_url, exc)
-        logger.info("[vidaa] bootstrap — base=%s tenant=%s geo=%s",
-                    self._bo_url, self._tenant, self._detected_geo_code)
-
-    def _ensure_bootstrap(self) -> None:
-        if self._bo_url is None:
-            self._bootstrap()
-
-    def _geos(self) -> list[str]:
-        raw = (self.config.get("geo") or "").strip()
-        codes = [_normalize_geo(part) for part in _GEO_SPLIT_RE.split(raw) if part.strip()]
-        return codes or [self._detected_geo_code or _DEFAULT_GEOS[0]]
-
-    def _station_headers(self, geo: str) -> dict[str, str]:
-        return {
-            "Accept-Language": "en",
-            "x-language":      "en",
-            "x-user-device":   "android-mobile",
-            "x-user-domain":   _normalize_geo(geo),
-        }
-
-    # ── fetch_channels ─────────────────────────────────────────────────────────
+    def _build_channel(self, media: dict, column_title: str | None) -> ChannelData | None:
+        cid = media.get("id")
+        show = media.get("showInfo") or {}
+        chan = media.get("channelInfo") or {}
+        name = (show.get("title") or "").strip()
+        stream_url = chan.get("streamingParam")
+        if not cid or not name or not stream_url:
+            return None
+        stream_url = _clean_stream_url(stream_url)
+        drm = bool((chan.get("streamingDetailParam") or {}).get("encryption"))
+        is_spanish = column_title == _SPANISH_COLUMN_TITLE
+        category = category_for_channel(name, column_title) or infer_category_from_name(name)
+        language = "es" if is_spanish else infer_language_from_metadata(name)
+        return ChannelData(
+            source_channel_id = str(cid),
+            name              = name,
+            stream_url        = stream_url,
+            logo_url          = show.get("frontPic") or show.get("appIcon") or None,
+            category          = category,
+            language          = language,
+            country           = "US",
+            stream_type       = "dash" if drm else "hls",
+        )
 
     def fetch_channels(self) -> list[ChannelData]:
-        self._ensure_bootstrap()
+        columns = self._discover_columns()
 
+        tile_ids_by_column: dict[int, list[int]] = {}
+        column_title_by_channel_id: dict[int, str] = {}
+        for col in columns:
+            col_id = col.get("id")
+            col_title = col.get("title") or ""
+            if col_id is None:
+                continue
+            tiles = self._fetch_column_tiles(col_id)
+            ids = [t["id"] for t in tiles]
+            tile_ids_by_column[col_id] = ids
+            for cid in ids:
+                column_title_by_channel_id.setdefault(cid, col_title)
+            logger.info("[vidaa] %s: %d channels", col_title, len(ids))
+
+        all_ids = list(column_title_by_channel_id.keys())
+        if not all_ids:
+            raise RuntimeError("Vidaa: no live channels discovered across any category")
+
+        now_ts = int(time.time())
         channels: list[ChannelData] = []
-        seen_ids: set[str] = set()
-        geos = self._geos()
-        stations_url = (
-            f"{self._bo_url}/catalogue-search/{self._tenant}"
-            f"/search/public/usercontext/epg/stations"
-            f"?{urlencode({'fields': _STATIONS_FIELDS})}"
-        )
-        for geo in geos:
-            r = self.session.get(stations_url, timeout=60, headers=self._station_headers(geo))
-            r.raise_for_status()
-            stations = r.json()
-
-            if not isinstance(stations, list):
-                raise RuntimeError(f"Vidaa stations response was not a list: {type(stations)}")
-
-            region_count = 0
-            for station in stations:
-                uid  = station.get("uid")
-                name = station.get("title")
-                if not uid or not name:
+        for batch in _chunk(all_ids, _MEDIAS_BATCH_SIZE):
+            detail = self._fetch_medias_info(batch, now_ts)
+            for media in detail.get("medias") or []:
+                cid = media.get("id")
+                if cid is None:
                     continue
+                channel = self._build_channel(media, column_title_by_channel_id.get(cid))
+                if channel:
+                    channels.append(channel)
 
-                streams = (station.get("externalResources") or {}).get("liveStream") or []
-                if not streams:
-                    logger.debug("[vidaa] skipping %r — no streams", name)
-                    continue
-
-                source_channel_id = _qualified_channel_id(geo, str(uid))
-                if source_channel_id in seen_ids:
-                    continue
-
-                primary    = streams[0]
-                meta       = primary.get("metadata") or {}
-                raw_url    = primary.get("url") or ""
-                if not raw_url:
-                    continue
-
-                seen_ids.add(source_channel_id)
-                stream_url   = _clean_stream_url(raw_url)
-                drm          = meta.get("drmType")
-                stream_type  = "dash" if drm else "hls"
-                genre        = _extract_genre(station, raw_url)
-                logo         = _pick_logo(station)
-                number       = station.get("channelNumber")
-                station_id   = (station.get("externalIds") or {}).get("tva-stationId")
-
-                # API returns "en" for all stations regardless of actual language.
-                # AV_CONTENT_LANGUAGE in Aniview stream URLs is the most reliable signal.
-                # 'ara' is ISO 639-2; normalise to ISO 639-1 'ar'.
-                # 'pt' and 'sp' (non-standard) collapse to 'es' — app has no separate pt slot.
-                m = re.search(r'AV_CONTENT_LANGUAGE=([a-z]{2,3})', raw_url, re.I)
-                url_lang = m.group(1).lower() if m else None
-                _LANG_MAP = {'es': 'es', 'pt': 'es', 'sp': 'es',
-                             'ara': 'ar', 'hi': 'hi', 'pa': 'pa', 'de': 'de'}
-                if url_lang and url_lang in _LANG_MAP:
-                    language = _LANG_MAP[url_lang]
-                else:
-                    language = infer_language_from_metadata(name)
-
-                channels.append(ChannelData(
-                    source_channel_id = source_channel_id,
-                    name              = name,
-                    stream_url        = stream_url,
-                    logo_url          = logo,
-                    category          = category_for_channel(name, genre) or infer_category_from_name(name),
-                    language          = language,
-                    country           = _normalize_geo(geo).upper(),
-                    stream_type       = stream_type,
-                    number            = int(number) if number is not None else None,
-                    guide_key         = station_id,
-                ))
-                region_count += 1
-
-            logger.info("[vidaa] %d channels fetched for geo=%s", region_count, _normalize_geo(geo))
-
-        logger.info("[vidaa] %d channels fetched across %d geo feed(s)", len(channels), len(geos))
+        logger.info("[vidaa] %d channels fetched across %d categories", len(channels), len(columns))
         return channels
 
-    # ── fetch_epg ──────────────────────────────────────────────────────────────
-
-    def _fetch_epg_chunk(
-        self, geo: str, chunk: list[str], start_str: str, end_str: str,
-    ) -> tuple[list[dict], int, int, Exception | None]:
-        """Fetch one EPG grid chunk. On HTTP failure (VIDAA 500/503s when the
-        chunk's payload exceeds the backend ceiling) split it in half and retry
-        the halves, down to a single station. Returns
-        (entries, ok_leaves, failed_leaves, last_exc) where the leaf counts are
-        the number of terminal grid requests that succeeded/failed — used by the
-        caller to distinguish a partial outage from a total wipeout."""
-        if self._epg_circuit_open.get(geo):
-            return [], 0, len(chunk), self._epg_circuit_exc.get(geo)
-
-        epg_url = (
-            f"{self._bo_url}/catalogue-search/{self._tenant}"
-            f"/search/public/usercontext/epg/grid"
-            f"?{urlencode({'stationIds': ','.join(chunk), 'startTime': start_str, 'endTime': end_str})}"
-        )
-        try:
-            r = self.session.get(epg_url, timeout=60, headers=self._station_headers(geo))
-            r.raise_for_status()
-            data = r.json()
-            # Any successful response (any chunk size, any geo) proves the
-            # endpoint is reachable right now, so a prior failure wasn't the
-            # start of a real outage — only a genuine run of *consecutive*
-            # leaf failures with no success in between should trip the circuit.
-            self._epg_leaf_failures[geo] = 0
-            return (list(data) if isinstance(data, list) else []), 1, 0, None
-        except Exception as exc:
-            if len(chunk) <= 1:
-                logger.warning("[vidaa] EPG chunk (1 station) failed for geo=%s: %s", geo, exc)
-                failures = self._epg_leaf_failures.get(geo, 0) + 1
-                self._epg_leaf_failures[geo] = failures
-                if failures >= _EPG_CIRCUIT_THRESHOLD:
-                    self._epg_circuit_open[geo] = True
-                    self._epg_circuit_exc[geo] = exc
-                    logger.error(
-                        "[vidaa] EPG grid failing even at single-station granularity "
-                        "(%d consecutive) for geo=%s — not the chunk-size ceiling, it's an "
-                        "outage; aborting remaining chunks for this geo without further requests",
-                        failures, geo,
-                    )
-                return [], 0, 1, exc
-            mid = len(chunk) // 2
-            logger.info("[vidaa] EPG chunk of %d failed for geo=%s (%s); splitting %d+%d",
-                        len(chunk), geo, exc, mid, len(chunk) - mid)
-            l_entries, l_ok, l_fail, l_exc = self._fetch_epg_chunk(geo, chunk[:mid], start_str, end_str)
-            r_entries, r_ok, r_fail, r_exc = self._fetch_epg_chunk(geo, chunk[mid:], start_str, end_str)
-            return l_entries + r_entries, l_ok + r_ok, l_fail + r_fail, (r_exc or l_exc)
+    # ── fetch_epg ────────────────────────────────────────────────────────────
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
-        self._ensure_bootstrap()
-
         if not channels:
             return []
 
-        now       = datetime.now(UTC)
-        end       = now + timedelta(hours=_EPG_HOURS)
-        start_str = now.strftime("%Y-%m-%dT%H:%MZ")
-        end_str   = end.strftime("%Y-%m-%dT%H:%MZ")
+        ids = [int(ch.source_channel_id) for ch in channels]
+        now = int(time.time())
+        steps = (_EPG_HORIZON_DAYS * 24) // _EPG_STEP_HOURS
+        related_dates = [now + step * _EPG_STEP_HOURS * 3600 for step in range(steps)]
+        batches = list(_chunk(ids, _MEDIAS_BATCH_SIZE))
+        total = len(batches) * len(related_dates)
 
-        qualified_by_geo: dict[str, dict[str, str]] = {}
-        uid_to_genre: dict[str, str] = {}
-        for ch in channels:
-            geo, raw_id = _split_qualified_channel_id(ch.source_channel_id)
-            if not raw_id:
-                continue
-            qualified_by_geo.setdefault(geo, {})[raw_id] = ch.source_channel_id
-            if ch.category:
-                uid_to_genre[ch.source_channel_id] = ch.category
-
-        total = len(channels)
+        programs_by_key: dict[tuple[str, int], ProgramData] = {}
         done = 0
-        # Track chunk health so a total EPG outage surfaces as a scrape error
-        # instead of a silent 0-program "success". Partial failures stay
-        # best-effort (return what we got); a full wipeout raises below.
-        chunks_total = 0
-        chunks_failed = 0
-        last_epg_exc: Exception | None = None
-        all_entries: list[tuple[str, dict]] = []
-        for geo, station_map in qualified_by_geo.items():
-            station_ids = list(station_map.keys())
-            for i in range(0, len(station_ids), _EPG_CHUNK_SIZE):
-                chunk = station_ids[i : i + _EPG_CHUNK_SIZE]
-                entries, ok_leaves, failed_leaves, exc = self._fetch_epg_chunk(
-                    geo, chunk, start_str, end_str)
-                all_entries.extend((geo, entry) for entry in entries)
-                chunks_total  += ok_leaves + failed_leaves
-                chunks_failed += failed_leaves
-                if exc is not None:
-                    last_epg_exc = exc
-                done += len(chunk)
+        consecutive_failures = 0
+        circuit_open = False
+        for related_date in related_dates:
+            for batch in batches:
+                done += 1
+                if circuit_open:
+                    continue
+                try:
+                    data = self._fetch_medias_info(batch, related_date)
+                    consecutive_failures = 0
+                except Exception as exc:
+                    consecutive_failures += 1
+                    logger.warning("[vidaa] EPG batch failed (relatedDate=%s, ids=%s): %s",
+                                    related_date, batch, exc)
+                    if consecutive_failures >= _EPG_CIRCUIT_THRESHOLD:
+                        circuit_open = True
+                        logger.error("[vidaa] %d consecutive EPG batch failures — "
+                                     "aborting remaining requests", consecutive_failures)
+                    if self._progress_cb:
+                        self._progress_cb('epg', min(done, total), total)
+                    continue
+
+                for media in data.get("medias") or []:
+                    cid = media.get("id")
+                    if cid is None:
+                        continue
+                    for sched in (media.get("channelInfo") or {}).get("scheduleList") or []:
+                        title = (sched.get("scheduleName") or "").strip()
+                        start_ms, end_ms = sched.get("startTime"), sched.get("endTime")
+                        if not title or not start_ms or not end_ms:
+                            continue
+                        start_dt = datetime.fromtimestamp(start_ms / 1000, tz=UTC)
+                        end_dt   = datetime.fromtimestamp(end_ms / 1000, tz=UTC)
+                        if end_dt <= start_dt:
+                            continue
+                        key = (str(cid), sched.get("scheduleId") or start_ms)
+                        programs_by_key[key] = ProgramData(
+                            source_channel_id = str(cid),
+                            title             = title,
+                            start_time        = start_dt,
+                            end_time          = end_dt,
+                            description       = (sched.get("summary") or "").strip() or None,
+                            poster_url        = sched.get("recommendPic"),
+                        )
                 if self._progress_cb:
                     self._progress_cb('epg', min(done, total), total)
 
-        # Total wipeout (every chunk failed) — this is an upstream VIDAA outage,
-        # not a bug, so skip (clean warning log, no traceback) rather than raise
-        # a hard error. The worker still records last_error and leaves
-        # last_epg_success_at stale (visible on the sources page), rather than
-        # stamping a false success with 0 programs.
-        if chunks_total and chunks_failed == chunks_total:
-            raise ScrapeSkipError(
-                f"Vidaa EPG unavailable: all {chunks_total} grid chunk(s) failed "
-                f"(last error: {last_epg_exc})"
-            )
-        if chunks_failed:
-            logger.warning("[vidaa] EPG partial: %d/%d grid chunk(s) failed",
-                            chunks_failed, chunks_total)
+        programs = list(programs_by_key.values())
+        if not programs and (circuit_open or consecutive_failures):
+            raise ScrapeSkipError("Vidaa EPG unavailable: all attempted batches failed")
 
-        programs: list[ProgramData] = []
-        for geo, entry in all_entries:
-            station_uid = entry.get("uid")
-            qualified_station_uid = qualified_by_geo.get(geo, {}).get(str(station_uid))
-            if not qualified_station_uid:
-                continue
-            chan_genre = uid_to_genre.get(qualified_station_uid)
-
-            for event in entry.get("events") or []:
-                raw_title = (event.get("title") or "").strip()
-                start_raw = event.get("startTime")
-                end_raw   = event.get("endTime")
-                if not raw_title or not start_raw or not end_raw:
-                    continue
-                try:
-                    start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
-                    end_dt   = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
-                except ValueError:
-                    continue
-                if end_dt <= start_dt:
-                    continue
-
-                # Korean EPG encodes episode number as <N> at the end of the title
-                ep_num = None
-                ep_match = re.search(r'\s*<(\d+)>\s*$', raw_title)
-                if ep_match:
-                    ep_num = int(ep_match.group(1))
-                    raw_title = raw_title[:ep_match.start()].strip()
-
-                related = ((event.get("relations") or {}).get("event-related-asset") or [{}])[0]
-                desc    = (related.get("longDescription") or "").strip() or None
-
-                images = (event.get("externalResources") or {}).get("image") or []
-                poster = images[0].get("cdnUrl") if images else None
-
-                programs.append(ProgramData(
-                    source_channel_id = qualified_station_uid,
-                    title             = raw_title,
-                    start_time        = start_dt,
-                    end_time          = end_dt,
-                    description       = desc,
-                    poster_url        = poster,
-                    category          = _event_genre(event) or chan_genre,
-                    rating            = _event_rating(event),
-                    episode           = ep_num,
-                ))
-
-        logger.info("[vidaa] %d EPG programs fetched across %d stations",
-                    len(programs), len(all_entries))
+        logger.info("[vidaa] %d EPG programs fetched across %d channels", len(programs), len(channels))
         return programs
