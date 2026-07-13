@@ -61,7 +61,7 @@ Go to **Admin → Settings** and set two things:
 **3. Configure Sources.**
 Go to **Admin → Sources**. Enable or disable sources to taste, and expand any source card to enter credentials. Changes take effect on the next scrape.
 
-Some sources ship **disabled by default** because they need credentials, a local device, or carry mostly DRM content: Pluto TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), and Frndly/Fubo/FreeCast require account credentials. See [Source Notes](#source-notes) for per-source details.
+Some sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, DistroTV, and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), and Frndly/Fubo/FreeCast require account credentials. See [Source Notes](#source-notes) for per-source details.
 
 **4. Run Stream Audits.**
 Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
@@ -252,7 +252,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Xumo Play | None | Public API |
 | Samsung TV Plus | None | Channel data and EPG via [Matt Huisman's public mirror](https://github.com/matthuisman/samsung-tvplus-for-channels). Region configurable (default: `us`). |
 | Sling Freestream | Optional OAuth creds | **Default off.** Streams are DRM-only for generic IPTV clients |
-| DistroTV | None | Android TV UA required, URL macro substitution |
+| DistroTV | None | **Default off.** Upstream lineup has shrunk considerably. Android TV UA required, URL macro substitution |
 | LG Channels | None | Country configurable (default: `US`) |
 | Local Now | None | **Default off.** Public API |
 | STIRR | None | Public API |
