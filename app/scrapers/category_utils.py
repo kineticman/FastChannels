@@ -286,6 +286,12 @@ _CANONICAL_MAP: dict[str, str] = {
     'reality competition':          'Reality TV',
     'competition reality':          'Reality TV',
     'competition and reality':      'Reality TV',
+    # Pluto's seasonal Big Brother pop-up. The live-feed camera channels sit in
+    # this category and nothing else, and their names ("Big Brother Camera 1")
+    # infer nothing, so without this they land in the uncategorized bucket.
+    # It also pins the main "Big Brother" channel, which today only lands on
+    # Reality TV via the order Pluto happens to return its categories in.
+    'big brother live':             'Reality TV',
 
     # Sci-Fi (combos leading with Sci-Fi)
     'sci-fi & horror':              'Sci-Fi',
