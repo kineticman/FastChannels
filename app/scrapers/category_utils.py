@@ -323,6 +323,12 @@ _NUMBERED_FOX_LOCAL_RE = re.compile(r'^fox \d+\s+local\b')
 _CANONICAL_LOWER: dict[str, str] = {}  # populated lazily on first use
 _NETWORK_NUMBERED_NEWS_RE = re.compile(r'^(abc|cbs|fox|nbc)\d+\s+news\b')
 _CALL_SIGN_LEADING_NEWS_RE = re.compile(r'^[kw][a-z]{2,4}\b.*\bnews\b')
+# "<NETWORK> [N] <CALLSIGN> <City> <ST>" — Sinclair/STIRR style, where the call
+# sign is bare (no parentheses) and the name never says "news", so neither
+# _LOCAL_CALL_SIGN_RE nor the ' news' check below sees it. The call sign is
+# matched case-sensitively: a real one is always upper-case, which stops city
+# words like "Waco" or "West" from being read as a call sign.
+_NETWORK_BARE_CALL_SIGN_RE = re.compile(r'^(?i:abc|cbs|fox|nbc)\s+(?:\d+\s+)?[KW][A-Z]{2,3}\s+\S')
 
 # Sources whose channels are real OTA broadcast stations (full call signs that
 # span genres), so the bare call-sign → Local News heuristic should NOT apply —
@@ -1156,6 +1162,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'fox 26 fresno ca':                     'Local News',
     'action news jax (cbs47 / fox30)':      'Local News',
     'atlanta news first':                   'Local News',
+    'boston 25 news':                       'Local News',   # Roku's name for the same WFXT feed
     'boston 25 news (fox)':                 'Local News',
     'channel 3 eyewitness news':            'Local News',
     'cleveland 19 news plus':               'Local News',
@@ -1838,14 +1845,26 @@ _NATIONAL_NETWORK_NEWS = {
     'nbc news now',
 }
 
+# Telemundo's regional news feeds, which sources name in three different word
+# orders: "Telemundo Noticias Texas", "Telemundo Texas", "Noticias Telemundo
+# Suroeste". Matched against this fixed region list rather than a bare
+# "telemundo <x>" prefix, because that prefix also covers non-news feeds
+# ("Telemundo Acción" → Latino, "Telemundo Deportes Ahora" → Sports) and the
+# national "Noticias Telemundo Ahora" / "Telemundo Al Día".
+_TELEMUNDO_NEWS_REGIONS = frozenset({
+    'california', 'florida', 'noreste', 'suroeste', 'texas',
+})
 
-def _local_news_rule(name_lower: str) -> str | None:
+
+def _local_news_rule(name_lower: str, name: str) -> str | None:
     if _NETWORK_NUMBERED_NEWS_RE.match(name_lower):
         return 'network_numbered_news'
     if _CALL_SIGN_LEADING_NEWS_RE.match(name_lower):
         return 'leading_call_sign_news'
     if _NUMBERED_FOX_LOCAL_RE.match(name_lower):
         return 'numbered_fox_local'
+    if _NETWORK_BARE_CALL_SIGN_RE.match(name):
+        return 'network_bare_call_sign'
     if name_lower.startswith(('abc ', 'cbs ', 'fox ', 'nbc ')):
         if _LOCAL_CALL_SIGN_RE.search(name_lower):
             return 'network_call_sign'
@@ -1853,6 +1872,9 @@ def _local_news_rule(name_lower: str) -> str | None:
             return 'network_city_news'
     if name_lower.startswith('telemundo noticias ') and name_lower != 'telemundo noticias ahora':
         return 'telemundo_regional_news'
+    for prefix in ('telemundo ', 'noticias telemundo '):
+        if name_lower.startswith(prefix) and name_lower[len(prefix):] in _TELEMUNDO_NEWS_REGIONS:
+            return 'telemundo_regional_news'
     return None
 
 
@@ -1872,7 +1894,8 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
     scraper-provided category (a real genre, or 'Broadcast') is honoured.
     For every other source the resolution order is unchanged.
     """
-    name_lower = (name or '').strip().lower()
+    name_clean = (name or '').strip()
+    name_lower = name_clean.lower()
 
     # 1. Exact override
     override = _NAME_OVERRIDES.get(name_lower)
@@ -1892,7 +1915,7 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
         return 'Westerns'
 
     # Local News patterns
-    if _local_news_rule(name_lower):
+    if _local_news_rule(name_lower, name_clean):
         return 'Local News'
     # Local Now local-market feeds, e.g. "Local Now Atlanta" (and the bare
     # "Local Now"). The Allen Media "Local Now <market>" brand is always a
@@ -1955,7 +1978,8 @@ def explain_category(name: str, raw_category: str | None, source_name: str | Non
     Mirrors category_for_channel: `source_name` in _CALLSIGN_GENRE_TRUSTED_SOURCES
     skips the bare call-sign guess so the scraper-provided category wins.
     """
-    name_lower = (name or '').strip().lower()
+    name_clean = (name or '').strip()
+    name_lower = name_clean.lower()
 
     # 1. Exact override
     if name_lower in _NAME_OVERRIDES:
@@ -1973,7 +1997,7 @@ def explain_category(name: str, raw_category: str | None, source_name: str | Non
     if (name_lower.endswith(' westerns') or name_lower.endswith(' western')
             or name_lower.startswith('western ') or ' western ' in name_lower):
         return {'source': 'name_pattern', 'rule': 'western', 'detail': 'Name contains "Western" → Westerns.'}
-    local_rule = _local_news_rule(name_lower)
+    local_rule = _local_news_rule(name_lower, name_clean)
     if local_rule:
         return {
             'source': 'name_pattern',
