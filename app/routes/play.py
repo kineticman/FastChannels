@@ -69,6 +69,21 @@ def _distro_variant_key(upstream_url: str) -> str:
     return _DISTRO_REDIS_KEY_PREFIX + hashlib.md5(upstream_url.encode()).hexdigest()
 
 
+from ..scrapers.cspan import (
+    CDN_HEADERS as _CSPAN_CDN_HEADERS,
+    CDN_HOST_SUFFIX as _CSPAN_CDN_HOST_SUFFIX,
+    pick_best_variant as _cspan_pick_best_variant,
+    build_live_window as _cspan_build_live_window,
+    CSpanScraper,
+)
+
+# Persistent session for C-SPAN segment/manifest fetches. Carries the Referer
+# the segment CDN (m3u8-l2.c-spanvideo.org) requires; reuses TCP/TLS across the
+# ~6s manifest poll interval.
+_CSPAN_PROXY_SESSION = _requests.Session()
+_CSPAN_PROXY_SESSION.headers.update(_CSPAN_CDN_HEADERS)
+
+
 from ..scrapers.base import StreamDeadError
 from .tasks import trigger_channel_auto_disable
 
@@ -640,6 +655,127 @@ def _distro_fetch_variant(upstream_url: str, channel_id: str) -> tuple[str, _req
     except Exception:
         pass
     return best_variant, variant_r
+
+
+@play_bp.route('/play/cspan/segment')
+def cspan_segment_proxy():
+    """
+    Segment proxy for C-SPAN's media CDN (m3u8-l2.c-spanvideo.org), which 403s
+    any request lacking `Referer: https://www.c-span.org/`. Segment URLs come
+    from manifests we already fetched from C-SPAN's own hosts, so we only guard
+    HTTPS + host suffix + private IPs against SSRF.
+    """
+    from urllib.parse import urlsplit, unquote as _unquote
+    raw = request.args.get('url', '')
+    if not raw:
+        abort(400)
+    url = _unquote(raw)
+    parsed = urlsplit(url)
+    if parsed.scheme != 'https' or not parsed.netloc:
+        abort(400)
+    host = parsed.netloc.split(':')[0].lower()
+    if not host.endswith(_CSPAN_CDN_HOST_SUFFIX):
+        logger.warning('[cspan-seg] blocked non-C-SPAN host: %s', host)
+        abort(403)
+    if _PRIVATE_IP_RE.match(host):
+        abort(403)
+    try:
+        r = _CSPAN_PROXY_SESSION.get(url, timeout=15, stream=True)
+        if r.status_code != 200:
+            abort(r.status_code)
+        return Response(
+            r.iter_content(65536),
+            status=200,
+            content_type=r.headers.get('Content-Type', 'video/MP2T'),
+            headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+        )
+    except Exception as e:
+        logger.warning('[cspan-seg] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+
+
+@play_bp.route('/play/cspan/<channel_id>/proxy.m3u8')
+def cspan_manifest_proxy(channel_id: str):
+    """
+    Manifest proxy for C-SPAN floor feeds.
+
+    Resolves the live event's master (via the scraper's cached /congress/ scrape),
+    picks the best variant, fetches its media playlist, and rewrites segment URLs
+    to go through cspan_segment_proxy (which adds the required Referer). Manifests
+    are on an open host, but segments are Referer-gated, so the client can't fetch
+    them directly.
+    """
+    from urllib.parse import urlsplit, unquote as _unquote, quote as _quote
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'cspan', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper = CSpanScraper(config=channel.source.config or {})
+    try:
+        master_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[cspan-proxy] resolve failed for %s: %s', raw_id, e)
+        return _unavailable_response()
+    if not master_url or not master_url.startswith('http'):
+        # No live session (recess) — transient, not dead.
+        return _unavailable_response()
+
+    try:
+        master_r = _CSPAN_PROXY_SESSION.get(master_url, timeout=10)
+        master_r.raise_for_status()
+    except Exception as e:
+        logger.warning('[cspan-proxy] master fetch failed for %s: %s', raw_id, e)
+        return _unavailable_response()
+
+    variant_url = _cspan_pick_best_variant(master_r.text, master_r.url)
+    if variant_url:
+        try:
+            variant_r = _CSPAN_PROXY_SESSION.get(variant_url, timeout=10)
+            variant_r.raise_for_status()
+        except Exception as e:
+            logger.warning('[cspan-proxy] variant fetch failed for %s: %s', raw_id, e)
+            return _unavailable_response()
+    elif '#EXTINF' in master_r.text:
+        # Some event manifests (e.g. an event that hasn't cut to content yet)
+        # return a media playlist directly rather than a master. Use it as-is.
+        variant_r = master_r
+    else:
+        logger.warning('[cspan-proxy] no variants or segments in manifest for %s', raw_id)
+        return _unavailable_response()
+
+    # Refresh the resolution/codec badge off the master we just fetched.
+    from flask import current_app as _current_app
+    _refresh_stream_info_async(
+        _current_app._get_current_object(), channel.id, channel.stream_info, master_r.text,
+    )
+
+    base_url = request.host_url.rstrip('/')
+
+    def _rewrite_segment(abs_url: str) -> str:
+        seg_host = urlsplit(abs_url).netloc.split(':')[0].lower()
+        # Route C-SPAN-hosted segments through the Referer-adding proxy; leave
+        # anything else (should not occur) direct.
+        if seg_host.endswith(_CSPAN_CDN_HOST_SUFFIX):
+            return f'{base_url}/play/cspan/segment?url={_quote(abs_url, safe="")}'
+        return abs_url
+
+    # C-SPAN serves EVENT playlists holding the whole session from segment 0, so
+    # a player would start hours behind live. Trim to a sliding live window so
+    # playback begins at the live edge.
+    body = _cspan_build_live_window(variant_r.text, variant_r.url, _rewrite_segment)
+
+    return Response(
+        body,
+        mimetype='application/vnd.apple.mpegurl',
+        headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+    )
 
 
 @play_bp.route('/play/distro/<channel_id>/proxy.m3u8')
@@ -2141,6 +2277,17 @@ def play(source_name: str, channel_id: str):
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
             f"{request.host_url.rstrip('/')}/play/stirr/{encoded_id}/proxy.m3u8",
+            302,
+        )
+
+    # C-SPAN floor feeds: manifests are open but segments are Referer-gated, so
+    # every stream goes through the manifest proxy (which rewrites segments through
+    # the Referer-adding segment proxy).
+    if source_name == 'cspan':
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/cspan/{encoded_id}/proxy.m3u8",
             302,
         )
 
