@@ -77,6 +77,8 @@ FLOOR_CHANNELS = {
 # Schedule-discovered channels (fixed opaque ids).
 WJ_CHANNEL_ID = "washington-journal"
 LIVE_EVENT_CHANNEL_ID = "live-event"
+CSPAN3_CHANNEL_ID = "cspan3"
+CSPAN3_NETWORK = 3  # /schedule/?channel=3 — the per-network C-SPAN 3 view
 
 # Schedule slugs that belong to a dedicated channel above, so the rotating
 # Live Event channel never doubles up on them.
@@ -124,8 +126,8 @@ _FORCE_COOLDOWN = 20  # seconds
 _discovery_lock = threading.Lock()
 # chamber -> (fetched_at, floor_info | None)
 _floor_cache: dict[str, tuple[float, Optional[dict]]] = {}
-# single key -> (fetched_at, [event dict, ...])
-_schedule_cache: tuple[float, list[dict]] | None = None
+# network view ('default' | '3' | ...) -> (fetched_at, [event dict, ...])
+_schedule_cache: dict[str, tuple[float, list[dict]]] = {}
 # discovery key -> monotonic-ish wall time of the last FORCED refetch
 _last_forced: dict[str, float] = {}
 
@@ -249,24 +251,31 @@ def discover_floor(scraper: "CSpanScraper", chamber: str, force: bool = False) -
     return info
 
 
-def discover_schedule(scraper: "CSpanScraper", force: bool = False) -> list[dict]:
-    """Currently-live schedule events (cached, stale-fallback)."""
-    global _schedule_cache
+def discover_schedule(scraper: "CSpanScraper", channel: Optional[int] = None,
+                      force: bool = False) -> list[dict]:
+    """Currently-live events on the /schedule/ page, cached per network view.
+
+    channel=None uses the default (C-SPAN-1-centric) view — fine for Washington
+    Journal and marquee events. channel=3 uses the per-network C-SPAN 3 view, the
+    reliable source for committee hearings (the default view misses them).
+    """
+    view = str(channel) if channel is not None else "default"
+    url = SCHEDULE_URL if channel is None else f"{SCHEDULE_URL}?channel={channel}"
     with _discovery_lock:
-        cached = _schedule_cache
-    if not _should_fetch("schedule", cached[0] if cached else None, force):
+        cached = _schedule_cache.get(view)
+    if not _should_fetch(f"schedule:{view}", cached[0] if cached else None, force):
         return cached[1] if cached else []
     now = time.time()
 
-    html = _fetch_page(scraper, SCHEDULE_URL)
+    html = _fetch_page(scraper, url)
     if html is None:
         return cached[1] if cached else []
 
     events = _parse_schedule(html)
     with _discovery_lock:
-        _schedule_cache = (now, events)
-    logger.info("[cspan] schedule: %d live event(s): %s",
-                len(events), ", ".join(e["slug"] for e in events) or "none")
+        _schedule_cache[view] = (now, events)
+    logger.info("[cspan] schedule[%s]: %d live event(s): %s",
+                view, len(events), ", ".join(e["slug"] for e in events) or "none")
     return events
 
 
@@ -427,6 +436,7 @@ class CSpanScraper(BaseScraper):
         defs = [
             (cid, meta["name"], meta["logo"]) for cid, meta in FLOOR_CHANNELS.items()
         ]
+        defs.append((CSPAN3_CHANNEL_ID, "C-SPAN 3", _LOGO_CSPAN3))
         defs.append((WJ_CHANNEL_ID, "C-SPAN Washington Journal", _LOGO_CSPAN))
         if self._live_events_enabled():
             defs.append((LIVE_EVENT_CHANNEL_ID, "C-SPAN Live Event", _LOGO_CSPAN3))
@@ -456,6 +466,13 @@ class CSpanScraper(BaseScraper):
         if cid in FLOOR_CHANNELS:
             info = discover_floor(self, FLOOR_CHANNELS[cid]["chamber"], force=force)
             return info  # already has manifest_url/title/description or None
+
+        if cid == CSPAN3_CHANNEL_ID:
+            # The C-SPAN 3 network view lists only C-SPAN 3's own programming, so
+            # the currently-live entry is whatever hearing/event is on the network.
+            for ev in discover_schedule(self, channel=CSPAN3_NETWORK, force=force):
+                return self._event_info(ev)
+            return None
 
         if cid == WJ_CHANNEL_ID:
             for ev in discover_schedule(self, force=force):
