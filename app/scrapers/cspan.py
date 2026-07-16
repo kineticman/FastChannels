@@ -40,7 +40,9 @@ live. Discovery pages sit behind an AWS WAF that issues a JS challenge (HTTP
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 import threading
 import time
@@ -79,6 +81,41 @@ WJ_CHANNEL_ID = "washington-journal"
 LIVE_EVENT_CHANNEL_ID = "live-event"
 CSPAN3_CHANNEL_ID = "cspan3"
 CSPAN3_NETWORK = 3  # /schedule/?channel=3 — the per-network C-SPAN 3 view
+
+# ---- C-SPAN Now app API (EPG only) ------------------------------------------
+# api.c-spanarchives.org is the C-SPAN Now app's backend (AWS API Gateway). Its
+# schedule/{networkId} endpoint (networkId 1/2/3) returns a real, titled, gapless
+# ~24-38h forward guide per network — far richer than a neutral block. Used ONLY
+# for EPG; live playback still comes from the public web player (discover_floor /
+# discover_schedule above), so nothing here resolves a stream.
+#
+# The endpoint requires an app-wide X-Api-Key — a shared secret baked into the
+# client, NOT a per-user login. A bundled default works out of the box, while the
+# CSPAN_API_KEY env var still allows rotation/override without editing code. If
+# the key rotates and 403s, EPG transparently falls back to the neutral block
+# below; nothing else is affected.
+API_BASE = "https://api.c-spanarchives.org/3.0"
+API_KEY = os.environ.get("CSPAN_API_KEY", "3TTDHrdFlraPQ6g2p4goq6HPPNi3cIzi3CwUFLQF")
+API_HEADERS = {"X-Api-Key": API_KEY, "Accept": "application/json"}
+
+# Which C-SPAN network each channel draws its guide from. House and Washington
+# Journal both air on C-SPAN 1, so they intentionally share the net-1 grid — the
+# guide reflects the source network, not a per-program slice.
+CHANNEL_NETWORK = {
+    "house":               1,
+    "senate":              2,
+    CSPAN3_CHANNEL_ID:     3,
+    WJ_CHANNEL_ID:         1,
+    LIVE_EVENT_CHANNEL_ID: 3,
+}
+
+# The Washington Journal channel plays only the WJ show (~7-10am ET), not the whole
+# C-SPAN 1 network — so its guide keeps just the Washington Journal blocks and marks
+# the rest of the day "Off Air" (see _filtered_epg_rows), instead of mirroring the
+# full net-1 lineup (House sessions, POTUS, Primetime...). The block still spans the
+# gap so the row isn't empty, but its title reads as not-a-real-program.
+_WJ_TITLE_MATCH = "washington journal"
+_OFF_AIR_TITLE = "Off Air"
 
 # Schedule slugs that belong to a dedicated channel above, so the rotating
 # Live Event channel never doubles up on them.
@@ -123,13 +160,30 @@ _DISCOVERY_TTL = 600  # 10 minutes
 # refetch can hit the WAF-protected page during a genuine recess (no new event),
 # where every poll would otherwise see the dead manifest and refetch.
 _FORCE_COOLDOWN = 20  # seconds
+# Discovery coordination state is SHARED ACROSS ALL WORKERS via Redis (the app's
+# existing store), so the 2 gunicorn web workers keep ONE cache / WAF-backoff /
+# fetch-gate / pre-warm cooldown instead of each holding its own in-process copy.
+# Per-worker copies were the WAF's undoing: a play landing on a cold worker re-ran
+# discovery, and the uncoordinated combined rate across workers tripped the
+# challenge. Every Redis helper below degrades to "no coordination" if Redis is
+# unreachable (if it is, the whole app is down anyway).
+#
+#   cspan:disc:<key>   JSON {"at": fetched_at, "val": floor|schedule}  (ex=_CACHE_TTL)
+#   cspan:waf_backoff  presence = backing off; TTL = seconds left       (ex=_WAF_BACKOFF)
+#   cspan:fetch_gate   short-lived NX lock enforcing _MIN_FETCH_GAP spacing
+#   cspan:prewarm      NX cooldown so only one worker pre-warms per window
+_REDIS_PREFIX = "cspan:"
+_CACHE_TTL = 3600        # Redis key lifetime; freshness within it judged by _DISCOVERY_TTL
+_WAF_BACKOFF = 120       # seconds to pause ALL discovery fetches after a 202
+_MIN_FETCH_GAP = 2.5     # seconds between discovery page fetches, fleet-wide
+_PREWARM_COOLDOWN = 300  # seconds between background pre-warms, fleet-wide
+
+# In-process only: a cheap first-line single-flight within one worker, plus the
+# force-cooldown map (force is rare and already rate-limited, so per-worker is fine).
 _discovery_lock = threading.Lock()
-# chamber -> (fetched_at, floor_info | None)
-_floor_cache: dict[str, tuple[float, Optional[dict]]] = {}
-# network view ('default' | '3' | ...) -> (fetched_at, [event dict, ...])
-_schedule_cache: dict[str, tuple[float, list[dict]]] = {}
-# discovery key -> monotonic-ish wall time of the last FORCED refetch
+_fetch_locks: dict[str, threading.Lock] = {}
 _last_forced: dict[str, float] = {}
+_redis_client = None
 
 _VIDEOFILE_RE = re.compile(r"data-videofile='([^']+\.m3u8)'")
 _VIDEOID_RE = re.compile(r"data-videoid='([^']+)'")
@@ -149,6 +203,31 @@ def _truthy(value) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "yes", "on")
     return bool(value)
+
+
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    """Parse an API timestamp like '2026-07-16T21:00:00Z' to aware UTC, or None."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _clean_title(title: Optional[str]) -> Optional[str]:
+    """Tidy schedule titles. C-SPAN doubles many up as 'X: X' (e.g.
+    'U.S. House of Representatives: U.S. House of Representatives') — collapse those
+    to a single 'X'. Genuinely two-part titles ('The Hearing Room: Labor Secretary
+    Nominee Testifies...') are left intact."""
+    if not title:
+        return None
+    t = re.sub(r"\s+", " ", title).strip()
+    if ":" in t:
+        left, right = (p.strip() for p in t.split(":", 1))
+        if left and left == right:
+            return left
+    return t or None
 
 
 def _parse_floor(html: str) -> Optional[dict]:
@@ -192,16 +271,92 @@ def _parse_schedule(html: str) -> list[dict]:
     return live
 
 
+# ---- shared coordination via Redis ------------------------------------------
+
+def _redis():
+    """Shared Redis handle (lazy, cached). Returns None if Redis can't be reached,
+    so callers degrade gracefully instead of raising in the play path."""
+    global _redis_client
+    if _redis_client is None:
+        try:
+            import redis
+            _redis_client = redis.from_url(
+                os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
+                decode_responses=True, socket_timeout=2,
+            )
+        except Exception as e:
+            logger.warning("[cspan] Redis unavailable — discovery coordination degraded: %s", e)
+            return None
+    return _redis_client
+
+
+def _cache_get(key: str):
+    """Return (fetched_at, value) for a discovery view from the shared cache, or
+    None when absent / Redis is down. `value` is the parsed floor dict / schedule
+    list, JSON round-tripped."""
+    r = _redis()
+    if r is None:
+        return None
+    try:
+        raw = r.get(_REDIS_PREFIX + "disc:" + key)
+        if not raw:
+            return None
+        obj = json.loads(raw)
+        return (obj["at"], obj["val"])
+    except Exception:
+        return None
+
+
+def _cache_set(key: str, at: float, val) -> None:
+    r = _redis()
+    if r is None:
+        return
+    try:
+        r.set(_REDIS_PREFIX + "disc:" + key,
+              json.dumps({"at": at, "val": val}), ex=_CACHE_TTL)
+    except Exception:
+        pass
+
+
+def _waf_backoff_left() -> Optional[float]:
+    """Seconds left on the fleet-wide WAF backoff, or None if not active / Redis down."""
+    r = _redis()
+    if r is None:
+        return None
+    try:
+        ttl = r.ttl(_REDIS_PREFIX + "waf_backoff")
+        return float(ttl) if ttl and ttl > 0 else None
+    except Exception:
+        return None
+
+
+def _arm_waf_backoff() -> None:
+    r = _redis()
+    if r is None:
+        return
+    try:
+        r.set(_REDIS_PREFIX + "waf_backoff", "1", ex=_WAF_BACKOFF)
+    except Exception:
+        pass
+
+
 def _fetch_page(scraper: "CSpanScraper", url: str) -> Optional[str]:
-    """GET a discovery page, returning HTML or None. A 202 is the AWS WAF JS
-    challenge (we're being rate-limited); the caller falls back to cache."""
+    """GET a discovery page -> HTML or None. Honors the shared WAF backoff (skips
+    the request entirely while active, so we stop agitating the WAF) and arms it
+    fleet-wide on a fresh 202. Spacing + caching are handled by the _discover flow."""
+    left = _waf_backoff_left()
+    if left is not None:
+        logger.info("[cspan] WAF backoff active (%.0fs left) — skipping %s", left, url)
+        return None
     try:
         r = scraper.session.get(url, headers=PAGE_HEADERS, timeout=15)
     except Exception as e:
         logger.warning("[cspan] page fetch failed for %s: %s", url, e)
         return None
     if r.status_code == 202:
-        logger.warning("[cspan] WAF challenge (202) for %s", url)
+        _arm_waf_backoff()
+        logger.warning("[cspan] WAF challenge (202) for %s — backing off %ds",
+                       url, _WAF_BACKOFF)
         return None
     if r.status_code != 200:
         logger.warning("[cspan] page HTTP %s for %s", r.status_code, url)
@@ -224,36 +379,123 @@ def _should_fetch(key: str, cached_at: Optional[float], force: bool) -> bool:
     return not fresh
 
 
+def _fetch_lock_for(key: str) -> threading.Lock:
+    """Return the per-view single-flight lock for `key`, creating it on demand.
+    Held around the actual page fetch so only one caller stampedes a cold view."""
+    with _discovery_lock:
+        lock = _fetch_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _fetch_locks[key] = lock
+        return lock
+
+
+def _await_fetch_slot() -> None:
+    """Block until it's this caller's turn to fetch, keeping discovery page fetches
+    >= _MIN_FETCH_GAP apart FLEET-WIDE via a short-lived Redis NX lock, so the two
+    workers can't fetch at the same instant. Degrades to no spacing if Redis is down.
+    Bounded wait so a stuck gate can never hang a request forever."""
+    r = _redis()
+    if r is None:
+        return
+    gate = _REDIS_PREFIX + "fetch_gate"
+    gap_ms = int(_MIN_FETCH_GAP * 1000)
+    for _ in range(240):  # safety cap (~ minutes worst case); normally 1-2 iterations
+        try:
+            if r.set(gate, "1", nx=True, px=gap_ms):
+                return  # we own this slot; the key auto-expires after the gap
+            ttl_ms = r.pttl(gate)
+        except Exception:
+            return
+        time.sleep(ttl_ms / 1000.0 if ttl_ms and ttl_ms > 0 else 0.1)
+
+
+def _maybe_prewarm(scraper: "CSpanScraper") -> None:
+    """Warm every discovery view in the background so the rest of a viewing session
+    hits (shared) cache. Fires only from a play (never on a timer), and at most once
+    per _PREWARM_COOLDOWN FLEET-WIDE (a Redis NX key), so the two workers don't each
+    launch their own warm. Each discover_* call fetches only if its view is cold, is
+    spaced by the fleet-wide gate, and reuses the shared cache — so this adds no load
+    when caches are already warm. No-op if Redis is down (on-demand still works)."""
+    r = _redis()
+    if r is None:
+        return
+    try:
+        if not r.set(_REDIS_PREFIX + "prewarm", "1", nx=True, ex=_PREWARM_COOLDOWN):
+            return  # another worker pre-warmed within the cooldown
+    except Exception:
+        return
+
+    def _run() -> None:
+        try:
+            discover_floor(scraper, "house")
+            discover_floor(scraper, "senate")
+            discover_schedule(scraper, None)
+            discover_schedule(scraper, CSPAN3_NETWORK)
+        except Exception as e:  # background best-effort; never surface
+            logger.debug("[cspan] prewarm error: %s", e)
+
+    threading.Thread(target=_run, name="cspan-prewarm", daemon=True).start()
+
+
+def _discover(scraper, *, key, url, parse, empty, force, log):
+    """Shared discovery flow: Redis cache -> in-worker single-flight -> fleet-wide
+    WAF-backoff check -> fleet-wide fetch spacing -> re-check cache -> fetch -> cache.
+
+    `parse(html)` -> value; `empty` is the no-live default (None for floors, [] for
+    schedules); `log(value)` emits the result line. Returns the cached/fresh value,
+    or the stale value / `empty` when a fetch is skipped or fails."""
+    cached = _cache_get(key)
+    if not _should_fetch(key, cached[0] if cached else None, force):
+        return cached[1] if cached is not None else empty
+
+    prev_at = cached[0] if cached else 0.0
+    with _fetch_lock_for(key):                       # cheap in-worker single-flight
+        cached = _cache_get(key)
+        if cached is not None and cached[0] > prev_at:
+            return cached[1]                         # refreshed while we waited (this worker)
+
+        left = _waf_backoff_left()
+        if left is not None:
+            logger.info("[cspan] WAF backoff active (%.0fs left) — skipping %s", left, url)
+            return cached[1] if cached is not None else empty
+
+        _await_fetch_slot()                          # fleet-wide inter-fetch spacing
+        cached = _cache_get(key)
+        if cached is not None and cached[0] > prev_at:
+            return cached[1]                         # another WORKER refreshed it while we waited
+
+        html = _fetch_page(scraper, url)
+        if html is None:
+            return cached[1] if cached is not None else empty
+
+        val = parse(html)
+        _cache_set(key, time.time(), val)
+        log(val)
+        return val
+
+
 def discover_floor(scraper: "CSpanScraper", chamber: str, force: bool = False) -> Optional[dict]:
-    """Current live floor event for a chamber (cached, stale-fallback).
+    """Current live floor event for a chamber (shared cache, stale-fallback).
 
     `force` re-fetches even within the TTL (rate-limited) so the play proxy can
     recover immediately when a session rolls to a new Part.
     """
-    with _discovery_lock:
-        cached = _floor_cache.get(chamber)
-    if not _should_fetch(f"floor:{chamber}", cached[0] if cached else None, force):
-        return cached[1] if cached else None
-    now = time.time()
+    def _log(info):
+        if info:
+            logger.info("[cspan] %s floor live: event %s (%s)",
+                        chamber, info.get("video_id"), info.get("title") or "")
+        else:
+            logger.info("[cspan] %s floor not in session", chamber)
 
-    html = _fetch_page(scraper, CONGRESS_URL.format(chamber=chamber))
-    if html is None:
-        return cached[1] if cached else None
-
-    info = _parse_floor(html)
-    with _discovery_lock:
-        _floor_cache[chamber] = (now, info)
-    if info:
-        logger.info("[cspan] %s floor live: event %s (%s)",
-                    chamber, info.get("video_id"), info.get("title") or "")
-    else:
-        logger.info("[cspan] %s floor not in session", chamber)
-    return info
+    return _discover(scraper, key=f"floor:{chamber}",
+                     url=CONGRESS_URL.format(chamber=chamber),
+                     parse=_parse_floor, empty=None, force=force, log=_log)
 
 
 def discover_schedule(scraper: "CSpanScraper", channel: Optional[int] = None,
                       force: bool = False) -> list[dict]:
-    """Currently-live events on the /schedule/ page, cached per network view.
+    """Currently-live events on the /schedule/ page, shared-cached per network view.
 
     channel=None uses the default (C-SPAN-1-centric) view — fine for Washington
     Journal and marquee events. channel=3 uses the per-network C-SPAN 3 view, the
@@ -261,22 +503,13 @@ def discover_schedule(scraper: "CSpanScraper", channel: Optional[int] = None,
     """
     view = str(channel) if channel is not None else "default"
     url = SCHEDULE_URL if channel is None else f"{SCHEDULE_URL}?channel={channel}"
-    with _discovery_lock:
-        cached = _schedule_cache.get(view)
-    if not _should_fetch(f"schedule:{view}", cached[0] if cached else None, force):
-        return cached[1] if cached else []
-    now = time.time()
 
-    html = _fetch_page(scraper, url)
-    if html is None:
-        return cached[1] if cached else []
+    def _log(events):
+        logger.info("[cspan] schedule[%s]: %d live event(s): %s",
+                    view, len(events), ", ".join(e["slug"] for e in events) or "none")
 
-    events = _parse_schedule(html)
-    with _discovery_lock:
-        _schedule_cache[view] = (now, events)
-    logger.info("[cspan] schedule[%s]: %d live event(s): %s",
-                view, len(events), ", ".join(e["slug"] for e in events) or "none")
-    return events
+    return _discover(scraper, key=f"schedule:{view}", url=url,
+                     parse=_parse_schedule, empty=[], force=force, log=_log)
 
 
 def rewrite_media_playlist(media_text: str, variant_url: str, rewrite_segment) -> str:
@@ -481,7 +714,17 @@ class CSpanScraper(BaseScraper):
             return None
 
         if cid == LIVE_EVENT_CHANNEL_ID:
+            # 1) Default (C-SPAN-1-centric) view first — the marquee White House
+            #    events / briefings this channel is named for live on C-SPAN 1.
             for ev in discover_schedule(self, force=force):
+                if ev["slug"] not in _DEDICATED_SLUGS:
+                    return self._event_info(ev)
+            # 2) Fall back to the C-SPAN 3 network view, which surfaces committee
+            #    hearings the C-SPAN-1-centric default view misses. This may mirror
+            #    whatever the dedicated cspan3 channel is showing — acceptable for a
+            #    best-effort rotating channel. The channel=3 view is shared-cached
+            #    (cspan3 already populates it), so this adds ~no WAF load.
+            for ev in discover_schedule(self, channel=CSPAN3_NETWORK, force=force):
                 if ev["slug"] not in _DEDICATED_SLUGS:
                     return self._event_info(ev)
             return None
@@ -510,35 +753,155 @@ class CSpanScraper(BaseScraper):
             return raw_url
         cid = raw_url[len(CHANNEL_SCHEME):]
         info = self._resolve_info(cid, force=force)
+        # Someone's watching — warm the other channels' discovery in the background
+        # (spaced, cooldown-guarded) so their next channel-changes hit cache rather
+        # than firing a fresh page each. No-op if caches are already warm.
+        _maybe_prewarm(self)
         if not info:
             logger.info("[cspan] nothing live for %s", cid)
             return None
         return info["manifest_url"]
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
-        """Minimal guide data: a neutral, always-present block per channel.
+        """Real guide data from the C-SPAN Now app's schedule API.
 
-        These are live event channels with no machine-readable schedule, and their
-        live/off-air state flips far faster than the scrape interval. The EPG
-        deliberately does NOT assert live vs. off-air: a scrape-time discovery
-        probe is stale within minutes and — because the scraper and the play path
-        run in separate processes with separate caches — can flatly contradict
-        playback (e.g. label a channel "off air" while it streams fine). It would
-        also add WAF load on every scrape. So the guide just labels the channel;
-        actual availability is handled at play time (503 when nothing is live).
-        Regenerated every scrape_interval (< the block duration) so consecutive
-        blocks overlap and leave no gap.
+        Each channel draws its guide from its source C-SPAN network (1/2/3) via
+        schedule/{networkId}: a gapless, titled, ~24-38h forward grid. House and
+        Washington Journal both air on C-SPAN 1, so they intentionally share the
+        net-1 grid (the guide reflects the source network, not a per-program slice).
+
+        GUIDE ONLY — it deliberately does not assert live vs. off-air. The API's
+        `live` flag means 'first-run', not 'airing now' (a network routinely reports
+        several `live=True` blocks at once), and scrape-time state would contradict
+        the play path anyway (separate processes/caches; see resolve()). Actual
+        availability stays a play-time concern (503 when nothing is live). If the
+        API key is unset/rotated or a network is unreachable, that channel falls
+        back to one neutral 6h block so the guide never empties — the original
+        behaviour. Regenerated every scrape_interval.
         """
-        programs: list[ProgramData] = []
         now = datetime.now(timezone.utc)
-        start = now.replace(minute=0, second=0, microsecond=0)
-        end = start + timedelta(hours=6)
+        schedules: dict[int, Optional[list[dict]]] = {}  # network -> items | None
+        programs: list[ProgramData] = []
+
         for ch in channels:
-            programs.append(ProgramData(
+            net = CHANNEL_NETWORK.get(ch.source_channel_id)
+            items: Optional[list[dict]] = None
+            if net is not None:
+                if net not in schedules:
+                    schedules[net] = self._fetch_network_schedule(net)
+                items = schedules[net]
+
+            if ch.source_channel_id == WJ_CHANNEL_ID:
+                rows = self._filtered_epg_rows(ch, items, _WJ_TITLE_MATCH)
+            else:
+                rows = self._epg_rows_from_schedule(ch, items)
+            if rows:
+                programs.extend(rows)
+            else:
+                programs.append(self._neutral_block(ch, now))
+
+        live_nets = sum(1 for it in schedules.values() if it)
+        logger.info("[cspan] built %d EPG entries for %d channels (%d/%d networks live)",
+                    len(programs), len(channels), live_nets, len(schedules))
+        return programs
+
+    def _fetch_network_schedule(self, network: int) -> Optional[list[dict]]:
+        """schedule/{network} items from the app API, or None on any failure (the
+        caller falls back to a neutral block so EPG generation never breaks)."""
+        if not API_KEY:
+            return None
+        try:
+            r = self.session.get(f"{API_BASE}/schedule/{network}",
+                                 headers=API_HEADERS, timeout=15)
+        except Exception as e:
+            logger.warning("[cspan] schedule/%s fetch failed: %s", network, e)
+            return None
+        if r.status_code != 200:
+            logger.warning("[cspan] schedule/%s HTTP %s", network, r.status_code)
+            return None
+        try:
+            return (r.json() or {}).get("scheduleItems") or []
+        except ValueError:
+            logger.warning("[cspan] schedule/%s non-JSON body", network)
+            return None
+
+    @staticmethod
+    def _epg_rows_from_schedule(ch: ChannelData,
+                                items: Optional[list[dict]]) -> list[ProgramData]:
+        """Map schedule items -> ProgramData rows for one channel (empty if no data)."""
+        if not items:
+            return []
+        rows: list[ProgramData] = []
+        for it in items:
+            start = _parse_iso(it.get("beginTime"))
+            end = _parse_iso(it.get("endTime"))
+            if not start or not end or end <= start:
+                continue
+            rows.append(ProgramData(
                 source_channel_id=ch.source_channel_id,
-                title=ch.name,
+                title=_clean_title(it.get("title")) or ch.name,
                 start_time=start,
                 end_time=end,
+                description=(it.get("description") or "").strip() or None,
             ))
-        logger.info("[cspan] built %d EPG blocks", len(programs))
-        return programs
+        return rows
+
+    @staticmethod
+    def _filtered_epg_rows(ch: ChannelData, items: Optional[list[dict]],
+                           title_match: str) -> list[ProgramData]:
+        """EPG for a single-program channel (Washington Journal): keep only the
+        programs whose title contains `title_match`, and fill every other slot with
+        one merged neutral, channel-named block — so the guide reflects what the
+        channel actually plays (that show, when it airs) rather than the whole
+        network's lineup. Gapless, because the network grid is contiguous."""
+        if not items:
+            return []
+        parsed = []
+        for it in items:
+            start = _parse_iso(it.get("beginTime"))
+            end = _parse_iso(it.get("endTime"))
+            if start and end and end > start:
+                parsed.append((start, end, it))
+
+        rows: list[ProgramData] = []
+        fill_start = fill_end = None
+
+        def _flush_filler() -> None:
+            nonlocal fill_start, fill_end
+            if fill_start and fill_end and fill_end > fill_start:
+                rows.append(ProgramData(
+                    source_channel_id=ch.source_channel_id,
+                    title=_OFF_AIR_TITLE, start_time=fill_start, end_time=fill_end,
+                ))
+            fill_start = fill_end = None
+
+        for start, end, it in sorted(parsed, key=lambda x: x[0]):
+            title = _clean_title(it.get("title")) or ""
+            if title_match in title.lower():
+                _flush_filler()
+                rows.append(ProgramData(
+                    source_channel_id=ch.source_channel_id,
+                    title=title, start_time=start, end_time=end,
+                    description=(it.get("description") or "").strip() or None,
+                ))
+            elif fill_start is None:
+                fill_start, fill_end = start, end
+            elif start <= fill_end:            # contiguous grid → extend the filler
+                fill_end = max(fill_end, end)
+            else:
+                _flush_filler()
+                fill_start, fill_end = start, end
+        _flush_filler()
+        return rows
+
+    @staticmethod
+    def _neutral_block(ch: ChannelData, now: datetime) -> ProgramData:
+        """The original always-present 6h block — a per-channel fallback when the
+        schedule API is unavailable, so the guide never goes empty."""
+        start = now.replace(minute=0, second=0, microsecond=0)
+        return ProgramData(
+            source_channel_id=ch.source_channel_id,
+            title=ch.name,
+            start_time=start,
+            end_time=start + timedelta(hours=6),
+        )
