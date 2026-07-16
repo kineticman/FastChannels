@@ -718,37 +718,57 @@ def cspan_manifest_proxy(channel_id: str):
         abort(404)
 
     scraper = CSpanScraper(config=channel.source.config or {})
-    try:
-        master_url = scraper.resolve(channel.stream_url)
-    except Exception as e:
-        logger.warning('[cspan-proxy] resolve failed for %s: %s', raw_id, e)
-        return _unavailable_response()
-    if not master_url or not master_url.startswith('http'):
-        # No live session (recess) — transient, not dead.
-        return _unavailable_response()
 
-    try:
-        master_r = _CSPAN_PROXY_SESSION.get(master_url, timeout=10)
-        master_r.raise_for_status()
-    except Exception as e:
-        logger.warning('[cspan-proxy] master fetch failed for %s: %s', raw_id, e)
-        return _unavailable_response()
-
-    variant_url = _cspan_pick_best_variant(master_r.text, master_r.url)
-    if variant_url:
+    def _fetch_live(force: bool):
+        """Resolve → master → best variant. Returns ((variant_r, master_r), None)
+        on success, or (None, reason) where reason is 'gone' (nothing live now),
+        'dead' (event manifest 403'd — a floor session rolled to a new Part), or
+        'error'."""
         try:
-            variant_r = _CSPAN_PROXY_SESSION.get(variant_url, timeout=10)
-            variant_r.raise_for_status()
+            m_url = scraper.resolve(channel.stream_url, force=force)
         except Exception as e:
-            logger.warning('[cspan-proxy] variant fetch failed for %s: %s', raw_id, e)
+            logger.warning('[cspan-proxy] resolve failed for %s: %s', raw_id, e)
+            return None, 'error'
+        if not m_url or not m_url.startswith('http'):
+            return None, 'gone'
+        try:
+            m_r = _CSPAN_PROXY_SESSION.get(m_url, timeout=10)
+        except Exception as e:
+            logger.warning('[cspan-proxy] master fetch failed for %s: %s', raw_id, e)
+            return None, 'error'
+        if m_r.status_code != 200:
+            return None, 'dead'
+        v_url = _cspan_pick_best_variant(m_r.text, m_r.url)
+        if v_url:
+            try:
+                v_r = _CSPAN_PROXY_SESSION.get(v_url, timeout=10)
+                v_r.raise_for_status()
+            except Exception as e:
+                logger.warning('[cspan-proxy] variant fetch failed for %s: %s', raw_id, e)
+                return None, 'error'
+        elif '#EXTINF' in m_r.text:
+            # Some event manifests return a media playlist directly, not a master.
+            v_r = m_r
+        else:
+            return None, 'error'
+        return (v_r, m_r), None
+
+    result, reason = _fetch_live(force=False)
+    # A dead master (403 → Part rolled) or a playlist that has hit #EXT-X-ENDLIST
+    # (the event just ended) means the cached event id is stale. Force one fresh
+    # discovery (rate-limited in the scraper) to pick up the new Part.
+    ended = result is not None and '#EXT-X-ENDLIST' in result[0].text
+    if reason == 'dead' or ended:
+        logger.info('[cspan-proxy] %s event ended/rolled — forcing re-discovery', raw_id)
+        result, reason = _fetch_live(force=True)
+        if result is not None and '#EXT-X-ENDLIST' in result[0].text:
+            # Still ended and no fresh live event yet — tell the client to retry
+            # rather than serving a frozen tail.
             return _unavailable_response()
-    elif '#EXTINF' in master_r.text:
-        # Some event manifests (e.g. an event that hasn't cut to content yet)
-        # return a media playlist directly rather than a master. Use it as-is.
-        variant_r = master_r
-    else:
-        logger.warning('[cspan-proxy] no variants or segments in manifest for %s', raw_id)
+    if result is None:
+        # 'gone' (recess) / 'dead' / 'error' — all transient, not a dead channel.
         return _unavailable_response()
+    variant_r, master_r = result
 
     # Refresh the resolution/codec badge off the master we just fetched.
     from flask import current_app as _current_app
