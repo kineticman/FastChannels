@@ -13,7 +13,7 @@ __pycache__/
 node_modules/
 dist/
 build/
-Dev/
+dev/
 amazoncookies.json
 docker-compose*.yml
 README.md
