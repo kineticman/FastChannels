@@ -384,7 +384,7 @@ class CSpanScraper(BaseScraper):
     # returns unavailable (not dead) with no live event, so nothing auto-disables
     # the channels during downtime.
     stream_audit_enabled = False
-    scrape_interval = 180  # channels are static; this mainly refreshes EPG titles
+    scrape_interval = 180  # channels + EPG are static; scrape only rolls the EPG window forward
 
     config_schema = [
         ConfigField(
@@ -483,10 +483,16 @@ class CSpanScraper(BaseScraper):
         return info["manifest_url"]
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
-        """Minimal guide data: one 'live now' block per channel from the current
-        event's title. C-SPAN publishes no machine-readable schedule of stream
-        URLs ahead of air, so this is a placeholder covering the scrape window
-        rather than a true grid — it keeps clients from showing a blank guide.
+        """Minimal guide data: a neutral, always-present block per channel.
+
+        These are live event channels with no machine-readable schedule, and their
+        live/off-air state flips far faster than the scrape interval. The EPG
+        deliberately does NOT assert live vs. off-air: a scrape-time discovery
+        probe is stale within minutes and — because the scraper and the play path
+        run in separate processes with separate caches — can flatly contradict
+        playback (e.g. label a channel "off air" while it streams fine). It would
+        also add WAF load on every scrape. So the guide just labels the channel;
+        actual availability is handled at play time (503 when nothing is live).
         Regenerated every scrape_interval (< the block duration) so consecutive
         blocks overlap and leave no gap.
         """
@@ -495,21 +501,11 @@ class CSpanScraper(BaseScraper):
         start = now.replace(minute=0, second=0, microsecond=0)
         end = start + timedelta(hours=6)
         for ch in channels:
-            cid = ch.source_channel_id
-            info = self._resolve_info(cid)
-            if info:
-                title = info.get("title") or ch.name
-                description = info.get("description") or None
-            else:
-                title = f"{ch.name} (Off Air)"
-                description = None
             programs.append(ProgramData(
-                source_channel_id=cid,
-                title=title,
-                description=description,
+                source_channel_id=ch.source_channel_id,
+                title=ch.name,
                 start_time=start,
                 end_time=end,
-                is_live=bool(info),
             ))
         logger.info("[cspan] built %d EPG blocks", len(programs))
         return programs
