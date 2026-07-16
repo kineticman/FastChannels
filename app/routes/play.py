@@ -543,6 +543,19 @@ _PRIVATE_IP_RE = re.compile(
     re.IGNORECASE,
 )
 
+
+def _host_in_cdn_suffix(host: str, suffix: str) -> bool:
+    """True only if ``host`` is exactly ``suffix`` or a real subdomain of it.
+
+    A bare ``host.endswith(suffix)`` matches attacker-registrable siblings like
+    ``xc-spanvideo.org`` for the suffix ``c-spanvideo.org`` (no label boundary),
+    which turns the segment proxy into an SSRF/open relay. Anchor on a leading
+    dot so only the domain and its subdomains pass.
+    """
+    host = host.lower()
+    suffix = suffix.lower()
+    return host == suffix or host.endswith('.' + suffix)
+
 # Variant URL pattern indicating a session token that rotates after each ad break
 # (e.g. ViewTV's _uid=).  Masters that embed this in variant URLs need the relay
 # proxy so the player never holds a stale session reference.
@@ -675,13 +688,15 @@ def cspan_segment_proxy():
     if parsed.scheme != 'https' or not parsed.netloc:
         abort(400)
     host = parsed.netloc.split(':')[0].lower()
-    if not host.endswith(_CSPAN_CDN_HOST_SUFFIX):
+    if not _host_in_cdn_suffix(host, _CSPAN_CDN_HOST_SUFFIX):
         logger.warning('[cspan-seg] blocked non-C-SPAN host: %s', host)
         abort(403)
     if _PRIVATE_IP_RE.match(host):
         abort(403)
     try:
-        r = _CSPAN_PROXY_SESSION.get(url, timeout=15, stream=True)
+        # allow_redirects=False: the host allowlist only vets the original URL,
+        # so a 3xx to an internal address would otherwise bypass it (SSRF).
+        r = _CSPAN_PROXY_SESSION.get(url, timeout=15, stream=True, allow_redirects=False)
         if r.status_code != 200:
             abort(r.status_code)
         return Response(
@@ -786,7 +801,7 @@ def cspan_manifest_proxy(channel_id: str):
         seg_host = urlsplit(abs_url).netloc.split(':')[0].lower()
         # Route C-SPAN-hosted segments through the Referer-adding proxy; leave
         # anything else (should not occur) direct.
-        if seg_host.endswith(_CSPAN_CDN_HOST_SUFFIX):
+        if _host_in_cdn_suffix(seg_host, _CSPAN_CDN_HOST_SUFFIX):
             return f'{base_url}/play/cspan/segment?url={_quote(abs_url, safe="")}'
         return abs_url
 

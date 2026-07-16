@@ -2590,19 +2590,32 @@ def _cleanup_orphans(batch_size: int = 2000):
 
 
 def _normalize_episode(season, episode):
-    """Strip season-prefixed compound episode codes (S3E07 arriving as 307).
+    """Strip season-prefixed compound episode codes (S4E01 arriving as 401).
 
     Several upstreams (Plex, TCL, Tubi, Pluto) send production-code style
-    episode numbers where the season is prepended: S1E18 → 118, S4E01 → 401.
-    Detect via episode // 100 == season and keep only the episode part.
-    Exact multiples of 100 are left alone — E00 doesn't exist in the compound
-    scheme, so a value like 100 with season 1 is a genuine episode 100.
-    Genuine large numbers (S5 E105, S12 E4991) fail the // 100 check and pass
-    through untouched.
+    episode numbers with the season prepended: S4E01 → 401, S3E07 → 307.
+    Detect via ``episode // 100 == season`` and keep only the episode part.
+
+    Only applied for season >= 2. In season 1 the compound form (S1E18 → 118)
+    is mathematically indistinguishable from a genuine high-numbered episode of
+    a long single-season show — daily court/talk strips and telenovelas
+    routinely run season 1 well past episode 100 — so stripping there silently
+    collapsed real episodes (150 → 50) and corrupted EPG/DVR episode identity.
+    Leaving season-1 values untouched is the safe choice; the worst case is a
+    cosmetic prefix in the displayed episode number. Season-1 rows previously
+    mangled self-heal to their genuine value as each scrape window is rewritten.
+
+    Exact multiples of 100 (E00 doesn't exist in the compound scheme) and
+    genuine large numbers (S5 E105, S12 E4991) fail the checks and pass through.
+    Non-integer season/episode values are returned untouched (never coerced).
     """
-    if (season and season > 0 and episode and episode >= 100
-            and episode // 100 == season and episode % 100 != 0):
-        return episode % 100
+    try:
+        s = int(season)
+        e = int(episode)
+    except (TypeError, ValueError):
+        return episode
+    if s >= 2 and e >= 100 and e // 100 == s and e % 100 != 0:
+        return e % 100
     return episode
 
 

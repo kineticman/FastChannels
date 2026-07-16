@@ -707,6 +707,42 @@ class PhiloScraper(BaseScraper):
                     cid, "yes" if auth_token else "no")
         return dash_url
 
+    def audit_resolve(self, raw_url: str) -> str | None:
+        """Liveness-only resolution for the stream audit.
+
+        Deliberately does NOT go through the full resolve():
+          * resolve() raises StreamDeadError on an empty-broadcast response, and
+            the audit's Dead handler permanently disables the channel with no
+            grace (is_enabled cleared → not restored by a later rescrape). An
+            empty broadcast is a normal transient (schedule boundary, brief API
+            blip), not a confirmed-dead stream, so we return None (a soft audit
+            error) instead of ever raising Dead here.
+          * resolve() also mints a real createPlaybackSessionV2 (the same call a
+            live tune makes) per channel — auditing the whole lineup would open a
+            burst of real sessions against the account. This checks only whether a
+            current broadcast exists (playbackSessionPresentation), never opening a
+            playback session.
+
+        Returns the opaque philo:// URL as an "alive, skip manifest fetch"
+        sentinel, or None if liveness could not be confirmed (never Dead).
+        """
+        if not raw_url.startswith("philo://"):
+            return raw_url
+        cid = raw_url[len("philo://"):]
+
+        # A live DASH URL cached from a recent tune/resolve proves the channel is up.
+        if self._cached_dash(cid):
+            return raw_url
+        # No session to check with → can't audit, don't penalize (mirrors amazon).
+        if not self._ensure_session():
+            return raw_url
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        pres = self._gql("playbackSessionPresentation", {"id": cid, "broadcastAt": now})
+        edges = ((((pres[0].get("data") or {}).get("node") or {})
+                  .get("broadcasts") or {}).get("edges") or [])
+        return raw_url if edges else None
+
     # ── Widevine license relay (DRMtoday) ───────────────────────────────────
 
     @classmethod
