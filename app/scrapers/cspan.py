@@ -109,12 +109,18 @@ CHANNEL_NETWORK = {
     LIVE_EVENT_CHANNEL_ID: 3,
 }
 
-# The Washington Journal channel plays only the WJ show (~7-10am ET), not the whole
-# C-SPAN 1 network — so its guide keeps just the Washington Journal blocks and marks
-# the rest of the day "Off Air" (see _filtered_epg_rows), instead of mirroring the
-# full net-1 lineup (House sessions, POTUS, Primetime...). The block still spans the
-# gap so the row isn't empty, but its title reads as not-a-real-program.
-_WJ_TITLE_MATCH = "washington journal"
+# Single-content channels show only their own program(s) from the network grid
+# (matched by a title substring) and mark every other slot "Off Air", instead of
+# mirroring the whole network lineup (House sessions, POTUS, Primetime...). Each goes
+# dark outside its window — the play proxy 503s — so "Off Air" is honest and matches
+# playback, and the filler block still spans the gap so the guide row isn't empty.
+# Network / rotating channels (cspan3, live-event) are intentionally absent: they
+# have no single program to key off, so they keep the full network grid.
+CHANNEL_TITLE_FILTER = {
+    "house":       "u.s. house",         # C-SPAN 1 House floor sessions
+    "senate":      "u.s. senate",        # C-SPAN 2 Senate floor sessions
+    WJ_CHANNEL_ID: "washington journal",  # C-SPAN 1 Washington Journal (7-10am ET)
+}
 _OFF_AIR_TITLE = "Off Air"
 
 # Schedule slugs that belong to a dedicated channel above, so the rotating
@@ -791,8 +797,9 @@ class CSpanScraper(BaseScraper):
                     schedules[net] = self._fetch_network_schedule(net)
                 items = schedules[net]
 
-            if ch.source_channel_id == WJ_CHANNEL_ID:
-                rows = self._filtered_epg_rows(ch, items, _WJ_TITLE_MATCH)
+            title_match = CHANNEL_TITLE_FILTER.get(ch.source_channel_id)
+            if title_match:
+                rows = self._filtered_epg_rows(ch, items, title_match)
             else:
                 rows = self._epg_rows_from_schedule(ch, items)
             if rows:
