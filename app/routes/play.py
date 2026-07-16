@@ -74,6 +74,7 @@ from ..scrapers.cspan import (
     CDN_HOST_SUFFIX as _CSPAN_CDN_HOST_SUFFIX,
     pick_best_variant as _cspan_pick_best_variant,
     build_live_window as _cspan_build_live_window,
+    rewrite_media_playlist as _cspan_rewrite_media_playlist,
     CSpanScraper,
 )
 
@@ -754,21 +755,24 @@ def cspan_manifest_proxy(channel_id: str):
         return (v_r, m_r), None
 
     result, reason = _fetch_live(force=False)
-    # A dead master (403 → Part rolled) or a playlist that has hit #EXT-X-ENDLIST
-    # (the event just ended) means the cached event id is stale. Force one fresh
-    # discovery (rate-limited in the scraper) to pick up the new Part.
-    ended = result is not None and '#EXT-X-ENDLIST' in result[0].text
-    if reason == 'dead' or ended:
-        logger.info('[cspan-proxy] %s event ended/rolled — forcing re-discovery', raw_id)
+    # A dead master (403) means the cached event id 403'd — a floor session rolled
+    # to a new Part. Force one fresh discovery (rate-limited in the scraper).
+    if reason == 'dead':
         result, reason = _fetch_live(force=True)
-        if result is not None and '#EXT-X-ENDLIST' in result[0].text:
-            # Still ended and no fresh live event yet — tell the client to retry
-            # rather than serving a frozen tail.
-            return _unavailable_response()
     if result is None:
         # 'gone' (recess) / 'dead' / 'error' — all transient, not a dead channel.
         return _unavailable_response()
     variant_r, master_r = result
+
+    # An #EXT-X-ENDLIST means this event has ended (a floor session's Part is done).
+    # Prefer a newer LIVE Part if one exists; otherwise fall through and serve the
+    # ended session as a finite VOD (below) so the player shows the recorded session
+    # rather than failing.
+    if '#EXT-X-ENDLIST' in variant_r.text:
+        logger.info('[cspan-proxy] %s event ended — checking for a newer live Part', raw_id)
+        alt, _alt_reason = _fetch_live(force=True)
+        if alt is not None and '#EXT-X-ENDLIST' not in alt[0].text:
+            variant_r, master_r = alt
 
     # Refresh the resolution/codec badge off the master we just fetched.
     from flask import current_app as _current_app
@@ -786,10 +790,16 @@ def cspan_manifest_proxy(channel_id: str):
             return f'{base_url}/play/cspan/segment?url={_quote(abs_url, safe="")}'
         return abs_url
 
-    # C-SPAN serves EVENT playlists holding the whole session from segment 0, so
-    # a player would start hours behind live. Trim to a sliding live window so
-    # playback begins at the live edge.
-    body = _cspan_build_live_window(variant_r.text, variant_r.url, _rewrite_segment)
+    if '#EXT-X-ENDLIST' in variant_r.text:
+        # Ended session → serve the whole thing as a finite VOD (keep ENDLIST) so
+        # the player shows the recorded session/slate instead of failing. Keeping
+        # ENDLIST is what prevents the stall: the player treats it as VOD, not a
+        # live stream waiting on segments that will never come.
+        body = _cspan_rewrite_media_playlist(variant_r.text, variant_r.url, _rewrite_segment)
+    else:
+        # Live session → C-SPAN's EVENT playlist holds the whole session from
+        # segment 0, so trim to a sliding window that begins at the live edge.
+        body = _cspan_build_live_window(variant_r.text, variant_r.url, _rewrite_segment)
 
     return Response(
         body,

@@ -270,6 +270,22 @@ def discover_schedule(scraper: "CSpanScraper", force: bool = False) -> list[dict
     return events
 
 
+def rewrite_media_playlist(media_text: str, variant_url: str, rewrite_segment) -> str:
+    """Rewrite segment URLs through `rewrite_segment`, keeping every tag intact —
+    including #EXT-X-ENDLIST. Used to serve an ENDED floor session as a finite VOD
+    (from segment 0, so the player shows the recorded session and its opening
+    'coming up today' slate) rather than failing. Keeping ENDLIST is what stops it
+    stalling: the player treats it as finite instead of waiting for live segments."""
+    out = []
+    for raw in media_text.splitlines():
+        s = raw.strip()
+        if s and not s.startswith("#"):
+            out.append(rewrite_segment(urljoin(variant_url, s)))
+        else:
+            out.append(raw)
+    return "\n".join(out) + "\n"
+
+
 def pick_best_variant(master_text: str, master_url: str) -> Optional[str]:
     """Return the highest-bandwidth variant URL from an HLS master playlist,
     or None if `master_text` is not a master (has no #EXT-X-STREAM-INF)."""
