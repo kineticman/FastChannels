@@ -705,7 +705,11 @@ def cspan_segment_proxy():
             content_type=r.headers.get('Content-Type', 'video/MP2T'),
             headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
         )
-    except Exception as e:
+    except _requests.RequestException as e:
+        # Narrow to request errors so the abort(r.status_code) above (a werkzeug
+        # HTTPException, itself an Exception) propagates the real CDN status
+        # instead of being masked as 502 — a rolled-segment 404 / Referer 403
+        # should surface as-is for logging and client backoff.
         logger.warning('[cspan-seg] fetch failed for %s: %s', url[:80], e)
         abort(502)
 
@@ -746,6 +750,13 @@ def cspan_manifest_proxy(channel_id: str):
             logger.warning('[cspan-proxy] resolve failed for %s: %s', raw_id, e)
             return None, 'error'
         if not m_url or not m_url.startswith('http'):
+            return None, 'gone'
+        # The master URL comes from a scraped /congress page (data-videofile).
+        # Vet its host against the C-SPAN CDN allowlist before fetching it
+        # server-side, so a poisoned/injected page can't turn this into an SSRF.
+        m_host = urlsplit(m_url).netloc.split(':')[0].lower()
+        if not _host_in_cdn_suffix(m_host, _CSPAN_CDN_HOST_SUFFIX):
+            logger.warning('[cspan-proxy] blocked non-C-SPAN master host for %s: %s', raw_id, m_host)
             return None, 'gone'
         try:
             m_r = _CSPAN_PROXY_SESSION.get(m_url, timeout=10)
