@@ -156,10 +156,14 @@ CDN_HEADERS = {
     "Origin": "https://www.c-span.org",
 }
 
-# Discovery is cached so a burst of play requests — or the scrape and play paths
-# together — never hammer the WAF-protected pages. An event ID is stable for the
-# whole session (hours), so a long TTL is safe.
-_DISCOVERY_TTL = 600  # 10 minutes
+# Discovery is cached so play requests never hammer the WAF-protected pages. A live
+# event ID is stable for the whole session (hours), so a long TTL is safe AND is our
+# main defense against the WAF: fewer distinct page fetches = far less chance of the
+# AWS WAF flagging our IP and JS-challenging us (which a plain HTTP client can't
+# solve). Staleness self-heals at play time — when a cached event's manifest goes
+# dead/ended the play proxy calls resolve(force=True), which re-discovers immediately
+# (rate-limited by _FORCE_COOLDOWN), so the long TTL never strands a channel.
+_DISCOVERY_TTL = 1800  # 30 minutes
 # When the play proxy detects a dead/ended event manifest (a floor session rolled
 # to a new "Part", so the cached event 403s or carries ENDLIST), it forces a fresh
 # discovery to pick up the new event id. This cooldown bounds how often a forced
