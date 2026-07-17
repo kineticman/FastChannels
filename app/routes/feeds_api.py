@@ -116,6 +116,144 @@ def chnum_ranges():
     return jsonify(ranges)
 
 
+def _feed_member_stubs(q_filters: dict):
+    """
+    Load a feed's member channels (both M3U partitions) as lightweight stubs,
+    sorted by master number — the same combined ordering the auto-numbering
+    worker uses.  Returns (stubs, gracenote_id_set).
+    """
+    from ..generators.m3u import _selected_channel_stubs
+    std = _selected_channel_stubs(q_filters, gracenote=False)
+    gn  = _selected_channel_stubs(q_filters, gracenote=True)
+    gn_ids = {ch.id for ch in gn}
+    stubs = sorted(
+        std + gn,
+        key=lambda ch: (ch.number is None, ch.number or 0, (ch.name or '').lower()),
+    )
+    return stubs, gn_ids
+
+
+@feeds_api_bp.route('/preview-order', methods=['POST'])
+def preview_order():
+    """
+    Anticipated channel list + tvg-chno for a feed definition, computed by the
+    same code paths the generator uses (read-only despite POST — the filters
+    payload is too large for a query string).
+
+    Body: {filters, chnum_start, feed_id, order}
+      - order (optional): explicit channel-id sequence to overlay, so the UI can
+        preview an unsaved drag-drop ordering merged with current membership.
+    """
+    from ..generators.m3u import (
+        _build_feed_chnum_map, build_manual_order_map, feed_namespace_start,
+    )
+    data = request.get_json() or {}
+    filters = _clean_filters(data.get('filters') or {})
+    q_filters = feed_to_query_filters(filters)
+
+    feed = Feed.query.get(data['feed_id']) if data.get('feed_id') else None
+
+    start = _parse_chnum_start(data.get('chnum_start'))
+    if start is None and feed is not None:
+        start = feed.chnum_start or feed_namespace_start(feed, gracenote=False)
+    if start is None:
+        start = 1000
+
+    stubs, gn_ids = _feed_member_stubs(q_filters)
+
+    order_ids = data.get('order') or []
+    if order_ids:
+        try:
+            order_ids = [int(i) for i in order_ids]
+        except (TypeError, ValueError):
+            return jsonify({'error': 'order must contain integer channel ids'}), 400
+        num_map = build_manual_order_map(stubs, order_ids, start)
+    else:
+        stored = {}
+        if feed is not None:
+            stored = {
+                r.channel_id: r.number
+                for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
+            }
+        num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
+
+    feed_pinned_ids = set(filters.get('pinned_channel_ids') or [])
+    rows = [{
+        'id':          ch.id,
+        'name':        ch.name,
+        'source':      ch.source.display_name or ch.source.name,
+        'number':      num_map.get(ch.id),
+        'pinned':      bool(getattr(ch, 'number_pinned', False) and ch.number is not None),
+        'feed_pinned': ch.id in feed_pinned_ids,
+        'gracenote':   ch.id in gn_ids,
+    } for ch in stubs]
+    rows.sort(key=lambda r: (r['number'] is None, r['number'] or 0, r['name'].lower()))
+    return jsonify({'start': start, 'channels': rows})
+
+
+@feeds_api_bp.route('/<int:feed_id>/channel-order', methods=['PUT'])
+def set_channel_order(feed_id):
+    """
+    Persist a manual drag-drop ordering as this feed's channel numbers by
+    rewriting its FeedChannelNumber pool sequentially from chnum_start.
+    The sticky-number refresh preserves these on later scrapes; channels that
+    newly match the filters append after the ordered block.
+    """
+    from ..generators.m3u import build_manual_order_map, feed_namespace_start
+    feed = Feed.query.get_or_404(feed_id)
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        return jsonify({'error': 'Built-in feeds cannot be reordered.'}), 403
+
+    data = request.get_json() or {}
+    order_ids = data.get('order')
+    if not isinstance(order_ids, list) or not order_ids:
+        return jsonify({'error': 'order (list of channel ids) is required'}), 400
+    try:
+        order_ids = [int(i) for i in order_ids]
+    except (TypeError, ValueError):
+        return jsonify({'error': 'order must contain integer channel ids'}), 400
+
+    baseline_warnings = set(get_global_chnum_overlaps())
+
+    # A manual order needs a durable explicit start — the namespace auto-start
+    # shifts when feeds are added/renamed, which would drop stored numbers below
+    # the new floor and silently shred the user's ordering.
+    if 'chnum_start' in data:
+        explicit = _parse_chnum_start(data['chnum_start'])
+        if explicit is not None:
+            feed.chnum_start = explicit
+    if feed.chnum_start is None:
+        feed.chnum_start = feed_namespace_start(feed, gracenote=False)
+
+    q_filters = feed_to_query_filters(feed.filters or {})
+    stubs, _ = _feed_member_stubs(q_filters)
+    num_map = build_manual_order_map(stubs, order_ids, feed.chnum_start)
+
+    existing = {r.channel_id: r for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
+    for cid, num in num_map.items():
+        if cid in existing:
+            if existing[cid].number != num:
+                existing[cid].number = num
+        else:
+            db.session.add(FeedChannelNumber(feed_id=feed.id, channel_id=cid, number=num))
+    for cid, row in existing.items():
+        if cid not in num_map:
+            db.session.delete(row)
+
+    err = _safe_flush()
+    if err:
+        return err
+    new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
+    if new_warnings:
+        db.session.rollback()
+        return jsonify({'error': 'Channel number overlaps detected', 'warnings': new_warnings}), 409
+    err = _safe_commit()
+    if err:
+        return err
+    _invalidate_and_refresh_xml()
+    return jsonify(feed.to_dict(public_base_url()))
+
+
 @feeds_api_bp.route('', methods=['GET'])
 def list_feeds():
     base_url = public_base_url()

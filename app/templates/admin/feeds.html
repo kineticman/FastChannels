@@ -158,12 +158,12 @@
       display: none; position: fixed; inset: 0;
       background: var(--overlay-strong); z-index: 50;
       align-items: flex-start; justify-content: center;
-      padding: 2rem 1rem; overflow-y: auto;
+      padding: 2rem 1rem 0; overflow-y: auto;
     }
     .overlay.open { display: flex; }
     .modal {
       background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-      width: 100%; max-width: 960px; padding: 1.75rem;
+      width: 100%; max-width: 960px; padding: 1.75rem 1.75rem 0;
       margin: auto;
     }
     .modal h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 1.25rem; }
@@ -190,9 +190,22 @@
     .check-item:hover { border-color: var(--text-dim); }
     .check-item input { accent-color: var(--accent); cursor: pointer; }
     .check-item.selected { border-color: var(--accent); background: var(--accent-bg-soft); }
+    .check-item .src-count { color: var(--text-dim); font-size: 0.7rem; font-variant-numeric: tabular-nums; }
+    .check-item .src-count.zero { color: var(--warning-soft); }
+    .ch-src-hint {
+      font-size: 0.75rem; color: var(--warning-soft); line-height: 1.45;
+      padding: 0.35rem 0.5rem; border-radius: 4px; margin-bottom: 0.15rem;
+      background: color-mix(in srgb, var(--warning-bg) 40%, transparent);
+    }
+    .ch-src-hint a { color: inherit; text-decoration: underline; }
 
+    /* Sticky at the viewport bottom so Save/Cancel stay reachable while
+       scrolling the tall two-pane modal. Background matches the modal, so
+       content scrolling behind it disappears seamlessly. */
     .modal-footer { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.5rem;
-                    padding-top: 1rem; border-top: 1px solid var(--surface-5); }
+                    padding-top: 1rem; padding-bottom: 1.25rem;
+                    border-top: 1px solid var(--surface-5);
+                    position: sticky; bottom: 0; background: var(--surface); z-index: 10; }
     .save-status { font-size: 0.8rem; font-weight: 500; min-width: 80px; text-align: right; align-self: center; }
     .save-status.ok    { color: var(--success-soft); }
     .save-status.error { color: var(--danger); }
@@ -209,7 +222,7 @@
     }
     .ch-search:focus { border-color: var(--focus-accent); }
     .ch-list {
-      max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.2rem;
+      max-height: min(48vh, 520px); overflow-y: auto; display: flex; flex-direction: column; gap: 0.2rem;
       border: 1px solid var(--accent-bg); border-radius: 6px; padding: 0.4rem;
       background: var(--bg);
     }
@@ -260,6 +273,83 @@
     .pill-red  { background: color-mix(in srgb, var(--danger-bg) 72%, var(--surface)); color: var(--danger); }
     .pill-teal { background: color-mix(in srgb, var(--teal) 26%, var(--surface)); color: var(--teal-soft); }
     .pill-beta { background: color-mix(in srgb, var(--warning-bg) 70%, transparent); color: var(--warning-soft); border: 1px solid var(--warning-border); text-transform: uppercase; }
+
+    /* ── Two-pane feed modal ── */
+    .modal-feed { max-width: 1280px; }
+    .modal-cols {
+      display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+      gap: 1.75rem; align-items: start;
+    }
+    .modal-col-ch { position: sticky; top: 0; }
+    @media (max-width: 1000px) {
+      .modal-cols { grid-template-columns: 1fr; gap: 1rem; }
+      .modal-col-ch { position: static; }
+    }
+
+    /* Workspace tabs (Select / Order) */
+    .ws-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.6rem; flex-wrap: wrap; }
+    .ws-label { font-size: 0.78rem; font-weight: 500; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.04em; }
+    .ws-tabs { display: flex; background: var(--bg); border: 1px solid var(--surface-5); border-radius: 8px; padding: 3px; gap: 3px; }
+    .ws-tab {
+      border: none; background: transparent; color: var(--text-muted);
+      font-size: 0.78rem; font-weight: 600; padding: 0.3rem 0.85rem;
+      border-radius: 6px; cursor: pointer; transition: background 0.12s, color 0.12s;
+    }
+    .ws-tab:hover { color: var(--text); }
+    .ws-tab.active { background: var(--accent-strong); color: #fff; }
+
+    /* Order & Numbers view */
+    .ord-bar { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.4rem; min-height: 1.2rem; }
+    .ord-list {
+      max-height: min(56vh, 620px); overflow-y: auto;
+      border: 1px solid var(--accent-bg); border-radius: 6px; background: var(--bg);
+      padding: 0.3rem; display: flex; flex-direction: column; gap: 2px;
+    }
+    .ord-row {
+      display: flex; align-items: center; gap: 0.55rem;
+      padding: 0.28rem 0.5rem; border-radius: 6px; font-size: 0.82rem;
+      background: var(--surface); border: 1px solid transparent; position: relative;
+    }
+    .ord-row:not(.pinned) { cursor: grab; }
+    .ord-row:hover { border-color: var(--surface-5); }
+    .ord-row.dragging { opacity: 0.35; }
+    .ord-row.drop-above::before, .ord-row.drop-below::after {
+      content: ''; position: absolute; left: 4px; right: 4px; height: 2px;
+      background: var(--accent); border-radius: 2px; pointer-events: none;
+    }
+    .ord-row.drop-above::before { top: -2px; }
+    .ord-row.drop-below::after { bottom: -2px; }
+    .ord-grip { color: var(--text-dim); font-size: 0.8rem; letter-spacing: -1px; user-select: none; flex-shrink: 0; width: 1rem; text-align: center; }
+    .ord-num {
+      font-family: monospace; font-variant-numeric: tabular-nums; font-weight: 700;
+      color: var(--accent); background: var(--accent-bg); border: 1px solid var(--accent-border);
+      border-radius: 5px; padding: 0.05rem 0.45rem; font-size: 0.75rem;
+      flex-shrink: 0; min-width: 3.4rem; text-align: right; cursor: pointer;
+    }
+    .ord-row:not(.pinned) .ord-num:hover { border-color: var(--accent); }
+    .ord-row.pinned .ord-num { color: var(--success-soft); background: var(--success-bg); border-color: var(--success-border); cursor: default; }
+    .ord-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+    .ord-src { color: var(--text-dim); font-size: 0.7rem; flex-shrink: 0; max-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ord-gn {
+      font-size: 0.62rem; font-weight: 700; color: var(--info);
+      background: var(--accent-bg); border-radius: 4px; padding: 0.05rem 0.3rem; flex-shrink: 0;
+    }
+    .ord-fpin {
+      font-size: 0.62rem; font-weight: 700; color: var(--success-soft);
+      background: var(--success-bg); border-radius: 4px; padding: 0.05rem 0.3rem; flex-shrink: 0;
+    }
+    .ch-pinned-item .ord-num { cursor: default; }
+    .ord-actions { display: flex; gap: 0.15rem; flex-shrink: 0; opacity: 0; transition: opacity 0.1s; }
+    .ord-row:hover .ord-actions { opacity: 1; }
+    .ord-actions button { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.8rem; padding: 0 0.2rem; line-height: 1; }
+    .ord-actions button:hover { color: var(--accent); }
+    .ord-num-input {
+      width: 4.6rem; font-family: monospace; font-size: 0.75rem; padding: 0.05rem 0.3rem;
+      border-radius: 5px; border: 1px solid var(--accent); background: var(--bg);
+      color: var(--text); outline: none; flex-shrink: 0;
+    }
+    .ord-hint { font-size: 0.72rem; color: var(--text-dim); margin-top: 0.4rem; line-height: 1.5; }
+    .ord-empty { text-align: center; color: var(--text-dim); padding: 2rem 1rem; font-size: 0.82rem; }
     @media (max-width: 760px) {
       html { font-size: 16px; }
       nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
@@ -324,7 +414,7 @@
       .url-chip > a { grid-area: open; justify-self: start; }
       .url-chip .copy-btn { grid-area: copy; justify-self: end; }
       .modal {
-        padding: 1rem;
+        padding: 1rem 1rem 0;
         border-radius: 14px;
       }
       .check-group { max-height: 220px; }
@@ -345,12 +435,8 @@
     @media (max-width: 480px) {
       .feed-meta { grid-template-columns: 1fr; }
       .filter-tags { gap: 0.35rem; }
-      .modal-footer {
-        position: sticky;
-        bottom: 0;
-        background: var(--surface);
-        padding-top: 0.85rem;
-      }
+      .modal { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+      .modal-footer { padding-top: 0.85rem; padding-bottom: 0.85rem; }
       .modal-footer .btn { width: 100%; }
     }
   </style>
@@ -606,10 +692,12 @@
 
 <!-- ── Create / Edit Modal ── -->
 <div class="overlay" id="modal-overlay">
-  <div class="modal">
+  <div class="modal modal-feed">
     <h3 id="modal-title">New Feed</h3>
     <input type="hidden" id="edit-id" value="">
 
+    <div class="modal-cols">
+    <div class="modal-col-def">
     <div class="field">
       <label>Feed Name <span style="color:var(--danger)">*</span></label>
       <input type="text" id="f-name" placeholder="e.g. Sports, News, Pluto Everything">
@@ -622,8 +710,10 @@
       <label>Sources <span style="color:var(--text-dim);font-weight:400;text-transform:none">(leave all unchecked = include all)</span></label>
       <div class="check-group" id="sources-group">
         {% for s in sources %}
-        <label class="check-item" id="src-wrap-{{ s.name }}">
+        {% set sc = source_counts.get(s.name, {}) %}
+        <label class="check-item" id="src-wrap-{{ s.name }}" {% if not sc.get('eligible') %}title="No channels from this source are currently eligible for feeds"{% endif %}>
           <input type="checkbox" value="{{ s.name }}" class="src-cb"> {{ s.display_name }}
+          <span class="src-count {% if not sc.get('eligible') %}zero{% endif %}">{{ sc.get('eligible', 0) }}</span>
         </label>
         {% endfor %}
       </div>
@@ -670,30 +760,53 @@
       <div class="help">Useful when you want a feed that is only Gracenote-capable or only XMLTV-backed.</div>
     </div>
     <div class="field">
-      <label>Channels <span style="color:var(--text-dim);font-weight:400;text-transform:none">(leave none checked to use filters above)</span></label>
-      <div class="ch-bar">
-        <span id="ch-selected-count">loading…</span>
-        <span class="ch-bar-actions">
-          <button class="ch-bar-btn" id="ch-btn-selectall" type="button" onclick="selectAllChannels()">Select all</button>
-          <button class="ch-bar-btn" type="button" onclick="clearAllChannels()">Clear</button>
-        </span>
-      </div>
-      <input class="ch-search" id="ch-search" type="text" placeholder="Filter channels…" oninput="renderChannelListDebounced()">
-      <div class="ch-list" id="channel-list"></div>
-    </div>
-
-    <div class="field">
       <label>Max Channels</label>
       <input type="number" id="f-max" min="1" max="9999" placeholder="750 recommended for Channels DVR">
       <div class="help">Leave blank for no limit. Channels DVR degrades above ~750.</div>
     </div>
     <div class="field">
       <label>Starting Channel Number <span style="color:var(--text-dim);font-weight:400;text-transform:none">(tvg-chno)</span></label>
-      <input type="number" id="f-chnum" min="1" placeholder="auto" oninput="checkChnumConflict()">
+      <input type="number" id="f-chnum" min="1" placeholder="auto" oninput="checkChnumConflict(); onChnumInputForOrder()">
       <div class="help" id="f-chnum-help">Leave blank to auto-assign. Set a value to number all channels in this feed sequentially from here.</div>
       <div id="f-chnum-ranges" style="margin-top:6px;font-size:0.78rem;color:var(--text-soft);line-height:1.6"></div>
     </div>
     <div class="count-preview" id="count-preview"></div>
+    </div><!-- /modal-col-def -->
+
+    <div class="modal-col-ch">
+      <div class="ws-head">
+        <span class="ws-label">Channels</span>
+        <div class="ws-tabs">
+          <button type="button" class="ws-tab active" id="ws-tab-select" onclick="switchWorkspace('select')">✓ Select</button>
+          <button type="button" class="ws-tab" id="ws-tab-order" onclick="switchWorkspace('order')">↕ Order &amp; Numbers</button>
+        </div>
+      </div>
+
+      <div id="ws-select">
+        <div class="ch-bar">
+          <span id="ch-selected-count">loading…</span>
+          <span class="ch-bar-actions">
+            <button class="ch-bar-btn" id="ch-btn-selectall" type="button" onclick="selectAllChannels()">Select all</button>
+            <button class="ch-bar-btn" type="button" onclick="clearAllChannels()">Clear</button>
+          </span>
+        </div>
+        <input class="ch-search" id="ch-search" type="text" placeholder="Filter channels…" oninput="renderChannelListDebounced()">
+        <div class="ch-list" id="channel-list"></div>
+        <div class="ord-hint">Leave everything unchecked to let the filters on the left define this feed, or check channels to hand-pick it.</div>
+      </div>
+
+      <div id="ws-order" style="display:none">
+        <div class="ord-bar"><span id="ord-note"></span></div>
+        <div class="ord-list" id="order-list"></div>
+        <div class="ord-hint">
+          Drag rows to reorder — tvg-chno is reassigned sequentially from the starting number as you go.
+          You can also hover a row for ⤒ / ⤓, or click a number chip and type a target number.
+          📌 rows have a locked channel number (set on the Channels page) and can't be dragged; PIN-badged rows are pinned into this feed and reorder freely.
+          Channels that match your filters later are appended to the end of the order.
+        </div>
+      </div>
+    </div><!-- /modal-col-ch -->
+    </div><!-- /modal-cols -->
 
     <div class="modal-footer">
       <span class="save-status" id="modal-status"></span>
@@ -705,6 +818,7 @@
 
 <script>
 const FEED_CHNUM_PLACEHOLDER = {{ feed_chnum_placeholder | tojson }};
+const SRC_COUNTS = {{ source_counts | tojson }};
 
 // ── Channel list cache ─────────────────────────────────────────────────────
 let _allChannels = [];
@@ -765,13 +879,18 @@ function renderChannelList() {
     pinnedSection.appendChild(hdr);
     for (const id of _pinnedChannelIds) {
       const ch = _allChannels.find(c => c.id === id);
+      const orow = _orderRows.find(r => r.id === id);
+      const numTxt = orow && orow.number != null ? orow.number.toLocaleString() : '—';
       const row = document.createElement('div');
       row.className = 'ch-pinned-item';
-      row.innerHTML = `<span class="ch-name">${ch ? ch.name : `Channel #${id}`}</span><span class="ch-source">${ch ? ch.source_name : ''}</span><button class="btn-unpin" title="Remove from pinned">×</button>`;
+      row.dataset.id = id;
+      row.innerHTML = `<span class="ord-num" title="Anticipated tvg-chno in this feed"></span><span class="ch-name">${ch ? ch.name : `Channel #${id}`}</span><span class="ch-source">${ch ? ch.source_name : ''}</span><button class="btn-unpin" title="Remove from pinned">×</button>`;
+      row.querySelector('.ord-num').textContent = numTxt;
       row.querySelector('.btn-unpin').onclick = () => {
         _pinnedChannelIds.delete(id);
         renderChannelList();
         updateCountPreview();
+        markOrderStale();
       };
       pinnedSection.appendChild(row);
     }
@@ -788,6 +907,38 @@ function renderChannelList() {
   const excludeMode  = !explicitMode && hasFilters;
 
   document.getElementById('ch-btn-selectall').style.display = excludeMode ? 'none' : '';
+
+  // Checked sources that can't contribute a single channel would otherwise
+  // change nothing visibly — explain why instead of staying silent.
+  if (_allChannels.length > 0) {
+    const cacheCounts = {};
+    for (const ch of _allChannels) cacheCounts[ch.source_name] = (cacheCounts[ch.source_name] || 0) + 1;
+    for (const src of activeSources) {
+      if (cacheCounts[src]) continue;
+      const meta  = SRC_COUNTS[src] || {};
+      const label = meta.display || src;
+      const hint  = document.createElement('div');
+      hint.className = 'ch-src-hint';
+      const strong = document.createElement('strong');
+      strong.textContent = label;
+      hint.append('⚠ ', strong, ': ');
+      if (meta.epg_only) {
+        hint.append('EPG-only source — it never contributes playable channels to feeds.');
+      } else if (meta.disabled) {
+        hint.append(`no eligible channels — ${meta.disabled} disabled. `);
+        const a = document.createElement('a');
+        a.href = `/admin/channels?source=${encodeURIComponent(src)}`;
+        a.target = '_blank';
+        a.textContent = 'Enable them on the Channels page';
+        hint.append(a, ' and they’ll appear here.');
+      } else if (meta.total) {
+        hint.append(`no eligible channels (${meta.total} inactive or unplayable upstream).`);
+      } else {
+        hint.append('no channels scraped yet — run a scrape on the Sources page first.');
+      }
+      frag.appendChild(hint);
+    }
+  }
 
   const renderSlice = visibleChannels.slice(0, _CH_RENDER_LIMIT);
   const overflow    = visibleChannels.length - renderSlice.length;
@@ -829,6 +980,7 @@ function renderChannelList() {
         }
         updateChCount();
         schedulePreview();
+        markOrderStale();
       });
       frag.appendChild(label);
     }
@@ -885,6 +1037,7 @@ function selectAllChannels() {
   visible.forEach(ch => _selectedChannelIds.add(ch.id));
   renderChannelList();
   schedulePreview();
+  markOrderStale();
 }
 
 function clearAllChannels() {
@@ -892,6 +1045,7 @@ function clearAllChannels() {
   _excludedChannelIds.clear();
   renderChannelList();
   schedulePreview();
+  markOrderStale();
 }
 
 // ── Modal state ────────────────────────────────────────────────────────────
@@ -909,6 +1063,10 @@ async function openModal(feed = null) {
   document.getElementById('f-gracenote').value = feed ? (feed.filters.gracenote || '') : '';
   document.getElementById('modal-status').textContent = '';
   document.getElementById('ch-search').value  = '';
+
+  // Reset the Order & Numbers workspace for the new session
+  _orderRows = []; _orderStart = null; _orderDirty = false; _orderStale = true;
+  switchWorkspace('select');
 
   // Restore selected / excluded / pinned channel IDs
   _selectedChannelIds  = new Set((feed?.filters?.channel_ids          || []).map(Number));
@@ -942,6 +1100,9 @@ async function openModal(feed = null) {
   ]);
   renderChannelList();
   updateCountPreview();
+  // Pinned rows in the Select tab show their anticipated tvg-chno, which only
+  // the server-side order preview knows — fetch it eagerly when pins exist.
+  if (_pinnedChannelIds.size > 0) refreshOrderPreview();
   await loadChnumRanges(feed ? feed.id : null);
   checkChnumConflict();
 }
@@ -1093,6 +1254,7 @@ document.querySelectorAll('.src-cb, .lang-cb, .country-cb').forEach(cb => {
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
     renderChannelList();
     schedulePreview();
+    markOrderStale();
   });
 });
 
@@ -1101,15 +1263,20 @@ document.querySelectorAll('.cat-cb').forEach(cb => {
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
     renderChannelList();
     schedulePreview();
+    markOrderStale();
   });
 });
 
 document.getElementById('f-gracenote').addEventListener('change', () => {
   renderChannelList();
   schedulePreview();
+  markOrderStale();
 });
 
-document.getElementById('f-max').addEventListener('input', schedulePreview);
+document.getElementById('f-max').addEventListener('input', () => {
+  schedulePreview();
+  markOrderStale();
+});
 
 // ── Build filters from modal state ────────────────────────────────────────
 function buildFilters() {
@@ -1166,10 +1333,37 @@ async function saveFeed() {
     });
     if (!r.ok) {
       let msg = `HTTP ${r.status}`;
-      try { const d = await r.json(); msg = d.error || msg; } catch {}
+      try {
+        const d = await r.json();
+        msg = d.error || msg;
+        // Overlap 409s carry the actual collisions — surface the first one
+        // instead of just the generic headline.
+        if (d.warnings?.length) {
+          msg += ` — ${d.warnings[0]}` + (d.warnings.length > 1 ? ` (+${d.warnings.length - 1} more)` : '');
+        }
+      } catch {}
       throw new Error(msg);
     }
     const saved = await r.json().catch(() => ({}));
+    // If this was a create, remember the id so a retry after a partial failure
+    // below PATCHes the existing feed instead of creating a duplicate.
+    if (!id && saved.id) document.getElementById('edit-id').value = saved.id;
+
+    // Persist a manual drag-drop ordering (rewrites the feed's number pool).
+    if (_orderDirty && _orderRows.length && saved.id) {
+      status.textContent = 'Saving channel order…';
+      const or = await fetch(`/api/feeds/${saved.id}/channel-order`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ order: _orderRows.map(row => row.id) }),
+      });
+      if (!or.ok) {
+        let msg = `HTTP ${or.status}`;
+        try { const d = await or.json(); msg = d.error || msg; } catch {}
+        throw new Error(`Feed saved, but applying the channel order failed: ${msg}`);
+      }
+    }
+
     // Fire prewarm requests before reload so cache is warm when page returns
     const prewarmUrls = [saved.m3u_url, saved.epg_url, saved.gracenote_url].filter(Boolean);
     if (saved.slug === 'default') prewarmUrls.push('/m3u', '/epg.xml', '/m3u/gracenote');
@@ -1384,7 +1578,7 @@ async function resetFeedChnums(feedId, feedName, isDefault, btn) {
   const status = document.getElementById(`chnum-status-${feedId}`);
   const message = isDefault
     ? `Warning: reset channel numbers for "${feedName}"?\n\nThis will overwrite the current sticky channel-number assignments for the master feed and regenerate them from the saved start number.\n\nThis is destructive and cannot be undone automatically.`
-    : `Warning: reset channel numbers for "${feedName}"?\n\nThis will overwrite this feed's sticky channel-number assignments and regenerate them from the saved Channel Number Start.\n\nThis is destructive and cannot be undone automatically.`;
+    : `Warning: reset channel numbers for "${feedName}"?\n\nThis will overwrite this feed's sticky channel-number assignments — including any manual drag-drop ordering — and regenerate them from the saved Channel Number Start.\n\nThis is destructive and cannot be undone automatically.`;
   if (!confirm(message)) return;
 
   const orig = btn.textContent;
@@ -1407,6 +1601,302 @@ async function resetFeedChnums(feedId, feedName, isDefault, btn) {
     btn.textContent = orig;
   }
 }
+
+// ── Order & Numbers workspace ─────────────────────────────────────────────
+// _orderRows holds the server-computed anticipated lineup: one entry per feed
+// channel with its tvg-chno. Dragging mutates the array locally (numbers are
+// recomputed client-side with the same pinned-skip rule the server uses); the
+// authoritative rewrite happens on save via PUT /api/feeds/<id>/channel-order.
+let _orderRows  = [];
+let _orderStart = null;
+let _orderDirty = false;   // user reordered → persist on save
+let _orderStale = true;    // membership inputs changed since last preview fetch
+let _activeWs   = 'select';
+
+function switchWorkspace(ws) {
+  _activeWs = ws;
+  document.getElementById('ws-tab-select').classList.toggle('active', ws === 'select');
+  document.getElementById('ws-tab-order').classList.toggle('active', ws === 'order');
+  document.getElementById('ws-select').style.display = ws === 'select' ? '' : 'none';
+  document.getElementById('ws-order').style.display  = ws === 'order'  ? '' : 'none';
+  if (ws === 'order' && _orderStale) refreshOrderPreview();
+}
+
+function markOrderStale() {
+  _orderStale = true;
+  if (_activeWs === 'order') scheduleOrderPreview();
+}
+
+let _orderPreviewTimer = null;
+function scheduleOrderPreview() {
+  clearTimeout(_orderPreviewTimer);
+  _orderPreviewTimer = setTimeout(refreshOrderPreview, 450);
+}
+
+// Suggest a starting number for a brand-new feed: first free block above every
+// existing feed's range, rounded up to a clean hundred.
+async function suggestChnumStart() {
+  try {
+    const ranges = await _fetchAllRanges();
+    const maxEnd = Math.max(0, ...ranges.map(r => r.end || 0));
+    return Math.max(1000, Math.ceil((maxEnd + 1) / 100) * 100);
+  } catch { return 1000; }
+}
+
+let _orderFetchSeq = 0;
+async function refreshOrderPreview() {
+  const listEl = document.getElementById('order-list');
+  const noteEl = document.getElementById('ord-note');
+  const seq = ++_orderFetchSeq;
+  if (!_orderRows.length) listEl.innerHTML = '<div class="ord-empty">Computing channel order…</div>';
+  noteEl.textContent = 'Updating…';
+
+  const feedIdRaw = document.getElementById('edit-id').value;
+  const chnumEl   = document.getElementById('f-chnum');
+  let start = parseInt(chnumEl.value.trim(), 10);
+  if (isNaN(start)) start = null;
+  if (!start && !feedIdRaw) {
+    start = await suggestChnumStart();
+    chnumEl.value = start;
+    checkChnumConflict();
+  }
+
+  const body = {
+    filters:     buildFilters(),
+    chnum_start: start,
+    feed_id:     feedIdRaw ? parseInt(feedIdRaw, 10) : null,
+  };
+  // Overlay the user's in-progress ordering so a filter tweak merges into it
+  // (kept channels hold their relative order, new matches append) instead of
+  // discarding the drag work.
+  if (_orderDirty && _orderRows.length) body.order = _orderRows.map(r => r.id);
+
+  try {
+    const r = await fetch('/api/feeds/preview-order', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    if (seq !== _orderFetchSeq) return;   // superseded by a newer fetch
+    _orderRows  = d.channels;
+    _orderStart = d.start;
+    _orderStale = false;
+    renderOrderList();
+  } catch(e) {
+    if (seq !== _orderFetchSeq) return;
+    listEl.innerHTML = '';
+    const err = document.createElement('div');
+    err.className = 'ord-empty';
+    err.textContent = 'Failed to load channel order: ' + e.message;
+    listEl.appendChild(err);
+    noteEl.textContent = '';
+  }
+}
+
+function updateOrderNote() {
+  const n  = _orderRows.length;
+  const gn = _orderRows.filter(r => r.gracenote).length;
+  let text = `${n} channel${n === 1 ? '' : 's'} · numbering from ${(_orderStart ?? 0).toLocaleString()}`;
+  if (gn) text += ` · ${gn} in Gracenote M3U`;
+  if (_orderDirty) text += ' · reordered — Save Feed to apply';
+  document.getElementById('ord-note').textContent = text;
+}
+
+// Mirror of the server's numbering rule: pinned rows keep their master number
+// (reserved up front), everyone else numbers sequentially from the start,
+// skipping reserved slots. Sorting by the result re-slots pinned rows into
+// their true positions after every move.
+function renumberOrderRows() {
+  const used = new Set();
+  for (const r of _orderRows) if (r.pinned && r.number != null) used.add(r.number);
+  let cursor = _orderStart ?? 1;
+  for (const r of _orderRows) {
+    if (r.pinned && r.number != null) continue;
+    while (used.has(cursor)) cursor++;
+    r.number = cursor;
+    used.add(cursor);
+    cursor++;
+  }
+  _orderRows.sort((a, b) => (a.number ?? Infinity) - (b.number ?? Infinity));
+}
+
+function renderOrderList() {
+  const list = document.getElementById('order-list');
+  if (!_orderRows.length) {
+    list.innerHTML = '<div class="ord-empty">No channels match this feed yet — pick sources, filters, or channels on the Select tab.</div>';
+    updateOrderNote();
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const r of _orderRows) {
+    const row = document.createElement('div');
+    row.className = 'ord-row' + (r.pinned ? ' pinned' : '');
+    row.dataset.id = r.id;
+    if (!r.pinned) row.draggable = true;
+    row.innerHTML =
+      `<span class="ord-grip">${r.pinned ? '📌' : '⋮⋮'}</span>` +
+      `<span class="ord-num" title="${r.pinned ? 'Pinned master number' : 'Click to type a channel number'}"></span>` +
+      `<span class="ord-name"></span>` +
+      (r.feed_pinned ? `<span class="ord-fpin" title="Manually pinned into this feed — included regardless of filters">PIN</span>` : '') +
+      (r.gracenote ? `<span class="ord-gn" title="Served from this feed's Gracenote M3U">GN</span>` : '') +
+      `<span class="ord-src"></span>` +
+      (r.pinned ? '' :
+        `<span class="ord-actions">` +
+          `<button type="button" data-act="top" title="Move to top">⤒</button>` +
+          `<button type="button" data-act="bottom" title="Move to bottom">⤓</button>` +
+        `</span>`);
+    row.querySelector('.ord-num').textContent  = r.number != null ? r.number.toLocaleString() : '—';
+    const nameEl = row.querySelector('.ord-name');
+    nameEl.textContent = r.name;
+    nameEl.title = r.name;
+    row.querySelector('.ord-src').textContent = r.source;
+    frag.appendChild(row);
+  }
+  list.innerHTML = '';
+  list.appendChild(frag);
+  updateOrderNote();
+  updatePinnedChips();
+}
+
+// Keep the Select tab's 📌 Pinned section number chips in sync with the
+// latest order data (fresh preview fetch or a drag renumber).
+function updatePinnedChips() {
+  document.querySelectorAll('.ch-pinned-item').forEach(el => {
+    const id   = parseInt(el.dataset.id, 10);
+    const chip = el.querySelector('.ord-num');
+    if (!chip) return;
+    const r = _orderRows.find(o => o.id === id);
+    chip.textContent = r && r.number != null ? r.number.toLocaleString() : '—';
+  });
+}
+
+function moveOrderRow(id, toIndex) {
+  const from = _orderRows.findIndex(r => r.id === id);
+  if (from < 0) return;
+  const [row] = _orderRows.splice(from, 1);
+  if (toIndex > from) toIndex--;
+  toIndex = Math.max(0, Math.min(toIndex, _orderRows.length));
+  _orderRows.splice(toIndex, 0, row);
+  _orderDirty = true;
+  renumberOrderRows();
+  renderOrderList();
+}
+
+// The chnum start changed: a dirty order just renumbers locally from the new
+// start; a clean one refetches so stored sticky numbers are re-evaluated.
+function onChnumInputForOrder() {
+  const val = parseInt(document.getElementById('f-chnum').value.trim(), 10);
+  if (_orderDirty && !isNaN(val) && _orderRows.length) {
+    _orderStart = val;
+    renumberOrderRows();
+    renderOrderList();
+  } else {
+    markOrderStale();
+  }
+}
+
+function _clearDropMarkers() {
+  document.querySelectorAll('#order-list .drop-above, #order-list .drop-below')
+    .forEach(r => r.classList.remove('drop-above', 'drop-below'));
+}
+
+function beginNumEdit(id, chip) {
+  const cur = _orderRows.find(r => r.id === id);
+  if (!cur) return;
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'ord-num-input';
+  input.value = cur.number ?? '';
+  chip.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const commit = () => {
+    if (done) return;
+    done = true;
+    const target = parseInt(input.value, 10);
+    if (!isNaN(target)) {
+      // Take the slot nearest the typed number; the block then renumbers
+      // sequentially, so the final value snaps into the feed's compact range.
+      const idx = _orderRows.filter(r => r.id !== id && r.number != null && r.number < target).length;
+      moveOrderRow(id, idx);
+    } else {
+      renderOrderList();
+    }
+  };
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter')  { ev.preventDefault(); input.blur(); }
+    if (ev.key === 'Escape') { done = true; renderOrderList(); }
+  });
+}
+
+// Drag-drop wiring (event delegation — the list rerenders on every move)
+(function initOrderDrag() {
+  const list = document.getElementById('order-list');
+  let dragId = null;
+
+  list.addEventListener('dragstart', e => {
+    const row = e.target.closest('.ord-row');
+    if (!row || row.classList.contains('pinned')) { e.preventDefault(); return; }
+    dragId = parseInt(row.dataset.id, 10);
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', row.dataset.id); } catch {}
+  });
+
+  list.addEventListener('dragover', e => {
+    if (dragId == null) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    _clearDropMarkers();
+    const row = e.target.closest('.ord-row');
+    if (row && parseInt(row.dataset.id, 10) !== dragId) {
+      const rect = row.getBoundingClientRect();
+      row.classList.add(e.clientY > rect.top + rect.height / 2 ? 'drop-below' : 'drop-above');
+    }
+    // Auto-scroll when hovering near the list edges
+    const lr = list.getBoundingClientRect();
+    if (e.clientY < lr.top + 28)         list.scrollTop -= 14;
+    else if (e.clientY > lr.bottom - 28) list.scrollTop += 14;
+  });
+
+  list.addEventListener('drop', e => {
+    if (dragId == null) return;
+    e.preventDefault();
+    const row = e.target.closest('.ord-row');
+    let toIndex = _orderRows.length;
+    if (row) {
+      const rect  = row.getBoundingClientRect();
+      const below = e.clientY > rect.top + rect.height / 2;
+      toIndex = _orderRows.findIndex(r => r.id === parseInt(row.dataset.id, 10)) + (below ? 1 : 0);
+    }
+    const id = dragId;
+    dragId = null;
+    _clearDropMarkers();
+    moveOrderRow(id, toIndex);
+  });
+
+  list.addEventListener('dragend', () => {
+    dragId = null;
+    _clearDropMarkers();
+    list.querySelectorAll('.ord-row.dragging').forEach(r => r.classList.remove('dragging'));
+  });
+
+  list.addEventListener('click', e => {
+    const row = e.target.closest('.ord-row');
+    if (!row) return;
+    const id = parseInt(row.dataset.id, 10);
+    const btn = e.target.closest('.ord-actions button');
+    if (btn) {
+      moveOrderRow(id, btn.dataset.act === 'top' ? 0 : _orderRows.length);
+    } else if (e.target.classList.contains('ord-num') && !row.classList.contains('pinned')) {
+      beginNumEdit(id, e.target);
+    }
+  });
+})();
 
 // Close on backdrop click
 document.getElementById('modal-overlay').addEventListener('click', e => {

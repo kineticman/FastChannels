@@ -686,6 +686,55 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int,
     return result
 
 
+def build_manual_order_map(channels, order_ids: list[int], start: int) -> dict[int, int]:
+    """
+    Number `channels` sequentially from `start` following an explicit
+    user-chosen `order_ids` sequence (drag-drop ordering from the feed modal).
+
+    Master-pinned channels always keep their Channel.number; those numbers are
+    reserved so the sequential cursor skips over them.  Channels in the feed but
+    absent from `order_ids` (e.g. newly matched by the filters since the order
+    was captured) are appended after the ordered block in master-number order.
+    Ids in `order_ids` that are no longer feed members are ignored.
+    """
+    by_id = {ch.id: ch for ch in channels}
+    ordered = [by_id[cid] for cid in order_ids if cid in by_id]
+    seen = {ch.id for ch in ordered}
+    ordered += sorted(
+        (ch for ch in channels if ch.id not in seen),
+        key=lambda c: (c.number is None, c.number or 0, (c.name or '').lower()),
+    )
+
+    result: dict[int, int] = {}
+    used: set[int] = set()
+    for ch in ordered:
+        if getattr(ch, 'number_pinned', False) and ch.number is not None:
+            result[ch.id] = ch.number
+            used.add(ch.number)
+    cursor = start
+    for ch in ordered:
+        if ch.id in result:
+            continue
+        while cursor in used:
+            cursor += 1
+        result[ch.id] = cursor
+        used.add(cursor)
+        cursor += 1
+    return result
+
+
+def _sort_by_assigned_chnum(channels, chnum_map: dict) -> None:
+    """
+    Sort a channel list in place by its resolved tvg-chno so playlist line
+    order matches the numbers we emit.  Only used for feed-pool numbering
+    (feed_chnum_start / namespace_start), where a manual reorder can make the
+    assigned numbers diverge from master Channel.number order.
+    """
+    channels.sort(key=lambda c: (chnum_map.get(c.id) is None,
+                                 chnum_map.get(c.id) or 0,
+                                 (c.name or '').lower()))
+
+
 def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) -> dict:
     """
     Assign channel numbers to Gracenote channels starting at gn_start, with
@@ -863,6 +912,8 @@ def generate_m3u(filters: dict = None, base_url: str = None,
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap: %s', w)
+    else:
+        _sort_by_assigned_chnum(channels, chnum_map)
 
     multi_country_map = _source_multi_country_map(channels)
     _kodi_props_cache: dict[str, dict] = {}
@@ -948,6 +999,8 @@ def generate_native_m3u(filters: dict = None, base_url: str = None,
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap (native): %s', w)
+    else:
+        _sort_by_assigned_chnum(channels, chnum_map)
 
     multi_country_map = _source_multi_country_map(channels)
     lines = ['#EXTM3U']
@@ -1013,6 +1066,8 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap (gracenote): %s', w)
+    else:
+        _sort_by_assigned_chnum(channels, chnum_map)
 
     multi_country_map = _source_multi_country_map(channels)
     lines = ['#EXTM3U']
@@ -1170,6 +1225,8 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap (prismcast): %s', w)
+    else:
+        _sort_by_assigned_chnum(channels, chnum_map)
 
     multi_country_map = _source_multi_country_map(channels)
     lines = ['#EXTM3U']

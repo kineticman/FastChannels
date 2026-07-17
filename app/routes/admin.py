@@ -1194,6 +1194,29 @@ def feeds():
     app_settings = AppSettings.get()
     sources    = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
     feeds      = Feed.query.order_by(Feed.name).all()
+    # Per-source channel tallies for the feed modal: how many channels each
+    # source can actually contribute to a feed (mirrors the feed_eligible
+    # predicate), plus why the rest can't, so checking a dead source in the
+    # modal explains itself instead of silently adding nothing.
+    source_counts = {
+        s.name: {'display': s.display_name or s.name, 'epg_only': bool(s.epg_only),
+                 'eligible': 0, 'disabled': 0, 'total': 0}
+        for s in sources
+    }
+    _cnt_rows = db.session.query(
+        Source.name, Channel.is_active, Channel.is_enabled, Channel.stream_url != None,
+    ).select_from(Channel).join(Source, Channel.source_id == Source.id)\
+     .filter(Source.is_enabled == True).all()
+    for name, active, enabled, has_url in _cnt_rows:
+        entry = source_counts.get(name)
+        if entry is None:
+            continue
+        entry['total'] += 1
+        if active and has_url and not entry['epg_only']:
+            if enabled:
+                entry['eligible'] += 1
+            else:
+                entry['disabled'] += 1
     cats = db.session.query(Channel.category)\
         .filter(Channel.is_active == True, Channel.category != None)\
         .distinct().order_by(Channel.category).all()
@@ -1235,6 +1258,7 @@ def feeds():
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
+                           source_counts=source_counts,
                            default_chnum_from_env=default_feed and default_feed.chnum_start is None and app_settings.env_global_chnum_start() is not None)
 
 
