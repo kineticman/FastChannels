@@ -41,8 +41,13 @@ _SUPPRESS_FEED_RE = re.compile(r'"GET /feeds/|"GET /m3u/|"GET /output/')
 # still logged by the app.routes.play logger, so these access lines add no signal.
 _SUPPRESS_WATCH_RE = re.compile(r'"(?:GET|HEAD) /watch/\d+')
 
-# Match Amazon DASH manifest polls: GET /play/amazon_prime_free/<channel_id>/dash.mpd
-_DASH_RE = re.compile(r'GET /play/amazon_prime_free/([^/]+)/dash\.mpd')
+# Match DRM DASH manifest polls: (GET|HEAD) /play/<source>/<channel_id>/dash.mpd
+_SUCCESS_ACCESS_RE = re.compile(r'HTTP/\d(?:\.\d)?" [23]\d\d ')
+_SUCCESS_SUPPRESS_PATTERNS = (
+    '/play/philo/license',     # Philo DRM license — noisy during startup/key rotation
+)
+_SUCCESS_SUPPRESS_RE = re.compile(r'(?:GET|HEAD) /play/philo/[^/]+/dash\.mpd')
+_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|philo)/([^/]+)/dash\.mpd')
 _DASH_COOLDOWN = 120  # seconds — log first request, suppress repeats within this window
 
 
@@ -53,6 +58,11 @@ class _AccessFilter(logging.Filter):
 
     def filter(self, record):
         msg = record.getMessage()
+        is_success = bool(_SUCCESS_ACCESS_RE.search(msg))
+        if is_success and any(p in msg for p in _SUCCESS_SUPPRESS_PATTERNS):
+            return False
+        if is_success and _SUCCESS_SUPPRESS_RE.search(msg):
+            return False
         if any(p in msg for p in _SUPPRESS_PATTERNS):
             return False
         if _SUPPRESS_RE.search(msg):
@@ -62,8 +72,8 @@ class _AccessFilter(logging.Filter):
         if _SUPPRESS_WATCH_RE.search(msg):
             return False
         m = _DASH_RE.search(msg)
-        if m:
-            channel_id = m.group(1)
+        if m and is_success:
+            channel_id = f'{m.group(1)}:{m.group(2)}'
             now = time.monotonic()
             if now - self._dash_last.get(channel_id, 0) < _DASH_COOLDOWN:
                 return False

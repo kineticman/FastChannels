@@ -2095,8 +2095,14 @@ def philo_dash_proxy(channel_id: str):
         logger.warning('[philo-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
         return _unavailable_response()
 
+    # Philo's dynamic MPD includes a <Location> pointing back to Philo's
+    # CORS-locked manifest URL. Shaka honors that on refresh and bypasses this
+    # proxy, causing periodic NETWORK.HTTP_ERROR stalls. Remove it so refreshes
+    # continue against the same same-origin /play/philo/.../dash.mpd URL.
+    manifest_text = re.sub(r'<Location>.*?</Location>\s*', '', r.text, flags=re.DOTALL)
+
     return Response(
-        r.text,
+        manifest_text,
         mimetype='application/dash+xml',
         headers={
             'Cache-Control': 'no-cache',
@@ -2550,7 +2556,10 @@ def watch(channel_id):
     from flask import make_response
     # Version param busts stale browser caches from before this route existed.
     if '_v' not in request.args:
-        return redirect(f'{request.path}?_v=3', 302)
+        qs = request.args.to_dict(flat=True)
+        qs['_v'] = '3'
+        from urllib.parse import urlencode as _urlencode
+        return redirect(f'{request.path}?{_urlencode(qs)}', 302)
     channel = Channel.query.get_or_404(channel_id)
     info = _get_playback_info(channel, fast_mode=False)
     resp = make_response(render_template(
@@ -2560,6 +2569,42 @@ def watch(channel_id):
         playback_mode=info.get('playback_mode', 'hls'),
         stream_type=info.get('stream_type', 'hls'),
         license_url=info.get('license_url') or '',
+        watch_debug=request.args.get('debug') == '1',
     ))
     resp.headers['Cache-Control'] = 'no-store'
     return resp
+
+
+@play_bp.route('/watch/<int:channel_id>/debug', methods=['POST'])
+def watch_debug(channel_id):
+    channel = Channel.query.get_or_404(channel_id)
+    payload = request.get_json(silent=True) or {}
+    event = str(payload.get('event') or 'event')[:48]
+    extra = payload.get('extra') if isinstance(payload.get('extra'), dict) else {}
+    state = {
+        'seq': payload.get('seq'),
+        'age_ms': payload.get('age_ms'),
+        'current_time': payload.get('current_time'),
+        'ready_state': payload.get('ready_state'),
+        'network_state': payload.get('network_state'),
+        'paused': payload.get('paused'),
+        'ended': payload.get('ended'),
+        'seeking': payload.get('seeking'),
+        'buffered_end': payload.get('buffered_end'),
+        'buffered_ahead': payload.get('buffered_ahead'),
+        'video_size': payload.get('video_size'),
+        'dropped': payload.get('dropped'),
+        'decoded': payload.get('decoded'),
+    }
+    logger.info(
+        '[watch-debug] event=%s ip=%s channel_id=%s source=%s source_channel_id=%s channel_name=%s state=%s extra=%s',
+        event,
+        request.headers.get('X-Forwarded-For') or request.remote_addr,
+        channel.id,
+        channel.source.name if channel.source else None,
+        channel.source_channel_id,
+        channel.name,
+        {k: v for k, v in state.items() if v is not None},
+        {str(k)[:40]: str(v)[:800] for k, v in extra.items()},
+    )
+    return Response(status=204)

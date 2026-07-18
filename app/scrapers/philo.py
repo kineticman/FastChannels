@@ -302,14 +302,18 @@ class PhiloScraper(BaseScraper):
             "user_id": (data.get("analytics") or {}).get("userId"),
         }
 
-    def _ensure_player(self) -> str | None:
+    def _ensure_player(self, *, force_register: bool = False) -> str | None:
         """Return a Philo playerId, registering one via registerPlayerV2 if needed.
 
         The player is keyed by a per-source device UUID (persisted in config), so
         re-registering returns the same player rather than spawning duplicates."""
         import uuid
-        if self._player_id:
+        if self._player_id and not force_register:
             return self._player_id
+        if force_register:
+            self._player_id = None
+            self.config.pop("player_id", None)
+            self._pending_config_updates["player_id"] = None
         device_ident = self.config.get("player_device_ident")
         if not device_ident:
             device_ident = str(uuid.uuid4())
@@ -327,10 +331,41 @@ class PhiloScraper(BaseScraper):
             reg = ((part or {}).get("data") or {}).get("registerPlayerV2")
             if reg and reg.get("player", {}).get("id"):
                 self._player_id = reg["player"]["id"]
+                self._update_config("player_id", self._player_id)
                 return self._player_id
         return None
 
     # ── GraphQL ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _gql_error_summary(parts: list) -> str | None:
+        """Compact non-secret GraphQL error details for logs/user-facing failures."""
+        messages: list[str] = []
+        for part in parts or []:
+            for err in (part.get("errors") or []):
+                ext = err.get("extensions") or {}
+                bits = []
+                msg = err.get("message")
+                if msg:
+                    bits.append(str(msg))
+                for key in ("philoCode", "errorCode", "code", "serviceName"):
+                    if ext.get(key):
+                        bits.append(f"{key}={ext[key]}")
+                path = err.get("path")
+                if path:
+                    bits.append(f"path={'.'.join(str(p) for p in path)}")
+                if bits:
+                    messages.append(" ".join(bits))
+        return "; ".join(messages) if messages else None
+
+    @staticmethod
+    def _has_gql_error_code(parts: list, code: str) -> bool:
+        for part in parts or []:
+            for err in (part.get("errors") or []):
+                ext = err.get("extensions") or {}
+                if ext.get("philoCode") == code or ext.get("code") == code:
+                    return True
+        return False
 
     def _gql(self, op: str, variables: dict) -> list:
         """POST a persisted-query op (as a 1-element batch) and return the raw
@@ -690,6 +725,13 @@ class PhiloScraper(BaseScraper):
                      "lat": None, "givn": None, "tileGroupId": None,
                      "broadcastAt": None, "startAtOverride": None, "isPreload": False}
         cps = self._gql("createPlaybackSessionV2", variables)
+        if self._has_gql_error_code(cps, "PLAYER_NOT_FOUND"):
+            logger.info("[philo] saved playerId was rejected; registering a new player for %s", cid)
+            player_id = self._ensure_player(force_register=True)
+            if not player_id:
+                raise RuntimeError(f"[philo] could not refresh playerId for {cid}")
+            variables["playerId"] = player_id
+            cps = self._gql("createPlaybackSessionV2", variables)
         sess = None
         for part in cps:
             node = ((part.get("data") or {}).get("createPlaybackSessionV2"))
@@ -697,6 +739,9 @@ class PhiloScraper(BaseScraper):
                 sess = node
                 break
         if not sess or not sess.get("dashURL"):
+            detail = self._gql_error_summary(cps)
+            if detail:
+                raise RuntimeError(f"[philo] no dashURL for {cid}: {detail}")
             raise RuntimeError(f"[philo] no dashURL for {cid}")
         dash_url = sess["dashURL"]
         auth_token = ((sess.get("drmProvider") or {}).get("authToken"))
