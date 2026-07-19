@@ -204,9 +204,20 @@ class FrndlyTVScraper(BaseScraper):
         """Convert 'epg,{path}' template image field to a CDN URL."""
         if not image_field or ',' not in image_field:
             return None
-        _, path = image_field.split(',', 1)
+        bucket, path = image_field.split(',', 1)
+        if bucket.strip().lower() != 'epg':
+            return None
         path = path.strip()
         return _EPG_IMAGE_URL.format(path=path) if path else None
+
+    @staticmethod
+    def _valid_epg_image_url(url: str | None) -> str | None:
+        """Return only Frndly programme artwork URLs, not channel-logo fallbacks."""
+        if not url:
+            return None
+        if '/content/common/epgs/channel/logos/' in url:
+            return None
+        return url
 
     # ── fetch_channels ────────────────────────────────────────────────────────
 
@@ -360,7 +371,7 @@ class FrndlyTVScraper(BaseScraper):
         for p in prog_list:
             p.description = desc or (f'Cast: {cast_raw}' if cast_raw else None)
             p.rating = meta.get('rating')
-            p.poster_url = meta.get('poster')
+            p.poster_url = FrndlyTVScraper._valid_epg_image_url(meta.get('poster'))
             p.season = season
             p.episode = episode
             p.episode_title = meta.get('ep_title')
