@@ -402,16 +402,20 @@
       font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
       color: var(--accent-soft); margin-bottom: 0.4rem;
     }
+    .gm-program-card {
+      border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+      padding: 0.85rem; margin-bottom: 0.85rem; overflow: hidden; min-height: 96px;
+    }
     .gm-prog-title { font-size: 1.05rem; font-weight: 700; color: var(--text-strong, var(--text)); margin-bottom: 0.25rem; line-height: 1.3; }
-    .gm-prog-time { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.6rem; }
+    .gm-prog-time { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.45rem; }
     .gm-prog-desc {
       font-size: 0.83rem; color: var(--text-soft, var(--text-muted)); line-height: 1.55;
       margin-bottom: 0.75rem; border-left: 2px solid var(--border); padding-left: 0.7rem;
     }
     .gm-prog-meta { font-size: 0.75rem; color: var(--text-dim, var(--text-muted)); margin-bottom: 0.75rem; }
     .gm-poster {
-      float: right; margin: 0 0 0.5rem 0.75rem;
-      width: 76px; height: 76px; border-radius: 6px;
+      float: right; margin: 0 0 0.45rem 0.75rem;
+      width: 96px; height: 96px; border-radius: 6px;
       object-fit: cover; background: var(--bg);
     }
     .gm-live-badge {
@@ -735,6 +739,10 @@
           data-cat="${escapeHtml(p.cat)}"
           data-rating="${escapeHtml(p.rating)}"
           data-poster="${escapeHtml(p.poster)}"
+          data-episode-title="${escapeHtml(p.episode_title || '')}"
+          data-season="${p.season || ''}"
+          data-episode="${p.episode || ''}"
+          data-program-type="${escapeHtml(p.program_type || '')}"
           ${p.current ? 'data-current="1"' : ''}
           title="${tooltip}"
           onclick="openGuideProgModal(this)">
@@ -1009,6 +1017,10 @@
         cat:     el.dataset.cat     || '',
         rating:  el.dataset.rating  || '',
         poster:  el.dataset.poster  || '',
+        episodeTitle: el.dataset.episodeTitle || '',
+        season:  el.dataset.season || '',
+        episode: el.dataset.episode || '',
+        programType: el.dataset.programType || '',
         current: !!el.dataset.current,
       };
     }
@@ -1093,6 +1105,10 @@
             cat:     cp.category || '',
             rating:  cp.rating || '',
             poster:  cp.poster_url || '',
+            episodeTitle: cp.episode_title || '',
+            season:  cp.season || '',
+            episode: cp.episode || '',
+            programType: cp.program_type || '',
             current: true,
           };
         }
@@ -1123,6 +1139,15 @@
           : '';
 
         const catRating = [prog && prog.cat, prog && prog.rating].filter(Boolean).join(' · ');
+        const categories = `${(prog && prog.cat) || ''};${ch.category || ''}`
+          .split(';')
+          .map(v => v.trim().toLowerCase())
+          .filter(Boolean);
+        const isMovie = (prog && prog.programType === 'movie') || categories.includes('movie') || categories.includes('movies');
+        const episodeBits = [];
+        if (prog && !isMovie && prog.episodeTitle) episodeBits.push(prog.episodeTitle);
+        if (prog && !isMovie && prog.season && prog.episode) episodeBits.push(`S${prog.season} E${prog.episode}`);
+        const episodeLine = episodeBits.length ? `<div class="gm-prog-time">${episodeBits.map(escapeHtml).join(' · ')}</div>` : '';
 
         const playBtn = isMuxed
           ? ''
@@ -1158,10 +1183,11 @@
           <hr class="gm-divider">
           ${prog ? `
             <div class="gm-prog-label">${prog.current ? 'Now Playing' : 'Upcoming'} ${badge}</div>
-            <div style="overflow:hidden">
+            <div class="gm-program-card">
               ${poster}
               <div class="gm-prog-title">${escapeHtml(prog.title || '—')}</div>
               <div class="gm-prog-time">${escapeHtml(prog.start)} – ${escapeHtml(prog.end)}</div>
+              ${episodeLine}
               ${prog.desc ? `<div class="gm-prog-desc">${escapeHtml(prog.desc)}</div>` : ''}
               ${catRating ? `<div class="gm-prog-meta">${escapeHtml(catRating)}</div>` : ''}
             </div>

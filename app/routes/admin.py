@@ -1098,7 +1098,8 @@ def guide_programs():
         .options(load_only(
             Program.channel_id, Program.start_time, Program.end_time,
             Program.title, Program.description, Program.category,
-            Program.rating, Program.poster_url,
+            Program.rating, Program.poster_url, Program.episode_title,
+            Program.season, Program.episode, Program.program_type,
         ))
         .filter(
             Program.channel_id.in_(channel_ids),
@@ -1136,6 +1137,10 @@ def guide_programs():
             'current': start_utc_p <= now_utc < end_utc_p,
             'rating':  p.rating or '',
             'poster':  p.poster_url or '',
+            'episode_title': p.episode_title or '',
+            'season': p.season,
+            'episode': p.episode,
+            'program_type': p.program_type or '',
         })
     return jsonify(result)
 
