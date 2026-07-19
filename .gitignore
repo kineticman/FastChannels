@@ -47,4 +47,5 @@ probe_amazon.py
 docker-compose.override.yml
 docker-compose.test.yml
 CLAUDE.md
+AGENTS.md
 tests/

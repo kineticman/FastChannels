@@ -30,6 +30,7 @@ _CHANNELS_URL = 'https://frndlytv-api.revlet.net/service/api/v1/tvguide/channels
 _STREAM_URL = 'https://frndlytv-api.revlet.net/service/api/v1/page/stream'
 _GUIDE_URL = 'https://frndlytv-tvguideapi.revlet.net/service/api/v1/static/tvguide'
 _TEMPLATE_URL = 'https://frndlytv-api.revlet.net/service/api/v1/template/data'
+_NEXT_PROGRAMS_URL = 'https://frndlytv-api.revlet.net/service/api/v1/get/live/channel/next/programs'
 _SESSION_END_URL = 'https://frndlytv-api.revlet.net/service/api/v1/stream/session/end'
 
 _LOGIN_TTL = 60 * 60 * 24  # force re-login after 24 hours
@@ -37,6 +38,7 @@ _EPG_DAYS = 3
 _GUIDE_CHUNK = 20       # channel IDs per guide request
 _ENRICH_WORKERS = 2    # conservative concurrency for template/data enrichment
 _ENRICH_DELAY = 0.4    # seconds between requests per worker to avoid rate-limiting
+_RICH_GUIDE_WORKERS = 2  # one rich next-programs request per channel; payloads are large
 _CACHE_MAX = 8000      # max content_cache entries to keep in the source_cache table
 
 # "S2 Ep14 | Manager Meltdown"  or  "S1 Ep3"  (no episode title)
@@ -271,11 +273,12 @@ class FrndlyTVScraper(BaseScraper):
 
         content_map: dict[str, tuple[int, list[ProgramData]]] = {}
         programs: list[ProgramData] = []
+        rich_targets: dict[str, tuple[str, int]] = {}
 
         for i in range(0, len(ids), _GUIDE_CHUNK):
             chunk = ids[i:i + _GUIDE_CHUNK]
             start = now
-            for _ in range(_EPG_DAYS):
+            for day_idx in range(_EPG_DAYS):
                 end = start + 86400
                 params = {
                     'channel_ids': ','.join(chunk),
@@ -287,12 +290,21 @@ class FrndlyTVScraper(BaseScraper):
                     data = self._api_get(_GUIDE_URL, params=params)
                     for row in data.get('data', []):
                         ch_id = str(row['channelId'])
-                        for prog in row.get('programs', []):
+                        row_programs = row.get('programs', [])
+                        if day_idx == 0 and row_programs and ch_id not in rich_targets:
+                            path = ((row_programs[0].get('target') or {}).get('path') or '').strip()
+                            if path:
+                                rich_targets[ch_id] = (path, len(row_programs))
+                        for idx, prog in enumerate(row_programs):
                             p, sched_id, content_id = self._parse_program(ch_id, prog)
                             if p is None:
                                 continue
                             programs.append(p)
-                            if ch_id in enrich_ids and content_id:
+                            # Template detail is rate-limited, so only enrich all programmes
+                            # for non-Gracenote channels. For every channel, also enrich the
+                            # first 24h row so admin preview Now Playing gets artwork.
+                            should_template_enrich = ch_id in enrich_ids or (day_idx == 0 and idx == 0)
+                            if should_template_enrich and content_id:
                                 if content_id not in content_map:
                                     content_map[content_id] = (sched_id, [])
                                 content_map[content_id][1].append(p)
@@ -308,6 +320,9 @@ class FrndlyTVScraper(BaseScraper):
 
         if content_map:
             self._enrich_programs(content_map)
+
+        if rich_targets:
+            self._enrich_next_program_artwork(programs, rich_targets)
 
         return programs
 
@@ -332,6 +347,99 @@ class FrndlyTVScraper(BaseScraper):
             end_time=end,
             episode_id=content_id or None,
         ), sched_id, content_id
+
+
+    # ── 24h rich guide artwork via get/live/channel/next/programs ───────────
+
+    @staticmethod
+    def _program_key(ch_id: str, start_ms: int, end_ms: int) -> tuple[str, datetime, datetime]:
+        return (
+            ch_id,
+            datetime.fromtimestamp(int(start_ms) / 1000, tz=timezone.utc),
+            datetime.fromtimestamp(int(end_ms) / 1000, tz=timezone.utc),
+        )
+
+    @staticmethod
+    def _rich_program_meta(item: dict) -> tuple[str | None, str | None]:
+        page = item.get('pageContent') or {}
+        info_attrs = (page.get('info') or {}).get('attributes') or {}
+        first_content = ((page.get('data') or [{}])[0].get('content') or {})
+        poster = (
+            FrndlyTVScraper._epg_image(first_content.get('backgroundImage') or '')
+            or FrndlyTVScraper._epg_image(info_attrs.get('image') or '')
+        )
+        poster = FrndlyTVScraper._valid_epg_image_url(poster)
+        episode_title = (info_attrs.get('episodeTitle') or '').strip() or None
+        return poster, episode_title
+
+    def _enrich_next_program_artwork(
+        self,
+        programs: list[ProgramData],
+        targets: dict[str, tuple[str, int]],
+    ) -> None:
+        """Add 24h programme artwork/episode titles from Frndly's rich guide.
+
+        The endpoint returns very large pageContent objects, so each response is
+        parsed and discarded per channel. It does not provide descriptions.
+        """
+        if not programs or not targets:
+            return
+
+        by_key: dict[tuple[str, datetime, datetime], ProgramData] = {
+            (p.source_channel_id, p.start_time, p.end_time): p
+            for p in programs
+        }
+        headers_snapshot = dict(self._frndly_headers)
+
+        def fetch_one(ch_id: str, path: str, count: int) -> tuple[int, int, int]:
+            applied = with_poster = with_ep_title = 0
+            try:
+                r = self.session.get(
+                    _NEXT_PROGRAMS_URL,
+                    params={'path': path, 'count': count},
+                    headers=headers_snapshot,
+                    timeout=45,
+                )
+                if not r.ok:
+                    logger.debug('[frndlytv] rich guide %s HTTP %s', ch_id, r.status_code)
+                    return applied, with_poster, with_ep_title
+                data = r.json()
+                for item in (data.get('response') or {}).get('data', []):
+                    start_ms = item.get('startTime')
+                    end_ms = item.get('endTime')
+                    if not start_ms or not end_ms:
+                        continue
+                    prog = by_key.get(self._program_key(ch_id, start_ms, end_ms))
+                    if not prog:
+                        continue
+                    poster, episode_title = self._rich_program_meta(item)
+                    if poster and not prog.poster_url:
+                        prog.poster_url = poster
+                        with_poster += 1
+                    if episode_title and not prog.episode_title:
+                        prog.episode_title = episode_title
+                        with_ep_title += 1
+                    applied += 1
+            except Exception as exc:
+                logger.debug('[frndlytv] rich guide failed for %s: %s', ch_id, exc)
+            return applied, with_poster, with_ep_title
+
+        total_applied = total_posters = total_ep_titles = 0
+        with ThreadPoolExecutor(max_workers=_RICH_GUIDE_WORKERS) as pool:
+            futures = {
+                pool.submit(fetch_one, ch_id, path, count): ch_id
+                for ch_id, (path, count) in targets.items()
+            }
+            for future in as_completed(futures):
+                applied, posters, ep_titles = future.result()
+                total_applied += applied
+                total_posters += posters
+                total_ep_titles += ep_titles
+
+        logger.info(
+            '[frndlytv] rich guide applied %d programs: %d posters, %d episode titles',
+            total_applied, total_posters, total_ep_titles,
+        )
 
     # ── EPG enrichment via template/data ──────────────────────────────────────
 
