@@ -25,8 +25,10 @@ from ..scrapers import registry
 from ..scrapers.distro import (
     CHANNEL_SCHEME as _DISTRO_SCHEME,
     SESSION_CDN_HOSTS as _DISTRO_SESSION_CDN_HOSTS,
+    MANIFEST_PROXY_HOSTS as _DISTRO_MANIFEST_PROXY_HOSTS,
     HLS_HEADERS as _DISTRO_HLS_HEADERS,
     _resolve_from_feed as _distro_resolve_from_feed,
+    _sanitize_url as _distro_sanitize_url,
     _split_qualified_channel_id as _distro_split_id,
     _pick_best_variant as _distro_pick_best_variant,
     DistroScraper,
@@ -37,6 +39,134 @@ from ..scrapers.distro import (
 # per-poll latency by avoiding repeated handshakes to the same CloudFront host.
 _DISTRO_PROXY_SESSION = _requests.Session()
 _DISTRO_PROXY_SESSION.headers.update(_DISTRO_HLS_HEADERS)
+
+_DISTRO_SEGMENT_SEQ_RE = re.compile(r'-(\d+)\.ts(?:[?#]|%3[fF]|%23|$)')
+_DISTRO_PROXY_LOG_LAST: dict[str, float] = {}
+_DISTRO_PROXY_LOG_INTERVAL = 30.0
+
+
+def _distro_throttled_info(channel_id: str, msg: str, *args) -> None:
+    now = _time.monotonic()
+    last = _DISTRO_PROXY_LOG_LAST.get(channel_id, 0.0)
+    if now - last >= _DISTRO_PROXY_LOG_INTERVAL:
+        _DISTRO_PROXY_LOG_LAST[channel_id] = now
+        logger.info(msg, *args)
+
+
+def _distro_rewrite_media_playlist(
+    text: str,
+    playlist_url: str,
+    channel_id: str,
+    base_url: str,
+    quote,
+) -> tuple[str, dict]:
+    """Rewrite Distro media playlists for stricter HLS clients.
+
+    Caton playlists are browser-hostile in two ways: they set MEDIA-SEQUENCE to
+    the last segment number instead of the first, and their AAC packets can crash
+    Chrome after Shaka transmuxes TS to MSE. Serve Caton through the segment
+    proxy as video-only TS and lag its live window behind the still-writing edge.
+    """
+    playlist_host = urlsplit(playlist_url).netloc
+    trim_to_segments = None
+    lag_segments = 2 if playlist_host == 'global.cgtn.cicc.media.caton.cloud' else 0
+    variant_base = playlist_url.rsplit('/', 1)[0] + '/'
+
+    header_lines: list[str] = []
+    pending_tags: list[str] = []
+    segment_blocks: list[list[str]] = []
+    first_seg_seq: int | None = None
+    last_seg_seq: int | None = None
+    old_seq: int | None = None
+    proxied_segments = 0
+    seen_segment = False
+
+    for raw_line in text.splitlines():
+        line = raw_line
+        stripped = line.strip()
+        if stripped.startswith('#EXT-X-MEDIA-SEQUENCE:'):
+            try:
+                old_seq = int(stripped.split(':', 1)[1])
+            except Exception:
+                old_seq = None
+            if not seen_segment:
+                header_lines.append(line)
+            else:
+                pending_tags.append(line)
+            continue
+
+        if stripped and not stripped.startswith('#'):
+            abs_url = urljoin(variant_base, stripped)
+            seg_match = _DISTRO_SEGMENT_SEQ_RE.search(abs_url)
+            if seg_match:
+                seg_seq = int(seg_match.group(1))
+                if first_seg_seq is None:
+                    first_seg_seq = seg_seq
+                last_seg_seq = seg_seq
+            seg_host = urlsplit(abs_url).netloc
+            if seg_host == 'global.cgtn.cicc.media.caton.cloud':
+                proxied_segments += 1
+                line = f'{base_url}/play/distro/segment?url={quote(abs_url, safe="")}&video_only=1'
+            elif seg_host in _DISTRO_SESSION_CDN_HOSTS:
+                proxied_segments += 1
+                line = f'{base_url}/play/distro/segment?url={quote(abs_url, safe="")}'
+            else:
+                line = abs_url
+            segment_blocks.append(pending_tags + [line])
+            pending_tags = []
+            seen_segment = True
+        elif seen_segment or pending_tags or stripped.startswith(('#EXTINF', '#EXT-X-BYTERANGE', '#EXT-X-DISCONTINUITY')):
+            pending_tags.append(line)
+        else:
+            header_lines.append(line)
+
+    original_segment_count = len(segment_blocks)
+    trimmed_segments = 0
+    if lag_segments and len(segment_blocks) > lag_segments:
+        segment_blocks = segment_blocks[:-lag_segments]
+        trimmed_segments += lag_segments
+    if trim_to_segments and len(segment_blocks) > trim_to_segments:
+        trimmed_segments += len(segment_blocks) - trim_to_segments
+        segment_blocks = segment_blocks[-trim_to_segments:]
+    if lag_segments or trim_to_segments:
+        kept_uris = [ln for block in segment_blocks for ln in block if ln.startswith(('http://', 'https://'))]
+        first_match = _DISTRO_SEGMENT_SEQ_RE.search(kept_uris[0]) if kept_uris else None
+        last_match = _DISTRO_SEGMENT_SEQ_RE.search(kept_uris[-1]) if kept_uris else None
+        if first_match:
+            first_seg_seq = int(first_match.group(1))
+        if last_match:
+            last_seg_seq = int(last_match.group(1))
+
+    fixed_seq = None
+    if old_seq is not None and first_seg_seq is not None and old_seq != first_seg_seq:
+        fixed_seq = first_seg_seq
+        replaced = False
+        for idx, line in enumerate(header_lines):
+            if line.strip().startswith('#EXT-X-MEDIA-SEQUENCE:'):
+                header_lines[idx] = f'#EXT-X-MEDIA-SEQUENCE:{first_seg_seq}'
+                replaced = True
+                break
+        if not replaced:
+            insert_at = 1 if header_lines and header_lines[0].strip() == '#EXTM3U' else 0
+            header_lines.insert(insert_at, f'#EXT-X-MEDIA-SEQUENCE:{first_seg_seq}')
+
+    lines = header_lines[:]
+    for block in segment_blocks:
+        lines.extend(block)
+    lines.extend(pending_tags)
+
+    info = {
+        'old_seq': old_seq,
+        'fixed_seq': fixed_seq,
+        'first_seg_seq': first_seg_seq,
+        'last_seg_seq': last_seg_seq,
+        'segment_count': len(segment_blocks),
+        'original_segment_count': original_segment_count,
+        'trimmed_segments': trimmed_segments,
+        'lag_segments': lag_segments,
+        'proxied_segments': proxied_segments,
+    }
+    return '\n'.join(lines), info
 
 # Variant URL stored in Redis so ALL gunicorn workers share a single CloudFront
 # session per channel. Each master fetch creates a new session token
@@ -69,6 +199,153 @@ def _distro_redis() -> 'redis.Redis | None':
 def _distro_variant_key(upstream_url: str) -> str:
     import hashlib
     return _DISTRO_REDIS_KEY_PREFIX + hashlib.md5(upstream_url.encode()).hexdigest()
+
+
+_VIDEO_STREAM_TYPES = {0x01, 0x02, 0x10, 0x1B, 0x24, 0x27, 0x42, 0xD1}
+
+
+def _mpeg_crc32(data: bytes) -> int:
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte << 24
+        for _ in range(8):
+            if crc & 0x80000000:
+                crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF
+            else:
+                crc = (crc << 1) & 0xFFFFFFFF
+    return crc & 0xFFFFFFFF
+
+
+def _ts_payload_offset(packet: bytes) -> int | None:
+    if len(packet) != 188 or packet[0] != 0x47:
+        return None
+    afc = (packet[3] >> 4) & 0x03
+    if afc == 0 or afc == 2:
+        return None
+    off = 4
+    if afc == 3:
+        off += 1 + packet[4]
+    return off if off < 188 else None
+
+
+def _psi_section_from_packet(packet: bytes) -> bytes | None:
+    off = _ts_payload_offset(packet)
+    if off is None or not (packet[1] & 0x40):
+        return None
+    pointer = packet[off]
+    start = off + 1 + pointer
+    if start + 3 > 188:
+        return None
+    section_length = ((packet[start + 1] & 0x0F) << 8) | packet[start + 2]
+    end = start + 3 + section_length
+    if end > 188:
+        return None
+    return packet[start:end]
+
+
+def _pat_pmt_pid(packet: bytes) -> int | None:
+    section = _psi_section_from_packet(packet)
+    if not section or section[0] != 0x00:
+        return None
+    section_length = ((section[1] & 0x0F) << 8) | section[2]
+    pos = 8
+    end = 3 + section_length - 4
+    while pos + 4 <= end:
+        program_number = (section[pos] << 8) | section[pos + 1]
+        pid = ((section[pos + 2] & 0x1F) << 8) | section[pos + 3]
+        if program_number != 0:
+            return pid
+        pos += 4
+    return None
+
+
+def _rewrite_pmt_video_only(packet: bytes) -> tuple[bytes, set[int]] | None:
+    section = _psi_section_from_packet(packet)
+    if not section or section[0] != 0x02:
+        return None
+    section_length = ((section[1] & 0x0F) << 8) | section[2]
+    section_end = 3 + section_length - 4
+    if section_end > len(section) or len(section) < 12:
+        return None
+    program_info_len = ((section[10] & 0x0F) << 8) | section[11]
+    pos = 12 + program_info_len
+    if pos > section_end:
+        return None
+
+    kept = bytearray(section[:pos])
+    video_pids: set[int] = set()
+    while pos + 5 <= section_end:
+        stream_type = section[pos]
+        elem_pid = ((section[pos + 1] & 0x1F) << 8) | section[pos + 2]
+        es_info_len = ((section[pos + 3] & 0x0F) << 8) | section[pos + 4]
+        entry_end = pos + 5 + es_info_len
+        if entry_end > section_end:
+            return None
+        if stream_type in _VIDEO_STREAM_TYPES:
+            kept.extend(section[pos:entry_end])
+            video_pids.add(elem_pid)
+        pos = entry_end
+
+    if not video_pids:
+        return None
+    new_section = bytearray(kept)
+    new_section_length = len(new_section) - 3 + 4
+    new_section[1] = (new_section[1] & 0xF0) | ((new_section_length >> 8) & 0x0F)
+    new_section[2] = new_section_length & 0xFF
+    crc = _mpeg_crc32(bytes(new_section))
+    new_section.extend(crc.to_bytes(4, 'big'))
+
+    pid_hi = packet[1] & 0x1F
+    pid_lo = packet[2]
+    continuity = packet[3] & 0x0F
+    payload = b'\x00' + bytes(new_section)
+    if len(payload) > 184:
+        return None
+    new_packet = bytes([0x47, 0x40 | pid_hi, pid_lo, 0x10 | continuity]) + payload
+    new_packet += b'\xFF' * (188 - len(new_packet))
+    return new_packet, video_pids
+
+
+def _distro_filter_ts_video_only(data: bytes) -> bytes:
+    """Return MPEG-TS bytes with audio streams removed from the PMT and payload.
+
+    Used only for Caton Distro browser preview segments whose AAC packets crash
+    Chrome after Shaka transmuxing. If parsing fails, return original bytes.
+    """
+    if len(data) < 188 or len(data) % 188 != 0:
+        return data
+    packets = [data[i:i + 188] for i in range(0, len(data), 188)]
+    pmt_pid = None
+    for packet in packets[:200]:
+        pid = ((packet[1] & 0x1F) << 8) | packet[2]
+        if pid == 0:
+            pmt_pid = _pat_pmt_pid(packet)
+            if pmt_pid is not None:
+                break
+    if pmt_pid is None:
+        return data
+
+    video_pids: set[int] = set()
+    rewritten_pmt: bytes | None = None
+    for packet in packets[:500]:
+        pid = ((packet[1] & 0x1F) << 8) | packet[2]
+        if pid == pmt_pid:
+            rewritten = _rewrite_pmt_video_only(packet)
+            if rewritten:
+                rewritten_pmt, video_pids = rewritten
+                break
+    if not rewritten_pmt or not video_pids:
+        return data
+
+    keep_pids = {0, pmt_pid, 0x1FFF} | video_pids
+    out = bytearray()
+    for packet in packets:
+        pid = ((packet[1] & 0x1F) << 8) | packet[2]
+        if pid == pmt_pid:
+            out.extend(rewritten_pmt)
+        elif pid in keep_pids:
+            out.extend(packet)
+    return bytes(out) or data
 
 
 from ..scrapers.cspan import (
@@ -604,14 +881,23 @@ def distro_segment_proxy():
         logger.warning('[distro-seg-proxy] blocked SSRF attempt to: %s', parsed.netloc)
         abort(403)
     try:
-        r = _DISTRO_PROXY_SESSION.get(url, timeout=15, stream=True)
+        video_only = request.args.get('video_only') == '1' and parsed.netloc == 'global.cgtn.cicc.media.caton.cloud'
+        r = _DISTRO_PROXY_SESSION.get(url, timeout=15, stream=not video_only)
         if r.status_code != 200:
             abort(r.status_code)
+        if video_only:
+            body = _distro_filter_ts_video_only(r.content)
+            return Response(
+                body,
+                status=200,
+                content_type=r.headers.get('Content-Type', 'video/MP2T'),
+                headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+            )
         return Response(
             r.iter_content(65536),
             status=200,
             content_type=r.headers.get('Content-Type', 'video/MP2T'),
-            headers={'Cache-Control': 'no-cache'},
+            headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
         )
     except Exception as e:
         logger.warning('[distro-seg-proxy] fetch failed for %s: %s', url[:80], e)
@@ -653,6 +939,9 @@ def _distro_fetch_variant(upstream_url: str, channel_id: str) -> tuple[str, _req
         return None
 
     effective_master_url = master_r.url
+    if '#EXTINF' in master_r.text and '#EXT-X-STREAM-INF' not in master_r.text:
+        return effective_master_url, master_r
+
     best_variant = _distro_pick_best_variant(master_r.text, effective_master_url)
     if not best_variant:
         logger.warning('[distro-proxy] no variants in master for %s', channel_id)
@@ -856,38 +1145,63 @@ def distro_manifest_proxy(channel_id: str):
     upstream_url = _distro_resolve_from_feed(scraper, geo, raw_id)
     if not upstream_url:
         return _unavailable_response()
+    upstream_url = _distro_sanitize_url(upstream_url)
 
     result = _distro_fetch_variant(upstream_url, channel_id)
     if result is None:
         # One retry with a forced feed refresh in case the upstream URL itself changed
         upstream_url = _distro_resolve_from_feed(scraper, geo, raw_id, force_refresh=True)
         if upstream_url:
+            upstream_url = _distro_sanitize_url(upstream_url)
             result = _distro_fetch_variant(upstream_url, channel_id)
     if result is None:
         return _unavailable_response()
 
     best_variant, variant_r = result
 
-    # Only proxy segments whose CDN host requires Origin/Referer headers.
-    # Segments on other hosts (e.g. b.jsrdn.com) are publicly accessible and
-    # can be served as direct URLs, avoiding unnecessary proxy overhead.
+    # Proxy segments only when needed: header-gated Distro CDNs need the normal
+    # segment proxy, while Caton needs the video-only segment proxy for Chrome/Shaka.
+    # Other hosts are rewritten to absolute CDN URLs and fetched directly.
     base_url = request.host_url.rstrip('/')
-    variant_base = best_variant.rsplit('/', 1)[0] + '/'
-    lines = []
-    for line in variant_r.text.splitlines():
-        if line and not line.startswith('#'):
-            abs_url = urljoin(variant_base, line)
-            seg_host = urlsplit(abs_url).netloc
-            if seg_host in _DISTRO_SESSION_CDN_HOSTS:
-                line = f'{base_url}/play/distro/segment?url={_quote(abs_url, safe="")}'
-            else:
-                line = abs_url
-        lines.append(line)
+    body, info = _distro_rewrite_media_playlist(
+        variant_r.text,
+        best_variant,
+        channel_id,
+        base_url,
+        _quote,
+    )
+    if info.get('fixed_seq') is not None:
+        _distro_throttled_info(
+            channel_id,
+            '[distro-proxy] normalized media sequence channel=%s old=%s fixed=%s first_seg=%s last_seg=%s segments=%s trimmed=%s lag=%s',
+            channel_id,
+            info.get('old_seq'),
+            info.get('fixed_seq'),
+            info.get('first_seg_seq'),
+            info.get('last_seg_seq'),
+            info.get('segment_count'),
+            info.get('trimmed_segments'),
+            info.get('lag_segments'),
+        )
+    else:
+        _distro_throttled_info(
+            channel_id,
+            '[distro-proxy] served channel=%s host=%s seq=%s first_seg=%s last_seg=%s segments=%s trimmed=%s lag=%s proxied_segments=%s',
+            channel_id,
+            urlsplit(best_variant).netloc,
+            info.get('old_seq'),
+            info.get('first_seg_seq'),
+            info.get('last_seg_seq'),
+            info.get('segment_count'),
+            info.get('trimmed_segments'),
+            info.get('lag_segments'),
+            info.get('proxied_segments'),
+        )
 
     return Response(
-        '\n'.join(lines),
+        body,
         mimetype='application/vnd.apple.mpegurl',
-        headers={'Cache-Control': 'no-cache'},
+        headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
     )
 
 
@@ -2720,12 +3034,12 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
-    # Distro channels on the Referer-restricted CDN: serve a manifest proxy
-    # instead of a direct redirect so IPTV clients can access the segments
-    # (which are on an open CDN) without needing Origin/Referer headers.
+    # Distro channels with browser-sensitive manifests: serve a manifest proxy
+    # so Shaka sees absolute segment URLs and so header-gated CDNs are fetched
+    # server-side. The proxy still leaves public segment URLs direct.
     if source_name == 'distro' and resolved_url:
         from urllib.parse import urlsplit as _urlsplit
-        if _urlsplit(resolved_url).netloc in _DISTRO_SESSION_CDN_HOSTS:
+        if _urlsplit(resolved_url).netloc in _DISTRO_MANIFEST_PROXY_HOSTS:
             from urllib.parse import quote as _quote
             encoded_id = _quote(channel.source_channel_id, safe='')
             return redirect(

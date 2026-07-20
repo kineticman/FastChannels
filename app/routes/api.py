@@ -2500,7 +2500,7 @@ def _get_playback_info(ch, fast_mode=True):
     # the 302) rather than the redirect target, sending sub-playlist requests back
     # to our server.  The proxy fetches the master server-side and rewrites all
     # variant URLs to absolute proxy URLs, eliminating the relative-URL problem.
-    if ch.source and ch.source.name in ('fubo', 'tubi', 'pluto', 'samsung') and ch.source_channel_id:
+    if ch.source and ch.source.name in ('fubo', 'tubi', 'pluto', 'samsung', 'distro') and ch.source_channel_id:
         from urllib.parse import quote as _quote
         _enc = _quote(ch.source_channel_id, safe='')
         preview_url = f'/play/{ch.source.name}/{_enc}/proxy.m3u8'

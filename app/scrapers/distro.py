@@ -96,6 +96,14 @@ SESSION_CDN_HOSTS = {
     "d35j504z0x2vu2.cloudfront.net",   # requires Origin/Referer headers (proxy required)
 }
 
+# Hosts whose playlists need server-side manifest rewriting for browser/Shaka
+# playback, even though their segments can be fetched directly. Caton returns
+# root-relative segment URLs; after a /play 302 Shaka can resolve those against
+# FastChannels instead of the final CDN origin, causing stalls/retries.
+MANIFEST_PROXY_HOSTS = SESSION_CDN_HOSTS | {
+    "global.cgtn.cicc.media.caton.cloud",
+}
+
 # Superset: hosts where resolve() should skip the server-side pre-fetch.
 # Broadpeak is included here (direct redirect works for clients) but NOT in
 # SESSION_CDN_HOSTS because it does NOT need the manifest proxy.
