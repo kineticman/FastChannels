@@ -42,15 +42,15 @@ real HAR captures of a successful Chrome playback session):
 
   3. identityCookie (session-level, long-lived — has its own expiry) comes
      from POST /rights/management/mdrm/vgemultidrm/v1/widevine/activate,
-     which needs a real browser's Widevine CDM to generate the
-     activationChallenge. Captured once per auth refresh by
-     this module's Playwright login flow, alongside bearer_token.
+     which needs the playback client's Widevine/Shaka activation challenge.
+     It is minted lazily by license_proxy() and cached per playback device.
 
 Channel/EPG metadata (name, number, logo, schedule) uses a separate,
-lightweight path: plain `requests` calls with the bearer token + clientContext
-captured by the Playwright auth flow below (Akamai Bot Manager blocks a bare `requests`
-login, but the captured token works fine over plain HTTP for metadata and,
-it turns out, for the manifest/license calls too).
+lightweight path: plain `requests` calls with the bearer token captured by the
+curl-cffi ForgeRock/PKCE auth flow below. Bare `requests` is not enough for
+sign-in, but curl-cffi with Chrome impersonation gets the tokens and the
+captured bearer works over plain HTTP for metadata, manifests, and license
+calls.
 
 source_channel_id is the ccid (not DirecTV's resourceId UUID) — the
 channel-resolve and license calls both key off ccid, so it has to be the
@@ -61,15 +61,24 @@ for the schedule/EPG API, so it's embedded in the opaque stream_url instead:
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
+import os
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import quote, unquote, urlparse, parse_qs
 
 import requests
+try:
+    from curl_cffi import requests as _cffi_requests
+    _CFFI_IMPERSONATE = 'chrome'
+except ImportError:
+    _cffi_requests = None
+    _CFFI_IMPERSONATE = None
 
 from .base import (
     BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError,
@@ -84,6 +93,13 @@ _SCHEDULE_URL = "https://api.cld.dtvce.com/discovery/edge/schedule/v1/service/sc
 _CHANNEL_AUTH_URL = "https://api.cld.dtvce.com/right/authorization/channel/v1"
 _ACTIVATE_URL = "https://api.cld.dtvce.com/rights/management/mdrm/vgemultidrm/v1/widevine/activate"
 _LICENSE_URL = "https://api.cld.dtvce.com/rights/management/mdrm/vgemultidrm/v1/widevine/license"
+_IDENTITY_AUTH_URL = "https://identity.directv.com/am/IdPwdAuth"
+_IDENTITY_AUTHORIZE_URL = "https://identity.directv.com/authorize"
+_AUTHN_TOKEN_URL = "https://api.cld.dtvce.com/authn-tokengo/v3/tokens"
+
+_FORGEROCK_CLIENT_ID = "fr_web_02"
+_WEB_CLIENT_ID = "UNIFIED_DTV_WEB"
+_AUTH_RETURN_URL = "https://stream.directv.com/auth-return"
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -527,6 +543,230 @@ def _click_primary_button(page) -> bool:
 
 # ── Core capture ─────────────────────────────────────────────────────────────
 
+
+def _pkce_verifier() -> str:
+    alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
+    raw = os.urandom(128)
+    return ''.join(alphabet[b % len(alphabet)] for b in raw)
+
+
+def _b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=')
+
+
+def _pkce_challenge(verifier: str) -> str:
+    return _b64url(hashlib.sha256(verifier.encode('ascii')).digest())
+
+
+def _fill_auth_callback(payload: dict, value: str) -> dict:
+    data = json.loads(json.dumps(payload))
+    for callback in data.get('callbacks') or []:
+        if callback.get('type') not in ('NameCallback', 'PasswordCallback', 'ChoiceCallback'):
+            continue
+        inputs = callback.get('input') or []
+        if inputs:
+            inputs[0]['value'] = value
+            break
+    return data
+
+
+def _json_or_error(response, label: str) -> dict:
+    try:
+        data = response.json()
+    except Exception as exc:
+        raise DirectvAuthError(
+            f'{label} returned non-JSON HTTP {response.status_code}: {response.text[:160]}'
+        ) from exc
+    if response.status_code < 200 or response.status_code >= 300:
+        msg = data.get('message') or data.get('errorDescription') or data.get('reason') or data
+        raise DirectvAuthError(f'{label} failed HTTP {response.status_code}: {msg}')
+    return data
+
+
+def _normalize_activation_token(raw_token: str) -> str:
+    token = (raw_token or '').strip()
+    if not token:
+        return ''
+    if len(token) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in token):
+        try:
+            return base64.b64encode(bytes.fromhex(token)).decode('ascii')
+        except Exception:
+            pass
+    return token
+
+
+def capture_directv_auth_cffi(
+    username: str,
+    password: str,
+    *,
+    on_status: Callable[[str, str], None] | None = None,
+) -> dict:
+    """Sign in to DirecTV with curl-cffi instead of browser automation.
+
+    The web app uses ForgeRock callbacks plus a PKCE auth-code exchange. AuthN
+    returns activationToken as hex; the DRM activate endpoint expects the same
+    bytes base64-encoded, so normalize it before persisting.
+    """
+    if _cffi_requests is None:
+        raise DirectvAuthError('curl_cffi unavailable')
+
+    def _status(state: str, detail: str = '') -> None:
+        logger.info('[directv-auth] %s %s', state, detail)
+        if on_status:
+            try:
+                on_status(state, detail)
+            except Exception:
+                pass
+
+    _status('running', 'Signing in to DirecTV…')
+    session = _cffi_requests.Session(impersonate=_CFFI_IMPERSONATE)
+    session.headers.update({
+        'User-Agent': _UA,
+        'Accept-Language': 'en-US,en;q=0.9',
+    })
+
+    # Prime Akamai cookies on both origins. The actual login remains API-only.
+    try:
+        session.get(_GUIDE_URL, timeout=20)
+        session.get('https://identity.directv.com/', timeout=20, allow_redirects=True)
+    except Exception as exc:
+        raise DirectvAuthError(f'DirecTV auth cookie priming failed: {exc}') from exc
+
+    auth_headers = {
+        'Content-Type': 'application/json',
+        'Accept-API-Version': 'resource=2.0, protocol=1.0',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'client_id': _FORGEROCK_CLIENT_ID,
+        'Origin': 'https://stream.directv.com',
+        'Referer': 'https://stream.directv.com/',
+        'Accept': 'application/json, text/plain, */*',
+    }
+
+    data = _json_or_error(
+        session.post(_IDENTITY_AUTH_URL, headers=auth_headers, data='{}', timeout=30),
+        'DirecTV username challenge',
+    )
+    if not any(c.get('type') == 'NameCallback' for c in data.get('callbacks') or []):
+        raise DirectvAuthError('DirecTV username challenge did not return NameCallback')
+
+    _status('running', 'Submitting email…')
+    data = _json_or_error(
+        session.post(_IDENTITY_AUTH_URL, headers=auth_headers,
+                     json=_fill_auth_callback(data, username), timeout=30),
+        'DirecTV password challenge',
+    )
+    if not any(c.get('type') == 'PasswordCallback' for c in data.get('callbacks') or []):
+        raise DirectvAuthError('DirecTV password challenge did not return PasswordCallback')
+
+    _status('running', 'Submitting password…')
+    data = _json_or_error(
+        session.post(_IDENTITY_AUTH_URL, headers=auth_headers,
+                     json=_fill_auth_callback(data, password), timeout=30),
+        'DirecTV password submit',
+    )
+    if not data.get('tokenId'):
+        msg = data.get('message') or data.get('reason') or 'missing tokenId'
+        raise DirectvAuthError(f'DirecTV login failed: {msg}')
+
+    _status('running', 'Exchanging auth code…')
+    verifier = _pkce_verifier()
+    authz = session.get(
+        _IDENTITY_AUTHORIZE_URL,
+        params={
+            'scope': 'read',
+            'response_type': 'code',
+            'client_id': _FORGEROCK_CLIENT_ID,
+            'redirect_uri': _AUTH_RETURN_URL,
+            'code_challenge': _pkce_challenge(verifier),
+            'code_challenge_method': 'S256',
+        },
+        headers={'Referer': 'https://stream.directv.com/'},
+        timeout=30,
+        allow_redirects=False,
+    )
+    location = authz.headers.get('location') or authz.url
+    code = (parse_qs(urlparse(location).query).get('code') or [''])[0]
+    if not code:
+        raise DirectvAuthError(f'DirecTV authorize did not return an auth code (HTTP {authz.status_code})')
+
+    token_response = session.post(
+        _AUTHN_TOKEN_URL,
+        data=[
+            ('clientID', _WEB_CLIENT_ID),
+            ('deviceClassID', str(uuid.uuid4())),
+            ('clientMake', 'Google'),
+            ('clientModel', 'Chrome'),
+            ('authCode', code),
+            ('codeVerifier', verifier),
+            ('returnURL', _AUTH_RETURN_URL),
+            ('reqParams', 'DEVICEID'),
+            ('reqParams', 'AUTHGROUPS'),
+        ],
+        headers={
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'Accept': 'application/json, text/plain, */*',
+            'Origin': 'https://stream.directv.com',
+            'Referer': 'https://stream.directv.com/',
+        },
+        timeout=30,
+    )
+    token_data = _json_or_error(token_response, 'DirecTV token exchange')
+    bearer = (token_data.get('access_token') or '').strip()
+    refresh = (token_data.get('refresh_token') or '').strip()
+    activation = _normalize_activation_token(
+        ((token_data.get('valuePairs') or {}).get('activationToken') or '').strip()
+    )
+    if not bearer or not refresh or not activation:
+        raise DirectvAuthError(
+            'DirecTV token exchange did not return bearer, refresh, and activation tokens'
+        )
+
+    # Cheap sanity check: the token should authorize metadata without browser
+    # cookies or clientContext.
+    verify = session.get(
+        _ALLCHANNELS_URL,
+        params={'sort': 'OrdCh=ASC'},
+        headers={
+            'Authorization': f'Bearer {bearer}',
+            'Accept': 'application/json, text/plain, */*',
+            'Origin': 'https://stream.directv.com',
+            'Referer': 'https://stream.directv.com/',
+        },
+        timeout=30,
+    )
+    if verify.status_code < 200 or verify.status_code >= 300:
+        raise DirectvAuthError(f'DirecTV token verify failed HTTP {verify.status_code}')
+
+    _status('success', 'Captured DirecTV session.')
+    return {
+        'bearer_token': bearer,
+        'refresh_token': refresh,
+        'activation_token': activation,
+        'cookies': [],
+        'captured_at': time.time(),
+        'auth_method': 'curl_cffi',
+    }
+
+
+def capture_directv_auth_fast(
+    username: str,
+    password: str,
+    *,
+    on_status: Callable[[str, str], None] | None = None,
+) -> dict:
+    try:
+        return capture_directv_auth_cffi(username, password, on_status=on_status)
+    except Exception as exc:
+        logger.warning('[directv-auth] curl-cffi auth failed, falling back to browser: %s', exc)
+        if on_status:
+            try:
+                on_status('running', 'Lightweight auth failed; falling back to browser…')
+            except Exception:
+                pass
+        return capture_directv_auth(username, password, on_status=on_status)
+
+
 def capture_directv_auth(
     username: str,
     password: str,
@@ -566,15 +806,11 @@ def capture_directv_auth(
 
     with sync_playwright() as p:
         try:
-            # Real Google Chrome, not Playwright's bundled open-source Chromium:
-            # Akamai Bot Manager fingerprints the Chromium build and actively
-            # resets its HTTP/2 connections (net::ERR_HTTP2_PROTOCOL_ERROR).
-            browser = p.chromium.launch(channel='chrome', headless=headless, args=_STEALTH_ARGS)
+            # Fallback only. The normal DirecTV auth path is curl-cffi; bundled
+            # Chromium remains available because other project features use it.
+            browser = p.chromium.launch(headless=headless, args=_STEALTH_ARGS)
         except Exception as exc:
-            raise DirectvAuthError(
-                'Google Chrome is required for DirecTV auth. Rebuild the container '
-                'so `playwright install chrome` from the Dockerfile is present.'
-            ) from exc
+            raise DirectvAuthError(f'Playwright Chromium unavailable: {exc}') from exc
         try:
             context = browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
@@ -760,7 +996,7 @@ def run_directv_auth(redis_url: str, source_id: int, username: str, password: st
     import redis as _redis
     r = _redis.from_url(redis_url)
 
-    _write_status(r, source_id, 'starting', 'Launching browser…')
+    _write_status(r, source_id, 'starting', 'Signing in…')
     logger.info('[directv-auth] starting for source_id=%s', source_id)
 
     def _on_status(state: str, detail: str) -> None:
@@ -768,7 +1004,7 @@ def run_directv_auth(redis_url: str, source_id: int, username: str, password: st
             _write_status(r, source_id, 'running', detail)
 
     try:
-        result = capture_directv_auth(username, password, on_status=_on_status)
+        result = capture_directv_auth_fast(username, password, on_status=_on_status)
     except Exception as exc:
         logger.warning('[directv-auth] capture failed for source_id=%s: %s', source_id, exc)
         _write_status(r, source_id, 'failed', str(exc))
@@ -876,7 +1112,7 @@ class DirectvScraper(BaseScraper):
 
         def _run():
             try:
-                result = capture_directv_auth(username, password)
+                result = capture_directv_auth_fast(username, password)
             except DirectvAuthError as exc:
                 logger.warning('[directv] background re-auth failed: %s', exc)
                 return
@@ -893,16 +1129,26 @@ class DirectvScraper(BaseScraper):
                         return
                     cfg = dict(source.config or {})
                     cfg['bearer_token'] = result['bearer_token']
+                    if result.get('refresh_token'):
+                        cfg['refresh_token'] = result['refresh_token']
                     if result.get('client_context'):
                         cfg['client_context'] = result['client_context']
+                    else:
+                        cfg.pop('client_context', None)
                     if result.get('activation_token'):
                         cfg['activation_token'] = result['activation_token']
                     cfg['cookies'] = result.get('cookies') or []
                     cfg['token_captured_at'] = result['captured_at']
                     if result.get('identity_cookie'):
                         cfg['identity_cookie'] = result['identity_cookie']
+                    else:
+                        cfg.pop('identity_cookie', None)
                     if result.get('identity_cookie_expires_at'):
                         cfg['identity_cookie_expires_at'] = result['identity_cookie_expires_at']
+                    else:
+                        cfg.pop('identity_cookie_expires_at', None)
+                    if result.get('auth_method'):
+                        cfg['auth_method'] = result['auth_method']
                     source.config = cfg
                     db.session.commit()
                     logger.info('[directv] background re-auth succeeded, persisted new token')

@@ -1579,6 +1579,9 @@ def save_source_config(source_id):
     _CRED_IDENTITY_KEYS = {'username', 'email', 'amazon_email'}
     _CRED_KEYS   = _CRED_IDENTITY_KEYS | secret_keys
     _AUTH_STATE  = ('access_token', 'refresh_token', 'token_time',
+                    'bearer_token', 'activation_token', 'token_captured_at',
+                    'client_context', 'cookies', 'identity_cookie',
+                    'identity_cookie_expires_at', 'auth_method',
                     'session_id', 'login_time',
                     'cookie_header', 'browser_storage_state',
                     'oauth_token', 'oauth_token_secret', 'oauth_token_time',
@@ -1812,16 +1815,26 @@ def directv_auth_status(source_id):
                 if source:
                     cfg = dict(source.config or {})
                     cfg['bearer_token'] = result['bearer_token']
+                    if result.get('refresh_token'):
+                        cfg['refresh_token'] = result['refresh_token']
                     if result.get('client_context'):
                         cfg['client_context'] = result['client_context']
+                    else:
+                        cfg.pop('client_context', None)
                     if result.get('activation_token'):
                         cfg['activation_token'] = result['activation_token']
                     cfg['cookies'] = result.get('cookies') or []
                     cfg['token_captured_at'] = result['captured_at']
                     if result.get('identity_cookie'):
                         cfg['identity_cookie'] = result['identity_cookie']
+                    else:
+                        cfg.pop('identity_cookie', None)
                     if result.get('identity_cookie_expires_at'):
                         cfg['identity_cookie_expires_at'] = result['identity_cookie_expires_at']
+                    else:
+                        cfg.pop('identity_cookie_expires_at', None)
+                    if result.get('auth_method'):
+                        cfg['auth_method'] = result['auth_method']
                     source.config = cfg
                     db.session.commit()
                     logger.info('[directv-auth] persisted session to source config source_id=%s', source_id)
