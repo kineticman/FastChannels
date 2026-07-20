@@ -45,12 +45,12 @@ _DISTRO_PROXY_LOG_LAST: dict[str, float] = {}
 _DISTRO_PROXY_LOG_INTERVAL = 30.0
 
 
-def _distro_throttled_info(channel_id: str, msg: str, *args) -> None:
+def _distro_throttled_debug(channel_id: str, msg: str, *args) -> None:
     now = _time.monotonic()
     last = _DISTRO_PROXY_LOG_LAST.get(channel_id, 0.0)
     if now - last >= _DISTRO_PROXY_LOG_INTERVAL:
         _DISTRO_PROXY_LOG_LAST[channel_id] = now
-        logger.info(msg, *args)
+        logger.debug(msg, *args)
 
 
 def _distro_rewrite_media_playlist(
@@ -1171,7 +1171,7 @@ def distro_manifest_proxy(channel_id: str):
         _quote,
     )
     if info.get('fixed_seq') is not None:
-        _distro_throttled_info(
+        _distro_throttled_debug(
             channel_id,
             '[distro-proxy] normalized media sequence channel=%s old=%s fixed=%s first_seg=%s last_seg=%s segments=%s trimmed=%s lag=%s',
             channel_id,
@@ -1184,7 +1184,7 @@ def distro_manifest_proxy(channel_id: str):
             info.get('lag_segments'),
         )
     else:
-        _distro_throttled_info(
+        _distro_throttled_debug(
             channel_id,
             '[distro-proxy] served channel=%s host=%s seq=%s first_seg=%s last_seg=%s segments=%s trimmed=%s lag=%s proxied_segments=%s',
             channel_id,
