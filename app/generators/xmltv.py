@@ -43,7 +43,11 @@ _XMLTV_CAT_NORM = {
 }
 
 
-def _append_category(el, value: str, seen: set[str]) -> None:
+def _xmltv_lang(value: str | None) -> str:
+    return (value or '').strip() or 'en'
+
+
+def _append_category(el, value: str, seen: set[str], lang: str = 'en') -> None:
     """Emit a <category> child, normalized and de-duplicated.
 
     `seen` holds the casefolded normalized labels already emitted on this
@@ -55,7 +59,7 @@ def _append_category(el, value: str, seen: set[str]) -> None:
     if norm_key in seen:
         return
     seen.add(norm_key)
-    SubElement(el, 'category', lang='en').text = normalized
+    SubElement(el, 'category', lang=lang).text = normalized
 
 
 def generate_xmltv(filters: dict = None, base_url: str = None, feed_name: str = None) -> str:
@@ -115,6 +119,8 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     tvg_map      = {ch.id: _tvg_id(ch) for ch in channels}
     # Channel category map — used as fallback when prog.category is None
     ch_cat_map   = {ch.id: ch.category for ch in channels if ch.category}
+    # Channel language map — used for XMLTV programme text metadata.
+    ch_lang_map  = {ch.id: _xmltv_lang(ch.language) for ch in channels}
     # Source display name map — added as a final <category> tag on every programme
     ch_src_map      = {ch.id: ch.source.display_name for ch in channels}
     # Source internal name map — used to decide poster proxy policy per source
@@ -178,9 +184,10 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                 'stop':    _dt(prog.end_time),
                 'channel': tvg_id,
             })
-            SubElement(el, 'title', lang='en').text = _sanitize(prog.title)
+            lang = ch_lang_map.get(prog.channel_id, 'en')
+            SubElement(el, 'title', lang=lang).text = _sanitize(prog.title)
             if prog.description:
-                SubElement(el, 'desc', lang='en').text = _sanitize(prog.description)
+                SubElement(el, 'desc', lang=lang).text = _sanitize(prog.description)
             channel_cat = ch_cat_map.get(prog.channel_id) or ''
             program_cat = prog.category or ''
             combined_cats = [c.strip() for c in f'{program_cat};{channel_cat}'.split(';') if c.strip()]
@@ -192,14 +199,14 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             # Split semicolon-joined strings into multiple <category> tags —
             # XMLTV allows multiple per programme and clients filter by them.
             for cat in combined_cats:
-                _append_category(el, cat, seen_categories)
+                _append_category(el, cat, seen_categories, lang=lang)
             # Always add source name as a category so clients can filter by provider
             src_name = ch_src_map.get(prog.channel_id)
             if src_name:
-                _append_category(el, src_name, seen_categories)
+                _append_category(el, src_name, seen_categories, lang=lang)
             # Add feed name as a category when generating a feed-specific EPG
             if feed_name:
-                _append_category(el, feed_name, seen_categories)
+                _append_category(el, feed_name, seen_categories, lang=lang)
             if prog.poster_url:
                 # Only proxy/cache Roku posters (CDN returns 403 to clients).
                 # All other sources serve artwork directly — no caching overhead.
@@ -221,9 +228,9 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             # Ensure <category>Movie</category> is emitted when program_type
             # signals a movie but the scraped category doesn't already say so.
             if prog_type == 'movie' and 'movie' not in cats and 'movies' not in cats:
-                _append_category(el, 'Movie', seen_categories)
+                _append_category(el, 'Movie', seen_categories, lang=lang)
             if prog.episode_title and not is_movie:
-                SubElement(el, 'sub-title', lang='en').text = _sanitize(prog.episode_title)
+                SubElement(el, 'sub-title', lang=lang).text = _sanitize(prog.episode_title)
             if prog.season and prog.episode and not is_movie:
                 SubElement(el, 'episode-num', system='xmltv_ns').text = \
                     f'{prog.season - 1}.{prog.episode - 1}.'
@@ -258,18 +265,19 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                     'stop':    _dt(slot_end),
                     'channel': tvg_id,
                 })
-                SubElement(el, 'title', lang='en').text = _sanitize(ch.name)
+                lang = ch_lang_map.get(ch.id, 'en')
+                SubElement(el, 'title', lang=lang).text = _sanitize(ch.name)
                 if ch.description:
-                    SubElement(el, 'desc', lang='en').text = _sanitize(ch.description)
+                    SubElement(el, 'desc', lang=lang).text = _sanitize(ch.description)
                 seen_categories = set()
                 channel_cat = ch_cat_map.get(ch.id) or ''
                 if channel_cat:
-                    _append_category(el, channel_cat, seen_categories)
+                    _append_category(el, channel_cat, seen_categories, lang=lang)
                 src_name = ch_src_map.get(ch.id)
                 if src_name:
-                    _append_category(el, src_name, seen_categories)
+                    _append_category(el, src_name, seen_categories, lang=lang)
                 if feed_name:
-                    _append_category(el, feed_name, seen_categories)
+                    _append_category(el, feed_name, seen_categories, lang=lang)
                 if ch.logo_url:
                     SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url)
                 yield tostring(el, encoding='unicode') + '\n'
