@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import random
 import re
 import threading
 import time
@@ -63,12 +64,12 @@ class SlingScraper(BaseScraper):
     license_url = 'https://p-drmwv.movetv.com/widevine/proxy'
     config_schema = [
         ConfigField('username', 'Email', placeholder='you@example.com',
-                    help_text='Optional Sling account email. Required only when including subscription channels.'),
+                    help_text='Optional. Freestream does not require sign-in; enter this only to include paid Sling subscription channels.'),
         ConfigField('password', 'Password', field_type='password', secret=True,
-                    help_text='Optional Sling account password. Required only when including subscription channels.'),
-        ConfigField('include_subscription_channels', 'Include subscription channels',
+                    help_text='Optional. Required only with a paid Sling account when subscription channels are enabled.'),
+        ConfigField('include_subscription_channels', 'Include paid subscription channels',
                     field_type='toggle', default='false',
-                    help_text='Add channels from your paid Sling subscription when credentials are saved.'),
+                    help_text='Off keeps Sling Freestream-only. Turn on only when email/password are saved for an active paid Sling account.'),
     ]
     kodi_props = {
         'inputstream': 'inputstream.adaptive',
@@ -82,6 +83,7 @@ class SlingScraper(BaseScraper):
     CMS = "https://cbd46b77.cdn.cms.movetv.com"
     UMS = "https://ums.p.sling.com"
     EXTAUTH = "https://int.p.sling.com"
+    MS = "https://ms.p.sling.com"
     GEO = "https://p-geo.movetv.com/geo"
 
     _OAUTH_CONSUMER_KEY = "4rvjj7tdCLxg5ed8vcYElMejjmkDhE2jcuam0VNX"
@@ -285,12 +287,38 @@ class SlingScraper(BaseScraper):
             self._update_config('device_id', device_id)
         return device_id
 
+    def _lookup_subscription_account(self, username: str) -> dict[str, Any]:
+        payload = {
+            'request_context': {
+                'application_name': 'Browser',
+                'interaction_id': f'Browser:{self._ensure_device_id()[:7]}',
+                'partner_name': 'Browser',
+                'request_id': str(random.randint(0, 999999)),
+                'timestamp': str(int(time.time())),
+            },
+            'request': {'email': username},
+        }
+        resp = self.session.post(
+            f'{self.EXTAUTH}/user/lookup',
+            headers=self._subscription_headers(),
+            data=json.dumps(payload),
+            auth=self._oauth(),
+            timeout=30,
+        )
+        resp.raise_for_status()
+        account = (resp.json().get('response') or {})
+        subscriber_id = (account.get('guid') or '').strip()
+        account_status = (account.get('account_status') or '').strip()
+        if subscriber_id:
+            self._update_config('subscriber_id', subscriber_id)
+        if account_status:
+            self._update_config('account_status', account_status)
+        return account
+
     def _ensure_subscription_auth(self) -> None:
         username = (self.config.get('username') or '').strip()
         password = (self.config.get('password') or '').strip()
-        if not username or not password:
-            logger.warning('[sling] include_subscription_channels is enabled but username/password are missing')
-            return
+        browser_token = self._browser_auth_token()
 
         token = (self.config.get('oauth_token') or '').strip()
         token_secret = (self.config.get('oauth_token_secret') or '').strip()
@@ -300,6 +328,28 @@ class SlingScraper(BaseScraper):
                 return
             except Exception as exc:  # noqa: BLE001
                 logger.info('[sling] cached OAuth token did not validate; logging in again: %s', exc)
+
+        if username:
+            account = self._lookup_subscription_account(username)
+            account_status = (account.get('account_status') or '').strip().lower()
+            if account_status and account_status != 'active':
+                raise RuntimeError(f'Sling account is {account_status}; paid subscription channels require an active account')
+
+        if not username or not password:
+            if not browser_token:
+                logger.warning('[sling] include_subscription_channels is enabled but no cached OAuth, browser token, or username/password are saved')
+                return
+
+        if browser_token:
+            try:
+                self._exchange_browser_auth_token(browser_token)
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.info('[sling] browser auth token exchange failed; trying legacy login: %s', exc)
+
+        if not username or not password:
+            logger.warning('[sling] legacy Sling login requires username/password')
+            return
 
         device_id = self._ensure_device_id()
         payload = f"email={quote(username)}&password={quote(password)}&device_guid={quote(device_id)}"
@@ -327,6 +377,59 @@ class SlingScraper(BaseScraper):
             (self.config.get('oauth_token_secret') or '').strip(),
         )
 
+    def _browser_auth_token(self) -> str:
+        token = (self.config.get('browser_auth_token') or '').strip()
+        if not token:
+            return ''
+        if 'AUTHORIZATION:Token=' in token:
+            token = token.split('AUTHORIZATION:Token=', 1)[1].split(';', 1)[0].strip()
+        if token.lower().startswith('bearer '):
+            token = token.split(None, 1)[1].strip()
+        return token
+
+    def _watch_headers(self, *, content_type: str | None = 'application/json; charset=UTF-8') -> dict[str, str]:
+        headers = dict(self.session.headers)
+        headers.update({
+            'Origin': 'https://watch.sling.com',
+            'Referer': 'https://watch.sling.com/',
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
+            ),
+        })
+        if content_type:
+            headers['Content-Type'] = content_type
+        else:
+            headers.pop('Content-Type', None)
+        return headers
+
+    def _exchange_browser_auth_token(self, browser_token: str) -> dict[str, Any]:
+        form = {
+            'token': browser_token,
+            'device_guid': self._ensure_device_id(),
+            'client_application': 'browser',
+        }
+        oauth_resp = self.session.post(
+            f'{self.UMS}/v5/users/access_from_jwt',
+            headers=self._watch_headers(content_type='application/x-www-form-urlencoded; charset=UTF-8'),
+            data=form,
+            auth=self._oauth(),
+            timeout=30,
+        )
+        oauth_resp.raise_for_status()
+        access_token = (oauth_resp.json().get('access_token') or {})
+        token = (access_token.get('token') or '').strip()
+        token_secret = (access_token.get('secret') or '').strip()
+        if not token or not token_secret:
+            raise RuntimeError('Sling access_from_jwt response did not include OAuth tokens')
+
+        self._update_config('oauth_token', token)
+        self._update_config('oauth_token_secret', token_secret)
+        self._update_config('oauth_token_time', int(time.time()))
+        self._update_config('browser_auth_token', '')
+        logger.info('[sling] exchanged browser auth token for cached OAuth credentials')
+        return self._refresh_subscription_context()
+
     def _refresh_subscription_context(self) -> dict[str, Any]:
         resp = self.session.get(
             f'{self.UMS}/v2/user.json',
@@ -342,6 +445,10 @@ class SlingScraper(BaseScraper):
             self._update_config('subscriber_id', subscriber_id)
         if info.get('account_status'):
             self._update_config('account_status', info.get('account_status'))
+        if info.get('lineup_key'):
+            self._update_config('lineup_key', info.get('lineup_key'))
+        if info.get('billing_zipcode'):
+            self._update_config('billing_zip', str(info.get('billing_zipcode')).split('-', 1)[0])
 
         subscriptions = info.get('subscriptionpacks') or []
         legacy_ids: list[str] = []

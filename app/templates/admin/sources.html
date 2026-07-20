@@ -329,6 +329,14 @@
     }
     .field input:focus { border-color: var(--focus-accent); }
     .field .help { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.32rem; line-height: 1.45; }
+    .config-toggle-field {
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+      padding: 0.7rem 0.8rem; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface-2);
+    }
+    .config-toggle-field label { margin: 0; }
+    .config-toggle-text { min-width: 0; }
+    .config-toggle-field .help { margin-top: 0.25rem; }
     .region-select {
       width: 100%; min-height: 8rem; background: var(--bg); border: 1px solid var(--border);
       border-radius: 8px; color: var(--text); font-size: 0.84rem; padding: 0.35rem; outline: none;
@@ -2847,7 +2855,7 @@
         const val = values[f.key] ?? f.default ?? '';
         const req = f.required ? '<span class="req">*</span>' : '';
         const help = f.help_text ? `<div class="help">${escapeHtml(f.help_text)}</div>` : '';
-        const cls = fieldSchema.length === 1 ? 'field field-full' : 'field';
+        const cls = fieldSchema.length === 1 || f.field_type === 'toggle' ? 'field field-full' : 'field';
         let control;
         if (f.field_type === 'select' && Array.isArray(f.options) && f.options.length) {
           const selected = new Set(String(val).split(/[,\s|/]+/).map(v => v.trim()).filter(Boolean));
@@ -2857,6 +2865,21 @@
           const multiple = f.multiple ? ' multiple' : '';
           const size = f.multiple ? ` size="${Math.min(Math.max(f.options.length, 4), 8)}"` : '';
           control = `<select id="cfg-${sourceId}-${f.key}" data-key="${f.key}"${multiple}${size}>${opts}</select>`;
+        } else if (f.field_type === 'toggle') {
+          const checked = ['1', 'true', 'yes', 'on'].includes(String(val).trim().toLowerCase()) ? ' checked' : '';
+          return `
+            <div class="${cls}">
+              <div class="config-toggle-field">
+                <div class="config-toggle-text">
+                  <label for="cfg-${sourceId}-${f.key}">${escapeHtml(f.label)}${req}</label>
+                  ${help}
+                </div>
+                <label class="toggle" title="${escapeHtml(f.label)}">
+                  <input type="checkbox" id="cfg-${sourceId}-${f.key}" data-key="${f.key}" data-secret="${f.secret}"${checked}>
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>`;
         } else {
           const inputType = f.field_type === 'password' ? 'password' : (f.field_type === 'number' ? 'number' : 'text');
           const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : '';
@@ -2944,6 +2967,10 @@
           payload[key] = [...new Set([...selected, ...custom])].join(',');
           return;
         }
+        if (keyFields[0].type === 'checkbox') {
+          payload[key] = keyFields[0].checked ? 'true' : 'false';
+          return;
+        }
         payload[key] = keyFields[0].value;
       });
 
@@ -2994,6 +3021,8 @@
       document.querySelectorAll(`#source-config-${sourceId} input[data-key], #source-config-${sourceId} select[data-key]`).forEach(field => {
         if (field.tagName === 'SELECT' && field.multiple) {
           [...field.options].forEach(opt => { opt.selected = false; });
+        } else if (field.type === 'checkbox') {
+          field.checked = false;
         } else {
           field.value = '';
         }
