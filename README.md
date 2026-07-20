@@ -1,6 +1,6 @@
 # FastChannels
 
-FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, your own HDHomeRun tuner, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
+FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, DirecTV Stream, your own HDHomeRun tuner, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.).
 
 ## Deploy with Portainer
 
@@ -61,7 +61,7 @@ Go to **Admin → Settings** and set two things:
 **3. Configure Sources.**
 Go to **Admin → Sources**. Enable or disable sources to taste, and expand any source card to enter credentials. Changes take effect on the next scrape.
 
-Some sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, DistroTV, and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), and Frndly/Fubo/FreeCast require account credentials. See [Source Notes](#source-notes) for per-source details.
+Some sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, DistroTV, DirecTV Stream, and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), and Frndly/Fubo/FreeCast/DirecTV Stream require account credentials. See [Source Notes](#source-notes) for per-source details.
 
 **4. Run Stream Audits.**
 Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
@@ -270,6 +270,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Frndly TV | Email/password required | **Default off.** Paid subscription required |
 | Fubo TV | Email/password required | **Default off.** Account required |
 | FreeCast | Email/password required | **Default off.** Free account at watch.freecast.com required for playback |
+| DirecTV Stream | Email/password required | **Default off.** Paid subscription required; streams are DRM-only, with browser playback via Widevine and M3U playback via PrismCast bridge |
 | HDHomeRun | Device address | **Default off.** Your own LAN tuner; optional hardware transcode (EXTEND models). See [HDHomeRun](#hdhomerun) |
 | Custom Channels | None | User-added HLS/M3U8 streams; never auto-scraped. See [Custom Channels](#custom-channels) |
 

@@ -2582,6 +2582,117 @@
     }
     // ── end Amazon auto-login ───────────────────────────────────────────────
 
+
+    // -- DirecTV auto-login --------------------------------------------------
+    let _directvPollTimer = null;
+
+    function renderDirectvConfig(sourceId, schema, values, cfg = {}) {
+      const hasSession = cfg.config_complete === true || cfg.config_status === 'configured';
+      const hasCreds = !!((values.username || '').trim() && (values.password || '').trim());
+      return `
+        <div class="config-title">DirecTV Stream Settings</div>
+        <div class="config-note">
+          DirecTV Stream channels are DRM-protected and play only through the PrismCast bridge
+          (Settings &rarr; PrismCast). ${hasSession
+            ? 'FastChannels has an active DirecTV session.'
+            : 'Connect your DirecTV Stream account below, then click Authenticate.'}
+        </div>
+
+        <div class="amazon-autologin-panel" id="directv-autologin-${sourceId}">
+          <div class="amazon-autologin-header">
+            <button class="btn btn-run" type="button"
+                    id="directv-login-btn-${sourceId}"
+                    ${hasCreds ? '' : 'disabled'}
+                    onclick="directvStartLogin(${sourceId})">${hasSession ? 'Re-authenticate' : 'Authenticate'}</button>
+            <span class="amazon-status-text" id="directv-status-${sourceId}">
+              ${hasSession ? '<span style="color:var(--success-soft)">&#10003; Session active</span>' : (hasCreds ? 'Account saved. Authenticate to finish setup.' : 'Add your DirecTV account below first.')}
+            </span>
+          </div>
+        </div>
+
+        <details class="amazon-account-details" ${hasCreds ? '' : 'open'}>
+          <summary>Account settings</summary>
+          <div class="fields-grid" style="margin-top:0.75rem;">
+            <div class="field">
+              <label for="cfg-${sourceId}-username">Email</label>
+              <input type="text" id="cfg-${sourceId}-username" data-key="username" data-secret="false"
+                     value="${escapeHtml(String(values.username || ''))}"
+                     placeholder="you@example.com" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="cfg-${sourceId}-password">Password</label>
+              <input type="password" id="cfg-${sourceId}-password" data-key="password" data-secret="true"
+                     value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
+            </div>
+          </div>
+          <div class="config-actions">
+            <span class="config-status" id="config-status-${sourceId}"></span>
+            <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+            <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Account</button>
+          </div>
+        </details>`;
+    }
+
+    async function directvStartLogin(sourceId) {
+      const btn = document.getElementById(`directv-login-btn-${sourceId}`);
+      const statusEl = document.getElementById(`directv-status-${sourceId}`);
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Starting...</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/directv-auto-login`, {method: 'POST'});
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(d.error || 'Start failed')}</span>`;
+          btn.disabled = false;
+          return;
+        }
+      } catch(e) {
+        statusEl.innerHTML = '<span style="color:var(--danger)">Network error</span>';
+        btn.disabled = false;
+        return;
+      }
+      directvPollStatus(sourceId);
+    }
+
+    function directvPollStatus(sourceId) {
+      if (_directvPollTimer) clearInterval(_directvPollTimer);
+      _directvPollTimer = setInterval(() => _directvCheckStatus(sourceId), 2000);
+    }
+
+    async function _directvCheckStatus(sourceId) {
+      const statusEl = document.getElementById(`directv-status-${sourceId}`);
+      const btn = document.getElementById(`directv-login-btn-${sourceId}`);
+      if (!statusEl) { clearInterval(_directvPollTimer); return; }
+
+      let data;
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/directv-auth-status`);
+        data = await r.json();
+      } catch(e) { return; }
+
+      const { status, detail } = data;
+      const statusMap = {
+        idle: null,
+        starting: '<span style="color:var(--text-muted)">Starting browser...</span>',
+        running: `<span style="color:var(--text-muted)">${escapeHtml(detail || 'Running...')}</span>`,
+        success: '<span style="color:var(--success-soft)">&#10003; Session captured.</span>',
+        failed: `<span style="color:var(--danger)">${escapeHtml(detail || 'Login failed.')}</span>`,
+      };
+
+      if (status === 'idle' || !statusMap[status]) return;
+      statusEl.innerHTML = statusMap[status] || escapeHtml(status);
+
+      if (status === 'success' || status === 'failed') {
+        clearInterval(_directvPollTimer);
+        _directvPollTimer = null;
+        btn.disabled = false;
+        if (status === 'success') {
+          setTimeout(() => loadSourceConfig(sourceId, 'directv'), 500);
+        }
+      }
+    }
+    // -- end DirecTV auto-login ---------------------------------------------
+
     // ── Philo passwordless sign-in (email → code) ────────────────────────────
     function renderPhiloConfig(sourceId, schema, values) {
       const signedIn = !!(values.session_cookies);
@@ -2726,6 +2837,8 @@
         return renderFuboConfig(sourceId, schema, values);
       } else if (sourceName === 'amazon_prime_free') {
         return renderAmazonConfig(sourceId, schema, values);
+      } else if (sourceName === 'directv') {
+        return renderDirectvConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'philo') {
         return renderPhiloConfig(sourceId, schema, values);
       }

@@ -1757,6 +1757,77 @@ def amazon_auth_otp(source_id):
     return jsonify({'status': 'ok'})
 
 
+# -- DirecTV Stream auto-login ---------------------------------------------
+# No OTP route: the captured flow does normal email/password login. If DirecTV
+# serves MFA or a bot check, directv.py reports it through the status poll.
+
+@api_bp.route('/sources/<int:source_id>/directv-auto-login', methods=['POST'])
+def directv_auto_login(source_id):
+    import threading
+    from ..scrapers.directv import run_directv_auth
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'directv':
+        return jsonify({'error': 'not a directv source'}), 400
+
+    cfg = source.config or {}
+    username = (cfg.get('username') or '').strip()
+    password = (cfg.get('password') or '').strip()
+    if not username or not password:
+        return jsonify({'error': 'username and password must be saved first'}), 400
+
+    redis_url = current_app.config['REDIS_URL']
+
+    t = threading.Thread(
+        target=run_directv_auth,
+        args=(redis_url, source_id, username, password),
+        daemon=True,
+    )
+    t.start()
+    return jsonify({'status': 'started'})
+
+
+@api_bp.route('/sources/<int:source_id>/directv-auth-status')
+def directv_auth_status(source_id):
+    import redis as _redis
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+
+    raw = r.get(f'directv:auth:status:{source_id}')
+    if not raw:
+        return jsonify({'status': 'idle'})
+
+    data = json.loads(raw)
+
+    if data.get('status') == 'success':
+        # Atomically claim the result -- only the first poller that wins the
+        # getdel persists the token; subsequent polls see None and skip.
+        result_raw = r.getdel(f'directv:auth:result:{source_id}')
+        if result_raw:
+            try:
+                result = json.loads(result_raw)
+                source = Source.query.get(source_id)
+                if source:
+                    cfg = dict(source.config or {})
+                    cfg['bearer_token'] = result['bearer_token']
+                    if result.get('client_context'):
+                        cfg['client_context'] = result['client_context']
+                    if result.get('activation_token'):
+                        cfg['activation_token'] = result['activation_token']
+                    cfg['cookies'] = result.get('cookies') or []
+                    cfg['token_captured_at'] = result['captured_at']
+                    if result.get('identity_cookie'):
+                        cfg['identity_cookie'] = result['identity_cookie']
+                    if result.get('identity_cookie_expires_at'):
+                        cfg['identity_cookie_expires_at'] = result['identity_cookie_expires_at']
+                    source.config = cfg
+                    db.session.commit()
+                    logger.info('[directv-auth] persisted session to source config source_id=%s', source_id)
+            except Exception as exc:
+                logger.error('[directv-auth] failed to persist result: %s', exc)
+
+    return jsonify(data)
+
+
 @api_bp.route('/channels')
 def list_channels():
     page     = request.args.get('page', 1, type=int)
@@ -2087,7 +2158,9 @@ def inspect_channel(channel_id):
     # PrismCast — so this is a 'bridge-ready' check, not a full decrypt.)
     _scraper_cls = registry.get(source.name)
     if getattr(ch, 'requires_drm_bridge', False) and _scraper_cls:
-        return _inspect_drm_bridge(ch, source, _scraper_cls)
+        _bridge_stream_type = (getattr(ch, 'stream_type', '') or '').strip().lower()
+        if _bridge_stream_type == 'dash' or source.name in {'amazon_prime_free', 'philo', 'roku'}:
+            return _inspect_drm_bridge(ch, source, _scraper_cls)
 
     # Resolve the stream URL directly — avoids a self-referential HTTP request to the
     # gunicorn server itself, which can deadlock all workers under concurrent inspect calls.
@@ -2247,6 +2320,16 @@ def inspect_channel(channel_id):
             if drm.get('keyformat'):
                 detail += f"; KEYFORMAT={drm['keyformat']}"
             detail += ')'
+            if getattr(ch, 'requires_drm_bridge', False) and scraper_cls:
+                try:
+                    has_license = bool(scraper_cls.get_license_url(source.config or {}, channel_id=ch.source_channel_id))
+                except Exception:
+                    has_license = bool(getattr(scraper_cls, 'license_url', None))
+                if has_license:
+                    return jsonify({
+                        'status': 'bridge',
+                        'detail': f'{detail}, license path present -- plays via PrismCast',
+                    })
             return jsonify({'status': 'drm', 'detail': detail})
 
         # Use the last media segment — live streams with rolling windows purge old
@@ -2361,7 +2444,7 @@ def _get_playback_info(ch, fast_mode=True):
         # Roku is DRM-capable per-channel: only DRM-flagged Roku channels use the
         # license path; plain Roku channels stay native HLS with no license URL.
         if _scraper_cls and not (ch.source.name == 'roku' and not roku_drm):
-            _lu = _scraper_cls.get_license_url(ch.source.config or {})
+            _lu = _scraper_cls.get_license_url(ch.source.config or {}, channel_id=ch.source_channel_id)
             if _lu:
                 from flask import request as _req
                 _base = _req.host_url.rstrip('/')
@@ -2378,6 +2461,19 @@ def _get_playback_info(ch, fast_mode=True):
         play_url = f'/play/{ch.source.name}/{ch.source_channel_id}.m3u8'
     if not preview_url:
         preview_url = play_url
+
+    if ch.source and ch.source.name == 'directv' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        _enc = _quote(ch.source_channel_id, safe='')
+        if request.args.get('directv_bridge') == '1':
+            preview_url = f'/play/directv/{_enc}/prismcast.m3u8'
+            play_url = preview_url
+            license_url = None
+        else:
+            preview_url = f'/play/directv/{_enc}.m3u8'
+            play_url = preview_url
+        playback_mode = 'hls'
+        stream_type = 'hls'
 
     # For sources whose CDN blocks browser requests (TLS fingerprinting, IP-locked
     # tokens, CORS mismatches, or relative-URL resolution bugs on redirects), route
@@ -3896,18 +3992,25 @@ def _reconcile_drm_bridge_mode(enabled: bool) -> None:
             ch.is_active = True
             ch.is_enabled = True
             ch.disable_reason = None
-        # Also flag DASH channels from capable sources (Amazon/Sling) — intrinsically
-        # bridge-only, so the flag should match without waiting for a scrape/audit.
-        dash_rows = (Channel.query.join(Source)
-                     .filter(Source.name.in_(capable),
-                             Channel.stream_type == 'dash',
-                             Channel.is_active == True,
-                             Channel.requires_drm_bridge == False)
-                     .all())
-        for ch in dash_rows:
+        # Also flag intrinsically bridge-only rows without waiting for audit.
+        # Most DRM-capable sources only need DASH rows; all-DRM HLS sources such
+        # as DirecTV Stream opt in with all_channels_require_drm_bridge.
+        intrinsic = []
+        for _sname in capable:
+            _cls = registry.get(_sname)
+            if not _cls:
+                continue
+            q = (Channel.query.join(Source)
+                 .filter(Source.name == _sname,
+                         Channel.is_active == True,
+                         Channel.requires_drm_bridge == False))
+            if not getattr(_cls, 'all_channels_require_drm_bridge', False):
+                q = q.filter(Channel.stream_type == 'dash')
+            intrinsic.extend(q.all())
+        for ch in intrinsic:
             ch.requires_drm_bridge = True
-        logger.info('[drm-bridge] mode ON — recovered %d disabled-DRM + flagged %d intrinsic-DASH channels',
-                    len(rows), len(dash_rows))
+        logger.info('[drm-bridge] mode ON — recovered %d disabled-DRM + flagged %d intrinsic bridge channels',
+                    len(rows), len(intrinsic))
     else:
         rows = Channel.query.filter(Channel.requires_drm_bridge == True).all()
         for ch in rows:

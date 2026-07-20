@@ -2141,24 +2141,30 @@ def _backfill_stale_native_gracenote(source, channel_data_list):
 
 
 def _sync_intrinsic_drm_bridge(source) -> None:
-    """A DASH channel from a DRM-capable source (e.g. Amazon, Sling) is intrinsically
-    bridge-only — it can never play on a normal client. Mirror that in the
-    requires_drm_bridge flag (gated on bridge mode) so the admin badge/filter/count match
-    the feed routing without needing an audit. The standard feed already excludes these by
-    stream type; this just keeps the flag — and its UI — in sync. Only flips the flag,
-    never is_active (the audit owns disable)."""
+    """Mirror channels that are inherently bridge-only into requires_drm_bridge.
+
+    Most DRM-capable sources only need this for DASH rows. Some premium sources,
+    such as DirecTV Stream, are all-DRM even when their manifests are HLS; those
+    scrapers advertise all_channels_require_drm_bridge. The flag is gated on the
+    global bridge mode and only flips requires_drm_bridge; audit still owns
+    disable/dead state."""
     scraper_cls = registry.get(source.name)
     if not (scraper_cls and getattr(scraper_cls, 'license_url', None)):
         return
     want = bool(AppSettings.get().drm_bridge_enabled)
+    q = source.channels
+    label = 'all'
+    if not getattr(scraper_cls, 'all_channels_require_drm_bridge', False):
+        q = q.filter(Channel.stream_type == 'dash')
+        label = 'DASH'
     changed = 0
-    for ch in source.channels.filter(Channel.stream_type == 'dash').all():
+    for ch in q.all():
         if bool(ch.requires_drm_bridge) != want:
             ch.requires_drm_bridge = want
             changed += 1
     if changed:
-        logger.info('[%s] requires_drm_bridge synced on %d DASH channel(s) (bridge=%s)',
-                    source.name, changed, want)
+        logger.info('[%s] requires_drm_bridge synced on %d %s channel(s) (bridge=%s)',
+                    source.name, changed, label, want)
 
 
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None,
@@ -2855,7 +2861,7 @@ def _schedule_due_scrapes():
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
-        default_disabled_sources = {'amazon_prime_free', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'distro', 'philo'}
+        default_disabled_sources = {'amazon_prime_free', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'distro', 'philo', 'directv'}
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():
             db.session.add(Source(

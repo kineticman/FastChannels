@@ -1082,7 +1082,7 @@
     async function _loadGuideModal(channelId, prog) {
       const content = document.getElementById('gm-content');
       try {
-        const r = await fetch(`/api/channels/${channelId}/preview?detect=0`);
+        const r = await fetch(`/api/channels/${channelId}/preview?detect=0${location.search.includes('directv_drm=1') ? '&directv_drm=1' : ''}`);
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
 
@@ -1343,7 +1343,7 @@
     async function _detectGuideStream(channelId) {
       _guideDetectingFor = channelId;
       try {
-        const r    = await fetch(`/api/channels/${channelId}/preview`);
+        const r    = await fetch(`/api/channels/${channelId}/preview${location.search.includes('directv_drm=1') ? '?directv_drm=1' : ''}`);
         const data = await r.json();
         if (_guideDetectingFor !== channelId || !r.ok) return;
         const ch         = data.channel || {};

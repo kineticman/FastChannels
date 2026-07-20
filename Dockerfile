@@ -48,6 +48,9 @@ ARG YTDLP_REFRESH=unset
 RUN pip install --force-reinstall "yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
 
 RUN playwright install-deps chromium && playwright install chromium
+# Real Google Chrome (not just open-source Chromium) is used by DirecTV auth:
+# Akamai Bot Manager rejects Playwright's bundled Chromium in captured testing.
+RUN playwright install-deps chrome && playwright install chrome
 
 COPY . .
 

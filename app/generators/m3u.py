@@ -1160,6 +1160,13 @@ def _needs_prismcast_bridge(ch) -> bool:
         return True
     return False
 
+def _prismcast_bridge_url(ch, prismcast_url: str, inner_base_url: str) -> str:
+    # DRM -> route through PrismCast's headless Chrome (EME decrypt + capture).
+    # profile=keyboardFullscreen makes PrismCast press 'f', which the /watch
+    # page turns into a real fullscreen; without it, capture may stay windowed.
+    watch_url = f'{inner_base_url}/watch/{ch.id}'
+    return f'{prismcast_url}/play?url={_url_quote(watch_url, safe="")}&profile={_PRISMCAST_PROFILE}'
+
 
 def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
                            prismcast_url: str, inner_base_url: str = None,
@@ -1255,12 +1262,7 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         if _needs_prismcast_bridge(ch) and _prismcast_capturable(ch):
-            # DRM → route through PrismCast's headless Chrome (EME decrypt + capture).
-            # profile=keyboardFullscreen makes PrismCast press 'f', which the /watch
-            # page turns into a real fullscreen — without it the captured tab stays
-            # windowed and the video is letterboxed/pillarboxed inside the frame.
-            watch_url = f'{inner_base_url}/watch/{ch.id}'
-            lines.append(f'{prismcast_url}/play?url={_url_quote(watch_url, safe="")}&profile={_PRISMCAST_PROFILE}')
+            lines.append(_prismcast_bridge_url(ch, prismcast_url, inner_base_url))
         else:
             # Non-DRM → direct play proxy, same URL the standard M3U emits.
             lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')

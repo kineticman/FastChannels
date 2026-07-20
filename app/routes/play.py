@@ -7,11 +7,13 @@ is automatically marked is_active=False so it drops out of M3U/EPG output.
 It remains visible in the admin channels page so users can see what was
 disabled and manually re-enable if desired.
 """
+import json
 import logging
 import re
+import secrets
 import threading
 import time as _time
-from urllib.parse import urljoin, parse_qs as _parse_qs
+from urllib.parse import quote as _url_quote, urljoin, urlsplit, parse_qs as _parse_qs
 
 import requests as _requests
 
@@ -1321,6 +1323,135 @@ def _amazon_sht_redis() -> 'redis.Redis | None':
     return _AMAZON_SHT_REDIS
 
 
+_DIRECTV_DEVICE_COOKIE = 'fc_dtv_device'
+_DIRECTV_IDENTITY_KEY_PREFIX = 'directv_identity:'
+_DIRECTV_DEFAULT_IDENTITY_TTL = 30 * 24 * 3600
+
+
+def _directv_identity_ttl(expires_at) -> int:
+    if not expires_at:
+        return _DIRECTV_DEFAULT_IDENTITY_TTL
+    try:
+        raw = str(expires_at).strip()
+        if raw.isdigit():
+            ts = int(raw)
+            if ts > 10_000_000_000:
+                ts = ts / 1000
+            ttl = int(ts - _time.time())
+        else:
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            ttl = int(dt.timestamp() - _time.time())
+        return max(300, min(ttl, _DIRECTV_DEFAULT_IDENTITY_TTL))
+    except Exception:
+        return _DIRECTV_DEFAULT_IDENTITY_TTL
+
+
+def _directv_device_session_id() -> tuple[str, bool]:
+    sid = (request.cookies.get(_DIRECTV_DEVICE_COOKIE) or '').strip()
+    if re.fullmatch(r'[A-Za-z0-9_-]{16,96}', sid):
+        return sid, False
+    return secrets.token_urlsafe(24), True
+
+
+def _directv_identity_cache_key(source_id: int, sid: str) -> str:
+    return f'{_DIRECTV_IDENTITY_KEY_PREFIX}{source_id}:{sid}'
+
+
+def _directv_response(payload: bytes, status: int, sid: str, set_cookie: bool = True) -> Response:
+    resp = Response(payload, status=status, content_type='application/octet-stream')
+    if set_cookie:
+        resp.set_cookie(
+            _DIRECTV_DEVICE_COOKIE, sid, max_age=_DIRECTV_DEFAULT_IDENTITY_TTL,
+            httponly=True, samesite='Lax', path='/'
+        )
+    return resp
+
+
+def _directv_activate_identity(scraper_cls, cfg: dict, challenge: bytes):
+    get_url = getattr(scraper_cls, 'get_activation_url', None)
+    prep = getattr(scraper_cls, 'prepare_activation_request', None)
+    parse = getattr(scraper_cls, 'process_activation_response', None)
+    if not get_url or not prep or not parse:
+        return None, None, None, None, None
+    activate_url = get_url(cfg)
+    if not activate_url:
+        return None, None, None, None, None
+    body, headers = prep(challenge, cfg)
+    try:
+        r = _requests.post(activate_url, data=body, headers=headers, timeout=15)
+    except Exception as exc:
+        logger.warning('[directv-license] activation request failed: %s', exc)
+        return None, None, None, None, None
+    logger.info('[directv-license] activation -> HTTP %s (%d bytes)', r.status_code, len(r.content))
+    if r.status_code < 200 or r.status_code >= 300:
+        logger.warning('[directv-license] activation HTTP %s: %s', r.status_code, r.content[:500])
+        return None, None, None, r.status_code, r.content
+    parsed = parse(r.content) or {}
+    return (
+        parsed.get('identity_cookie') or None,
+        parsed.get('identity_cookie_expires_at') or None,
+        parsed.get('response_bytes') or None,
+        r.status_code,
+        None,
+    )
+
+
+def _directv_error_payload(content: bytes) -> dict:
+    try:
+        data = json.loads(content or b'{}')
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _directv_error_requires_reauth(status: int, content: bytes) -> bool:
+    if status not in (400, 401, 403):
+        return False
+    data = _directv_error_payload(content)
+    haystack = ' '.join(str(data.get(k) or '') for k in ('errorReason', 'description', 'message')).lower()
+    if not haystack:
+        return False
+    token_markers = (
+        'invalid token', 'expired token', 'error decrypting token',
+        'missing parameter activationtoken', 'missing parameter bearertoken',
+        'activationtoken', 'bearertoken',
+    )
+    return any(marker in haystack for marker in token_markers)
+
+
+def _directv_trigger_reauth(source, reason: str) -> None:
+    cfg = dict(source.config or {})
+    username = (cfg.get('username') or '').strip()
+    password = (cfg.get('password') or '').strip()
+    if not username or not password:
+        logger.warning('[directv-auth] cannot auto-reauth after %s: username/password missing', reason)
+        return
+    try:
+        from ..extensions import db
+        cfg['token_captured_at'] = 0
+        cfg.pop('activation_token', None)
+        cfg.pop('identity_cookie', None)
+        cfg.pop('identity_cookie_expires_at', None)
+        source.config = cfg
+        db.session.commit()
+    except Exception:
+        try:
+            from ..extensions import db
+            db.session.rollback()
+        except Exception:
+            pass
+        logger.debug('[directv-auth] could not mark tokens stale after %s', reason, exc_info=True)
+    try:
+        from ..scrapers.directv import DirectvScraper
+        DirectvScraper(cfg)._start_background_reauth(username, password)
+        logger.info('[directv-auth] queued background reauth after %s', reason)
+    except Exception:
+        logger.exception('[directv-auth] failed to queue background reauth after %s', reason)
+
+
 def _stirr_session() -> _requests.Session:
     """Persistent lax-TLS session for Stirr CDN fetches. Created once, reused per worker."""
     global _STIRR_PROXY_SESSION
@@ -2157,6 +2288,43 @@ def license_proxy(source_name: str):
                 except Exception:
                     pass
 
+    directv_sid = None
+    if source_name == 'directv':
+        directv_sid, _ = _directv_device_session_id()
+        rdb = _amazon_sht_redis()
+        identity_key = _directv_identity_cache_key(source.id, directv_sid)
+        if request.args.get('reset_identity') == '1' and rdb:
+            try:
+                rdb.delete(identity_key)
+            except Exception:
+                pass
+        identity_cookie = None
+        if rdb:
+            try:
+                identity_cookie = rdb.get(identity_key) or None
+            except Exception:
+                identity_cookie = None
+        if not identity_cookie:
+            identity_cookie, expires_at, activation_payload, activation_status, activation_error = _directv_activate_identity(
+                scraper_cls, cfg, challenge,
+            )
+            if activation_error and _directv_error_requires_reauth(activation_status or 0, activation_error):
+                _directv_trigger_reauth(source, f'activation HTTP {activation_status}')
+            if identity_cookie and rdb:
+                try:
+                    rdb.setex(identity_key, _directv_identity_ttl(expires_at), identity_cookie)
+                except Exception:
+                    pass
+            if activation_payload:
+                if activation_payload[:2] == b'\x08\x05' and rdb:
+                    try:
+                        rdb.setex(f'amz_service_cert:{source_name}', 86400, activation_payload)
+                    except Exception:
+                        pass
+                return _directv_response(activation_payload, activation_status or 200, directv_sid)
+        if identity_cookie:
+            cfg = {**cfg, 'identity_cookie': identity_cookie}
+
     body, headers = scraper_cls.prepare_license_request(challenge, cfg, channel_id=channel_id, sht=sht)
     headers.setdefault('Content-Type', 'application/octet-stream')
     # Cache the raw challenge in Redis so test scripts can replay it
@@ -2185,6 +2353,19 @@ def license_proxy(source_name: str):
                 _rdb.setex(f'amz_service_cert:{source_name}', 86400, response_bytes)
             except Exception:
                 pass
+    if source_name == 'directv' and r.status_code == 403:
+        _rdb = _amazon_sht_redis()
+        if _rdb and directv_sid:
+            try:
+                _rdb.delete(_directv_identity_cache_key(source.id, directv_sid))
+            except Exception:
+                pass
+        if _directv_error_requires_reauth(r.status_code, r.content):
+            _directv_trigger_reauth(source, f'license HTTP {r.status_code}')
+        logger.warning('[directv-license] license HTTP 403 channel=%s body=%s',
+                       channel_id or '-', r.content[:500])
+    if source_name == 'directv' and directv_sid:
+        return _directv_response(response_bytes, r.status_code, directv_sid)
     return Response(response_bytes, status=r.status_code, content_type='application/octet-stream')
 
 
@@ -2235,6 +2416,92 @@ def license_certificate(source_name: str):
         return Response(cert_bytes, status=200, content_type='application/octet-stream')
     logger.warning('[cert] %s returned unexpected response (not a service certificate)', source_name)
     abort(502)
+
+
+def _directv_prismcast_play_url(channel) -> str | None:
+    from ..models import AppSettings
+    settings = AppSettings.get()
+    prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
+    if not prismcast_url:
+        return None
+    selector = (channel.name or channel.source_channel_id or '').strip()
+    if not selector:
+        return None
+    guide_url = 'https://stream.directv.com/guide'
+    return (
+        f'{prismcast_url}/play?'
+        f'url={_url_quote(guide_url, safe="")}'
+        f'&selector={_url_quote(selector, safe="")}'
+    )
+
+
+def _directv_prismcast_asset_proxy_url(upstream_url: str) -> str:
+    return f'/play/directv/prismcast-asset?url={_url_quote(upstream_url, safe="")}'
+
+
+def _rewrite_directv_prismcast_playlist(text: str, playlist_url: str) -> str:
+    def _rewrite_uri(match):
+        return f'URI="{_directv_prismcast_asset_proxy_url(urljoin(playlist_url, match.group(1)))}"'
+
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if 'URI="' in line:
+            line = re.sub(r'URI="([^"]+)"', _rewrite_uri, line)
+        if stripped and not stripped.startswith('#'):
+            line = _directv_prismcast_asset_proxy_url(urljoin(playlist_url, stripped))
+        lines.append(line)
+    return '\n'.join(lines)
+
+
+@play_bp.route('/play/directv/<channel_id>/prismcast.m3u')
+@play_bp.route('/play/directv/<channel_id>/prismcast.m3u8')
+def directv_prismcast_playlist(channel_id: str):
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'directv', Channel.source_channel_id == channel_id)
+        .first_or_404()
+    )
+    play_url = _directv_prismcast_play_url(channel)
+    if not play_url:
+        return Response('PrismCast is not configured.\n', status=503, mimetype='text/plain')
+    try:
+        r = _requests.get(play_url, timeout=35, allow_redirects=True)
+    except Exception as exc:
+        logger.warning('[directv-prismcast] playlist fetch failed for channel=%s: %s', channel_id, exc)
+        abort(502)
+    if r.status_code >= 400:
+        return Response(r.content, status=r.status_code, content_type=r.headers.get('Content-Type') or 'text/plain')
+    playlist = _rewrite_directv_prismcast_playlist(r.text, r.url)
+    return Response(
+        playlist,
+        status=200,
+        mimetype='application/vnd.apple.mpegurl',
+        headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+    )
+
+
+@play_bp.route('/play/directv/prismcast-asset')
+def directv_prismcast_asset():
+    from ..models import AppSettings
+    raw_url = (request.args.get('url') or '').strip()
+    if not raw_url:
+        abort(400)
+    settings = AppSettings.get()
+    prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
+    allowed = urlsplit(prismcast_url)
+    target = urlsplit(raw_url)
+    if not allowed.scheme or not allowed.netloc or target.scheme not in ('http', 'https') or target.netloc != allowed.netloc:
+        abort(400)
+    try:
+        r = _requests.get(raw_url, timeout=20, stream=True)
+    except Exception as exc:
+        logger.warning('[directv-prismcast] asset fetch failed for %s: %s', raw_url[:160], exc)
+        abort(502)
+    headers = {'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'}
+    content_type = r.headers.get('Content-Type') or 'application/octet-stream'
+    return Response(r.iter_content(64 * 1024), status=r.status_code, content_type=content_type, headers=headers)
 
 
 @play_bp.route('/play/<source_name>/<channel_id>.m3u8')
