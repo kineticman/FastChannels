@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
 try:
-    from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
+    from requests_oauthlib import OAuth1
+except ImportError:  # pragma: no cover - optional until Docker deps are rebuilt
+    OAuth1 = None
+
+try:
+    from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
     from .category_utils import infer_category_from_name, normalize_category
 except ImportError:  # pragma: no cover - local staging outside FastChannels package
-    from app.scrapers.base import BaseScraper, ChannelData, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
+    from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
     from app.scrapers.category_utils import infer_category_from_name, normalize_category
 
 logger = logging.getLogger(__name__)
@@ -33,15 +41,17 @@ def _join_categories(values: list[str] | tuple[str, ...] | None) -> str | None:
 
 class SlingScraper(BaseScraper):
     """
-    FastChannels scraper for Sling Freestream.
+    FastChannels scraper for Sling Freestream, with optional Sling account
+    credentials to include entitled subscription channels.
 
-    - Channel inventory: public channel summary feed (no auth).
-    - EPG: per-channel schedule.qvt windows (no auth).
+    - Freestream channel inventory: public channel summary feed (no auth).
+    - Subscription channel inventory: authenticated subscriptionpack channel feed.
+    - EPG: per-channel schedule.qvt windows.
     - Streams: CENC-encrypted DASH (Widevine + PlayReady).
     - DRM: Widevine proxy at p-drmwv.movetv.com accepts the challenge wrapped in a
       JSON envelope {"env":..,"user_id":..,"channel_id":..,"message":[bytes]}.
-      No auth token is required for Freestream channels — any UUID works as user_id.
-      The /play/sling/license?channel_id=<guid> proxy handles the envelope wrapping.
+      Freestream accepts an anonymous UUID; subscription channels use the saved
+      Sling subscriber id.
     """
 
     source_name = "sling"
@@ -51,6 +61,15 @@ class SlingScraper(BaseScraper):
     epg_quality = 'basic'     # thumbnails only; no program descriptions
     source_category = 'drm'
     license_url = 'https://p-drmwv.movetv.com/widevine/proxy'
+    config_schema = [
+        ConfigField('username', 'Email', placeholder='you@example.com',
+                    help_text='Optional Sling account email. Required only when including subscription channels.'),
+        ConfigField('password', 'Password', field_type='password', secret=True,
+                    help_text='Optional Sling account password. Required only when including subscription channels.'),
+        ConfigField('include_subscription_channels', 'Include subscription channels',
+                    field_type='toggle', default='false',
+                    help_text='Add channels from your paid Sling subscription when credentials are saved.'),
+    ]
     kodi_props = {
         'inputstream': 'inputstream.adaptive',
         'inputstream.adaptive.manifest_type': 'mpd',
@@ -59,7 +78,14 @@ class SlingScraper(BaseScraper):
     channel_refresh_hours = 0    # fetch channel list every run — one summary call; avoids channel-list staleness
 
     CMW_FAST = "https://p-cmwnext-fast.movetv.com"
+    CMW = "https://p-cmwnext.movetv.com"
     CMS = "https://cbd46b77.cdn.cms.movetv.com"
+    UMS = "https://ums.p.sling.com"
+    EXTAUTH = "https://int.p.sling.com"
+    GEO = "https://p-geo.movetv.com/geo"
+
+    _OAUTH_CONSUMER_KEY = "4rvjj7tdCLxg5ed8vcYElMejjmkDhE2jcuam0VNX"
+    _OAUTH_CONSUMER_SECRET = "MnaIjrORUh8WIIG3t3wsVJkk1o0wGPLQT65KUfaA"
 
     DEFAULT_FOCUS_CHANNEL_ID = "21ec280634b247cfa0688744fb7a7e8a"
 
@@ -98,7 +124,7 @@ class SlingScraper(BaseScraper):
             return challenge, {}
         body = json.dumps({
             'env': 'production',
-            'user_id': str(uuid.uuid4()),
+            'user_id': (config.get('subscriber_id') or str(uuid.uuid4())),
             'channel_id': channel_id,
             'message': list(challenge),
         }).encode()
@@ -119,7 +145,11 @@ class SlingScraper(BaseScraper):
     # ------------------------------------------------------------------ setup
 
     def pre_run_setup(self) -> None:
-        return None
+        if self._include_subscription_channels():
+            try:
+                self._ensure_subscription_auth()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('[sling] subscription auth failed during setup; Freestream will still scrape: %s', exc)
 
     def fetch_channels(self) -> list[ChannelData]:
         payload = self._get_json(self.SUMMARY_URL)
@@ -129,6 +159,10 @@ class SlingScraper(BaseScraper):
         for item in summary_channels:
             channel = self._channel_from_summary(item)
             if channel is not None:
+                channels[channel.source_channel_id] = channel
+
+        if self._include_subscription_channels():
+            for channel in self._fetch_subscription_channels():
                 channels[channel.source_channel_id] = channel
 
         result = sorted(channels.values(), key=lambda c: (c.name or "", c.source_channel_id))
@@ -210,6 +244,231 @@ class SlingScraper(BaseScraper):
     def _channel_schedule_url(self, channel_guid: str) -> str:
         return f"{self.CMS}/playermetadata/sling/v1/api/channels/{channel_guid}/current/schedule.qvt"
 
+    def _channel_schedule_24_url(self, channel_guid: str) -> str:
+        stamp = datetime.utcnow().strftime("%y%m%d%H%M")
+        return f"{self.CMS}/cms/publish3/channel/schedule/24/{stamp}/1/{channel_guid}.json"
+
+    def _include_subscription_channels(self) -> bool:
+        return str(self.config.get('include_subscription_channels', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+    def _oauth(self, token: str | None = None, token_secret: str | None = None):
+        if OAuth1 is None:
+            raise RuntimeError('requests-oauthlib is required for Sling subscription auth; rebuild the container')
+        return OAuth1(
+            self._OAUTH_CONSUMER_KEY,
+            self._OAUTH_CONSUMER_SECRET,
+            token or None,
+            token_secret or None,
+        )
+
+    def _subscription_headers(self, *, content_type: str | None = 'application/json;charset=UTF-8') -> dict[str, str]:
+        headers = dict(self.session.headers)
+        for key in list(headers):
+            if key.lower() in {'origin', 'referer', 'content-type'}:
+                headers.pop(key, None)
+        headers.update({
+            'Origin': 'https://www.sling.com',
+            'Referer': 'https://www.sling.com',
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
+            ),
+        })
+        if content_type:
+            headers['Content-Type'] = content_type
+        return headers
+
+    def _ensure_device_id(self) -> str:
+        device_id = (self.config.get('device_id') or '').strip()
+        if not device_id:
+            device_id = str(uuid.uuid4())
+            self._update_config('device_id', device_id)
+        return device_id
+
+    def _ensure_subscription_auth(self) -> None:
+        username = (self.config.get('username') or '').strip()
+        password = (self.config.get('password') or '').strip()
+        if not username or not password:
+            logger.warning('[sling] include_subscription_channels is enabled but username/password are missing')
+            return
+
+        token = (self.config.get('oauth_token') or '').strip()
+        token_secret = (self.config.get('oauth_token_secret') or '').strip()
+        if token and token_secret:
+            try:
+                self._refresh_subscription_context()
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.info('[sling] cached OAuth token did not validate; logging in again: %s', exc)
+
+        device_id = self._ensure_device_id()
+        payload = f"email={quote(username)}&password={quote(password)}&device_guid={quote(device_id)}"
+        resp = self.session.put(
+            f'{self.UMS}/v3/xauth/access_token.json',
+            headers=self._subscription_headers(content_type='application/x-www-form-urlencoded'),
+            data=payload,
+            auth=self._oauth(),
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        token = (data.get('oauth_token') or '').strip()
+        token_secret = (data.get('oauth_token_secret') or '').strip()
+        if not token or not token_secret:
+            raise RuntimeError('Sling login response did not include OAuth tokens')
+        self._update_config('oauth_token', token)
+        self._update_config('oauth_token_secret', token_secret)
+        self._update_config('oauth_token_time', int(time.time()))
+        self._refresh_subscription_context()
+
+    def _subscription_auth(self):
+        return self._oauth(
+            (self.config.get('oauth_token') or '').strip(),
+            (self.config.get('oauth_token_secret') or '').strip(),
+        )
+
+    def _refresh_subscription_context(self) -> dict[str, Any]:
+        resp = self.session.get(
+            f'{self.UMS}/v2/user.json',
+            headers=self._subscription_headers(content_type=None),
+            auth=self._subscription_auth(),
+            timeout=30,
+        )
+        resp.raise_for_status()
+        info = resp.json()
+
+        subscriber_id = (info.get('guid') or info.get('user_guid') or info.get('subscriber_id') or '').strip()
+        if subscriber_id:
+            self._update_config('subscriber_id', subscriber_id)
+        if info.get('account_status'):
+            self._update_config('account_status', info.get('account_status'))
+
+        subscriptions = info.get('subscriptionpacks') or []
+        legacy_ids: list[str] = []
+        package_guids: list[str] = []
+        for sub in subscriptions:
+            legacy_id = str(sub.get('id') or '').strip()
+            package_guid = str(sub.get('guid') or '').strip()
+            if legacy_id:
+                legacy_ids.append(legacy_id)
+            if package_guid:
+                package_guids.append(package_guid)
+        self._update_config('legacy_subs', '+'.join(dict.fromkeys(legacy_ids)) if legacy_ids else '')
+        self._update_config('user_subs', '+'.join(dict.fromkeys(package_guids)) if package_guids else '')
+
+        if subscriber_id:
+            self._refresh_region_context(subscriber_id)
+        return info
+
+    def _refresh_region_context(self, subscriber_id: str) -> None:
+        params = {'subscriber_id': subscriber_id, 'device_id': self._ensure_device_id()}
+        resp = self.session.get(
+            self.GEO,
+            params=params,
+            headers=self._subscription_headers(content_type=None),
+            timeout=30,
+        )
+        if not resp.ok:
+            logger.warning('[sling] region lookup failed: HTTP %s', resp.status_code)
+            return
+        data = resp.json()
+        if data.get('dma'):
+            self._update_config('user_dma', str(data.get('dma')))
+        if data.get('time_zone_offset'):
+            self._update_config('user_offset', str(data.get('time_zone_offset')))
+        if data.get('zip_code'):
+            self._update_config('user_zip', str(data.get('zip_code')))
+
+    def _fetch_subscription_channels(self) -> list[ChannelData]:
+        try:
+            self._ensure_subscription_auth()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[sling] subscription auth failed; keeping Freestream-only lineup: %s', exc)
+            return []
+
+        legacy_subs = (self.config.get('legacy_subs') or '').strip()
+        if not legacy_subs:
+            logger.warning('[sling] Sling account has no subscription package ids; keeping Freestream-only lineup')
+            return []
+
+        user_offset = (self.config.get('user_offset') or '-0500').strip()
+        user_dma = (self.config.get('user_dma') or '535').strip()
+        encoded_subs = base64.b64encode(legacy_subs.replace('+', ',').encode()).decode().strip()
+        url = f'{self.CMS}/cms/publish3/domain/channels/v4/{user_offset}/{user_dma}/{encoded_subs}/1.json'
+        payload = self._get_json(url)
+
+        channel_ids: dict[str, dict[str, Any]] = {}
+        for pack in payload.get('subscriptionpacks') or []:
+            for item in pack.get('channels') or []:
+                channel_guid = (item.get('channel_guid') or item.get('guid') or '').strip()
+                if channel_guid:
+                    channel_ids[channel_guid] = item
+
+        if not channel_ids:
+            logger.warning('[sling] subscription channel feed returned no channels')
+            return []
+
+        channels: list[ChannelData] = []
+        max_workers = min(40, max(1, len(channel_ids)))
+        headers_snapshot = dict(self.session.headers)
+        thread_local = threading.local()
+
+        def fetch_one(channel_guid: str) -> ChannelData | None:
+            sess = getattr(thread_local, 'session', None)
+            if sess is None:
+                sess = self.new_session(headers=headers_snapshot)
+                thread_local.session = sess
+            try:
+                resp = sess.get(self._channel_schedule_24_url(channel_guid), timeout=15)
+                resp.raise_for_status()
+                schedule = (resp.json().get('schedule') or {})
+                channel = self._channel_from_summary(schedule, require_free=False)
+                if channel is not None:
+                    channel.tags = list(dict.fromkeys([*channel.tags, 'Sling Subscription']))
+                return channel
+            except Exception as exc:  # noqa: BLE001
+                fallback = self._channel_from_subscription_item(channel_ids[channel_guid])
+                if fallback is not None:
+                    fallback.tags = list(dict.fromkeys([*fallback.tags, 'Sling Subscription']))
+                    return fallback
+                logger.debug('[sling] subscription channel detail failed for %s: %s', channel_guid, exc)
+                return None
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(fetch_one, channel_guid) for channel_guid in channel_ids}
+            for future in as_completed(futures):
+                channel = future.result()
+                if channel is not None:
+                    channels.append(channel)
+
+        logger.info('[%s] %d subscription channels', self.source_name, len(channels))
+        return channels
+
+    def _channel_from_subscription_item(self, item: dict[str, Any]) -> ChannelData | None:
+        channel_guid = (item.get('channel_guid') or item.get('guid') or '').strip()
+        if not channel_guid:
+            return None
+        name = self._best_summary_channel_name(item) or item.get('network_affiliate_name') or item.get('title')
+        if not name:
+            return None
+        logo_url = ((item.get('thumbnail') or {}).get('url'))
+        category = self._infer_summary_group(item, name)
+        return ChannelData(
+            source_channel_id=channel_guid,
+            name=name.strip(),
+            stream_url=f'sling://{channel_guid}',
+            logo_url=logo_url,
+            slug=self._slugify(name),
+            category=category,
+            language=infer_language_from_metadata(name, category, (item.get('metadata') or {}).get('language')),
+            country='US',
+            stream_type='dash',
+            number=self._to_int(item.get('channel_number')),
+            gracenote_id=str(item.get('gracenote_channel_id') or '').strip() or None,
+            guide_key=(item.get('qvt_url') or item.get('qvt') or '').strip() or None,
+            tags=['Sling Subscription'],
+        )
+
     def _fetch_epg_for_channel(self, channel_guid: str, max_windows: int) -> list[ProgramData]:
         return self._fetch_epg_for_channel_with_session(channel_guid, max_windows, self.session)
 
@@ -244,18 +503,20 @@ class SlingScraper(BaseScraper):
         return sorted(programs.values(), key=lambda p: p.start_time)
 
 
-    def _channel_from_summary(self, item: dict[str, Any]) -> ChannelData | None:
+    def _channel_from_summary(self, item: dict[str, Any], require_free: bool = True) -> ChannelData | None:
         metadata = item.get("metadata") or {}
         visibility = item.get("visibility") or {}
         channel_guid = (item.get("channel_guid") or item.get("external_id") or "").strip()
-        qvt_url = (item.get("qvt_url") or "").strip()
+        qvt_url = (item.get("qvt_url") or item.get("qvt") or "").strip()
         if not channel_guid or not qvt_url:
             return None
         if not visibility.get("visible", True):
             return None
-        if not metadata.get("is_linear_channel"):
+        if require_free and not metadata.get("is_linear_channel"):
             return None
-        if not metadata.get("is_free"):
+        if not require_free and metadata.get("is_linear_channel") is False:
+            return None
+        if require_free and not metadata.get("is_free"):
             return None
         if item.get("cmw_hide_channel"):
             return None
@@ -292,6 +553,7 @@ class SlingScraper(BaseScraper):
             number=self._to_int(item.get("channel_number")),
             gracenote_id=str(item.get("gracenote_channel_id") or "").strip() or None,
             guide_key=qvt_url,
+            tags=['Sling Freestream'] if require_free else ['Sling Subscription'],
         )
 
     def _best_summary_channel_name(self, item: dict[str, Any]) -> str | None:

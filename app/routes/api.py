@@ -1580,7 +1580,10 @@ def save_source_config(source_id):
     _CRED_KEYS   = _CRED_IDENTITY_KEYS | secret_keys
     _AUTH_STATE  = ('access_token', 'refresh_token', 'token_time',
                     'session_id', 'login_time',
-                    'cookie_header', 'browser_storage_state')
+                    'cookie_header', 'browser_storage_state',
+                    'oauth_token', 'oauth_token_secret', 'oauth_token_time',
+                    'subscriber_id', 'account_status', 'legacy_subs', 'user_subs',
+                    'user_dma', 'user_offset', 'user_zip')
 
     def _norm_cred(key: str, val) -> str:
         # Whitespace from autofill/paste shouldn't read as a credential change

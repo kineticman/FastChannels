@@ -3,6 +3,7 @@ flask-sqlalchemy==3.1.1
 redis==5.2.1
 rq==1.16.2
 requests==2.32.3
+requests-oauthlib==2.0.0
 gunicorn==23.0.0
 gevent==24.11.1
 python-dotenv==1.2.2
