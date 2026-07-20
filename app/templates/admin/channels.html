@@ -1637,11 +1637,11 @@
     </div>
 
     <!-- Bulk action bar (shown when rows selected) -->
-    <div class="bulk-bar" id="bulk-bar">
-      <span id="bulk-count">0 selected</span>
-      <span class="bulk-scope-note" id="bulk-scope-note" hidden></span>
-      <span class="bulk-select-hint" id="bulk-select-hint">
-        <span id="bulk-select-hint-text"></span>
+    <div class="bulk-bar" data-bulk-bar="1">
+      <span data-bulk-count="1">0 selected</span>
+      <span class="bulk-scope-note" data-bulk-scope-note="1" hidden></span>
+      <span class="bulk-select-hint" data-bulk-select-hint="1">
+        <span data-bulk-select-hint-text="1"></span>
         <button type="button" class="bulk-select-link" onclick="selectAllMatching()">Select all matching</button>
       </span>
       <button class="btn-enable"  onclick="bulkToggle(true)">Enable Selected</button>
@@ -1933,6 +1933,29 @@
         </div>
       </div>
       {% endfor %}
+    </div>
+
+    <!-- Bottom bulk action bar mirrors the top controls for long channel pages. -->
+    <div class="bulk-bar bulk-bar-bottom" data-bulk-bar="1">
+      <span data-bulk-count="1">0 selected</span>
+      <span class="bulk-scope-note" data-bulk-scope-note="1" hidden></span>
+      <span class="bulk-select-hint" data-bulk-select-hint="1">
+        <span data-bulk-select-hint-text="1"></span>
+        <button type="button" class="bulk-select-link" onclick="selectAllMatching()">Select all matching</button>
+      </span>
+      <button class="btn-enable"  onclick="bulkToggle(true)">Enable Selected</button>
+      {% if review_filter == 'pending' %}
+      <button class="btn-disable" onclick="bulkMarkReviewed()">Keep Disabled</button>
+      {% else %}
+      <button class="btn-disable" onclick="bulkToggle(false)">Disable Selected</button>
+      {% endif %}
+      {% if gracenote_filter or gracenote_mode_filter %}
+      <button class="btn-open-external" onclick="bulkGracenoteAction('set_auto')">Set Auto</button>
+      <button class="btn-open-external" onclick="bulkGracenoteAction('set_manual')">Set Manual</button>
+      <button class="btn-open-external" onclick="bulkGracenoteAction('set_off')">Set Off</button>
+      <button class="btn-cancel" onclick="bulkGracenoteAction('clear_ids')">Clear IDs</button>
+      {% endif %}
+      <button class="btn-cancel"  onclick="clearSelection()">Cancel</button>
     </div>
 
     {% if channels.pages > 1 %}
@@ -3440,31 +3463,35 @@
     function onRowCheck() {
       const checked = document.querySelectorAll('.row-check:checked');
       const all = document.querySelectorAll('.row-check');
-      const bar = document.getElementById('bulk-bar');
+      const bars = document.querySelectorAll('[data-bulk-bar]');
       const allVisibleSelected = all.length > 0 && checked.length === all.length;
       if (_bulkSelectionScope === 'filter' && !allVisibleSelected) {
         _bulkSelectionScope = 'page';
       }
 
-      document.getElementById('bulk-count').textContent = _bulkSelectionScope === 'filter'
+      const selectedText = _bulkSelectionScope === 'filter'
         ? `${_pageTotalCount} selected`
         : `${checked.length} selected`;
-      bar.classList.toggle('visible', checked.length > 0);
-
-      const scopeNote = document.getElementById('bulk-scope-note');
-      const hint = document.getElementById('bulk-select-hint');
-      const hintText = document.getElementById('bulk-select-hint-text');
       const canExpandToFilter = _pageTotalCount > all.length;
-      if (_bulkSelectionScope === 'filter' && checked.length > 0) {
-        scopeNote.hidden = false;
-        scopeNote.textContent = `All ${_pageTotalCount} matching channels are selected across this filter.`;
-        hint.classList.remove('visible');
-      } else {
-        scopeNote.hidden = true;
-        scopeNote.textContent = '';
-        hint.classList.toggle('visible', checked.length > 0 && allVisibleSelected && canExpandToFilter);
-        hintText.textContent = `All ${all.length} visible rows are selected.`;
-      }
+
+      bars.forEach(bar => {
+        bar.querySelector('[data-bulk-count]').textContent = selectedText;
+        bar.classList.toggle('visible', checked.length > 0);
+
+        const scopeNote = bar.querySelector('[data-bulk-scope-note]');
+        const hint = bar.querySelector('[data-bulk-select-hint]');
+        const hintText = bar.querySelector('[data-bulk-select-hint-text]');
+        if (_bulkSelectionScope === 'filter' && checked.length > 0) {
+          scopeNote.hidden = false;
+          scopeNote.textContent = `All ${_pageTotalCount} matching channels are selected across this filter.`;
+          hint.classList.remove('visible');
+        } else {
+          scopeNote.hidden = true;
+          scopeNote.textContent = '';
+          hint.classList.toggle('visible', checked.length > 0 && allVisibleSelected && canExpandToFilter);
+          hintText.textContent = `All ${all.length} visible rows are selected.`;
+        }
+      });
 
       document.getElementById('select-all').indeterminate = checked.length > 0 && checked.length < all.length;
       document.getElementById('select-all').checked = checked.length === all.length;
@@ -3473,10 +3500,13 @@
     function clearSelection() {
       _bulkSelectionScope = 'page';
       document.querySelectorAll('.row-check, #select-all').forEach(cb => { cb.checked = false; cb.indeterminate = false; });
-      document.getElementById('bulk-bar').classList.remove('visible');
-      document.getElementById('bulk-scope-note').hidden = true;
-      document.getElementById('bulk-scope-note').textContent = '';
-      document.getElementById('bulk-select-hint').classList.remove('visible');
+      document.querySelectorAll('[data-bulk-bar]').forEach(bar => {
+        bar.classList.remove('visible');
+        const scopeNote = bar.querySelector('[data-bulk-scope-note]');
+        scopeNote.hidden = true;
+        scopeNote.textContent = '';
+        bar.querySelector('[data-bulk-select-hint]').classList.remove('visible');
+      });
     }
 
     // ── Sort by column ────────────────────────────────────────────────────
