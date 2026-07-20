@@ -483,6 +483,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                                 active_geos=_active_geos,
                                 miss_threshold=getattr(scraper, 'channel_miss_threshold', _CHANNEL_MISS_THRESHOLD),
                                 rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
+                                allow_suspicious_collapse=getattr(scraper, 'allow_suspicious_channel_collapse', False),
                             )
                         # Persist scraper config/cache FIRST. persist_*() call
                         # db.session.expire_all(), which DISCARDS unflushed attribute
@@ -2168,7 +2169,8 @@ def _sync_intrinsic_drm_bridge(source) -> None:
 
 
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None,
-                     miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False):
+                     miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False,
+                     allow_suspicious_collapse: bool = False):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
 
     # Build a guide_key → channel index so we can re-use an existing DB row
@@ -2393,7 +2395,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             ch.source_channel_id,
         )
 
-    if suspicious_collapse:
+    if suspicious_collapse and not allow_suspicious_collapse:
         logger.warning(
             '[%s] suspicious channel refresh collapse: existing_active=%d incoming=%d missing_active=%d; preserving prior active rows',
             source.name,

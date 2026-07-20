@@ -129,7 +129,17 @@ class PhiloScraper(BaseScraper):
         ConfigField("email", "Account email", placeholder="you@example.com",
                     help_text="The Philo account this source signs in to "
                               "(passwordless — you'll get a code by email/text)."),
+        ConfigField("include_out_of_plan", "Include out-of-plan channels",
+                    field_type="toggle", default=False,
+                    help_text="Off by default: only scrape channels Philo exposes "
+                              "for the signed-in account. Turn on to include the "
+                              "full guide catalog, including unsubscribed channels."),
     ]
+    # When an account expires or loses a package, the guide may intentionally
+    # shrink from the full catalog to only free/entitled rows. Let the normal
+    # missed-scrape path age those rows out instead of treating it as a parser
+    # collapse.
+    allow_suspicious_channel_collapse = True
 
     def __init__(self, config: dict = None):
         super().__init__(config)
@@ -148,6 +158,14 @@ class PhiloScraper(BaseScraper):
         self._load_dash_cache()
         # {desc_key: {"d": text, "t": epoch}} — loaded lazily at fetch_epg start.
         self._desc_cache: dict[str, dict] = {}
+
+    def _guide_vars(self) -> dict:
+        variables = dict(_GUIDE_VARS)
+        capabilities = list(_GUIDE_VARS.get("capabilities") or [])
+        if not bool(self.config.get("include_out_of_plan", False)):
+            capabilities = [c for c in capabilities if c != "OUT_OF_PLAN_CONTENT"]
+        variables["capabilities"] = capabilities
+        return variables
 
     # ── Session / auth ──────────────────────────────────────────────────────
 
@@ -401,7 +419,7 @@ class PhiloScraper(BaseScraper):
         seen: set[str] = set()
         cursor = None
         for _ in range(_GUIDE_MAX_PAGES):
-            variables = dict(_GUIDE_VARS)
+            variables = self._guide_vars()
             variables["endCursor"] = cursor
             parts = self._gql("page", variables)
             groups = (((parts[0].get("data") or {}).get("page") or {}).get("groups") or {})
@@ -468,7 +486,7 @@ class PhiloScraper(BaseScraper):
         entries: list[tuple] = []
         cursor = None
         for _ in range(_GUIDE_MAX_PAGES):
-            variables = dict(_GUIDE_VARS)
+            variables = self._guide_vars()
             variables["initialTiles"] = _GUIDE_EPG_TILES
             variables["endCursor"] = cursor
             parts = self._gql("page", variables)
@@ -753,32 +771,24 @@ class PhiloScraper(BaseScraper):
         return dash_url
 
     def audit_resolve(self, raw_url: str) -> str | None:
-        """Liveness-only resolution for the stream audit.
+        """Audit Philo liveness and account entitlement.
 
-        Deliberately does NOT go through the full resolve():
-          * resolve() raises StreamDeadError on an empty-broadcast response, and
-            the audit's Dead handler permanently disables the channel with no
-            grace (is_enabled cleared → not restored by a later rescrape). An
-            empty broadcast is a normal transient (schedule boundary, brief API
-            blip), not a confirmed-dead stream, so we return None (a soft audit
-            error) instead of ever raising Dead here.
-          * resolve() also mints a real createPlaybackSessionV2 (the same call a
-            live tune makes) per channel — auditing the whole lineup would open a
-            burst of real sessions against the account. This checks only whether a
-            current broadcast exists (playbackSessionPresentation), never opening a
-            playback session.
-
-        Returns the opaque philo:// URL as an "alive, skip manifest fetch"
-        sentinel, or None if liveness could not be confirmed (never Dead).
+        Empty current-broadcast responses are treated as soft audit errors because
+        they can happen at schedule boundaries. A createPlaybackSessionV2 response
+        with CONTENT_NOT_IN_PLAN is a firm account-entitlement failure, so the
+        audit may disable that channel. Successful entitlement checks return the
+        opaque philo:// URL as an alive sentinel so the generic audit skips a
+        second manifest fetch.
         """
         if not raw_url.startswith("philo://"):
             return raw_url
         cid = raw_url[len("philo://"):]
 
-        # A live DASH URL cached from a recent tune/resolve proves the channel is up.
+        # A live DASH URL cached from a recent tune/resolve proves the channel is
+        # both up and entitled.
         if self._cached_dash(cid):
             return raw_url
-        # No session to check with → can't audit, don't penalize (mirrors amazon).
+        # No session to check with -> cannot audit, so do not penalize.
         if not self._ensure_session():
             return raw_url
 
@@ -786,7 +796,46 @@ class PhiloScraper(BaseScraper):
         pres = self._gql("playbackSessionPresentation", {"id": cid, "broadcastAt": now})
         edges = ((((pres[0].get("data") or {}).get("node") or {})
                   .get("broadcasts") or {}).get("edges") or [])
-        return raw_url if edges else None
+        if not edges:
+            return None
+        broadcast_id = (edges[0].get("node") or {}).get("id")
+        if not broadcast_id:
+            return None
+
+        player_id = self._ensure_player()
+        if not player_id:
+            raise RuntimeError(f"[philo] could not obtain playerId for {cid}")
+        variables = {"id": broadcast_id, "playerId": player_id, "idfa": None,
+                     "lat": None, "givn": None, "tileGroupId": None,
+                     "broadcastAt": None, "startAtOverride": None, "isPreload": False}
+        cps = self._gql("createPlaybackSessionV2", variables)
+        if self._has_gql_error_code(cps, "PLAYER_NOT_FOUND"):
+            logger.info("[philo] saved playerId was rejected during audit; registering a new player for %s", cid)
+            player_id = self._ensure_player(force_register=True)
+            if not player_id:
+                raise RuntimeError(f"[philo] could not refresh playerId for {cid}")
+            variables["playerId"] = player_id
+            cps = self._gql("createPlaybackSessionV2", variables)
+
+        if self._has_gql_error_code(cps, "CONTENT_NOT_IN_PLAN"):
+            detail = self._gql_error_summary(cps)
+            raise StreamDeadError(f"[philo] channel not in subscription: {detail or cid}")
+
+        sess = None
+        for part in cps:
+            node = ((part.get("data") or {}).get("createPlaybackSessionV2"))
+            if node:
+                sess = node
+                break
+        if not sess or not sess.get("dashURL"):
+            detail = self._gql_error_summary(cps)
+            if detail:
+                raise RuntimeError(f"[philo] audit no dashURL for {cid}: {detail}")
+            raise RuntimeError(f"[philo] audit no dashURL for {cid}")
+
+        self._cache_dash(cid, sess["dashURL"], ((sess.get("drmProvider") or {}).get("authToken")))
+        self._persist_session()
+        return raw_url
 
     # ── Widevine license relay (DRMtoday) ───────────────────────────────────
 
