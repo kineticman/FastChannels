@@ -6,7 +6,7 @@ from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
-from ..models import Source, Channel, Feed, AppSettings, Program
+from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program
 from ..generators.m3u import (
     _build_channel_query,
     _build_feed_chnum_map,
@@ -158,13 +158,27 @@ def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
     gn_channels  = _selected_channel_stubs({}, gracenote=True)
 
     if default_feed.chnum_start is not None:
-        full_map = _build_feed_chnum_map(std_channels, default_feed.chnum_start) if std_channels else {}
+        stored_numbers = {
+            row.channel_id: row.number
+            for row in FeedChannelNumber.query.filter_by(feed_id=default_feed.id).all()
+        }
+        all_stubs = sorted(
+            std_channels + gn_channels,
+            key=lambda ch: (ch.number is None, ch.number or 0, (ch.name or '').lower()),
+        )
+        full_map = (
+            _build_feed_chnum_map(
+                all_stubs,
+                default_feed.chnum_start,
+                stored_numbers=stored_numbers,
+            )
+            if all_stubs else {}
+        )
     else:
         full_map, _ = _build_source_chnum_map(std_channels) if std_channels else ({}, [])
-
-    if gn_channels:
-        gn_start = (max(full_map.values()) + 1) if full_map else (default_feed.chnum_start or 1)
-        full_map.update(_build_sticky_gn_chnum_map(gn_channels, gn_start, set(full_map.values())))
+        if gn_channels:
+            gn_start = (max(full_map.values()) + 1) if full_map else 1
+            full_map.update(_build_sticky_gn_chnum_map(gn_channels, gn_start, set(full_map.values())))
 
     page_ids = {ch.id for ch in page_items}
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
