@@ -790,7 +790,7 @@ class DirectvScraper(BaseScraper):
     min_scrape_interval = 60
     config_required      = True
     is_premium            = True
-    source_category       = 'drm'
+    source_category       = 'premium'
     activation_url         = _ACTIVATE_URL
     license_url            = _LICENSE_URL
     # Every DirecTV Stream channel is DRM-protected. Keep them out of standard
@@ -1047,13 +1047,19 @@ class DirectvScraper(BaseScraper):
                     r = self.session.get(_SCHEDULE_URL, params=params, timeout=20)
                 except requests.RequestException as exc:
                     logger.warning('[directv] schedule request failed: %s', exc)
+                    completed_batches += 1
+                    _progress(self, 'epg', min(completed_batches, total_batches), total_batches)
                     continue
                 if r.status_code != 200:
                     logger.warning('[directv] schedule HTTP %s', r.status_code)
+                    completed_batches += 1
+                    _progress(self, 'epg', min(completed_batches, total_batches), total_batches)
                     continue
                 try:
                     payload = r.json()
                 except ValueError:
+                    completed_batches += 1
+                    _progress(self, 'epg', min(completed_batches, total_batches), total_batches)
                     continue
 
                 for sched in (payload.get('schedules') or []):
@@ -1072,8 +1078,8 @@ class DirectvScraper(BaseScraper):
                             program = self._parse_program(ccid, content, cons, seen_schedule_ids)
                             if program:
                                 programs.append(program)
-                    completed_batches += 1
-                    _progress(self, 'epg', completed_batches, total_batches)
+                completed_batches += 1
+                _progress(self, 'epg', min(completed_batches, total_batches), total_batches)
             w_start = w_end
 
         return programs
