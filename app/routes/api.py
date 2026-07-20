@@ -3885,22 +3885,11 @@ def test_prismcast():
                 'loopback (http://127.0.0.1:<port>) and run PrismCast with host networking. '
                 'Otherwise serve FastChannels over trusted HTTPS.')
 
-    # 3) End-to-end capture: the chain-validating test. Try one bridged channel per
-    # capable source so a single channel's resolution hiccup (e.g. a stale Roku session)
-    # doesn't fail the whole SETUP test — pass if ANY channel captures.
-    test_channels = []
-    for _sname in _drm_bridge_capable_sources():
-        _c = (Channel.query.join(Source)
-              .filter(Source.name == _sname, Channel.requires_drm_bridge == True,
-                      Channel.is_active == True)
-              .order_by(Channel.id).first())
-        if _c:
-            test_channels.append(_c)
-        if len(test_channels) >= 4:
-            break
-    if not test_channels:
-        test_channels = (Channel.query.filter(Channel.is_active == True, Channel.is_enabled == True)
-                         .order_by(Channel.id).limit(2).all())
+    # 3) End-to-end capture: the chain-validating DRM-bridge test. Use only
+    # active/enabled channels that are actually marked for PrismCast bridging from
+    # DRM-capable sources. Do not fall back to arbitrary FAST channels: that proves
+    # generic capture, not the DRM bridge, and can fail on unrelated source quirks.
+    test_channels = _prismcast_test_channels(limit=4)
 
     def _try_capture(tc):
         """Returns (ok, detail). Drives PrismCast and waits for segments to flow."""
@@ -3944,7 +3933,9 @@ def test_prismcast():
     if not health_ok:
         add('End-to-end capture', 'skip', 'Skipped — PrismCast is not reachable.')
     elif not test_channels:
-        add('End-to-end capture', 'skip', 'Skipped — no active channel available to test.')
+        add('End-to-end capture', 'skip',
+            'Skipped — no active, enabled DRM-bridge channel is available to test.',
+            fix='Enable Bridge DRM channels, scrape or audit a DRM-capable source, then rerun this setup test.')
     else:
         attempts = []
         captured = None
@@ -3987,6 +3978,47 @@ def test_prismcast():
                else 'warn' if any(c['status'] == 'warn' for c in checks)
                else 'ok')
     return jsonify({'checks': checks, 'overall': overall})
+
+
+def _prismcast_test_channels(limit: int = 4) -> list[Channel]:
+    """Return deterministic DRM-bridge channels for the PrismCast setup test.
+
+    The setup test is meant to validate the DRM bridge, so candidates must be
+    real bridge-required channels from sources with license handling. Generic
+    FAST channels are intentionally excluded; a random clear channel can fail
+    for source-specific reasons that have nothing to do with PrismCast.
+    """
+    capable = sorted(set(_drm_bridge_capable_sources()))
+    if not capable or limit <= 0:
+        return []
+
+    rows = (Channel.query.join(Source)
+            .filter(Source.name.in_(capable),
+                    Source.is_enabled == True,
+                    Source.epg_only == False,
+                    Channel.requires_drm_bridge == True,
+                    Channel.is_active == True,
+                    Channel.is_enabled == True,
+                    Channel.stream_url != None,
+                    Channel.source_channel_id != None,
+                    Channel.source_channel_id != '')
+            .order_by(Source.name.asc(),
+                      Channel.number.asc().nullslast(),
+                      Channel.name.asc(),
+                      Channel.id.asc())
+            .all())
+
+    selected = []
+    seen_sources = set()
+    for ch in rows:
+        source_name = ch.source.name if ch.source else None
+        if not source_name or source_name in seen_sources:
+            continue
+        selected.append(ch)
+        seen_sources.add(source_name)
+        if len(selected) >= limit:
+            break
+    return selected
 
 
 def _drm_bridge_capable_sources() -> list[str]:
