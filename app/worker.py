@@ -722,6 +722,11 @@ def run_stream_audit(source_name: str):
             except Exception as _refresh_exc:
                 logger.warning('[audit] %s: pre-audit refresh failed (non-fatal): %s', source_name, _refresh_exc)
 
+        # Sources such as DirecTV are intrinsically bridge-only. Re-sync before
+        # auditing so a prior generic audit or manual state drift cannot leave
+        # channels out of the bridge feed.
+        _sync_intrinsic_drm_bridge(source)
+
         channels = source.channels.filter(
             db.or_(
                 Channel.is_active == True,

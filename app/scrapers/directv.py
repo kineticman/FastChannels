@@ -996,6 +996,16 @@ class DirectvScraper(BaseScraper):
 
     # ── Playback ─────────────────────────────────────────────────────────────
 
+    def audit_resolve(self, raw_url: str) -> str:
+        # DirecTV is intrinsically bridge-only even when the resolved manifest
+        # looks like ordinary HLS to the generic audit. Validate entitlement via
+        # resolve(), then return the opaque URL sentinel so audit skips manifest
+        # inspection and does not clear requires_drm_bridge.
+        if raw_url.startswith('directv://'):
+            self.resolve(raw_url)
+            return raw_url
+        return raw_url
+
     def resolve(self, raw_url: str) -> str:
         if not raw_url.startswith('directv://'):
             return raw_url
