@@ -3898,7 +3898,13 @@ def test_prismcast():
         except Exception as e:
             return False, f'"{tc.name}": {type(e).__name__}.'
         if r.status_code not in (301, 302) or not r.headers.get('Location'):
-            return False, f'"{tc.name}": PrismCast /play returned HTTP {r.status_code}.'
+            body = (r.text or '').strip().replace('\n', ' ')
+            if len(body) > 220:
+                body = body[:217] + '...'
+            detail = f'"{tc.name}": PrismCast /play returned HTTP {r.status_code}'
+            if body:
+                detail += f': {body}'
+            return False, detail + '.'
         hls = r.headers['Location']
         if not hls.startswith('http'):
             hls = prismcast_url + hls
@@ -3907,7 +3913,10 @@ def test_prismcast():
         while _time.time() < deadline:
             _time.sleep(3)
             try:
-                segs = _req.get(hls, timeout=8).text.count('.m4s')
+                playlist = _req.get(hls, timeout=8).text
+                segs = (playlist.count('.m4s') + playlist.count('.ts')
+                        + sum(1 for line in playlist.splitlines()
+                              if line and not line.startswith('#')))
             except Exception:
                 pass
             if segs >= 2:

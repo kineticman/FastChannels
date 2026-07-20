@@ -475,7 +475,7 @@
           <input type="text" id="public-base-url"
                  placeholder="192.168.1.50:5523" value="{{ public_base_url or detected_base_url }}"
                  oninput="checkPublicBaseUrlPortWarning()">
-          <div class="help">Address other devices should use to reach this FastChannels server for generated M3U, XML, logo, poster, and playback URLs. Include <code>http://</code> and the port if needed (most installs use <code>:5523</code>).</div>
+          <div class="help">Address other devices should use to reach this FastChannels server for generated M3U, XML, logo, poster, and playback URLs. Include <code>http://</code> and the port if needed (most installs use <code>:5523</code>). This only changes generated URLs; it does not change the Docker published port. To move the web UI itself to another port, change the compose port mapping and restart the container.</div>
           <div class="help" id="no-port-warning" style="color:var(--warning-soft);{% if not public_base_url_no_port_warning %} display:none;{% endif %}">
             No port specified — this is fine if you're behind a reverse proxy, but most direct installs need <code>:5523</code>.
           </div>
@@ -626,7 +626,7 @@
           <label for="prismcast-inner-url">Watch-page URL for PrismCast's browser <span style="color:var(--text-muted);font-weight:400">(optional)</span></label>
           <input type="text" id="prismcast-inner-url"
                  placeholder="defaults to FastChannels Server URL" value="{{ prismcast_inner_url }}">
-          <div class="help">Where PrismCast's Chrome reaches this server's <code>/watch</code> pages. DRM needs a secure context: use loopback (<code>http://127.0.0.1:5523</code>) if PrismCast is on this host, else trusted HTTPS. Blank reuses the Server URL.</div>
+          <div class="help">Where PrismCast's Chrome reaches this server's <code>/watch</code> pages. DRM needs a secure context: use loopback (<code>http://127.0.0.1:5523</code>) when PrismCast's Chrome runs on the same host as FastChannels' published port, such as a native/Homebrew PrismCast install with FastChannels in Docker. Use trusted HTTPS when PrismCast runs on another host. Blank reuses the Server URL.</div>
           <div class="help" style="color:var(--warning-soft)">A plain <code>http://</code> LAN IP isn't a secure context — DRM won't decrypt.</div>
         </div>
       </div>
