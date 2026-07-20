@@ -258,6 +258,12 @@ def _pick(d: dict, *keys: str) -> str:
 def _directv_gracenote_key(value: str | None) -> str:
     return ''.join(ch for ch in (value or '').lower() if ch.isalnum())
 
+
+def _progress(scraper: Any, phase: str, done: int = 0, total: int = 0) -> None:
+    cb = getattr(scraper, '_progress_cb', None)
+    if cb:
+        cb(phase, done, total)
+
 def _looks_like_channel_obj(d: dict) -> bool:
     keys = {k.lower() for k in d.keys()}
     return bool(keys & {'ccid', 'callsign', 'channelnumber', 'resourceid', 'logourl'})
@@ -915,6 +921,7 @@ class DirectvScraper(BaseScraper):
                 'DirecTV Stream: not authenticated yet — use "Authenticate" in source settings'
             )
 
+        _progress(self, 'channels', 0, 1)
         params = {'sort': 'OrdCh=ASC'}
         client_context = self.config.get('client_context')
         if client_context:
@@ -974,6 +981,7 @@ class DirectvScraper(BaseScraper):
                 gracenote_id=_DIRECTV_GRACENOTE_IDS.get(_directv_gracenote_key(name)),
             ))
 
+        _progress(self, 'channels', 1, 1)
         return channels
 
     # ── EPG ──────────────────────────────────────────────────────────────────
@@ -1008,6 +1016,12 @@ class DirectvScraper(BaseScraper):
 
         programs: list[ProgramData] = []
         seen_schedule_ids: set[str] = set()
+
+        batch_count = (len(resource_ids) + _SCHEDULE_BATCH - 1) // _SCHEDULE_BATCH
+        window_count = max(1, int((end - now).total_seconds() // window.total_seconds()))
+        total_batches = batch_count * window_count
+        completed_batches = 0
+        _progress(self, 'epg', 0, total_batches)
 
         w_start = now
         while w_start < end:
@@ -1058,6 +1072,8 @@ class DirectvScraper(BaseScraper):
                             program = self._parse_program(ccid, content, cons, seen_schedule_ids)
                             if program:
                                 programs.append(program)
+                    completed_batches += 1
+                    _progress(self, 'epg', completed_batches, total_batches)
             w_start = w_end
 
         return programs
