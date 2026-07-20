@@ -265,6 +265,12 @@ nav,
   transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
+nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
 .theme-picker {
   margin-left: auto;
   display: inline-flex;

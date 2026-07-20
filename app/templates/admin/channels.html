@@ -26,6 +26,11 @@
       flex-direction: column;
       gap: 0.85rem;
       margin-bottom: 1rem;
+      position: sticky;
+      top: 0;
+      z-index: 70;
+      background: var(--bg);
+      padding: 0.65rem 0 0.8rem;
     }
     .toolbar-primary {
       display: grid;
@@ -1267,6 +1272,7 @@
       .container { padding: 0 1rem; }
       .toolbar-primary { grid-template-columns: 1fr; }
       .toolbar-secondary { grid-template-columns: 1fr; }
+      .toolbar { margin-bottom: 0.75rem; }
       /* Swap table → cards */
       .section { display: none; }
       .mobile-cards { display: flex; }
@@ -2050,6 +2056,21 @@
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
   <script src="{{ url_for('static', filename='js/fc_player.js') }}?v={{ app_version }}"></script>
   <script>
+    // Pin the Channels filter toolbar below the shared sticky admin nav. The nav
+    // wraps on narrow screens, so measure it instead of hard-coding an offset.
+    (function () {
+      const navEl = document.querySelector('nav');
+      const toolbarEl = document.querySelector('.toolbar');
+      if (!navEl || !toolbarEl) return;
+      function syncChannelsToolbarTop() {
+        toolbarEl.style.top = navEl.getBoundingClientRect().height + 'px';
+      }
+      syncChannelsToolbarTop();
+      window.addEventListener('resize', syncChannelsToolbarTop);
+      window.addEventListener('orientationchange', syncChannelsToolbarTop);
+      window.addEventListener('load', syncChannelsToolbarTop);
+    })();
+
     let _previewShaka = null;
     let _previewList = null;
     let _previewIndex = -1;
