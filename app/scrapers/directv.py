@@ -103,6 +103,15 @@ _PLAYBACK_CACHE_TTL = 3300
 
 _SCHEDULE_DAYS = 2
 _SCHEDULE_WINDOW_HOURS = 6
+# Ask the schedule endpoint to hydrate content.images. Without this selector,
+# the same schedule rows include IDs and metadata but no artwork.
+_SCHEDULE_FIS_PROPERTIES = (
+    "ISF:2.0"
+    "#poster,640,360"
+    "#series-poster,640,360"
+    "#bg-fplayer,1024,576"
+    "#iconic,64,36"
+)
 # The schedule API silently drops every channel but the first when channelIds
 # is sent the normal `requests` way (repeated query keys) — it must be ONE
 # comma-joined value (see fetch_epg). Comma-joined also has a hard batch cap:
@@ -881,6 +890,7 @@ class DirectvScraper(BaseScraper):
                     'endTime': int(w_end.timestamp() * 1000),
                     'include4K': 'false',
                     'is4KCompatible': 'false',
+                    'fisProperties': _SCHEDULE_FIS_PROPERTIES,
                     # Must be ONE comma-joined value — passing a list here lets
                     # `requests` serialize it as repeated `channelIds=` keys,
                     # which the API accepts (200 OK) but silently honors only
@@ -956,6 +966,7 @@ class DirectvScraper(BaseScraper):
             start_time=start,
             end_time=end,
             description=_pick(content, 'description') or None,
+            poster_url=DirectvScraper._pick_program_image(content.get('images')),
             category=category,
             episode_title=sub or None,
             season=int(season_raw) if season_raw.isdigit() else None,
@@ -963,6 +974,25 @@ class DirectvScraper(BaseScraper):
             series_id=_pick(content, 'canonicalId') or None,
             episode_id=sched_id or None,
         )
+
+    @staticmethod
+    def _pick_program_image(images: Any) -> str | None:
+        if not isinstance(images, list):
+            return None
+
+        by_type: dict[str, str] = {}
+        for image in images:
+            if not isinstance(image, dict):
+                continue
+            image_type = _pick(image, 'imageType').lower()
+            image_url = _pick(image, 'imageUrl')
+            if image_type and image_url:
+                by_type[image_type] = image_url
+
+        for image_type in ('poster', 'series-poster', 'bg-fplayer', 'iconic'):
+            if by_type.get(image_type):
+                return by_type[image_type]
+        return None
 
     # ── Playback ─────────────────────────────────────────────────────────────
 
