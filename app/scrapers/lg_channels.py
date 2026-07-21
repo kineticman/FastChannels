@@ -1,14 +1,35 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import logging
 import time
 import uuid
+import zlib
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
+
+from requests.utils import requote_uri
 
 from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata
 
 logger = logging.getLogger(__name__)
+
+
+def _lg_redirect_target(resp):
+    if not resp.is_redirect:
+        return None
+    location = resp.headers.get("location")
+    if location is None:
+        return None
+    if isinstance(location, bytes):
+        try:
+            location = location.decode("utf-8")
+        except UnicodeDecodeError:
+            location = location.decode("latin-1")
+    return requote_uri(location)
 
 
 class LGChannelsScraper(BaseScraper):
@@ -36,6 +57,7 @@ class LGChannelsScraper(BaseScraper):
     def __init__(self, config: dict | None = None):
         super().__init__(config)
         self._schedulelist_cache: dict | None = None
+        self.session.get_redirect_target = _lg_redirect_target
 
         self.country          = "US"
         self.language         = "en"
@@ -183,8 +205,18 @@ class LGChannelsScraper(BaseScraper):
         try:
             payload = r.json()
         except Exception as exc:
-            logger.error("[lg-channels] schedulelist JSON parse failed: %s", exc)
-            return None
+            payload = self._decode_schedulelist_payload(r.text)
+            if payload is None:
+                logger.error(
+                    "[lg-channels] schedulelist JSON parse failed: %s "
+                    "(status=%s content_type=%s bytes=%s preview=%r)",
+                    exc,
+                    r.status_code,
+                    r.headers.get("Content-Type"),
+                    len(r.content or b""),
+                    (r.text or "")[:80],
+                )
+                return None
 
         if not isinstance(payload, dict):
             logger.error("[lg-channels] schedulelist payload was not an object")
@@ -193,17 +225,33 @@ class LGChannelsScraper(BaseScraper):
         self._schedulelist_cache = payload
         return payload
 
+    @staticmethod
+    def _decode_schedulelist_payload(text: str) -> dict[str, Any] | None:
+        if not text:
+            return None
+
+        stripped = text.strip()
+        try:
+            compressed = base64.b64decode(stripped, validate=True)
+            decoded = zlib.decompress(compressed).decode("utf-8")
+            payload = json.loads(decoded)
+            return payload if isinstance(payload, dict) else None
+        except (binascii.Error, UnicodeDecodeError, ValueError, zlib.error):
+            return None
+
     def _expand_stream_macros(self, url: str) -> str:
         nonce = str(int(time.time()))
         device_id = str(uuid.uuid4())
         ua = self.session.headers.get("User-Agent", "Mozilla/5.0")
+        encoded_ua = quote(ua, safe="")
+        encoded_play_device_type = quote(self.play_device_type, safe="")
         replacements = {
             "[DEVICE_ID]": device_id,
             "[IFA]": "",
             "[IFA_TYPE]": "",
             "[LMT]": "0",
             "[DNS]": "0",
-            "[UA]": ua,
+            "[UA]": encoded_ua,
             "[IP]": "0.0.0.0",
             "[GDPR]": "",
             "[GDPR_CONSENT]": "",
@@ -213,14 +261,17 @@ class LGChannelsScraper(BaseScraper):
             "[APP_BUNDLE]": "",
             "[APP_NAME]": self.app_name,
             "[APP_VERSION]": "",
-            "[DEVICE_TYPE]": self.play_device_type,
+            "[DEVICE_TYPE]": encoded_play_device_type,
             "[DEVICE_MAKE]": "",
             "[DEVICE_MODEL]": "",
             "[TARGETAD_ALLOWED]": "",
             "[FCK]": "",
+            "[PCS]": "",
+            "[COPPA]": "0",
             "[VIEWSIZE]": "1920x1080",
             "[NONCE]": nonce,
             "[HOTELTYPE]": "",
+            "[HOTEL_TYPE]": "",
         }
 
         expanded = url
