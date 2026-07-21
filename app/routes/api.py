@@ -1783,10 +1783,11 @@ def directv_auto_login(source_id):
         return jsonify({'error': 'username and password must be saved first'}), 400
 
     redis_url = current_app.config['REDIS_URL']
+    app = current_app._get_current_object()
 
     t = threading.Thread(
         target=run_directv_auth,
-        args=(redis_url, source_id, username, password),
+        args=(redis_url, source_id, username, password, app),
         daemon=True,
     )
     t.start()
@@ -2481,7 +2482,7 @@ def _get_playback_info(ch, fast_mode=True):
     if ch.source and ch.source.name == 'directv' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         _enc = _quote(ch.source_channel_id, safe='')
-        if request.args.get('directv_bridge') == '1':
+        if request.args.get('directv_bridge') == '1' or request.args.get('directv_drm') == '1':
             preview_url = f'/play/directv/{_enc}/prismcast.m3u8'
             play_url = preview_url
             license_url = None

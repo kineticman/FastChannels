@@ -1010,12 +1010,12 @@ def capture_directv_auth(
 
 # ── Manual admin-UI entry point ─────────────────────────────────────────────
 
-def run_directv_auth(redis_url: str, source_id: int, username: str, password: str) -> None:
+def run_directv_auth(redis_url: str, source_id: int, username: str, password: str, app=None) -> None:
     """Redis-status-driven wrapper for the admin-UI "Authenticate" button.
 
-    Runs in a daemon thread with no Flask/DB context (mirrors
-    amazon_auth.run_amazon_auth) — the polling Flask route
-    (app/routes/api.py: directv_auth_status) persists the result on success.
+    Runs in a daemon thread. When a Flask app object is provided, the
+    captured session is persisted immediately; the polling route still consumes
+    the Redis result as a fallback for older callers.
     """
     import redis as _redis
     r = _redis.from_url(redis_url)
@@ -1033,6 +1033,42 @@ def run_directv_auth(redis_url: str, source_id: int, username: str, password: st
         logger.warning('[directv-auth] capture failed for source_id=%s: %s', source_id, exc)
         _write_status(r, source_id, 'failed', str(exc))
         return
+
+    if app is not None:
+        try:
+            with app.app_context():
+                from ..extensions import db
+                from ..models import Source
+
+                source = Source.query.get(source_id)
+                if source is not None:
+                    cfg = dict(source.config or {})
+                    cfg['bearer_token'] = result['bearer_token']
+                    if result.get('refresh_token'):
+                        cfg['refresh_token'] = result['refresh_token']
+                    if result.get('client_context'):
+                        cfg['client_context'] = result['client_context']
+                    else:
+                        cfg.pop('client_context', None)
+                    if result.get('activation_token'):
+                        cfg['activation_token'] = result['activation_token']
+                    cfg['cookies'] = result.get('cookies') or []
+                    cfg['token_captured_at'] = result['captured_at']
+                    if result.get('identity_cookie'):
+                        cfg['identity_cookie'] = result['identity_cookie']
+                    else:
+                        cfg.pop('identity_cookie', None)
+                    if result.get('identity_cookie_expires_at'):
+                        cfg['identity_cookie_expires_at'] = result['identity_cookie_expires_at']
+                    else:
+                        cfg.pop('identity_cookie_expires_at', None)
+                    if result.get('auth_method'):
+                        cfg['auth_method'] = result['auth_method']
+                    source.config = cfg
+                    db.session.commit()
+                    logger.info('[directv-auth] persisted session to source config source_id=%s', source_id)
+        except Exception as exc:
+            logger.error('[directv-auth] failed to persist result directly: %s', exc)
 
     r.set(_result_key(source_id), json.dumps(result), ex=_RESULT_TTL)
     _write_status(r, source_id, 'success', 'Logged in — session captured.')
