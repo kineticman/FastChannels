@@ -65,6 +65,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -325,6 +326,13 @@ def _parse_iso(s: str) -> datetime | None:
         return None
 
 
+def _license_content_id_from_stream_url(stream_url: str, fallback: str) -> str:
+    match = re.search(r'/channel\([^)]*-(\d+)(?:\.|[)])', stream_url or '')
+    if match:
+        return match.group(1)
+    return fallback
+
+
 def _fetch_channel_playback(
     bearer_token: str, cookies: list[dict], client_context: str | None, ccid: str,
 ) -> dict | None:
@@ -390,7 +398,12 @@ def _fetch_channel_playback(
     play_token = (data.get('dRights') or {}).get('playToken')
     if not fallback_url or not play_token:
         return None
-    return {'fallback_url': fallback_url, 'play_token': play_token, 'cached_at': time.time()}
+    return {
+        'fallback_url': fallback_url,
+        'play_token': play_token,
+        'license_content_id': _license_content_id_from_stream_url(fallback_url, ccid),
+        'cached_at': time.time(),
+    }
 
 
 # ── Playwright auth capture ────────────────────────────────────────────────
@@ -1535,9 +1548,14 @@ class DirectvScraper(BaseScraper):
         # license request should never normally precede a resolve, but stay
         # correct if it does).
         play_token = None
+        license_content_id = channel_id or ''
         cached = (config.get('directv_playback') or {}).get(channel_id) if channel_id else None
         if cached:
             play_token = cached.get('play_token')
+            license_content_id = (
+                cached.get('license_content_id')
+                or _license_content_id_from_stream_url(cached.get('fallback_url') or '', license_content_id)
+            )
         if not play_token and channel_id and bearer:
             try:
                 fresh = _fetch_channel_playback(
@@ -1551,9 +1569,10 @@ class DirectvScraper(BaseScraper):
                 fresh = None
             if fresh:
                 play_token = fresh.get('play_token')
+                license_content_id = fresh.get('license_content_id') or license_content_id
 
         body_dict = {
-            'contentID': channel_id or '',
+            'contentID': license_content_id,
             'contentType': '2',
             'identityCookie': identity_cookie,
             'authorizationToken': play_token or '',
