@@ -1728,6 +1728,8 @@ def _directv_error_requires_reauth(status: int, content: bytes) -> bool:
     haystack = ' '.join(str(data.get(k) or '') for k in ('errorReason', 'description', 'message')).lower()
     if not haystack:
         return False
+    if 'identity cookie' in haystack or 'identitycookie' in haystack:
+        return False
     token_markers = (
         'invalid token', 'expired token', 'error decrypting token',
         'missing parameter activationtoken', 'missing parameter bearertoken',
@@ -2618,6 +2620,10 @@ def license_proxy(source_name: str):
                 identity_cookie = rdb.get(identity_key) or None
             except Exception:
                 identity_cookie = None
+        if identity_cookie:
+            logger.debug('[directv-license] identity cache hit sid=%s', directv_sid[:8])
+        else:
+            logger.debug('[directv-license] identity cache miss sid=%s', directv_sid[:8])
         if not identity_cookie:
             identity_cookie, expires_at, activation_payload, activation_status, activation_error = _directv_activate_identity(
                 scraper_cls, cfg, challenge,

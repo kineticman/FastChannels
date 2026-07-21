@@ -88,6 +88,10 @@ from .category_utils import category_for_channel, infer_category_from_name
 
 logger = logging.getLogger(__name__)
 
+
+class DirectvAuthExpiredError(RuntimeError):
+    """Raised when DirecTV accepts the request but reports an expired token."""
+
 _ALLCHANNELS_URL = "https://api.cld.dtvce.com/discovery/metadata/channel/v5/service/allchannels"
 _SCHEDULE_URL = "https://api.cld.dtvce.com/discovery/edge/schedule/v1/service/schedule"
 _CHANNEL_AUTH_URL = "https://api.cld.dtvce.com/right/authorization/channel/v1"
@@ -106,10 +110,9 @@ _UA = (
     "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
 )
 
-# Refresh a bit before DirecTV's own session naturally expires — the exact TTL
-# isn't documented anywhere; this mirrors the reference tool's daily-refresh
-# cadence with headroom.
-_TOKEN_TTL = 20 * 3600
+# Refresh well before DirecTV's own session naturally expires. Observed
+# channel/v1 playback auth has rejected 18h-old tokens as expired.
+_TOKEN_TTL = 12 * 3600
 _REAUTH_LOCK_TTL = 20 * 60  # avoid spawning overlapping background logins
 
 # Live-captured channel/v1 responses reported duration ~3874s — cache with
@@ -371,7 +374,15 @@ def _fetch_channel_playback(
     except ValueError:
         return None
     if not data.get('authorized'):
-        logger.warning('[directv] channel/v1 not authorized for ccid=%s', ccid)
+        status = data.get('responseStatus') or {}
+        error_code = str(status.get('errorCode') or '').strip()
+        error_text = str(status.get('errorText') or status.get('message') or '').strip()
+        logger.warning(
+            '[directv] channel/v1 not authorized for ccid=%s errorCode=%s errorText=%s',
+            ccid, error_code or '?', error_text or '?',
+        )
+        if error_code == '0015' or 'access token has expired' in error_text.lower():
+            raise DirectvAuthExpiredError(error_text or 'access token has expired')
         return None
 
     pb = data.get('playbackData') or {}
@@ -1086,6 +1097,19 @@ class DirectvScraper(BaseScraper):
             'will pick up on the next scheduled run'
         )
 
+    def _mark_auth_stale_and_reauth(self, reason: str) -> None:
+        # Do not queue token-field config updates here: play-route finally blocks
+        # persist scraper updates after resolve() returns, and a fast background
+        # login can otherwise be overwritten by those stale updates.
+        self._update_cache('directv_playback', {})
+
+        username = (self.config.get('username') or '').strip()
+        password = (self.config.get('password') or '').strip()
+        if not username or not password:
+            logger.warning('[directv] cannot auto-reauth after %s: username/password missing', reason)
+            return
+        self._start_background_reauth(username, password)
+
     def _start_background_reauth(self, username: str, password: str) -> None:
         """Kick off a Playwright login in a daemon thread, outside the worker's
         signal-guarded scrape phases. Dedupes via
@@ -1417,11 +1441,21 @@ class DirectvScraper(BaseScraper):
 
         bearer = self.config.get('bearer_token')
         if not bearer:
-            raise RuntimeError('DirecTV Stream: not authenticated — use "Authenticate" in source settings')
+            self._mark_auth_stale_and_reauth(f'missing bearer token for ccid={ccid}')
+            raise RuntimeError(
+                'DirecTV Stream: not authenticated; refreshing authentication in the background'
+            )
 
-        result = _fetch_channel_playback(
-            bearer, self.config.get('cookies') or [], self.config.get('client_context'), ccid,
-        )
+        try:
+            result = _fetch_channel_playback(
+                bearer, self.config.get('cookies') or [], self.config.get('client_context'), ccid,
+            )
+        except DirectvAuthExpiredError as exc:
+            self._mark_auth_stale_and_reauth(f'channel/v1 expired token for ccid={ccid}')
+            raise RuntimeError(
+                f'DirecTV Stream: session expired while resolving channel {ccid}; '
+                'refreshing authentication in the background'
+            ) from exc
         if not result:
             raise RuntimeError(f'DirecTV Stream: could not resolve playback for channel {ccid}')
 
@@ -1505,9 +1539,16 @@ class DirectvScraper(BaseScraper):
         if cached:
             play_token = cached.get('play_token')
         if not play_token and channel_id and bearer:
-            fresh = _fetch_channel_playback(
-                bearer, config.get('cookies') or [], config.get('client_context'), channel_id,
-            )
+            try:
+                fresh = _fetch_channel_playback(
+                    bearer, config.get('cookies') or [], config.get('client_context'), channel_id,
+                )
+            except DirectvAuthExpiredError as exc:
+                logger.warning(
+                    '[directv] license fallback could not refresh playToken for channel=%s: %s',
+                    channel_id, exc,
+                )
+                fresh = None
             if fresh:
                 play_token = fresh.get('play_token')
 
