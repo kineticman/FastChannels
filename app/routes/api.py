@@ -52,8 +52,11 @@ from .tasks import (
 from ..generators.m3u import (
     feed_to_query_filters,
     get_global_chnum_overlaps,
+    _build_channel_query,
+    _parse_gracenote_id,
     _selected_channel_stubs,
     _resolve_chnum_map,
+    feed_gracenote_start,
     feed_namespace_start,
 )
 from .. import logfile
@@ -75,6 +78,66 @@ _CUSTOM_DIRECT_SUFFIXES = ('.m3u8', '.mpd', '.mp4', '.webm', '.ts')
 _CUSTOM_DETECT_KEY_PREFIX = 'custom-detect:'
 _CUSTOM_DETECT_TTL_SECONDS = 600
 _CUSTOM_DETECT_DONE_TTL_SECONDS = 180
+
+
+def _channel_feed_summaries(ch: Channel) -> list[dict]:
+    """Return enabled feeds that include a channel, with its output channel number."""
+    channel_id = ch.id
+    gracenote_output = bool(_parse_gracenote_id(ch))
+    feeds = Feed.query.filter(Feed.is_enabled == True).order_by(Feed.name).all()
+    result = []
+
+    for feed in feeds:
+        filters = feed.filters or {}
+        pinned = channel_id in (filters.get('pinned_channel_ids') or [])
+        excluded = channel_id in (filters.get('excluded_channel_ids') or [])
+        if excluded and not pinned:
+            continue
+
+        q_filters = feed_to_query_filters(filters)
+        if pinned:
+            status = 'pinned'
+        else:
+            in_feed = (
+                _build_channel_query(q_filters, activity='any')
+                .filter(Channel.id == channel_id)
+                .count()
+                > 0
+            )
+            if not in_feed:
+                continue
+            status = 'filtered'
+
+        selected = _selected_channel_stubs(q_filters, gracenote=gracenote_output)
+        if feed.chnum_start is not None:
+            chnum_map, _ = _resolve_chnum_map(
+                selected,
+                feed_chnum_start=feed.chnum_start,
+                feed_id=feed.id,
+            )
+        elif feed.slug == 'default' and gracenote_output:
+            chnum_map, _ = _resolve_chnum_map(
+                selected,
+                namespace_start=feed_gracenote_start(feed),
+            )
+        elif feed.slug == 'default':
+            chnum_map, _ = _resolve_chnum_map(selected)
+        else:
+            chnum_map, _ = _resolve_chnum_map(
+                selected,
+                namespace_start=feed_namespace_start(feed, gracenote=gracenote_output),
+            )
+
+        result.append({
+            'feed_id': feed.id,
+            'feed_name': feed.name,
+            'feed_slug': feed.slug,
+            'status': status,
+            'feed_channel_number': chnum_map.get(channel_id),
+            'output': 'gracenote' if gracenote_output else 'xmltv',
+        })
+
+    return result
 
 
 def _normalize_custom_stream_type(raw_type, stream_url: str | None = None) -> str:
@@ -2654,6 +2717,7 @@ def preview_channel(channel_id):
         'needs_detection': needs_detection,
         'epg_programs': future_count,
         'epg_hours': epg_hours,
+        'feed_memberships': _channel_feed_summaries(ch),
     })
 
 

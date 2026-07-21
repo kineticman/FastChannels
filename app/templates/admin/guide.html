@@ -1078,6 +1078,28 @@
       await _loadGuideModal(channelId, prog);
     }
 
+    function renderGuideFeedMemberships(feeds) {
+      feeds = Array.isArray(feeds) ? feeds : [];
+      const rows = feeds.map(f => {
+        const number = f.feed_channel_number ? `Ch ${escapeHtml(String(f.feed_channel_number))}` : 'Ch -';
+        const output = f.output === 'gracenote' ? 'Gracenote' : 'XMLTV';
+        const pinned = f.status === 'pinned' ? '<span style="color:var(--text-dim);font-size:0.7rem;margin-left:0.35rem">pinned</span>' : '';
+        return `
+          <div style="display:flex;align-items:baseline;gap:0.6rem;justify-content:space-between;padding:0.22rem 0;border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent)">
+            <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-soft)">${escapeHtml(f.feed_name || 'Feed')}${pinned}</span>
+            <span style="display:flex;gap:0.4rem;align-items:baseline;flex-shrink:0;color:var(--text-dim);font-size:0.74rem">
+              <span style="font-family:monospace;color:var(--text-muted)">${number}</span>
+              <span>${output}</span>
+            </span>
+          </div>`;
+      }).join('');
+      return `
+        <div style="margin:0.45rem 0 0.9rem;color:var(--text-muted);font-size:0.76rem;line-height:1.35">
+          <div style="font-size:0.7rem;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0;margin-bottom:0.15rem">Feeds</div>
+          ${rows || '<div style="color:var(--text-dim)">Not included in any enabled feed.</div>'}
+        </div>`;
+    }
+
     // ── Fetch channel data + render modal ─────────────────────────────
     async function _loadGuideModal(channelId, prog) {
       const content = document.getElementById('gm-content');
@@ -1193,6 +1215,7 @@
             </div>
           ` : `<div class="gm-prog-label">No current program data</div>`}
           ${notCurrentNote}
+          ${renderGuideFeedMemberships(data.feed_memberships)}
           ${muxedNote}
           ${warningHtml}
           <div class="gm-actions" id="gm-actions">
