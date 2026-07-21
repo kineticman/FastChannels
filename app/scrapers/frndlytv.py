@@ -144,7 +144,7 @@ class FrndlyTVScraper(BaseScraper):
         data = r.json()
         if not data.get('status'):
             msg = (data.get('error') or {}).get('message') or 'unknown error'
-            raise RuntimeError(f'Frndly TV login failed: {msg}')
+            raise ScrapeSkipError(f'Frndly TV login failed: {msg}')
 
         self._frndly_headers = headers
         self._update_config('session_id', session_id)
