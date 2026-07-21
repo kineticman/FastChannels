@@ -82,6 +82,18 @@
     ].filter(Boolean).join(' ');
   }
 
+  function seekNearLiveEdge(player, video) {
+    try {
+      if (!player || !video || !player.isLive || !player.isLive()) return;
+      const range = player.seekRange && player.seekRange();
+      if (!range || !Number.isFinite(range.end) || range.end <= 0) return;
+      const target = Math.max(range.start || 0, range.end - 3);
+      if (Number.isFinite(target) && Math.abs((video.currentTime || 0) - target) > 5) {
+        video.currentTime = target;
+      }
+    } catch (_) {}
+  }
+
   /**
    * Load `url` into the `video` element. Returns the shaka.Player instance, or
    * null when playback is handled natively (direct video / native HLS) or cannot
@@ -164,6 +176,7 @@
       return player.load(url, null, mimeType);
     }).then(() => {
       onStatus('Stream loaded.');
+      seekNearLiveEdge(player, video);
       video.muted = false;
       video.play().catch(() => {});
     }).catch((err) => {

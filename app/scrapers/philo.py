@@ -11,7 +11,7 @@
 # Play-time resolve (per tune):
 #   1. playbackSessionPresentation({id: channelId, broadcastAt: now})
 #        → current Broadcast id
-#   2. createPlaybackSessionV2({id: broadcastId, playerId})
+#   2. createPlaybackSessionV2({id: broadcastId, playerId, broadcastAt: now})
 #        → dashURL (a real DASH MPD) + drmProvider.authToken (x-dt-auth-token)
 #   3. The MPD is fetched/proxied by /play/philo/<id>/dash.mpd (CORS is philo-only);
 #      segments are on prod.cdn-*.philo.com with CORS '*' so Shaka fetches them direct.
@@ -741,7 +741,7 @@ class PhiloScraper(BaseScraper):
             raise RuntimeError(f"[philo] could not obtain playerId for {cid}")
         variables = {"id": broadcast_id, "playerId": player_id, "idfa": None,
                      "lat": None, "givn": None, "tileGroupId": None,
-                     "broadcastAt": None, "startAtOverride": None, "isPreload": False}
+                     "broadcastAt": now, "startAtOverride": None, "isPreload": False}
         cps = self._gql("createPlaybackSessionV2", variables)
         if self._has_gql_error_code(cps, "PLAYER_NOT_FOUND"):
             logger.info("[philo] saved playerId was rejected; registering a new player for %s", cid)
@@ -807,7 +807,7 @@ class PhiloScraper(BaseScraper):
             raise RuntimeError(f"[philo] could not obtain playerId for {cid}")
         variables = {"id": broadcast_id, "playerId": player_id, "idfa": None,
                      "lat": None, "givn": None, "tileGroupId": None,
-                     "broadcastAt": None, "startAtOverride": None, "isPreload": False}
+                     "broadcastAt": now, "startAtOverride": None, "isPreload": False}
         cps = self._gql("createPlaybackSessionV2", variables)
         if self._has_gql_error_code(cps, "PLAYER_NOT_FOUND"):
             logger.info("[philo] saved playerId was rejected during audit; registering a new player for %s", cid)
