@@ -32,11 +32,11 @@ CHANNEL_CATALOG = [
         ],
     },
     {
-        "network": "ItsRealGoodTV",
+        "network": "Heartland+",
         "channels": [
             {
                 "name": "The Heartland Network",
-                "stream_url": "https://watch.itsrealgoodtv.com/player/50167/50167",
+                "stream_url": "https://watchheartlandplus.com/live/play/heartland",
                 "logo_url": "https://st1-fs.cdn01.net/channels/0000050/0050167/thumb/0050167xl.jpg?v1",
                 "category": "Entertainment",
                 "language": "en",
@@ -44,7 +44,7 @@ CHANNEL_CATALOG = [
             },
             {
                 "name": "Retro TV",
-                "stream_url": "https://watch.itsrealgoodtv.com/player/50177/50177",
+                "stream_url": "https://watchheartlandplus.com/live/play/retrotv",
                 "logo_url": "https://st1-fs.cdn01.net/channels/0000050/0050177/thumb/0050177xl.jpg?v1",
                 "category": "Entertainment",
                 "language": "en",
@@ -52,7 +52,7 @@ CHANNEL_CATALOG = [
             },
             {
                 "name": "REV'N ACTION",
-                "stream_url": "https://watch.itsrealgoodtv.com/player/49983/49983",
+                "stream_url": "https://watchheartlandplus.com/live/play/revn",
                 "logo_url": "https://st1-fs.cdn01.net/channels/0000049/0049983/thumb/0049983xl.jpg?v4",
                 "category": "Sports",
                 "language": "en",

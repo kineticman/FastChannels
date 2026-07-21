@@ -26,6 +26,7 @@ import os
 import re
 import secrets
 import time
+import uuid
 from functools import lru_cache
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urlunsplit, urljoin, parse_qs, unquote, quote
@@ -139,6 +140,10 @@ _STREAMSPORTS99_LIVE_RE = re.compile(
     re.IGNORECASE,
 )
 _SHOUT_TV_LIVE_RE = re.compile(r'^https?://(www\.)?watch\.shout-tv\.com/live/\d+(?:[?#].*)?$', re.IGNORECASE)
+_HEARTLAND_PLUS_RE = re.compile(
+    r'^https?://(?:www\.)?watchheartlandplus\.com/(?:live/play/([^/?#]+)|live-tv)(?:[?#].*)?$',
+    re.IGNORECASE,
+)
 _NBCNEWS_WATCH_RE = re.compile(r'^https?://(www\.)?nbcnews\.com/watch(?:[?#].*)?$', re.IGNORECASE)
 _NBCNEWS_CALLLETTERS_RE = re.compile(r'''callLetters":"([^"]+)''', re.IGNORECASE)
 _NBCNEWS_PLAYER_CALLLETTERS_RE = re.compile(
@@ -862,6 +867,7 @@ class StreamDetector:
             self._extract_balticlivecam_provider_candidates,
             self._extract_skyline_provider_candidates,
             self._extract_shouttv_provider_candidates,
+            self._extract_heartland_plus_provider_candidates,
             self._extract_explore_provider_candidates,
             self._extract_nbcnews_provider_candidates,
             self._extract_tvpass_provider_candidates,
@@ -1153,6 +1159,129 @@ class StreamDetector:
         self._candidate_resolvers.setdefault(hls_url, 'nimo')
         self._candidate_page_urls.setdefault(hls_url, url)
         return [hls_url]
+
+    def _extract_heartland_plus_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        """
+        Heartland+ / Luken TV live channels use Revlet's anonymous session API.
+
+        Player pages are static Next.js shells; the HLS URL is returned by
+        /service/api/v1/page/stream after bootstrapping a session ID.
+        """
+        match = _HEARTLAND_PLUS_RE.match(url)
+        if not match:
+            return []
+
+        slug = (match.group(1) or '').strip('/')
+        stream_path = f'live/play/{slug}' if slug else None
+        try:
+            api = requests.Session()
+            api.headers.update({
+                'User-Agent': _BROWSER_UA,
+                'Referer': 'https://watchheartlandplus.com/',
+            })
+            box_id = str(uuid.uuid4())
+            token_resp = api.get(
+                'https://lukentv-api.revlet.net/service/api/v1/get/token',
+                params={
+                    'tenant_code': 'lukentv',
+                    'box_id': box_id,
+                    'product': 'lukentv',
+                    'device_id': '5',
+                    'display_lang_code': 'ENG',
+                    'device_sub_type': 'Chrome,145.0.0.0,Windows',
+                    'timezone': 'America/New_York',
+                },
+                timeout=self.TIMEOUT,
+            )
+            if not token_resp.ok:
+                return []
+            token_data = token_resp.json()
+            response = token_data.get('response') or {}
+            session_id = response.get('sessionId') or token_data.get('sessionId')
+            if not session_id:
+                return []
+            api.headers.update({
+                'box-id': box_id,
+                'session-id': session_id,
+                'tenant-code': 'lukentv',
+            })
+
+            if not stream_path:
+                stream_path = self._heartland_first_stream_path(api)
+            if not stream_path:
+                return []
+
+            stream_resp = api.get(
+                'https://lukentv-api.revlet.net/service/api/v1/page/stream',
+                params={'path': stream_path},
+                timeout=self.TIMEOUT,
+            )
+            if not stream_resp.ok:
+                return []
+            data = stream_resp.json()
+            if not data.get('status'):
+                return []
+
+            streams = (data.get('response') or {}).get('streams') or []
+            candidates: list[str] = []
+            ordered_streams = sorted(
+                streams,
+                key=lambda item: 0 if 'hdnts=' in str(item.get('url') or '') else 1,
+            )
+            for item in ordered_streams:
+                hls = str(item.get('url') or '').strip()
+                if not hls or '.m3u8' not in hls.lower():
+                    continue
+                if hls not in candidates:
+                    candidates.append(hls)
+                    self._candidate_resolvers.setdefault(hls, 'heartland+')
+                    self._candidate_page_urls.setdefault(hls, url)
+            return candidates
+        except Exception as exc:
+            logger.debug('[detector] heartland+ api failed for %s: %s', url[:80], exc)
+            return []
+
+    def _heartland_first_stream_path(self, api: requests.Session) -> str | None:
+        try:
+            content_resp = api.get(
+                'https://lukentv-api.revlet.net/service/api/v1/page/content',
+                params={'path': 'live-tv', 'count': 24},
+                timeout=self.TIMEOUT,
+            )
+            if not content_resp.ok:
+                return None
+            data = content_resp.json()
+        except Exception:
+            return None
+
+        def walk(node):
+            if isinstance(node, dict):
+                if node.get('key') == 'targetPath':
+                    value = node.get('value')
+                    if isinstance(value, str) and value.startswith('live/play/'):
+                        return value
+                target = node.get('target')
+                if isinstance(target, dict):
+                    path = target.get('path')
+                    if isinstance(path, str) and path.startswith('live/play/'):
+                        return path
+                for value in node.values():
+                    found = walk(value)
+                    if found:
+                        return found
+            elif isinstance(node, list):
+                for item in node:
+                    found = walk(item)
+                    if found:
+                        return found
+            return None
+
+        return walk(data)
 
     def _extract_gray_quickplay_provider_candidates(
         self,
