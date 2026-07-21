@@ -108,6 +108,7 @@
     const STREAM_TYPE   = {{ stream_type | tojson }};
     const LICENSE_URL   = {{ license_url | tojson }};
     const WATCH_DEBUG   = {{ watch_debug | default(false) | tojson }};
+    const MAX_HEIGHT    = {{ max_height | default(0) | tojson }};
     const WATCH_DEBUG_URL = {{ url_for('play.watch_debug', channel_id=channel.id) | tojson }};
   </script>
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
@@ -211,7 +212,7 @@
     }
 
     function initPlayer() {
-      emitWatchDebug('init', { mode: PLAYBACK_MODE, type: STREAM_TYPE, has_license: Boolean(LICENSE_URL) });
+      emitWatchDebug('init', { mode: PLAYBACK_MODE, type: STREAM_TYPE, has_license: Boolean(LICENSE_URL), max_height: MAX_HEIGHT });
       if (PLAYBACK_MODE === 'unsupported' || !PLAY_URL) return;
       _shaka = FCPlayer.load({
         video,
@@ -219,6 +220,7 @@
         mode: PLAYBACK_MODE,
         type: STREAM_TYPE,
         license: LICENSE_URL,
+        maxHeight: MAX_HEIGHT,
         onStatus: () => {},   // fullscreen overlay stays clean on success / native playback
         onError: onPlayerError,
       });

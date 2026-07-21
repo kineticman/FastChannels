@@ -4092,6 +4092,14 @@ def app_settings():
             row.prismcast_url = _normalize_server_url(data['prismcast_url'], default_port=None)
         if 'prismcast_inner_url' in data:
             row.prismcast_inner_url = _normalize_server_url(data['prismcast_inner_url'], default_port=None)
+        if 'prismcast_max_height' in data:
+            try:
+                max_height = int(data.get('prismcast_max_height') or 0)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid PrismCast max resolution.'}), 422
+            if max_height not in {0, 360, 480, 720, 1080}:
+                return jsonify({'error': 'Invalid PrismCast max resolution.'}), 422
+            row.prismcast_max_height = max_height
         if 'drm_bridge_enabled' in data:
             _new_drm_bridge = bool(data['drm_bridge_enabled'])
             if _new_drm_bridge != bool(row.drm_bridge_enabled):
@@ -4132,6 +4140,7 @@ def app_settings():
         'gracenote_contribution_url': row.gracenote_contribution_url or '',
         'prismcast_url': row.effective_prismcast_url() or '',
         'prismcast_inner_url': row.prismcast_inner_url or '',
+        'prismcast_max_height': int(row.prismcast_max_height or 0),
         'drm_bridge_enabled': bool(row.drm_bridge_enabled),
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),

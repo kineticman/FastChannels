@@ -95,6 +95,7 @@
     const mode = String(opts.mode || '').toLowerCase();
     const type = String(opts.type || '').toLowerCase();
     const license = String(opts.license || '');
+    const maxHeight = Number(opts.maxHeight || 0);
     const onStatus = opts.onStatus || function () {};
     const onError = opts.onError || function (info) { onStatus(info.message); };
 
@@ -138,14 +139,18 @@
     const player = new shaka.Player();
     player.attach(video).then(() => {
       if (license) {
-        player.configure({
+        const shakaConfig = {
           drm: {
             servers: {
               'com.widevine.alpha':      license,
               'com.microsoft.playready': license,
             },
           },
-        });
+        };
+        if (maxHeight > 0) {
+          shakaConfig.restrictions = { maxHeight };
+        }
+        player.configure(shakaConfig);
         player.getNetworkingEngine().registerRequestFilter((reqType, request) => {
           if (reqType === 2 /* LICENSE */) request.uris = [license];
         });

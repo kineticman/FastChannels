@@ -187,6 +187,8 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_url TEXT"))
             if "prismcast_inner_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_inner_url TEXT"))
+            if "prismcast_max_height" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_max_height INTEGER NOT NULL DEFAULT 0"))
             if "drm_bridge_enabled" not in cols:
                 # False = audit disables DRM channels (legacy); True = keep them active and
                 # bridge via PrismCast. Default off so non-PrismCast users are unaffected.

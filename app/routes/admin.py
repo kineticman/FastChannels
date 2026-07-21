@@ -1350,6 +1350,7 @@ def settings():
                            image_proxy_enabled=app_settings.image_proxy_enabled if app_settings.image_proxy_enabled is not None else True,
                            prismcast_url=app_settings.effective_prismcast_url() or '',
                            prismcast_inner_url=app_settings.prismcast_inner_url or '',
+                           prismcast_max_height=int(app_settings.prismcast_max_height or 0),
                            drm_bridge_enabled=bool(app_settings.drm_bridge_enabled),
                            drm_bridge_recoverable_count=_drm_bridge_recoverable_count(),
                            gracenote_contribution_url=app_settings.gracenote_contribution_url or '')

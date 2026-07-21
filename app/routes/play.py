@@ -3135,6 +3135,7 @@ def play(source_name: str, channel_id: str):
 def watch(channel_id):
     from .api import _get_playback_info
     from flask import make_response
+    from ..models import AppSettings
     # Version param busts stale browser caches from before this route existed.
     if '_v' not in request.args:
         qs = request.args.to_dict(flat=True)
@@ -3143,6 +3144,8 @@ def watch(channel_id):
         return redirect(f'{request.path}?{_urlencode(qs)}', 302)
     channel = Channel.query.get_or_404(channel_id)
     info = _get_playback_info(channel, fast_mode=False)
+    settings = AppSettings.get()
+    max_height = int(settings.prismcast_max_height or 0)
     resp = make_response(render_template(
         'watch.html',
         channel=channel,
@@ -3151,6 +3154,7 @@ def watch(channel_id):
         stream_type=info.get('stream_type', 'hls'),
         license_url=info.get('license_url') or '',
         watch_debug=request.args.get('debug') == '1',
+        max_height=max_height,
     ))
     resp.headers['Cache-Control'] = 'no-store'
     return resp

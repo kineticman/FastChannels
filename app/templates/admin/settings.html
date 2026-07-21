@@ -629,6 +629,17 @@
           <div class="help">Where PrismCast's Chrome reaches this server's <code>/watch</code> pages. DRM needs a secure context: use loopback (<code>http://127.0.0.1:5523</code>) when PrismCast's Chrome runs on the same host as FastChannels' published port, such as a native/Homebrew PrismCast install with FastChannels in Docker. Use trusted HTTPS when PrismCast runs on another host. Blank reuses the Server URL.</div>
           <div class="help" style="color:var(--warning-soft)">A plain <code>http://</code> LAN IP isn't a secure context — DRM won't decrypt.</div>
         </div>
+        <div class="field field-full">
+          <label for="prismcast-max-height">Maximum source resolution</label>
+          <select id="prismcast-max-height">
+            <option value="0" {% if prismcast_max_height == 0 %}selected{% endif %}>Auto</option>
+            <option value="1080" {% if prismcast_max_height == 1080 %}selected{% endif %}>1080p</option>
+            <option value="720" {% if prismcast_max_height == 720 %}selected{% endif %}>720p</option>
+            <option value="480" {% if prismcast_max_height == 480 %}selected{% endif %}>480p</option>
+            <option value="360" {% if prismcast_max_height == 360 %}selected{% endif %}>360p</option>
+          </select>
+          <div class="help">Caps the video variant loaded by the browser before PrismCast captures it. Lower this on underpowered servers if DRM streams black out or PrismCast reports buffering/recovery.</div>
+        </div>
       </div>
       <div class="field-actions">
         <span class="save-status" id="prismcast-status"></span>
@@ -987,9 +998,11 @@ async function savePublicBaseUrlSettings() {
 async function savePrismcastSettings() {
   const url   = document.getElementById('prismcast-url').value.trim();
   const inner = document.getElementById('prismcast-inner-url').value.trim();
+  const maxHeight = parseInt(document.getElementById('prismcast-max-height').value || '0', 10);
   await saveSettings({
     prismcast_url:       url || null,
     prismcast_inner_url: inner || null,
+    prismcast_max_height: Number.isFinite(maxHeight) ? maxHeight : 0,
   }, 'prismcast-status');
 }
 
