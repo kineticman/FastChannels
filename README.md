@@ -46,6 +46,16 @@ If you prefer Docker Compose with the published image:
 docker compose -f docker-compose.ghcr.yml up -d
 ```
 
+### Cox beta image
+
+The Cox integration is published from the `beta/cox-integration` branch as a beta image. To test it without switching to the stable `latest` image, run:
+
+```bash
+FASTCHANNELS_IMAGE_TAG=cox-beta docker compose -f docker-compose.ghcr.yml up -d
+```
+
+For Portainer, use `ghcr.io/kineticman/fastchannels:cox-beta` as the image tag. The default `latest` image remains the stable build from `main`.
+
 ## Getting Started
 
 After deploying, follow these steps to get a clean, working lineup:

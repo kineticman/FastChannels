@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - beta/cox-integration
     tags:
       - "v*"
   pull_request:
@@ -51,6 +52,7 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=cox-beta,enable=${{ github.ref == 'refs/heads/beta/cox-integration' }}
             type=ref,event=branch
             type=ref,event=tag
             type=sha
