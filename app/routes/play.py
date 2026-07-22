@@ -2479,6 +2479,78 @@ def roku_dash_proxy(channel_id: str):
     return redirect(mpd_url, code=302)
 
 
+@play_bp.route('/play/cox/<channel_id>/dash.mpd')
+def cox_dash_proxy(channel_id: str):
+    """DASH (Widevine) manifest proxy for Cox Contour TVE channels.
+
+    Cox exposes TVE channel URLs as .m3u8 in channelmap, but the matching
+    .mpd?trred=false endpoint returns a Widevine DASH manifest. Proxy the MPD
+    with permissive CORS and inject a BaseURL so Shaka resolves relative
+    segment templates against the Cox CDN, not this FastChannels route.
+    """
+    from urllib.parse import unquote as _unquote, urljoin as _urljoin
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'cox', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper_cls = registry.get('cox')
+    if not scraper_cls:
+        return _unavailable_response()
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        dash_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[cox-dash] resolve failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    finally:
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            except Exception:
+                pass
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+            except Exception:
+                pass
+
+    if not dash_url or not dash_url.startswith('http'):
+        logger.warning('[cox-dash] no DASH URL for %s', raw_id[:40])
+        return _unavailable_response()
+
+    try:
+        r = _requests.get(dash_url, timeout=10, headers={
+            'Origin': 'https://watchtv.cox.com',
+            'Referer': 'https://watchtv.cox.com/',
+            'Accept': '*/*',
+        })
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[cox-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+
+    mpd = r.text
+    if not re.search(r'<BaseURL\b', mpd):
+        cdn_base = _urljoin(dash_url, '.')
+        mpd = mpd.replace('<Period ', f'<BaseURL>{cdn_base}</BaseURL>\n  <Period ', 1)
+
+    return Response(
+        mpd,
+        mimetype='application/dash+xml',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 @play_bp.route('/play/philo/<channel_id>/dash.mpd')
 def philo_dash_proxy(channel_id: str):
     """DASH (Widevine) manifest proxy for a Philo channel — the browser/EME path
@@ -2559,7 +2631,8 @@ def philo_dash_proxy(channel_id: str):
 
 
 @play_bp.route('/play/<source_name>/license', methods=['POST'])
-def license_proxy(source_name: str):
+@play_bp.route('/play/<source_name>/license/<channel_id>', methods=['POST'])
+def license_proxy(source_name: str, channel_id: str | None = None):
     """DRM license proxy — forwards Widevine challenges to the scraper's license_url
     with source-specific auth headers so clients don't need credentials.
     Pass ?channel_id=<id> for scrapers that need per-channel auth (e.g. Sling)."""
@@ -2578,7 +2651,7 @@ def license_proxy(source_name: str):
     # Merge source_cache (e.g. Amazon's channel_pe) over config so the scraper
     # classmethods that read playback envelopes see them — they moved out of config.
     cfg = {**(source.config or {}), **load_source_cache(source.id)}
-    channel_id = request.args.get('channel_id') or None
+    channel_id = channel_id or request.args.get('channel_id') or None
     license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id)
     if not license_url:
         abort(404)
@@ -2657,7 +2730,11 @@ def license_proxy(source_name: str):
             except Exception:
                 pass
     try:
-        r = _requests.post(license_url, data=body, headers=headers, timeout=15)
+        post_license = getattr(scraper_cls, 'post_license_request', None)
+        if callable(post_license):
+            r = post_license(license_url, body, headers, timeout=15)
+        else:
+            r = _requests.post(license_url, data=body, headers=headers, timeout=15)
     except Exception as e:
         logger.warning('[license-proxy] %s request failed: %s', source_name, e)
         abort(502)
