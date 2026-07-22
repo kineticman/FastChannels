@@ -179,18 +179,39 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             if not tvg_id:
                 continue
 
+            lang = ch_lang_map.get(prog.channel_id, 'en')
+            channel_cat = ch_cat_map.get(prog.channel_id) or ''
+            program_cat = prog.category or ''
+            combined_cats = [c.strip() for c in f'{program_cat};{channel_cat}'.split(';') if c.strip()]
+            cats = [c.casefold() for c in combined_cats]
+            prog_type = getattr(prog, 'program_type', None)
+            is_movie = prog_type == 'movie' or 'movie' in cats or 'movies' in cats
+            episode_nums: list[tuple[str, str]] = []
+            if prog.season and prog.episode and not is_movie:
+                episode_nums.append(('xmltv_ns', f'{prog.season - 1}.{prog.episode - 1}.'))
+                if prog.season >= 1 and prog.episode >= 1:
+                    episode_nums.append(('onscreen', f'S{prog.season:02d}E{prog.episode:02d}'))
+
+            series_id  = getattr(prog, 'series_id',  None)
+            episode_id = getattr(prog, 'episode_id', None)
+            if series_id:
+                episode_nums.append(('fastchannels_series', series_id))
+            if episode_id:
+                system = 'dd_progid' if _is_tms_id(episode_id) else 'fastchannels'
+                episode_nums.append((system, episode_id))
+
             el = Element('programme', attrib={
                 'start':   _dt(prog.start_time),
                 'stop':    _dt(prog.end_time),
                 'channel': tvg_id,
             })
-            lang = ch_lang_map.get(prog.channel_id, 'en')
             SubElement(el, 'title', lang=lang).text = _sanitize(prog.title)
+            if prog.episode_title and not is_movie:
+                SubElement(el, 'sub-title', lang=lang).text = _sanitize(prog.episode_title)
             if prog.description:
                 SubElement(el, 'desc', lang=lang).text = _sanitize(prog.description)
-            channel_cat = ch_cat_map.get(prog.channel_id) or ''
-            program_cat = prog.category or ''
-            combined_cats = [c.strip() for c in f'{program_cat};{channel_cat}'.split(';') if c.strip()]
+            if prog.original_air_date:
+                SubElement(el, 'date').text = prog.original_air_date.strftime('%Y%m%d')
             # Track every category emitted (normalized, casefolded) so the source
             # name, feed name and synthetic Movie tag below don't duplicate one
             # already present — e.g. a feed named "Plex" on the Plex source.
@@ -207,6 +228,10 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             # Add feed name as a category when generating a feed-specific EPG
             if feed_name:
                 _append_category(el, feed_name, seen_categories, lang=lang)
+            # Ensure <category>Movie</category> is emitted when program_type
+            # signals a movie but the scraped category doesn't already say so.
+            if prog_type == 'movie' and 'movie' not in cats and 'movies' not in cats:
+                _append_category(el, 'Movie', seen_categories, lang=lang)
             if prog.poster_url:
                 # Only proxy/cache Roku posters (CDN returns 403 to clients).
                 # All other sources serve artwork directly — no caching overhead.
@@ -215,35 +240,11 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                 else:
                     poster_src = prog.poster_url
                 SubElement(el, 'icon', src=poster_src)
-            if prog.original_air_date:
-                SubElement(el, 'date').text = prog.original_air_date.strftime('%Y%m%d')
+            for system, value in episode_nums:
+                SubElement(el, 'episode-num', system=system).text = value
             if prog.rating:
                 r = SubElement(el, 'rating', system='MPAA')
                 SubElement(r, 'value').text = prog.rating
-            if prog.is_live:
-                SubElement(el, 'live')
-            cats = [c.casefold() for c in combined_cats]
-            prog_type = getattr(prog, 'program_type', None)
-            is_movie = prog_type == 'movie' or 'movie' in cats or 'movies' in cats
-            # Ensure <category>Movie</category> is emitted when program_type
-            # signals a movie but the scraped category doesn't already say so.
-            if prog_type == 'movie' and 'movie' not in cats and 'movies' not in cats:
-                _append_category(el, 'Movie', seen_categories, lang=lang)
-            if prog.episode_title and not is_movie:
-                SubElement(el, 'sub-title', lang=lang).text = _sanitize(prog.episode_title)
-            if prog.season and prog.episode and not is_movie:
-                SubElement(el, 'episode-num', system='xmltv_ns').text = \
-                    f'{prog.season - 1}.{prog.episode - 1}.'
-                if prog.season >= 1 and prog.episode >= 1:
-                    SubElement(el, 'episode-num', system='onscreen').text = \
-                        f'S{prog.season:02d}E{prog.episode:02d}'
-            series_id  = getattr(prog, 'series_id',  None)
-            episode_id = getattr(prog, 'episode_id', None)
-            if series_id:
-                SubElement(el, 'series-id', system='fastchannels').text = series_id
-            if episode_id:
-                system = 'dd_progid' if _is_tms_id(episode_id) else 'fastchannels'
-                SubElement(el, 'episode-num', system=system).text = episode_id
             yield tostring(el, encoding='unicode') + '\n'
 
     # ── Synthetic hourly blocks for custom channels ───────────────────────

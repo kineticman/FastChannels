@@ -190,6 +190,8 @@ Streams never go stale — every play request gets a fresh URL.
 
 M3U and EPG XML outputs are cached to disk and served as fast file reads. The cache is invalidated automatically after each scrape. Cold builds of the full EPG can take a few seconds; subsequent requests are near-instant.
 
+Validate a saved XMLTV artifact against the upstream XMLTV DTD with `scripts/validate_xmltv.sh /path/to/epg.xml`. The Docker image includes `xmllint` via `libxml2-utils` for this check.
+
 ### Stream Audit
 
 Every scraped source has a **📋 Stream Audit** button on the Sources page that health-checks every channel's stream URL and automatically marks dead or DRM-protected channels inactive. (Only the Custom Channels source, which you populate by hand, has no audit.)
