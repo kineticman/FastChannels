@@ -286,6 +286,15 @@ def _category_for_channel_item(item: dict[str, Any], name: str) -> str | None:
     return category_for_channel(name, raw_category, 'cox') or infer_category_from_name(name)
 
 
+def _content_rating(item: dict[str, Any]) -> str | None:
+    detailed = item.get('contentRating/detailed')
+    if isinstance(detailed, dict):
+        rating = _first_text(detailed.get('name'), detailed.get('value'))
+        if rating:
+            return rating
+    return _first_text(item.get('rating'), item.get('contentRating'))
+
+
 def _listing_channel_id(item: dict[str, Any]) -> str | None:
     links = item.get('_links') if isinstance(item.get('_links'), dict) else {}
     self_link = links.get('self') if isinstance(links.get('self'), dict) else {}
@@ -825,9 +834,9 @@ class CoxScraper(BaseScraper):
             description=_first_text(item.get('description'), item.get('shortDescription'), item.get('longDescription')),
             poster_url=_concrete_logo_url(_first_text(item.get('imageUrl'), item.get('posterUrl'))),
             category=_first_text(item.get('genre'), item.get('category')),
-            rating=_first_text(item.get('rating'), item.get('contentRating')),
+            rating=_content_rating(item),
             episode_title=_first_text(item.get('episodeTitle'), item.get('subtitle')),
-            is_live=item.get('airingType') == 'Live',
+            is_live=(_first_text(item.get('airingType')) or '').upper() == 'LIVE',
             program_type=program_type,
             series_id=_first_text(item.get('seriesId')),
             episode_id=_first_text(item.get('entityId'), item.get('listingId')),
