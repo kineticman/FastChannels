@@ -49,7 +49,8 @@ _SUCCESS_SUPPRESS_PATTERNS = (
     '/play/philo/license',     # Philo DRM license — noisy during startup/key rotation
 )
 _SUCCESS_SUPPRESS_RE = re.compile(r'(?:GET|HEAD) /play/philo/[^/]+/dash\.mpd')
-_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|philo)/([^/]+)/dash\.mpd')
+_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo)/([^/]+)/dash\.mpd')
+_LICENSE_RE = re.compile(r'POST /play/(cox)/license/([^/]+)')
 _DASH_COOLDOWN = 120  # seconds — log first request, suppress repeats within this window
 
 
@@ -57,6 +58,7 @@ class _AccessFilter(logging.Filter):
     def __init__(self):
         super().__init__()
         self._dash_last: dict[str, float] = {}
+        self._license_last: dict[str, float] = {}
 
     def filter(self, record):
         msg = record.getMessage()
@@ -80,6 +82,13 @@ class _AccessFilter(logging.Filter):
             if now - self._dash_last.get(channel_id, 0) < _DASH_COOLDOWN:
                 return False
             self._dash_last[channel_id] = now
+        m = _LICENSE_RE.search(msg)
+        if m and is_success:
+            channel_id = f'{m.group(1)}:{m.group(2)}'
+            now = time.monotonic()
+            if now - self._license_last.get(channel_id, 0) < _DASH_COOLDOWN:
+                return False
+            self._license_last[channel_id] = now
         return True
 
 
