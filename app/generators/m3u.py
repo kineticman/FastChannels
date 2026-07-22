@@ -888,6 +888,13 @@ def get_global_chnum_overlaps() -> list[str]:
     return warnings
 
 
+def _channel_play_url(ch, base_url: str) -> str:
+    source_name = ch.source.name
+    channel_id = _url_quote(ch.source_channel_id, safe="")
+    if source_name == 'cspan':
+        return f'{base_url}/play/cspan/{channel_id}/proxy.m3u8'
+    return f'{base_url}/play/{source_name}/{channel_id}.m3u8'
+
 def generate_m3u(filters: dict = None, base_url: str = None,
                  feed_chnum_start: int = None, namespace_start: int = None,
                  feed_id: int = None) -> str:
@@ -967,7 +974,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
             for prop_key, prop_val in _kodi_props_cache[src_name].items():
                 lines.append(f'#KODIPROP:{prop_key}={prop_val}')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
-        lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
+        lines.append(_channel_play_url(ch, base_url))
 
     return '\n'.join(lines)
 
@@ -1037,7 +1044,7 @@ def generate_native_m3u(filters: dict = None, base_url: str = None,
         if guide_cat:
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
-        lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
+        lines.append(_channel_play_url(ch, base_url))
 
     return '\n'.join(lines)
 
@@ -1104,7 +1111,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
         if guide_cat:
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
-        lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
+        lines.append(_channel_play_url(ch, base_url))
 
     return '\n'.join(lines)
 
@@ -1280,7 +1287,7 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
             lines.append(_prismcast_bridge_url(ch, prismcast_url, inner_base_url))
         else:
             # Non-DRM → direct play proxy, same URL the standard M3U emits.
-            lines.append(f'{base_url}/play/{ch.source.name}/{_url_quote(ch.source_channel_id, safe="")}.m3u8')
+            lines.append(_channel_play_url(ch, base_url))
 
     return '\n'.join(lines)
 

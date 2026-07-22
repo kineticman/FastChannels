@@ -25,12 +25,11 @@ Channels
     embeds the live event's manifest URL directly. The schedule page is
     C-SPAN-1-centric and does not reliably surface the Senate floor, so the
     floors use their own authoritative page.
-  * Washington Journal — the daily 7-10am ET call-in show; discovered from the
-    public /schedule/ page (live only during its airing window).
-  * C-SPAN Live Event (optional, config toggle) — a rotating channel that plays
-    whatever hearing / briefing / White House event is currently live on the
-    /schedule/ page. Best-effort: the schedule view is C-SPAN-1-centric, so it
-    catches marquee events but may miss a C-SPAN-3-only hearing.
+  * Washington Journal / C-SPAN 3 / C-SPAN Live Event — older builds attempted
+    to discover these from the public /schedule/ page. C-SPAN's current schedule
+    HTML is a TV grid and no longer exposes reliable live event manifest IDs, so
+    these channels are hidden by default unless a user explicitly opts into the
+    best-effort discovery path.
 
 The event ID is not published ahead of air — it appears only once the event
 goes live, and the manifest opens with a short "starting soon" bumper. So
@@ -110,16 +109,16 @@ CHANNEL_NETWORK = {
 }
 
 # Single-content channels show only their own program(s) from the network grid
-# (matched by a title substring) and mark every other slot "Off Air", instead of
-# mirroring the whole network lineup (House sessions, POTUS, Primetime...). Each goes
-# dark outside its window — the play proxy 503s — so "Off Air" is honest and matches
-# playback, and the filler block still spans the gap so the guide row isn't empty.
+# and mark every other slot "Off Air", instead of mirroring the whole network
+# lineup. The app API exposes useful metadata (`live`, exact title, and the
+# gavel-to-gavel floor description), so avoid broad substring matching: network 2
+# regularly airs clips titled "U.S. Senate: ..." that are not the Senate floor.
 # Network / rotating channels (cspan3, live-event) are intentionally absent: they
 # have no single program to key off, so they keep the full network grid.
-CHANNEL_TITLE_FILTER = {
-    "house":       "u.s. house",         # C-SPAN 1 House floor sessions
-    "senate":      "u.s. senate",        # C-SPAN 2 Senate floor sessions
-    WJ_CHANNEL_ID: "washington journal",  # C-SPAN 1 Washington Journal (7-10am ET)
+CHANNEL_PROGRAM_FILTER = {
+    "house":  "house_floor",
+    "senate": "senate_floor",
+    WJ_CHANNEL_ID: "washington_journal",
 }
 _OFF_AIR_TITLE = "Off Air"
 
@@ -652,14 +651,26 @@ class CSpanScraper(BaseScraper):
     # returns unavailable (not dead) with no live event, so nothing auto-disables
     # the channels during downtime.
     stream_audit_enabled = False
+    channel_miss_threshold = 1
     scrape_interval = 180  # channels + EPG are static; scrape only rolls the EPG window forward
 
     config_schema = [
         ConfigField(
+            "include_schedule_channels",
+            "Experimental Schedule Channels",
+            field_type="toggle",
+            default=False,
+            help_text=(
+                "Add C-SPAN 3, Washington Journal, and the rotating Live Event "
+                "channel. These depend on C-SPAN's public schedule HTML and may "
+                "be unavailable when that page does not expose a live event ID."
+            ),
+        ),
+        ConfigField(
             "include_live_events",
             'Rotating "Live Event" Channel',
             field_type="toggle",
-            default=True,
+            default=False,
             help_text=(
                 "Add a channel that plays whatever hearing, briefing, or White "
                 "House event C-SPAN currently has live (discovered from the public "
@@ -673,16 +684,20 @@ class CSpanScraper(BaseScraper):
         self.session.headers.update(PAGE_HEADERS)
 
     def _live_events_enabled(self) -> bool:
-        return _truthy(self.config.get("include_live_events", True))
+        return _truthy(self.config.get("include_live_events", False))
+
+    def _schedule_channels_enabled(self) -> bool:
+        return _truthy(self.config.get("include_schedule_channels", False))
 
     def fetch_channels(self) -> list[ChannelData]:
         defs = [
             (cid, meta["name"], meta["logo"]) for cid, meta in FLOOR_CHANNELS.items()
         ]
-        defs.append((CSPAN3_CHANNEL_ID, "C-SPAN 3", _LOGO_CSPAN3))
-        defs.append((WJ_CHANNEL_ID, "C-SPAN Washington Journal", _LOGO_CSPAN))
-        if self._live_events_enabled():
-            defs.append((LIVE_EVENT_CHANNEL_ID, "C-SPAN Live Event", _LOGO_CSPAN3))
+        if self._schedule_channels_enabled():
+            defs.append((CSPAN3_CHANNEL_ID, "C-SPAN 3", _LOGO_CSPAN3))
+            defs.append((WJ_CHANNEL_ID, "C-SPAN Washington Journal", _LOGO_CSPAN))
+            if self._live_events_enabled():
+                defs.append((LIVE_EVENT_CHANNEL_ID, "C-SPAN Live Event", _LOGO_CSPAN3))
 
         channels = [
             ChannelData(
@@ -801,9 +816,9 @@ class CSpanScraper(BaseScraper):
                     schedules[net] = self._fetch_network_schedule(net)
                 items = schedules[net]
 
-            title_match = CHANNEL_TITLE_FILTER.get(ch.source_channel_id)
-            if title_match:
-                rows = self._filtered_epg_rows(ch, items, title_match)
+            program_filter = CHANNEL_PROGRAM_FILTER.get(ch.source_channel_id)
+            if program_filter:
+                rows = self._filtered_epg_rows(ch, items, program_filter)
             else:
                 rows = self._epg_rows_from_schedule(ch, items)
             if rows:
@@ -859,12 +874,10 @@ class CSpanScraper(BaseScraper):
 
     @staticmethod
     def _filtered_epg_rows(ch: ChannelData, items: Optional[list[dict]],
-                           title_match: str) -> list[ProgramData]:
-        """EPG for a single-program channel (Washington Journal): keep only the
-        programs whose title contains `title_match`, and fill every other slot with
-        one merged neutral, channel-named block — so the guide reflects what the
-        channel actually plays (that show, when it airs) rather than the whole
-        network's lineup. Gapless, because the network grid is contiguous."""
+                           program_filter: str) -> list[ProgramData]:
+        """EPG for a single-program channel: keep only rows that match that
+        channel's app-API identity, and fill every other slot with one merged
+        Off Air block. Gapless, because the network grid is contiguous."""
         if not items:
             return []
         parsed = []
@@ -888,7 +901,7 @@ class CSpanScraper(BaseScraper):
 
         for start, end, it in sorted(parsed, key=lambda x: x[0]):
             title = _clean_title(it.get("title")) or ""
-            if title_match in title.lower():
+            if CSpanScraper._matches_single_program(it, program_filter):
                 _flush_filler()
                 rows.append(ProgramData(
                     source_channel_id=ch.source_channel_id,
@@ -904,6 +917,26 @@ class CSpanScraper(BaseScraper):
                 fill_start, fill_end = start, end
         _flush_filler()
         return rows
+
+    @staticmethod
+    def _matches_single_program(item: dict, program_filter: str) -> bool:
+        title = (_clean_title(item.get("title")) or "").strip().lower()
+        desc = (item.get("description") or "").strip().lower()
+        live = bool(item.get("live"))
+
+        if program_filter == "house_floor":
+            return (
+                title == "u.s. house of representatives"
+                and (live or "gavel-to-gavel coverage of the united states house" in desc)
+            )
+        if program_filter == "senate_floor":
+            return (
+                title == "u.s. senate"
+                and (live or "gavel-to-gavel coverage of the united states senate" in desc)
+            )
+        if program_filter == "washington_journal":
+            return title.startswith("washington journal") and live
+        return False
 
     @staticmethod
     def _neutral_block(ch: ChannelData, now: datetime) -> ProgramData:

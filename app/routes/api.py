@@ -2542,6 +2542,14 @@ def _get_playback_info(ch, fast_mode=True):
     if not preview_url:
         preview_url = play_url
 
+    if ch.source and ch.source.name == 'cspan' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        _enc = _quote(ch.source_channel_id, safe='')
+        preview_url = f'/play/cspan/{_enc}/proxy.m3u8'
+        play_url = preview_url
+        playback_mode = 'hls'
+        stream_type = 'hls'
+
     if ch.source and ch.source.name == 'directv' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         _enc = _quote(ch.source_channel_id, safe='')
