@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ display_channel_name(channel) }}</title>
+  <title>{{ channel.name }}</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
@@ -89,7 +89,7 @@
     {% elif channel.logo_url %}
     <img src="{{ channel.logo_url }}" alt="">
     {% endif %}
-    <h1>{{ display_channel_name(channel) }}</h1>
+    <h1>{{ channel.name }}</h1>
     <div class="hint" id="overlay-hint">
       {% if playback_mode == 'unsupported' %}
         Stream type ({{ stream_type }}) is not supported for browser playback.

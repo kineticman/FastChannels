@@ -6,7 +6,6 @@ from .config import Config, VERSION
 from . import logfile
 from .schema import ensure_runtime_schema
 from .models import AppSettings, Channel
-from .channel_display import display_channel_name
 from .timezone_utils import format_datetime, write_timezone_cache
 from .version_check import get_version_status
 
@@ -67,8 +66,6 @@ def create_app(config_class=Config):
         """Format a UTC datetime in the user-selected timezone."""
         settings = AppSettings.get()
         return format_datetime(dt, timezone_name=settings.effective_timezone_name())
-
-    app.jinja_env.globals['display_channel_name'] = display_channel_name
 
     db.init_app(app)
     with app.app_context():

@@ -20,7 +20,6 @@ from app.config_store import persist_source_config_updates, persist_source_cache
 from app.config import VERSION
 from ..extensions import db
 from ..models import Source, Channel, Program, AppSettings, Feed
-from ..channel_display import display_channel_name
 from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
 from ..gracenote_suggest import SuggestionChannel, suggest_gracenote_matches
@@ -2712,7 +2711,6 @@ def preview_channel(channel_id):
         'channel': {
             'id': ch.id,
             'name': ch.name,
-            'display_name': display_channel_name(ch),
             'source_name': ch.source.name if ch.source else None,
             'source_display_name': ch.source.display_name if ch.source else None,
             'source_channel_id': ch.source_channel_id,
@@ -3290,7 +3288,6 @@ def channel_duplicates(channel_id):
         return {
             'id':             c.id,
             'name':           c.name,
-            'display_name':   display_channel_name(c),
             'source':         c.source.display_name,
             'logo_url':       c.logo_url,
             'logo_display_url': c.logo_display_url,
