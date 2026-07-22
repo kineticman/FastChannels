@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover - deployment dependency guard
     _CFFI_IMPERSONATE = None
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError
-from .category_utils import infer_category_from_name
+from .category_utils import category_for_channel, infer_category_from_name
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,106 @@ def _display_channel_name(item: dict[str, Any]) -> str | None:
     if voice and call_sign and voice.lower() != call_sign.lower():
         return f'{voice} ({call_sign})'
     return _first_text(affiliate, voice, call_sign)
+
+
+_COX_CATEGORY_BY_BRAND = {
+    'a&e': 'Entertainment',
+    'abc': 'Broadcast',
+    'acc network': 'Sports',
+    'amc': 'Movies',
+    'american heroes': 'History',
+    'animal planet': 'Nature',
+    'antenna tv': 'Classic TV',
+    'bbc america': 'Entertainment',
+    'bet': 'Entertainment',
+    'big ten network': 'Sports',
+    'bounce tv': 'Broadcast',
+    'bouncetv': 'Broadcast',
+    'bravo': 'Reality TV',
+    'byutv': 'Faith',
+    'c-span': 'News',
+    'cbs': 'Broadcast',
+    'charge!': 'Action & Adventure',
+    'cnbc': 'News',
+    'comet': 'Sci-Fi',
+    'cowboy channel': 'Outdoors',
+    'cozi tv': 'Classic TV',
+    'dabl': 'Lifestyle',
+    'daystar': 'Faith',
+    'destination america': 'Travel',
+    'discovery channel': 'Documentary',
+    'discovery life': 'Lifestyle',
+    'disney channel': 'Kids',
+    'e!': 'Entertainment',
+    'entertainment studios': 'Entertainment',
+    'estrella tv': 'Latino',
+    'ewtn': 'Faith',
+    'fetv': 'Classic TV',
+    'fox': 'Broadcast',
+    'fox business': 'News',
+    'freeform': 'Entertainment',
+    'fx': 'Entertainment',
+    'fxx': 'Comedy',
+    'galavisión': 'Latino',
+    'gettv': 'Classic TV',
+    'grit': 'Westerns',
+    'h&i': 'Classic TV',
+    'hgtv': 'Home & DIY',
+    'hln': 'News',
+    'impact': 'Faith',
+    'independent': 'Broadcast',
+    'insp': 'Faith',
+    'investigation discovery': 'True Crime',
+    'ion': 'Broadcast',
+    'jewelrytv': 'Shopping',
+    'jltv': 'Faith',
+    'lifetime': 'Drama',
+    'local government': 'Broadcast',
+    'local programming': 'Broadcast',
+    'magnolia network': 'Home & DIY',
+    'metv': 'Classic TV',
+    'metv+': 'Classic TV',
+    'ms now': 'News',
+    'mynetworktv': 'Broadcast',
+    'nat geo': 'Documentary',
+    'nickelodeon': 'Kids',
+    'outlaw': 'Westerns',
+    'own': 'Lifestyle',
+    'paramount network': 'Entertainment',
+    'pop': 'Entertainment',
+    'public access (peg)': 'Broadcast',
+    'pursuit channel': 'Outdoors',
+    'quest': 'Documentary',
+    'rewind tv': 'Classic TV',
+    'sec': 'Sports',
+    'start': 'Drama',
+    'starz': 'Movies',
+    'sundance tv': 'Movies',
+    'sundancetv': 'Movies',
+    'syfy': 'Sci-Fi',
+    'tbs': 'Comedy',
+    'tcm': 'Movies',
+    'telexitos': 'Latino',
+    'thegrio': 'News',
+    'tlc': 'Reality TV',
+    'tnt': 'Drama',
+    'trutv': 'Comedy',
+    'tudn': 'Sports',
+    'tv land': 'Classic TV',
+    'unimás': 'Latino',
+    'usa': 'Entertainment',
+    'vh1': 'Music',
+    'vice': 'Documentary',
+    'we tv': 'Reality TV',
+    'yurview': 'Local News',
+}
+
+
+def _category_for_channel_item(item: dict[str, Any], name: str) -> str | None:
+    raw_brand = _first_text(item.get('branchOf/company/callSign'), item.get('callSignVoiceOverHint'))
+    brand_key = (raw_brand or '').strip().lower()
+    raw_category = _COX_CATEGORY_BY_BRAND.get(brand_key)
+    return category_for_channel(name, raw_category, 'cox') or infer_category_from_name(name)
 
 
 def _listing_channel_id(item: dict[str, Any]) -> str | None:
@@ -651,7 +751,7 @@ class CoxScraper(BaseScraper):
             name=name,
             stream_url=_opaque_url(channel_id, opaque_payload),
             logo_url=_logo_url(item),
-            category=infer_category_from_name(name),
+            category=_category_for_channel_item(item, name),
             language=_language_code(item, name),
             country='US',
             stream_type='dash' if (content_url or hd_url) else 'hls',
