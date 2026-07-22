@@ -403,6 +403,7 @@ class PlexScraper(BaseScraper):
         self._psid = self.config.get("playback_session_id") or str(uuid4())
         self._pid  = self.config.get("playback_id") or str(uuid4())
         self._auth_token: str | None = self.config.get("auth_token")
+        self._tune_session = requests.Session()
 
         if not self.config.get("client_id"):
             self._update_config("client_id",            self._client_id)
@@ -425,6 +426,10 @@ class PlexScraper(BaseScraper):
             "X-Plex-Provider-Version":    "6.5.0",
             "X-Plex-Session-Id":          self._session_id,
         })
+        self._tune_session.headers.update(self.session.headers)
+        _tune_adapter = HTTPAdapter(max_retries=0)
+        self._tune_session.mount("https://", _tune_adapter)
+        self._tune_session.mount("http://", _tune_adapter)
 
         self._rsc_cache: str | None = None  # reused within a single scrape run
 
@@ -1045,9 +1050,11 @@ class PlexScraper(BaseScraper):
         if not self._ensure_auth():
             raise RuntimeError("[plex] cannot resolve — auth failed")
 
-        # Tune: wakes the channel on Plex's infrastructure (best-effort)
+        # Tune wakes the channel on Plex's infrastructure, but playback does not
+        # depend on it. Keep it truly best-effort so a slow tune endpoint cannot
+        # block the manifest redirect long enough for clients to retry/fail.
         try:
-            self.session.post(
+            self._tune_session.post(
                 f"{_EPG_HOST}/channels/{channel_id}/tune",
                 headers={
                     "Accept":               "application/json",
@@ -1056,7 +1063,7 @@ class PlexScraper(BaseScraper):
                     "X-Plex-Token":         self._auth_token,
                 },
                 data=b"",
-                timeout=10,
+                timeout=(2, 2),
             )
         except Exception as exc:
             logger.debug("[plex] tune request failed (non-fatal): %s", exc)
