@@ -1787,7 +1787,7 @@
             <td class="ch-name-td"
                 title="Click to preview stream{% if hover_parts %} · {{ hover_parts|join(' · ') }}{% endif %}"
                 onclick="openPreview({{ ch.id }})">
-              <div class="ch-name-wrap"><strong>{{ ch.name }}</strong>{% if ch.review_state == 'pending' %}<span class="review-badge" title="New channel pending review{% if ch.first_seen_at %} · First added {{ ch.first_seen_at|localtime }}{% endif %}">NEW</span>{% endif %}</div>
+              <div class="ch-name-wrap"><strong>{{ display_channel_name(ch) }}</strong>{% if ch.review_state == 'pending' %}<span class="review-badge" title="New channel pending review{% if ch.first_seen_at %} · First added {{ ch.first_seen_at|localtime }}{% endif %}">NEW</span>{% endif %}</div>
             </td>
             <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.name in duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Duplicate match found — click to see matches">DUP</span>{% elif ch.name in possible_duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Possible duplicate — click to see matches">DUP?</span>{% elif ch.id in gn_duplicate_ids %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Same Gracenote ID found on another source — click to see matches">GN DUP</span>{% endif %}{% if ch.is_duplicate %}<span class="badge-manual-dup badge-dup-clickable" data-channel-id="{{ ch.id }}" title="Click to see potential duplicates" style="cursor:pointer">DUPL</span>{% endif %}</td>
             <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
@@ -1907,7 +1907,7 @@
           <div class="mcard-logo-empty"></div>
           {% endif %}
           <div class="mcard-body">
-            <div class="mcard-name">{{ ch.name }}{% if ch.review_state == 'pending' %} <span class="review-badge" title="New channel pending review{% if ch.first_seen_at %} · First added {{ ch.first_seen_at|localtime }}{% endif %}">NEW</span>{% endif %}</div>
+            <div class="mcard-name">{{ display_channel_name(ch) }}{% if ch.review_state == 'pending' %} <span class="review-badge" title="New channel pending review{% if ch.first_seen_at %} · First added {{ ch.first_seen_at|localtime }}{% endif %}">NEW</span>{% endif %}</div>
             <div class="mcard-meta">{{ ch.source.display_name }}{% if ch.category %} · {{ ch.category }}{% endif %}{% if ch.language_override or ch.language %} · {{ ch.language_override or ch.language }}{% endif %}</div>
             {% set _is_rotator = (ch.tags and 'featured' in ch.tags.split(',')) or (ch.content_swap_count or 0) > 0 %}
             {% set _has_b = ch.disable_reason or ch.requires_drm_bridge or ch.identity_changed_at or _is_rotator or (ch.stream_info and (ch.stream_info.has_4k or ch.stream_info.has_hd or ch.stream_info.video_codec == 'hevc')) or ch.name in duplicate_names or ch.name in possible_duplicate_names or ch.id in gn_duplicate_ids or (ch.is_enabled and not ch.is_active) %}
@@ -2302,7 +2302,7 @@
           <div class="preview-header">
             ${ch.logo_url ? `<img class="preview-logo" src="${escapeHtml(ch.logo_display_url || ch.logo_url)}" alt="">` : '<div class="preview-logo"></div>'}
             <div>
-              <div class="preview-title">${escapeHtml(ch.name || 'Channel')}</div>
+              <div class="preview-title">${escapeHtml(ch.display_name || ch.name || 'Channel')}</div>
               <div class="preview-meta">
                 ${escapeHtml(ch.source_display_name || 'Unknown source')}
                 ${ch.country ? ` · ${escapeHtml(ch.country)}` : ''}
@@ -2973,7 +2973,7 @@
             <input type="checkbox" name="dup-pick" value="${ch.id}" ${checked ? 'checked' : ''} ${ch.is_duplicate ? 'disabled' : ''}>
             ${logo}
             <div class="dup-finder-info">
-              <div class="dup-finder-name">${escapeHtml(ch.name)}</div>
+              <div class="dup-finder-name">${escapeHtml(ch.display_name || ch.name)}</div>
               <div class="dup-finder-source">${escapeHtml(ch.source)}</div>
             </div>
             <div class="dup-finder-badges">${badges}</div>
@@ -2989,11 +2989,11 @@
 
       content.innerHTML = `
         <h2>Potential Duplicates</h2>
-        <p class="modal-sub">Marking <strong>${escapeHtml(data.channel.name)}</strong> as duplicate. Select any related channels to mark at the same time.</p>
+        <p class="modal-sub">Marking <strong>${escapeHtml(data.channel.display_name || data.channel.name)}</strong> as duplicate. Select any related channels to mark at the same time.</p>
         <div class="dup-finder-subject">
           ${data.channel.logo_url ? `<img src="${escapeHtml(data.channel.logo_display_url || data.channel.logo_url)}" onerror="this.style.display='none'">` : ''}
           <div>
-            <div class="dup-finder-name">${escapeHtml(data.channel.name)}</div>
+            <div class="dup-finder-name">${escapeHtml(data.channel.display_name || data.channel.name)}</div>
             <div class="dup-finder-source">${escapeHtml(data.channel.source)}</div>
           </div>
         </div>
@@ -3122,7 +3122,7 @@
             ${logo}
             <div class="dc-identity">
               ${isSubject ? `<div class="dc-kicker">This channel</div>` : ''}
-              <div class="dc-name">${escapeHtml(ch.name)}</div>
+              <div class="dc-name">${escapeHtml(ch.display_name || ch.name)}</div>
               <div class="dc-source">${escapeHtml(ch.source)}</div>
             </div>
             <div class="dc-badges">${badges.join('')}</div>
