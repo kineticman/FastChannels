@@ -467,7 +467,7 @@
     <div class="summary-stat">
       <span class="num">{{ '{:,}'.format(feed_summary.all_channels) }}</span>
       <span class="lbl">Channels</span>
-      <span class="sub">all enabled (Default feed)</span>
+      <span class="sub">{{ '{:,}'.format(feed_summary.standard) }} standard{% if feed_summary.bridged %} · {{ '{:,}'.format(feed_summary.bridged) }} bridge-only{% endif %}</span>
     </div>
     <div class="summary-stat">
       <span class="num">{{ '{:,}'.format(feed_summary.gracenote) }}</span>
@@ -544,10 +544,12 @@
                   onclick='openModal({{ feed.to_dict(base_url)|tojson }})'>Edit</button>
           {% endif %}
           {% set split = feed_split_counts.get(feed.id, {}) %}
-          {% set std_count = split.get('standard_count', feed.channel_count()) %}
-          <button class="btn btn-dvr" title="Register this feed as a custom M3U source in Channels DVR"
-                  onclick='pushToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ feed.channel_count() }}, {{ std_count }}, this)'
-                  {% if feed.channel_count() == 0 %}disabled title="No channels in this feed"{% endif %}>📺 Add to Channels DVR</button>
+          {% set standard_total = split.get('total_count', feed.channel_count()) %}
+          {% set std_count = split.get('standard_count', standard_total) %}
+          <button class="btn btn-dvr"
+                  title="{% if standard_total == 0 %}No standard channels in this feed; use PrismCast output below for bridge-only channels{% else %}Register this feed's standard M3U source in Channels DVR{% endif %}"
+                  onclick='pushToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ standard_total }}, {{ std_count }}, this)'
+                  {% if standard_total == 0 %}disabled{% endif %}>📺 Add to Channels DVR</button>
           {% if feed.slug != 'default' %}
           <button class="btn btn-danger" onclick='deleteFeed({{ feed.id }}, {{ feed.name|tojson }}, this)'>Delete</button>
           {% endif %}
@@ -555,10 +557,20 @@
       </div>
 
       <div class="feed-meta">
-        {% set _bridged = feed_split_counts.get(feed.id, {}).get('bridged_count', 0) %}
-        <div class="feed-stat" title="{% if prismcast_enabled and _bridged %}Standard channels only — excludes {{ _bridged }} DRM-protected channel{{ 's' if _bridged != 1 else '' }} that {{ 'requires' if _bridged == 1 else 'require' }} PrismCast's DRM Bridge to play (see PrismCast output below).{% else %}Active channels in this feed's standard M3U/EPG.{% endif %}">
-          <strong>{{ feed.channel_count() }}</strong> channels
+        {% set _standard_total = split.get('total_count', feed.channel_count()) %}
+        {% set _bridged = split.get('bridged_count', 0) %}
+        {% set _available_total = _standard_total + _bridged %}
+        <div class="feed-stat" title="Total active channels this feed can output across standard and PrismCast playlists.">
+          <strong>{{ _available_total }}</strong> available
         </div>
+        <div class="feed-stat" title="Channels in the regular M3U/EPG output. Bridge-only DRM channels are excluded here.">
+          <strong>{{ _standard_total }}</strong> standard
+        </div>
+        {% if _bridged %}
+        <div class="feed-stat" title="DRM-protected channels available only through the PrismCast output below.">
+          <strong>{{ _bridged }}</strong> bridge-only
+        </div>
+        {% endif %}
         <div class="feed-stat">
           <strong>{% if feed.is_enabled %}Enabled{% else %}Disabled{% endif %}</strong>
         </div>
@@ -605,6 +617,7 @@
 
       <div class="feed-urls">
         {% set split = feed_split_counts.get(feed.id, {}) %}
+        {% set standard_total = split.get('total_count', feed.channel_count()) %}
         {% set std_count = split.get('standard_count', 1) %}
         {% set gn_count  = split.get('gracenote_count', 0) %}
         {% if std_count > 0 %}
@@ -635,7 +648,7 @@
         <summary>Native (scraped-only) endpoints — advanced</summary>
         <div class="feed-urls" style="margin-top:0.5rem">
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/native/m3u')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Native M3U ({{ feed.channel_count() }})</span>
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Native M3U ({{ standard_total }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/native/m3u</span>
             <a href="{{ base_url }}/feeds/{{ feed.slug }}/native/m3u" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/native/m3u')">Copy</button>
@@ -647,15 +660,15 @@
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/native/epg.xml')">Copy</button>
           </div>
         </div>
-        <p class="help" style="margin-top:0.5rem">All {{ feed.channel_count() }} channels in this feed with scraped EPG data only — Gracenote assignments are ignored. Use these together as a single source for clients that prefer one EPG backend.</p>
+        <p class="help" style="margin-top:0.5rem">The feed's {{ standard_total }} standard channel{{ 's' if standard_total != 1 else '' }} with scraped EPG data only — Gracenote assignments and bridge-only DRM channels are ignored. Use these together as a single source for clients that prefer one EPG backend.</p>
       </details>
 
       <details class="native-endpoints">
-        <summary>PrismCast output <span class="badge-pill pill-beta">Beta</span>{% if prismcast_enabled and split.get('bridged_count', 0) %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">— adds {{ split.get('bridged_count', 0) }} DRM Bridge channel{{ 's' if split.get('bridged_count', 0) != 1 else '' }} on top of the {{ feed.channel_count() }} standard channels above</span>{% endif %}</summary>
+        <summary>PrismCast output <span class="badge-pill pill-beta">Beta</span>{% if prismcast_enabled and split.get('bridged_count', 0) %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">— includes {{ split.get('bridged_count', 0) }} bridge-only channel{{ 's' if split.get('bridged_count', 0) != 1 else '' }}{% if standard_total %} plus {{ standard_total }} standard{% endif %}</span>{% endif %}</summary>
         <div class="feed-urls" style="margin-top:0.5rem">
           {% if prismcast_enabled %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">PrismCast M3U ({{ split.get('prismcast_count', feed.channel_count()) }})</span>
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">PrismCast M3U ({{ split.get('prismcast_count', standard_total) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast</span>
             <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast')">Copy</button>
@@ -683,7 +696,7 @@
                   {% if not split.get('prismcast_count', 0) and not split.get('prismcast_gracenote_count', 0) %}disabled title="No PrismCast channels in this feed"{% endif %}>📺 Add PrismCast to Channels DVR</button>
         </div>
         {% endif %}
-        <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}DRM channels are routed through your PrismCast server, everything else served direct — so PrismCast M3U counts run higher than the feed's standard channel count above, which excludes DRM-only channels entirely. Like the regular feed, PrismCast splits into a standard M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote) — import whichever fits your DVR. Import only one per source to avoid duplicate channels. The button above registers both as distinct sources (named "… PrismCast") separate from the standard push.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
+        <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}Bridge-only DRM channels are routed through your PrismCast server; standard channels are served direct in the same playlist. Like the regular feed, PrismCast splits into a standard-guide M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote). Import only one per source to avoid duplicate channels. The button above registers both as distinct sources (named "… PrismCast") separate from the standard push.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
       </details>
     </div>
     {% endfor %}
