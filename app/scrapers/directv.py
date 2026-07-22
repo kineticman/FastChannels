@@ -66,7 +66,6 @@ import json
 import logging
 import os
 import re
-import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1010,12 +1009,19 @@ def capture_directv_auth(
 
 # ── Manual admin-UI entry point ─────────────────────────────────────────────
 
-def run_directv_auth(redis_url: str, source_id: int, username: str, password: str, app=None) -> None:
-    """Redis-status-driven wrapper for the admin-UI "Authenticate" button.
+def run_directv_auth(
+    redis_url: str,
+    source_id: int,
+    username: str,
+    password: str,
+    app=None,
+    lock_key: str | None = None,
+) -> None:
+    """Redis-status-driven wrapper for DirecTV authentication.
 
-    Runs in a daemon thread. When a Flask app object is provided, the
-    captured session is persisted immediately; the polling route still consumes
-    the Redis result as a fallback for older callers.
+    Used by the admin-UI "Authenticate" button and by queued background
+    refreshes. Queued refreshes pass no Flask app object, so this function
+    creates one when needed and persists the captured session directly.
     """
     import redis as _redis
     r = _redis.from_url(redis_url)
@@ -1028,13 +1034,21 @@ def run_directv_auth(redis_url: str, source_id: int, username: str, password: st
             _write_status(r, source_id, 'running', detail)
 
     try:
-        result = capture_directv_auth_fast(username, password, on_status=_on_status)
-    except Exception as exc:
-        logger.warning('[directv-auth] capture failed for source_id=%s: %s', source_id, exc)
-        _write_status(r, source_id, 'failed', str(exc))
-        return
+        try:
+            result = capture_directv_auth_fast(username, password, on_status=_on_status)
+        except Exception as exc:
+            logger.warning('[directv-auth] capture failed for source_id=%s: %s', source_id, exc)
+            _write_status(r, source_id, 'failed', str(exc))
+            return
 
-    if app is not None:
+        if app is None:
+            try:
+                from flask import current_app
+                app = current_app._get_current_object()
+            except Exception:
+                from app import create_app
+                app = create_app()
+
         try:
             with app.app_context():
                 from ..extensions import db
@@ -1070,8 +1084,14 @@ def run_directv_auth(redis_url: str, source_id: int, username: str, password: st
         except Exception as exc:
             logger.error('[directv-auth] failed to persist result directly: %s', exc)
 
-    r.set(_result_key(source_id), json.dumps(result), ex=_RESULT_TTL)
-    _write_status(r, source_id, 'success', 'Logged in — session captured.')
+        r.set(_result_key(source_id), json.dumps(result), ex=_RESULT_TTL)
+        _write_status(r, source_id, 'success', 'Logged in — session captured.')
+    finally:
+        if lock_key:
+            try:
+                r.delete(lock_key)
+            except Exception:
+                logger.debug('[directv-auth] failed to release refresh lock %s', lock_key, exc_info=True)
 
 
 class DirectvScraper(BaseScraper):
@@ -1160,76 +1180,60 @@ class DirectvScraper(BaseScraper):
         self._start_background_reauth(username, password)
 
     def _start_background_reauth(self, username: str, password: str) -> None:
-        """Kick off a Playwright login in a daemon thread, outside the worker's
-        signal-guarded scrape phases. Dedupes via
-        a short Redis lock so repeated stale-token scrape ticks don't pile up
-        overlapping browser logins."""
+        """Queue a login outside the scraper work-horse process.
+
+        Scrape jobs run under RQ's forking Worker. A daemon thread started from
+        pre_run_setup() can be killed as soon as the skipped scrape job exits, so
+        the refresh has to run as its own job on the non-forking fast worker.
+        """
         try:
             import redis as _redis
+            from rq import Queue
             from flask import current_app
         except Exception:
             logger.warning('[directv] cannot start background re-auth (redis/flask unavailable)')
             return
 
+        lock_key = f'directv:auth:refreshing:{self.source_name}'
         try:
             r = _redis.from_url(current_app.config['REDIS_URL'])
-            lock_key = f'directv:auth:refreshing:{self.source_name}'
             if not r.set(lock_key, '1', nx=True, ex=_REAUTH_LOCK_TTL):
                 logger.info('[directv] background re-auth already in progress')
                 return
         except Exception:
-            logger.debug('[directv] redis lock unavailable, proceeding without dedup', exc_info=True)
+            logger.warning('[directv] cannot queue background re-auth (redis unavailable)', exc_info=True)
+            return
 
-        app = current_app._get_current_object()
-        source_name = self.source_name
-
-        def _run():
-            try:
-                result = capture_directv_auth_fast(username, password)
-            except DirectvAuthError as exc:
-                logger.warning('[directv] background re-auth failed: %s', exc)
-                return
-            except Exception:
-                logger.exception('[directv] background re-auth crashed')
-                return
-
-            with app.app_context():
-                from ..extensions import db
-                from ..models import Source
+        try:
+            from ..models import Source
+            source = Source.query.filter_by(name=self.source_name).first()
+            if source is None:
+                logger.warning('[directv] cannot start background re-auth: source not found')
                 try:
-                    source = Source.query.filter_by(name=source_name).first()
-                    if source is None:
-                        return
-                    cfg = dict(source.config or {})
-                    cfg['bearer_token'] = result['bearer_token']
-                    if result.get('refresh_token'):
-                        cfg['refresh_token'] = result['refresh_token']
-                    if result.get('client_context'):
-                        cfg['client_context'] = result['client_context']
-                    else:
-                        cfg.pop('client_context', None)
-                    if result.get('activation_token'):
-                        cfg['activation_token'] = result['activation_token']
-                    cfg['cookies'] = result.get('cookies') or []
-                    cfg['token_captured_at'] = result['captured_at']
-                    if result.get('identity_cookie'):
-                        cfg['identity_cookie'] = result['identity_cookie']
-                    else:
-                        cfg.pop('identity_cookie', None)
-                    if result.get('identity_cookie_expires_at'):
-                        cfg['identity_cookie_expires_at'] = result['identity_cookie_expires_at']
-                    else:
-                        cfg.pop('identity_cookie_expires_at', None)
-                    if result.get('auth_method'):
-                        cfg['auth_method'] = result['auth_method']
-                    source.config = cfg
-                    db.session.commit()
-                    logger.info('[directv] background re-auth succeeded, persisted new token')
+                    r.delete(lock_key)
                 except Exception:
-                    db.session.rollback()
-                    logger.exception('[directv] failed to persist re-auth result')
+                    pass
+                return
 
-        threading.Thread(target=_run, daemon=True).start()
+            q = Queue('fast', connection=r)
+            q.enqueue(
+                'app.scrapers.directv.run_directv_auth',
+                current_app.config['REDIS_URL'],
+                source.id,
+                username,
+                password,
+                None,
+                lock_key,
+                job_timeout=1800,
+                job_id=f'directv-auth-refresh-{source.id}-{int(time.time())}',
+            )
+            logger.info('[directv] queued background re-auth job source_id=%s', source.id)
+        except Exception:
+            try:
+                r.delete(lock_key)
+            except Exception:
+                pass
+            logger.exception('[directv] failed to queue background re-auth job')
 
     # ── Channels ─────────────────────────────────────────────────────────────
 
