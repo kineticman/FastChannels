@@ -856,6 +856,7 @@
       <div id="prismcast-test-body" style="margin-bottom:1rem;line-height:1.5;font-size:0.95rem;overflow-y:auto">&hellip;</div>
       <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
         <button class="btn btn-secondary" id="prismcast-test-rerun" onclick="testPrismcast()">Re-run</button>
+        <button class="btn btn-secondary" id="prismcast-copy-diagnostics" onclick="copyPrismcastDiagnostics()" disabled>Copy diagnostics</button>
         <button class="btn-cancel-modal" onclick="document.getElementById('prismcast-test-modal').classList.remove('open')">Close</button>
       </div>
     </div>
@@ -1006,13 +1007,121 @@ async function savePrismcastSettings() {
   }, 'prismcast-status');
 }
 
+let _lastPrismcastDiagnostics = '';
+
+function formatPrismcastDiagnostics(data) {
+  const d = data.diagnostics || {};
+  const settings = d.settings || {};
+  const health = d.health || {};
+  const attempts = d.attempts || [];
+  const healthSnapshots = d.health_snapshots || [];
+  const apiProbes = d.api_probes || [];
+  const portProbes = d.port_probes || [];
+  const streamText = h => h && h.streams ? `${h.streams.active}/${h.streams.limit}` : '(unknown)';
+  const snapshotLine = snap => {
+    const body = snap.body || {};
+    return `  ${snap.phase || '(unknown)'}: HTTP ${snap.status_code == null ? '(none)' : snap.status_code}, ${snap.latency_ms == null ? '?' : snap.latency_ms}ms, status ${body.status || '(unknown)'}, streams ${streamText(body)}${snap.error ? `, error ${snap.error}` : ''}`;
+  };
+  const lines = [
+    'PrismCast setup diagnostics',
+    `Overall: ${(data.overall || 'unknown').toUpperCase()}`,
+    '',
+    'Settings:',
+    `  Public Base URL: ${settings.public_base_url || '(blank)'}`,
+    `  PrismCast Server URL: ${settings.prismcast_url || '(blank)'}`,
+    `  Watch-page URL base: ${settings.watch_page_url_base || '(blank)'}`,
+    `  Channels DVR URL: ${settings.channels_dvr_url || '(blank)'}`,
+    `  Bridge DRM enabled: ${settings.drm_bridge_enabled}`,
+    `  PrismCast max height: ${settings.prismcast_max_height || 0}`,
+    '',
+    'PrismCast health:',
+    `  Status: ${health.status || '(unknown)'}`,
+    `  Version: ${health.version || '(unknown)'}`,
+    `  Chrome: ${health.chrome || '(unknown)'}`,
+    `  Capture mode: ${health.captureMode || '(unknown)'}`,
+    `  FFmpeg available: ${health.ffmpegAvailable}`,
+    `  Initial streams: ${streamText(health)}`,
+    '',
+    'PrismCast API probes:',
+  ];
+  if (!apiProbes.length) {
+    lines.push('  (none)');
+  } else {
+    apiProbes.forEach(p => {
+      lines.push(`  ${p.path}: HTTP ${p.status_code == null ? '(none)' : p.status_code}, ${p.latency_ms == null ? '?' : p.latency_ms}ms, available ${p.available}, content-type ${p.content_type || '(none)'}`);
+      if (p.body) lines.push(`    Body: ${p.body}`);
+    });
+  }
+  lines.push('', 'PrismCast port probes:');
+  if (!portProbes.length) {
+    lines.push('  (none)');
+  } else {
+    portProbes.forEach(p => {
+      lines.push(`  ${p.label}: ${p.host || '?'}:${p.port} ${p.open ? 'open' : 'closed'} (${p.latency_ms == null ? '?' : p.latency_ms}ms)${p.error ? `, ${p.error}` : ''}`);
+    });
+  }
+  lines.push('', 'PrismCast health snapshots:');
+  if (!healthSnapshots.length) {
+    lines.push('  (none)');
+  } else {
+    healthSnapshots.forEach(snap => lines.push(snapshotLine(snap)));
+  }
+  lines.push('', 'Checks:');
+  (data.checks || []).forEach(c => {
+    lines.push(`  [${c.status || '?'}] ${c.name || ''}: ${c.detail || ''}`);
+    if (c.fix) {
+      const label = c.status === 'info' ? 'Note' : 'Fix';
+      lines.push(`      ${label}: ${c.fix}`);
+    }
+  });
+  lines.push('', 'Capture attempts:');
+  if (!attempts.length) {
+    lines.push('  (none)');
+  } else {
+    attempts.forEach((a, i) => {
+      lines.push(`  Attempt ${i + 1}: ${a.channel_name || '(unknown)'} (${a.source || '?'}/${a.source_channel_id || a.channel_id || '?'})`);
+      lines.push(`    Watch URL: ${a.watch_url || '(blank)'}`);
+      lines.push(`    PrismCast /play URL: ${a.prismcast_play_url || '(blank)'}`);
+      lines.push(`    /play status: ${a.play_status == null ? '(none)' : a.play_status}`);
+      if (a.play_body) lines.push(`    /play body: ${a.play_body}`);
+      if (a.redirect_url) lines.push(`    HLS redirect: ${a.redirect_url}`);
+      if (a.health_before_play) lines.push(`    Health before /play: ${snapshotLine(a.health_before_play).trim()}`);
+      if (a.health_after_play) lines.push(`    Health after /play: ${snapshotLine(a.health_after_play).trim()}`);
+      if (a.health_after_hls) lines.push(`    Health after HLS: ${snapshotLine(a.health_after_hls).trim()}`);
+      lines.push(`    HLS statuses: ${(a.hls_statuses || []).join(', ') || '(none)'}`);
+      lines.push(`    Segments: ${a.segments || 0}`);
+      lines.push(`    Elapsed seconds: ${a.elapsed_seconds == null ? '(unknown)' : a.elapsed_seconds}`);
+    });
+  }
+  return lines.join('\n');
+}
+
+async function copyPrismcastDiagnostics() {
+  if (!_lastPrismcastDiagnostics) return;
+  const btn = document.getElementById('prismcast-copy-diagnostics');
+  try {
+    await navigator.clipboard.writeText(_lastPrismcastDiagnostics);
+    if (btn) {
+      const old = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = old; }, 1200);
+    }
+  } catch (_) {
+    window.prompt('Copy diagnostics', _lastPrismcastDiagnostics);
+  }
+}
+
 async function testPrismcast() {
   const modal = document.getElementById('prismcast-test-modal');
   const body  = document.getElementById('prismcast-test-body');
   const rerun = document.getElementById('prismcast-test-rerun');
+  const copyBtn = document.getElementById('prismcast-copy-diagnostics');
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const escAttr = s => esc(s).replace(/'/g, '&#39;');
   modal.classList.add('open');
   rerun.disabled = true;
+  if (copyBtn) copyBtn.disabled = true;
+  _lastPrismcastDiagnostics = '';
   body.innerHTML = '<div style="color:var(--text-subtle)">Running checks — this takes ~15–30s (it does a real capture)…</div>';
   try {
     const r = await fetch('/api/settings/prismcast/test', { method: 'POST' });
@@ -1022,17 +1131,52 @@ async function testPrismcast() {
       return;
     }
     const data = await r.json();
+    _lastPrismcastDiagnostics = formatPrismcastDiagnostics(data);
+    if (copyBtn) copyBtn.disabled = false;
     const icon  = { ok:'✓', warn:'⚠', fail:'✗', skip:'–', info:'ℹ' };
     const color = { ok:'var(--success-soft)', warn:'var(--warning-soft)', fail:'var(--danger)', skip:'var(--text-muted)', info:'var(--accent-soft)' };
     const overall = (data.overall || 'ok');
+    const d = data.diagnostics || {};
+    const attempts = d.attempts || [];
+    const apiProbes = d.api_probes || [];
+    const portProbes = d.port_probes || [];
     let html = `<div style="color:${color[overall]||''};font-weight:700;font-size:1.05rem;margin-bottom:0.6rem">Overall: ${overall.toUpperCase()}</div>`;
     (data.checks || []).forEach(c => {
       html += `<div style="padding:0.55rem 0;border-bottom:1px solid var(--border)">`
             +   `<div style="color:${color[c.status]||''};font-weight:600">${icon[c.status]||'?'} ${esc(c.name)}</div>`
             +   `<div style="color:var(--text-subtle);font-size:0.9rem;margin-top:0.25rem">${esc(c.detail)}</div>`
-            +   (c.fix ? `<div style="color:var(--text-muted);font-size:0.85rem;margin-top:0.3rem">→ ${esc(c.fix)}</div>` : '')
+            +   (c.fix ? `<div style="color:var(--text-muted);font-size:0.85rem;margin-top:0.3rem">${c.status === 'info' ? 'Note' : 'Fix'}: ${esc(c.fix)}</div>` : '')
             + `</div>`;
     });
+    if (apiProbes.length || portProbes.length) {
+      html += `<details style="margin-top:0.75rem"><summary style="cursor:pointer;color:var(--text-soft);font-weight:600">PrismCast API details</summary>`;
+      if (apiProbes.length) {
+        html += `<div style="margin-top:0.55rem;color:var(--text-subtle);font-size:0.86rem">`
+              + apiProbes.map(p => `${esc(p.path)}: HTTP ${esc(p.status_code == null ? '(none)' : p.status_code)} · ${p.available ? 'available' : 'unavailable'}`).join('<br>')
+              + `</div>`;
+      }
+      if (portProbes.length) {
+        html += `<div style="margin-top:0.55rem;color:var(--text-subtle);font-size:0.86rem">`
+              + portProbes.map(p => `${esc(p.label)} ${esc(p.host || '?')}:${esc(p.port)} · ${p.open ? 'open' : 'closed'}`).join('<br>')
+              + `</div>`;
+      }
+      html += `</details>`;
+    }
+    if (attempts.length) {
+      html += `<details style="margin-top:0.75rem"><summary style="cursor:pointer;color:var(--text-soft);font-weight:600">Capture attempt details</summary>`;
+      attempts.forEach((a, i) => {
+        html += `<div style="margin-top:0.65rem;padding:0.6rem;border:1px solid var(--border);border-radius:6px;background:rgba(255,255,255,0.03)">`
+              + `<div style="font-weight:600;margin-bottom:0.35rem">Attempt ${i + 1}: ${esc(a.channel_name || 'Unknown channel')}</div>`
+              + `<div style="font-size:0.82rem;color:var(--text-muted);font-family:monospace;word-break:break-all" title="${escAttr(a.watch_url || '')}">Watch: ${esc(a.watch_url || '')}</div>`
+              + `<div style="font-size:0.82rem;color:var(--text-muted);font-family:monospace;word-break:break-all;margin-top:0.25rem" title="${escAttr(a.prismcast_play_url || '')}">/play: ${esc(a.prismcast_play_url || '')}</div>`
+              + `<div style="font-size:0.85rem;color:var(--text-subtle);margin-top:0.35rem">Status ${esc(a.play_status == null ? '(none)' : a.play_status)} · segments ${esc(a.segments || 0)} · HLS ${esc((a.hls_statuses || []).join(', ') || '(none)')}</div>`
+              + (a.play_body ? `<div style="font-size:0.82rem;color:var(--warning-soft);margin-top:0.25rem">${esc(a.play_body)}</div>` : '')
+              + `</div>`;
+      });
+      html += `</details>`;
+    }
+    html += `<details style="margin-top:0.75rem"><summary style="cursor:pointer;color:var(--text-soft);font-weight:600">Copyable diagnostics</summary>`
+          + `<pre style="white-space:pre-wrap;word-break:break-word;font-size:0.78rem;color:var(--text-muted);background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;padding:0.65rem;max-height:220px;overflow:auto">${esc(_lastPrismcastDiagnostics)}</pre></details>`;
     body.innerHTML = html;
   } catch (e) {
     body.innerHTML = `<div style="color:var(--danger)">Test failed to run: ${esc(e)}</div>`;

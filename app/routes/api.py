@@ -3911,6 +3911,7 @@ def test_prismcast():
     Designed to catch the common setup mistakes (host networking, loopback secure
     context, blocked ports, wrong URLs)."""
     from urllib.parse import urlparse, quote as _quote
+    import socket as _socket
     import time as _time
 
     settings = AppSettings.get()
@@ -3918,6 +3919,82 @@ def test_prismcast():
     if not prismcast_url:
         return jsonify({'error': 'PrismCast Server URL is not set.'}), 400
     inner = (settings.effective_prismcast_inner_url() or public_base_url() or '').strip().rstrip('/')
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
+
+    diagnostics = {
+        'settings': {
+            'public_base_url': public_base_url() or '',
+            'prismcast_url': prismcast_url,
+            'watch_page_url_base': inner,
+            'channels_dvr_url': dvr_url,
+            'drm_bridge_enabled': bool(settings.drm_bridge_enabled),
+            'prismcast_max_height': int(settings.prismcast_max_height or 0),
+        },
+        'health': None,
+        'health_snapshots': [],
+        'api_probes': [],
+        'port_probes': [],
+        'attempts': [],
+    }
+
+    def _clip(value, limit=600):
+        text = str(value or '').strip().replace('\n', ' ')
+        return text if len(text) <= limit else text[:limit - 3] + '...'
+
+    def _snapshot_health(phase, timeout=4):
+        t0 = _time.time()
+        snap = {'phase': phase, 'ok': False, 'status_code': None, 'latency_ms': None, 'body': None, 'error': ''}
+        try:
+            r = _req.get(f'{prismcast_url}/health', timeout=timeout)
+            snap['status_code'] = r.status_code
+            snap['latency_ms'] = int((_time.time() - t0) * 1000)
+            if r.status_code == 200:
+                try:
+                    snap['body'] = r.json()
+                    snap['ok'] = True
+                except Exception:
+                    snap['error'] = 'Invalid JSON health response'
+            else:
+                snap['error'] = _clip(r.text, 220)
+        except Exception as e:
+            snap['latency_ms'] = int((_time.time() - t0) * 1000)
+            snap['error'] = type(e).__name__
+        diagnostics['health_snapshots'].append(snap)
+        return snap
+
+    def _probe_prismcast_api(path, timeout=3):
+        t0 = _time.time()
+        probe = {'path': path, 'status_code': None, 'latency_ms': None, 'available': False, 'content_type': '', 'body': ''}
+        try:
+            r = _req.get(f'{prismcast_url}{path}', timeout=timeout)
+            probe['status_code'] = r.status_code
+            probe['latency_ms'] = int((_time.time() - t0) * 1000)
+            probe['available'] = r.status_code < 400
+            probe['content_type'] = r.headers.get('content-type', '')
+            probe['body'] = _clip(r.text, 220) if r.status_code < 400 else ''
+        except Exception as e:
+            probe['latency_ms'] = int((_time.time() - t0) * 1000)
+            probe['body'] = type(e).__name__
+        diagnostics['api_probes'].append(probe)
+        return probe
+
+    def _probe_port(label, port, timeout=1.5):
+        parsed = urlparse(prismcast_url)
+        hostname = parsed.hostname or ''
+        probe = {'label': label, 'host': hostname, 'port': port, 'open': False, 'latency_ms': None, 'error': ''}
+        if not hostname:
+            probe['error'] = 'No PrismCast host configured'
+            diagnostics['port_probes'].append(probe)
+            return probe
+        t0 = _time.time()
+        try:
+            with _socket.create_connection((hostname, int(port)), timeout=timeout):
+                probe['open'] = True
+        except Exception as e:
+            probe['error'] = type(e).__name__
+        probe['latency_ms'] = int((_time.time() - t0) * 1000)
+        diagnostics['port_probes'].append(probe)
+        return probe
 
     checks = []
     def add(name, status, detail, fix=None):
@@ -3925,25 +4002,49 @@ def test_prismcast():
 
     # 1) PrismCast server reachable + healthy (from FastChannels' vantage point)
     health_ok = False
+    health_snap = _snapshot_health('before_capture', timeout=8)
     try:
-        r = _req.get(f'{prismcast_url}/health', timeout=8)
-        if r.status_code == 200:
-            try:
-                healthy = (r.json().get('status') == 'healthy')
-            except Exception:
-                healthy = True
+        if health_snap.get('status_code') == 200:
+            health_json = health_snap.get('body') or {}
+            diagnostics['health'] = health_json
+            healthy = (health_json.get('status') == 'healthy') if health_json else True
+            health_bits = []
+            if health_json.get('version'):
+                health_bits.append(f"version {health_json.get('version')}")
+            if health_json.get('captureMode'):
+                health_bits.append(f"capture {health_json.get('captureMode')}")
+            if health_json.get('chrome'):
+                health_bits.append(str(health_json.get('chrome')))
+            streams = health_json.get('streams') if isinstance(health_json.get('streams'), dict) else {}
+            if streams:
+                health_bits.append(f"streams {streams.get('active', '?')}/{streams.get('limit', '?')}")
             health_ok = healthy
             add('PrismCast server reachable', 'ok' if healthy else 'warn',
-                f'{prismcast_url} responded' + ('' if healthy else ' but status is not "healthy"'))
+                f'{prismcast_url} responded'
+                + (f" ({', '.join(health_bits)})" if health_bits else '')
+                + ('' if healthy else ' but status is not "healthy"'))
         else:
             add('PrismCast server reachable', 'fail',
-                f'{prismcast_url}/health returned HTTP {r.status_code}')
+                f"{prismcast_url}/health returned HTTP {health_snap.get('status_code')}")
     except Exception as e:
         add('PrismCast server reachable', 'fail',
             f'Could not reach {prismcast_url} ({type(e).__name__}).',
             fix='Check the URL and that PrismCast is running. If PrismCast uses Docker host '
                 'networking, its ports are subject to the host firewall — open it (e.g. '
                 '`sudo ufw allow 5589/tcp`).')
+
+    for _path in ('/status', '/debug/streams', '/metrics'):
+        _probe_prismcast_api(_path)
+    parsed_pc = urlparse(prismcast_url)
+    _probe_port('PrismCast API', parsed_pc.port or 5589)
+    _probe_port('HDHomeRun emulation', 5004)
+    _probe_port('noVNC', 6080)
+
+    available_api = [p['path'] for p in diagnostics['api_probes'] if p.get('available')]
+    unavailable_api = [f"{p['path']}={p.get('status_code') or p.get('body') or 'error'}" for p in diagnostics['api_probes'] if not p.get('available')]
+    add('PrismCast API capabilities', 'info',
+        'Available optional endpoints: ' + (', '.join(available_api) if available_api else 'none detected')
+        + (f"; unavailable: {', '.join(unavailable_api)}" if unavailable_api else ''))
 
     # 2) Watch-page URL is a browser secure context (required for Widevine/EME)
     host = (urlparse(inner).hostname or '').lower()
@@ -3953,6 +4054,10 @@ def test_prismcast():
             f'{inner} — ' + ('trusted HTTPS' if scheme == 'https' else 'loopback')
             + ' — a valid secure-context address. This only checks the URL\'s shape; see '
               '"End-to-end capture" below to confirm PrismCast can actually reach it.')
+        if host == 'localhost' or host.startswith('127.'):
+            add('Loopback watch-page routing', 'info',
+                'The Watch-page URL uses loopback. That is correct only when PrismCast Chrome shares the host network namespace.',
+                fix='For Docker PrismCast, use `network_mode: host`. In bridge networking, 127.0.0.1 points inside the PrismCast container.')
     else:
         add('Watch-page URL is a secure context', 'warn',
             f'{inner} is a plain http:// LAN address — not a secure context, so Widevine/EME will not decrypt (black capture).',
@@ -3968,19 +4073,40 @@ def test_prismcast():
 
     def _try_capture(tc):
         """Returns (ok, detail). Drives PrismCast and waits for segments to flow."""
-        watch = f'{inner}/watch/{tc.id}'
+        watch = f'{inner}/watch/{tc.id}?debug=1&capture_probe=1'
         play = f'{prismcast_url}/play?url={_quote(watch, safe="")}&profile=keyboardFullscreen'
+        attempt = {
+            'channel_id': tc.id,
+            'source': tc.source.name if tc.source else '',
+            'source_channel_id': tc.source_channel_id,
+            'channel_name': tc.name,
+            'watch_url': watch,
+            'prismcast_play_url': play,
+            'play_status': None,
+            'play_body': '',
+            'redirect_url': '',
+            'hls_statuses': [],
+            'segments': 0,
+            'elapsed_seconds': None,
+        }
+        diagnostics['attempts'].append(attempt)
         t0 = _time.time()
         try:
+            attempt['health_before_play'] = _snapshot_health(f'before_play:{tc.id}')
             r = _req.get(play, timeout=25, allow_redirects=False)
         except _req.exceptions.Timeout:
+            attempt['elapsed_seconds'] = round(_time.time() - t0, 1)
             return False, f'"{tc.name}": PrismCast /play timed out (couldn\'t reach the watch page or reach a playable state).'
         except Exception as e:
+            attempt['elapsed_seconds'] = round(_time.time() - t0, 1)
+            attempt['play_body'] = type(e).__name__
             return False, f'"{tc.name}": {type(e).__name__}.'
+        attempt['play_status'] = r.status_code
+        attempt['health_after_play'] = _snapshot_health(f'after_play:{tc.id}')
         if r.status_code not in (301, 302) or not r.headers.get('Location'):
-            body = (r.text or '').strip().replace('\n', ' ')
-            if len(body) > 220:
-                body = body[:217] + '...'
+            body = _clip(r.text, 220)
+            attempt['play_body'] = _clip(r.text)
+            attempt['elapsed_seconds'] = round(_time.time() - t0, 1)
             detail = f'"{tc.name}": PrismCast /play returned HTTP {r.status_code}'
             if body:
                 detail += f': {body}'
@@ -3988,21 +4114,29 @@ def test_prismcast():
         hls = r.headers['Location']
         if not hls.startswith('http'):
             hls = prismcast_url + hls
+        attempt['redirect_url'] = hls
         segs = 0
         deadline = _time.time() + 12
         while _time.time() < deadline:
             _time.sleep(3)
             try:
-                playlist = _req.get(hls, timeout=8).text
+                hls_r = _req.get(hls, timeout=8)
+                playlist = hls_r.text
+                attempt['hls_statuses'].append(hls_r.status_code)
                 segs = (playlist.count('.m4s') + playlist.count('.ts')
                         + sum(1 for line in playlist.splitlines()
                               if line and not line.startswith('#')))
             except Exception:
-                pass
+                attempt['hls_statuses'].append('error')
             if segs >= 2:
                 break
+        attempt['segments'] = segs
+        attempt['elapsed_seconds'] = round(_time.time() - t0, 1)
+        attempt['health_after_hls'] = _snapshot_health(f'after_hls:{tc.id}')
         if segs >= 2:
             return True, f'Captured "{tc.name}" in {_time.time()-t0:.0f}s — {segs}+ segments flowing. The full chain works.'
+        if 404 in attempt['hls_statuses']:
+            return False, f'"{tc.name}": session started but the HLS playlist returned 404 while polling.'
         return False, f'"{tc.name}": session started but produced no video.'
 
     if not health_ok:
@@ -4039,9 +4173,12 @@ def test_prismcast():
                 'No test channel captured. Tried: ' + ' | '.join(attempts), fix=fix)
 
     # 4) Cross-host firewall note (FastChannels can't test the DVR→PrismCast path directly)
-    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
     dvr_host = (urlparse(dvr_url).hostname or '') if dvr_url else ''
     pc_host = (urlparse(prismcast_url).hostname or '')
+    if dvr_host and pc_host in ('localhost', '127.0.0.1') and dvr_host not in ('localhost', '127.0.0.1'):
+        add('Channels DVR playlist URL', 'warn',
+            f'PrismCast Server URL is {prismcast_url}. If Channels DVR runs on another host, it cannot use that loopback address.',
+            fix='Set PrismCast Server URL to a LAN or Tailscale address that Channels DVR can reach, while keeping Watch-page URL loopback if PrismCast shares the FastChannels host.')
     if dvr_host and pc_host and dvr_host != pc_host:
         _port = urlparse(prismcast_url).port or 5589
         add('Channels DVR → PrismCast reachability', 'info',
@@ -4052,7 +4189,7 @@ def test_prismcast():
     overall = ('fail' if any(c['status'] == 'fail' for c in checks)
                else 'warn' if any(c['status'] == 'warn' for c in checks)
                else 'ok')
-    return jsonify({'checks': checks, 'overall': overall})
+    return jsonify({'checks': checks, 'overall': overall, 'diagnostics': diagnostics})
 
 
 def _prismcast_test_channels(limit: int = 4) -> list[Channel]:
