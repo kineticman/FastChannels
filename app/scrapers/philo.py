@@ -84,7 +84,7 @@ _GUIDE_VARS = {
 # session, log a warning" bound; it does not force a re-login (there's no password
 # to log in with).
 _SESSION_TTL = 300 * 24 * 60 * 60   # ~10 months
-_DASH_TTL = 4 * 60             # per-session dashURL/token reuse window (seconds)
+_DASH_TTL = 6 * 60 * 60        # keep one playback session stable during long captures
 _GUIDE_MAX_PAGES = 12
 # Airings per channel to pull for the guide. 48 half-hour slots ≈ 24–34h of EPG;
 # the grid supports more (hasNextPage) but this is a sensible per-scrape window.
@@ -706,6 +706,21 @@ class PhiloScraper(BaseScraper):
             self._dash_cache.pop(cid, None)
             return None
         return entry
+
+    def expire_cached_dash(self, cid: str) -> None:
+        """Force a cached playback session to be ignored by future resolves.
+
+        source_cache merges are additive, so overwrite the channel entry with an
+        already-expired placeholder instead of deleting the key.
+        """
+        if not cid:
+            return
+        self._dash_cache[cid] = {
+            "dash_url": "",
+            "auth_token": None,
+            "cached_at": 0,
+        }
+        self._update_cache("dash_cache", self._dash_cache)
 
     def resolve(self, raw_url: str) -> str:
         """philo://<channelId> → a live DASH MPD URL.
