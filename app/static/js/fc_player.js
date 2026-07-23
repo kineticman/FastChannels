@@ -82,14 +82,27 @@
     ].filter(Boolean).join(' ');
   }
 
-  function seekNearLiveEdge(player, video) {
+  function seekNearLiveEdge(player, video, opts) {
     try {
       if (!player || !video || !player.isLive || !player.isLive()) return;
       const range = player.seekRange && player.seekRange();
       if (!range || !Number.isFinite(range.end) || range.end <= 0) return;
-      const target = Math.max(range.start || 0, range.end - 3);
-      if (Number.isFinite(target) && Math.abs((video.currentTime || 0) - target) > 5) {
+      const liveDelay = Number((opts && opts.liveDelay) || 3);
+      const minSeek = Number((opts && opts.minSeek) || 5);
+      const target = Math.max(range.start || 0, range.end - liveDelay);
+      const from = video.currentTime || 0;
+      const delta = target - from;
+      if (Number.isFinite(target) && Math.abs(delta) > minSeek) {
         video.currentTime = target;
+        if (opts && typeof opts.onSeek === 'function') {
+          opts.onSeek({
+            from: Number(from.toFixed(3)),
+            to: Number(target.toFixed(3)),
+            delta: Number(delta.toFixed(3)),
+            range_start: Number((range.start || 0).toFixed(3)),
+            range_end: Number(range.end.toFixed(3)),
+          });
+        }
       }
     } catch (_) {}
   }
@@ -108,6 +121,7 @@
     const type = String(opts.type || '').toLowerCase();
     const license = String(opts.license || '');
     const maxHeight = Number(opts.maxHeight || 0);
+    const liveEdgeSync = Boolean(opts.liveEdgeSync);
     const onStatus = opts.onStatus || function () {};
     const onError = opts.onError || function (info) { onStatus(info.message); };
 
@@ -159,6 +173,20 @@
             },
           },
         };
+        if (liveEdgeSync) {
+          shakaConfig.streaming = {
+            bufferingGoal: 20,
+            rebufferingGoal: 4,
+            bufferBehind: 20,
+            liveSync: {
+              enabled: true,
+              targetLatency: 3,
+              targetLatencyTolerance: 2,
+              maxPlaybackRate: 1.08,
+              minPlaybackRate: 0.95,
+            },
+          };
+        }
         if (maxHeight > 0) {
           shakaConfig.restrictions = { maxHeight };
         }
@@ -172,11 +200,40 @@
         onError({ phase: 'event', err, message: formatError(err) });
         console.error('[Shaka] error', err.code, err);
       });
+      if (liveEdgeSync) {
+        let lastLiveSeek = 0;
+        const chaseLive = (reason) => {
+          const now = Date.now();
+          if (now - lastLiveSeek < 2500) return;
+          lastLiveSeek = now;
+          seekNearLiveEdge(player, video, {
+            liveDelay: 3,
+            minSeek: 8,
+            onSeek: (info) => {
+              if (typeof opts.onLiveEdgeSeek === 'function') {
+                opts.onLiveEdgeSeek(Object.assign({ reason }, info));
+              }
+            },
+          });
+        };
+        player.addEventListener('buffering', (event) => {
+          if (!event.buffering) window.setTimeout(() => chaseLive('buffering-ended'), 250);
+        });
+        video.addEventListener('playing', () => window.setTimeout(() => chaseLive('playing'), 250));
+      }
       const mimeType = isDash ? 'application/dash+xml' : 'application/x-mpegURL';
       return player.load(url, null, mimeType);
     }).then(() => {
       onStatus('Stream loaded.');
-      seekNearLiveEdge(player, video);
+      seekNearLiveEdge(player, video, {
+        liveDelay: 3,
+        minSeek: liveEdgeSync ? 3 : 5,
+        onSeek: (info) => {
+          if (typeof opts.onLiveEdgeSeek === 'function') {
+            opts.onLiveEdgeSeek(Object.assign({ reason: 'load' }, info));
+          }
+        },
+      });
       video.muted = false;
       video.play().catch(() => {});
     }).catch((err) => {

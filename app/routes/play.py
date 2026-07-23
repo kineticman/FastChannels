@@ -2779,14 +2779,6 @@ def philo_dash_proxy(channel_id: str):
         r.raise_for_status()
     except Exception as e:
         logger.warning('[philo-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
-        try:
-            expire_cached_dash = getattr(scraper, 'expire_cached_dash', None)
-            if callable(expire_cached_dash):
-                expire_cached_dash(raw_id)
-                if getattr(scraper, '_pending_cache_updates', None):
-                    persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
-        except Exception:
-            pass
         return _unavailable_response()
 
     # Philo's dynamic MPD includes a <Location> pointing back to Philo's
@@ -3435,6 +3427,7 @@ def watch(channel_id):
         watch_debug=request.args.get('debug') == '1',
         request_id=getattr(g, 'request_id', ''),
         max_height=max_height,
+        live_edge_sync=bool(channel.source and channel.source.name == 'philo'),
     ))
     resp.headers['Cache-Control'] = 'no-store'
     return resp

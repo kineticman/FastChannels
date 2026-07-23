@@ -110,6 +110,7 @@
     const WATCH_DEBUG   = {{ watch_debug | default(false) | tojson }};
     const REQUEST_ID    = {{ request_id | default('') | tojson }};
     const MAX_HEIGHT    = {{ max_height | default(0) | tojson }};
+    const LIVE_EDGE_SYNC = {{ live_edge_sync | default(false) | tojson }};
     const WATCH_DEBUG_URL = {{ url_for('play.watch_debug', channel_id=channel.id) | tojson }};
   </script>
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
@@ -228,6 +229,8 @@
         type: STREAM_TYPE,
         license: LICENSE_URL,
         maxHeight: MAX_HEIGHT,
+        liveEdgeSync: LIVE_EDGE_SYNC,
+        onLiveEdgeSeek: (info) => emitWatchDebug('live-edge-seek', info),
         onStatus: () => {},   // fullscreen overlay stays clean on success / native playback
         onError: onPlayerError,
       });
