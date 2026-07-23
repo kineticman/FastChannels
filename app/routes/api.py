@@ -4238,7 +4238,12 @@ def test_prismcast():
                 'Amazon playback authentication failed; the configured cookie/session is likely expired or invalid.',
                 'Complete Amazon login or replace the cookie header, then rerun the test.')
         if captured:
-            add('End-to-end capture', 'ok', ' | '.join(captured))
+            failed = [detail for detail in attempts if detail not in captured]
+            if failed:
+                add('End-to-end capture', 'warn',
+                    'Captured: ' + ' | '.join(captured) + ' Failed: ' + ' | '.join(failed))
+            else:
+                add('End-to-end capture', 'ok', ' | '.join(captured))
         else:
             is_loopback = (host == 'localhost' or host.startswith('127.'))
             fix = ('If channels reach a playable state nowhere, PrismCast\'s Chrome is usually '
@@ -4257,6 +4262,17 @@ def test_prismcast():
 
     from .play import get_recent_proxy_failures
     diagnostics['proxy_failures'] = get_recent_proxy_failures(since=diagnostic_started)
+    license_failures = [
+        f for f in diagnostics['proxy_failures']
+        if str(f.get('label') or '').endswith('-license') and int(f.get('upstream_status') or 0) >= 400
+    ]
+    if license_failures:
+        details = ', '.join(
+            f"{f.get('label')} HTTP {f.get('upstream_status')}"
+            for f in license_failures[:5]
+        )
+        add('DRM license proxy failures', 'fail',
+            f'One or more DRM license exchanges failed during capture: {details}.')
 
     # 4) Cross-host firewall note (FastChannels can't test the DVR→PrismCast path directly)
     dvr_host = (urlparse(dvr_url).hostname or '') if dvr_url else ''

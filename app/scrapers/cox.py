@@ -383,6 +383,49 @@ def _extract_content_metadata(manifest: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _optional_text(mapping: dict[str, Any] | None, *keys: str) -> str | None:
+    if not isinstance(mapping, dict):
+        return None
+    for key in keys:
+        value = _first_text(mapping.get(key))
+        if value:
+            return value
+    return None
+
+
+def _cox_license_access_attributes(playback: dict[str, Any] | None, config: dict[str, Any], channel_id: str | None) -> dict[str, str]:
+    stream_type = _optional_text(playback, 'location_stream_type', 'stream_type')
+    if not stream_type:
+        stream_type = _first_text(config.get('cox_license_stream_type')) or 'Geofenced'
+    attributes = {'content:xcal:streamType': stream_type}
+
+    virtual_stream_id = _optional_text(playback, 'virtual_stream_id', 'stream_id', 'media_id') or channel_id
+    if virtual_stream_id:
+        attributes['content:xcal:virtualStreamId'] = virtual_stream_id
+
+    service_zone = _optional_text(playback, 'service_zone', 'service_zone_id') or _first_text(
+        config.get('service_zone'),
+        config.get('service_zone_id'),
+        config.get('cox_service_zone'),
+    )
+    if service_zone:
+        attributes['device:xcal:serviceZone'] = service_zone
+
+    device_type = _optional_text(playback, 'device_type') or _first_text(config.get('device_type'), config.get('cox_device_type'))
+    if device_type:
+        attributes['device:xcal:deviceType'] = device_type
+
+    postal_code = _optional_text(playback, 'location_postal_code', 'service_zip') or _first_text(
+        config.get('location_postal_code'),
+        config.get('service_zip'),
+        config.get('cox_service_zip'),
+    )
+    if postal_code and stream_type:
+        attributes['device:xcal:locationPostalCode'] = postal_code
+
+    return attributes
+
+
 def _logo_url(item: dict[str, Any]) -> str | None:
     links = item.get('_links') if isinstance(item.get('_links'), dict) else {}
     logo = links.get('logo') if isinstance(links.get('logo'), dict) else None
@@ -447,8 +490,13 @@ class CoxScraper(BaseScraper):
         ConfigField('password', 'Password', field_type='password', required=True,
                     secret=True,
                     help_text='Your Cox Contour password.'),
-        ConfigField('include_inhome_cable', 'Include In-Home Cable Rows', field_type='toggle', default=False,
-                    help_text='Experimental. Includes non-TVE cable rows that usually require Cox in-home playback context.'),
+        ConfigField('channel_family', 'Channel family', field_type='select', default='tve',
+                    options=[
+                        {'value': 'tve', 'label': 'TVE channels'},
+                        {'value': 'away', 'label': 'Away-from-home channels'},
+                        {'value': 'both', 'label': 'Both TVE and away-from-home'},
+                    ],
+                    help_text='Choose which Cox channel rows are stored. TVE rows are the browser-style TV Everywhere lineup; away-from-home rows are Cox cable rows marked out-of-home.'),
     ]
 
     def __init__(self, config: dict | None = None):
@@ -699,17 +747,24 @@ class CoxScraper(BaseScraper):
         self._ensure_auth()
         self._fetch_features()
         payload = self._fetch_channelmap()
+        family = str(self.config.get('channel_family') or 'tve').strip().lower()
+        if family not in {'tve', 'away', 'both'}:
+            family = 'tve'
         selected: dict[str, tuple[int, dict[str, Any]]] = {}
         for item in _channel_items(payload):
             if item.get('entitled') is not True:
                 continue
-            if item.get('isTve') is not True and not _bool_config(self.config.get('include_inhome_cable')):
+            is_tve = item.get('isTve') is True
+            if family == 'tve' and not is_tve:
+                continue
+            if family == 'away' and is_tve:
                 continue
             name = _display_channel_name(item)
             if not name or name.lower().startswith(AUDIO_ONLY_PREFIXES):
                 continue
             call_sign = _first_text(item.get('callSign'), item.get('callsign'))
-            dedupe = (call_sign or _first_text(item.get('stationId'), item.get('channelId')) or name).lower()
+            dedupe_base = (call_sign or _first_text(item.get('stationId'), item.get('channelId')) or name).lower()
+            dedupe = f"{dedupe_base}|{'tve' if is_tve else 'away'}" if family == 'both' else dedupe_base
             rank = _priority_rank(item)
             previous = selected.get(dedupe)
             if previous is None or rank < previous[0]:
@@ -737,9 +792,14 @@ class CoxScraper(BaseScraper):
         stream_obj = _stream_object(item)
         restrictions = [str(v) for v in item.get('restrictStreaming', [])] if isinstance(item.get('restrictStreaming'), list) else []
         tags = ['Cox Contour']
-        tags.append('TVE' if item.get('isTve') is True else 'Cable')
-        if restrictions:
-            tags.extend(restrictions)
+        if item.get('isTve') is True:
+            tags.append('TVE')
+        else:
+            tags.append('Away from Home')
+        for value in restrictions:
+            tag = 'Away from Home' if value == 'out-of-home' else value
+            if tag not in tags:
+                tags.append(tag)
         opaque_payload = {
             'channel_id': channel_id,
             'station_id': station_id,
@@ -860,10 +920,19 @@ class CoxScraper(BaseScraper):
         if not channel_id or not hls_url:
             raise ScrapeSkipError('Cox Contour channel did not include TVE playback metadata.')
 
-        cached = (self.cache.get('cox_playback') or {}).get(channel_id)
+        playback_cache = dict(self.cache.get('cox_playback') or {})
+        cached = playback_cache.get(channel_id)
         if cached and time.time() - float(cached.get('cached_at') or 0) < PLAYBACK_CACHE_TTL:
             mpd_url = cached.get('mpd_url')
             if mpd_url:
+                enriched = dict(cached)
+                enriched.setdefault('media_id', data.get('media_id'))
+                enriched.setdefault('stream_id', data.get('stream_id'))
+                enriched.setdefault('virtual_stream_id', data.get('stream_id') or data.get('media_id') or channel_id)
+                enriched.setdefault('geofenced', data.get('geofenced') is True)
+                if enriched != cached:
+                    playback_cache[channel_id] = enriched
+                    self._update_cache('cox_playback', playback_cache)
                 self._ensure_xsct()
                 return mpd_url
 
@@ -898,6 +967,8 @@ class CoxScraper(BaseScraper):
             'hls_url': hls_url,
             'content_metadata': content_metadata,
             'media_id': data.get('media_id'),
+            'stream_id': data.get('stream_id'),
+            'virtual_stream_id': data.get('stream_id') or data.get('media_id') or channel_id,
             'geofenced': data.get('geofenced') is True,
             'xsct_cached_at': time.time() if xsct else 0,
             'cached_at': time.time(),
@@ -953,7 +1024,7 @@ class CoxScraper(BaseScraper):
             'contentMetadata': content_metadata,
             'mediaUsage': 'stream',
             'accessToken': xsct,
-            'accessAttributes': {'content:xcal:streamType': 'Geofenced'},
+            'accessAttributes': _cox_license_access_attributes(playback, config, channel_id),
         }).encode('utf-8')
         return body, cls.license_request_headers(config)
 

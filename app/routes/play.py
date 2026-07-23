@@ -2877,6 +2877,18 @@ def license_proxy(source_name: str, channel_id: str | None = None):
         abort(502)
     logger.debug('[license-proxy] %s channel=%s -> HTTP %s (%d bytes)',
                  source_name, channel_id or '-', r.status_code, len(r.content))
+    if r.status_code >= 400:
+        _record_proxy_failure(
+            label=f'{source_name}-license',
+            request_id=getattr(g, 'request_id', '-'),
+            upstream_status=r.status_code,
+            bytes_sent=len(r.content or b''),
+            error=f'license HTTP {r.status_code}',
+        )
+        logger.warning(
+            '[license-proxy] %s channel=%s upstream returned HTTP %s (%d bytes)',
+            source_name, channel_id or '-', r.status_code, len(r.content or b''),
+        )
     response_bytes = scraper_cls.process_license_response(r.content)
     # If Amazon returned a SERVICE_CERTIFICATE (Widevine type 5), cache it for
     # the /certificate endpoint so Shaka can pre-fetch it via serverCertificateUri.
