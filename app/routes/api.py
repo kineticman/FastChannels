@@ -3950,7 +3950,9 @@ def test_prismcast():
     context, blocked ports, wrong URLs)."""
     from urllib.parse import urlparse, quote as _quote
     import socket as _socket
+    import os as _os
     import time as _time
+    import resource as _resource
 
     settings = AppSettings.get()
     prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
@@ -3976,6 +3978,7 @@ def test_prismcast():
             'drm_bridge_enabled': bool(settings.drm_bridge_enabled),
             'prismcast_max_height': int(settings.prismcast_max_height or 0),
         },
+        'topology': {},
         'health': None,
         'health_snapshots': [],
         'api_probes': [],
@@ -3983,11 +3986,49 @@ def test_prismcast():
         'attempts': [],
         'candidates': [],
         'proxy_failures': [],
+        'resources': {},
+        'timing_note': 'Timing is measured from FastChannels around PrismCast /play and HLS polling; source resolution inside PrismCast is not exposed.',
     }
 
     def _clip(value, limit=600):
         text = str(value or '').strip().replace('\n', ' ')
         return text if len(text) <= limit else text[:limit - 3] + '...'
+
+    def _resource_snapshot():
+        snapshot = {'hostname': _socket.gethostname(), 'pid': _os.getpid(),
+                    'load_average': None, 'memory_mb': {}, 'cgroup_memory_mb': {}}
+        try:
+            snapshot['load_average'] = [round(value, 2) for value in _os.getloadavg()]
+        except (AttributeError, OSError):
+            pass
+        try:
+            meminfo = {}
+            with open('/proc/meminfo', encoding='utf-8') as _fh:
+                for line in _fh:
+                    key, _, value = line.partition(':')
+                    if key in ('MemTotal', 'MemAvailable', 'MemFree'):
+                        meminfo[key] = int(value.strip().split()[0]) / 1024
+            snapshot['memory_mb'] = {key: round(value, 1) for key, value in meminfo.items()}
+        except (OSError, ValueError):
+            pass
+        for current_path, max_path in (('/sys/fs/cgroup/memory.current', '/sys/fs/cgroup/memory.max'),
+                                       ('/sys/fs/cgroup/memory/memory.usage_in_bytes', '/sys/fs/cgroup/memory/memory.limit_in_bytes')):
+            try:
+                current = int(open(current_path, encoding='utf-8').read().strip()) / (1024 * 1024)
+                raw_max = open(max_path, encoding='utf-8').read().strip()
+                limit = None if raw_max == 'max' else int(raw_max) / (1024 * 1024)
+                snapshot['cgroup_memory_mb'] = {'current': round(current, 1), 'limit': round(limit, 1) if limit is not None else 'unlimited'}
+                break
+            except (OSError, ValueError):
+                continue
+        try:
+            usage = _resource.getrusage(_resource.RUSAGE_SELF)
+            snapshot['max_rss_mb'] = round(float(usage.ru_maxrss) / 1024, 1)
+        except (AttributeError, OSError):
+            pass
+        return snapshot
+
+    diagnostics['resources'] = _resource_snapshot()
 
     def _snapshot_health(phase, timeout=4):
         t0 = _time.time()
@@ -4083,6 +4124,61 @@ def test_prismcast():
 
     for _path in ('/status', '/debug/streams', '/metrics'):
         _probe_prismcast_api(_path)
+
+    parsed_pc = urlparse(prismcast_url)
+    parsed_inner = urlparse(inner)
+    _cgroup_text = ''
+    try:
+        with open('/proc/1/cgroup', encoding='utf-8') as _fh:
+            _cgroup_text = _fh.read().lower()
+    except Exception:
+        pass
+    _fastchannels_containerized = bool(
+        _os.path.exists('/.dockerenv')
+        or any(token in _cgroup_text for token in ('docker', 'containerd', 'kubepods'))
+    )
+    _pc_host = (parsed_pc.hostname or '').lower()
+    _inner_host = (parsed_inner.hostname or '').lower()
+    _pc_loopback = _pc_host in ('localhost', '127.0.0.1', '::1')
+    _inner_loopback = _inner_host in ('localhost', '127.0.0.1', '::1')
+    _public_url = (diagnostics['settings'].get('public_base_url') or '').strip()
+    _public_parsed = urlparse(_public_url)
+    _public_host = (_public_parsed.hostname or '').lower()
+    _public_loopback = _public_host in ('localhost', '127.0.0.1', '::1')
+    _docker_socket = _os.path.exists('/var/run/docker.sock')
+    _network_mode = (_os.environ.get('PRISMCAST_NETWORK_MODE') or '').strip() or 'unknown'
+    diagnostics['topology'] = {
+        'fastchannels_runtime': 'docker/container' if _fastchannels_containerized else 'native/unknown',
+        'fastchannels_hostname': _socket.gethostname(),
+        'prismcast_runtime': (_os.environ.get('PRISMCAST_RUNTIME') or '').strip() or 'unknown',
+        'prismcast_host': _pc_host,
+        'prismcast_loopback': _pc_loopback,
+        'prismcast_network_mode': _network_mode,
+        'watch_page_host': _inner_host,
+        'watch_page_loopback': _inner_loopback,
+        'public_base_host': _public_host,
+        'public_base_loopback': _public_loopback,
+        'public_watch_host_match': bool(_public_host and _inner_host and _public_host == _inner_host),
+        'docker_socket_available': _docker_socket,
+        'network_mode_source': 'PRISMCAST_NETWORK_MODE environment variable' if _network_mode != 'unknown' else 'not available without Docker socket inspection',
+        'network_mode_note': 'PrismCast network mode is reported from PRISMCAST_NETWORK_MODE when set; otherwise it cannot be inspected here. End-to-end capture remains authoritative.',
+    }
+    if _inner_loopback:
+        add('Runtime / network topology', 'info',
+            f"FastChannels runtime: {diagnostics['topology']['fastchannels_runtime']}; PrismCast runtime: {diagnostics['topology']['prismcast_runtime']}; PrismCast network mode: {diagnostics['topology']['prismcast_network_mode']}; Watch-page host: {_inner_host or '(blank)'}.",
+            fix='Loopback requires PrismCast Chrome to share the FastChannels host network namespace. For Docker PrismCast, use network_mode: host.')
+    else:
+        add('Runtime / network topology', 'info',
+            f"FastChannels runtime: {diagnostics['topology']['fastchannels_runtime']}; PrismCast runtime: {diagnostics['topology']['prismcast_runtime']}; PrismCast network mode: {diagnostics['topology']['prismcast_network_mode']}; Watch-page host: {_inner_host or '(blank)'}.",
+            fix='PrismCast network mode cannot be verified here because the Docker socket is not mounted; confirm the container can reach the Watch-page host.')
+    if _public_loopback and _inner_loopback and not _pc_loopback:
+        add('URL consistency', 'warn',
+            f'Public/watch URL uses {_public_host}, but PrismCast is addressed at {_pc_host}. A separate PrismCast container may resolve loopback to itself.',
+            fix='Use the FastChannels host address reachable from PrismCast, or run PrismCast with network_mode: host and keep the loopback watch URL.')
+    elif _public_host and _inner_host and _public_host != _inner_host:
+        add('URL consistency', 'info',
+            f'Public Base URL host {_public_host} and Watch-page host {_inner_host} differ; this can be intentional, but PrismCast must resolve the Watch-page host.')
+
     parsed_pc = urlparse(prismcast_url)
     _probe_port('PrismCast API', parsed_pc.port or 5589)
     _probe_port('HDHomeRun emulation (optional)', 5004)
@@ -4164,18 +4260,28 @@ def test_prismcast():
             'hls_statuses': [],
             'segments': 0,
             'elapsed_seconds': None,
+            'prismcast_play_elapsed_seconds': None,
+            'hls_probe_elapsed_seconds': None,
+            'failure_class': '',
         }
         diagnostics['attempts'].append(attempt)
         t0 = _time.time()
+        play_t0 = _time.time()
         try:
             attempt['health_before_play'] = _snapshot_health(f'before_play:{tc.id}')
+            play_t0 = _time.time()
             r = _req.get(play, timeout=25, allow_redirects=False)
+            attempt['prismcast_play_elapsed_seconds'] = round(_time.time() - play_t0, 3)
         except _req.exceptions.Timeout:
+            attempt['prismcast_play_elapsed_seconds'] = round(_time.time() - play_t0, 3)
             attempt['elapsed_seconds'] = round(_time.time() - t0, 1)
+            attempt['failure_class'] = 'watch_page_unreachable_or_capture_start_timeout'
             return False, f'"{tc.name}": PrismCast /play timed out (couldn\'t reach the watch page or reach a playable state).'
         except Exception as e:
+            attempt['prismcast_play_elapsed_seconds'] = round(_time.time() - play_t0, 3)
             attempt['elapsed_seconds'] = round(_time.time() - t0, 1)
             attempt['play_body'] = type(e).__name__
+            attempt['failure_class'] = 'prismcast_request_error'
             return False, f'"{tc.name}": {type(e).__name__}.'
         attempt['play_status'] = r.status_code
         attempt['health_after_play'] = _snapshot_health(f'after_play:{tc.id}')
@@ -4185,8 +4291,10 @@ def test_prismcast():
             attempt['elapsed_seconds'] = round(_time.time() - t0, 1)
             if tc.source and tc.source.name == 'amazon_prime_free' and r.status_code in (401, 403, 500):
                 attempt['auth_failure'] = True
+                attempt['failure_class'] = 'license_or_auth_failure'
                 return False, (f'"{tc.name}": Amazon playback authentication failed '
                                f'(HTTP {r.status_code}); the cookie/session may be missing or expired.')
+            attempt['failure_class'] = 'capture_start_failed'
             detail = f'"{tc.name}": PrismCast /play returned HTTP {r.status_code}'
             if body:
                 detail += f': {body}'
@@ -4196,6 +4304,7 @@ def test_prismcast():
             hls = prismcast_url + hls
         attempt['redirect_url'] = hls
         segs = 0
+        hls_t0 = _time.time()
         deadline = _time.time() + 12
         while _time.time() < deadline:
             _time.sleep(3)
@@ -4211,12 +4320,16 @@ def test_prismcast():
             if segs >= 2:
                 break
         attempt['segments'] = segs
+        attempt['hls_probe_elapsed_seconds'] = round(_time.time() - hls_t0, 3)
         attempt['elapsed_seconds'] = round(_time.time() - t0, 1)
         attempt['health_after_hls'] = _snapshot_health(f'after_hls:{tc.id}')
         if segs >= 2:
+            attempt['failure_class'] = 'capture_success'
             return True, f'Captured "{tc.name}" in {_time.time()-t0:.0f}s — {segs}+ segments flowing. The full chain works.'
         if 404 in attempt['hls_statuses']:
+            attempt['failure_class'] = 'manifest_or_segment_failure'
             return False, f'"{tc.name}": session started but the HLS playlist returned 404 while polling.'
+        attempt['failure_class'] = 'manifest_or_segment_failure'
         return False, f'"{tc.name}": session started but produced no video.'
 
     if not health_ok:
@@ -4259,6 +4372,17 @@ def test_prismcast():
             fix += ' If only some channels fail, those channels couldn\'t resolve right now (not a PrismCast problem).'
             add('End-to-end capture', 'fail',
                 'No test channel captured. Tried: ' + ' | '.join(attempts), fix=fix)
+
+    failed_attempts = [a for a in diagnostics['attempts'] if a.get('failure_class') and a.get('failure_class') != 'capture_success']
+    if failed_attempts:
+        classes = ', '.join(f"{a.get('source') or 'unknown'}={a.get('failure_class')}" for a in failed_attempts)
+        add('Capture failure classification', 'info',
+            'Best-effort classification from HTTP status, timing, health, and HLS results: ' + classes,
+            'This classification is inferential; PrismCast does not expose its internal browser error in the diagnostic API.')
+    if diagnostics.get('health_snapshots'):
+        last_health = diagnostics['health_snapshots'][-1].get('body') or {}
+        streams = last_health.get('streams') if isinstance(last_health.get('streams'), dict) else {}
+        diagnostics['resources']['prismcast_streams'] = {'active': streams.get('active'), 'limit': streams.get('limit')}
 
     from .play import get_recent_proxy_failures
     diagnostics['proxy_failures'] = get_recent_proxy_failures(since=diagnostic_started)

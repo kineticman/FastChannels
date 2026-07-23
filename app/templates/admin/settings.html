@@ -1012,6 +1012,8 @@ let _lastPrismcastDiagnostics = '';
 function formatPrismcastDiagnostics(data) {
   const d = data.diagnostics || {};
   const settings = d.settings || {};
+  const topology = d.topology || {};
+  const resources = d.resources || {};
   const browserContext = d.browser_context || {};
   const health = d.health || {};
   const attempts = d.attempts || [];
@@ -1037,6 +1039,28 @@ function formatPrismcastDiagnostics(data) {
     `  PrismCast max height: ${settings.prismcast_max_height || 0}`,
     `  Browser origin: ${browserContext.origin || '(unknown)'}`,
     `  Browser isSecureContext: ${browserContext.is_secure_context == null ? '(not reported)' : browserContext.is_secure_context}`,
+    '',
+    'Runtime / network topology:',
+    '  FastChannels runtime: ' + (topology.fastchannels_runtime || '(unknown)'),
+    '  FastChannels hostname: ' + (topology.fastchannels_hostname || '(unknown)'),
+    '  PrismCast runtime: ' + (topology.prismcast_runtime || '(unknown)'),
+    '  PrismCast host: ' + (topology.prismcast_host || '(unknown)'),
+    '  PrismCast network mode: ' + (topology.prismcast_network_mode || '(unknown)'),
+    '  Watch-page host: ' + (topology.watch_page_host || '(unknown)'),
+    '  Watch-page loopback: ' + (topology.watch_page_loopback == null ? '(unknown)' : topology.watch_page_loopback),
+    '  Public base host: ' + (topology.public_base_host || '(unknown)'),
+    '  Public/watch host match: ' + (topology.public_watch_host_match == null ? '(unknown)' : topology.public_watch_host_match),
+    '  Docker socket visible: ' + (topology.docker_socket_available == null ? '(unknown)' : topology.docker_socket_available),
+    '  Network-mode source: ' + (topology.network_mode_source || '(unknown)'),
+    '  Network-mode note: ' + (topology.network_mode_note || '(none)'),
+    '  Timing note: ' + (d.timing_note || '(none)'),
+    '',
+    'FastChannels resource snapshot:',
+    '  Load average: ' + (resources.load_average ? resources.load_average.join(', ') : '(unknown)'),
+    '  Memory: ' + (resources.memory_mb && resources.memory_mb.MemAvailable != null ? resources.memory_mb.MemAvailable + ' MB available / ' + (resources.memory_mb.MemTotal || '?') + ' MB total' : '(unknown)'),
+    '  Process max RSS: ' + (resources.max_rss_mb == null ? '(unknown)' : resources.max_rss_mb + ' MB'),
+    '  Cgroup memory: ' + (resources.cgroup_memory_mb && resources.cgroup_memory_mb.current != null ? resources.cgroup_memory_mb.current + ' MB / ' + resources.cgroup_memory_mb.limit + ' MB' : '(not limited or unavailable)'),
+    '  PrismCast streams at end: ' + (resources.prismcast_streams ? resources.prismcast_streams.active + '/' + resources.prismcast_streams.limit : '(unknown)'),
     '',
     'PrismCast health:',
     `  Status: ${health.status || '(unknown)'}`,
@@ -1113,6 +1137,9 @@ function formatPrismcastDiagnostics(data) {
       lines.push(`    Watch URL: ${a.watch_url || '(blank)'}`);
       lines.push(`    PrismCast /play URL: ${a.prismcast_play_url || '(blank)'}`);
       lines.push(`    /play status: ${a.play_status == null ? '(none)' : a.play_status}`);
+      if (a.failure_class) lines.push(`    Failure classification: ${a.failure_class}`);
+      if (a.prismcast_play_elapsed_seconds != null) lines.push(`    PrismCast /play elapsed: ${a.prismcast_play_elapsed_seconds}s`);
+      if (a.hls_probe_elapsed_seconds != null) lines.push(`    HLS probe elapsed: ${a.hls_probe_elapsed_seconds}s`);
       if (a.play_body) lines.push(`    /play body: ${a.play_body}`);
       if (a.redirect_url) lines.push(`    HLS redirect: ${a.redirect_url}`);
       if (a.health_before_play) lines.push(`    Health before /play: ${snapshotLine(a.health_before_play).trim()}`);
@@ -1234,6 +1261,9 @@ async function testPrismcast() {
 
     html += `<details style="margin-top:0.75rem"><summary style="cursor:pointer;color:var(--text-soft);font-weight:600">Technical details</summary>`;
     html += `<div style="margin-top:0.55rem;color:var(--text-subtle);font-size:0.84rem">Watch page: ${esc(d.settings?.watch_page_url_base || '(unknown)')}<br>PrismCast: ${esc(d.settings?.prismcast_url || '(unknown)')}<br>Secure context: ${esc(browserContext.origin || '(unknown)')} · ${secureContext ? 'true' : 'false'}</div>`;
+    html += '<div style="margin-top:0.65rem;color:var(--text-muted);font-size:0.8rem">Runtime / network topology: ' + esc(topology.fastchannels_runtime || '(unknown)') + ' · PrismCast runtime ' + esc(topology.prismcast_runtime || '(unknown)') + ' · network mode ' + esc(topology.prismcast_network_mode || '(unknown)') + ' · Watch-page host ' + esc(topology.watch_page_host || '(unknown)') + '</div>';
+    html += '<div style="margin-top:0.35rem;color:var(--text-muted);font-size:0.8rem">Timing: ' + esc(d.timing_note || '(unknown)') + '</div>';
+    html += '<div style="margin-top:0.35rem;color:var(--text-muted);font-size:0.8rem">Resources: ' + esc(resources.load_average ? 'load ' + resources.load_average.join(', ') : 'load unknown') + ' · ' + esc(resources.memory_mb && resources.memory_mb.MemAvailable != null ? resources.memory_mb.MemAvailable + ' MB available' : 'memory unknown') + ' · max RSS ' + esc(resources.max_rss_mb == null ? 'unknown' : resources.max_rss_mb + ' MB') + '</div>';
     if (apiProbes.length || portProbes.length) {
       html += `<div style="margin-top:0.65rem;color:var(--text-muted);font-size:0.8rem">`
         + apiProbes.map(p => `${esc(p.path)} · HTTP ${esc(p.status_code == null ? '(none)' : p.status_code)}`).join('<br>')
@@ -1248,6 +1278,7 @@ async function testPrismcast() {
         html += `<div style="margin-top:0.55rem;padding:0.55rem 0;border-top:1px solid var(--border);font-size:0.8rem;color:var(--text-muted)">`
           + `<strong>${i + 1}. ${esc(a.source || '')} · ${esc(a.channel_name || 'Unknown channel')}</strong><br>`
           + `Diagnostic ID: ${esc(a.request_id || '(none)')} · HTTP ${esc(a.play_status == null ? '(none)' : a.play_status)} · ${esc(a.segments || 0)} segments · ${esc(a.elapsed_seconds == null ? '?' : a.elapsed_seconds)}s`
+          + `<br>Class: ${esc(a.failure_class || 'unknown')} · /play ${esc(a.prismcast_play_elapsed_seconds == null ? '?' : a.prismcast_play_elapsed_seconds)}s · HLS ${esc(a.hls_probe_elapsed_seconds == null ? '?' : a.hls_probe_elapsed_seconds)}s`
           + (a.play_body ? `<br><span style="color:var(--warning-soft)">${esc(a.play_body)}</span>` : '')
           + `</div>`;
       });
