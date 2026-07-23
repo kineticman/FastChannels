@@ -17,7 +17,7 @@ from urllib.parse import quote as _url_quote, urljoin, urlsplit, parse_qs as _pa
 
 import requests as _requests
 
-from flask import Blueprint, redirect, abort, request, Response, render_template, g
+from flask import Blueprint, redirect, abort, request, Response, render_template, g, stream_with_context
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
 from ..hls import inspect_hls_drm, parse_stream_info
 from ..models import Channel, Source
@@ -398,6 +398,51 @@ def _unavailable_response() -> Response:
         mimetype='text/plain',
         headers={'Retry-After': '30'},
     )
+
+def _stream_upstream_response(
+    upstream: _requests.Response,
+    *,
+    status: int = 200,
+    content_type: str | None = None,
+    headers: dict | None = None,
+    label: str = 'upstream',
+) -> Response:
+    request_id = getattr(g, 'request_id', '-')
+    upstream_status = upstream.status_code
+    bytes_sent = 0
+
+    def generate():
+        nonlocal bytes_sent
+        try:
+            for chunk in upstream.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    bytes_sent += len(chunk)
+                    yield chunk
+        except _requests.RequestException as exc:
+            logger.warning(
+                '[%s] stream interrupted request_id=%s upstream_status=%s bytes=%s: %s',
+                label, request_id, upstream_status, bytes_sent, exc,
+            )
+        except Exception:
+            logger.exception(
+                '[%s] stream failed request_id=%s upstream_status=%s bytes=%s',
+                label, request_id, upstream_status, bytes_sent,
+            )
+        finally:
+            upstream.close()
+            logger.info(
+                '[%s] stream closed request_id=%s upstream_status=%s bytes=%s',
+                label, request_id, upstream_status, bytes_sent,
+            )
+
+    response = Response(
+        stream_with_context(generate()),
+        status=status,
+        content_type=content_type,
+        headers=headers or {},
+    )
+    response.call_on_close(upstream.close)
+    return response
 
 # TTL-cache for custom channel re-detection results.
 # Key: channel.id  Value: (stream_url, headers, monotonic_timestamp, resolver)
@@ -882,7 +927,7 @@ def distro_segment_proxy():
         abort(403)
     try:
         video_only = request.args.get('video_only') == '1' and parsed.netloc == 'global.cgtn.cicc.media.caton.cloud'
-        r = _DISTRO_PROXY_SESSION.get(url, timeout=15, stream=not video_only)
+        r = _DISTRO_PROXY_SESSION.get(url, timeout=(5, 30), stream=not video_only)
         if r.status_code != 200:
             abort(r.status_code)
         if video_only:
@@ -893,11 +938,12 @@ def distro_segment_proxy():
                 content_type=r.headers.get('Content-Type', 'video/MP2T'),
                 headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
             )
-        return Response(
-            r.iter_content(65536),
+        return _stream_upstream_response(
+            r,
             status=200,
             content_type=r.headers.get('Content-Type', 'video/MP2T'),
             headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+            label='distro-seg-proxy',
         )
     except Exception as e:
         logger.warning('[distro-seg-proxy] fetch failed for %s: %s', url[:80], e)
@@ -987,14 +1033,15 @@ def cspan_segment_proxy():
     try:
         # allow_redirects=False: the host allowlist only vets the original URL,
         # so a 3xx to an internal address would otherwise bypass it (SSRF).
-        r = _CSPAN_PROXY_SESSION.get(url, timeout=15, stream=True, allow_redirects=False)
+        r = _CSPAN_PROXY_SESSION.get(url, timeout=(5, 30), stream=True, allow_redirects=False)
         if r.status_code != 200:
             abort(r.status_code)
-        return Response(
-            r.iter_content(65536),
+        return _stream_upstream_response(
+            r,
             status=200,
             content_type=r.headers.get('Content-Type', 'video/MP2T'),
             headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+            label='cspan-seg-proxy',
         )
     except _requests.RequestException as e:
         # Narrow to request errors so the abort(r.status_code) above (a werkzeug
@@ -1596,7 +1643,7 @@ def fubo_segment_proxy():
         abort(403)
 
     try:
-        r = _requests.get(url, timeout=15, stream=True)
+        r = _requests.get(url, timeout=(5, 30), stream=True)
         r.raise_for_status()
     except Exception as e:
         logger.warning('[fubo-seg] fetch failed for %s: %s', url[:80], e)
@@ -1605,10 +1652,11 @@ def fubo_segment_proxy():
     content_type = r.headers.get('Content-Type', 'application/octet-stream')
     # Stream the segment chunk-by-chunk; r.content would buffer the whole
     # (multi-MB) segment into the worker before sending, defeating stream=True.
-    return Response(
-        r.iter_content(65536),
-        mimetype=content_type,
+    return _stream_upstream_response(
+        r,
+        content_type=content_type,
         headers={'Access-Control-Allow-Origin': '*'},
+        label='fubo-seg',
     )
 
 
@@ -1970,17 +2018,18 @@ def stirr_segment_proxy():
         abort(403)
     _hdrs = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
-        r = _stirr_session().get(url, headers=_hdrs, timeout=15, stream=True)
+        r = _stirr_session().get(url, headers=_hdrs, timeout=(5, 30), stream=True)
         r.raise_for_status()
     except Exception as e:
         logger.warning('[stirr-segment] fetch failed for %s: %s', url[:80], e)
         abort(502)
     content_type = (r.headers.get('Content-Type') or 'video/mp2t').split(';')[0].strip()
-    return Response(
-        r.iter_content(chunk_size=65536),
+    return _stream_upstream_response(
+        r,
         status=200,
-        mimetype=content_type,
+        content_type=content_type,
         headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+        label='stirr-segment',
     )
 
 
@@ -2191,7 +2240,7 @@ def custom_direct_proxy(channel_id: str):
         headers['Range'] = range_header
 
     try:
-        r = _requests.get(stream_url, headers=headers, timeout=15, stream=True)
+        r = _requests.get(stream_url, headers=headers, timeout=(5, 30), stream=True)
         if r.status_code not in (200, 206):
             abort(r.status_code)
 
@@ -2201,10 +2250,11 @@ def custom_direct_proxy(channel_id: str):
             if value:
                 response_headers[key] = value
 
-        return Response(
-            r.iter_content(65536),
+        return _stream_upstream_response(
+            r,
             status=r.status_code,
             headers=response_headers,
+            label='custom-direct',
         )
     except Exception as e:
         logger.warning('[custom-direct] fetch failed for %s: %s', raw_id, e)
@@ -2327,7 +2377,7 @@ def custom_segment_proxy():
     # real status (e.g. 403/410) instead of being masked as 502, so players and
     # logs reflect what the upstream actually returned.
     try:
-        r = _requests.get(url, headers=_custom_proxy_headers(channel), timeout=15, stream=True)
+        r = _requests.get(url, headers=_custom_proxy_headers(channel), timeout=(5, 30), stream=True)
     except Exception as e:
         logger.warning('[custom-seg-proxy] upstream fetch error host=%s url=%s: %s', seg_host, url[:160], e)
         abort(502)
@@ -2339,11 +2389,12 @@ def custom_segment_proxy():
 
     logger.debug('[custom-seg-proxy] 200 host=%s ct=%s len=%s',
                  seg_host, r.headers.get('Content-Type'), r.headers.get('Content-Length', '?'))
-    return Response(
-        r.iter_content(65536),
+    return _stream_upstream_response(
+        r,
         status=200,
         content_type=r.headers.get('Content-Type', 'video/MP2T'),
         headers={'Cache-Control': 'no-cache'},
+        label='custom-seg-proxy',
     )
 
 
@@ -2892,13 +2943,19 @@ def directv_prismcast_asset():
     if not allowed.scheme or not allowed.netloc or target.scheme not in ('http', 'https') or target.netloc != allowed.netloc:
         abort(400)
     try:
-        r = _requests.get(raw_url, timeout=20, stream=True)
+        r = _requests.get(raw_url, timeout=(5, 30), stream=True)
     except Exception as exc:
         logger.warning('[directv-prismcast] asset fetch failed for %s: %s', raw_url[:160], exc)
         abort(502)
     headers = {'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'}
     content_type = r.headers.get('Content-Type') or 'application/octet-stream'
-    return Response(r.iter_content(64 * 1024), status=r.status_code, content_type=content_type, headers=headers)
+    return _stream_upstream_response(
+        r,
+        status=r.status_code,
+        content_type=content_type,
+        headers=headers,
+        label='directv-prismcast-asset',
+    )
 
 
 @play_bp.route('/play/<source_name>/<channel_id>.m3u8')

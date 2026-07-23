@@ -2525,11 +2525,20 @@ def _get_playback_info(ch, fast_mode=True):
         # Roku is DRM-capable per-channel: only DRM-flagged Roku channels use the
         # license path; plain Roku channels stay native HLS with no license URL.
         if _scraper_cls and not (ch.source.name == 'roku' and not roku_drm):
-            _lu = _scraper_cls.get_license_url(ch.source.config or {}, channel_id=ch.source_channel_id)
-            if _lu:
-                from flask import request as _req
-                _base = _req.host_url.rstrip('/')
-                license_url = f'{_base}/play/{ch.source.name}/license?channel_id={ch.source_channel_id}'
+            from flask import request as _req
+            _base = _req.host_url.rstrip('/')
+            if ch.source.name == 'roku' and roku_drm:
+                # Roku's per-session license URL is created when the DASH route
+                # resolves the matching MPD. Advertise our proxy before that
+                # request so Shaka has a license server when the MPD loads.
+                license_url = f'{_base}/play/roku/license?channel_id={ch.source_channel_id}'
+            else:
+                _lu = _scraper_cls.get_license_url(
+                    ch.source.config or {},
+                    channel_id=ch.source_channel_id,
+                )
+                if _lu:
+                    license_url = f'{_base}/play/{ch.source.name}/license?channel_id={ch.source_channel_id}'
 
     play_url = None
     if (
