@@ -3953,6 +3953,7 @@ def test_prismcast():
     import os as _os
     import time as _time
     import resource as _resource
+    import platform as _platform
 
     settings = AppSettings.get()
     prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
@@ -3960,6 +3961,7 @@ def test_prismcast():
         return jsonify({'error': 'PrismCast Server URL is not set.'}), 400
     inner = (settings.effective_prismcast_inner_url() or public_base_url() or '').strip().rstrip('/')
     dvr_url = (settings.effective_channels_dvr_url() or '').strip()
+    _runtime_os = _platform.system() or 'unknown'
 
     client_probe = request.get_json(silent=True) or {}
     browser_origin = str(client_probe.get('browser_origin') or '').strip()
@@ -3977,6 +3979,7 @@ def test_prismcast():
             'channels_dvr_url': dvr_url,
             'drm_bridge_enabled': bool(settings.drm_bridge_enabled),
             'prismcast_max_height': int(settings.prismcast_max_height or 0),
+            'diagnostic_runtime_os': _runtime_os,
         },
         'topology': {},
         'health': None,
@@ -4149,6 +4152,7 @@ def test_prismcast():
     _network_mode = (_os.environ.get('PRISMCAST_NETWORK_MODE') or '').strip() or 'unknown'
     diagnostics['topology'] = {
         'fastchannels_runtime': 'docker/container' if _fastchannels_containerized else 'native/unknown',
+        'fastchannels_os': _runtime_os,
         'fastchannels_hostname': _socket.gethostname(),
         'prismcast_runtime': (_os.environ.get('PRISMCAST_RUNTIME') or '').strip() or 'unknown',
         'prismcast_host': _pc_host,
@@ -4225,6 +4229,14 @@ def test_prismcast():
     candidate_report = _prismcast_candidate_report()
     diagnostics['candidates'] = candidate_report
     test_channels = _prismcast_test_channels(limit=None)
+    if _runtime_os.lower() == 'linux':
+        cox_candidate = next((item for item in candidate_report if item.get('source') == 'cox' and item.get('source_enabled')), None)
+        if cox_candidate:
+            cox_skip = 'Skipped on Linux: Cox browser DRM playback is not supported by Cox. This is an upstream platform limitation, not a FastChannels or PrismCast failure.'
+            cox_candidate['test_skipped_reason'] = cox_skip
+            test_channels = [tc for tc in test_channels if not (tc.source and tc.source.name == 'cox')]
+            add('Cox Linux compatibility', 'info', cox_skip,
+                'Run the Cox PrismCast test on a supported non-Linux browser/runtime if Cox support is required.')
     selected_by_source = {tc.source.name: tc for tc in test_channels if tc.source}
     selected_names = ', '.join(
         f"{source} ({selected_by_source[source].name})"

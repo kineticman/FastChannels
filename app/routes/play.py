@@ -2896,15 +2896,40 @@ def license_proxy(source_name: str, channel_id: str | None = None):
                 _rdb.setex(f'amz_challenge:{channel_id}', 300, _b64.b64encode(challenge))
             except Exception:
                 pass
-    try:
-        post_license = getattr(scraper_cls, 'post_license_request', None)
+    post_license = getattr(scraper_cls, 'post_license_request', None)
+
+    def _send_license():
         if callable(post_license):
-            r = post_license(license_url, body, headers, timeout=15)
-        else:
-            r = _requests.post(license_url, data=body, headers=headers, timeout=15)
+            return post_license(license_url, body, headers, timeout=15)
+        return _requests.post(license_url, data=body, headers=headers, timeout=15)
+
+    try:
+        r = _send_license()
     except Exception as e:
         logger.warning('[license-proxy] %s request failed: %s', source_name, e)
         abort(502)
+
+    # Philo's DRMtoday token is tied to the channel's playback session. The
+    # session cache can outlive the token, so refresh only this channel once
+    # after a 403 rather than borrowing another channel's token.
+    if r.status_code == 403 and source_name == 'philo' and channel_id:
+        try:
+            fresh_cfg = {**(source.config or {}), **load_source_cache(source.id)}
+            fresh_scraper = scraper_cls(config=fresh_cfg)
+            fresh_scraper.expire_cached_dash(channel_id)
+            fresh_scraper.resolve(f'philo://{channel_id}')
+            if getattr(fresh_scraper, '_pending_cache_updates', None):
+                persist_source_cache_updates(source.id, fresh_scraper._pending_cache_updates)
+            if getattr(fresh_scraper, '_pending_config_updates', None):
+                persist_source_config_updates(source.id, fresh_scraper._pending_config_updates)
+            cfg = {**(source.config or {}), **load_source_cache(source.id)}
+            body, headers = scraper_cls.prepare_license_request(
+                challenge, cfg, channel_id=channel_id, sht=sht)
+            headers.setdefault('Content-Type', 'application/octet-stream')
+            logger.info('[philo-license] refreshed playback session after HTTP 403 channel=%s', channel_id)
+            r = _send_license()
+        except Exception as e:
+            logger.warning('[philo-license] channel refresh after HTTP 403 failed: %s', e)
     logger.debug('[license-proxy] %s channel=%s -> HTTP %s (%d bytes)',
                  source_name, channel_id or '-', r.status_code, len(r.content))
     if r.status_code >= 400:

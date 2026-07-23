@@ -1087,11 +1087,13 @@ function formatPrismcastDiagnostics(data) {
     `  Channels DVR URL: ${settings.channels_dvr_url || '(blank)'}`,
     `  Bridge DRM enabled: ${settings.drm_bridge_enabled}`,
     `  PrismCast max height: ${settings.prismcast_max_height || 0}`,
+    `  Diagnostic runtime OS: ${settings.diagnostic_runtime_os || '(unknown)'}`,
     `  Browser origin: ${browserContext.origin || '(unknown)'}`,
     `  Browser isSecureContext: ${browserContext.is_secure_context == null ? '(not reported)' : browserContext.is_secure_context}`,
     '',
     'Runtime / network topology:',
     '  FastChannels runtime: ' + (topology.fastchannels_runtime || '(unknown)'),
+    '  FastChannels OS: ' + (topology.fastchannels_os || '(unknown)'),
     '  FastChannels hostname: ' + (topology.fastchannels_hostname || '(unknown)'),
     '  PrismCast runtime: ' + (topology.prismcast_runtime || '(unknown)'),
     '  PrismCast host: ' + (topology.prismcast_host || '(unknown)'),
@@ -1151,6 +1153,7 @@ function formatPrismcastDiagnostics(data) {
     candidates.forEach(c => {
       lines.push(`  ${c.source}: ${c.selected_channel_name ? `selected ${c.selected_channel_name} (#${c.selected_channel_id})` : 'no selected channel'}; active/enabled ${c.total_active_enabled}; bridge candidates ${c.candidate_count}`);
       lines.push(`    Auth: ${c.auth_detail || '(unknown)'}`);
+      if (c.test_skipped_reason) lines.push(`    Test: ${c.test_skipped_reason}`);
       if (c.reason) lines.push(`    Readiness: ${c.reason}`);
       if (c.fix) lines.push(`    Fix: ${c.fix}`);
     });
@@ -1298,12 +1301,13 @@ async function testPrismcast() {
       sourceCandidates.forEach(c => {
         const attempt = attemptBySource[c.source];
         const passed = attempt && (attempt.segments || 0) >= 2;
+        const skipped = Boolean(c.test_skipped_reason);
         const notTested = !c.selected_channel_name;
-        const state = passed ? 'Passed' : (notTested ? 'Not tested' : 'Failed');
-        const stateColor = passed ? 'var(--success-soft)' : (notTested ? 'var(--warning-soft)' : 'var(--danger)');
-        const detail = passed ? `${attempt.segments}+ segments · ${attempt.elapsed_seconds || '?'}s` : c.reason;
+        const state = passed ? 'Passed' : (skipped ? 'Skipped' : (notTested ? 'Not tested' : 'Failed'));
+        const stateColor = passed ? 'var(--success-soft)' : (skipped || notTested ? 'var(--warning-soft)' : 'var(--danger)');
+        const detail = passed ? `${attempt.segments}+ segments · ${attempt.elapsed_seconds || '?'}s` : (c.test_skipped_reason || c.reason);
         html += `<div style="display:flex;align-items:flex-start;gap:0.55rem;padding:0.62rem 0;border-bottom:1px solid var(--border)">`
-          + `<div style="color:${stateColor};font-size:1rem;line-height:1.2">${passed ? '✓' : (notTested ? '⚠' : '✗')}</div>`
+          + `<div style="color:${stateColor};font-size:1rem;line-height:1.2">${passed ? '✓' : (skipped || notTested ? '⚠' : '✗')}</div>`
           + `<div style="min-width:0;flex:1"><div style="display:flex;justify-content:space-between;gap:0.5rem;flex-wrap:wrap"><strong>${esc(c.source)}</strong><span style="color:${stateColor};font-size:0.82rem;font-weight:600">${state}</span></div>`
           + `<div style="color:var(--text-subtle);font-size:0.84rem;margin-top:0.2rem">${esc(c.selected_channel_name ? c.selected_channel_name : detail)}</div>`
           + `<div style="color:var(--text-muted);font-size:0.78rem;margin-top:0.15rem">${esc(c.auth_detail || '')}${c.selected_channel_name ? ` · ${esc(detail)}` : ''}</div></div></div>`;
