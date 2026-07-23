@@ -37,6 +37,8 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
     stream_audit_enabled = True
     source_category = 'drm'
+    # Every Amazon Free channel uses the CENC/Widevine bridge path.
+    all_channels_require_drm_bridge = True
     audit_requires_config = ['cookie_header']
     license_url = 'https://atv-ps.amazon.com/playback/drm-linear/GetWidevineLicense'
     kodi_props = {

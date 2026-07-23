@@ -42,7 +42,7 @@ def drm_capable_source_names() -> list[str]:
     and kept out of the standard feed. Single source of truth for "is this source
     bridgeable"; callers in the feed query, audit, PrismCast test, and Settings nudge
     all route through here so they can never disagree."""
-    return [name for name, cls in get_all().items() if getattr(cls, 'license_url', None)]
+    return sorted({cls.source_name for cls in get_all().values() if getattr(cls, 'license_url', None)})
 
 
 def source_is_drm_capable(source_name: str | None) -> bool:

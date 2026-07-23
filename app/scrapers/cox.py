@@ -428,6 +428,7 @@ class CoxScraper(BaseScraper):
     config_required = True
     is_premium = True
     source_category = 'premium'
+    under_development = True
     license_url = LICENSE_URL
     stream_audit_enabled = False
     audit_requires_config = ['username', 'password']

@@ -61,6 +61,8 @@ class SlingScraper(BaseScraper):
     stream_audit_enabled = True
     epg_quality = 'basic'     # thumbnails only; no program descriptions
     source_category = 'drm'
+    # Sling Freestream channels use the CENC/Widevine bridge path.
+    all_channels_require_drm_bridge = True
     license_url = 'https://p-drmwv.movetv.com/widevine/proxy'
     config_schema = [
         ConfigField('username', 'Email', placeholder='you@example.com',

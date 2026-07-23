@@ -1,5 +1,8 @@
 import os
-from flask import Flask
+import logging
+import secrets
+from flask import Flask, g, jsonify, request
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from .extensions import db
 from .config import Config, VERSION
@@ -29,6 +32,50 @@ def _ensure_sqlite_parent_dir(database_uri: str | None) -> None:
 def create_app(config_class=Config):
     logfile.setup()
     app = Flask(__name__)
+
+    @app.before_request
+    def assign_request_id():
+        incoming = (request.headers.get('X-Request-ID') or '').strip()
+        g.request_id = incoming[:80] if incoming else secrets.token_hex(8)
+
+    @app.after_request
+    def attach_request_diagnostics(response):
+        request_id = getattr(g, 'request_id', None)
+        if request_id:
+            response.headers['X-FastChannels-Request-ID'] = request_id
+        failure_stage = getattr(g, 'failure_stage', None)
+        if failure_stage and response.status_code >= 500:
+            response.headers['X-FastChannels-Failure-Stage'] = failure_stage
+        return response
+
+    @app.errorhandler(Exception)
+    def handle_unexpected_error(exc):
+        if isinstance(exc, HTTPException):
+            return exc
+        path = request.path or ''
+        if '/license' in path or '/certificate' in path:
+            stage = 'license'
+        elif '/watch/' in path:
+            stage = 'watch-page'
+        elif '/dash.mpd' in path or path.endswith('.m3u8'):
+            stage = 'manifest'
+        elif '/play' in path:
+            stage = 'resolve'
+        else:
+            stage = 'server'
+        g.failure_stage = stage
+        request_id = getattr(g, 'request_id', '-')
+        logging.getLogger(__name__).exception(
+            '[http-error] request_id=%s stage=%s method=%s path=%s',
+            request_id, stage, request.method, path,
+        )
+        return jsonify({
+            'error': 'Internal server error',
+            'request_id': request_id,
+            'failure_stage': stage,
+            'path': path,
+        }), 500
+
     # Trust X-Forwarded-Proto/Host/Port from reverse proxies (Nginx, Traefik, Caddy, etc.)
     # so that request.host_url reflects the public scheme/host/port instead of the
     # internal connection details. x_port ensures standard ports (80/443) are not

@@ -17,7 +17,7 @@ from urllib.parse import quote as _url_quote, urljoin, urlsplit, parse_qs as _pa
 
 import requests as _requests
 
-from flask import Blueprint, redirect, abort, request, Response, render_template
+from flask import Blueprint, redirect, abort, request, Response, render_template, g
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
 from ..hls import inspect_hls_drm, parse_stream_info
 from ..models import Channel, Source
@@ -2927,8 +2927,8 @@ def play(source_name: str, channel_id: str):
     # Custom channels log full detail (incl. cache/resolver) via _log_custom_play_path
     _log_play_req = logger.debug if source_name == 'custom' else logger.info
     _log_play_req(
-        '[play] request ip=%s source=%s channel_id=%s channel_name=%s',
-        client_ip, source_name, channel_id, channel.name,
+        '[play] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s',
+        getattr(g, 'request_id', '-'), client_ip, source_name, channel_id, channel.name,
     )
 
     if source_name == 'samsung':
@@ -2959,8 +2959,8 @@ def play(source_name: str, channel_id: str):
             resolve_dead = True
         except Exception as e:
             logger.error(
-                '[play] resolve failed ip=%s source=%s channel_id=%s channel_name=%s: %s',
-                client_ip, source_name, channel_id, channel.name, e,
+                '[play] resolve failed request_id=%s ip=%s source=%s channel_id=%s channel_name=%s: %s',
+                getattr(g, 'request_id', '-'), client_ip, source_name, channel_id, channel.name, e,
             )
             resolved_url = None
         finally:
@@ -3199,8 +3199,8 @@ def play(source_name: str, channel_id: str):
         threading.Thread(target=_bg_check, daemon=True).start()
 
     logger.debug(
-        '[play] redirect ip=%s source=%s channel_id=%s channel_name=%s → %s',
-        client_ip, source_name, channel_id, channel.name, resolved_url[:80],
+        '[play] redirect request_id=%s ip=%s source=%s channel_id=%s channel_name=%s → %s',
+        getattr(g, 'request_id', '-'), client_ip, source_name, channel_id, channel.name, resolved_url[:80],
     )
     if source_name == 'custom':
         _log_custom_play_path(
@@ -3216,6 +3216,9 @@ def play(source_name: str, channel_id: str):
 
 @play_bp.route('/watch/<int:channel_id>')
 def watch(channel_id):
+    capture_request_id = (request.args.get('fc_request_id') or '').strip()
+    if capture_request_id:
+        g.request_id = capture_request_id[:80]
     from .api import _get_playback_info
     from flask import make_response
     from ..models import AppSettings
@@ -3237,6 +3240,7 @@ def watch(channel_id):
         stream_type=info.get('stream_type', 'hls'),
         license_url=info.get('license_url') or '',
         watch_debug=request.args.get('debug') == '1',
+        request_id=getattr(g, 'request_id', ''),
         max_height=max_height,
     ))
     resp.headers['Cache-Control'] = 'no-store'
@@ -3247,6 +3251,7 @@ def watch(channel_id):
 def watch_debug(channel_id):
     channel = Channel.query.get_or_404(channel_id)
     payload = request.get_json(silent=True) or {}
+    debug_request_id = str(payload.get('request_id') or getattr(g, 'request_id', '-'))[:80]
     event = str(payload.get('event') or 'event')[:48]
     extra = payload.get('extra') if isinstance(payload.get('extra'), dict) else {}
     state = {
@@ -3265,7 +3270,8 @@ def watch_debug(channel_id):
         'decoded': payload.get('decoded'),
     }
     logger.info(
-        '[watch-debug] event=%s ip=%s channel_id=%s source=%s source_channel_id=%s channel_name=%s state=%s extra=%s',
+        '[watch-debug] request_id=%s event=%s ip=%s channel_id=%s source=%s source_channel_id=%s channel_name=%s state=%s extra=%s',
+        debug_request_id,
         event,
         request.headers.get('X-Forwarded-For') or request.remote_addr,
         channel.id,

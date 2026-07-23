@@ -185,6 +185,11 @@
       color: var(--warning-soft);
       border-color: var(--warning-border);
     }
+    .config-badge.development {
+      background: color-mix(in srgb, var(--warning-bg) 45%, transparent);
+      color: var(--warning-soft);
+      border-color: var(--warning-border);
+    }
     .config-badge.premium {
       background: color-mix(in srgb, #7c3aed 12%, transparent);
       color: #a78bfa;
@@ -659,6 +664,9 @@
                   {% if source.last_error %}<span class="err-pip" title="{{ source.last_error }}">⚠</span>{% endif %}
                   {% if premium_sources.get(source.name) %}
                     <span class="config-badge premium">Premium</span>
+                  {% endif %}
+                  {% if under_development.get(source.name) %}
+                    <span class="config-badge development" title="This source is under development and disabled by default">Under development</span>
                   {% endif %}
                   {% if cfg_status == 'configured' %}
                     <span class="config-badge configured" id="config-badge-{{ source.id }}">Configured</span>

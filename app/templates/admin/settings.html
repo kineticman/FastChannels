@@ -847,7 +847,7 @@
   </div>
 
   <!-- PrismCast setup test modal -->
-  <div class="modal-overlay" id="prismcast-test-modal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal-overlay" id="prismcast-test-modal">
     <div class="modal-box" style="max-width:760px;max-height:85vh;display:flex;flex-direction:column">
       <h3 style="margin:0 0 0.25rem">PrismCast setup test</h3>
       <p style="color:var(--text-subtle);margin:0 0 1rem;font-size:0.85rem;line-height:1.5">
@@ -1012,8 +1012,10 @@ let _lastPrismcastDiagnostics = '';
 function formatPrismcastDiagnostics(data) {
   const d = data.diagnostics || {};
   const settings = d.settings || {};
+  const browserContext = d.browser_context || {};
   const health = d.health || {};
   const attempts = d.attempts || [];
+  const candidates = d.candidates || [];
   const healthSnapshots = d.health_snapshots || [];
   const apiProbes = d.api_probes || [];
   const portProbes = d.port_probes || [];
@@ -1024,7 +1026,7 @@ function formatPrismcastDiagnostics(data) {
   };
   const lines = [
     'PrismCast setup diagnostics',
-    `Overall: ${(data.overall || 'unknown').toUpperCase()}`,
+    `Overall: ${data.overall_label || (data.overall || 'unknown').toUpperCase()}`,
     '',
     'Settings:',
     `  Public Base URL: ${settings.public_base_url || '(blank)'}`,
@@ -1033,6 +1035,8 @@ function formatPrismcastDiagnostics(data) {
     `  Channels DVR URL: ${settings.channels_dvr_url || '(blank)'}`,
     `  Bridge DRM enabled: ${settings.drm_bridge_enabled}`,
     `  PrismCast max height: ${settings.prismcast_max_height || 0}`,
+    `  Browser origin: ${browserContext.origin || '(unknown)'}`,
+    `  Browser isSecureContext: ${browserContext.is_secure_context == null ? '(not reported)' : browserContext.is_secure_context}`,
     '',
     'PrismCast health:',
     `  Status: ${health.status || '(unknown)'}`,
@@ -1066,6 +1070,17 @@ function formatPrismcastDiagnostics(data) {
   } else {
     healthSnapshots.forEach(snap => lines.push(snapshotLine(snap)));
   }
+  lines.push('', 'DRM candidates:');
+  if (!candidates.length) {
+    lines.push('  (none)');
+  } else {
+    candidates.forEach(c => {
+      lines.push(`  ${c.source}: ${c.selected_channel_name ? `selected ${c.selected_channel_name} (#${c.selected_channel_id})` : 'no selected channel'}; active/enabled ${c.total_active_enabled}; bridge candidates ${c.candidate_count}`);
+      lines.push(`    Auth: ${c.auth_detail || '(unknown)'}`);
+      if (c.reason) lines.push(`    Readiness: ${c.reason}`);
+      if (c.fix) lines.push(`    Fix: ${c.fix}`);
+    });
+  }
   lines.push('', 'Checks:');
   (data.checks || []).forEach(c => {
     lines.push(`  [${c.status || '?'}] ${c.name || ''}: ${c.detail || ''}`);
@@ -1080,6 +1095,7 @@ function formatPrismcastDiagnostics(data) {
   } else {
     attempts.forEach((a, i) => {
       lines.push(`  Attempt ${i + 1}: ${a.channel_name || '(unknown)'} (${a.source || '?'}/${a.source_channel_id || a.channel_id || '?'})`);
+      lines.push(`    Diagnostic ID: ${a.request_id || '(none)'}`);
       lines.push(`    Watch URL: ${a.watch_url || '(blank)'}`);
       lines.push(`    PrismCast /play URL: ${a.prismcast_play_url || '(blank)'}`);
       lines.push(`    /play status: ${a.play_status == null ? '(none)' : a.play_status}`);
@@ -1124,7 +1140,11 @@ async function testPrismcast() {
   _lastPrismcastDiagnostics = '';
   body.innerHTML = '<div style="color:var(--text-subtle)">Running checks — this takes ~15–30s (it does a real capture)…</div>';
   try {
-    const r = await fetch('/api/settings/prismcast/test', { method: 'POST' });
+    const r = await fetch('/api/settings/prismcast/test', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ browser_origin: window.location.origin, browser_secure_context: window.isSecureContext }),
+    });
     if (r.status === 400) {
       const e = await r.json();
       body.innerHTML = `<div style="color:var(--warning-soft)">${esc(e.error || 'PrismCast is not configured.')}</div>`;
@@ -1138,45 +1158,89 @@ async function testPrismcast() {
     const overall = (data.overall || 'ok');
     const d = data.diagnostics || {};
     const attempts = d.attempts || [];
+    const candidates = d.candidates || [];
+    const browserContext = d.browser_context || {};
     const apiProbes = d.api_probes || [];
     const portProbes = d.port_probes || [];
-    let html = `<div style="color:${color[overall]||''};font-weight:700;font-size:1.05rem;margin-bottom:0.6rem">Overall: ${overall.toUpperCase()}</div>`;
-    (data.checks || []).forEach(c => {
-      html += `<div style="padding:0.55rem 0;border-bottom:1px solid var(--border)">`
-            +   `<div style="color:${color[c.status]||''};font-weight:600">${icon[c.status]||'?'} ${esc(c.name)}</div>`
-            +   `<div style="color:var(--text-subtle);font-size:0.9rem;margin-top:0.25rem">${esc(c.detail)}</div>`
-            +   (c.fix ? `<div style="color:var(--text-muted);font-size:0.85rem;margin-top:0.3rem">${c.status === 'info' ? 'Note' : 'Fix'}: ${esc(c.fix)}</div>` : '')
-            + `</div>`;
-    });
-    if (apiProbes.length || portProbes.length) {
-      html += `<details style="margin-top:0.75rem"><summary style="cursor:pointer;color:var(--text-soft);font-weight:600">PrismCast API details</summary>`;
-      if (apiProbes.length) {
-        html += `<div style="margin-top:0.55rem;color:var(--text-subtle);font-size:0.86rem">`
-              + apiProbes.map(p => `${esc(p.path)}: HTTP ${esc(p.status_code == null ? '(none)' : p.status_code)} · ${p.available ? 'available' : 'unavailable'}`).join('<br>')
-              + `</div>`;
-      }
-      if (portProbes.length) {
-        html += `<div style="margin-top:0.55rem;color:var(--text-subtle);font-size:0.86rem">`
-              + portProbes.map(p => `${esc(p.label)} ${esc(p.host || '?')}:${esc(p.port)} · ${p.open ? 'open' : 'closed'}`).join('<br>')
-              + `</div>`;
-      }
-      html += `</details>`;
+    const health = d.health || {};
+    const attemptBySource = {};
+    attempts.forEach(a => { if (a.source) attemptBySource[a.source] = a; });
+    const sourceCandidates = candidates.filter(c => c.source_enabled);
+    const disabledSources = candidates.filter(c => !c.source_enabled).map(c => c.source);
+    const actionChecks = (data.checks || []).filter(c => (c.status === 'warn' || c.status === 'fail') && !String(c.name || '').includes('candidate readiness'));
+    const secureContext = browserContext.is_secure_context === true;
+    const summaryItem = (label, value, tone='var(--text-subtle)') =>
+      `<div style="min-width:0"><div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase">${esc(label)}</div><div style="margin-top:0.18rem;color:${tone};font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(value)}</div></div>`;
+
+    let html = `<div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.8rem">`
+      + `<div><div style="font-size:1.05rem;font-weight:700;color:${color[overall]||'var(--text)'}">${esc(data.overall_label || overall.toUpperCase())}</div>`
+      + `<div style="color:var(--text-muted);font-size:0.82rem;margin-top:0.18rem">Live bridge, browser context, and source checks</div></div>`
+      + `<div style="font-size:1.7rem;color:${color[overall]||'var(--text)'}" aria-hidden="true">${icon[overall]||'?'}</div></div>`;
+
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:0.65rem;padding:0.7rem 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-bottom:0.8rem">`
+      + summaryItem('PrismCast', health.status === 'healthy' ? 'Healthy' : (health.status || 'Unknown'), health.status === 'healthy' ? 'var(--success-soft)' : 'var(--danger)')
+      + summaryItem('Browser context', secureContext ? 'Trusted' : 'Not trusted', secureContext ? 'var(--success-soft)' : 'var(--warning-soft)')
+      + summaryItem('Chrome', health.chrome || 'Unknown')
+      + summaryItem('Capture slots', health.streams ? `${health.streams.active}/${health.streams.limit}` : 'Unknown')
+      + `</div>`;
+
+    if (actionChecks.length) {
+      html += `<div style="margin-bottom:0.8rem">`;
+      actionChecks.forEach(c => {
+        html += `<div style="padding:0.6rem 0;border-bottom:1px solid var(--border)">`
+          + `<div style="color:${color[c.status]||''};font-weight:600">${icon[c.status]||'?'} ${esc(c.name)}</div>`
+          + `<div style="color:var(--text-subtle);font-size:0.86rem;margin-top:0.2rem">${esc(c.detail)}</div>`
+          + (c.fix ? `<div style="color:var(--warning-soft);font-size:0.82rem;margin-top:0.25rem">Fix: ${esc(c.fix)}</div>` : '')
+          + `</div>`;
+      });
+      html += `</div>`;
     }
+
+    if (sourceCandidates.length) {
+      html += `<div style="font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;margin-bottom:0.35rem">Source results</div>`;
+      sourceCandidates.forEach(c => {
+        const attempt = attemptBySource[c.source];
+        const passed = attempt && (attempt.segments || 0) >= 2;
+        const notTested = !c.selected_channel_name;
+        const state = passed ? 'Passed' : (notTested ? 'Not tested' : 'Failed');
+        const stateColor = passed ? 'var(--success-soft)' : (notTested ? 'var(--warning-soft)' : 'var(--danger)');
+        const detail = passed ? `${attempt.segments}+ segments · ${attempt.elapsed_seconds || '?'}s` : c.reason;
+        html += `<div style="display:flex;align-items:flex-start;gap:0.55rem;padding:0.62rem 0;border-bottom:1px solid var(--border)">`
+          + `<div style="color:${stateColor};font-size:1rem;line-height:1.2">${passed ? '✓' : (notTested ? '⚠' : '✗')}</div>`
+          + `<div style="min-width:0;flex:1"><div style="display:flex;justify-content:space-between;gap:0.5rem;flex-wrap:wrap"><strong>${esc(c.source)}</strong><span style="color:${stateColor};font-size:0.82rem;font-weight:600">${state}</span></div>`
+          + `<div style="color:var(--text-subtle);font-size:0.84rem;margin-top:0.2rem">${esc(c.selected_channel_name ? c.selected_channel_name : detail)}</div>`
+          + `<div style="color:var(--text-muted);font-size:0.78rem;margin-top:0.15rem">${esc(c.auth_detail || '')}${c.selected_channel_name ? ` · ${esc(detail)}` : ''}</div></div></div>`;
+      });
+      html += `</div>`;
+    }
+
+    if (disabledSources.length) {
+      html += `<details style="margin-top:0.75rem"><summary style="cursor:pointer;color:var(--text-muted);font-size:0.82rem">Disabled DRM sources (${disabledSources.length})</summary><div style="color:var(--text-muted);font-size:0.82rem;margin-top:0.45rem">${disabledSources.map(esc).join(' · ')}</div></details>`;
+    }
+
+    html += `<details style="margin-top:0.75rem"><summary style="cursor:pointer;color:var(--text-soft);font-weight:600">Technical details</summary>`;
+    html += `<div style="margin-top:0.55rem;color:var(--text-subtle);font-size:0.84rem">Watch page: ${esc(d.settings?.watch_page_url_base || '(unknown)')}<br>PrismCast: ${esc(d.settings?.prismcast_url || '(unknown)')}<br>Secure context: ${esc(browserContext.origin || '(unknown)')} · ${secureContext ? 'true' : 'false'}</div>`;
+    if (apiProbes.length || portProbes.length) {
+      html += `<div style="margin-top:0.65rem;color:var(--text-muted);font-size:0.8rem">`
+        + apiProbes.map(p => `${esc(p.path)} · HTTP ${esc(p.status_code == null ? '(none)' : p.status_code)}`).join('<br>')
+        + (portProbes.length ? `<br>` + portProbes.map(p => `${esc(p.label)} · ${p.open ? 'open' : 'closed'}`).join('<br>') : '')
+        + `</div>`;
+    }
+    html += `</details>`;
+
     if (attempts.length) {
-      html += `<details style="margin-top:0.75rem"><summary style="cursor:pointer;color:var(--text-soft);font-weight:600">Capture attempt details</summary>`;
+      html += `<details style="margin-top:0.65rem"><summary style="cursor:pointer;color:var(--text-muted);font-size:0.82rem">Capture details (${attempts.length})</summary>`;
       attempts.forEach((a, i) => {
-        html += `<div style="margin-top:0.65rem;padding:0.6rem;border:1px solid var(--border);border-radius:6px;background:rgba(255,255,255,0.03)">`
-              + `<div style="font-weight:600;margin-bottom:0.35rem">Attempt ${i + 1}: ${esc(a.channel_name || 'Unknown channel')}</div>`
-              + `<div style="font-size:0.82rem;color:var(--text-muted);font-family:monospace;word-break:break-all" title="${escAttr(a.watch_url || '')}">Watch: ${esc(a.watch_url || '')}</div>`
-              + `<div style="font-size:0.82rem;color:var(--text-muted);font-family:monospace;word-break:break-all;margin-top:0.25rem" title="${escAttr(a.prismcast_play_url || '')}">/play: ${esc(a.prismcast_play_url || '')}</div>`
-              + `<div style="font-size:0.85rem;color:var(--text-subtle);margin-top:0.35rem">Status ${esc(a.play_status == null ? '(none)' : a.play_status)} · segments ${esc(a.segments || 0)} · HLS ${esc((a.hls_statuses || []).join(', ') || '(none)')}</div>`
-              + (a.play_body ? `<div style="font-size:0.82rem;color:var(--warning-soft);margin-top:0.25rem">${esc(a.play_body)}</div>` : '')
-              + `</div>`;
+        html += `<div style="margin-top:0.55rem;padding:0.55rem 0;border-top:1px solid var(--border);font-size:0.8rem;color:var(--text-muted)">`
+          + `<strong>${i + 1}. ${esc(a.source || '')} · ${esc(a.channel_name || 'Unknown channel')}</strong><br>`
+          + `Diagnostic ID: ${esc(a.request_id || '(none)')} · HTTP ${esc(a.play_status == null ? '(none)' : a.play_status)} · ${esc(a.segments || 0)} segments · ${esc(a.elapsed_seconds == null ? '?' : a.elapsed_seconds)}s`
+          + (a.play_body ? `<br><span style="color:var(--warning-soft)">${esc(a.play_body)}</span>` : '')
+          + `</div>`;
       });
       html += `</details>`;
     }
-    html += `<details style="margin-top:0.75rem"><summary style="cursor:pointer;color:var(--text-soft);font-weight:600">Copyable diagnostics</summary>`
-          + `<pre style="white-space:pre-wrap;word-break:break-word;font-size:0.78rem;color:var(--text-muted);background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;padding:0.65rem;max-height:220px;overflow:auto">${esc(_lastPrismcastDiagnostics)}</pre></details>`;
+    html += `<details style="margin-top:0.65rem"><summary style="cursor:pointer;color:var(--text-muted);font-size:0.82rem">Copyable diagnostics</summary>`
+      + `<pre style="white-space:pre-wrap;word-break:break-word;font-size:0.75rem;color:var(--text-muted);background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;padding:0.65rem;max-height:220px;overflow:auto;margin-top:0.5rem">${esc(_lastPrismcastDiagnostics)}</pre></details>`;
     body.innerHTML = html;
   } catch (e) {
     body.innerHTML = `<div style="color:var(--danger)">Test failed to run: ${esc(e)}</div>`;

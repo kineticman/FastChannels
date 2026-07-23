@@ -374,6 +374,10 @@ def dashboard():
     feeds          = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
     app_settings   = AppSettings.get()
     all_scrapers   = _scraper_registry.get_all()
+    under_development = {
+        name: getattr(cls, 'under_development', False)
+        for name, cls in all_scrapers.items()
+    }
     setup_checklist = build_setup_checklist(
         app_settings,
         {source.name: source for source in sources},
@@ -462,6 +466,7 @@ def dashboard():
                            feeds=feeds, source_output_meta=source_output_meta,
                            epg_meta=epg_meta, source_health=source_health,
                            source_updated=source_updated,
+                           under_development=under_development,
                            health_summary=health_summary,
                            setup_checklist=setup_checklist,
                            setup_complete_count=5 - len(setup_checklist),
@@ -484,6 +489,10 @@ def sources():
     }
     premium_sources = {
         name: getattr(cls, 'is_premium', False)
+        for name, cls in all_scrapers.items()
+    }
+    under_development = {
+        name: getattr(cls, 'under_development', False)
         for name, cls in all_scrapers.items()
     }
     source_categories = {
@@ -555,6 +564,7 @@ def sources():
                            audit_enabled=audit_enabled,
                            config_required=config_required,
                            premium_sources=premium_sources,
+                           under_development=under_development,
                            source_categories=source_categories,
                            source_interval_meta=source_interval_meta,
                            source_config_status=source_config_status,

@@ -108,6 +108,7 @@
     const STREAM_TYPE   = {{ stream_type | tojson }};
     const LICENSE_URL   = {{ license_url | tojson }};
     const WATCH_DEBUG   = {{ watch_debug | default(false) | tojson }};
+    const REQUEST_ID    = {{ request_id | default('') | tojson }};
     const MAX_HEIGHT    = {{ max_height | default(0) | tojson }};
     const WATCH_DEBUG_URL = {{ url_for('play.watch_debug', channel_id=channel.id) | tojson }};
   </script>
@@ -152,6 +153,7 @@
         video_size: `${video.videoWidth || 0}x${video.videoHeight || 0}`,
         dropped: quality ? quality.droppedVideoFrames : null,
         decoded: quality ? quality.totalVideoFrames : null,
+        request_id: REQUEST_ID,
         extra,
       };
       const body = JSON.stringify(payload);
@@ -174,9 +176,14 @@
     }
 
     const _chromeDrmTip = '<br><small style="font-size:0.8em;color:#bbb">Chrome tip: paste <code style="background:rgba(255,255,255,0.1);padding:1px 4px;border-radius:3px">chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> into the address bar, add this origin, and relaunch.</small>';
+    const _diagnosticRef = REQUEST_ID
+      ? '<br><small style="font-size:0.75em;color:#aaa">Diagnostic ID: <code>'
+        + String(REQUEST_ID).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+        + '</code></small>'
+      : '';
 
     function setError(msg, includeDrmTip) {
-      hint.innerHTML = msg + (includeDrmTip ? _chromeDrmTip : '');
+      hint.innerHTML = msg + (includeDrmTip ? _chromeDrmTip : '') + _diagnosticRef;
       hint.className = 'hint error';
     }
 
@@ -200,7 +207,7 @@
         if (code === 6007 || code === 6008) setStatus('DRM: license rejected');
         else if (code === 6020) setStatus('DRM: requires HTTPS');
         else if (code === 1001 || code === 1002) setStatus('Network error loading stream');
-        else if (code) setStatus('Shaka error ' + code);
+        else if (code) setStatus('Shaka error ' + code + (REQUEST_ID ? ' · Ref ' + REQUEST_ID : ''));
       } else if (phase === 'load') {
         const code = err && err.code;
         if (code === 4042) {

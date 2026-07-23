@@ -2,6 +2,7 @@ import json
 import logging
 import os as _os
 import re
+import secrets
 import time as _time
 import requests as _req
 
@@ -3929,7 +3930,14 @@ def test_prismcast():
     inner = (settings.effective_prismcast_inner_url() or public_base_url() or '').strip().rstrip('/')
     dvr_url = (settings.effective_channels_dvr_url() or '').strip()
 
+    client_probe = request.get_json(silent=True) or {}
+    browser_origin = str(client_probe.get('browser_origin') or '').strip()
+    browser_secure_context = client_probe.get('browser_secure_context')
     diagnostics = {
+        'browser_context': {
+            'origin': browser_origin,
+            'is_secure_context': browser_secure_context,
+        },
         'settings': {
             'public_base_url': public_base_url() or '',
             'prismcast_url': prismcast_url,
@@ -3943,6 +3951,7 @@ def test_prismcast():
         'api_probes': [],
         'port_probes': [],
         'attempts': [],
+        'candidates': [],
     }
 
     def _clip(value, limit=600):
@@ -4045,12 +4054,12 @@ def test_prismcast():
         _probe_prismcast_api(_path)
     parsed_pc = urlparse(prismcast_url)
     _probe_port('PrismCast API', parsed_pc.port or 5589)
-    _probe_port('HDHomeRun emulation', 5004)
-    _probe_port('noVNC', 6080)
+    _probe_port('HDHomeRun emulation (optional)', 5004)
+    _probe_port('noVNC (optional)', 6080)
 
     available_api = [p['path'] for p in diagnostics['api_probes'] if p.get('available')]
     unavailable_api = [f"{p['path']}={p.get('status_code') or p.get('body') or 'error'}" for p in diagnostics['api_probes'] if not p.get('available')]
-    add('PrismCast API capabilities', 'info',
+    add('PrismCast API capabilities (optional endpoints)', 'info',
         'Available optional endpoints: ' + (', '.join(available_api) if available_api else 'none detected')
         + (f"; unavailable: {', '.join(unavailable_api)}" if unavailable_api else ''))
 
@@ -4073,17 +4082,45 @@ def test_prismcast():
                 'loopback (http://127.0.0.1:<port>) and run PrismCast with host networking. '
                 'Otherwise serve FastChannels over trusted HTTPS.')
 
-    # 3) End-to-end capture: the chain-validating DRM-bridge test. Use only
-    # active/enabled channels that are actually marked for PrismCast bridging from
-    # DRM-capable sources. Do not fall back to arbitrary FAST channels: that proves
-    # generic capture, not the DRM bridge, and can fail on unrelated source quirks.
-    test_channels = _prismcast_test_channels(limit=4)
+    # The server cannot read chrome://flags, but the browser can report the
+    # effective result for the exact admin origin. This catches the insecure-origin
+    # exception without pretending to inspect Chrome's private settings page.
+    if browser_secure_context is True:
+        add('This browser secure context', 'ok',
+            f'{browser_origin or "Current browser origin"} reports window.isSecureContext=true.')
+    elif browser_secure_context is False:
+        add('This browser secure context', 'warn',
+            f'{browser_origin or "Current browser origin"} reports window.isSecureContext=false.',
+            'For an HTTP LAN origin, enable chrome://flags/#unsafely-treat-insecure-origin-as-secure for this exact origin and relaunch Chrome, or use HTTPS.')
+
+    # 3) Inventory every DRM source before capturing. A successful Amazon test
+    # must not hide an untested Roku source.
+    candidate_report = _prismcast_candidate_report()
+    diagnostics['candidates'] = candidate_report
+    test_channels = _prismcast_test_channels(limit=None)
+    selected_by_source = {tc.source.name: tc for tc in test_channels if tc.source}
+    selected_names = ', '.join(
+        f"{source} ({selected_by_source[source].name})"
+        for source in selected_by_source
+    )
+    if selected_names:
+        add('DRM bridge candidates', 'ok', f'Selected one candidate per source: {selected_names}.')
+    else:
+        add('DRM bridge candidates', 'warn', 'No eligible DRM-bridge candidates were selected.')
+    for item in candidate_report:
+        if item.get('source_enabled') and not item.get('candidate_count'):
+            add(f"{item['source']} candidate readiness", 'warn', item['reason'], item.get('fix'))
+        if item.get('source_enabled') and item.get('missing_config'):
+            add(f"{item['source']} authentication configuration", 'fail',
+                item['auth_detail'], item.get('auth_fix'))
 
     def _try_capture(tc):
         """Returns (ok, detail). Drives PrismCast and waits for segments to flow."""
-        watch = f'{inner}/watch/{tc.id}?debug=1&capture_probe=1'
+        capture_request_id = secrets.token_hex(8)
+        watch = f'{inner}/watch/{tc.id}?debug=1&capture_probe=1&fc_request_id={capture_request_id}'
         play = f'{prismcast_url}/play?url={_quote(watch, safe="")}&profile=keyboardFullscreen'
         attempt = {
+            'request_id': capture_request_id,
             'channel_id': tc.id,
             'source': tc.source.name if tc.source else '',
             'source_channel_id': tc.source_channel_id,
@@ -4115,6 +4152,10 @@ def test_prismcast():
             body = _clip(r.text, 220)
             attempt['play_body'] = _clip(r.text)
             attempt['elapsed_seconds'] = round(_time.time() - t0, 1)
+            if tc.source and tc.source.name == 'amazon_prime_free' and r.status_code in (401, 403, 500):
+                attempt['auth_failure'] = True
+                return False, (f'"{tc.name}": Amazon playback authentication failed '
+                               f'(HTTP {r.status_code}); the cookie/session may be missing or expired.')
             detail = f'"{tc.name}": PrismCast /play returned HTTP {r.status_code}'
             if body:
                 detail += f': {body}'
@@ -4155,15 +4196,18 @@ def test_prismcast():
             fix='Enable Bridge DRM channels, scrape or audit a DRM-capable source, then rerun this setup test.')
     else:
         attempts = []
-        captured = None
+        captured = []
         for tc in test_channels:
             ok_cap, detail = _try_capture(tc)
             attempts.append(detail)
             if ok_cap:
-                captured = detail
-                break
+                captured.append(detail)
+        if any(attempt.get('auth_failure') for attempt in diagnostics['attempts']):
+            add('Amazon authentication', 'fail',
+                'Amazon playback authentication failed; the configured cookie/session is likely expired or invalid.',
+                'Complete Amazon login or replace the cookie header, then rerun the test.')
         if captured:
-            add('End-to-end capture', 'ok', captured)
+            add('End-to-end capture', 'ok', ' | '.join(captured))
         else:
             is_loopback = (host == 'localhost' or host.startswith('127.'))
             fix = ('If channels reach a playable state nowhere, PrismCast\'s Chrome is usually '
@@ -4197,10 +4241,20 @@ def test_prismcast():
     overall = ('fail' if any(c['status'] == 'fail' for c in checks)
                else 'warn' if any(c['status'] == 'warn' for c in checks)
                else 'ok')
-    return jsonify({'checks': checks, 'overall': overall, 'diagnostics': diagnostics})
+    overall_label = {
+        'ok': 'PASS',
+        'warn': 'PASS WITH WARNINGS',
+        'fail': 'FAIL',
+    }[overall]
+    return jsonify({
+        'checks': checks,
+        'overall': overall,
+        'overall_label': overall_label,
+        'diagnostics': diagnostics,
+    })
 
 
-def _prismcast_test_channels(limit: int = 4) -> list[Channel]:
+def _prismcast_test_channels(limit: int | None = None) -> list[Channel]:
     """Return deterministic DRM-bridge channels for the PrismCast setup test.
 
     The setup test is meant to validate the DRM bridge, so candidates must be
@@ -4209,7 +4263,7 @@ def _prismcast_test_channels(limit: int = 4) -> list[Channel]:
     for source-specific reasons that have nothing to do with PrismCast.
     """
     capable = sorted(set(_drm_bridge_capable_sources()))
-    if not capable or limit <= 0:
+    if not capable or (limit is not None and limit <= 0):
         return []
 
     rows = (Channel.query.join(Source)
@@ -4236,9 +4290,74 @@ def _prismcast_test_channels(limit: int = 4) -> list[Channel]:
             continue
         selected.append(ch)
         seen_sources.add(source_name)
-        if len(selected) >= limit:
+        if limit is not None and len(selected) >= limit:
             break
     return selected
+
+
+
+def _prismcast_candidate_report() -> list[dict]:
+    """Report source prerequisites and bridge-flagged candidate counts."""
+    report = []
+    for source_name in sorted(set(_drm_bridge_capable_sources())):
+        scraper_cls = registry.get(source_name)
+        source = Source.query.filter_by(name=source_name).first()
+        config = (source.config or {}) if source else {}
+        required = list(getattr(scraper_cls, 'audit_requires_config', []) or [])
+        missing = [key for key in required if not str(config.get(key) or '').strip()]
+        total_active_enabled = 0
+        candidate_count = 0
+        if source:
+            base = Channel.query.filter_by(source_id=source.id, is_active=True, is_enabled=True)
+            total_active_enabled = base.count()
+            candidate_count = base.filter_by(requires_drm_bridge=True).count()
+        source_enabled = bool(source and source.is_enabled and not source.epg_only)
+        if not source:
+            reason = 'Not tested: source is not present; scrape or enable it before testing.'
+            fix = 'Enable and scrape this DRM-capable source.'
+        elif not source_enabled:
+            reason = 'Not tested: source is disabled or EPG-only.'
+            fix = 'Enable the source before running the PrismCast test.'
+        elif not candidate_count:
+            reason = f'Not tested: no active/enabled channels are marked for bridging ({total_active_enabled} active/enabled channels found).'
+            fix = 'Run Stream Audit and enable Bridge DRM channels, then rerun this test.'
+        else:
+            reason = f'{candidate_count} active/enabled bridge candidate(s) available.'
+            fix = None
+        if missing:
+            if source_name == 'amazon_prime_free' and 'cookie_header' in missing:
+                auth_detail = 'Amazon cookie/session header is missing; playback cannot authenticate.'
+                auth_fix = 'Complete Amazon login or paste a current cookie header, then rerun the test.'
+            else:
+                auth_detail = 'Required source configuration is missing: ' + ', '.join(missing) + '.'
+                auth_fix = 'Complete the source configuration, then rerun the test.'
+        elif required:
+            auth_detail = 'Required authentication configuration is present; playback will verify whether it is still valid.'
+            auth_fix = None
+        else:
+            auth_detail = 'No source credentials are required.'
+            auth_fix = None
+        report.append({
+            'source': source_name,
+            'source_enabled': source_enabled,
+            'total_active_enabled': total_active_enabled,
+            'candidate_count': candidate_count,
+            'selected_channel_id': None,
+            'selected_channel_name': None,
+            'required_config': required,
+            'missing_config': missing,
+            'auth_detail': auth_detail,
+            'auth_fix': auth_fix,
+            'reason': reason,
+            'fix': fix,
+        })
+    selected = {ch.source.name: ch for ch in _prismcast_test_channels(limit=None) if ch.source}
+    for item in report:
+        channel = selected.get(item['source'])
+        if channel:
+            item['selected_channel_id'] = channel.id
+            item['selected_channel_name'] = channel.name
+    return report
 
 
 def _drm_bridge_capable_sources() -> list[str]:

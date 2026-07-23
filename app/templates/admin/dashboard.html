@@ -236,7 +236,7 @@
       {% set u = source_updated.get(source.id, {'rel': 'never', 'due': false}) %}
       {% set nxt = source.next_scrape_at() %}
       <tr class="src-row state-{{ h.state }}">
-        <td class="src-cell"><span class="src-name">{{ source.display_name }}</span></td>
+        <td class="src-cell"><span class="src-name">{{ source.display_name }}</span>{% if under_development.get(source.name) %} <span class="warn" title="This source is under development and disabled by default">Under development</span>{% endif %}</td>
         <td>
           <span class="signal {{ h.state }}"{% if h.state == 'error' and source.last_error %} title="{{ source.last_error }}"{% elif h.state == 'warn' and h.label == 'Guide stale' %} title="No successful guide refresh in over 2× the scrape interval — guide data may be going stale while channels keep refreshing."{% endif %}>
             <span class="dot"></span>{{ h.label }}
