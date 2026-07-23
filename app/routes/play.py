@@ -13,6 +13,7 @@ import re
 import secrets
 import threading
 import time as _time
+import xml.etree.ElementTree as ET
 from urllib.parse import quote as _url_quote, urljoin, urlsplit, parse_qs as _parse_qs
 
 import requests as _requests
@@ -2665,7 +2666,7 @@ def cox_dash_proxy(channel_id: str):
         logger.warning('[cox-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
         return _unavailable_response()
 
-    mpd = r.text
+    mpd = _cox_strip_empty_mpd_periods(r.text, raw_id)
     if not re.search(r'<BaseURL\b', mpd):
         cdn_base = _urljoin(dash_url, '.')
         mpd = mpd.replace('<Period ', f'<BaseURL>{cdn_base}</BaseURL>\n  <Period ', 1)
@@ -2678,6 +2679,43 @@ def cox_dash_proxy(channel_id: str):
             'Access-Control-Allow-Origin': '*',
         },
     )
+
+
+def _cox_strip_empty_mpd_periods(mpd: str, channel_id: str) -> str:
+    """Remove Cox event-only/empty periods that Shaka rejects before playback."""
+    if '<Period' not in mpd:
+        return mpd
+
+    try:
+        root = ET.fromstring(mpd.encode('utf-8'))
+    except ET.ParseError:
+        logger.debug('[cox-dash] MPD parse failed for %s; returning original manifest', channel_id[:40])
+        return mpd
+
+    namespace = ''
+    if root.tag.startswith('{'):
+        namespace = root.tag[1:].split('}', 1)[0]
+        ET.register_namespace('', namespace)
+
+    period_tag = f'{{{namespace}}}Period' if namespace else 'Period'
+    adaptation_tag = f'{{{namespace}}}AdaptationSet' if namespace else 'AdaptationSet'
+    periods = list(root.findall(period_tag))
+    if not periods:
+        return mpd
+
+    empty_periods = [period for period in periods if not list(period.iter(adaptation_tag))]
+    if not empty_periods or len(empty_periods) == len(periods):
+        return mpd
+
+    for period in empty_periods:
+        root.remove(period)
+
+    logger.info(
+        '[cox-dash] stripped %d empty MPD period(s) for channel=%s',
+        len(empty_periods),
+        channel_id[:40],
+    )
+    return ET.tostring(root, encoding='unicode', xml_declaration=True)
 
 
 @play_bp.route('/play/philo/<channel_id>/dash.mpd')

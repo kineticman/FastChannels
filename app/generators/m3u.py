@@ -1,7 +1,8 @@
+import json
 import logging
 import re
 from dataclasses import dataclass
-from urllib.parse import quote as _url_quote
+from urllib.parse import parse_qs, quote as _url_quote, urlsplit
 from sqlalchemy.orm import contains_eager
 from ..extensions import db
 from ..models import Channel, Source, Feed, AppSettings
@@ -1182,7 +1183,38 @@ def _needs_prismcast_bridge(ch) -> bool:
         return True
     return False
 
+def _cox_native_page_selector(ch) -> str | None:
+    if not (ch.source and ch.source.name == 'cox'):
+        return None
+    mode = str((ch.source.config or {}).get('prismcast_playback') or 'proxy').strip().lower()
+    if mode != 'native_page':
+        return None
+    if not (ch.stream_url or '').startswith('cox://channel/'):
+        return None
+    try:
+        encoded = parse_qs(urlsplit(ch.stream_url).query).get('data')
+        if not encoded:
+            return None
+        payload = json.loads(encoded[0])
+    except Exception:
+        return None
+    call_sign = str(payload.get('call_sign') or '').strip()
+    return call_sign or None
+
+
 def _prismcast_bridge_url(ch, prismcast_url: str, inner_base_url: str) -> str:
+    # Experimental Cox mode: let PrismCast open Cox Contour's native web app and
+    # ask its SPA to switch to the stored call sign. This avoids FastChannels'
+    # Shaka/license proxy path but still depends on PrismCast's browser/CDM being
+    # accepted by Cox.
+    cox_selector = _cox_native_page_selector(ch)
+    if cox_selector:
+        guide_url = 'https://watchtv.cox.com/listings'
+        return (
+            f'{prismcast_url}/play?url={_url_quote(guide_url, safe="")}'
+            f'&selector={_url_quote(cox_selector, safe="")}'
+        )
+
     # DRM -> route through PrismCast's headless Chrome (EME decrypt + capture).
     # profile=keyboardFullscreen makes PrismCast press 'f', which the /watch
     # page turns into a real fullscreen; without it, capture may stay windowed.

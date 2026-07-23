@@ -61,6 +61,8 @@ TOKEN_REFRESH_SKEW = 300
 XACT_REFRESH_SKEW = 7200
 XSCT_REFRESH_SKEW = 3600
 PLAYBACK_CACHE_TTL = 45 * 60
+COX_DEVICE_URN_PREFIX = 'urn:scte:224:audience:Device:'
+COX_ZIP_URN_PREFIX = 'urn:scte:224:audience:Zip:'
 
 
 def _first_text(*values: Any) -> str | None:
@@ -393,11 +395,44 @@ def _optional_text(mapping: dict[str, Any] | None, *keys: str) -> str | None:
     return None
 
 
+def _cox_device_type(value: str | None) -> str | None:
+    value = (value or '').strip()
+    if not value:
+        return None
+    if value.startswith(COX_DEVICE_URN_PREFIX):
+        return value
+    normalized = value.strip().upper().replace(' ', '_').replace('-', '_')
+    aliases = {
+        'ANDROID': 'PHONE',
+        'ANDROID_PHONE': 'PHONE',
+        'MOBILE': 'PHONE',
+        'PC': 'COMPUTER',
+        'DESKTOP': 'COMPUTER',
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized in {'PHONE', 'TABLET', 'COMPUTER'}:
+        return f'{COX_DEVICE_URN_PREFIX}{normalized}'
+    return value
+
+
+def _cox_postal_code(value: str | None) -> str | None:
+    value = (value or '').strip()
+    if not value:
+        return None
+    if value.startswith(COX_ZIP_URN_PREFIX):
+        return value
+    return f'{COX_ZIP_URN_PREFIX}{value}'
+
+
 def _cox_license_access_attributes(playback: dict[str, Any] | None, config: dict[str, Any], channel_id: str | None) -> dict[str, str]:
     stream_type = _optional_text(playback, 'location_stream_type', 'stream_type')
+    if not stream_type and isinstance(playback, dict) and playback.get('is_tve') is True:
+        stream_type = 'TVE'
     if not stream_type:
-        stream_type = _first_text(config.get('cox_license_stream_type')) or 'Geofenced'
-    attributes = {'content:xcal:streamType': stream_type}
+        stream_type = _first_text(config.get('cox_license_stream_type'))
+    attributes: dict[str, str] = {}
+    if stream_type:
+        attributes['content:xcal:streamType'] = stream_type
 
     virtual_stream_id = _optional_text(playback, 'virtual_stream_id', 'stream_id', 'media_id') or channel_id
     if virtual_stream_id:
@@ -411,14 +446,18 @@ def _cox_license_access_attributes(playback: dict[str, Any] | None, config: dict
     if service_zone:
         attributes['device:xcal:serviceZone'] = service_zone
 
-    device_type = _optional_text(playback, 'device_type') or _first_text(config.get('device_type'), config.get('cox_device_type'))
+    device_type = _cox_device_type(
+        _optional_text(playback, 'device_type') or _first_text(config.get('device_type'), config.get('cox_device_type'))
+    )
     if device_type:
         attributes['device:xcal:deviceType'] = device_type
 
-    postal_code = _optional_text(playback, 'location_postal_code', 'service_zip') or _first_text(
-        config.get('location_postal_code'),
-        config.get('service_zip'),
-        config.get('cox_service_zip'),
+    postal_code = _cox_postal_code(
+        _optional_text(playback, 'location_postal_code', 'service_zip') or _first_text(
+            config.get('location_postal_code'),
+            config.get('service_zip'),
+            config.get('cox_service_zip'),
+        )
     )
     if postal_code and stream_type:
         attributes['device:xcal:locationPostalCode'] = postal_code
@@ -468,6 +507,7 @@ class CoxScraper(BaseScraper):
     display_name = 'Cox Contour'
     scrape_interval = 720
     min_scrape_interval = 60
+    channel_miss_threshold = 1
     config_required = True
     is_premium = True
     source_category = 'premium'
@@ -497,6 +537,12 @@ class CoxScraper(BaseScraper):
                         {'value': 'both', 'label': 'Both TVE and away-from-home'},
                     ],
                     help_text='Choose which Cox channel rows are stored. TVE rows are the browser-style TV Everywhere lineup; away-from-home rows are Cox cable rows marked out-of-home.'),
+        ConfigField('prismcast_playback', 'PrismCast playback', field_type='select', default='proxy',
+                    options=[
+                        {'value': 'proxy', 'label': 'FastChannels Widevine proxy'},
+                        {'value': 'native_page', 'label': 'Experimental Cox native web page'},
+                    ],
+                    help_text='Controls Cox channels in the PrismCast M3U only. The experimental native-page mode sends PrismCast to Cox Contour\'s own listings page with the channel call sign; it may still fail on Linux Chrome/Widevine.'),
     ]
 
     def __init__(self, config: dict | None = None):
@@ -809,6 +855,7 @@ class CoxScraper(BaseScraper):
             'hd_content_url': hd_url,
             'media_id': _first_text(stream_obj.get('mediaId')),
             'encoding_format': _first_text(stream_obj.get('encodingFormat')),
+            'stream_type': _first_text(item.get('streamType'), stream_obj.get('streamType')),
             'stream_location_required': stream_obj.get('locationRequired') is True,
             'geofenced': stream_obj.get('geofenced') is True,
             'is_tve': item.get('isTve') is True,
@@ -929,6 +976,10 @@ class CoxScraper(BaseScraper):
                 enriched.setdefault('media_id', data.get('media_id'))
                 enriched.setdefault('stream_id', data.get('stream_id'))
                 enriched.setdefault('virtual_stream_id', data.get('stream_id') or data.get('media_id') or channel_id)
+                enriched.setdefault('station_id', data.get('station_id'))
+                enriched.setdefault('location_stream_type', data.get('stream_type'))
+                enriched.setdefault('is_tve', data.get('is_tve') is True)
+                enriched.setdefault('restrict_streaming', data.get('restrict_streaming') or [])
                 enriched.setdefault('geofenced', data.get('geofenced') is True)
                 if enriched != cached:
                     playback_cache[channel_id] = enriched
@@ -969,6 +1020,10 @@ class CoxScraper(BaseScraper):
             'media_id': data.get('media_id'),
             'stream_id': data.get('stream_id'),
             'virtual_stream_id': data.get('stream_id') or data.get('media_id') or channel_id,
+            'station_id': data.get('station_id'),
+            'location_stream_type': data.get('stream_type'),
+            'is_tve': data.get('is_tve') is True,
+            'restrict_streaming': data.get('restrict_streaming') or [],
             'geofenced': data.get('geofenced') is True,
             'xsct_cached_at': time.time() if xsct else 0,
             'cached_at': time.time(),
