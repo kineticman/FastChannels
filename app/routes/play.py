@@ -17,7 +17,7 @@ from urllib.parse import quote as _url_quote, urljoin, urlsplit, parse_qs as _pa
 
 import requests as _requests
 
-from flask import Blueprint, redirect, abort, request, Response, render_template, g, stream_with_context
+from flask import Blueprint, redirect, abort, request, Response, render_template, g, stream_with_context, current_app
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
 from ..hls import inspect_hls_drm, parse_stream_info
 from ..models import Channel, Source
@@ -419,18 +419,32 @@ def _stream_upstream_response(
                     bytes_sent += len(chunk)
                     yield chunk
         except _requests.RequestException as exc:
+            _record_proxy_failure(
+                label=label,
+                request_id=request_id,
+                upstream_status=upstream_status,
+                bytes_sent=bytes_sent,
+                error=exc,
+            )
             logger.warning(
                 '[%s] stream interrupted request_id=%s upstream_status=%s bytes=%s: %s',
                 label, request_id, upstream_status, bytes_sent, exc,
             )
-        except Exception:
+        except Exception as exc:
+            _record_proxy_failure(
+                label=label,
+                request_id=request_id,
+                upstream_status=upstream_status,
+                bytes_sent=bytes_sent,
+                error=type(exc).__name__,
+            )
             logger.exception(
                 '[%s] stream failed request_id=%s upstream_status=%s bytes=%s',
                 label, request_id, upstream_status, bytes_sent,
             )
         finally:
             upstream.close()
-            logger.info(
+            logger.debug(
                 '[%s] stream closed request_id=%s upstream_status=%s bytes=%s',
                 label, request_id, upstream_status, bytes_sent,
             )
@@ -443,6 +457,70 @@ def _stream_upstream_response(
     )
     response.call_on_close(upstream.close)
     return response
+
+
+_PROXY_FAILURE_REDIS = None
+
+
+def _proxy_failure_redis():
+    global _PROXY_FAILURE_REDIS
+    if _PROXY_FAILURE_REDIS is not None:
+        return _PROXY_FAILURE_REDIS
+    try:
+        import redis as _redis
+        _PROXY_FAILURE_REDIS = _redis.from_url(
+            current_app.config['REDIS_URL'],
+            socket_connect_timeout=1,
+            socket_timeout=1,
+        )
+    except Exception:
+        _PROXY_FAILURE_REDIS = False
+    return _PROXY_FAILURE_REDIS
+
+
+def _record_proxy_failure(
+    *,
+    label: str,
+    request_id: str,
+    upstream_status: int,
+    bytes_sent: int,
+    error: str,
+) -> None:
+    rdb = _proxy_failure_redis()
+    if not rdb:
+        return
+    try:
+        event = json.dumps({
+            'timestamp': _time.time(),
+            'label': label,
+            'request_id': request_id,
+            'upstream_status': upstream_status,
+            'bytes': bytes_sent,
+            'error': str(error)[:240],
+        })
+        key = 'fc:proxy:failures'
+        rdb.lpush(key, event)
+        rdb.ltrim(key, 0, 49)
+        rdb.expire(key, 900)
+    except Exception:
+        pass
+
+
+def get_recent_proxy_failures(since: float | None = None) -> list[dict]:
+    rdb = _proxy_failure_redis()
+    if not rdb:
+        return []
+    try:
+        events = []
+        for raw in rdb.lrange('fc:proxy:failures', 0, 49):
+            event = json.loads(raw)
+            if since is not None and float(event.get('timestamp', 0)) < since:
+                continue
+            events.append(event)
+        return events
+    except Exception:
+        return []
+
 
 # TTL-cache for custom channel re-detection results.
 # Key: channel.id  Value: (stream_url, headers, monotonic_timestamp, resolver)

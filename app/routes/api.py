@@ -3942,6 +3942,7 @@ def test_prismcast():
     client_probe = request.get_json(silent=True) or {}
     browser_origin = str(client_probe.get('browser_origin') or '').strip()
     browser_secure_context = client_probe.get('browser_secure_context')
+    diagnostic_started = _time.time()
     diagnostics = {
         'browser_context': {
             'origin': browser_origin,
@@ -3961,6 +3962,7 @@ def test_prismcast():
         'port_probes': [],
         'attempts': [],
         'candidates': [],
+        'proxy_failures': [],
     }
 
     def _clip(value, limit=600):
@@ -4232,6 +4234,9 @@ def test_prismcast():
             fix += ' If only some channels fail, those channels couldn\'t resolve right now (not a PrismCast problem).'
             add('End-to-end capture', 'fail',
                 'No test channel captured. Tried: ' + ' | '.join(attempts), fix=fix)
+
+    from .play import get_recent_proxy_failures
+    diagnostics['proxy_failures'] = get_recent_proxy_failures(since=diagnostic_started)
 
     # 4) Cross-host firewall note (FastChannels can't test the DVR→PrismCast path directly)
     dvr_host = (urlparse(dvr_url).hostname or '') if dvr_url else ''

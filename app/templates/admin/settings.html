@@ -1089,6 +1089,20 @@ function formatPrismcastDiagnostics(data) {
       lines.push(`      ${label}: ${c.fix}`);
     }
   });
+  const proxyFailures = d.proxy_failures || [];
+  lines.push('', 'Proxy failures during diagnostic:');
+  if (!proxyFailures.length) {
+    lines.push('  (none)');
+  } else {
+    proxyFailures.forEach(e => {
+      const when = e.timestamp ? new Date(Number(e.timestamp) * 1000).toISOString() : '(unknown time)';
+      lines.push('  ' + when + ' ' + (e.label || 'upstream')
+        + ' | request_id=' + (e.request_id || '-')
+        + ' | upstream_status=' + (e.upstream_status == null ? '?' : e.upstream_status)
+        + ' | bytes=' + (e.bytes || 0)
+        + ' | ' + (e.error || 'stream failure'));
+    });
+  }
   lines.push('', 'Capture attempts:');
   if (!attempts.length) {
     lines.push('  (none)');
