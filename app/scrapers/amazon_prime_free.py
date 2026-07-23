@@ -205,6 +205,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
         self._channel_pe: dict[str, dict[str, Any]] = (
             raw_cpe if isinstance(raw_cpe, dict) else {}
         )
+        self._harvested_channel_pe_ids: set[str] = set()
 
     # ------------------------------------------------------------------
     # DRM / license support
@@ -447,6 +448,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
 
     def fetch_channels(self) -> list[ChannelData]:
         self._station_cache = {}
+        self._harvested_channel_pe_ids = set()
 
         page = self.get(self.LIVE_TV_URL)
         if not page:
@@ -468,13 +470,26 @@ class AmazonPrimeFreeScraper(BaseScraper):
             logger.warning("[%s] could not find pagination seed in Live TV HTML", self.source_name)
 
         channels: list[ChannelData] = []
+        skipped_no_free_pe: list[str] = []
         for station_id, station in stations.items():
+            if station_id not in self._harvested_channel_pe_ids:
+                label = (station.get("name") or station_id).strip()
+                skipped_no_free_pe.append(_html.unescape(label))
+                continue
             channel = self._channel_from_station(station_id, station)
             if channel:
                 channels.append(channel)
                 self._station_cache[station_id] = station
 
         channels.sort(key=lambda c: c.name.lower())
+        if skipped_no_free_pe:
+            preview = ", ".join(skipped_no_free_pe[:10])
+            if len(skipped_no_free_pe) > 10:
+                preview += f", +{len(skipped_no_free_pe) - 10} more"
+            logger.info(
+                "[%s] skipped %d stations without a current free playback envelope: %s",
+                self.source_name, len(skipped_no_free_pe), preview,
+            )
         logger.info("[%s] %d channels", self.source_name, len(channels))
 
         # Persist the per-channel playback envelopes harvested from the carousel. Prune entries
@@ -775,11 +790,13 @@ class AmazonPrimeFreeScraper(BaseScraper):
     def _record_pe(self, gti: str, meta: dict, fallback_url: str = '') -> None:
         pe = (meta or {}).get('playbackEnvelope')
         if gti and pe:
-            self._channel_pe[str(gti)] = {
+            gti = str(gti)
+            self._channel_pe[gti] = {
                 'pe': pe,
                 'expiry': (meta or {}).get('expiryTime', 0),
                 'asin': self._asin_from_fallback(fallback_url),
             }
+            self._harvested_channel_pe_ids.add(gti)
 
     def _harvest_pe_from_entity(self, entity: dict) -> None:
         """Capture a channel's playbackEnvelope from a paginate carousel entity."""
