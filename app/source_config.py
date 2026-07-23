@@ -58,6 +58,14 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
     schema = getattr(scraper_cls, 'config_schema', []) or []
     saved = values or {}
 
+    # Amazon playback may work with a manually pasted cookie, but the source
+    # should not be presented as fully configured until the account credentials
+    # and the captured session cookie are all present.
+    if source_name == 'amazon_prime_free':
+        return all((saved.get(key) or '').strip() for key in (
+            'amazon_email', 'amazon_password', 'cookie_header',
+        ))
+
     required_fields = [field for field in schema if getattr(field, 'required', False)]
     if required_fields:
         return all((saved.get(field.key) or '').strip() for field in required_fields)
