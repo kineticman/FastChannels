@@ -20,6 +20,56 @@
     }
 
     /* ── Nav ── */
+    .prismcast-loading {
+      color: var(--text-subtle);
+    }
+    .prismcast-loading-copy {
+      display: flex;
+      align-items: baseline;
+      gap: 0.15rem;
+    }
+    .prismcast-loading-bar {
+      height: 3px;
+      margin-top: 0.65rem;
+      background: var(--surface-5);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .prismcast-loading-bar span {
+      display: block;
+      width: 35%;
+      height: 100%;
+      background: var(--accent);
+      border-radius: inherit;
+      animation: prismcast-loading-slide 1.35s ease-in-out infinite;
+    }
+    .prismcast-loading-dots {
+      display: inline-flex;
+      gap: 0.08rem;
+      min-width: 1.3rem;
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .prismcast-loading-dot {
+      animation: prismcast-dot-pulse 1.2s infinite ease-in-out;
+      opacity: 0.35;
+    }
+    .prismcast-loading-dot:nth-child(2) { animation-delay: 0.15s; }
+    .prismcast-loading-dot:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes prismcast-dot-pulse {
+      0%, 60%, 100% { opacity: 0.35; }
+      30% { opacity: 1; }
+    }
+    @keyframes prismcast-loading-slide {
+      0% { transform: translateX(-115%); }
+      50% { transform: translateX(185%); }
+      100% { transform: translateX(300%); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .prismcast-loading-dot,
+      .prismcast-loading-bar span { animation: none; opacity: 1; }
+    }
+
     nav {
       background: var(--surface);
       border-bottom: 1px solid var(--border);
@@ -1179,7 +1229,11 @@ async function testPrismcast() {
   rerun.disabled = true;
   if (copyBtn) copyBtn.disabled = true;
   _lastPrismcastDiagnostics = '';
-  body.innerHTML = '<div style="color:var(--text-subtle)">Running checks — this takes ~15–30s (it does a real capture)…</div>';
+  body.innerHTML = '<div class="prismcast-loading" role="status" aria-live="polite">'
+    + '<div class="prismcast-loading-copy"><span>Running checks</span><span class="prismcast-loading-dots" aria-hidden="true">'
+    + '<span class="prismcast-loading-dot">.</span><span class="prismcast-loading-dot">.</span><span class="prismcast-loading-dot">.</span>'
+    + '</span><span style="color:var(--text-muted);font-size:0.85rem">This takes ~15–30s and includes a real capture.</span></div>'
+    + '<div class="prismcast-loading-bar" aria-hidden="true"><span></span></div></div>';
   try {
     const r = await fetch('/api/settings/prismcast/test', {
       method: 'POST',
@@ -1198,6 +1252,8 @@ async function testPrismcast() {
     const color = { ok:'var(--success-soft)', warn:'var(--warning-soft)', fail:'var(--danger)', skip:'var(--text-muted)', info:'var(--accent-soft)' };
     const overall = (data.overall || 'ok');
     const d = data.diagnostics || {};
+    const topology = d.topology || {};
+    const resources = d.resources || {};
     const attempts = d.attempts || [];
     const candidates = d.candidates || [];
     const browserContext = d.browser_context || {};
