@@ -1664,7 +1664,19 @@ def save_source_config(source_id):
         f.key in _CRED_KEYS and _norm_cred(f.key, old.get(f.key)) != _norm_cred(f.key, current.get(f.key))
         for f in schema
     )
-    if creds_changed:
+    def _sling_subscriptions_enabled(cfg: dict) -> bool:
+        return str(cfg.get('include_subscription_channels', '')).strip().lower() in {
+            '1', 'true', 'yes', 'on'
+        }
+
+    # Sling's subscription toggle changes the channel inventory, not just a
+    # playback preference. Clear the derived account context on either edge so
+    # enabling it cannot reuse an expired/old account lineup.
+    sling_lineup_changed = (
+        source.name == 'sling'
+        and _sling_subscriptions_enabled(old) != _sling_subscriptions_enabled(current)
+    )
+    if creds_changed or sling_lineup_changed:
         for tk in _AUTH_STATE:
             if data.get(tk) in (None, '', '••••••••'):  # skip values set in this save
                 current.pop(tk, None)
@@ -1679,6 +1691,13 @@ def save_source_config(source_id):
         source.is_enabled = True
         auto_enabled = True
     db.session.commit()
+    full_scrape_queued = False
+    if source.name == 'sling' and (creds_changed or sling_lineup_changed) and source.is_enabled:
+        # Credentials and the subscription toggle can add/remove channels.
+        # A normal scheduled scrape may be EPG-only for other sources, so make
+        # this refresh deterministic and immediate after the config commit.
+        trigger_scrape(source.name, force_full=True)
+        full_scrape_queued = True
     config_complete = bool(scraper_cls and is_source_config_complete(source.name, scraper_cls, current))
     config_status = (
         'configured'
@@ -1690,6 +1709,7 @@ def save_source_config(source_id):
         'source': source.name,
         'is_enabled': source.is_enabled,
         'auto_enabled': auto_enabled,
+        'full_scrape_queued': full_scrape_queued,
         'config_complete': config_complete,
         'config_status': config_status,
     })

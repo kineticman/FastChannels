@@ -2992,7 +2992,7 @@
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
-        status.textContent = '✓ Saved';
+        status.textContent = data.full_scrape_queued ? '✓ Saved — full scrape queued' : '✓ Saved';
         status.className = 'config-status ok';
         fields.forEach(field => {
           if (field.dataset.secret === 'true' && field.value && field.value !== MASK) {
