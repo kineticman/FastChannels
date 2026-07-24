@@ -390,11 +390,89 @@ def _isoformat_utc(dt):
 
 
 def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool,
-                               prismcast: bool = False) -> None:
-    """Wait briefly for feed artifacts to exist before handing URLs to Channels DVR."""
+                               prismcast: bool = False,
+                               force_refresh: bool = False) -> None:
+    """Ensure feed artifacts exist before handing URLs to Channels DVR.
+
+    Normal output serving is allowed to keep stale M3U files on disk while the
+    async refresh job catches up. A DVR import is a user-triggered snapshot, so
+    force_refresh rebuilds this feed synchronously to reflect recent channel
+    enable/disable edits before Channels DVR fetches the URL.
+    """
     std_key = f'feed-{feed.slug}-prismcast-m3u' if prismcast else f'feed-{feed.slug}-m3u'
     gn_key  = (f'feed-{feed.slug}-prismcast-gracenote-m3u' if prismcast
                else f'feed-{feed.slug}-gracenote-m3u')
+
+    if force_refresh:
+        from ..generators.m3u import (
+            generate_gracenote_m3u,
+            generate_m3u,
+            generate_prismcast_m3u,
+            feed_gracenote_start,
+            feed_namespace_start,
+            feed_to_query_filters,
+        )
+        from ..generators.xmltv import write_xmltv
+        from ..xml_cache import write_artifact, write_xml_artifact
+
+        filters = feed_to_query_filters(feed.filters or {})
+        if feed.chnum_start is not None:
+            std_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
+            gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
+        else:
+            std_kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
+            gn_kw = {'namespace_start': feed_gracenote_start(feed)}
+
+        write_xml_artifact(
+            f'feed-{feed.slug}',
+            lambda fp: write_xmltv(fp, filters, base_url=base_url, feed_name=feed.name),
+        )
+
+        if prismcast:
+            settings = AppSettings.get()
+            prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
+            prismcast_inner = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
+            write_artifact(
+                std_key,
+                lambda fp: fp.write(generate_prismcast_m3u(
+                    filters,
+                    base_url=base_url,
+                    prismcast_url=prismcast_url,
+                    inner_base_url=prismcast_inner,
+                    **std_kw,
+                )),
+                ext='m3u',
+            )
+            if has_gracenote:
+                write_artifact(
+                    gn_key,
+                    lambda fp: fp.write(generate_prismcast_m3u(
+                        filters,
+                        base_url=base_url,
+                        prismcast_url=prismcast_url,
+                        inner_base_url=prismcast_inner,
+                        gracenote=True,
+                        **gn_kw,
+                    )),
+                    ext='m3u',
+                )
+        else:
+            write_artifact(
+                std_key,
+                lambda fp: fp.write(generate_m3u(filters, base_url=base_url, **std_kw)),
+                ext='m3u',
+            )
+            if has_gracenote:
+                write_artifact(
+                    gn_key,
+                    lambda fp: fp.write(generate_gracenote_m3u(
+                        filters,
+                        base_url=base_url,
+                        **gn_kw,
+                    )),
+                    ext='m3u',
+                )
+        return
 
     def _ready() -> bool:
         xml_path, _ = get_xml_artifact(f'feed-{feed.slug}')
@@ -3648,7 +3726,7 @@ def push_feed_to_dvr(feed_id):
         }), 409
 
     try:
-        _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote)
+        _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote, force_refresh=True)
     except TimeoutError:
         return jsonify({'error': 'Timed out waiting for feed artifacts to build. Try again in a moment.'}), 503
 
@@ -3741,7 +3819,7 @@ def push_feed_prismcast_to_dvr(feed_id):
         }), 409
 
     try:
-        _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote, prismcast=True)
+        _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote, prismcast=True, force_refresh=True)
     except TimeoutError:
         return jsonify({'error': 'Timed out waiting for PrismCast feed artifacts to build. Try again in a moment.'}), 503
 
