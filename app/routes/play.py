@@ -3055,6 +3055,121 @@ def _rewrite_directv_prismcast_playlist(text: str, playlist_url: str) -> str:
     return '\n'.join(lines)
 
 
+_DIRECTV_BROWSER_CDN_SUFFIXES = (
+    'akamaized.net',
+    'directv.fastly-edge.com',
+    'live.cf.dtvcdn.com',
+    'live.cflare.dtvcdn.com',
+)
+
+
+def _directv_browser_cdn_allowed(host: str) -> bool:
+    return any(_host_in_cdn_suffix(host, suffix) for suffix in _DIRECTV_BROWSER_CDN_SUFFIXES)
+
+
+def _directv_browser_asset_proxy_url(upstream_url: str) -> str:
+    return f'/play/directv/browser-asset?url={_url_quote(upstream_url, safe="")}'
+
+
+def _directv_browser_proxyable_url(raw_url: str, playlist_url: str) -> str:
+    resolved = urljoin(playlist_url, raw_url)
+    parsed = urlsplit(resolved)
+    if parsed.scheme in ('http', 'https') and _directv_browser_cdn_allowed(parsed.hostname or ''):
+        return _directv_browser_asset_proxy_url(resolved)
+    return resolved
+
+
+def _rewrite_directv_browser_playlist(text: str, playlist_url: str) -> str:
+    def _rewrite_uri(match):
+        return f'URI="{_directv_browser_proxyable_url(match.group(1), playlist_url)}"'
+
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if 'URI="' in line:
+            line = re.sub(r'URI="([^"]+)"', _rewrite_uri, line)
+        if stripped and not stripped.startswith('#'):
+            line = _directv_browser_proxyable_url(stripped, playlist_url)
+        lines.append(line)
+    return '\n'.join(lines)
+
+
+@play_bp.route('/play/directv/<channel_id>/browser.m3u8')
+def directv_browser_manifest(channel_id: str):
+    """Same-origin HLS master for DirecTV browser/Shaka playback.
+
+    DirecTV's /play endpoint redirects to the live CDN master. Shaka can fail
+    that redirected manifest request in Chromium capture even when the CDN sends
+    CORS headers. Fetch the master server-side and absolutize child playlist
+    references; child playlists and media segments are proxied through FastChannels.
+    """
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'directv', Channel.source_channel_id == channel_id)
+        .first_or_404()
+    )
+    scraper_cls = registry.get('directv')
+    if not scraper_cls:
+        abort(404)
+    scraper = scraper_cls(channel.source.config or {})
+    try:
+        resolved_url = scraper.resolve(channel.stream_url)
+        r = _requests.get(resolved_url, timeout=12)
+    except Exception as exc:
+        logger.warning('[directv-browser] manifest fetch failed for channel=%s: %s', channel_id, exc)
+        return _unavailable_response()
+    if r.status_code >= 400:
+        return Response(r.content, status=r.status_code, content_type=r.headers.get('Content-Type') or 'text/plain')
+    return Response(
+        _rewrite_directv_browser_playlist(r.text, r.url),
+        status=200,
+        mimetype='application/vnd.apple.mpegurl',
+        headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+    )
+
+
+@play_bp.route('/play/directv/browser-asset')
+def directv_browser_asset():
+    raw_url = (request.args.get('url') or '').strip()
+    if not raw_url:
+        abort(400)
+    target = urlsplit(raw_url)
+    if target.scheme != 'https' or not _directv_browser_cdn_allowed(target.hostname or ''):
+        abort(400)
+    range_header = request.headers.get('Range')
+    headers = {'User-Agent': _BROWSER_UA}
+    if range_header:
+        headers['Range'] = range_header
+    try:
+        r = _requests.get(raw_url, headers=headers, timeout=(5, 30), stream=True)
+    except Exception as exc:
+        logger.warning('[directv-browser] asset fetch failed for %s: %s', raw_url[:160], exc)
+        abort(502)
+
+    content_type = r.headers.get('Content-Type') or 'application/octet-stream'
+    if 'mpegurl' in content_type.lower() or raw_url.lower().split('?', 1)[0].endswith(('.m3u8', '.m3u')):
+        return Response(
+            _rewrite_directv_browser_playlist(r.text, r.url),
+            status=r.status_code,
+            mimetype='application/vnd.apple.mpegurl',
+            headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+        )
+
+    response_headers = {'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'}
+    for key in ('Content-Length', 'Accept-Ranges', 'Content-Range'):
+        value = r.headers.get(key)
+        if value:
+            response_headers[key] = value
+    return _stream_upstream_response(
+        r,
+        status=r.status_code,
+        content_type=content_type,
+        headers=response_headers,
+        label='directv-browser-asset',
+    )
+
+
 @play_bp.route('/play/directv/<channel_id>/prismcast.m3u')
 @play_bp.route('/play/directv/<channel_id>/prismcast.m3u8')
 def directv_prismcast_playlist(channel_id: str):
@@ -3442,10 +3557,13 @@ def watch(channel_id):
     info = _get_playback_info(channel, fast_mode=False)
     settings = AppSettings.get()
     max_height = int(settings.prismcast_max_height or 0)
+    play_url = info.get('preview_url') or info.get('play_url') or ''
+    if play_url and play_url.startswith('/'):
+        play_url = urljoin(request.host_url, play_url.lstrip('/'))
     resp = make_response(render_template(
         'watch.html',
         channel=channel,
-        play_url=info.get('preview_url') or info.get('play_url') or '',
+        play_url=play_url,
         playback_mode=info.get('playback_mode', 'hls'),
         stream_type=info.get('stream_type', 'hls'),
         license_url=info.get('license_url') or '',

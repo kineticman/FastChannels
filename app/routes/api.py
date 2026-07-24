@@ -2628,6 +2628,7 @@ def _get_playback_info(ch, fast_mode=True):
         # license path; plain Roku channels stay native HLS with no license URL.
         if _scraper_cls and not (ch.source.name == 'roku' and not roku_drm):
             from flask import request as _req
+            from urllib.parse import quote as _quote
             _base = _req.host_url.rstrip('/')
             if ch.source.name == 'roku' and roku_drm:
                 # Roku's per-session license URL is created when the DASH route
@@ -2640,7 +2641,11 @@ def _get_playback_info(ch, fast_mode=True):
                     channel_id=ch.source_channel_id,
                 )
                 if _lu:
-                    license_url = f'{_base}/play/{ch.source.name}/license?channel_id={ch.source_channel_id}'
+                    _license_channel = _quote(ch.source_channel_id, safe='')
+                    if ch.source.name == 'directv':
+                        license_url = f'{_base}/play/{ch.source.name}/license/{_license_channel}'
+                    else:
+                        license_url = f'{_base}/play/{ch.source.name}/license?channel_id={_license_channel}'
 
     play_url = None
     if (
@@ -2670,8 +2675,8 @@ def _get_playback_info(ch, fast_mode=True):
             play_url = preview_url
             license_url = None
         else:
-            preview_url = f'/play/directv/{_enc}.m3u8'
-            play_url = preview_url
+            play_url = f'/play/directv/{_enc}.m3u8'
+            preview_url = f'/play/directv/{_enc}/browser.m3u8'
         playback_mode = 'hls'
         stream_type = 'hls'
 
