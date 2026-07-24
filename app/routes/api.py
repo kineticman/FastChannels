@@ -2741,6 +2741,15 @@ def _get_playback_info(ch, fast_mode=True):
         from urllib.parse import quote as _quote
         preview_url = f'/play/philo/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
+    # Sling → DASH+Widevine. Sling's CDN is currently browser-friendly, but use
+    # a same-origin manifest route for admin/watch debugging consistency with
+    # the other DASH DRM bridge sources.
+    if ch.source and ch.source.name == 'sling' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/sling/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+        playback_mode = 'dash'
+        stream_type = 'dash'
+
     return {
         'stream_type': stream_type,
         'preview_url': preview_url,

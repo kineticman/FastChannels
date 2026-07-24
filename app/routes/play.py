@@ -2797,6 +2797,72 @@ def philo_dash_proxy(channel_id: str):
     )
 
 
+@play_bp.route('/play/sling/<channel_id>/dash.mpd')
+def sling_dash_proxy(channel_id: str):
+    """DASH (Widevine) manifest proxy for Sling bridge playback.
+
+    Sling's MPD is currently CORS-open and uses absolute BaseURL entries, so this
+    route is mainly a same-origin debug hook matching the other DASH DRM sources.
+    Segment URLs stay direct to Sling's CDN.
+    """
+    from urllib.parse import unquote as _unquote
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'sling', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper_cls = registry.get('sling')
+    if not scraper_cls:
+        return _unavailable_response()
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        dash_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[sling-dash] resolve failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    finally:
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            except Exception:
+                pass
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+            except Exception:
+                pass
+
+    if not dash_url or not dash_url.startswith('http'):
+        logger.warning('[sling-dash] no DASH URL for %s', raw_id[:40])
+        return _unavailable_response()
+
+    try:
+        r = _requests.get(dash_url, timeout=10, headers={
+            'Origin': 'https://watch.sling.com',
+            'Referer': 'https://watch.sling.com/',
+            'Accept': '*/*',
+        })
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[sling-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+
+    return Response(
+        r.text,
+        mimetype='application/dash+xml',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 @play_bp.route('/play/<source_name>/license', methods=['POST'])
 @play_bp.route('/play/<source_name>/license/<channel_id>', methods=['POST'])
 def license_proxy(source_name: str, channel_id: str | None = None):
