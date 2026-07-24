@@ -1200,6 +1200,12 @@ function formatPrismcastDiagnostics(data) {
       if (a.health_after_hls) lines.push(`    Health after HLS: ${snapshotLine(a.health_after_hls).trim()}`);
       lines.push(`    HLS statuses: ${(a.hls_statuses || []).join(', ') || '(none)'}`);
       lines.push(`    Segments: ${a.segments || 0}`);
+      if (a.watch_debug) {
+        const wd = a.watch_debug || {};
+        const state = wd.last_state || {};
+        lines.push(`    Watch debug: event ${wd.last_event || '(none)'}, max ready ${wd.max_ready_state == null ? '(unknown)' : wd.max_ready_state}, max decoded ${wd.max_decoded == null ? '(unknown)' : wd.max_decoded}, playback ${wd.browser_playback ? 'true' : 'false'}`);
+        if (state.video_size || state.buffered_ahead != null) lines.push(`    Watch state: video ${state.video_size || '(unknown)'}, buffered ahead ${state.buffered_ahead == null ? '(unknown)' : state.buffered_ahead}`);
+      }
       lines.push(`    Elapsed seconds: ${a.elapsed_seconds == null ? '(unknown)' : a.elapsed_seconds}`);
     });
   }

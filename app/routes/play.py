@@ -1764,6 +1764,95 @@ def _amazon_sht_redis() -> 'redis.Redis | None':
     return _AMAZON_SHT_REDIS
 
 
+
+_WATCH_DEBUG_REDIS: 'redis.Redis | None' = None
+_WATCH_DEBUG_KEY_PREFIX = 'watch_debug:'
+_WATCH_DEBUG_TTL = 300
+
+
+def _watch_debug_redis() -> 'redis.Redis | None':
+    global _WATCH_DEBUG_REDIS
+    if _WATCH_DEBUG_REDIS is None:
+        try:
+            import redis as _r
+            from flask import current_app
+            _WATCH_DEBUG_REDIS = _r.from_url(
+                current_app.config['REDIS_URL'],
+                decode_responses=True,
+                socket_timeout=1,
+                socket_connect_timeout=1,
+            )
+        except Exception:
+            pass
+    return _WATCH_DEBUG_REDIS
+
+
+def _watch_debug_key(request_id: str) -> str:
+    return _WATCH_DEBUG_KEY_PREFIX + re.sub(r'[^A-Za-z0-9_.:-]', '_', request_id[:80])
+
+
+def get_watch_debug_snapshot(request_id: str) -> dict:
+    request_id = (request_id or '').strip()[:80]
+    if not request_id:
+        return {}
+    rdb = _watch_debug_redis()
+    if not rdb:
+        return {}
+    try:
+        raw = rdb.get(_watch_debug_key(request_id))
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+def _record_watch_debug_snapshot(request_id: str, channel: Channel, event: str, state: dict, extra: dict) -> None:
+    request_id = (request_id or '').strip()[:80]
+    if not request_id or request_id == '-':
+        return
+    rdb = _watch_debug_redis()
+    if not rdb:
+        return
+    key = _watch_debug_key(request_id)
+    now = _time.time()
+    try:
+        existing_raw = rdb.get(key)
+        existing = json.loads(existing_raw) if existing_raw else {}
+    except Exception:
+        existing = {}
+    try:
+        decoded = int(state.get('decoded') or 0)
+    except Exception:
+        decoded = 0
+    try:
+        ready_state = int(state.get('ready_state') or 0)
+    except Exception:
+        ready_state = 0
+    snapshot = dict(existing)
+    snapshot.update({
+        'request_id': request_id,
+        'channel_id': channel.id,
+        'source': channel.source.name if channel.source else None,
+        'source_channel_id': channel.source_channel_id,
+        'channel_name': channel.name,
+        'last_event': event,
+        'last_state': {k: v for k, v in state.items() if v is not None},
+        'last_extra': {str(k)[:40]: str(v)[:300] for k, v in extra.items()},
+        'updated_at': now,
+    })
+    snapshot['events'] = int(snapshot.get('events') or 0) + 1
+    snapshot['max_ready_state'] = max(int(snapshot.get('max_ready_state') or 0), ready_state)
+    snapshot['max_decoded'] = max(int(snapshot.get('max_decoded') or 0), decoded)
+    if event in {'video-playing', 'video-canplay', 'video-loadeddata'}:
+        snapshot['browser_playback'] = True
+    if event == 'player-error':
+        snapshot['player_error'] = True
+        snapshot['player_error_extra'] = snapshot['last_extra']
+    try:
+        rdb.setex(key, _WATCH_DEBUG_TTL, json.dumps(snapshot))
+    except Exception:
+        pass
+
+
 _DIRECTV_DEVICE_COOKIE = 'fc_dtv_device'
 _DIRECTV_IDENTITY_KEY_PREFIX = 'directv_identity:'
 _DIRECTV_DEFAULT_IDENTITY_TTL = 30 * 24 * 3600
@@ -3664,6 +3753,9 @@ def watch_debug(channel_id):
         'dropped': payload.get('dropped'),
         'decoded': payload.get('decoded'),
     }
+    compact_state = {k: v for k, v in state.items() if v is not None}
+    compact_extra = {str(k)[:40]: str(v)[:800] for k, v in extra.items()}
+    _record_watch_debug_snapshot(debug_request_id, channel, event, compact_state, extra)
     logger.info(
         '[watch-debug] request_id=%s event=%s ip=%s channel_id=%s source=%s source_channel_id=%s channel_name=%s state=%s extra=%s',
         debug_request_id,
@@ -3673,7 +3765,7 @@ def watch_debug(channel_id):
         channel.source.name if channel.source else None,
         channel.source_channel_id,
         channel.name,
-        {k: v for k, v in state.items() if v is not None},
-        {str(k)[:40]: str(v)[:800] for k, v in extra.items()},
+        compact_state,
+        compact_extra,
     )
     return Response(status=204)

@@ -4431,9 +4431,25 @@ def test_prismcast():
         attempt['hls_probe_elapsed_seconds'] = round(_time.time() - hls_t0, 3)
         attempt['elapsed_seconds'] = round(_time.time() - t0, 1)
         attempt['health_after_hls'] = _snapshot_health(f'after_hls:{tc.id}')
+        try:
+            from .play import get_watch_debug_snapshot
+            watch_debug = get_watch_debug_snapshot(capture_request_id)
+        except Exception:
+            watch_debug = {}
+        if watch_debug:
+            attempt['watch_debug'] = watch_debug
+        browser_played = bool(watch_debug.get('browser_playback')) or (
+            int(watch_debug.get('max_ready_state') or 0) >= 4
+            and int(watch_debug.get('max_decoded') or 0) > 0
+        )
         if segs >= 2:
             attempt['failure_class'] = 'capture_success'
             return True, f'Captured "{tc.name}" in {_time.time()-t0:.0f}s — {segs}+ segments flowing. The full chain works.'
+        if browser_played:
+            attempt['failure_class'] = 'hls_probe_failed_after_browser_playback'
+            decoded = int(watch_debug.get('max_decoded') or 0)
+            return False, (f'"{tc.name}": browser playback succeeded in PrismCast '
+                           f'(decoded {decoded} frame(s)), but the diagnostic HLS probe did not see segments.')
         if 404 in attempt['hls_statuses']:
             attempt['failure_class'] = 'manifest_or_segment_failure'
             return False, f'"{tc.name}": session started but the HLS playlist returned 404 while polling.'
