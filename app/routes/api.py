@@ -208,6 +208,10 @@ def _manual_gracenote_clause():
 def _apply_channel_filters(q, filters: dict | None = None):
     filters = filters or {}
 
+    if channel_ids := filters.get('channel_ids'):
+        ids = [int(v) for v in channel_ids if str(v).isdigit()]
+        q = q.filter(Channel.id.in_(ids or [-1]))
+
     if feed_slug := filters.get('feed'):
         feed = Feed.query.filter_by(slug=feed_slug).first()
         if feed:

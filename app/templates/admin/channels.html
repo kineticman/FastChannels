@@ -3683,22 +3683,20 @@
       const ids = [...document.querySelectorAll('.row-check:checked')].map(cb => parseInt(cb.value, 10));
       if (!ids.length) return;
 
-      await Promise.all(ids.map(id =>
-        fetch(`/api/channels/${id}`, {
-          method:  'PATCH',
+      try {
+        const r = await fetch('/api/channels/bulk', {
+          method:  'POST',
           headers: {'Content-Type': 'application/json'},
-          body:    JSON.stringify({is_enabled: enable}),
-        })
-      ));
-
-      ids.forEach(id => {
-        const row = document.getElementById(`row-${id}`);
-        const tog = row?.querySelector('.toggle input[type=checkbox]');
-        if (tog) tog.checked = enable;
-        row?.classList.toggle('disabled', !enable);
-      });
-      clearSelection();
-      if (_pageFilters.review === 'pending') setTimeout(() => window.location.reload(), 650);
+          body:    JSON.stringify({action: label, filters: {channel_ids: ids}}),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        showToast(`✓ ${label.charAt(0).toUpperCase() + label.slice(1)}d ${data.updated} channel${data.updated !== 1 ? 's' : ''}`);
+        clearSelection();
+        setTimeout(() => window.location.reload(), 800);
+      } catch (e) {
+        showToast('⚠ Bulk request failed — ' + e.message);
+      }
     }
 
     async function markReviewedKeepDisabled(channelId, btn) {
@@ -3750,15 +3748,19 @@
         return;
       }
 
-      await Promise.all(selectedIds.map(id =>
-        fetch(`/api/channels/${id}`, {
-          method: 'PATCH',
+      try {
+        const r = await fetch('/api/channels/bulk', {
+          method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({review_action: 'keep_disabled'}),
-        })
-      ));
-      showToast(`✓ Marked ${selectedIds.length} channel${selectedIds.length !== 1 ? 's' : ''} reviewed`);
-      setTimeout(() => window.location.reload(), 650);
+          body: JSON.stringify({action: 'mark_reviewed', filters: {channel_ids: selectedIds}}),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        showToast(`✓ Marked ${data.updated} channel${data.updated !== 1 ? 's' : ''} reviewed`);
+        setTimeout(() => window.location.reload(), 800);
+      } catch (e) {
+        showToast('⚠ Bulk request failed — ' + e.message);
+      }
     }
 
     async function bulkGracenoteAction(action) {
