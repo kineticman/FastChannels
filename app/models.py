@@ -125,6 +125,45 @@ class SourceCache(db.Model):
         return f'<SourceCache source_id={self.source_id} key={self.cache_key}>'
 
 
+class TVEAccount(db.Model):
+    __tablename__ = 'tve_accounts'
+
+    id               = db.Column(db.Integer, primary_key=True)
+    provider_id      = db.Column(db.String(64), unique=True, nullable=False)
+    display_name     = db.Column(db.String(128), nullable=False)
+    username         = db.Column(db.Text, nullable=True)
+    password         = db.Column(db.Text, nullable=True)
+    is_enabled       = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))
+    config           = db.Column(db.JSON, default=dict)
+    last_auth_status = db.Column(db.String(32), nullable=True)
+    last_auth_message = db.Column(db.Text, nullable=True)
+    last_auth_at     = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at       = db.Column(db.DateTime(timezone=True),
+                                 default=lambda: datetime.now(timezone.utc))
+    updated_at       = db.Column(db.DateTime(timezone=True),
+                                 default=lambda: datetime.now(timezone.utc),
+                                 onupdate=lambda: datetime.now(timezone.utc))
+
+    def has_credentials(self) -> bool:
+        return bool((self.username or '').strip() and (self.password or '').strip())
+
+    def to_safe_dict(self):
+        return {
+            'provider_id': self.provider_id,
+            'display_name': self.display_name,
+            'username': self.username or '',
+            'password_configured': bool((self.password or '').strip()),
+            'is_enabled': bool(self.is_enabled),
+            'last_auth_status': self.last_auth_status,
+            'last_auth_message': self.last_auth_message,
+            'last_auth_at': self.last_auth_at.isoformat() if self.last_auth_at else None,
+            'configured': bool(self.is_enabled and self.has_credentials()),
+        }
+
+    def __repr__(self):
+        return f'<TVEAccount {self.provider_id}>'
+
+
 class Channel(db.Model):
     __tablename__ = 'channels'
 

@@ -20,7 +20,7 @@ from sqlalchemy.orm import defer
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
 from app.config import VERSION
 from ..extensions import db
-from ..models import Source, Channel, Program, AppSettings, Feed
+from ..models import Source, Channel, Program, AppSettings, Feed, TVEAccount
 from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
 from ..gracenote_suggest import SuggestionChannel, suggest_gracenote_matches
@@ -62,6 +62,7 @@ from ..generators.m3u import (
 )
 from .. import logfile
 from ..timezone_utils import normalize_timezone_name, write_timezone_cache
+from ..tve.adobe_pass import TVEAuthError, verify_cox_history
 from ..xml_cache import (
     get_artifact,
     get_xml_artifact,
@@ -4715,6 +4716,67 @@ def _reconcile_drm_bridge_mode(enabled: bool) -> None:
             ch.disable_reason = ch.disable_reason or 'DRM'
         logger.info('[drm-bridge] mode OFF — disabled %d bridged channels', len(rows))
     db.session.flush()
+
+
+def _get_tve_account(provider_id: str, display_name: str) -> TVEAccount:
+    account = TVEAccount.query.filter_by(provider_id=provider_id).first()
+    if account:
+        return account
+    account = TVEAccount(provider_id=provider_id, display_name=display_name, is_enabled=False, config={})
+    db.session.add(account)
+    db.session.flush()
+    return account
+
+
+@api_bp.route('/settings/tve/cox', methods=['GET', 'POST'])
+def tve_cox_settings():
+    account = _get_tve_account('cox', 'Cox')
+    if request.method == 'POST':
+        data = request.get_json(force=True) or {}
+        if 'is_enabled' in data:
+            account.is_enabled = bool(data['is_enabled'])
+        if 'username' in data:
+            account.username = (data.get('username') or '').strip() or None
+        if data.get('clear_password'):
+            account.password = None
+        elif 'password' in data and (data.get('password') or ''):
+            account.password = data.get('password')
+        if data.get('clear_software_statement'):
+            cfg = dict(account.config or {})
+            cfg.pop('software_statement', None)
+            account.config = cfg
+        elif 'software_statement' in data:
+            statement = (data.get('software_statement') or '').strip()
+            if statement:
+                cfg = dict(account.config or {})
+                cfg['software_statement'] = statement
+                account.config = cfg
+        db.session.commit()
+    return jsonify(account.to_safe_dict())
+
+
+@api_bp.route('/settings/tve/cox/test', methods=['POST'])
+def test_tve_cox_settings():
+    account = _get_tve_account('cox', 'Cox')
+    if not account.has_credentials():
+        return jsonify({'error': 'Cox TVE username and password are required.'}), 400
+    try:
+        result = verify_cox_history(
+            account.username or '',
+            account.password or '',
+            software_statement=(account.config or {}).get('software_statement'),
+        )
+        account.last_auth_status = 'ok'
+        account.last_auth_message = 'Cox authorized History via Adobe Pass.'
+        account.last_auth_at = datetime.now(timezone.utc)
+        db.session.commit()
+        return jsonify({'ok': True, 'account': account.to_safe_dict(), 'result': result})
+    except TVEAuthError as exc:
+        account.last_auth_status = 'error'
+        account.last_auth_message = str(exc)[:1000]
+        account.last_auth_at = datetime.now(timezone.utc)
+        db.session.commit()
+        return jsonify({'ok': False, 'error': str(exc), 'account': account.to_safe_dict()}), 502
 
 
 @api_bp.route('/settings', methods=['GET', 'POST'])

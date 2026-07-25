@@ -131,6 +131,29 @@ def ensure_runtime_schema() -> None:
             ))
             tables.add("source_cache")
 
+
+        # tve_accounts: global TV Everywhere credential store. Sources consume
+        # these accounts at resolve time, but credentials are configured once
+        # under Settings instead of repeated per TVE-backed source.
+        if "tve_accounts" not in tables:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS tve_accounts ("
+                " id INTEGER PRIMARY KEY,"
+                " provider_id VARCHAR(64) NOT NULL UNIQUE,"
+                " display_name VARCHAR(128) NOT NULL,"
+                " username TEXT,"
+                " password TEXT,"
+                " is_enabled BOOLEAN NOT NULL DEFAULT 0,"
+                " config JSON,"
+                " last_auth_status VARCHAR(32),"
+                " last_auth_message TEXT,"
+                " last_auth_at DATETIME,"
+                " created_at DATETIME,"
+                " updated_at DATETIME"
+                ")"
+            ))
+            tables.add("tve_accounts")
+
         if "app_settings" in tables:
             cols = {
                 row[1]
@@ -751,6 +774,7 @@ def ensure_runtime_schema() -> None:
 
         # Migrate global_chnum_start from AppSettings → default Feed.chnum_start.
         # AppSettings.global_chnum_start is now legacy; the Feed column is authoritative.
+
         if "app_settings" in tables:
             as_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(app_settings)"))}
             if "global_chnum_start" in as_cols:

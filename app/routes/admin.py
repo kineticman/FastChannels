@@ -6,7 +6,7 @@ from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
-from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program
+from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program, TVEAccount
 from ..generators.m3u import (
     _build_channel_query,
     _build_feed_chnum_map,
@@ -549,7 +549,7 @@ def sources():
         if source_config_status.get(s.id) == 'required' and s.is_enabled
     ]
 
-    _CAT_ORDER = {'fast': 0, 'premium': 1, 'specialty': 2, 'drm': 3}
+    _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'drm': 4}
     sources_list.sort(key=lambda s: (
         _CAT_ORDER.get(source_categories.get(s.name, 'fast') if s.name != 'custom' else 'specialty', 99),
         s.display_name,
@@ -1334,6 +1334,7 @@ def settings():
             'anchor': 'settings-card-timezone',
         })
     tz_health = timezone_health(app_settings.timezone_name)
+    tve_cox_account = TVEAccount.query.filter_by(provider_id='cox').first()
     _url_from_env = _url_source in {'FASTCHANNELS_SERVER_URL', 'PUBLIC_BASE_URL'}
     _no_port_warning = False
     if _eff_url and not _url_from_env:
@@ -1366,6 +1367,17 @@ def settings():
                            prismcast_inner_url=app_settings.prismcast_inner_url or '',
                            prismcast_max_height=int(app_settings.prismcast_max_height or 0),
                            drm_bridge_enabled=bool(app_settings.drm_bridge_enabled),
+                           tve_cox_account=tve_cox_account.to_safe_dict() if tve_cox_account else {
+                               'provider_id': 'cox',
+                               'display_name': 'Cox',
+                               'username': '',
+                               'password_configured': False,
+                               'is_enabled': False,
+                               'last_auth_status': None,
+                               'last_auth_message': None,
+                               'last_auth_at': None,
+                               'configured': False,
+                           },
                            drm_bridge_recoverable_count=_drm_bridge_recoverable_count(),
                            gracenote_contribution_url=app_settings.gracenote_contribution_url or '')
 

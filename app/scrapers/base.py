@@ -382,7 +382,7 @@ class BaseScraper(ABC):
     license_url: str = None  # DRM license server URL; enables /play/<source>/license proxy endpoint
     config_required: bool = False      # True if source won't return useful channels without user configuration
     is_premium: bool = False           # True for paid/subscription services — shown as a badge in the admin UI
-    source_category: str = 'fast'     # 'fast' | 'premium' | 'specialty' | 'drm'
+    source_category: str = 'fast'     # 'fast' | 'premium' | 'tve' | 'specialty' | 'drm'
     under_development: bool = False  # shown in the admin UI; source remains opt-in
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
     channel_miss_threshold: int = 3  # missed scrapes before is_active=False; override per scraper

@@ -109,30 +109,30 @@
     .col-configure { width: 110px; text-align: right; }
 
     /* Category section headers */
+    .source-category-header {
+      --cat-color: var(--text-muted);
+      --cat-border: var(--border);
+    }
     .source-category-header td {
       padding: 0.55rem 1rem 0.45rem 1.1rem;
-      font-size: 0.7rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase;
+      font-size: 0.7rem;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--cat-color);
       background: color-mix(in srgb, var(--bg) 55%, var(--surface));
       border-top: 1px solid var(--border);
       border-bottom: 1px solid var(--border);
-      border-left: 3px solid transparent;
+      border-left: 3px solid var(--cat-border);
     }
     .source-category-header:first-child td { border-top: none; }
-    .source-category-header.cat-fast td {
-      color: var(--accent-soft);
-      border-left-color: var(--accent-strong);
-    }
-    .source-category-header.cat-premium td {
-      color: #a78bfa;
-      border-left-color: #7c3aed;
-    }
-    .source-category-header.cat-specialty td {
-      color: var(--warning-soft);
-      border-left-color: var(--warning-strong);
-    }
-    .source-category-header.cat-drm td {
-      color: var(--danger-soft);
-      border-left-color: var(--danger-border);
+    .source-category-header.cat-fast,
+    .source-category-header.cat-premium,
+    .source-category-header.cat-tve,
+    .source-category-header.cat-specialty,
+    .source-category-header.cat-drm {
+      --cat-color: var(--accent-soft);
+      --cat-border: var(--accent-strong);
     }
 
     /* Source cell content */
@@ -642,7 +642,7 @@
           </tr>
         </thead>
         <tbody>
-          {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'specialty': 'Specialty Sources', 'drm': 'DRM Sources'} %}
+          {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'tve': 'TVE Sources', 'specialty': 'Specialty Sources', 'drm': 'DRM Sources'} %}
           {% set ns = namespace(last_cat=None) %}
           {% for source in sources %}
           {% set cfg_status = source_config_status.get(source.id, 'none') %}

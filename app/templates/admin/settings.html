@@ -821,6 +821,52 @@
     </div>
   </div>
 
+
+  <!-- TV Everywhere card -->
+  <div class="source-card" id="settings-card-tve">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">📡</div>
+        <div>
+          <div class="source-name">TV Everywhere</div>
+          <div class="source-meta">Shared provider credentials for legal TVE-backed sources</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Cox</div>
+          <div class="toggle-row-help">Used by prototype TVE sources such as A+E Networks TVE. Passwords are stored in the local FastChannels database and are never returned to the browser after saving.</div>
+          <div style="margin-top:0.7rem;display:grid;grid-template-columns:1fr 1fr;gap:0.6rem">
+            <input type="text" id="tve-cox-username" autocomplete="username" placeholder="Cox username" value="{{ tve_cox_account.username }}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+            <input type="password" id="tve-cox-password" autocomplete="current-password" placeholder="{% if tve_cox_account.password_configured %}Password saved - leave blank to keep{% else %}Cox password{% endif %}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+          </div>
+          <details style="margin-top:0.65rem;color:var(--text-muted);font-size:0.82rem">
+            <summary style="cursor:pointer;color:var(--text-subtle)">Advanced Adobe bootstrap override</summary>
+            <textarea id="tve-cox-software-statement" rows="2" placeholder="Optional software_statement override; blank uses live A+E discovery" style="margin-top:0.45rem;width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.78rem;padding:0.45rem 0.6rem;font-family:ui-monospace,monospace"></textarea>
+          </details>
+          <div id="tve-cox-last-status" style="margin-top:0.55rem;color:var(--text-muted);font-size:0.82rem">
+            {% if tve_cox_account.last_auth_status %}
+              Last test: {{ tve_cox_account.last_auth_status }}{% if tve_cox_account.last_auth_at %} at {{ tve_cox_account.last_auth_at }}{% endif %}{% if tve_cox_account.last_auth_message %} — {{ tve_cox_account.last_auth_message }}{% endif %}
+            {% else %}
+              No auth test has run yet.
+            {% endif %}
+          </div>
+        </div>
+        <div class="toggle-row-control" style="gap:0.5rem;flex-wrap:wrap">
+          <label class="toggle-switch" title="Enable Cox TVE credentials">
+            <input type="checkbox" id="tve-cox-enabled" {% if tve_cox_account.is_enabled %}checked{% endif %}>
+            <span class="toggle-slider"></span>
+          </label>
+          <button class="btn btn-secondary" onclick="saveTveCoxSettings()">Save</button>
+          <button class="btn btn-audit" id="tve-cox-test-btn" onclick="testTveCox()">Test</button>
+          <span class="save-status" id="tve-cox-status"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Gracenote card -->
   <div class="source-card">
     <div class="source-header" style="cursor:default">
@@ -1059,6 +1105,63 @@ async function savePrismcastSettings() {
     prismcast_inner_url: inner || null,
     prismcast_max_height: Number.isFinite(maxHeight) ? maxHeight : 0,
   }, 'prismcast-status');
+}
+
+
+async function saveTveCoxSettings() {
+  const status = document.getElementById('tve-cox-status');
+  const body = {
+    is_enabled: document.getElementById('tve-cox-enabled').checked,
+    username: document.getElementById('tve-cox-username').value.trim(),
+    password: document.getElementById('tve-cox-password').value,
+    software_statement: document.getElementById('tve-cox-software-statement').value.trim(),
+  };
+  status.className = 'save-status';
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/settings/tve/cox', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    document.getElementById('tve-cox-password').value = '';
+    document.getElementById('tve-cox-password').placeholder = data.password_configured ? 'Password saved - leave blank to keep' : 'Cox password';
+    status.className = 'save-status ok';
+    status.textContent = '✓ Saved';
+    setTimeout(() => { status.textContent = ''; }, 2500);
+    return true;
+  } catch (e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ ' + e.message;
+    return false;
+  }
+}
+
+async function testTveCox() {
+  const status = document.getElementById('tve-cox-status');
+  const btn = document.getElementById('tve-cox-test-btn');
+  const last = document.getElementById('tve-cox-last-status');
+  const saved = await saveTveCoxSettings();
+  if (!saved) return;
+  status.className = 'save-status';
+  status.textContent = 'Testing…';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/settings/tve/cox/test', { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    status.className = 'save-status ok';
+    status.textContent = '✓ Authorized';
+    if (last) last.textContent = data.account?.last_auth_message || 'Cox authorized History via Adobe Pass.';
+  } catch (e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ Auth failed';
+    if (last) last.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 let _lastPrismcastDiagnostics = '';
