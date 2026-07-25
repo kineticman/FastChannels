@@ -79,6 +79,34 @@
       text-transform: uppercase; letter-spacing: 0.05em; text-align: left;
       background: var(--surface);
     }
+
+
+    .tve-catalog-panel {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      overflow: hidden; margin-bottom: 2rem;
+    }
+    .tve-catalog-head {
+      display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start;
+      padding: 1rem 1.15rem; border-bottom: 1px solid var(--border);
+    }
+    .tve-catalog-title { font-size: 0.95rem; font-weight: 700; color: var(--text); }
+    .tve-catalog-subtitle { margin-top: 0.25rem; font-size: 0.78rem; line-height: 1.45; color: var(--text-muted); }
+    .tve-catalog-count { font-size: 0.72rem; font-weight: 700; color: var(--accent-soft); text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+    .tve-catalog-scroll { overflow-x: auto; }
+    .tve-catalog-table { width: 100%; border-collapse: collapse; min-width: 860px; }
+    .tve-catalog-table th,
+    .tve-catalog-table td { padding: 0.7rem 0.85rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .tve-catalog-table th { text-align: left; color: var(--text-soft); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; background: var(--surface); }
+    .tve-catalog-table tbody tr:last-child td { border-bottom: none; }
+    .tve-target-name { font-size: 0.88rem; font-weight: 700; color: var(--text); }
+    .tve-target-domains { margin-top: 0.25rem; color: var(--text-muted); font-size: 0.72rem; line-height: 1.35; }
+    .tve-target-notes { color: var(--text-soft); font-size: 0.74rem; line-height: 1.4; max-width: 20rem; }
+    .tve-target-meta { color: var(--text-muted); font-size: 0.74rem; line-height: 1.45; }
+    .tve-chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.15rem 0.5rem; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; border: 1px solid var(--border); color: var(--text-soft); background: var(--bg); white-space: nowrap; }
+    .tve-chip.implemented, .tve-chip.working, .tve-chip.low { color: var(--success-soft); border-color: color-mix(in srgb, var(--success-fill) 28%, transparent); background: color-mix(in srgb, var(--success-bg-2) 16%, transparent); }
+    .tve-chip.high-priority, .tve-chip.candidate, .tve-chip.probe, .tve-chip.partial, .tve-chip.placeholder, .tve-chip.mixed, .tve-chip.medium { color: var(--warning-soft); border-color: var(--warning-border); background: color-mix(in srgb, var(--warning-bg) 55%, transparent); }
+    .tve-chip.high, .tve-chip.medium-high, .tve-chip.unknown, .tve-chip.needed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 32%, transparent); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+    .tve-chip.parallel-track, .tve-chip.source-dependent { color: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); background: color-mix(in srgb, var(--accent-bg) 42%, transparent); }
     .dashboard-table th.col-toggle,
     .dashboard-table th.col-actions { text-align: center; }
     .dashboard-table tbody tr.dash-row {
@@ -905,6 +933,54 @@
           {% endfor %}
         </tbody>
       </table>
+    </div>
+
+    <div class="tve-catalog-panel" id="tve-source-catalog">
+      <div class="tve-catalog-head">
+        <div>
+          <div class="tve-catalog-title">TVE Source Catalog</div>
+          <div class="tve-catalog-subtitle">Prototype targets for legal TV Everywhere streams. This tracks extractor coverage, likely auth path, stream risk, guide status, and what should be probed next.</div>
+        </div>
+        <div class="tve-catalog-count">{{ tve_source_catalog | length }} targets</div>
+      </div>
+      <div class="tve-catalog-scroll">
+        <table class="tve-catalog-table">
+          <thead>
+            <tr>
+              <th>Target</th>
+              <th>Status</th>
+              <th>Extractor / Auth</th>
+              <th>Live / VOD</th>
+              <th>DRM / EPG</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for target in tve_source_catalog %}
+            <tr>
+              <td>
+                <div class="tve-target-name">{{ target.name }}</div>
+                <div class="tve-target-domains">{{ target.domains | join(', ') }}</div>
+              </td>
+              <td><span class="tve-chip {{ target.status }}">{{ target.status }}</span></td>
+              <td>
+                <div class="tve-target-meta"><strong>Extractor:</strong> {{ target.extractor or 'none yet' }}</div>
+                <div class="tve-target-meta"><strong>Auth:</strong> {{ target.auth_system }}</div>
+              </td>
+              <td>
+                <div><span class="tve-chip {{ target.live_status }}">Live {{ target.live_status }}</span></div>
+                <div style="margin-top:0.35rem"><span class="tve-chip {{ target.vod_status }}">VOD {{ target.vod_status }}</span></div>
+              </td>
+              <td>
+                <div><span class="tve-chip {{ target.drm_risk }}">DRM {{ target.drm_risk }}</span></div>
+                <div style="margin-top:0.35rem"><span class="tve-chip {{ target.epg_status }}">EPG {{ target.epg_status }}</span></div>
+              </td>
+              <td><div class="tve-target-notes">{{ target.notes }}</div></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
 
   </div>

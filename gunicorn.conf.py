@@ -26,6 +26,7 @@ _SUPPRESS_PATTERNS = (
     '/api/sources/chnum',      # overlap-banner polling
     '/api/feeds/chnum-ranges', # feed page chnum conflict checker
     '/play/amazon_prime_free/license', # Amazon DRM license — fires per key rotation
+    '/play/fox_tve/key',      # FOX Weather Uplynk AES keys — one per key rotation
     'GET /api/sources HTTP',   # sources list fetched on every poll cycle finish
     '"GET /admin/',            # admin page navigation GETs (POSTs still logged)
     'GET /api/logs',           # log viewer polling
