@@ -2698,6 +2698,147 @@ def roku_dash_proxy(channel_id: str):
     return redirect(mpd_url, code=302)
 
 
+
+_COX_HLS_HEADERS = {
+    'Origin': 'https://watchtv.cox.com',
+    'Referer': 'https://watchtv.cox.com/',
+    'Accept': '*/*',
+}
+_COX_HLS_SESSION = _requests.Session()
+_COX_HLS_SESSION.headers.update(_COX_HLS_HEADERS)
+
+
+def _cox_rewrite_master_playlist(text: str, playlist_url: str, channel_id: str, *, video_only: bool) -> str:
+    from urllib.parse import quote as _quote
+    base_url = request.host_url.rstrip('/')
+    variant_base = playlist_url.rsplit('/', 1)[0] + '/'
+    lines = []
+    pending_stream_inf = False
+    encoded_id = _quote(channel_id, safe='')
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if pending_stream_inf and line and not line.startswith('#'):
+            abs_url = urljoin(variant_base, line)
+            proxied = f'{base_url}/play/cox/{encoded_id}/proxy.m3u8?variant={_quote(abs_url, safe="")}'
+            if video_only:
+                proxied += '&video_only=1'
+            lines.append(proxied)
+            pending_stream_inf = False
+            continue
+        lines.append(raw_line)
+        pending_stream_inf = line.startswith('#EXT-X-STREAM-INF')
+    return '\n'.join(lines) + '\n'
+
+
+def _cox_rewrite_media_playlist(text: str, playlist_url: str, *, video_only: bool) -> str:
+    from urllib.parse import quote as _quote
+    base_url = request.host_url.rstrip('/')
+    variant_base = playlist_url.rsplit('/', 1)[0] + '/'
+    lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line and not line.startswith('#'):
+            abs_url = urljoin(variant_base, line)
+            proxied = f'{base_url}/play/cox/segment?url={_quote(abs_url, safe="")}'
+            if video_only:
+                proxied += '&video_only=1'
+            lines.append(proxied)
+        else:
+            lines.append(raw_line)
+    return '\n'.join(lines) + '\n'
+
+
+@play_bp.route('/play/cox/<channel_id>/proxy.m3u8')
+def cox_hls_proxy(channel_id: str):
+    """Same-origin HLS proxy for experimental Cox direct-HLS browser playback.
+
+    Cox TVE exposes HLS-shaped manifests, but observed media segments are
+    XCal/CENC protected rather than clear MPEG-TS. This route is kept for local
+    inspection while prototyping; normal playback should use the DASH/Widevine
+    proxy below.
+    """
+    from urllib.parse import unquote as _unquote
+    raw_id = _unquote(channel_id)
+    variant_url = request.args.get('variant') or ''
+    video_only = request.args.get('video_only') == '1'
+    if variant_url:
+        parsed = urlsplit(variant_url)
+        if parsed.scheme != 'https' or not parsed.netloc.endswith('.tve.cox.net'):
+            abort(400)
+        r = _COX_HLS_SESSION.get(variant_url, timeout=(5, 20))
+        if r.status_code != 200:
+            abort(r.status_code)
+        body = _cox_rewrite_media_playlist(r.text, str(r.url), video_only=video_only)
+        return Response(body, mimetype='application/vnd.apple.mpegurl', headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
+
+    channel = (
+        Channel.query
+        .join(Source, Source.id == Channel.source_id)
+        .filter(Source.name == 'cox', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        return _unavailable_response()
+    scraper_cls = registry.get('cox')
+    if not scraper_cls:
+        return _unavailable_response()
+    source = channel.source
+    scraper_config = dict(source.config or {})
+    scraper_config['allow_experimental_direct_hls'] = True
+    scraper = scraper_cls(config=scraper_config)
+    try:
+        upstream_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[cox-hls-proxy] resolve failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    finally:
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(source.id, scraper._pending_config_updates)
+            except Exception as ce:
+                db.session.rollback()
+                logger.warning('[cox-hls-proxy] failed to persist config updates: %s', ce)
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+            except Exception as ce:
+                db.session.rollback()
+                logger.warning('[cox-hls-proxy] failed to persist cache updates: %s', ce)
+    parsed = urlsplit(upstream_url)
+    if parsed.scheme != 'https' or not parsed.netloc.endswith('.tve.cox.net'):
+        abort(400)
+    r = _COX_HLS_SESSION.get(upstream_url, timeout=(5, 20))
+    if r.status_code != 200:
+        abort(r.status_code)
+    body = _cox_rewrite_master_playlist(r.text, str(r.url), raw_id, video_only=video_only)
+    return Response(body, mimetype='application/vnd.apple.mpegurl', headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
+
+
+@play_bp.route('/play/cox/segment')
+def cox_segment_proxy():
+    from urllib.parse import unquote as _unquote
+    raw = request.args.get('url', '')
+    if not raw:
+        abort(400)
+    url = _unquote(raw)
+    parsed = urlsplit(url)
+    if parsed.scheme != 'https' or not parsed.netloc.endswith('.tve.cox.net'):
+        abort(400)
+    video_only = request.args.get('video_only') == '1'
+    r = _COX_HLS_SESSION.get(url, timeout=(5, 30), stream=not video_only)
+    if r.status_code != 200:
+        abort(r.status_code)
+    if video_only:
+        body = _distro_filter_ts_video_only(r.content)
+        return Response(body, status=200, content_type=r.headers.get('Content-Type', 'video/MP2T'), headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
+    return _stream_upstream_response(
+        r,
+        status=200,
+        content_type=r.headers.get('Content-Type', 'video/MP2T'),
+        headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'},
+        label='cox-seg-proxy',
+    )
+
 @play_bp.route('/play/cox/<channel_id>/dash.mpd')
 def cox_dash_proxy(channel_id: str):
     """DASH (Widevine) manifest proxy for Cox Contour TVE channels.
@@ -2722,7 +2863,9 @@ def cox_dash_proxy(channel_id: str):
     scraper_cls = registry.get('cox')
     if not scraper_cls:
         return _unavailable_response()
-    scraper = scraper_cls(config=channel.source.config or {})
+    scraper_config = dict(channel.source.config or {})
+    scraper_config['allow_experimental_direct_hls'] = False
+    scraper = scraper_cls(config=scraper_config)
     try:
         dash_url = scraper.resolve(channel.stream_url)
     except Exception as e:

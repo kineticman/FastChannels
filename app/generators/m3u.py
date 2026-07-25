@@ -969,7 +969,10 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         else:
             if src_name not in _kodi_props_cache:
                 if scraper_cls and hasattr(scraper_cls, 'get_kodi_props'):
-                    _kodi_props_cache[src_name] = scraper_cls.get_kodi_props(base_url)
+                    try:
+                        _kodi_props_cache[src_name] = scraper_cls.get_kodi_props(base_url, ch.source.config or {})
+                    except TypeError:
+                        _kodi_props_cache[src_name] = scraper_cls.get_kodi_props(base_url)
                 else:
                     _kodi_props_cache[src_name] = getattr(scraper_cls, 'kodi_props', {}) if scraper_cls else {}
             for prop_key, prop_val in _kodi_props_cache[src_name].items():

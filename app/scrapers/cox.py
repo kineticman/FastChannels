@@ -543,6 +543,8 @@ class CoxScraper(BaseScraper):
                         {'value': 'native_page', 'label': 'Experimental Cox native web page'},
                     ],
                     help_text='Controls Cox channels in the PrismCast M3U only. The experimental native-page mode sends PrismCast to Cox Contour\'s own listings page with the channel call sign; it may still fail on Linux Chrome/Widevine.'),
+        ConfigField('allow_experimental_direct_hls', 'Experimental HLS audit', field_type='checkbox', default=False,
+                    help_text='Expose Cox TVE HLS-shaped playlists for local inspection. Observed segments are XCal/CENC protected and should not be treated as normal clear HLS playback.'),
     ]
 
     def __init__(self, config: dict | None = None):
@@ -1034,6 +1036,15 @@ class CoxScraper(BaseScraper):
     @classmethod
     def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
         return cls.license_url
+
+    @classmethod
+    def get_kodi_props(cls, base_url: str, config: dict | None = None) -> dict[str, str]:
+        return {
+            'inputstream': 'inputstream.adaptive',
+            'inputstream.adaptive.manifest_type': 'mpd',
+            'inputstream.adaptive.license_type': 'com.widevine.alpha',
+            'inputstream.adaptive.license_key': f'{base_url}/play/cox/license||R{{SSM}}|',
+        }
 
     @classmethod
     def license_request_headers(cls, config: dict) -> dict:

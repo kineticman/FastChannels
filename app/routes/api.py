@@ -2724,8 +2724,9 @@ def _get_playback_info(ch, fast_mode=True):
         from urllib.parse import quote as _quote
         preview_url = f'/play/roku/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
-    # Cox TVE → DASH+Widevine. The Cox resolver also caches XCal contentMetadata
-    # for the license proxy; the route proxies the MPD with permissive CORS.
+    # Cox TVE uses XCal/CENC-protected DASH+Widevine for browser playback.
+    # The HLS-shaped TVE playlists remain available through /proxy.m3u8 for
+    # inspection, but observed segments are not clear MPEG-TS.
     if ch.source and ch.source.name == 'cox' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         _enc = _quote(ch.source_channel_id, safe='')
