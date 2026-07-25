@@ -836,15 +836,44 @@
     <div class="source-body open">
       <div class="toggle-row">
         <div class="toggle-row-text">
-          <div class="toggle-row-label">Cox</div>
-          <div class="toggle-row-help">Used by prototype TVE sources such as A+E Networks TVE. Passwords are stored in the local FastChannels database and are never returned to the browser after saving.</div>
-          <div style="margin-top:0.7rem;display:grid;grid-template-columns:1fr 1fr;gap:0.6rem">
+          <div class="toggle-row-label">TV Provider Sign-In</div>
+          <div class="toggle-row-help">Choose your TV provider, then enter the same username and password you use on that provider's site. These credentials are stored only in the local FastChannels database and are never returned to the browser after saving.</div>
+          <div style="margin-top:0.7rem;display:grid;grid-template-columns:1fr;gap:0.45rem;max-width:520px">
+            <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem">
+              TV provider
+              <input type="text" id="tve-provider-search" placeholder="Search supported TV providers" oninput="filterTveProviders()" autocomplete="off" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+              <select id="tve-provider" onchange="updateTveProviderFields()" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+                {% for provider in tve_provider_choices %}
+                <option value="{{ provider.id }}" {% if provider.id == tve_cox_account.selected_mso_id %}selected{% endif %}>{{ provider.name }}{% if provider.id != provider.name %} ({{ provider.id }}){% endif %}</option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+          <div style="margin-top:0.65rem;display:grid;grid-template-columns:1fr 1fr;gap:0.6rem">
             <input type="text" id="tve-cox-username" autocomplete="username" placeholder="Cox username" value="{{ tve_cox_account.username }}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
             <input type="password" id="tve-cox-password" autocomplete="current-password" placeholder="{% if tve_cox_account.password_configured %}Password saved - leave blank to keep{% else %}Cox password{% endif %}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
           </div>
+          <div id="tve-provider-hint" style="margin-top:0.45rem;color:var(--text-muted);font-size:0.82rem">Used by TVE sources such as A+E Networks TVE.</div>
           <details style="margin-top:0.65rem;color:var(--text-muted);font-size:0.82rem">
-            <summary style="cursor:pointer;color:var(--text-subtle)">Advanced Adobe bootstrap override</summary>
-            <textarea id="tve-cox-software-statement" rows="2" placeholder="Optional software_statement override; blank uses live A+E discovery" style="margin-top:0.45rem;width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.78rem;padding:0.45rem 0.6rem;font-family:ui-monospace,monospace"></textarea>
+            <summary style="cursor:pointer;color:var(--text-subtle)">Advanced TVE options</summary>
+            <div style="margin-top:0.5rem;display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+              <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem">
+                Sign-in engine
+                <select id="tve-cox-auth-backend" onchange="updateTveProviderFields()" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+                  <option value="native" {% if tve_cox_account.auth_backend == 'native' %}selected{% endif %}>Native Adobe Pass</option>
+                  <option value="yt_dlp" {% if tve_cox_account.auth_backend == 'yt_dlp' %}selected{% endif %}>yt-dlp Adobe Pass</option>
+                </select>
+              </label>
+              <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem">
+                Adobe MSO ID
+                <input type="text" id="tve-cox-adobe-mso" value="{{ tve_cox_account.adobe_mso_id or 'Cox' }}" placeholder="Cox" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+              </label>
+              <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem">
+                yt-dlp MSO ID
+                <input type="text" id="tve-cox-ytdlp-mso" value="{{ tve_cox_account.yt_dlp_mso_id or 'Cox' }}" placeholder="Cox" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+              </label>
+              <textarea id="tve-cox-software-statement" rows="2" placeholder="Optional software_statement override; blank uses live A+E discovery" style="grid-column:1 / -1;width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.78rem;padding:0.45rem 0.6rem;font-family:ui-monospace,monospace"></textarea>
+            </div>
           </details>
           <div id="tve-cox-last-status" style="margin-top:0.55rem;color:var(--text-muted);font-size:0.82rem">
             {% if tve_cox_account.last_auth_status %}
@@ -1108,12 +1137,60 @@ async function savePrismcastSettings() {
 }
 
 
+const tveProviders = {{ tve_provider_choices | tojson }};
+const tveProviderMap = Object.fromEntries(tveProviders.map((p) => [p.id, p]));
+const tvePasswordPlaceholder = '{% if tve_cox_account.password_configured %}Password saved - leave blank to keep{% else %}TV provider password{% endif %}';
+
+function selectedTveProvider() {
+  const select = document.getElementById('tve-provider');
+  const providerId = select?.value || 'Cox';
+  return tveProviderMap[providerId] || tveProviderMap.Cox || tveProviders[0] || {id: 'Cox', name: 'Cox'};
+}
+
+function filterTveProviders() {
+  const query = (document.getElementById('tve-provider-search')?.value || '').trim().toLowerCase();
+  const select = document.getElementById('tve-provider');
+  if (!select) return;
+  for (const option of select.options) {
+    option.hidden = query && !option.textContent.toLowerCase().includes(query) && !option.value.toLowerCase().includes(query);
+  }
+}
+
+function updateTveProviderFields() {
+  const select = document.getElementById('tve-provider');
+  const provider = selectedTveProvider();
+  const username = document.getElementById('tve-cox-username');
+  const password = document.getElementById('tve-cox-password');
+  const adobeMso = document.getElementById('tve-cox-adobe-mso');
+  const ytdlpMso = document.getElementById('tve-cox-ytdlp-mso');
+  const hint = document.getElementById('tve-provider-hint');
+  const providerChanged = select && select.dataset.previousProvider && select.dataset.previousProvider !== provider.id;
+  if (username) username.placeholder = `${provider.name} username`;
+  if (password) password.placeholder = tvePasswordPlaceholder;
+  if (adobeMso && (providerChanged || !adobeMso.value.trim())) adobeMso.value = provider.id;
+  if (ytdlpMso && (providerChanged || !ytdlpMso.value.trim())) ytdlpMso.value = provider.id;
+  if (hint) {
+    const backend = document.getElementById('tve-cox-auth-backend')?.value || 'native';
+    const base = provider.id === 'Cox'
+      ? 'Used by TVE sources such as A+E Networks TVE.'
+      : `${provider.name} is available through yt-dlp Adobe Pass. Native A+E testing currently supports Cox only.`;
+    hint.textContent = backend === 'yt_dlp'
+      ? `${base} Advanced engine set to yt-dlp for future compatible TVE sources.`
+      : base;
+  }
+  if (select) select.dataset.previousProvider = provider.id;
+}
+
 async function saveTveCoxSettings() {
   const status = document.getElementById('tve-cox-status');
   const body = {
+    provider_id: document.getElementById('tve-provider').value,
     is_enabled: document.getElementById('tve-cox-enabled').checked,
     username: document.getElementById('tve-cox-username').value.trim(),
     password: document.getElementById('tve-cox-password').value,
+    auth_backend: document.getElementById('tve-cox-auth-backend').value,
+    adobe_mso_id: document.getElementById('tve-cox-adobe-mso').value.trim() || selectedTveProvider().id,
+    yt_dlp_mso_id: document.getElementById('tve-cox-ytdlp-mso').value.trim() || document.getElementById('tve-cox-adobe-mso').value.trim() || selectedTveProvider().id,
     software_statement: document.getElementById('tve-cox-software-statement').value.trim(),
   };
   status.className = 'save-status';
@@ -1127,7 +1204,7 @@ async function saveTveCoxSettings() {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
     document.getElementById('tve-cox-password').value = '';
-    document.getElementById('tve-cox-password').placeholder = data.password_configured ? 'Password saved - leave blank to keep' : 'Cox password';
+    document.getElementById('tve-cox-password').placeholder = data.password_configured ? 'Password saved - leave blank to keep' : 'TV provider password';
     status.className = 'save-status ok';
     status.textContent = '✓ Saved';
     setTimeout(() => { status.textContent = ''; }, 2500);
@@ -1989,6 +2066,7 @@ async function saveContributionUrl() {
 }
 
 loadSystemStats();
+updateTveProviderFields();
 
 // ── Community Gracenote map remote status ───────────────────────────────────
 async function loadRemoteGracenoteStatus() {

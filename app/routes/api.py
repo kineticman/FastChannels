@@ -63,6 +63,7 @@ from ..generators.m3u import (
 from .. import logfile
 from ..timezone_utils import normalize_timezone_name, write_timezone_cache
 from ..tve.adobe_pass import TVEAuthError, verify_cox_history
+from ..tve.providers import ytdlp_adobe_mso_providers
 from ..xml_cache import (
     get_artifact,
     get_xml_artifact,
@@ -4733,6 +4734,11 @@ def tve_cox_settings():
     account = _get_tve_account('cox', 'Cox')
     if request.method == 'POST':
         data = request.get_json(force=True) or {}
+        provider_choices = {p['id']: p for p in ytdlp_adobe_mso_providers()}
+        selected_mso_id = (data.get('provider_id') or data.get('selected_mso_id') or 'Cox').strip()
+        if selected_mso_id not in provider_choices:
+            return jsonify({'error': 'Unsupported TVE provider.'}), 400
+        selected_provider = provider_choices[selected_mso_id]
         if 'is_enabled' in data:
             account.is_enabled = bool(data['is_enabled'])
         if 'username' in data:
@@ -4741,16 +4747,30 @@ def tve_cox_settings():
             account.password = None
         elif 'password' in data and (data.get('password') or ''):
             account.password = data.get('password')
+
+        cfg = dict(account.config or {})
+        cfg['selected_mso_id'] = selected_mso_id
+        cfg['selected_mso_name'] = selected_provider['name']
+        if 'auth_backend' in data:
+            auth_backend = (data.get('auth_backend') or 'native').strip()
+            if auth_backend not in {'native', 'yt_dlp'}:
+                return jsonify({'error': 'Unsupported TVE auth backend.'}), 400
+            cfg['auth_backend'] = auth_backend
+        if 'adobe_mso_id' in data:
+            cfg['adobe_mso_id'] = (data.get('adobe_mso_id') or selected_mso_id).strip() or selected_mso_id
+        else:
+            cfg.setdefault('adobe_mso_id', selected_mso_id)
+        if 'yt_dlp_mso_id' in data:
+            cfg['yt_dlp_mso_id'] = (data.get('yt_dlp_mso_id') or selected_mso_id).strip() or selected_mso_id
+        else:
+            cfg['yt_dlp_mso_id'] = selected_mso_id
         if data.get('clear_software_statement'):
-            cfg = dict(account.config or {})
             cfg.pop('software_statement', None)
-            account.config = cfg
         elif 'software_statement' in data:
             statement = (data.get('software_statement') or '').strip()
             if statement:
-                cfg = dict(account.config or {})
                 cfg['software_statement'] = statement
-                account.config = cfg
+        account.config = cfg
         db.session.commit()
     return jsonify(account.to_safe_dict())
 
@@ -4759,7 +4779,12 @@ def tve_cox_settings():
 def test_tve_cox_settings():
     account = _get_tve_account('cox', 'Cox')
     if not account.has_credentials():
-        return jsonify({'error': 'Cox TVE username and password are required.'}), 400
+        return jsonify({'error': 'TVE username and password are required.'}), 400
+    cfg = account.config or {}
+    selected_mso_id = (cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+    auth_backend = (cfg.get('auth_backend') or 'native').strip()
+    if selected_mso_id != 'Cox' or auth_backend != 'native':
+        return jsonify({'error': 'The built-in auth test currently only verifies Cox with Native Adobe Pass.'}), 400
     try:
         result = verify_cox_history(
             account.username or '',

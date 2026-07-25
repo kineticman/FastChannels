@@ -25,6 +25,7 @@ from ..source_config import (
 )
 from ..timezone_utils import timezone_choices, timezone_health
 from ..url import public_base_url, detected_base_url
+from ..tve.providers import ytdlp_adobe_mso_providers
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
@@ -1335,6 +1336,7 @@ def settings():
         })
     tz_health = timezone_health(app_settings.timezone_name)
     tve_cox_account = TVEAccount.query.filter_by(provider_id='cox').first()
+    tve_provider_choices = ytdlp_adobe_mso_providers()
     _url_from_env = _url_source in {'FASTCHANNELS_SERVER_URL', 'PUBLIC_BASE_URL'}
     _no_port_warning = False
     if _eff_url and not _url_from_env:
@@ -1367,6 +1369,7 @@ def settings():
                            prismcast_inner_url=app_settings.prismcast_inner_url or '',
                            prismcast_max_height=int(app_settings.prismcast_max_height or 0),
                            drm_bridge_enabled=bool(app_settings.drm_bridge_enabled),
+                           tve_provider_choices=tve_provider_choices,
                            tve_cox_account=tve_cox_account.to_safe_dict() if tve_cox_account else {
                                'provider_id': 'cox',
                                'display_name': 'Cox',
@@ -1377,6 +1380,11 @@ def settings():
                                'last_auth_message': None,
                                'last_auth_at': None,
                                'configured': False,
+                               'auth_backend': 'native',
+                               'adobe_mso_id': 'Cox',
+                               'yt_dlp_mso_id': 'Cox',
+                               'selected_mso_id': 'Cox',
+                               'selected_mso_name': 'Cox',
                            },
                            drm_bridge_recoverable_count=_drm_bridge_recoverable_count(),
                            gracenote_contribution_url=app_settings.gracenote_contribution_url or '')
