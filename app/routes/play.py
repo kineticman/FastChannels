@@ -2846,6 +2846,21 @@ def fox_tve_proxy(channel_id: str):
     except Exception as exc:
         logger.warning('[fox-tve] resolve failed for %s: %s', raw_id, exc)
         return _unavailable_response()
+    finally:
+        if getattr(scraper, '_pending_config_updates', None):
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+            except Exception as ce:
+                from ..extensions import db
+                db.session.rollback()
+                logger.warning('[fox-tve] failed to persist config updates: %s', ce)
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            except Exception as ce:
+                from ..extensions import db
+                db.session.rollback()
+                logger.warning('[fox-tve] failed to persist cache updates: %s', ce)
 
     fetched = _fox_tve_fetch_media(upstream_url)
     if not fetched:
@@ -3749,6 +3764,17 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
+    # FOX TVE uses source-specific live resolution and playlist handling.
+    # Redirect before generic resolution so slow token acquisition happens only
+    # inside the manifest proxy request, not on both the initial tune and proxy.
+    if source_name == 'fox_tve':
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/fox_tve/{encoded_id}/proxy.m3u8",
+            302,
+        )
+
     scraper_cls = registry.get(source_name)
     scraper = None
     # Distinguish a confirmed-dead channel (permanent — being auto-disabled) from
@@ -3824,17 +3850,6 @@ def play(source_name: str, channel_id: str):
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
             f"{request.host_url.rstrip('/')}/play/cspan/{encoded_id}/proxy.m3u8",
-            302,
-        )
-
-    # FOX TVE uses source-specific live resolution and playlist handling.
-    # Keep these streams behind the proxy so the generic DRM/VOD guard does
-    # not disable playable AES-128 HLS prototypes.
-    if source_name == 'fox_tve':
-        from urllib.parse import quote as _quote
-        encoded_id = _quote(channel.source_channel_id, safe='')
-        return redirect(
-            f"{request.host_url.rstrip('/')}/play/fox_tve/{encoded_id}/proxy.m3u8",
             302,
         )
 

@@ -20,6 +20,10 @@ FOX_SPORTS_API_KEY = 'cf289e299efdfa39fb6316f259d1de93'
 FOX_SPORTS_PRODUCT_API = 'https://api.fox.com/fs/product/curated/v1/sporting/keystone/detail/by_filters'
 FOX_SPORTS_PREVIEW_MVPD = 'TempPass_fbcfox_60min'
 FOX_SPORTS_DVP_PLAYBACK_API = 'https://prod.api.digitalvideoplatform.com/sports/v3.0/partner-playback/live'
+FOX_NEWS_BUSINESS_SCHEDULE_FEEDS = {
+    'fox_news': 'https://apps.foxnews.com/schedule_new/feed/fox-news.jn',
+    'fox_business': 'https://apps.foxnews.com/schedule_new/feed/fox-business.jn',
+}
 FOX_SIGNED_HLS_RE = re.compile(r'https://247\.(?:foxnews|foxbusiness)\.com/[^\s\"\'<>]+?master\.m3u8\?hdne[at]=[^\s\"\'<>]+', re.I)
 FOX_HLS_TOKEN_EXP_RE = re.compile(r'hdne[at]=exp=(\d+)~', re.I)
 FOX_ADOBE_API = 'https://sp.auth.adobe.com'
@@ -42,6 +46,7 @@ FOX_NEWS_BUSINESS_ADOBE: dict[str, dict[str, str]] = {
     },
 }
 _SIGNED_HLS_CACHE: dict[str, tuple[str, int]] = {}
+SIGNED_HLS_CACHE_KEY_PREFIX = 'signed_hls:'
 
 
 @dataclass(frozen=True)
@@ -409,6 +414,97 @@ def _parse_fox_time(value: str | None) -> datetime | None:
         return None
 
 
+def _as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _first_text(value) -> str | None:
+    if value is None or value == {}:
+        return None
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, dict):
+        for key in ('#text', 'value', 'url', 'name'):
+            text = _first_text(value.get(key))
+            if text:
+                return text
+        return None
+    if isinstance(value, list):
+        for item in value:
+            text = _first_text(item)
+            if text:
+                return text
+    return str(value) if value else None
+
+
+def _fox_schedule_hosts(show: dict) -> str | None:
+    hosts = show.get('hosts')
+    if isinstance(hosts, dict):
+        hosts = hosts.get('name')
+    names = [_first_text(host) for host in _as_list(hosts)]
+    names = [name for name in names if name]
+    return ', '.join(names) if names else None
+
+
+def fetch_fox_news_business_schedule(channel_id: str) -> list[dict]:
+    url = FOX_NEWS_BUSINESS_SCHEDULE_FEEDS.get(channel_id)
+    if not url:
+        return []
+    r = requests.get(url, headers={'User-Agent': UA, 'Accept': 'application/json,*/*'}, timeout=20)
+    r.raise_for_status()
+    payload = r.json()
+    shows: list[dict] = []
+    for day in _as_list(payload.get('day')):
+        if not isinstance(day, dict):
+            continue
+        for show in _as_list(day.get('show')):
+            if isinstance(show, dict):
+                shows.append(show)
+    return shows
+
+
+def _fox_news_business_program(channel: FoxTVEChannel, show: dict) -> ProgramData | None:
+    start_time = _parse_fox_time(show.get('start-utc') or show.get('start'))
+    end_time = _parse_fox_time(show.get('end-utc') or show.get('end'))
+    if not start_time or not end_time or end_time <= start_time:
+        return None
+
+    title = _first_text(show.get('title')) or channel.guide_title
+    description = (
+        _first_text(show.get('long-description'))
+        or _first_text(show.get('description'))
+        or _first_text(show.get('short-description'))
+    )
+    hosts = _fox_schedule_hosts(show)
+    if hosts and description and hosts not in description:
+        description = f'{description} Hosts: {hosts}.'
+    elif hosts and not description:
+        description = f'Hosts: {hosts}.'
+
+    poster_url = (
+        _first_text(show.get('image'))
+        or _first_text(show.get('feature-image'))
+        or channel.logo_url
+    )
+    fox_id = _first_text(show.get('foxipedia-id')) or _first_text(show.get('machine-title'))
+    return ProgramData(
+        source_channel_id=channel.channel_id,
+        title=title,
+        description=description,
+        start_time=start_time,
+        end_time=end_time,
+        poster_url=poster_url,
+        category=channel.category,
+        is_live=True,
+        series_id=fox_id,
+        episode_id=f'{channel.channel_id}:{fox_id or title}:{start_time.isoformat()}',
+    )
+
+
 def fetch_fox_sports_listings(start: datetime, hours: int = 24) -> list[dict]:
     call_signs = sorted({
         call_sign
@@ -736,6 +832,20 @@ class FoxTVEScraper(BaseScraper):
         wanted = {ch.source_channel_id for ch in channels}
         now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         programs: list[ProgramData] = []
+
+        for channel_id in ('fox_news', 'fox_business'):
+            if channel_id not in wanted:
+                continue
+            channel = CHANNELS[channel_id]
+            try:
+                shows = fetch_fox_news_business_schedule(channel_id)
+            except requests.RequestException:
+                shows = []
+            for show in shows:
+                program = _fox_news_business_program(channel, show)
+                if program:
+                    programs.append(program)
+
         for channel_id, channel in CHANNELS.items():
             if channel_id != 'fox_weather' or channel_id not in wanted:
                 continue
@@ -800,8 +910,22 @@ class FoxTVEScraper(BaseScraper):
         if channel.channel_id == 'fox_weather':
             return find_live_hls(channel.page_url) or channel.fallback_stream_url
         if channel.signed_page_hls:
+            now = int(time.time())
+            cache_key = f'{SIGNED_HLS_CACHE_KEY_PREFIX}{channel.channel_id}'
+            cached = self.cache.get(cache_key) or {}
+            cached_url = cached.get('url') if isinstance(cached, dict) else None
+            cached_exp = int(cached.get('exp') or 0) if isinstance(cached, dict) else 0
+            if cached_url and cached_exp > now + 120:
+                _SIGNED_HLS_CACHE[channel.channel_id] = (cached_url, cached_exp)
+                return cached_url
             try:
-                return resolve_fox_http_signed_hls(channel)
+                signed_url = resolve_fox_http_signed_hls(channel)
             except Exception:
-                return resolve_fox_page_signed_hls(channel)
+                signed_url = resolve_fox_page_signed_hls(channel)
+            self._update_cache(cache_key, {
+                'url': signed_url,
+                'exp': _signed_hls_exp(signed_url),
+                'cached_at': now,
+            })
+            return signed_url
         return resolve_fox_sports_hls(channel)
