@@ -33,6 +33,10 @@ class TVEAuthError(RuntimeError):
     pass
 
 
+class TVENotAuthorizedError(TVEAuthError):
+    pass
+
+
 @dataclass
 class AdobeContext:
     software_statement: str
@@ -85,6 +89,29 @@ def _text_between(text: str, tag: str) -> str:
     value = m.group(1)
     value = re.sub(r'^<!\[CDATA\[(.*)\]\]>$', r'\1', value, flags=re.S)
     return value
+
+
+def _adobe_error_code(text: str) -> str:
+    m = re.search(r'<error\b[^>]*>(.*?)</error>', text or '', flags=re.S)
+    if not m:
+        return ''
+    tag = re.search(r'<([A-Za-z0-9_.:-]+)\b[^>]*/?>', m.group(1))
+    return tag.group(1) if tag else ''
+
+
+def _adobe_error_message(text: str) -> str:
+    try:
+        details = _text_between(text, 'details').strip()
+    except TVEAuthError:
+        details = ''
+    if details:
+        return details
+
+    code = _adobe_error_code(text)
+    if code:
+        return f'Adobe authorization error: {code}'
+
+    return 'Adobe authorization error'
 
 
 def _safe_url(value: str) -> str:
@@ -333,7 +360,10 @@ class AdobePassCoxClient:
             headers={'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
         )
         if '<error' in r.text:
-            raise TVEAuthError(_text_between(r.text, 'details'))
+            message = _adobe_error_message(r.text)
+            if _adobe_error_code(r.text) == 'notAuthorized':
+                raise TVENotAuthorizedError(message)
+            raise TVEAuthError(message)
         self.ctx.authz_token = html.unescape(_text_between(r.text, 'authzToken'))
 
         r = self._post(

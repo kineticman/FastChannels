@@ -44,6 +44,7 @@ from app.scrapers.base import (
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
+from app.tve.adobe_pass import TVENotAuthorizedError
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
 from app.routes.images import delete_cached_logo
 
@@ -730,7 +731,7 @@ def run_stream_audit(source_name: str):
         channels = source.channels.filter(
             db.or_(
                 Channel.is_active == True,
-                Channel.disable_reason.in_(['Dead', 'VOD']),
+                Channel.disable_reason.in_(['Dead', 'VOD', 'NotAuthorized']),
                 Channel.disable_reason.like('AuditError:%'),
             )
         ).all()
@@ -740,6 +741,7 @@ def run_stream_audit(source_name: str):
         bridged  = 0   # DRM channels kept active and routed via the PrismCast bridge
         dead     = 0
         vod      = 0
+        not_authorized = 0
         errors   = 0
         skipped_403 = 0
         # A DRM (FairPlay) channel is bridged — kept active + marked requires_drm_bridge so
@@ -766,7 +768,7 @@ def run_stream_audit(source_name: str):
             _redis_audit = None
 
         import json as _json_audit
-        def _audit_progress(done, total_, flagged_=0, dead_=0, vod_=0, errors_=0, skipped_403_=0, phase='checking'):
+        def _audit_progress(done, total_, flagged_=0, dead_=0, vod_=0, errors_=0, skipped_403_=0, phase='checking', not_authorized_=0):
             if not _redis_audit:
                 return
             try:
@@ -786,6 +788,7 @@ def run_stream_audit(source_name: str):
                         'phase': phase, 'done': done, 'total': total_,
                         'flagged': flagged_, 'dead': dead_, 'vod': vod_, 'errors': errors_,
                         'skipped_403': skipped_403_,
+                        'not_authorized': not_authorized_,
                         'cooldown_remaining': _cd_remaining,
                         'cooldown_reason': _cd_reason,
                         'current_index': getattr(_audit_progress, '_current_index', None),
@@ -817,7 +820,7 @@ def run_stream_audit(source_name: str):
                                 source_name, i, total, ch.source_channel_id, ch.name, (ch.stream_url or '')[:120])
                 _audit_progress._current_index = i
                 _audit_progress._current_channel = ch.name
-                _audit_progress(i - 1, total, flagged, dead, vod, errors, skipped_403)
+                _audit_progress(i - 1, total, flagged, dead, vod, errors, skipped_403, not_authorized_=not_authorized)
                 # Resolve the raw stream URL. Use audit_resolve() if the scraper
                 # provides a lighter-weight bulk-check variant (e.g. Plex skips tune).
                 _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
@@ -844,6 +847,21 @@ def run_stream_audit(source_name: str):
                         'reason': _audit_reason_from_exception(dead_exc),
                     })
                     logger.info('[audit] dead stream: %s  (confirmed by scraper)', ch.name)
+                    continue
+                except TVENotAuthorizedError as auth_exc:
+                    ch.is_active = False
+                    ch.is_enabled = False
+                    ch.disable_reason = 'NotAuthorized'
+                    not_authorized += 1
+                    consecutive_errors = 0
+                    consecutive_transient_errors = 0
+                    report_channels.append({
+                        'id': ch.id,
+                        'name': ch.name,
+                        'status': 'not-authorized',
+                        'reason': _audit_reason_from_exception(auth_exc),
+                    })
+                    logger.info('[audit] not authorized: %s  (%s)', ch.name, auth_exc)
                     continue
                 except Exception as re_exc:
                     if _is_transient_network_error(re_exc):
@@ -872,7 +890,7 @@ def run_stream_audit(source_name: str):
                         _waited = 0
                         while _waited < wait:
                             _audit_progress(i - 1, total, flagged, dead, vod, errors,
-                                            skipped_403, phase='cooldown')
+                                            skipped_403, phase='cooldown', not_authorized_=not_authorized)
                             _time.sleep(min(15, wait - _waited))
                             _waited += 15
                             if not _cooldown_active():
@@ -1227,13 +1245,13 @@ def run_stream_audit(source_name: str):
                     db.session.commit()
                     persist_source_cache_updates(source.id, {'last_audit_result': {
                         'total': i, 'checked': checked, 'flagged': flagged, 'bridged': bridged,
-                        'dead': dead, 'vod': vod, 'errors': errors, 'skipped_403': skipped_403,
+                        'dead': dead, 'vod': vod, 'not_authorized': not_authorized, 'errors': errors, 'skipped_403': skipped_403,
                         'ts': datetime.now(timezone.utc).isoformat(),
                         'partial': True,
                     }})
-                    _audit_progress(i, total, flagged, dead, vod, errors, skipped_403)
-                    logger.info('[audit] %s: %d/%d — checked=%d flagged=%d dead=%d vod=%d errors=%d skipped_403=%d',
-                                source_name, i, total, checked, flagged, dead, vod, errors, skipped_403)
+                    _audit_progress(i, total, flagged, dead, vod, errors, skipped_403, not_authorized_=not_authorized)
+                    logger.info('[audit] %s: %d/%d — checked=%d flagged=%d dead=%d vod=%d not_authorized=%d errors=%d skipped_403=%d',
+                                source_name, i, total, checked, flagged, dead, vod, not_authorized, errors, skipped_403)
 
                 if source_name == 'plex':
                     logger.debug('[audit-debug] %s %d/%d finish elapsed=%.2fs checked=%d dead=%d flagged=%d vod=%d errors=%d',
@@ -1247,7 +1265,7 @@ def run_stream_audit(source_name: str):
         persist_source_cache_updates(source.id, {
             'last_audit_result': {
                 'total': total, 'checked': checked, 'flagged': flagged, 'bridged': bridged,
-                'dead': dead, 'vod': vod, 'errors': errors, 'skipped_403': skipped_403,
+                'dead': dead, 'vod': vod, 'not_authorized': not_authorized, 'errors': errors, 'skipped_403': skipped_403,
                 'ts': datetime.now(timezone.utc).isoformat(),
             },
             'last_audit_report': {
@@ -1256,8 +1274,8 @@ def run_stream_audit(source_name: str):
             },
         })
         _audit_progress(0, 0, phase='done')
-        logger.info('[audit] %s: done — total=%d checked=%d flagged=%d bridged=%d dead=%d vod=%d errors=%d skipped_403=%d',
-                    source_name, total, checked, flagged, bridged, dead, vod, errors, skipped_403)
+        logger.info('[audit] %s: done — total=%d checked=%d flagged=%d bridged=%d dead=%d vod=%d not_authorized=%d errors=%d skipped_403=%d',
+                    source_name, total, checked, flagged, bridged, dead, vod, not_authorized, errors, skipped_403)
 
 
 def run_stream_audit_recheck(source_name: str, channel_ids: list):
@@ -1330,6 +1348,16 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                     recheck_results[ch.id] = {
                         'status': 'dead',
                         'reason': _audit_reason_from_exception(dead_exc),
+                    }
+                    _rc_progress(i, total)
+                    continue
+                except TVENotAuthorizedError as auth_exc:
+                    ch.is_active = False
+                    ch.is_enabled = False
+                    ch.disable_reason = 'NotAuthorized'
+                    recheck_results[ch.id] = {
+                        'status': 'not-authorized',
+                        'reason': _audit_reason_from_exception(auth_exc),
                     }
                     _rc_progress(i, total)
                     continue
@@ -1408,6 +1436,7 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
         result_summary = dict(_audit_cache.get('last_audit_result') or {})
         still_limited = sum(1 for r in recheck_results.values() if r and r['status'] == 'rate-limited')
         result_summary['skipped_403'] = still_limited
+        result_summary['not_authorized'] = sum(1 for c in existing.values() if c.get('status') == 'not-authorized')
         result_summary['ts'] = datetime.now(timezone.utc).isoformat()
 
         persist_source_cache_updates(source.id, {
@@ -2294,9 +2323,9 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 ch.description = _sanitize_description(cd.description)
             if getattr(cd, 'guide_key', None):
                 ch.guide_key = cd.guide_key
-            # Don't resurrect channels the stream audit flagged as Dead, VOD, or DRM
+            # Don't resurrect channels the stream audit flagged as Dead, VOD, NotAuthorized, or DRM
             # unless the stream URL changed (source may have fixed the channel).
-            _flagged = ch.disable_reason in ('Dead', 'VOD') or (ch.disable_reason or '').startswith('DRM')
+            _flagged = ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized') or (ch.disable_reason or '').startswith('DRM')
             if _flagged and not stream_url_changed:
                 ch.is_active  = False  # re-enforce — a prior scrape may have revived it
                 ch.is_enabled = False

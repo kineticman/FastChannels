@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urlparse, urlsplit
 import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
+from ..tve.adobe_pass import TVENotAuthorizedError
 
 SCHEME = 'fox-tve://'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
@@ -794,6 +795,20 @@ def resolve_fox_sports_hls(channel: FoxTVEChannel) -> str:
         'siteSection': '',
     }
     r = session.post(FOX_SPORTS_DVP_PLAYBACK_API, headers=headers, json=payload, timeout=20)
+    if r.status_code == 403:
+        try:
+            data = r.json()
+        except ValueError:
+            data = {}
+        issues = data.get('entitlementIssues') if isinstance(data, dict) else None
+        issue_text = '; '.join(
+            str(issue.get('message') or issue.get('errorCode') or '').strip()
+            for issue in (issues or [])
+            if isinstance(issue, dict)
+        ).strip()
+        message = data.get('message') if isinstance(data, dict) else ''
+        detail = issue_text or message or 'FOX Sports DVP denied playback entitlement'
+        raise TVENotAuthorizedError(f'{channel.name}: {detail}')
     r.raise_for_status()
     playback_url = r.json().get('playbackUrl')
     if not playback_url:
@@ -808,7 +823,24 @@ class FoxTVEScraper(BaseScraper):
     under_development = True
     is_premium = True
     scrape_interval = 720
-    stream_audit_enabled = False
+    stream_audit_enabled = True
+
+    def audit_resolve(self, raw_url: str) -> str:
+        channel = channel_for_url(raw_url)
+        if channel and channel.channel_id == 'fox_weather':
+            # FOX Weather's Uplynk playlist can look like a finite VOD window even
+            # though the channel plays as the current live feed. Avoid the generic
+            # HLS VOD heuristic disabling it.
+            resolved = self.resolve(raw_url)
+            if not resolved:
+                raise ValueError(f'Could not resolve FOX Weather stream URL: {raw_url}')
+            return raw_url
+        try:
+            return self.resolve(raw_url)
+        except ValueError as exc:
+            if str(exc).startswith('No current FOX Sports listing found for '):
+                return raw_url
+            raise
 
     def fetch_channels(self):
         return [

@@ -243,6 +243,7 @@
     .audit-last-result:empty { display: none; }
     .audit-last-result .aud-dead    { color: var(--danger); }
     .audit-last-result .aud-vod     { color: var(--info-soft, #7eb8f7); }
+    .audit-last-result .aud-auth    { color: var(--danger); }
     .audit-last-result .aud-drm     { color: var(--warning); }
     .audit-last-result .aud-403     { color: var(--warning); }
     .audit-last-result .aud-ok      { color: var(--success-soft); }
@@ -535,6 +536,7 @@
     }
     .audit-report-group-title.dead { color: var(--danger); }
     .audit-report-group-title.vod  { color: var(--info-soft, #7eb8f7); }
+    .audit-report-group-title.auth { color: var(--danger); }
     .audit-report-row {
       display: grid; grid-template-columns: minmax(0, 1fr) minmax(7rem, 1.2fr) auto; align-items: center; gap: 0.6rem;
       padding: 0.45rem 0.75rem; background: var(--bg); border: 1px solid var(--surface);
@@ -552,6 +554,7 @@
     }
     .audit-row-reason.dead         { color: var(--danger); }
     .audit-row-reason.vod          { color: var(--info-soft, #7eb8f7); }
+    .audit-row-reason.not-authorized { color: var(--danger); }
     .audit-row-reason.drm          { color: var(--warning); }
     .audit-row-reason.rate-limited { color: var(--warning); }
     .btn-audit-reenable {
@@ -1751,6 +1754,7 @@
             `<span class="aud-ok">${ok} ok</span>`,
             result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`               : null,
             result.vod         ? `<span class="aud-vod">${result.vod} VOD</span>`                  : null,
+            result.not_authorized ? `<span class="aud-auth">${result.not_authorized} not authorized</span>` : null,
             result.flagged     ? `<span class="aud-drm">${result.flagged} DRM</span>`              : null,
             result.skipped_403 ? `<span class="aud-403">${result.skipped_403} rate-limited</span>` : null,
             result.errors      ? `${result.errors} errors`                                         : null,
@@ -1768,6 +1772,7 @@
           const dead    = report.channels.filter(c => c.status === 'dead');
           const vod     = report.channels.filter(c => c.status === 'vod');
           const drm     = report.channels.filter(c => c.status === 'drm');
+          const unauthorized = report.channels.filter(c => c.status === 'not-authorized');
           const limited = report.channels.filter(c => c.status === 'rate-limited');
           const errors  = report.channels.filter(c => c.status === 'error');
 
@@ -1776,6 +1781,7 @@
             if (!text) return status === 'dead' ? 'Dead' : status === 'vod' ? 'VOD' : '';
             if (status === 'dead') return 'Dead';
             if (status === 'vod') return 'VOD';
+            if (status === 'not-authorized') return 'Not authorized';
             if (status === 'drm') return 'DRM';
             if (status === 'rate-limited') {
               const codeMatch = text.match(/\bHTTP\s+(\d{3})\b/i);
@@ -1796,13 +1802,14 @@
                 <div class="audit-row-reason ${escapeHtml(c.status)}" title="${escapeHtml(c.reason || '')}">${escapeHtml(formatReasonText(c.reason || '', c.status))}</div>
                 ${showReEnable ? `<button class="btn-audit-reenable" onclick="auditReEnableChannel(${Number(c.id)}, this)">Re-enable</button>` : '<div></div>'}
               </div>`).join('');
-            const titleClass = title.startsWith('Dead') ? 'dead' : title.startsWith('VOD') ? 'vod' : '';
+            const titleClass = title.startsWith('Dead') ? 'dead' : title.startsWith('VOD') ? 'vod' : title.startsWith('Not authorized') ? 'auth' : '';
             return `<div class="audit-report-group"><div class="audit-report-group-title${titleClass ? ' ' + titleClass : ''}">${escapeHtml(title)} (${chans.length})</div>${rows}</div>`;
           };
 
           html += `<div class="audit-report">`;
           html += renderGroup('Dead', dead, true);
           html += renderGroup('VOD — finite content, not a broken stream', vod, true);
+          html += renderGroup('Not authorized — account is not entitled', unauthorized, true);
           html += renderGroup('DRM', drm, false);
           html += renderGroup('Rate-limited', limited, false);
           html += renderGroup('Errors', errors, false);
@@ -2042,6 +2049,7 @@
       if (r.checked != null)  bits.push(`<span class="aud-ok">${ok} ok</span>`);
       if (r.dead)             bits.push(`<span class="aud-dead">${r.dead} dead</span>`);
       if (r.vod)              bits.push(`<span class="aud-vod">${r.vod} VOD</span>`);
+      if (r.not_authorized)   bits.push(`<span class="aud-auth">${r.not_authorized} not authorized</span>`);
       if (r.flagged)          bits.push(`<span class="aud-drm">${r.flagged} DRM</span>`);
       if (r.skipped_403)      bits.push(`<span class="aud-403">${r.skipped_403} rate-limited</span>`);
       if (r.errors)           bits.push(`${r.errors} errors`);
