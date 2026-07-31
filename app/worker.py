@@ -66,6 +66,7 @@ logger = logging.getLogger(__name__)
 _CHANNEL_MISS_THRESHOLD = 3
 _STALE_STARTED_JOB_GRACE_SECONDS = 300
 _SCRAPER_MISSING_GRACE_DAYS = 7
+_TVTV_CACHE_STARTUP_RETRY_COOLDOWN_HOURS = 12
 
 flask_app = create_app()
 from app.config import VERSION as _VERSION
@@ -1699,6 +1700,10 @@ def run_tvtv_cache_refresh():
         from app.tvtv_cache import refresh_tvtv_cache
         from app.tvtv_lookup import get_station_entry
         import sqlalchemy as sa
+
+        settings = AppSettings.get()
+        settings.tvtv_cache_last_attempt_at = datetime.now(timezone.utc)
+        db.session.commit()
 
         # Applied channel IDs.
         applied = set(
@@ -3555,17 +3560,34 @@ if __name__ == '__main__':
                 from app.models import TvtvProgramCache
                 from sqlalchemy import func as sa_func
                 from datetime import timezone as _tz
+                now_utc = datetime.now(_tz.utc)
                 newest = db.session.query(sa_func.max(TvtvProgramCache.fetched_at)).scalar()
                 if newest is None:
                     stale = True
                 else:
                     if newest.tzinfo is None:
                         newest = newest.replace(tzinfo=_tz.utc)
-                    age_hours = (datetime.now(_tz.utc) - newest).total_seconds() / 3600
+                    age_hours = (now_utc - newest).total_seconds() / 3600
                     stale = age_hours > 25
                 if stale:
-                    startup_status = _scheduled_tvtv_cache_refresh()
-                    logger.info('[tvtv-cache] stale/empty at startup (newest=%s) — status=%s', newest, startup_status)
+                    settings = AppSettings.get()
+                    last_attempt = settings.tvtv_cache_last_attempt_at
+                    if last_attempt is not None and last_attempt.tzinfo is None:
+                        last_attempt = last_attempt.replace(tzinfo=_tz.utc)
+                    attempt_age_hours = (
+                        (now_utc - last_attempt).total_seconds() / 3600
+                        if last_attempt is not None else None
+                    )
+                    if attempt_age_hours is not None and attempt_age_hours < _TVTV_CACHE_STARTUP_RETRY_COOLDOWN_HOURS:
+                        logger.info(
+                            '[tvtv-cache] stale/empty at startup (newest=%s), but last attempt was %.1fh ago; skipping startup retry',
+                            newest,
+                            attempt_age_hours,
+                        )
+                        startup_status = 'cooldown'
+                    else:
+                        startup_status = _scheduled_tvtv_cache_refresh()
+                        logger.info('[tvtv-cache] stale/empty at startup (newest=%s) — status=%s', newest, startup_status)
                     if newest is None and startup_status == 'deferred':
                         retry_at = datetime.now(_tz.utc) + timedelta(minutes=30)
                         scheduler.add_job(

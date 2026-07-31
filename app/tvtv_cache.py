@@ -103,10 +103,10 @@ def _get_session():
 # ---------------------------------------------------------------------------
 
 def _fetch_batch(session, lineup: str, station_ids: list[str],
-                 start: datetime, end: datetime) -> dict[str, list[dict]]:
+                 start: datetime, end: datetime) -> tuple[dict[str, list[dict]], str | None]:
     """
     Fetch one batch of station IDs for a lineup-day window.
-    Returns {station_id: [airing, ...]} for stations that had data.
+    Returns ({station_id: [airing, ...]}, failure_reason).
     """
     url = (
         f"{_TVTV_BASE}/api/v1/lineup/{lineup}/grid/"
@@ -117,14 +117,17 @@ def _fetch_batch(session, lineup: str, station_ids: list[str],
         r.raise_for_status()
         grid = r.json()
     except Exception as exc:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        reason = f"HTTP {status}" if status else type(exc).__name__
         log.debug("[tvtv-cache] batch failed %s %s...: %s", lineup, station_ids[:3], exc)
-        return {}
+        return {}, reason
 
     result: dict[str, list[dict]] = {}
     for i, sid in enumerate(station_ids):
         if i < len(grid) and isinstance(grid[i], list):
             result[sid] = grid[i]
-    return result
+    return result, None
 
 
 # ---------------------------------------------------------------------------
@@ -219,15 +222,18 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
                      lineup, day_offset, len(station_ids), len(batches))
 
             day_errors = 0
+            day_error_reasons: dict[str, int] = {}
             for batch in batches:
                 if dry_run:
                     total_batches += 1
                     continue
 
-                results = _fetch_batch(session, lineup, batch, start, end)
+                results, failure_reason = _fetch_batch(session, lineup, batch, start, end)
                 if not results:
                     total_errors += 1
                     day_errors   += 1
+                    reason = failure_reason or "empty response"
+                    day_error_reasons[reason] = day_error_reasons.get(reason, 0) + 1
                     time.sleep(_BATCH_DELAY)
                     continue
 
@@ -256,8 +262,12 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
                 time.sleep(_BATCH_DELAY)
 
             if day_errors:
-                log.warning("[tvtv-cache] %s day+%d: %d/%d batches rate-limited (429)",
-                            lineup, day_offset, day_errors, len(batches))
+                reason_summary = ", ".join(
+                    f"{reason}={count}"
+                    for reason, count in sorted(day_error_reasons.items())
+                ) or "unknown"
+                log.warning("[tvtv-cache] %s day+%d: %d/%d batches failed (%s)",
+                            lineup, day_offset, day_errors, len(batches), reason_summary)
 
             time.sleep(_DAY_DELAY)
 

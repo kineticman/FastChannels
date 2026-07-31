@@ -407,6 +407,7 @@ class AppSettings(db.Model):
     prismcast_inner_url  = db.Column(db.Text, nullable=True)     # base URL PrismCast's Chrome uses to reach /watch (loopback/HTTPS for EME secure-context); falls back to public_base_url
     prismcast_max_height = db.Column(db.Integer, nullable=False, default=0, server_default=db.text('0'))  # max source height for /watch playback through PrismCast; 0 = auto
     drm_bridge_enabled   = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # False=disable DRM channels (audit drops them); True=keep DRM channels active + route via PrismCast bridge
+    tvtv_cache_last_attempt_at = db.Column(db.DateTime, nullable=True)  # throttles startup retry loops when tvtv cache refresh fails
 
     @staticmethod
     def _env_int(name: str) -> int | None:

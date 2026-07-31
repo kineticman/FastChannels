@@ -222,6 +222,10 @@ def ensure_runtime_schema() -> None:
                 # False = audit disables DRM channels (legacy); True = keep them active and
                 # bridge via PrismCast. Default off so non-PrismCast users are unaffected.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN drm_bridge_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "tvtv_cache_last_attempt_at" not in cols:
+                # Persistent throttle for startup catch-up. Redis is process-local here,
+                # so failed empty-cache refreshes would otherwise rerun on every restart.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN tvtv_cache_last_attempt_at DATETIME"))
 
         if "sources" in tables:
             src_cols = {
