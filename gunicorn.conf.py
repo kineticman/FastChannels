@@ -19,16 +19,20 @@ _SUPPRESS_PATTERNS = (
     '/play/stirr/variant',     # stirr variant manifest refresh every ~5s
     '/proxy.m3u8',             # manifest proxy polls every ~3s during playback
     '"GET /static/',           # static asset cache hits — 304s add no signal
+    '"HEAD /static/',          # deployment/sanity probes of static assets
     'GET /api/gracenote/community-summary',  # polled frequently, low signal
     'GET /api/gracenote/remote-map/status', # polled frequently, low signal
     'GET /favicon.ico',                     # browser auto-request, always 404
     'GET /api/system-stats',               # polled frequently, low signal
+    'GET /api/channels/inactive-count',    # dashboard badge polling
+    'GET /api/settings/local-backups',     # settings-page backup snapshot lookup
     '/api/sources/chnum',      # overlap-banner polling
     '/api/feeds/chnum-ranges', # feed page chnum conflict checker
     '/play/amazon_prime_free/license', # Amazon DRM license — fires per key rotation
     '/play/fox_tve/key',      # FOX Weather Uplynk AES keys — one per key rotation
     'GET /api/sources HTTP',   # sources list fetched on every poll cycle finish
     '"GET /admin/',            # admin page navigation GETs (POSTs still logged)
+    '"HEAD /admin/',           # deployment/sanity probes of admin pages
     'GET /api/logs',           # log viewer polling
 )
 
