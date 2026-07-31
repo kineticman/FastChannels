@@ -154,6 +154,7 @@ def cancel_source_jobs(source_name: str) -> list[str]:
     canceled: list[str] = []
     for job_id in (
         f'scrape-{source_name}',
+        f'scrape-{source_name}-force-full',
         f'audit-{source_name}',
         f'audit-recheck-{source_name}',
     ):
@@ -180,7 +181,20 @@ def trigger_scrape(source_name: str, *, force_full: bool = False):
     try:
         q = get_queue()
         job_id = f'scrape-{source_name}'
-        if _job_already_active(q, job_id):
+        force_job_id = f'{job_id}-force-full'
+        base_active = _job_already_active(q, job_id)
+        force_active = _job_already_active(q, force_job_id)
+        if base_active or force_active:
+            if force_full and not force_active:
+                q.enqueue(
+                    'app.worker.run_scraper',
+                    source_name,
+                    True,
+                    job_timeout=3600,
+                    job_id=force_job_id,
+                )
+                logger.info('Enqueued follow-up force-full scrape for %s', source_name)
+                return
             logger.info('Scrape already queued/running for %s', source_name)
             return
         q.enqueue('app.worker.run_scraper', source_name, force_full, job_timeout=3600, job_id=job_id)

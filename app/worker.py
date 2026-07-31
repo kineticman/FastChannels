@@ -247,17 +247,26 @@ def _cleanup_stale_started_job(q: Queue, job_id: str) -> bool:
     return False
 
 
+def _scrape_job_ids(source_name: str) -> tuple[str, str]:
+    base = f'scrape-{source_name}'
+    return base, f'{base}-force-full'
+
+
 def _scrape_job_already_active(q: Queue, source_name: str) -> bool:
-    job_id = f'scrape-{source_name}'
-    _cleanup_stale_started_job(q, job_id)
+    job_ids = _scrape_job_ids(source_name)
+    for job_id in job_ids:
+        _cleanup_stale_started_job(q, job_id)
     active_ids = set(q.get_job_ids()) | set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
-    if job_id in active_ids:
+    if any(job_id in active_ids for job_id in job_ids):
         return True
-    try:
-        job = Job.fetch(job_id, connection=q.connection)
-        return job.get_status(refresh=False) in {'queued', 'started', 'deferred', 'scheduled'}
-    except Exception:
-        return False
+    for job_id in job_ids:
+        try:
+            job = Job.fetch(job_id, connection=q.connection)
+            if job.get_status(refresh=False) in {'queued', 'started', 'deferred', 'scheduled'}:
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def _any_scrapes_active() -> bool:
@@ -287,10 +296,10 @@ def _no_scrapes_pending(current_source_name: str) -> bool:
     try:
         r = redis.from_url(flask_app.config['REDIS_URL'])
         q = Queue('scraper', connection=r)
-        current_job_id = f'scrape-{current_source_name}'
+        current_job_ids = set(_scrape_job_ids(current_source_name))
         other_running = [
             jid for jid in StartedJobRegistry(q.name, connection=r).get_job_ids()
-            if jid != current_job_id
+            if jid not in current_job_ids
         ]
         queued = [jid for jid in q.get_job_ids() if jid.startswith('scrape-')]
         if other_running or queued:
