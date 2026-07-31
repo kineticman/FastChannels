@@ -511,7 +511,6 @@ class CoxScraper(BaseScraper):
     config_required = True
     is_premium = True
     source_category = 'premium'
-    under_development = True
     license_url = LICENSE_URL
     stream_audit_enabled = True
     audit_requires_config = ['username', 'password']
@@ -530,21 +529,6 @@ class CoxScraper(BaseScraper):
         ConfigField('password', 'Password', field_type='password', required=True,
                     secret=True,
                     help_text='Your Cox Contour password.'),
-        ConfigField('channel_family', 'Channel family', field_type='select', default='tve',
-                    options=[
-                        {'value': 'tve', 'label': 'TVE channels'},
-                        {'value': 'away', 'label': 'Away-from-home channels'},
-                        {'value': 'both', 'label': 'Both TVE and away-from-home'},
-                    ],
-                    help_text='Choose which Cox channel rows are stored. TVE rows are the browser-style TV Everywhere lineup; away-from-home rows are Cox cable rows marked out-of-home.'),
-        ConfigField('prismcast_playback', 'PrismCast playback', field_type='select', default='proxy',
-                    options=[
-                        {'value': 'proxy', 'label': 'FastChannels Widevine proxy'},
-                        {'value': 'native_page', 'label': 'Experimental Cox native web page'},
-                    ],
-                    help_text='Controls Cox channels in the PrismCast M3U only. The experimental native-page mode sends PrismCast to Cox Contour\'s own listings page with the channel call sign; it may still fail on Linux Chrome/Widevine.'),
-        ConfigField('allow_experimental_direct_hls', 'Experimental HLS audit', field_type='checkbox', default=False,
-                    help_text='Expose Cox TVE HLS-shaped playlists for local inspection. Observed segments are XCal/CENC protected and should not be treated as normal clear HLS playback.'),
     ]
 
     def __init__(self, config: dict | None = None):
@@ -795,24 +779,19 @@ class CoxScraper(BaseScraper):
         self._ensure_auth()
         self._fetch_features()
         payload = self._fetch_channelmap()
-        family = str(self.config.get('channel_family') or 'tve').strip().lower()
-        if family not in {'tve', 'away', 'both'}:
-            family = 'tve'
         selected: dict[str, tuple[int, dict[str, Any]]] = {}
         for item in _channel_items(payload):
             if item.get('entitled') is not True:
                 continue
             is_tve = item.get('isTve') is True
-            if family == 'tve' and not is_tve:
-                continue
-            if family == 'away' and is_tve:
+            if not is_tve:
                 continue
             name = _display_channel_name(item)
             if not name or name.lower().startswith(AUDIO_ONLY_PREFIXES):
                 continue
             call_sign = _first_text(item.get('callSign'), item.get('callsign'))
             dedupe_base = (call_sign or _first_text(item.get('stationId'), item.get('channelId')) or name).lower()
-            dedupe = f"{dedupe_base}|{'tve' if is_tve else 'away'}" if family == 'both' else dedupe_base
+            dedupe = dedupe_base
             rank = _priority_rank(item)
             previous = selected.get(dedupe)
             if previous is None or rank < previous[0]:
