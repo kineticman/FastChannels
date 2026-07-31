@@ -977,6 +977,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
                     _kodi_props_cache[src_name] = getattr(scraper_cls, 'kodi_props', {}) if scraper_cls else {}
             for prop_key, prop_val in _kodi_props_cache[src_name].items():
                 lines.append(f'#KODIPROP:{prop_key}={prop_val}')
+        _append_experimental_stream_attrs(attrs, _s)
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         lines.append(_channel_play_url(ch, base_url))
 
@@ -1047,6 +1048,7 @@ def generate_native_m3u(filters: dict = None, base_url: str = None,
         guide_cat = _tvc_guide_category(ch)
         if guide_cat:
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
+        _append_experimental_stream_attrs(attrs, _s)
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         lines.append(_channel_play_url(ch, base_url))
 
@@ -1114,6 +1116,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
         guide_cat = _tvc_guide_category(ch)
         if guide_cat:
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
+        _append_experimental_stream_attrs(attrs, _s)
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         lines.append(_channel_play_url(ch, base_url))
 
@@ -1317,6 +1320,7 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
         guide_cat = _tvc_guide_category(ch)
         if guide_cat:
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
+        _append_experimental_stream_attrs(attrs, _s)
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         if _needs_prismcast_bridge(ch) and _prismcast_capturable(ch):
             lines.append(_prismcast_bridge_url(ch, prismcast_url, inner_base_url))
@@ -1378,6 +1382,11 @@ def _tvc_guide_category(ch) -> str | None:
 
 
 _VALID_VCODECS = {'h264', 'mpeg2', 'hevc'}
+
+
+def _append_experimental_stream_attrs(attrs: list[str], settings: AppSettings) -> None:
+    if bool(getattr(settings, 'm3u_rewrite_timestamps', False)):
+        attrs.append('tvc-stream-timestamps="rewrite"')
 
 
 def _tvc_stream_codecs(stream_info: dict) -> tuple[str | None, str | None]:

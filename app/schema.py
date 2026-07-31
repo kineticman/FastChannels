@@ -198,6 +198,12 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN image_proxy_enabled BOOLEAN NOT NULL DEFAULT 1"
                 ))
+            if "m3u_rewrite_timestamps" not in cols:
+                # Experimental Channels DVR directive. Default off because it changes
+                # recording-time stream handling and may affect in-progress playback.
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN m3u_rewrite_timestamps BOOLEAN NOT NULL DEFAULT 0"
+                ))
             if "auto_allow_new_channels" not in cols:
                 # Existing installs default ON — preserve current behaviour where
                 # newly-scraped channels flow straight into feeds.  Turning this OFF
