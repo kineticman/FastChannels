@@ -626,6 +626,79 @@ class RokuScraper(BaseScraper):
             url += f"?traceId={trace_id}"
         return url
 
+    def _cached_synthetic_osm_url(self, selector_url: str | None) -> str | None:
+        """Return a stream URL from cached selector+OSM session state, if both are fresh."""
+        if not selector_url:
+            return None
+        osm_session = self._cached_osm_session()
+        if not osm_session:
+            return None
+        session_token, trace_id = osm_session
+        return self._synthetic_osm_url(selector_url, session_token, trace_id)
+
+    def _seed_osm_session_from_cache(self, *, skip_station_id: str | None = None) -> bool:
+        """Seed a fresh OSM session using cached play metadata for another station."""
+        if self._cached_osm_session():
+            return True
+        if self._cooldown_active() or not self._ensure_session():
+            return False
+
+        session_id = self.session.cookies.get("_usn", "roku-scraper")
+        attempts = 0
+        candidates = sorted(
+            self._play_id_cache.items(),
+            key=lambda item: float((item[1] or {}).get("cached_at") or 0),
+            reverse=True,
+        )
+        for sid, entry in candidates:
+            if sid == skip_station_id:
+                continue
+            play_id = (entry or {}).get("play_id")
+            selector_url = self._cached_selector_url(sid)
+            if not play_id or not selector_url:
+                continue
+            try:
+                decoded = base64.b64decode(str(play_id).split(".", 1)[1]).decode()
+                media_format = "mpeg-dash" if "dash" in decoded.lower() else "m3u"
+            except Exception:
+                media_format = "m3u"
+            if media_format != "m3u":
+                continue
+
+            attempts += 1
+            body = {
+                "rokuId":      sid,
+                "playId":      play_id,
+                "mediaFormat": media_format,
+                "drmType":     "widevine",
+                "quality":     "fhd",
+                "bifUrl":      None,
+                "adPolicyId":  "",
+                "providerId":  "rokuavod",
+                "playbackContextParams": (
+                    f"sessionId={session_id}"
+                    "&pageId=trc-us-live-ml-page-en-current"
+                    "&isNewSession=0&idType=roku-trc"
+                ),
+            }
+            r = self._api_post(
+                _PLAYBACK,
+                json_body=body,
+                timeout=10,
+                label=f"cache OSM seed for {sid}",
+                set_cooldown_on_403=False,
+            )
+            if r and r.status_code == 200:
+                stream_url = r.json().get("url", "")
+                if stream_url:
+                    self._cache_stream_url(sid, stream_url)
+                    logger.info("[roku] resolve fallback seeded osm_session from cached station %s", sid)
+                    return True
+            if attempts >= _PREWARM_SEED_MAX_ATTEMPTS:
+                break
+        logger.debug("[roku] resolve fallback could not seed osm_session in %d attempt(s)", attempts)
+        return False
+
     def _seed_osm_session(self, channels: list[ChannelData],
                           enabled_ids: set[str] | None = None) -> bool:
         """Call the playback API for one channel to seed _osm_session.
@@ -1528,7 +1601,28 @@ class RokuScraper(BaseScraper):
                         need_content_details,
                     )
                     return stream_url
-            if r2.status_code in (401, 403, 404, 502):
+            if r2.status_code in (502, 503, 504):
+                stream_url = self._cached_synthetic_osm_url(selector_url)
+                if not stream_url and self._seed_osm_session_from_cache(skip_station_id=station_id):
+                    stream_url = self._cached_synthetic_osm_url(selector_url)
+                if stream_url:
+                    logger.warning(
+                        "[roku] resolve %s via synthetic_osm after playback %d play_id_cache=%s selector_cache=%s content_lookup=%s",
+                        station_id,
+                        r2.status_code,
+                        had_play_id,
+                        had_selector_url,
+                        need_content_details,
+                    )
+                    return stream_url
+                logger.warning(
+                    "[roku] resolve %s playback %d fallback unavailable selector_cache=%s osm_session=%s",
+                    station_id,
+                    r2.status_code,
+                    bool(selector_url),
+                    bool(self._cached_osm_session()),
+                )
+            if r2.status_code in (401, 403, 404):
                 self._invalidate_play_id(station_id)
                 self._invalidate_selector_url(station_id)
                 self._invalidate_stream_url(station_id)
