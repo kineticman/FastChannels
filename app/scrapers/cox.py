@@ -513,7 +513,7 @@ class CoxScraper(BaseScraper):
     source_category = 'premium'
     under_development = True
     license_url = LICENSE_URL
-    stream_audit_enabled = False
+    stream_audit_enabled = True
     audit_requires_config = ['username', 'password']
     epg_quality = 'full'
     phase_timeouts = {
@@ -1032,6 +1032,24 @@ class CoxScraper(BaseScraper):
         }
         self._update_cache('cox_playback', playback)
         return mpd_url
+
+    def audit_resolve(self, raw_url: str) -> str:
+        """Resolve Cox audits through DASH so DRM is classified correctly.
+
+        The optional direct-HLS mode exposes HLS-shaped playlists for inspection,
+        but observed Cox media segments are still XCal/CENC protected. The
+        generic HLS audit can misclassify those playlists as clear, so force the
+        normal DASH/Widevine resolution path during Stream Audit.
+        """
+        original = self.config.get("allow_experimental_direct_hls")
+        self.config["allow_experimental_direct_hls"] = False
+        try:
+            return self.resolve(raw_url)
+        finally:
+            if original is None:
+                self.config.pop("allow_experimental_direct_hls", None)
+            else:
+                self.config["allow_experimental_direct_hls"] = original
 
     @classmethod
     def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
