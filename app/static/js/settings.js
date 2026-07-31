@@ -7,6 +7,107 @@ function scrollToSettingCard(anchorId) {
   el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+function settingsSectionLinks(container) {
+  return Array.from(container.querySelectorAll('a[href^="#settings-section-"]'));
+}
+
+function syncSettingsSectionNavActive(navContainers) {
+  const sourceNav = navContainers[0];
+  if (!sourceNav) return;
+  const sourceLinks = settingsSectionLinks(sourceNav);
+  const sections = sourceLinks
+    .map((link) => document.getElementById(link.getAttribute('href').slice(1)))
+    .filter(Boolean);
+  if (!sourceLinks.length || !sections.length) return;
+
+  const floatingNav = navContainers.find((nav) => nav.classList.contains('settings-section-nav-floating'));
+  const navBottom = (floatingNav && floatingNav.classList.contains('is-visible'))
+    ? floatingNav.getBoundingClientRect().bottom
+    : 0;
+  const activationLine = navBottom + 96;
+  let activeId = sections[0].id;
+  for (const section of sections) {
+    if (section.getBoundingClientRect().top <= activationLine) activeId = section.id;
+  }
+
+  navContainers.forEach((nav) => {
+    settingsSectionLinks(nav).forEach((link) => {
+      const isActive = link.getAttribute('href') === `#${activeId}`;
+      link.classList.toggle('active', isActive);
+      if (isActive) {
+        link.setAttribute('aria-current', 'true');
+        const left = link.offsetLeft;
+        const right = left + link.offsetWidth;
+        if (left < nav.scrollLeft) nav.scrollLeft = left;
+        if (right > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = right - nav.clientWidth;
+      } else {
+        link.removeAttribute('aria-current');
+      }
+    });
+  });
+}
+
+function initSettingsSectionNav() {
+  const sourceNav = document.querySelector('.settings-section-nav');
+  if (!sourceNav) return;
+
+  const floatingNav = document.createElement('div');
+  floatingNav.className = 'settings-section-nav-floating';
+  floatingNav.setAttribute('role', 'navigation');
+  floatingNav.setAttribute('aria-label', 'Settings sections');
+  floatingNav.innerHTML = sourceNav.innerHTML;
+  document.body.appendChild(floatingNav);
+
+  const adminNav = document.querySelector('body > nav');
+  const navContainers = [sourceNav, floatingNav];
+  const setActiveByHash = (hash) => {
+    if (!hash || !hash.startsWith('#settings-section-')) return;
+    navContainers.forEach((nav) => {
+      settingsSectionLinks(nav).forEach((link) => {
+        const isActive = link.getAttribute('href') === hash;
+        link.classList.toggle('active', isActive);
+        if (isActive) link.setAttribute('aria-current', 'true');
+        else link.removeAttribute('aria-current');
+      });
+    });
+  };
+  const adminNavOffset = () => {
+    if (!adminNav || adminNav === sourceNav) return 0;
+    return Math.max(0, Math.round(adminNav.getBoundingClientRect().bottom));
+  };
+  const update = () => {
+    const topOffset = adminNavOffset();
+    document.documentElement.style.setProperty('--settings-section-nav-top', `${topOffset}px`);
+    const sourceRect = sourceNav.getBoundingClientRect();
+    floatingNav.classList.toggle('is-visible', sourceRect.bottom <= topOffset);
+    syncSettingsSectionNavActive(navContainers);
+  };
+
+  let pending = false;
+  const requestUpdate = () => {
+    if (pending) return;
+    pending = true;
+    window.requestAnimationFrame(() => {
+      pending = false;
+      update();
+    });
+  };
+
+  navContainers.forEach((nav) => {
+    settingsSectionLinks(nav).forEach((link) => {
+      link.addEventListener('click', () => setActiveByHash(link.getAttribute('href')));
+    });
+  });
+
+  update();
+  window.addEventListener('scroll', requestUpdate, { passive: true });
+  window.addEventListener('resize', requestUpdate);
+  window.addEventListener('hashchange', () => {
+    setActiveByHash(window.location.hash);
+    requestUpdate();
+  });
+}
+
 function refreshSettingsNeedsConfigBanner() {
   const banner = document.getElementById('settings-needs-config-banner');
   const list = document.getElementById('settings-needs-config-list');
@@ -1041,6 +1142,7 @@ async function saveContributionUrl() {
   setTimeout(() => { st.textContent = ''; }, 3000);
 }
 
+initSettingsSectionNav();
 loadSystemStats();
 updateTveProviderFields();
 

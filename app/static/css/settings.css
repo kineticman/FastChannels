@@ -83,20 +83,48 @@
     h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 0.4rem; }
     .subtitle { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.1rem; }
 
-    .settings-section-nav {
-      position: sticky;
-      top: 0;
-      z-index: 50;
+    :root {
+      --settings-section-nav-top: 0px;
+      --settings-section-nav-clearance: 4.5rem;
+    }
+
+    .settings-section-nav,
+    .settings-section-nav-floating {
       display: flex;
+      flex-wrap: nowrap;
       gap: 0.35rem;
       overflow-x: auto;
       padding: 0.55rem 0;
-      margin: 0 0 1.75rem;
       background: color-mix(in srgb, var(--bg) 92%, transparent);
       border-bottom: 1px solid var(--border);
       scrollbar-width: thin;
     }
-    .settings-section-nav a {
+    .settings-section-nav {
+      position: static;
+      top: auto;
+      z-index: auto;
+      margin: 0 0 1.75rem;
+    }
+    .settings-section-nav-floating {
+      position: fixed;
+      top: var(--settings-section-nav-top);
+      left: 50%;
+      z-index: 90;
+      width: min(920px, calc(100vw - 3rem));
+      margin: 0;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, -100%);
+      transition: opacity 120ms ease, transform 120ms ease;
+      box-shadow: 0 8px 18px color-mix(in srgb, var(--bg) 82%, transparent);
+    }
+    .settings-section-nav-floating.is-visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, 0);
+    }
+    .settings-section-nav a,
+    .settings-section-nav-floating a {
       flex: 0 0 auto;
       color: var(--text-soft);
       text-decoration: none;
@@ -108,15 +136,24 @@
       background: var(--surface);
     }
     .settings-section-nav a:hover,
-    .settings-section-nav a:focus-visible {
+    .settings-section-nav a:focus-visible,
+    .settings-section-nav a.active,
+    .settings-section-nav-floating a:hover,
+    .settings-section-nav-floating a:focus-visible,
+    .settings-section-nav-floating a.active {
       color: var(--accent-soft);
       border-color: var(--focus-accent);
       outline: none;
     }
+    .settings-section-nav a.active,
+    .settings-section-nav-floating a.active {
+      background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+    }
 
     .settings-section {
       margin: 0 0 2.25rem;
-      scroll-margin-top: 4.5rem;
+      scroll-margin-top: calc(var(--settings-section-nav-top) + var(--settings-section-nav-clearance));
     }
     .settings-section:last-of-type { margin-bottom: 1.5rem; }
     .settings-section-header {
@@ -151,6 +188,7 @@
       border-radius: 10px;
       margin-bottom: 1.5rem;
       overflow: hidden;
+      scroll-margin-top: calc(var(--settings-section-nav-top) + var(--settings-section-nav-clearance));
     }
     .source-header {
       display: flex;
@@ -530,7 +568,9 @@
       nav .version { margin-left: 0; width: 100%; order: 99; }
       .page { padding: 1.25rem 1rem 2rem; }
       .settings-section-nav { margin-left: -1rem; margin-right: -1rem; padding-left: 1rem; padding-right: 1rem; }
-      .settings-section { scroll-margin-top: 4rem; }
+      .settings-section-nav-floating { left: 0; width: 100vw; padding-left: 1rem; padding-right: 1rem; transform: translateY(-100%); }
+      .settings-section-nav-floating.is-visible { transform: translateY(0); }
+      :root { --settings-section-nav-clearance: 4rem; }
       .settings-section-header { align-items: flex-start; }
       .source-header { padding: 1rem; align-items: flex-start; }
       .source-body { padding: 0 1rem 1rem; }
