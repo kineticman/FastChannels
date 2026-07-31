@@ -1,0 +1,42 @@
+  <!-- FastChannels Server card -->
+  <div class="source-card" id="settings-card-public-base-url">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">🌐</div>
+        <div>
+          <div class="source-name">FastChannels Server URL</div>
+          <div class="source-meta">Set the address players and other devices should use to reach this server</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="fields-grid" style="max-width:480px">
+        <div class="field field-full">
+          <label for="public-base-url">FastChannels Server URL</label>
+          <input type="text" id="public-base-url"
+                 placeholder="192.168.1.50:5523" value="{{ public_base_url or detected_base_url }}"
+                 oninput="checkPublicBaseUrlPortWarning()">
+          <div class="help">Address other devices should use to reach this FastChannels server for generated M3U, XML, logo, poster, and playback URLs. Include <code>http://</code> and the port if needed (most installs use <code>:5523</code>). This only changes generated URLs; it does not change the Docker published port. To move the web UI itself to another port, change the compose port mapping and restart the container.</div>
+          <div class="help" id="no-port-warning" style="color:var(--warning-soft);{% if not public_base_url_no_port_warning %} display:none;{% endif %}">
+            No port specified — this is fine if you're behind a reverse proxy, but most direct installs need <code>:5523</code>.
+          </div>
+          {% if public_base_url_from_env %}
+          <div class="help">Currently coming from environment variable <code>{{ public_base_url_env_name }}</code>. Saving here will override it in the database.</div>
+          {% endif %}
+          {% if public_base_url_needs_config and public_base_url %}
+          <div class="help" style="color:var(--warning-soft)">This is still an example placeholder. Replace it with the address other devices use to reach this FastChannels install.</div>
+          {% endif %}
+          <div class="hint-box">
+            Browser address: <code>{{ request_base_url }}</code><br>
+            Detected server address: <code>{{ detected_base_url }}</code><br>
+            If this field is set, generated feed URLs will use it exactly, even if you open the admin UI from a different host or port.<br>
+            If FastChannels is running in Docker and you opened the UI with <code>localhost</code>, auto-detect is usually not what other devices need, so set this field manually.
+          </div>
+        </div>
+      </div>
+      <div class="field-actions">
+        <span class="save-status" id="public-base-url-status"></span>
+        <button class="btn btn-primary" onclick="savePublicBaseUrlSettings()">Save</button>
+      </div>
+    </div>
+  </div>

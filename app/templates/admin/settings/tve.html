@@ -1,0 +1,73 @@
+  <!-- TV Everywhere card -->
+  <div class="source-card" id="settings-card-tve">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">📡</div>
+        <div>
+          <div class="source-name">TV Everywhere</div>
+          <div class="source-meta">Shared provider credentials for legal TVE-backed sources</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">TV Provider Sign-In</div>
+          <div class="toggle-row-help">Choose your TV provider, then enter the same username and password you use on that provider's site. These credentials are stored only in the local FastChannels database and are never returned to the browser after saving.</div>
+          <div style="margin-top:0.7rem;display:grid;grid-template-columns:1fr;gap:0.45rem;max-width:520px">
+            <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem">
+              TV provider
+              <input type="text" id="tve-provider-search" placeholder="Search supported TV providers" oninput="filterTveProviders()" autocomplete="off" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+              <select id="tve-provider" onchange="updateTveProviderFields()" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+                {% for provider in tve_provider_choices %}
+                <option value="{{ provider.id }}" {% if provider.id == tve_cox_account.selected_mso_id %}selected{% endif %}>{{ provider.name }}{% if provider.id != provider.name %} ({{ provider.id }}){% endif %}</option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+          <div style="margin-top:0.65rem;display:grid;grid-template-columns:1fr 1fr;gap:0.6rem">
+            <input type="text" id="tve-cox-username" autocomplete="username" placeholder="Cox username" value="{{ tve_cox_account.username }}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+            <input type="password" id="tve-cox-password" autocomplete="current-password" placeholder="{% if tve_cox_account.password_configured %}Password saved - leave blank to keep{% else %}Cox password{% endif %}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+          </div>
+          <div id="tve-provider-hint" style="margin-top:0.45rem;color:var(--text-muted);font-size:0.82rem">Used by TVE sources such as A+E Networks TVE.</div>
+          <details style="margin-top:0.65rem;color:var(--text-muted);font-size:0.82rem">
+            <summary style="cursor:pointer;color:var(--text-subtle)">Advanced TVE options</summary>
+            <div style="margin-top:0.5rem;display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+              <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem">
+                Sign-in engine
+                <select id="tve-cox-auth-backend" onchange="updateTveProviderFields()" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+                  <option value="native" {% if tve_cox_account.auth_backend == 'native' %}selected{% endif %}>Native Adobe Pass</option>
+                  <option value="yt_dlp" {% if tve_cox_account.auth_backend == 'yt_dlp' %}selected{% endif %}>yt-dlp Adobe Pass</option>
+                </select>
+              </label>
+              <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem">
+                Adobe MSO ID
+                <input type="text" id="tve-cox-adobe-mso" value="{{ tve_cox_account.adobe_mso_id or 'Cox' }}" placeholder="Cox" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+              </label>
+              <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem">
+                yt-dlp MSO ID
+                <input type="text" id="tve-cox-ytdlp-mso" value="{{ tve_cox_account.yt_dlp_mso_id or 'Cox' }}" placeholder="Cox" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+              </label>
+              <textarea id="tve-cox-software-statement" rows="2" placeholder="Optional software_statement override; blank uses live A+E discovery" style="grid-column:1 / -1;width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.78rem;padding:0.45rem 0.6rem;font-family:ui-monospace,monospace"></textarea>
+            </div>
+          </details>
+          <div id="tve-cox-last-status" style="margin-top:0.55rem;color:var(--text-muted);font-size:0.82rem">
+            {% if tve_cox_account.last_auth_status %}
+              Last test: {{ tve_cox_account.last_auth_status }}{% if tve_cox_account.last_auth_at %} at {{ tve_cox_account.last_auth_at }}{% endif %}{% if tve_cox_account.last_auth_message %} — {{ tve_cox_account.last_auth_message }}{% endif %}
+            {% else %}
+              No auth test has run yet.
+            {% endif %}
+          </div>
+        </div>
+        <div class="toggle-row-control" style="gap:0.5rem;flex-wrap:wrap">
+          <label class="toggle-switch" title="Enable Cox TVE credentials">
+            <input type="checkbox" id="tve-cox-enabled" {% if tve_cox_account.is_enabled %}checked{% endif %}>
+            <span class="toggle-slider"></span>
+          </label>
+          <button class="btn btn-secondary" onclick="saveTveCoxSettings()">Save</button>
+          <button class="btn btn-audit" id="tve-cox-test-btn" onclick="testTveCox()">Test</button>
+          <span class="save-status" id="tve-cox-status"></span>
+        </div>
+      </div>
+    </div>
+  </div>

@@ -1,0 +1,43 @@
+  <!-- Channels DVR card -->
+  <div class="source-card" id="settings-card-channels-dvr">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">📺</div>
+        <div>
+          <div class="source-name">Channels DVR</div>
+          <div class="source-meta">Register feeds as custom M3U sources in your DVR with one click</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="fields-grid" style="max-width:480px">
+        <div class="field field-full">
+          <label for="channels-dvr-url">Channels DVR Server URL</label>
+          <input type="url" id="channels-dvr-url"
+                 placeholder="http://192.168.1.x:8089" value="{{ channels_dvr_url }}">
+          <div class="help">Base URL of your Channels DVR server (port 8089). To find it, open <a href="https://my.channelsdvr.net" target="_blank">my.channelsdvr.net</a> → Settings → General — your server address is listed there. If FastChannels and Channels DVR are on the same machine and the Test Connection button fails with your LAN IP, try <code>http://172.17.0.1:8089</code> instead (the Docker host gateway).</div>
+          {% if channels_dvr_url_from_env %}
+          <div class="help">Currently coming from environment variable <code>CHANNELS_DVR_SERVER_URL</code>. Saving here will override it in the database.</div>
+          {% endif %}
+        </div>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Auto-refresh guide data hourly</div>
+          <div class="toggle-row-help">When enabled, FastChannels forces Channels DVR to re-import guide data for all registered FastChannels lineups once per hour. Only applies if you've added feeds via the "Add to Channels DVR" button.</div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="dvr-epg-auto-refresh" {% if dvr_epg_auto_refresh %}checked{% endif %}
+                   onchange="saveDvrSettings()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="field-actions">
+        <span class="save-status" id="dvr-settings-status"></span>
+        <button class="btn btn-secondary" onclick="testDvrConnection()">Test Connection</button>
+        <button class="btn btn-primary" onclick="saveDvrSettings()">Save</button>
+      </div>
+    </div>
+  </div>

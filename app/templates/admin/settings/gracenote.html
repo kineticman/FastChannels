@@ -1,0 +1,59 @@
+  <!-- Gracenote card -->
+  <div class="source-card">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">🎬</div>
+        <div>
+          <div class="source-name">Gracenote Guide Data</div>
+          <div class="source-meta">Control automatic guide ID assignment during scraping</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Auto-assign Gracenote IDs</div>
+          <div class="toggle-row-help">When enabled, scrapers populate Gracenote guide IDs for channels that support it. Channels with manually assigned IDs are never affected.</div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="gracenote-auto-fill-toggle"
+                   {% if gracenote_auto_fill %}checked{% endif %}
+                   onchange="onGracenoteAutoFillChange(this)">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="save-status" id="gracenote-auto-fill-status"></span>
+        </div>
+      </div>
+      <div class="toggle-row" id="gn-remote-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Community Map URL</div>
+          <div class="toggle-row-help">Remote CSV fetched on startup and refreshed daily. Leave blank to use the default FastChannels community Gist.</div>
+          <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+            <input type="url" id="gn-map-url" style="flex:1;min-width:260px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.82rem;padding:0.35rem 0.6rem" placeholder="Default Gist URL">
+            <button class="btn btn-secondary" onclick="saveGracenoteMapUrl()">Save URL</button>
+          </div>
+          <div id="gn-remote-meta" style="margin-top:0.4rem;color:var(--text-muted);font-size:0.8rem"></div>
+        </div>
+        <div class="toggle-row-control" style="flex-shrink:0">
+          <button class="btn btn-audit" id="gn-remote-refresh-btn" onclick="refreshRemoteGracenoteMap()">Refresh Now</button>
+          <span class="save-status" id="gn-remote-status"></span>
+        </div>
+      </div>
+      <div class="toggle-row" id="gn-contribution-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Contribution Webhook URL</div>
+          <div class="toggle-row-help">Where user contributions are sent when they click Contribute in the Community Map. Defaults to the FastChannels community webhook — leave blank to use the default.</div>
+          <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+            <input type="url" id="gn-contribution-url" style="flex:1;min-width:260px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.82rem;padding:0.35rem 0.6rem" placeholder="Default Make.com webhook (leave blank to use default)" value="{{ gracenote_contribution_url }}">
+            <button class="btn btn-secondary" onclick="saveContributionUrl()">Save URL</button>
+          </div>
+          <span class="save-status" id="gn-contribution-status"></span>
+        </div>
+      </div>
+      <div style="padding: 0.75rem 0 0.25rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center">
+        <button class="btn btn-audit" onclick="openCommunityMap()">Browse Community Map</button>
+        <button class="btn btn-danger" onclick="document.getElementById('gracenote-clear-modal').classList.add('open')">Disable &amp; Clear All Gracenote</button>
+      </div>
+    </div>
+  </div>

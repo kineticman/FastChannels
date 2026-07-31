@@ -1,0 +1,39 @@
+  <!-- Time Zone card -->
+  <div class="source-card" id="settings-card-timezone">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">🕒</div>
+        <div>
+          <div class="source-name">Time Zone</div>
+          <div class="source-meta">Control how timestamps display across the admin UI and FastChannels logs</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      {% if tz_health and tz_health.level == 'warning' %}
+      <div class="needs-config-banner" style="margin-bottom:1rem">
+        <strong>⚠ Timezone is falling back to UTC</strong>
+        <div style="margin-top:0.4rem;font-weight:400">{{ tz_health.message }}</div>
+      </div>
+      {% endif %}
+      <div class="fields-grid" style="max-width:480px">
+        <div class="field field-full">
+          <label for="tz-input">Time Zone</label>
+          <div class="tz-combobox" id="tz-combobox">
+            <input type="text" id="tz-input" autocomplete="off"
+                   placeholder="Type to search… e.g. Eastern, Chicago, London"
+                   value="{{ timezone_name }}">
+            <div class="tz-dropdown" id="tz-dropdown" hidden></div>
+          </div>
+          <div class="help">Type an IANA timezone like <code>America/New_York</code> or <code>Europe/London</code> — use a canonical <code>Area/Location</code> name, not a legacy alias like <code>US/Eastern</code> (see the <a href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank" rel="noopener noreferrer">full list ↗</a>). This controls admin timestamps and FastChannels app log timestamps, and overrides the container <code>TZ</code> for the app.</div>
+          {% if not timezone_name_from_db %}
+          <div class="help">Currently using the system timezone because no explicit timezone has been saved yet.</div>
+          {% endif %}
+        </div>
+      </div>
+      <div class="field-actions">
+        <span class="save-status" id="timezone-settings-status"></span>
+        <button class="btn btn-primary" onclick="saveTimezoneSettings()">Save</button>
+      </div>
+    </div>
+  </div>

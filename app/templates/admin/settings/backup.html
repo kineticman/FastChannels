@@ -1,0 +1,59 @@
+  <!-- Backup card -->
+  <div class="source-card">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">💾</div>
+        <div>
+          <div class="source-name">Database Backup</div>
+          <div class="source-meta">Back up and restore your FastChannels database</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="backup-grid">
+
+        <!-- CREATE -->
+        <div class="backup-col">
+          <div class="backup-col-title">Create</div>
+          <div class="backup-note">
+            Download a gzip-compressed copy of
+            <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">fastchannels.db</code> —
+            all channels, sources, feeds, settings, and Gracenote assignments. Store it somewhere safe.
+          </div>
+          <button class="btn btn-primary" id="backup-db-btn" onclick="downloadDbBackup()" style="margin:0">⬇ Download backup</button>
+          <span class="save-status" id="backup-db-status" style="display:block;margin-top:0.5rem"></span>
+        </div>
+
+        <!-- RESTORE -->
+        <div class="backup-col">
+          <div class="backup-col-title">Restore</div>
+          <div class="backup-note">
+            Replaces the current database, then reloads workers.
+            <strong style="color:var(--warning)">This cannot be undone</strong> — download a backup first.
+          </div>
+
+          <div class="backup-restore-block">
+            <div class="backup-restore-label">From a nightly auto-backup</div>
+            <div class="backup-snapshot" id="latest-backup-snapshot">
+              <span class="snap-when" style="color:var(--text-muted)">Checking…</span>
+            </div>
+            <button class="backup-viewall" id="backup-viewall-btn" onclick="openLocalBackups()" disabled>View all snapshots →</button>
+          </div>
+
+          <div class="backup-restore-block">
+            <div class="backup-restore-label">From a file (<code style="color:var(--accent-soft);font-family:ui-monospace,monospace">.db</code> / <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">.db.gz</code>)</div>
+            <div class="field-actions" style="justify-content:flex-start;align-items:center;gap:0.6rem;margin:0;padding:0;border-top:none;flex-wrap:wrap">
+              <label class="btn btn-secondary" style="cursor:pointer;margin:0">
+                Choose file&hellip;
+                <input type="file" id="restore-db-file" accept=".db,.db.gz" style="display:none" onchange="restoreDbFileChosen(this)">
+              </label>
+              <span id="restore-db-filename" style="color:var(--text-muted);font-size:0.85rem">No file chosen</span>
+              <button class="btn btn-danger" id="restore-db-btn" onclick="uploadDbRestore()" disabled style="margin:0">Restore</button>
+            </div>
+            <span class="save-status" id="restore-db-status" style="display:block;margin-top:0.5rem"></span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
