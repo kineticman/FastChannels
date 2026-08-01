@@ -117,14 +117,21 @@ def _fetch_items_cached(lineup: str, station_id: str, session) -> list:
         r = session.get(url, timeout=20)
         r.raise_for_status()
         grid = r.json()
+        items = grid[0] if isinstance(grid, list) and grid and isinstance(grid[0], list) else []
     except Exception as exc:
         log.warning("[tvtv] grid fetch failed for %s/%s: %s", lineup, station_id, exc)
         # curl_cffi HTTPError inherits from OSError (no .response attr), so check the message.
         if "429" in str(exc) or getattr(getattr(exc, 'response', None), 'status_code', None) == 429:
             return None  # Distinguish rate-limit from empty schedule
-        return []
+        if "404" not in str(exc) and getattr(getattr(exc, 'response', None), 'status_code', None) != 404:
+            return []
+        try:
+            from .tvtv_cache import _fetch_fragment_station
+            items = _fetch_fragment_station(session, station_id, start, end) or []
+        except Exception as fallback_exc:
+            log.warning("[tvtv] fragment fallback failed for %s/%s: %s", lineup, station_id, fallback_exc)
+            return []
 
-    items = grid[0] if isinstance(grid, list) and grid and isinstance(grid[0], list) else []
     _grid_cache[cache_key] = (now_ts, items)
     return items
 

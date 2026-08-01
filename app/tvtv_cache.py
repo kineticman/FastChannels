@@ -7,9 +7,10 @@ stores it in the tvtv_program_cache table.
 
 Called by the background worker on a cron schedule (default: 03:00 UTC).
 
-Typical cost: ~70-170 batched API calls (4 lineups × 2 days × ~20 batches
-each), taking ~2-4 minutes including pacing delays. Uses curl_cffi for a
-browser-like HTTP session without a headless browser bootstrap.
+Typical cost: ~70-170 batched API calls when tvtv's JSON grid endpoint is
+available. If that endpoint 404s, falls back to tvtv's htmx fragments, which
+are per-station/day and slower. Uses curl_cffi for a browser-like HTTP session
+without a headless browser bootstrap.
 
 Standalone dry run (prints stats, writes nothing):
     docker exec fastchannels python -m app.tvtv_cache --dry-run
@@ -26,10 +27,12 @@ log = logging.getLogger(__name__)
 
 _BATCH_SIZE  = 20    # station IDs per grid request — Cloudflare blocks >20
 _BATCH_DELAY = 1.0   # seconds between batches within a lineup-day
+_FRAGMENT_DELAY = 0.05  # small pace between fallback per-station fragment calls
 _DAY_DELAY   = 1.0   # seconds between lineup-day pairs
 _DAYS        = 2     # days of guide data to cache (today + 1)
 
 _TVTV_BASE = "https://tvtv.us"
+_FRAGMENT_FALLBACK_LOGGED = False
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +60,80 @@ def _parse_start(item: dict) -> datetime | None:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except Exception:
         return None
+
+
+def _fragment_day_keys(start: datetime, end: datetime) -> list[int]:
+    keys: list[int] = []
+    current = start.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    final = end.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    while current <= final:
+        keys.append(int(current.timestamp() * 1000))
+        current += timedelta(days=1)
+    return keys
+
+
+def _parse_fragment_airings(html: str, start: datetime, end: datetime) -> list[dict]:
+    """Parse tvtv's current htmx grid fragment format."""
+    try:
+        from bs4 import BeautifulSoup, NavigableString
+    except Exception:
+        log.warning("[tvtv-cache] BeautifulSoup unavailable; cannot parse tvtv fragment fallback")
+        return []
+
+    soup = BeautifulSoup(html or "", "html.parser")
+    items: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+    start_utc = start.astimezone(timezone.utc)
+    end_utc = end.astimezone(timezone.utc)
+
+    for airing in soup.select(".gridAiring"):
+        raw_time = airing.get("data-time")
+        raw_runtime = airing.get("data-runtime")
+        if not raw_time or not raw_runtime:
+            continue
+        try:
+            start_ms = int(raw_time)
+            runtime = int(raw_runtime)
+        except (TypeError, ValueError):
+            continue
+
+        item_start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
+        if item_start < start_utc or item_start > end_utc:
+            continue
+
+        subtitle_el = airing.select_one(".gridSubtitle")
+        subtitle = subtitle_el.get_text(" ", strip=True) if subtitle_el else None
+        title_el = airing.find("div", recursive=False)
+        if title_el is not None:
+            title = title_el.get_text(" ", strip=True)
+        else:
+            title_parts: list[str] = []
+            for child in airing.children:
+                if isinstance(child, NavigableString):
+                    text = str(child).strip()
+                    if text:
+                        title_parts.append(text)
+                elif getattr(child, "name", None) != "span":
+                    text = child.get_text(" ", strip=True)
+                    if text:
+                        title_parts.append(text)
+            title = " ".join(title_parts).strip()
+
+        program_id = airing.get("data-id")
+        key = (program_id or "", start_ms)
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append({
+            "programId": program_id,
+            "title": title or "Unknown",
+            "subtitle": subtitle,
+            "startTime": _iso_z(item_start),
+            "duration": runtime,
+        })
+
+    items.sort(key=lambda item: item.get("startTime") or "")
+    return items
 
 
 try:
@@ -102,6 +179,62 @@ def _get_session():
 # Core fetch
 # ---------------------------------------------------------------------------
 
+def _fetch_fragment_station(session, station_id: str, start: datetime, end: datetime) -> list[dict] | None:
+    airings: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    old_headers = dict(getattr(session, "headers", {}) or {})
+    try:
+        session.headers.update({
+            "Accept": "text/html, */*",
+            "HX-Request": "true",
+            "Referer": f"{_TVTV_BASE}/",
+        })
+        for day_key in _fragment_day_keys(start, end):
+            url = f"{_TVTV_BASE}/partial/source/{day_key}/{station_id}"
+            try:
+                r = session.get(url, timeout=20)
+                r.raise_for_status()
+            except Exception as exc:
+                log.debug("[tvtv-cache] fragment failed %s day=%s: %s", station_id, day_key, exc)
+                return None
+
+            for item in _parse_fragment_airings(r.text, start, end):
+                key = (str(item.get("programId") or ""), str(item.get("startTime") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                airings.append(item)
+            time.sleep(_FRAGMENT_DELAY)
+    finally:
+        session.headers.clear()
+        session.headers.update(old_headers)
+
+    airings.sort(key=lambda item: item.get("startTime") or "")
+    return airings
+
+
+def _fetch_batch_via_fragments(session, station_ids: list[str],
+                               start: datetime, end: datetime) -> tuple[dict[str, list[dict]], str | None]:
+    global _FRAGMENT_FALLBACK_LOGGED
+    if not _FRAGMENT_FALLBACK_LOGGED:
+        log.warning(
+            "[tvtv-cache] JSON grid endpoint returned 404; using per-station fragment fallback"
+        )
+        _FRAGMENT_FALLBACK_LOGGED = True
+    result: dict[str, list[dict]] = {}
+    failures = 0
+    for station_id in station_ids:
+        airings = _fetch_fragment_station(session, station_id, start, end)
+        if airings is None:
+            failures += 1
+            continue
+        result[station_id] = airings
+
+    if result:
+        return result, None
+    return {}, "fragment fallback failed" if failures else "empty fragment response"
+
+
 def _fetch_batch(session, lineup: str, station_ids: list[str],
                  start: datetime, end: datetime) -> tuple[dict[str, list[dict]], str | None]:
     """
@@ -121,6 +254,8 @@ def _fetch_batch(session, lineup: str, station_ids: list[str],
         status = getattr(response, "status_code", None)
         reason = f"HTTP {status}" if status else type(exc).__name__
         log.debug("[tvtv-cache] batch failed %s %s...: %s", lineup, station_ids[:3], exc)
+        if status == 404 or "404" in str(exc):
+            return _fetch_batch_via_fragments(session, station_ids, start, end)
         return {}, reason
 
     result: dict[str, list[dict]] = {}
