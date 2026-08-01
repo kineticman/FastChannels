@@ -2823,28 +2823,29 @@ def _fox_tve_rewrite_media_playlist(media_text: str, media_url: str, auth_query:
     return '\n'.join(out).rstrip() + '\n'
 
 
-@play_bp.route('/play/fox_tve/<channel_id>/proxy.m3u8')
-def fox_tve_proxy(channel_id: str):
+@play_bp.route('/play/fox_tve/<channel_id>/proxy.m3u8', defaults={'proxy_source_name': 'fox_tve'})
+@play_bp.route('/play/fox_one/<channel_id>/proxy.m3u8', defaults={'proxy_source_name': 'fox_one'})
+def fox_tve_proxy(channel_id: str, proxy_source_name: str):
     from urllib.parse import unquote as _unquote
 
     raw_id = _unquote(channel_id)
     channel = (
         Channel.query
         .join(Source)
-        .filter(Source.name == 'fox_tve', Channel.source_channel_id == raw_id)
+        .filter(Source.name == proxy_source_name, Channel.source_channel_id == raw_id)
         .first()
     )
     if not channel:
         abort(404)
 
-    scraper_cls = registry.get('fox_tve')
+    scraper_cls = registry.get(proxy_source_name)
     if not scraper_cls:
         return _unavailable_response()
     scraper = scraper_cls(config=channel.source.config or {})
     try:
         upstream_url = scraper.resolve(channel.stream_url)
     except Exception as exc:
-        logger.warning('[fox-tve] resolve failed for %s: %s', raw_id, exc)
+        logger.warning('[%s] resolve failed for %s: %s', proxy_source_name, raw_id, exc)
         return _unavailable_response()
     finally:
         if getattr(scraper, '_pending_config_updates', None):
@@ -2853,14 +2854,14 @@ def fox_tve_proxy(channel_id: str):
             except Exception as ce:
                 from ..extensions import db
                 db.session.rollback()
-                logger.warning('[fox-tve] failed to persist config updates: %s', ce)
+                logger.warning('[%s] failed to persist config updates: %s', proxy_source_name, ce)
         if getattr(scraper, '_pending_cache_updates', None):
             try:
                 persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
             except Exception as ce:
                 from ..extensions import db
                 db.session.rollback()
-                logger.warning('[fox-tve] failed to persist cache updates: %s', ce)
+                logger.warning('[%s] failed to persist cache updates: %s', proxy_source_name, ce)
 
     fetched = _fox_tve_fetch_media(upstream_url)
     if not fetched:
@@ -3764,14 +3765,14 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
-    # FOX TVE uses source-specific live resolution and playlist handling.
+    # FOX TVE/Fox One use source-specific live resolution and playlist handling.
     # Redirect before generic resolution so slow token acquisition happens only
     # inside the manifest proxy request, not on both the initial tune and proxy.
-    if source_name == 'fox_tve':
+    if source_name in {'fox_tve', 'fox_one'}:
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
-            f"{request.host_url.rstrip('/')}/play/fox_tve/{encoded_id}/proxy.m3u8",
+            f"{request.host_url.rstrip('/')}/play/{source_name}/{encoded_id}/proxy.m3u8",
             302,
         )
 

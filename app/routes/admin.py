@@ -26,7 +26,6 @@ from ..source_config import (
 from ..timezone_utils import timezone_choices, timezone_health
 from ..url import public_base_url, detected_base_url
 from ..tve.providers import ytdlp_adobe_mso_providers
-from ..tve.sources import tve_source_catalog
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
@@ -573,7 +572,6 @@ def sources():
                            channel_fetch_meta=channel_fetch_meta,
                            epg_meta=_epg_freshness_meta(sources_list, _now),
                            needs_config=needs_config,
-                           tve_source_catalog=tve_source_catalog(),
                            canonical_categories=CANONICAL_CATEGORIES)
 
 
