@@ -8,8 +8,8 @@ stores it in the tvtv_program_cache table.
 Called by the background worker on a cron schedule (default: 03:00 UTC).
 
 Typical cost: ~70-170 batched API calls when tvtv's JSON grid endpoint is
-available. If that endpoint 404s, falls back to tvtv's htmx fragments, which
-are per-station/day and slower. Uses curl_cffi for a browser-like HTTP session
+available. If that endpoint 404s, falls back to tvtv's htmx fragments with
+bounded per-station concurrency. Uses curl_cffi for a browser-like HTTP session
 without a headless browser bootstrap.
 
 Standalone dry run (prints stats, writes nothing):
@@ -19,7 +19,9 @@ Standalone dry run (prints stats, writes nothing):
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -27,12 +29,14 @@ log = logging.getLogger(__name__)
 
 _BATCH_SIZE  = 20    # station IDs per grid request — Cloudflare blocks >20
 _BATCH_DELAY = 1.0   # seconds between batches within a lineup-day
-_FRAGMENT_DELAY = 0.05  # small pace between fallback per-station fragment calls
+_FRAGMENT_WORKERS = 8  # concurrent per-station htmx fallback fetches per batch
+_FRAGMENT_DELAY = 0.0  # optional pace between fallback per-station fragment calls
 _DAY_DELAY   = 1.0   # seconds between lineup-day pairs
 _DAYS        = 2     # days of guide data to cache (today + 1)
 
 _TVTV_BASE = "https://tvtv.us"
 _FRAGMENT_FALLBACK_LOGGED = False
+_FRAGMENT_THREAD_STATE = threading.local()
 
 
 # ---------------------------------------------------------------------------
@@ -213,22 +217,56 @@ def _fetch_fragment_station(session, station_id: str, start: datetime, end: date
     return airings
 
 
+def _fragment_worker_session():
+    session = getattr(_FRAGMENT_THREAD_STATE, "session", None)
+    if session is None:
+        session = _make_session()
+        _FRAGMENT_THREAD_STATE.session = session
+    return session
+
+
+def _fetch_fragment_station_threaded(station_id: str, start: datetime, end: datetime) -> list[dict] | None:
+    return _fetch_fragment_station(_fragment_worker_session(), station_id, start, end)
+
+
 def _fetch_batch_via_fragments(session, station_ids: list[str],
                                start: datetime, end: datetime) -> tuple[dict[str, list[dict]], str | None]:
     global _FRAGMENT_FALLBACK_LOGGED
     if not _FRAGMENT_FALLBACK_LOGGED:
         log.warning(
-            "[tvtv-cache] JSON grid endpoint returned 404; using per-station fragment fallback"
+            "[tvtv-cache] JSON grid endpoint returned 404; using per-station fragment fallback (%d workers)",
+            _FRAGMENT_WORKERS,
         )
         _FRAGMENT_FALLBACK_LOGGED = True
+
     result: dict[str, list[dict]] = {}
     failures = 0
-    for station_id in station_ids:
-        airings = _fetch_fragment_station(session, station_id, start, end)
-        if airings is None:
-            failures += 1
-            continue
-        result[station_id] = airings
+    max_workers = max(1, min(_FRAGMENT_WORKERS, len(station_ids)))
+    if max_workers == 1:
+        for station_id in station_ids:
+            airings = _fetch_fragment_station(session, station_id, start, end)
+            if airings is None:
+                failures += 1
+                continue
+            result[station_id] = airings
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(_fetch_fragment_station_threaded, station_id, start, end): station_id
+                for station_id in station_ids
+            }
+            for future in as_completed(future_map):
+                station_id = future_map[future]
+                try:
+                    airings = future.result()
+                except Exception as exc:
+                    log.debug("[tvtv-cache] fragment worker failed %s: %s", station_id, exc)
+                    failures += 1
+                    continue
+                if airings is None:
+                    failures += 1
+                    continue
+                result[station_id] = airings
 
     if result:
         return result, None

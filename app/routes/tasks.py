@@ -395,11 +395,13 @@ def trigger_tvtv_cache_refresh():
         job_id = 'tvtv-cache-refresh'
         if _job_already_active(q, job_id):
             logger.info('tvtv cache refresh already queued/running')
-            return
+            return False
         q.enqueue('app.worker.run_tvtv_cache_refresh', job_timeout=1800, job_id=job_id)
         logger.info('Enqueued tvtv cache refresh')
+        return True
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for tvtv cache refresh')
         import threading
         from app.worker import run_tvtv_cache_refresh
         threading.Thread(target=run_tvtv_cache_refresh, daemon=True).start()
+        return True

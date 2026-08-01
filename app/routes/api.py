@@ -48,6 +48,7 @@ from .tasks import (
     trigger_source_channel_purge,
     trigger_stream_audit,
     trigger_stream_audit_recheck,
+    trigger_tvtv_cache_refresh,
     trigger_xml_refresh,
 )
 from ..generators.m3u import (
@@ -2973,6 +2974,15 @@ def station_now_playing(station_id):
     if not result.get('found') and result.get('error') == 'not_in_index':
         return jsonify(result), 404
     return jsonify(result)
+
+
+@api_bp.route('/tvtv/cache/refresh', methods=['POST'])
+def tvtv_cache_refresh():
+    """Queue an immediate refresh of the tvtv guide cache."""
+    queued = trigger_tvtv_cache_refresh()
+    if queued:
+        return jsonify({'status': 'queued', 'job_id': 'tvtv-cache-refresh'}), 202
+    return jsonify({'status': 'already_running', 'job_id': 'tvtv-cache-refresh'}), 202
 
 
 @api_bp.route('/gracenote/community-summary', methods=['GET'])
