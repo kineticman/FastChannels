@@ -378,7 +378,6 @@ class AENetworksTVEScraper(BaseScraper):
     source_name = 'aenetworks_tve'
     display_name = 'A+E Networks TVE'
     source_category = 'tve'
-    under_development = True
     is_premium = True
     scrape_interval = 720
     stream_audit_enabled = True

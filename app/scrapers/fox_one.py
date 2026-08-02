@@ -151,7 +151,6 @@ class FoxOneScraper(BaseScraper):
     display_name = 'FOX One'
     source_category = 'tve'
     is_premium = True
-    under_development = True
     scrape_interval = 720
     stream_audit_enabled = True
     config_schema = [

@@ -257,7 +257,6 @@ class DiscoveryTVEScraper(BaseScraper):
     source_name = 'discovery_tve'
     display_name = 'Discovery TVE'
     source_category = 'tve'
-    under_development = True
     is_premium = True
     scrape_interval = 720
     stream_audit_enabled = True

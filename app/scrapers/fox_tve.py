@@ -820,7 +820,6 @@ class FoxTVEScraper(BaseScraper):
     source_name = 'fox_tve'
     display_name = 'FOX TVE'
     source_category = 'tve'
-    under_development = True
     is_premium = True
     scrape_interval = 720
     stream_audit_enabled = True
