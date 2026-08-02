@@ -5,6 +5,7 @@ import json
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode, urlparse, urlsplit
@@ -363,11 +364,6 @@ def resolve_fox_page_signed_hls(channel: FoxTVEChannel) -> str:
     if cached and cached[1] > now + 120:
         return cached[0]
 
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception as exc:
-        raise ValueError('Playwright is not available for FOX signed HLS resolution') from exc
-
     matches: list[str] = []
     expected_host = urlsplit(channel.fallback_stream_url or '').netloc.lower()
 
@@ -380,21 +376,37 @@ def resolve_fox_page_signed_hls(channel: FoxTVEChannel) -> str:
         if FOX_SIGNED_HLS_RE.search(url) and url not in matches:
             matches.append(url)
 
-    try:
+    def _capture_with_playwright() -> None:
+        try:
+            from playwright.sync_api import sync_playwright
+        except Exception as exc:
+            raise ValueError('Playwright is not available for FOX signed HLS resolution') from exc
+
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=UA,
-                viewport={'width': 1365, 'height': 900},
-            )
-            page = context.new_page()
-            page.on('request', lambda req: _maybe_capture(req.url))
-            page.on('response', lambda resp: _maybe_capture(resp.url))
-            page.goto(channel.page_url, wait_until='domcontentloaded', timeout=60000)
-            deadline = time.time() + 18
-            while time.time() < deadline and not matches:
-                page.wait_for_timeout(250)
-            browser.close()
+            try:
+                context = browser.new_context(
+                    user_agent=UA,
+                    viewport={'width': 1365, 'height': 900},
+                )
+                page = context.new_page()
+                page.on('request', lambda req: _maybe_capture(req.url))
+                page.on('response', lambda resp: _maybe_capture(resp.url))
+                page.goto(channel.page_url, wait_until='domcontentloaded', timeout=60000)
+                deadline = time.time() + 18
+                while time.time() < deadline and not matches:
+                    page.wait_for_timeout(250)
+            finally:
+                browser.close()
+
+    try:
+        # The Flask/gevent request path can already have an asyncio loop in the
+        # current thread. Playwright's sync API rejects that, so run the capture
+        # in a fresh native thread where it owns its own event loop.
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix='fox-tve-playwright') as pool:
+            pool.submit(_capture_with_playwright).result(timeout=90)
+    except FuturesTimeoutError as exc:
+        raise ValueError(f'FOX page signed HLS capture timed out for {channel.name}') from exc
     except Exception as exc:
         raise ValueError(f'FOX page did not expose signed HLS for {channel.name}: {exc}') from exc
 
