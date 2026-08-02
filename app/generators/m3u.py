@@ -1125,7 +1125,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
 # Sources FastChannels forces to native-HLS playback (AES-128; see
 # api.py _get_playback_info ~ "playback_mode = 'native'"). Chrome has no native
 # HLS, so PrismCast's headless Chrome can't play them — exclude from the bridge.
-_PRISMCAST_INCAPABLE_SOURCES = {'pluto', 'fubo', 'roku'}
+_PRISMCAST_INCAPABLE_SOURCES = {'pluto', 'fubo', 'roku', 'discovery_tve'}
 # Stream types with no browser playback path: snapshot feeds, and muxed MPEG-TS
 # (e.g. HDHomeRun OTA — MPEG-2/AC-3, which Chrome can't decode).
 _PRISMCAST_UNSUPPORTED_TYPES = {'mjpeg', 'jpeg_snapshot', 'mpegts', 'ts'}
