@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS
 
@@ -123,13 +122,6 @@ def _genre(item: dict, fallback: str) -> str:
     if item.get('is_sportingevent'):
         return 'Sports'
     return fallback
-
-
-def _target_from_stream_url(raw_url: str) -> str | None:
-    if not raw_url.startswith(_SCHEME):
-        return None
-    parts = [part for part in urlparse(raw_url).path.split('/') if part]
-    return parts[0] if parts else None
 
 
 def _stream_parts(raw_url: str) -> tuple[str, str | None, str | None]:
