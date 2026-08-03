@@ -800,6 +800,7 @@
           <span id="ch-selected-count">loading…</span>
           <span class="ch-bar-actions">
             <button class="ch-bar-btn" id="ch-btn-selectall" type="button" onclick="selectAllChannels()">Select all</button>
+            <button class="ch-bar-btn" type="button" onclick="deselectAllChannels()">Deselect all</button>
             <button class="ch-bar-btn" type="button" onclick="clearAllChannels()">Clear</button>
           </span>
         </div>
@@ -1048,6 +1049,18 @@ function updateChCount() {
 function selectAllChannels() {
   const visible = getVisibleChannels();
   visible.forEach(ch => _selectedChannelIds.add(ch.id));
+  renderChannelList();
+  schedulePreview();
+  markOrderStale();
+}
+
+function deselectAllChannels() {
+  const visible = getVisibleChannels();
+  if (_selectedChannelIds.size > 0) {
+    visible.forEach(ch => _selectedChannelIds.delete(ch.id));
+  } else {
+    visible.forEach(ch => _excludedChannelIds.add(ch.id));
+  }
   renderChannelList();
   schedulePreview();
   markOrderStale();
