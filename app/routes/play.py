@@ -3620,6 +3620,26 @@ def directv_browser_manifest(channel_id: str):
     except Exception as exc:
         logger.warning('[directv-browser] manifest fetch failed for channel=%s: %s', channel_id, exc)
         return _unavailable_response()
+    finally:
+        # Without this, the fresh play_token/license_content_id this resolve()
+        # just minted never reaches the source_cache table, so the license
+        # request that follows (a separate request/route) reads a stale or
+        # empty directv_playback entry and fetches its own mismatched session
+        # — the CDM gets a license for the wrong content ID and never decrypts.
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+            except Exception as ce:
+                from ..extensions import db
+                db.session.rollback()
+                logger.warning('[directv-browser] failed to persist config updates: %s', ce)
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            except Exception as ce:
+                from ..extensions import db
+                db.session.rollback()
+                logger.warning('[directv-browser] failed to persist cache updates: %s', ce)
     if r.status_code >= 400:
         return Response(r.content, status=r.status_code, content_type=r.headers.get('Content-Type') or 'text/plain')
     return Response(
