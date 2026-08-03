@@ -652,6 +652,15 @@ class CSpanScraper(BaseScraper):
     # the channels during downtime.
     stream_audit_enabled = False
     channel_miss_threshold = 1
+    # The rotating Live Event channel is a config-driven static entry, not a
+    # discovered one — fetch_channels() only omits it if include_live_events (or
+    # its include_schedule_channels prerequisite) is off. With threshold=1 that
+    # means ANY transient config-read hiccup deactivates it on the very next
+    # scrape with zero grace, same as the other cspan channels are meant to have
+    # for a genuine toggle-off. Being dark is this channel's normal state (see
+    # stream_audit_enabled above) — exempt it from the miss threshold entirely
+    # rather than raising the threshold for the whole source.
+    pinned_channel_ids = frozenset({LIVE_EVENT_CHANNEL_ID})
     scrape_interval = 180  # channels + EPG are static; scrape only rolls the EPG window forward
 
     config_schema = [
@@ -821,6 +830,8 @@ class CSpanScraper(BaseScraper):
                 rows = self._filtered_epg_rows(ch, items, program_filter)
             else:
                 rows = self._epg_rows_from_schedule(ch, items)
+            if ch.source_channel_id == LIVE_EVENT_CHANNEL_ID:
+                self._splice_live_event_title(rows, now)
             if rows:
                 programs.extend(rows)
             else:
@@ -937,6 +948,43 @@ class CSpanScraper(BaseScraper):
         if program_filter == "washington_journal":
             return title.startswith("washington journal") and live
         return False
+
+    @staticmethod
+    def _current_live_event_title() -> Optional[str]:
+        """Title of whatever the Live Event channel is actually airing right now,
+        read from the shared discovery cache — NEVER fetches. fetch_epg runs on a
+        timer regardless of viewership, and only real plays / the play-triggered
+        prewarm are allowed to hit the WAF-protected schedule pages, so this only
+        reads whatever those already populated. Mirrors the network preference
+        order in _resolve_info's LIVE_EVENT_CHANNEL_ID branch (default view, then
+        the C-SPAN 3 network view) so the spliced title matches what resolve()
+        would actually pick. Returns None if nothing is cached, or the cache is
+        stale, or nothing live is outside the dedicated (house/senate/WJ) slugs."""
+        for key in ("schedule:default", f"schedule:{CSPAN3_NETWORK}"):
+            cached = _cache_get(key)
+            if not cached or (time.time() - cached[0]) >= _DISCOVERY_TTL:
+                continue
+            for ev in cached[1]:
+                if ev["slug"] not in _DEDICATED_SLUGS and ev.get("title"):
+                    return ev["title"]
+        return None
+
+    @classmethod
+    def _splice_live_event_title(cls, rows: list[ProgramData], now: datetime) -> None:
+        """Override the network-3 grid block covering `now` with the real live
+        title, in place. The Live Event channel's guide is sourced from network 3
+        (cspan.py:CHANNEL_NETWORK) because that grid has real per-program titles,
+        but resolve() actually prefers a *different* network's live pick first —
+        so the "now" slot can show the wrong program. This corrects just that one
+        slot from cache; future slots stay best-effort from the network-3 grid."""
+        title = cls._current_live_event_title()
+        if not title:
+            return
+        for row in rows:
+            if row.start_time <= now < row.end_time:
+                row.title = title
+                row.description = None
+                return
 
     @staticmethod
     def _neutral_block(ch: ChannelData, now: datetime) -> ProgramData:

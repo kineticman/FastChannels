@@ -495,6 +495,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                                 miss_threshold=getattr(scraper, 'channel_miss_threshold', _CHANNEL_MISS_THRESHOLD),
                                 rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
                                 allow_suspicious_collapse=getattr(scraper, 'allow_suspicious_channel_collapse', False),
+                                pinned_channel_ids=getattr(scraper, 'pinned_channel_ids', frozenset()),
                             )
                         # Persist scraper config/cache FIRST. persist_*() call
                         # db.session.expire_all(), which DISCARDS unflushed attribute
@@ -2541,7 +2542,7 @@ def _sync_intrinsic_drm_bridge(source) -> None:
 
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None,
                      miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False,
-                     allow_suspicious_collapse: bool = False):
+                     allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset()):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
 
     # Build a guide_key → channel index so we can re-use an existing DB row
@@ -2674,6 +2675,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                     ch.disable_reason = None  # clear flag; let next audit re-check
             ch.last_seen_at = seen_at
             ch.missed_scrapes = 0
+            if cd.source_channel_id in pinned_channel_ids and not ch.scrape_pinned:
+                ch.scrape_pinned = True  # scraper-declared exemption from channel_miss_threshold
             mode = (getattr(ch, 'gracenote_mode', None) or ('manual' if getattr(ch, 'gracenote_locked', False) else 'auto')).strip().lower()
             # Auto mode tracks the source. Normally we keep an existing ID when a
             # scrape returns nothing (transient source gaps shouldn't wipe a good
@@ -2714,6 +2717,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 is_enabled        = not _born_pending,
                 review_state      = 'pending' if _born_pending else 'approved',
                 missed_scrapes    = 0,
+                scrape_pinned     = cd.source_channel_id in pinned_channel_ids,
             ))
 
     seen = {cd.source_channel_id for cd in channel_data_list}

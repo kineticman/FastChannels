@@ -386,6 +386,7 @@ class BaseScraper(ABC):
     under_development: bool = False  # shown in the admin UI; source remains opt-in
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
     channel_miss_threshold: int = 3  # missed scrapes before is_active=False; override per scraper
+    pinned_channel_ids: frozenset = frozenset()  # source_channel_ids born (and kept) scrape_pinned=True — exempt from channel_miss_threshold; for channels that are expected to be intermittently absent from a scrape by design (e.g. a rotating best-effort discovery), not just resilient-by-default
     rehome_by_guide_key: bool = False  # when True, re-use existing DB rows whose guide_key matches an incoming channel whose uuid changed
 
     # Per-phase wall-clock limits (seconds). Overriding in a subclass replaces
