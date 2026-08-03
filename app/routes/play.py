@@ -3298,6 +3298,38 @@ def sling_dash_proxy(channel_id: str):
     )
 
 
+@play_bp.route('/play/vidaa/<channel_id>/dash.mpd')
+def vidaa_dash_proxy(channel_id: str):
+    """DASH (Widevine) manifest proxy for Vidaa's DRM tiles, for the watch page
+    and PrismCast bridge. The upstream evrideo manifest has no CORS headers at
+    all (unlike its segments, which reflect Origin fine), so proxy the manifest
+    body server-side with permissive CORS; segments stay direct."""
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'vidaa', Channel.source_channel_id == channel_id)
+        .first()
+    )
+    if not channel or not channel.stream_url:
+        abort(404)
+
+    try:
+        r = _requests.get(channel.stream_url, timeout=10, allow_redirects=True)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[vidaa-dash] manifest fetch failed for %s: %s', channel_id, e)
+        return _unavailable_response()
+
+    return Response(
+        r.text,
+        mimetype='application/dash+xml',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 @play_bp.route('/play/pbs/<channel_id>/dash.mpd')
 def pbs_dash_proxy(channel_id: str):
     """DASH (Widevine) manifest proxy for an opt-in PBS DRM station feed — the

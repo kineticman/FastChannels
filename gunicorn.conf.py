@@ -56,8 +56,10 @@ _SUCCESS_SUPPRESS_PATTERNS = (
     '/play/philo/license',     # Philo DRM license — noisy during startup/key rotation
 )
 _SUCCESS_SUPPRESS_RE = re.compile(r'(?:GET|HEAD) (?:/play/philo/[^/]+/dash\.mpd|/play/directv/browser-asset\?url=)')
-_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs)/([^/]+)/dash\.mpd')
-_LICENSE_RE = re.compile(r'POST /play/(cox)/license/([^/]+)')
+_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa)/([^/]+)/dash\.mpd')
+# cox uses path-form license URLs (/license/<id>), vidaa uses query-form
+# (/license?channel_id=<id>) — matched via the alternated separator below.
+_LICENSE_RE = re.compile(r'POST /play/(cox|vidaa)/license(?:/|\?channel_id=)([^ &]+)')
 _DASH_COOLDOWN = 120  # seconds — log first request, suppress repeats within this window
 
 

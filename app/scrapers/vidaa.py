@@ -6,8 +6,8 @@ import json
 import logging
 import time
 import uuid
-from datetime import UTC, datetime
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlparse, urlunparse
 
 from .base import (
     BaseScraper, ChannelData, ProgramData, ScrapeSkipError,
@@ -87,6 +87,27 @@ def _clean_stream_url(url: str) -> str:
     return urlunparse(parsed._replace(query=urlencode(clean)))
 
 
+def _parse_mini_player(url: str) -> dict | None:
+    """Unwrap a DRM tile's `streamingParam` — for encrypted channels it isn't a
+    manifest, it's a `mini-player/V1.0/index-mini-player.html` wrapper page meant
+    for a webview. It carries the real DASH manifest URL, the multi-DRM license
+    URL, and a `stream_id` (a distinct asset id, not the Vidaa channel id) as
+    encoded query params. Returns None if `url` isn't a recognizable wrapper."""
+    if not url or 'mini-player' not in url:
+        return None
+    q = parse_qs(urlparse(url).query)
+    streaming_url = unquote((q.get('streaming_url') or [''])[0])
+    drm_url = unquote((q.get('drm_url') or [''])[0])
+    stream_id = (q.get('stream_id') or [''])[0]
+    if not streaming_url or not drm_url or not stream_id:
+        return None
+    return {
+        'streaming_url': _clean_stream_url(streaming_url),
+        'drm_url': drm_url,
+        'stream_id': stream_id,
+    }
+
+
 def _chunk(seq: list, size: int):
     for i in range(0, len(seq), size):
         yield seq[i:i + size]
@@ -98,6 +119,11 @@ class VidaaScraper(BaseScraper):
     scrape_interval        = 720   # 12 hours
     stream_audit_enabled   = True
     channel_miss_threshold = 5
+
+    # Truthy marker only — enables the /play/vidaa/license proxy route and the
+    # audit's DRM-bridge branch. get_license_url() below always re-resolves the
+    # real per-channel URL live rather than reusing this constant.
+    license_url = "https://drm-vss.vidaahub.com/multi-drm/vss/license"
 
     # Channel discovery: 1 category-list call + ~15 paginated columnData calls +
     # ~55 batched mediasInfo POSTs (257 channels / 5 per batch). EPG: same batches
@@ -203,8 +229,19 @@ class VidaaScraper(BaseScraper):
         stream_url = chan.get("streamingParam")
         if not cid or not name or not stream_url:
             return None
-        stream_url = _clean_stream_url(stream_url)
         drm = bool((chan.get("streamingDetailParam") or {}).get("encryption"))
+        if drm:
+            # Encrypted tiles: streamingParam is a mini-player wrapper page, not a
+            # manifest — unwrap it to the real DASH URL. If the shape doesn't match
+            # what we've reverse-engineered, skip the tile rather than store a
+            # wrapper URL that will never resolve to playable content.
+            wrapped = _parse_mini_player(stream_url)
+            if not wrapped:
+                logger.warning("[vidaa] DRM tile %s (%s) has an unrecognized streamingParam shape — skipping", cid, name)
+                return None
+            stream_url = wrapped['streaming_url']
+        else:
+            stream_url = _clean_stream_url(stream_url)
         is_spanish = column_title == _SPANISH_COLUMN_TITLE
         category = category_for_channel(name, column_title) or infer_category_from_name(name)
         language = "es" if is_spanish else infer_language_from_metadata(name)
@@ -269,6 +306,7 @@ class VidaaScraper(BaseScraper):
         total = len(batches) * len(related_dates)
 
         programs_by_key: dict[tuple[str, int], ProgramData] = {}
+        seen_channel_ids: set[str] = set()
         done = 0
         consecutive_failures = 0
         circuit_open = False
@@ -296,6 +334,7 @@ class VidaaScraper(BaseScraper):
                     cid = media.get("id")
                     if cid is None:
                         continue
+                    seen_channel_ids.add(str(cid))
                     for sched in (media.get("channelInfo") or {}).get("scheduleList") or []:
                         title = (sched.get("scheduleName") or "").strip()
                         start_ms, end_ms = sched.get("startTime"), sched.get("endTime")
@@ -321,5 +360,89 @@ class VidaaScraper(BaseScraper):
         if not programs and (circuit_open or consecutive_failures):
             raise ScrapeSkipError("Vidaa EPG unavailable: all attempted batches failed")
 
+        # Some tiles (confirmed on the DRM "FAST Channel <Show>" single-title loops)
+        # publish no schedule at all — scheduleList comes back genuinely empty on
+        # every relatedDate, not a fetch failure. Fill those with a placeholder
+        # using the channel's own name so the guide isn't blank, but only for
+        # channels we actually queried successfully with zero results — if Vidaa
+        # starts publishing a real schedule for one later, this naturally stops
+        # firing for it instead of needing a source list to maintain.
+        covered_ids = {cid for cid, _ in programs_by_key}
+        name_by_id = {ch.source_channel_id: ch.name for ch in channels}
+        placeholder_channels = 0
+        for source_channel_id in seen_channel_ids - covered_ids:
+            name = name_by_id.get(source_channel_id)
+            if not name:
+                continue
+            for step in range(_EPG_HORIZON_DAYS * 24):
+                block_start = datetime.fromtimestamp(now + step * 3600, tz=UTC)
+                block_end = block_start + timedelta(hours=1)
+                programs_by_key[(source_channel_id, -1 - step)] = ProgramData(
+                    source_channel_id = source_channel_id,
+                    title             = name,
+                    start_time        = block_start,
+                    end_time          = block_end,
+                    description       = "Live schedule not published for this channel by the source.",
+                    poster_url        = None,
+                )
+            placeholder_channels += 1
+        if placeholder_channels:
+            logger.info("[vidaa] %d channel(s) had no published schedule — filled with placeholder blocks",
+                        placeholder_channels)
+
+        programs = list(programs_by_key.values())
         logger.info("[vidaa] %d EPG programs fetched across %d channels", len(programs), len(channels))
         return programs
+
+    # ── DRM license bridge (Widevine CENC, DASH tiles only) ─────────────────────
+    # The mini-player's own player config (captured from its JS bundle) builds two
+    # things per play: the license server URL `{drm_url}?streamId={stream_id}&
+    # reqFrom=v_tvch_m`, and a `playback-request` header. That header looks like an
+    # entitlement ticket but isn't one — it's just base64(JSON) of self-asserted
+    # client metadata, computed locally in the JS with no signature and no
+    # server round-trip. Confirmed live: a plain L3 Widevine challenge posted with
+    # this header returns a real license (content key matched the manifest's KID).
+    # `stream_id` is a distinct per-tile asset id (not the Vidaa channel id) that
+    # only appears inside the wrapper URL, so both methods below re-fetch it live
+    # via mediasInfo rather than guessing — same reasoning as PBS's get_license_url.
+
+    @classmethod
+    def _lookup_drm_params(cls, config: dict, channel_id: str) -> dict | None:
+        try:
+            scraper = cls(config=config)
+            detail = scraper._fetch_medias_info([int(channel_id)], int(time.time()))
+        except Exception as exc:
+            logger.warning("[vidaa] DRM param lookup failed for %s: %s", channel_id, exc)
+            return None
+        medias = detail.get("medias") or []
+        if not medias:
+            return None
+        raw = (medias[0].get("channelInfo") or {}).get("streamingParam") or ""
+        return _parse_mini_player(raw)
+
+    @classmethod
+    def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
+        if not channel_id:
+            return None
+        params = cls._lookup_drm_params(config, channel_id)
+        if not params:
+            return None
+        return f"{params['drm_url']}?streamId={params['stream_id']}&reqFrom=v_tvch_m"
+
+    @classmethod
+    def prepare_license_request(
+        cls, challenge: bytes, config: dict, channel_id: str | None = None, **kwargs
+    ) -> tuple[bytes, dict]:
+        params = cls._lookup_drm_params(config, channel_id) if channel_id else None
+        stream_id = params['stream_id'] if params else (channel_id or "")
+        playback_request = base64.b64encode(json.dumps({
+            "assetId": stream_id,
+            "clientMetadata": {
+                "name": "vod",
+                "version": "1.0.0",
+                "os": {"name": "Linux", "version": "5.15.148"},
+                "device": {"type": "vidaaOS"},
+                "supportedDrms": [{"type": "widevine"}, {"type": "playready"}],
+            },
+        }, separators=(",", ":")).encode()).decode()
+        return challenge, {"playback-request": playback_request}

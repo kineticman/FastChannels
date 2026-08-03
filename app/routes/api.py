@@ -3046,6 +3046,14 @@ def _get_playback_info(ch, fast_mode=True):
         playback_mode = 'dash'
         stream_type = 'dash'
 
+    # Vidaa DRM tiles → DASH+Widevine via the same PrismCast bridge pattern.
+    # Vidaa's clear HLS channels are untouched (stream_type stays 'hls').
+    if ch.source and ch.source.name == 'vidaa' and ch.source_channel_id and (ch.stream_type or '').lower() == 'dash':
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/vidaa/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+        playback_mode = 'dash'
+        stream_type = 'dash'
+
     return {
         'stream_type': stream_type,
         'preview_url': preview_url,
