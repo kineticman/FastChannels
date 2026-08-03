@@ -467,6 +467,13 @@
       font-size: 0.9rem; line-height: 1; padding: 0;
     }
     .pbs-drm-chip-remove:hover { color: var(--danger); }
+    .pbs-feed-list { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.5rem; }
+    .pbs-feed-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+      padding: 0.3rem 0.55rem; border-radius: 5px; background: var(--surface-2);
+      font-size: 0.78rem;
+    }
+    .pbs-feed-row-label { display: flex; align-items: center; gap: 0.4rem; color: var(--text-soft); }
 
     /* Custom channels */
     .custom-channel-card {
@@ -2248,20 +2255,26 @@
         </div>`;
     }
 
-    function pbsRenderAddedChips(sourceId, stations) {
+    // sourceId -> Set of "station_id:profile" keys already added, so search results
+    // can mark a feed "Added" instead of offering to add it a second time.
+    const _pbsManualFeedCache = {};
+    const pbsFeedKey = (stationId, profile) => `${stationId}:${profile}`;
+
+    function pbsRenderAddedChips(sourceId, feeds) {
+      _pbsManualFeedCache[sourceId] = new Set((feeds || []).map(f => pbsFeedKey(f.station_id, f.profile)));
       const el = document.getElementById(`pbs-drm-added-${sourceId}`);
-      if (el) el.innerHTML = pbsDrmChipsHtml(sourceId, stations || []);
+      if (el) el.innerHTML = pbsFeedChipsHtml(sourceId, feeds || []);
     }
 
-    async function pbsLoadDrmStations(sourceId) {
-      // drm_station_names isn't part of the generic config schema (it's a display-only
-      // lookup the finder maintains), so the initial config fetch only has bare ids —
-      // upgrade to real names once this resolves.
+    async function pbsLoadManualFeeds(sourceId) {
+      // manual_feed_station_names isn't part of the generic config schema (it's a
+      // display-only lookup the finder maintains), so the initial config fetch only
+      // has bare "station_id:profile" pairs — upgrade to real names once this resolves.
       try {
-        const r = await fetch(`/api/sources/${sourceId}/pbs-drm-stations`);
+        const r = await fetch(`/api/sources/${sourceId}/pbs-manual-feeds`);
         if (!r.ok) return;
         const d = await r.json();
-        pbsRenderAddedChips(sourceId, d.stations || []);
+        pbsRenderAddedChips(sourceId, d.feeds || []);
       } catch (e) {}
     }
 
@@ -2276,12 +2289,15 @@
       };
       const includeChecked = ['1', 'true', 'yes', 'on'].includes(
         String(values.include_preconfigured ?? includeField.default ?? true).trim().toLowerCase());
-      const drmIds = String(values.drm_station_ids || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
-      const drmPlaceholder = drmIds.map(id => ({station_id: id, name: id}));
+      const manualEntries = String(values.manual_feeds || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+      const manualPlaceholder = manualEntries.map(entry => {
+        const [stationId, profile] = entry.split(':');
+        return {station_id: stationId, profile: profile || '', label: profile || entry, station_name: stationId};
+      });
 
       return `
         <div class="config-title">PBS Settings</div>
-        <div class="config-note">The scraper automatically imports clear (non-DRM) HLS feeds from the curated station list and any ZIP codes below. DRM-protected main/PBS KIDS feeds are opt-in only (added below) and play through the PrismCast DRM bridge.</div>
+        <div class="config-note">The scraper automatically imports clear (non-DRM) HLS feeds from the curated station list and any ZIP codes below. Individual feeds — clear or DRM — can also be hand-picked below; DRM feeds (main/PBS KIDS) are opt-in only and play through the PrismCast bridge.</div>
         <div class="fields-grid">
           <div class="field field-full">
             <div class="config-toggle-field">
@@ -2309,8 +2325,8 @@
         </div>
 
         <details class="pbs-drm-details" open>
-          <summary>DRM Station Finder (PrismCast bridge)</summary>
-          <div class="config-note">Search by ZIP code, then add a station's main/PBS KIDS DRM feed. Added stations are picked up on the next scrape and play only through the PrismCast bridge — turn on PrismCast bridging in Settings to use them.</div>
+          <summary>Station &amp; Feed Finder</summary>
+          <div class="config-note">Search by ZIP code, then add individual feeds — mix and match clear and DRM per station (e.g. a clear secondary feed plus just the Main DRM feed, skipping PBS KIDS). DRM feeds play only through the PrismCast bridge — turn on PrismCast bridging in Settings to use them.</div>
           <div style="display:flex;align-items:flex-end;gap:8px;margin:0.5rem 0;">
             <div class="field" style="margin:0;flex:0 0 auto;max-width:160px;">
               <label for="pbs-drm-zip-${sourceId}">ZIP code</label>
@@ -2322,21 +2338,42 @@
           </div>
           <div id="pbs-drm-results-${sourceId}"></div>
           <div class="config-title" style="margin-top:1rem;font-size:0.9em;">
-            Added DRM Stations
+            Added Feeds
             <span id="pbs-drm-added-status-${sourceId}" class="config-note" style="margin:0"></span>
           </div>
-          <div id="pbs-drm-added-${sourceId}" class="pbs-drm-chips">${pbsDrmChipsHtml(sourceId, drmPlaceholder)}</div>
+          <div id="pbs-drm-added-${sourceId}" class="pbs-drm-chips">${pbsFeedChipsHtml(sourceId, manualPlaceholder)}</div>
         </details>`;
     }
 
-    function pbsDrmChipsHtml(sourceId, stations) {
-      return stations.length
-        ? stations.map(s => `
-            <span class="pbs-drm-chip" data-station-id="${escapeHtml(s.station_id)}" title="${escapeHtml(s.station_id)}">
-              ${escapeHtml(s.name || s.station_id)}
-              <button type="button" class="pbs-drm-chip-remove" onclick="pbsRemoveDrmStation(${sourceId}, '${escapeHtml(s.station_id)}')" title="Remove (deletes its channels)">&times;</button>
+    function pbsFeedChipsHtml(sourceId, feeds) {
+      return feeds.length
+        ? feeds.map(f => `
+            <span class="pbs-drm-chip" title="${escapeHtml(f.station_id)}:${escapeHtml(f.profile)}">
+              ${escapeHtml(f.station_name || f.station_id)}: ${escapeHtml(f.label || f.profile)}
+              <button type="button" class="pbs-drm-chip-remove"
+                      onclick="pbsRemoveManualFeed(${sourceId}, '${escapeHtml(f.station_id)}', '${escapeHtml(f.profile)}')"
+                      title="Remove (deletes its channel)">&times;</button>
             </span>`).join('')
-        : '<span class="config-note" style="margin:0">No DRM stations added yet.</span>';
+        : '<span class="config-note" style="margin:0">No feeds added yet.</span>';
+    }
+
+    function pbsFeedRowHtml(sourceId, station, feed) {
+      const already = (_pbsManualFeedCache[sourceId] || new Set()).has(pbsFeedKey(station.station_id, feed.profile));
+      const typeLabel = feed.type === 'drm' ? 'DRM' : 'Clear';
+      return `
+        <div class="pbs-feed-row">
+          <span class="pbs-feed-row-label">
+            <span class="pbs-badge pbs-badge-${feed.type === 'drm' ? 'drm' : 'clear'}">${typeLabel}</span>
+            ${escapeHtml(feed.label)}
+          </span>
+          <button class="btn btn-run btn-sm" type="button" ${already ? 'disabled' : ''}
+                  data-station-id="${escapeHtml(station.station_id)}"
+                  data-profile="${escapeHtml(feed.profile)}"
+                  data-label="${escapeHtml(feed.label)}"
+                  data-name="${escapeHtml(station.name || '')}"
+                  data-callsign="${escapeHtml(station.callsign || '')}"
+                  onclick="pbsAddManualFeed(${sourceId}, this)">${already ? 'Added' : 'Add'}</button>
+        </div>`;
     }
 
     async function pbsSearchStations(sourceId) {
@@ -2361,20 +2398,18 @@
         const stations = d.stations || [];
         status.textContent = stations.length ? `${stations.length} station(s) found.` : 'No stations found for that ZIP.';
         results.innerHTML = stations.map(s => {
-          const clearBadge = s.has_clear ? '<span class="pbs-badge pbs-badge-clear">Clear HLS</span>' : '';
-          const drmBadge = s.has_drm ? '<span class="pbs-badge pbs-badge-drm">DRM</span>' : '<span class="pbs-badge pbs-badge-none">No DRM feed</span>';
           const curatedBadge = s.already_curated ? '<span class="pbs-badge pbs-badge-curated">Curated</span>' : '';
+          const feeds = s.feeds || [];
+          const feedRows = feeds.length
+            ? feeds.map(f => pbsFeedRowHtml(sourceId, s, f)).join('')
+            : '<div class="pbs-feed-row"><span class="pbs-feed-row-label">No playable feeds found</span></div>';
           return `
             <div class="pbs-station-row" data-station-id="${escapeHtml(s.station_id)}">
               <div class="pbs-station-info">
                 <div class="pbs-station-name">${escapeHtml(s.name || s.callsign || s.station_id)}${s.callsign ? ` (${escapeHtml(s.callsign)})` : ''}</div>
-                <div class="pbs-station-meta">${escapeHtml(s.city_state || '')} ${clearBadge} ${drmBadge} ${curatedBadge}</div>
+                <div class="pbs-station-meta">${escapeHtml(s.city_state || '')} ${curatedBadge}</div>
+                <div class="pbs-feed-list">${feedRows}</div>
               </div>
-              <button class="btn btn-run btn-sm" type="button" ${s.has_drm ? '' : 'disabled'}
-                      data-station-id="${escapeHtml(s.station_id)}"
-                      data-name="${escapeHtml(s.name || '')}"
-                      data-callsign="${escapeHtml(s.callsign || '')}"
-                      onclick="pbsAddDrmStation(${sourceId}, this)">Add DRM</button>
             </div>`;
         }).join('');
       } catch (e) {
@@ -2382,54 +2417,65 @@
       }
     }
 
-    async function pbsAddDrmStation(sourceId, btn) {
-      // Read station id/name off the button's data-* attrs (not passed as inline JS
-      // string args) so station names with quotes/apostrophes can't break the onclick.
+    async function pbsAddManualFeed(sourceId, btn) {
+      // Read everything off the button's data-* attrs (not passed as inline JS string
+      // args) so station/feed names with quotes/apostrophes can't break the onclick.
       const stationId = btn.dataset.stationId;
+      const profile = btn.dataset.profile;
       const name = btn.dataset.name || '';
       const callsign = btn.dataset.callsign || '';
       btn.disabled = true;
       btn.textContent = 'Adding…';
       try {
-        const r = await fetch(`/api/sources/${sourceId}/pbs-add-drm-station`, {
+        const r = await fetch(`/api/sources/${sourceId}/pbs-add-manual-feed`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({station_id: stationId, name, callsign}),
+          body: JSON.stringify({station_id: stationId, profile, name, callsign}),
         });
         const d = await r.json();
         if (!r.ok) {
           btn.disabled = false;
-          btn.textContent = 'Add DRM';
-          alert(d.error || 'Failed to add station');
+          btn.textContent = 'Add';
+          alert(d.error || 'Failed to add feed');
           return;
         }
         btn.textContent = 'Added';
-        pbsRenderAddedChips(sourceId, d.stations || []);
+        pbsRenderAddedChips(sourceId, d.feeds || []);
         const statusEl = document.getElementById(`pbs-drm-added-status-${sourceId}`);
         if (statusEl) {
-          statusEl.textContent = d.scrape_queued
-            ? 'Scrape started — channels will appear shortly.'
-            : 'Added.';
-          setTimeout(() => { if (statusEl.textContent.startsWith('Scrape') || statusEl.textContent === 'Added.') statusEl.textContent = ''; }, 6000);
+          if (d.warning) {
+            statusEl.textContent = `Note: ${d.warning}`;
+            statusEl.style.color = 'var(--danger)';
+            setTimeout(() => { statusEl.textContent = ''; statusEl.style.color = ''; }, 15000);
+          } else {
+            statusEl.textContent = d.scrape_queued
+              ? 'Scrape started — the feed will appear shortly.'
+              : 'Added.';
+            setTimeout(() => { if (statusEl.textContent.startsWith('Scrape') || statusEl.textContent === 'Added.') statusEl.textContent = ''; }, 6000);
+          }
         }
       } catch (e) {
         btn.disabled = false;
-        btn.textContent = 'Add DRM';
+        btn.textContent = 'Add';
       }
     }
 
-    async function pbsRemoveDrmStation(sourceId, stationId) {
+    async function pbsRemoveManualFeed(sourceId, stationId, profile) {
       const statusEl = document.getElementById(`pbs-drm-added-status-${sourceId}`);
       try {
-        const r = await fetch(`/api/sources/${sourceId}/pbs-remove-drm-station`, {
+        const r = await fetch(`/api/sources/${sourceId}/pbs-remove-manual-feed`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({station_id: stationId}),
+          body: JSON.stringify({station_id: stationId, profile}),
         });
         const d = await r.json();
         if (!r.ok) {
           if (statusEl) statusEl.textContent = d.error || 'Remove failed';
           return;
         }
-        pbsRenderAddedChips(sourceId, d.stations || []);
+        pbsRenderAddedChips(sourceId, d.feeds || []);
+        // Re-enable the matching "Add" button in the search results, if still shown.
+        const btn = document.querySelector(
+          `#pbs-drm-results-${sourceId} button[data-station-id="${stationId}"][data-profile="${profile}"]`);
+        if (btn) { btn.disabled = false; btn.textContent = 'Add'; }
         if (statusEl) {
           const n = d.deleted_channels || 0;
           statusEl.textContent = n
@@ -2714,7 +2760,7 @@
         if (container) {
           container.innerHTML = renderConfigFields(sourceId, sourceName, schema, values, cfg);
           container.classList.remove('hidden');
-          if (sourceName === 'pbs') pbsLoadDrmStations(sourceId);
+          if (sourceName === 'pbs') pbsLoadManualFeeds(sourceId);
         }
       } catch (e) {
         if (badge) { badge.textContent = 'Config error'; badge.className = 'config-badge anon'; badge.style.display = ''; }

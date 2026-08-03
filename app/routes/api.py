@@ -1808,11 +1808,11 @@ def save_source_config(source_id):
     })
 
 
-# ── PBS DRM Station Finder ──────────────────────────────────────────────────
-# Lets the admin search PBS stations by ZIP and opt specific ones into the DRM
-# (Widevine) main/PBS KIDS feed, which plays only via the PrismCast bridge.
-# Clear (non-DRM) feeds stay auto-discovered via the existing zip_codes /
-# curated-station config — this only manages the `drm_station_ids` list.
+# ── PBS Station & Feed Finder ───────────────────────────────────────────────
+# Lets the admin search PBS stations by ZIP and hand-pick individual feeds —
+# clear or DRM (Widevine) — that aren't already covered by the curated station
+# list / ZIP codes config. DRM feeds play only via the PrismCast bridge.
+# Manages the `manual_feeds` config list ("station_id:profile" pairs).
 
 @api_bp.route('/sources/<int:source_id>/pbs-station-search')
 def pbs_station_search(source_id):
@@ -1832,88 +1832,131 @@ def pbs_station_search(source_id):
     return jsonify({'stations': stations})
 
 
-def _pbs_drm_station_list(cfg: dict) -> list[dict]:
-    """Combines drm_station_ids (the scraper's source of truth) with the
-    display-only drm_station_names lookup, falling back to the raw id for
-    entries added before name-tracking existed."""
-    ids = [s.strip() for s in re.split(r'[\s,]+', str(cfg.get('drm_station_ids') or '')) if s.strip()]
-    names = cfg.get('drm_station_names') or {}
-    return [{'station_id': sid, 'name': names.get(sid) or sid} for sid in ids]
-
-
-@api_bp.route('/sources/<int:source_id>/pbs-drm-stations')
-def pbs_drm_stations(source_id):
-    source = Source.query.get_or_404(source_id)
-    if source.name != 'pbs':
-        return jsonify({'error': 'not a pbs source'}), 400
-    return jsonify({'stations': _pbs_drm_station_list(source.config or {})})
-
-
-@api_bp.route('/sources/<int:source_id>/pbs-add-drm-station', methods=['POST'])
-def pbs_add_drm_station(source_id):
-    source = Source.query.get_or_404(source_id)
-    if source.name != 'pbs':
-        return jsonify({'error': 'not a pbs source'}), 400
+def _pbs_manual_feed_list(cfg: dict) -> list[dict]:
+    """Combines manual_feeds (the scraper's source of truth, "station_id:profile"
+    pairs) with the display-only manual_feed_station_names lookup, falling back to
+    the raw station id for entries added before name-tracking existed."""
     from ..scrapers.pbs import PBSScraper
+    station_names = cfg.get('manual_feed_station_names') or {}
+    entries = []
+    for raw in re.split(r'[\s,]+', str(cfg.get('manual_feeds') or '')):
+        raw = raw.strip()
+        if not raw:
+            continue
+        station_id, _, profile = raw.partition(':')
+        if not station_id or not profile:
+            continue
+        entries.append({
+            'station_id': station_id,
+            'profile': profile,
+            'label': PBSScraper._profile_label_for(profile),
+            'station_name': station_names.get(station_id) or station_id,
+        })
+    return entries
+
+
+@api_bp.route('/sources/<int:source_id>/pbs-manual-feeds')
+def pbs_manual_feeds(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'pbs':
+        return jsonify({'error': 'not a pbs source'}), 400
+    return jsonify({'feeds': _pbs_manual_feed_list(source.config or {})})
+
+
+@api_bp.route('/sources/<int:source_id>/pbs-add-manual-feed', methods=['POST'])
+def pbs_add_manual_feed(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'pbs':
+        return jsonify({'error': 'not a pbs source'}), 400
+    from ..scrapers.pbs import PBSScraper, _NATIONAL_SECONDARY_PROFILES
     data = request.get_json() or {}
     station_id = (data.get('station_id') or '').strip()
-    if not PBSScraper._valid_station_id(station_id):
-        return jsonify({'error': 'invalid station_id'}), 400
+    profile = (data.get('profile') or '').strip()
+    if not PBSScraper._valid_station_id(station_id) or not profile:
+        return jsonify({'error': 'invalid station_id or profile'}), 400
     display_name = (data.get('name') or '').strip()
     callsign = (data.get('callsign') or '').strip()
     if callsign and callsign not in display_name:
         display_name = f'{display_name} ({callsign})' if display_name else callsign
+
+    # Create/FNX/NHK/World are the same national feed regardless of which station's
+    # page you found them on — the scraper dedupes them across stations (first one
+    # scraped wins), so adding a second station's copy is a silent no-op rather than
+    # a distinct channel. Warn rather than let the "Added" response imply otherwise.
+    warning = None
+    if profile in _NATIONAL_SECONDARY_PROFILES:
+        existing_national = Channel.query.filter(
+            Channel.source_id == source.id,
+            Channel.source_channel_id.like(f'%:{profile}:%'),
+            db.not_(Channel.source_channel_id.like(f'{station_id}:%')),
+        ).first()
+        if existing_national:
+            warning = (
+                f"{PBSScraper._profile_label_for(profile)} is a shared national feed — "
+                f"{existing_national.name} already provides it, so this station's copy "
+                f"won't create an additional channel."
+            )
+
     cfg = dict(source.config or {})
-    existing = [s.strip() for s in re.split(r'[\s,]+', str(cfg.get('drm_station_ids') or '')) if s.strip()]
-    names = dict(cfg.get('drm_station_names') or {})
-    is_new = station_id not in existing
+    existing = [s.strip() for s in re.split(r'[\s,]+', str(cfg.get('manual_feeds') or '')) if s.strip()]
+    key = f'{station_id}:{profile}'
+    is_new = key not in existing
     if is_new:
-        existing.append(station_id)
+        existing.append(key)
+    names = dict(cfg.get('manual_feed_station_names') or {})
     if display_name:
         names[station_id] = display_name
-    cfg['drm_station_ids'] = ', '.join(existing)
-    cfg['drm_station_names'] = names
+    cfg['manual_feeds'] = ', '.join(existing)
+    cfg['manual_feed_station_names'] = names
     source.config = cfg
     db.session.commit()
-    # The station's DRM channels won't exist until the scraper actually runs — without
-    # this, they wouldn't appear until the next scheduled scrape (scrape_interval=360min).
-    # Same immediate-refresh rationale as Sling's config save (credentials/lineup changes
-    # that add channels trigger a forced full scrape rather than making the user find
-    # "Run now" themselves).
+    # The feed won't exist until the scraper actually runs — without this, it
+    # wouldn't appear until the next scheduled scrape (scrape_interval=360min).
+    # Same immediate-refresh rationale as Sling's config save (credentials/lineup
+    # changes that add channels trigger a forced full scrape rather than making
+    # the user find "Run now" themselves).
     scrape_queued = False
     if is_new and source.is_enabled:
         trigger_scrape('pbs', force_full=True)
         scrape_queued = True
-    return jsonify({'status': 'ok', 'stations': _pbs_drm_station_list(cfg), 'scrape_queued': scrape_queued})
+    return jsonify({
+        'status': 'ok', 'feeds': _pbs_manual_feed_list(cfg),
+        'scrape_queued': scrape_queued, 'warning': warning,
+    })
 
 
-@api_bp.route('/sources/<int:source_id>/pbs-remove-drm-station', methods=['POST'])
-def pbs_remove_drm_station(source_id):
+@api_bp.route('/sources/<int:source_id>/pbs-remove-manual-feed', methods=['POST'])
+def pbs_remove_manual_feed(source_id):
     source = Source.query.get_or_404(source_id)
     if source.name != 'pbs':
         return jsonify({'error': 'not a pbs source'}), 400
     data = request.get_json() or {}
     station_id = (data.get('station_id') or '').strip()
+    profile = (data.get('profile') or '').strip()
+    key = f'{station_id}:{profile}'
+
     cfg = dict(source.config or {})
-    existing = [s.strip() for s in re.split(r'[\s,]+', str(cfg.get('drm_station_ids') or '')) if s.strip()]
-    existing = [s for s in existing if s != station_id]
-    names = dict(cfg.get('drm_station_names') or {})
-    names.pop(station_id, None)
-    cfg['drm_station_ids'] = ', '.join(existing)
-    cfg['drm_station_names'] = names
+    existing = [s.strip() for s in re.split(r'[\s,]+', str(cfg.get('manual_feeds') or '')) if s.strip()]
+    existing = [s for s in existing if s != key]
+    cfg['manual_feeds'] = ', '.join(existing)
+    if not any(s.startswith(f'{station_id}:') for s in existing):
+        names = dict(cfg.get('manual_feed_station_names') or {})
+        names.pop(station_id, None)
+        cfg['manual_feed_station_names'] = names
     source.config = cfg
 
-    # The scraper won't emit this station's DRM channels on the next scrape once
-    # it's out of drm_station_ids, but that scrape may be hours away (scrape_interval)
-    # and the reconcile miss-threshold would otherwise leave the stale rows active
-    # in the meantime. Delete them immediately, same as removing/disabling a source
-    # deletes its channels — cascades to programs (ORM) and feed_channel_numbers
-    # (DB ondelete=CASCADE).
+    # The scraper won't emit this feed on the next scrape once it's out of
+    # manual_feeds, but that scrape may be hours away (scrape_interval) and the
+    # reconcile miss-threshold would otherwise leave the stale row active in the
+    # meantime. Delete it immediately, same as removing/disabling a source deletes
+    # its channels — cascades to programs (ORM) and feed_channel_numbers (DB
+    # ondelete=CASCADE). Filters on the exact profile so sibling feeds from the
+    # same station (e.g. keeping Main while removing PBS KIDS) are untouched.
     deleted = 0
-    if station_id:
+    if station_id and profile:
         orphans = Channel.query.filter(
             Channel.source_id == source.id,
-            Channel.source_channel_id.like(f'{station_id}:%'),
+            Channel.source_channel_id.like(f'{station_id}:{profile}:%'),
         ).all()
         for ch in orphans:
             db.session.delete(ch)
@@ -1922,7 +1965,7 @@ def pbs_remove_drm_station(source_id):
     db.session.commit()
     if deleted:
         _invalidate_and_refresh_xml()
-    return jsonify({'status': 'ok', 'stations': _pbs_drm_station_list(cfg), 'deleted_channels': deleted})
+    return jsonify({'status': 'ok', 'feeds': _pbs_manual_feed_list(cfg), 'deleted_channels': deleted})
 
 
 # ── Sling interactive browser login ─────────────────────────────────────────

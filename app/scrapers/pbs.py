@@ -68,11 +68,12 @@ class PBSScraper(BaseScraper):
     """
     PBS station/feed scraper.
 
-    Auto-imports official PBS feeds that expose a clear non_drm_url. Local main
-    PBS and PBS KIDS feeds are DRM (Widevine) in most markets — those are opt-in
-    only, via the `drm_station_ids` config field (populated by the admin DRM
-    Station Finder), and play through the PrismCast DRM bridge like Roku/Philo/
-    Sling rather than the standard feed.
+    Auto-imports official PBS feeds that expose a clear non_drm_url from the
+    curated station list / ZIP codes. Individual feeds (clear or DRM) can also
+    be hand-picked via the `manual_feeds` config field (populated by the admin
+    Station & Feed Finder) — this is the only way to get a DRM-protected
+    main/PBS KIDS feed, which plays through the PrismCast DRM bridge like
+    Roku/Philo/Sling rather than the standard feed.
     """
 
     source_name = "pbs"
@@ -109,14 +110,16 @@ class PBSScraper(BaseScraper):
             help_text="Optional comma-separated ZIP codes to search for more clear PBS feeds.",
         ),
         ConfigField(
-            key="drm_station_ids",
-            label="DRM Station IDs",
+            key="manual_feeds",
+            label="Manually Added Feeds",
             field_type="text",
-            placeholder="92d89794-5ff0-4fe6-a443-cc888104e021",
+            placeholder="92d89794-5ff0-4fe6-a443-cc888104e021:ga-main",
             help_text=(
-                "Comma-separated PBS station IDs whose main/PBS KIDS DRM feed should be "
-                "added and played through the PrismCast DRM bridge. Use the DRM Station "
-                "Finder below to search by ZIP and add stations."
+                "Comma-separated station_id:profile pairs for individually hand-picked "
+                "feeds — clear or DRM — not already covered by the curated list or ZIP "
+                "codes above. DRM feeds (main/PBS KIDS) play through the PrismCast "
+                "bridge. Use the Station & Feed Finder below to search by ZIP and add "
+                "specific feeds."
             ),
         ),
     ]
@@ -147,62 +150,42 @@ class PBSScraper(BaseScraper):
 
             attrs = station.get("attributes") or {}
             call_sign = (attrs.get("call_sign") or "").strip()
-            station_name = attrs.get("full_common_name") or attrs.get("short_common_name") or call_sign or station_id
             logo_url = self._logo(attrs)
 
             for feed in attrs.get("livestream_feeds") or []:
-                profile = (feed.get("profile") or "").strip()
-                non_drm_url = (feed.get("non_drm_url") or "").strip()
-                if not non_drm_url:
-                    continue
-                feed_cid = (feed.get("associated_tvss_feed") or feed.get("cid") or profile).strip()
-                if not feed_cid:
-                    continue
-                source_channel_id = f"{station_id}:{profile}:{feed_cid}"
-                dedupe_key = self._dedupe_key(station_id, profile, feed_cid)
-                if dedupe_key in seen:
-                    continue
-                seen.add(dedupe_key)
+                # Bulk auto-discovery stays clear-only (allow_drm=False) — DRM feeds
+                # are opt-in only, via manual_feeds below.
+                ch = self._build_channel(station_id, call_sign, logo_url, feed, seen, allow_drm=False)
+                if ch:
+                    channels.append(ch)
 
-                label = _PROFILE_LABELS.get(profile) or self._profile_label(profile)
-                name = f"PBS {label}"
-                if call_sign and profile.startswith("ga-local-subchannel"):
-                    name = f"PBS {call_sign} {label}"
-                elif call_sign:
-                    name = f"{name} ({call_sign})"
-
-                channels.append(ChannelData(
-                    source_channel_id=source_channel_id,
-                    name=name,
-                    stream_url=f"{PBS_SCHEME}{station_id}/{profile}/{feed_cid}",
-                    logo_url=logo_url,
-                    category="Education",
-                    country="US",
-                    language="en",
-                    stream_type="hls",
-                    guide_key=f"pbs:{feed_cid}",
-                    tags=["PBS", label],
-                ))
-
-        drm_count = self._add_drm_channels(channels, seen)
+        manual_count = self._add_manual_feeds(channels, seen)
 
         logger.info(
-            "[%s] %d clear + %d DRM channels from %d stations",
-            self.source_name, len(channels) - drm_count, drm_count, len(station_ids),
+            "[%s] %d clear + %d manually-added channel(s) from %d stations",
+            self.source_name, len(channels) - manual_count, manual_count, len(station_ids),
         )
         return channels
 
-    def _add_drm_channels(self, channels: list[ChannelData], seen: set[str]) -> int:
-        """Adds opt-in DRM (Widevine) feeds for stations listed in drm_station_ids.
-        Unlike the clear-feed loop, these are never auto-discovered — a user must
-        explicitly add a station via the admin DRM Station Finder."""
-        station_ids = [s for s in self._csv_values(self.config.get("drm_station_ids")) if self._valid_station_id(s)]
+    def _add_manual_feeds(self, channels: list[ChannelData], seen: set[str]) -> int:
+        """Adds individually hand-picked feeds (clear or DRM) via manual_feeds config
+        ("station_id:profile" pairs from the admin Station & Feed Finder). Unlike the
+        bulk clear-feed loop, these are never auto-discovered and may be either type —
+        a user might want just one station's Main DRM feed plus one clear secondary
+        feed, without pulling in every feed that station has."""
+        by_station: dict[str, set[str]] = {}
+        for entry in self._csv_values(self.config.get("manual_feeds")):
+            station_id, _, profile = entry.partition(":")
+            station_id, profile = station_id.strip(), profile.strip()
+            if self._valid_station_id(station_id) and profile:
+                by_station.setdefault(station_id, set()).add(profile)
+
         added = 0
-        for station_id in station_ids:
+        for station_id, profiles in by_station.items():
             try:
                 station = self._station(station_id)
             except Exception as exc:
-                logger.warning("[%s] DRM station lookup failed for %s: %s", self.source_name, station_id, exc)
+                logger.warning("[%s] manual feed station lookup failed for %s: %s", self.source_name, station_id, exc)
                 continue
 
             attrs = station.get("attributes") or {}
@@ -210,38 +193,59 @@ class PBSScraper(BaseScraper):
             logo_url = self._logo(attrs)
 
             for feed in attrs.get("livestream_feeds") or []:
-                profile = (feed.get("profile") or "").strip()
-                drm_dash_url = (feed.get("drm_dash_url") or "").strip()
-                if not drm_dash_url:
+                if (feed.get("profile") or "").strip() not in profiles:
                     continue
-                feed_cid = (feed.get("associated_tvss_feed") or feed.get("cid") or profile).strip()
-                if not feed_cid:
-                    continue
-                source_channel_id = f"{station_id}:{profile}:{feed_cid}"
-                dedupe_key = self._dedupe_key(station_id, profile, feed_cid)
-                if dedupe_key in seen:
-                    continue
-                seen.add(dedupe_key)
-
-                label = _PROFILE_LABELS.get(profile) or self._profile_label(profile)
-                name = f"PBS {label}"
-                if call_sign:
-                    name = f"{name} ({call_sign})"
-
-                channels.append(ChannelData(
-                    source_channel_id=source_channel_id,
-                    name=name,
-                    stream_url=f"{PBS_SCHEME}{station_id}/{profile}/{feed_cid}",
-                    logo_url=logo_url,
-                    category="Education",
-                    country="US",
-                    language="en",
-                    stream_type="dash",
-                    guide_key=f"pbs:{feed_cid}",
-                    tags=["PBS", label, "DRM"],
-                ))
-                added += 1
+                ch = self._build_channel(station_id, call_sign, logo_url, feed, seen, allow_drm=True)
+                if ch:
+                    channels.append(ch)
+                    added += 1
         return added
+
+    def _build_channel(
+        self, station_id: str, call_sign: str, logo_url: str | None,
+        feed: dict, seen: set[str], *, allow_drm: bool,
+    ) -> ChannelData | None:
+        """Builds a ChannelData for a single feed dict, preferring its clear
+        (non_drm_url) stream; falls back to the DRM (drm_dash_url) one only when
+        allow_drm=True. Returns None if the feed has no usable URL under those
+        rules, or if it's a duplicate per `seen` (mutated in place, shared across
+        both the bulk clear-feed loop and _add_manual_feeds)."""
+        profile = (feed.get("profile") or "").strip()
+        if not profile:
+            return None
+        feed_cid = (feed.get("associated_tvss_feed") or feed.get("cid") or profile).strip()
+        if not feed_cid:
+            return None
+        non_drm_url = (feed.get("non_drm_url") or "").strip()
+        drm_dash_url = (feed.get("drm_dash_url") or "").strip() if allow_drm else ""
+        if not non_drm_url and not drm_dash_url:
+            return None
+        is_drm = not non_drm_url
+
+        dedupe_key = self._dedupe_key(station_id, profile, feed_cid)
+        if dedupe_key in seen:
+            return None
+        seen.add(dedupe_key)
+
+        label = self._profile_label_for(profile)
+        name = f"PBS {label}"
+        if call_sign and profile.startswith("ga-local-subchannel"):
+            name = f"PBS {call_sign} {label}"
+        elif call_sign:
+            name = f"{name} ({call_sign})"
+
+        return ChannelData(
+            source_channel_id=f"{station_id}:{profile}:{feed_cid}",
+            name=name,
+            stream_url=f"{PBS_SCHEME}{station_id}/{profile}/{feed_cid}",
+            logo_url=logo_url,
+            category="Education",
+            country="US",
+            language="en",
+            stream_type="dash" if is_drm else "hls",
+            guide_key=f"pbs:{feed_cid}",
+            tags=["PBS", label] + (["DRM"] if is_drm else []),
+        )
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         by_station: dict[str, set[str]] = {}
@@ -357,9 +361,9 @@ class PBSScraper(BaseScraper):
         return None
 
     def search_stations(self, zip_code: str) -> list[dict]:
-        """ZIP → candidate PBS stations with clear/DRM feed availability, for the
-        admin DRM Station Finder. Fetches full station detail per candidate (the
-        ZIP endpoint alone doesn't expose feed URLs)."""
+        """ZIP → candidate PBS stations with per-feed (clear/DRM) availability, for
+        the admin Station & Feed Finder. Fetches full station detail per candidate
+        (the ZIP endpoint alone doesn't expose feed URLs)."""
         zip_code = re.sub(r"\D", "", zip_code or "")[:5]
         if len(zip_code) != 5:
             raise ValueError("valid 5-digit ZIP code required")
@@ -375,10 +379,10 @@ class PBSScraper(BaseScraper):
             name = (raw.get("common_name") or raw.get("common_name_full")
                     or raw.get("common_name_short") or callsign or station_id)
             try:
-                summary = self.station_drm_summary(station_id)
+                summary = self.station_feed_summary(station_id)
             except Exception as exc:
                 logger.warning("[%s] station detail lookup failed for %s: %s", self.source_name, station_id, exc)
-                summary = {"has_clear": None, "has_drm": None, "drm_profiles": [], "already_curated": station_id in _DEFAULT_STATIONS}
+                summary = {"feeds": [], "already_curated": station_id in _DEFAULT_STATIONS}
             results.append({
                 "station_id": station_id,
                 "callsign": callsign,
@@ -388,19 +392,31 @@ class PBSScraper(BaseScraper):
             })
         return results
 
-    def station_drm_summary(self, station_id: str) -> dict:
+    def station_feed_summary(self, station_id: str) -> dict:
+        """A station's individually-addable feeds — each with its profile (the
+        opaque id used in manual_feeds), a friendly label, and whether it's clear
+        or DRM. Skips any feed with no playable URL at all."""
         station = self._station(station_id)
         attrs = station.get("attributes") or {}
-        feeds = attrs.get("livestream_feeds") or []
-        drm_profiles = [f.get("profile") for f in feeds if (f.get("drm_dash_url") or "").strip()]
-        clear_profiles = [f.get("profile") for f in feeds if (f.get("non_drm_url") or "").strip()]
-        return {
-            "has_clear": bool(clear_profiles),
-            "has_drm": bool(drm_profiles),
-            "drm_profiles": drm_profiles,
-            "clear_profiles": clear_profiles,
-            "already_curated": station_id in _DEFAULT_STATIONS,
-        }
+        feeds_out = []
+        for feed in attrs.get("livestream_feeds") or []:
+            profile = (feed.get("profile") or "").strip()
+            if not profile:
+                continue
+            has_clear = bool((feed.get("non_drm_url") or "").strip())
+            has_drm = bool((feed.get("drm_dash_url") or "").strip())
+            if not has_clear and not has_drm:
+                continue
+            feeds_out.append({
+                "profile": profile,
+                "label": self._profile_label_for(profile),
+                "type": "clear" if has_clear else "drm",
+            })
+        return {"feeds": feeds_out, "already_curated": station_id in _DEFAULT_STATIONS}
+
+    @staticmethod
+    def _profile_label_for(profile: str) -> str:
+        return _PROFILE_LABELS.get(profile) or PBSScraper._profile_label(profile)
 
     def _configured_station_ids(self) -> list[str]:
         seen: set[str] = set()
