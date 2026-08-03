@@ -11,6 +11,7 @@ pytz==2026.2
 beautifulsoup4==4.15.0
 apscheduler==3.10.4
 playwright
+camoufox
 Pillow==12.2.0
 curl_cffi
 yt-dlp

@@ -8,6 +8,8 @@ _SUPPRESS_PATTERNS = (
     'scrape-status',           # admin UI polls every 2s during scrape
     'audit-status',            # admin UI polls every 2s during audit
     'directv-auth-status',     # admin UI polls every 2s during DirecTV login
+    'sling-browser-login/state', # admin UI polls every ~400ms during Sling sign-in
+    'sling-browser-login/input', # mousemove/click/key forwarding — up to ~16/s while dragging
     '/api/custom-channels/detect/', # stream detection status polling
     '/images/proxy',           # per-image cache hits — too noisy
     '/logos/',                 # cached logo file hits — too noisy

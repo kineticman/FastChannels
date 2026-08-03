@@ -1693,7 +1693,8 @@ def get_source_config(source_id):
         ('required' if scraper_cls and getattr(scraper_cls, 'config_required', False) else 'optional')
     )
     return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
-                    'config_status': config_status})
+                    'config_status': config_status,
+                    'oauth_token_time': saved.get('oauth_token_time')})
 
 
 @api_bp.route('/sources/<int:source_id>/config', methods=['POST'])
@@ -1739,6 +1740,7 @@ def save_source_config(source_id):
                     'identity_cookie_expires_at', 'auth_method',
                     'session_id', 'login_time',
                     'cookie_header', 'browser_storage_state',
+                    'browser_auth_token',
                     'oauth_token', 'oauth_token_secret', 'oauth_token_time',
                     'subscriber_id', 'account_status', 'legacy_subs', 'user_subs',
                     'user_dma', 'user_offset', 'user_zip')
@@ -1804,6 +1806,82 @@ def save_source_config(source_id):
         'config_complete': config_complete,
         'config_status': config_status,
     })
+
+
+# ── Sling interactive browser login ─────────────────────────────────────────
+# A real, human-operated sign-in: a Camoufox (anti-detect Firefox) tab loads
+# sling.com in the 'fast' RQ worker, auto-fills the saved credentials, and the
+# admin UI streams periodic screenshots of it and forwards the admin's own
+# clicks/keystrokes back — so a real person solves the real hCaptcha
+# challenge. The job captures the OAuth token from the auth-callback URL (or
+# localStorage as a fallback) once sign-in succeeds and saves it. State is
+# relayed through Redis (not held in this process) since screenshot/input
+# requests can land on a different gunicorn worker than started the job.
+
+@api_bp.route('/sources/<int:source_id>/sling-browser-login/start', methods=['POST'])
+def sling_browser_login_start(source_id):
+    from .tasks import trigger_sling_browser_login
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'sling':
+        return jsonify({'error': 'not a sling source'}), 400
+    started = trigger_sling_browser_login()
+    return jsonify({'status': 'started' if started else 'already_running'})
+
+
+@api_bp.route('/sources/<int:source_id>/sling-browser-login/state')
+def sling_browser_login_state(source_id):
+    import base64
+    import redis as _redis
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'sling':
+        return jsonify({'error': 'not a sling source'}), 400
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw_status = r.get('sling:browser-login:status')
+    result = json.loads(raw_status) if raw_status else {'state': 'idle'}
+    shot = r.get('sling:browser-login:screenshot')
+    if shot:
+        result['screenshot'] = base64.b64encode(shot).decode('ascii')
+    return jsonify(result)
+
+
+@api_bp.route('/sources/<int:source_id>/sling-browser-login/input', methods=['POST'])
+def sling_browser_login_input(source_id):
+    import redis as _redis
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'sling':
+        return jsonify({'error': 'not a sling source'}), 400
+    data = request.get_json() or {}
+    kind = data.get('type')
+    if kind in ('click', 'mousemove', 'mousedown', 'mouseup'):
+        try:
+            payload = {'type': kind, 'x': float(data['x']), 'y': float(data['y'])}
+        except (KeyError, TypeError, ValueError):
+            return jsonify({'error': f'{kind} requires numeric x/y'}), 400
+    elif kind == 'key':
+        key = str(data.get('key') or '')
+        if not key:
+            return jsonify({'error': 'key requires a non-empty key'}), 400
+        payload = {'type': 'key', 'key': key}
+    else:
+        return jsonify({'error': 'invalid input type'}), 400
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    r.rpush('sling:browser-login:input', json.dumps(payload))
+    r.expire('sling:browser-login:input', 60)
+    return jsonify({'status': 'ok'})
+
+
+@api_bp.route('/sources/<int:source_id>/sling-browser-login/stop', methods=['POST'])
+def sling_browser_login_stop(source_id):
+    from .tasks import stop_sling_browser_login
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'sling':
+        return jsonify({'error': 'not a sling source'}), 400
+    stop_sling_browser_login()
+    return jsonify({'status': 'stopping'})
 
 
 # ── Amazon auto-login ──────────────────────────────────────────────────────────

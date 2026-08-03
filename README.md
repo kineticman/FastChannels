@@ -255,7 +255,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Plex | None | Session cookie auth |
 | Xumo Play | None | Public API |
 | Samsung TV Plus | None | Channel data and EPG via [Matt Huisman's public mirror](https://github.com/matthuisman/samsung-tvplus-for-channels). Region configurable (default: `us`). |
-| Sling Freestream | Optional email/password | **Default off.** Freestream plus optional paid subscription channels; streams are DRM-only for generic IPTV clients |
+| Sling Freestream | Optional (paid) | **Default off.** Two modes: Freestream-only (free, anonymous) or paid Sling account for premium channels; streams are DRM-only for generic IPTV clients |
 | DistroTV | None | **Default off.** Upstream lineup has shrunk considerably. Android TV UA required, URL macro substitution |
 | LG Channels | None | Country configurable (default: `US`) |
 | Local Now | None | **Default off.** Public API |
@@ -278,7 +278,8 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 
 - **Roku**: Cloudflare rate-limiting can cause occasional 403 errors during scraping or playback. If this happens, wait a few minutes before retrying — repeated attempts make it worse. Some channels also expose sparse future guide data; short EPG windows are expected on those channels.
 - **Amazon Prime Free**: without a valid cookie header, channel discovery pagination is limited.
-- **Sling Freestream**: streams are DRM-only for generic IPTV clients. Optional Sling credentials can add channels from a paid subscription when enabled in source settings.
+- **Sling Freestream**: streams are DRM-only for generic IPTV clients. Toggle on "Paid Sling account (premium channels)" to add premium channels. Off = Freestream-only (free, anonymous; no sign-in, no browser).
+  - Sling gates its login form with invisible hCaptcha Enterprise, which reliably challenges automated browsers regardless of fingerprint spoofing — so signing in still needs a human to solve the captcha when one is shown. Save your email/password in the source config, then click **Sign in to Sling**: FastChannels launches a real anti-detect browser (Camoufox) against the actual sign-in page, auto-fills your saved credentials, and streams it live in an admin-UI modal — you only need to solve the captcha if one appears. Once signed in, it captures the session automatically and caches the OAuth credentials; no manual token pasting needed.
 - **Samsung TV Plus**: EPG covers approximately the current day. All credit for the data to [Matt Huisman](https://github.com/matthuisman/samsung-tvplus-for-channels).
 
 ## Advanced

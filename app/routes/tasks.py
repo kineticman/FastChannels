@@ -389,6 +389,33 @@ def trigger_channel_auto_disable(channel_id: int, reason: str):
         threading.Thread(target=run_channel_auto_disable, args=(channel_id, reason), daemon=True).start()
 
 
+def trigger_sling_browser_login():
+    """Returns True if a job was enqueued, False if one is already running."""
+    try:
+        q = get_fast_queue()
+        job_id = 'sling-browser-login'
+        if _job_already_active(q, job_id):
+            logger.info('Sling browser login already running')
+            return False
+        q.enqueue('app.worker.run_sling_browser_login', job_timeout=1830, job_id=job_id)
+        logger.info('Enqueued Sling browser login')
+        return True
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for Sling browser login')
+        import threading
+        from app.worker import run_sling_browser_login
+        threading.Thread(target=run_sling_browser_login, daemon=True).start()
+        return True
+
+
+def stop_sling_browser_login():
+    try:
+        r = redis.from_url(current_app.config['REDIS_URL'])
+        r.setex('sling:browser-login:stop', 30, '1')
+    except Exception as e:
+        logger.warning(f'Failed to signal Sling browser login stop: {e}')
+
+
 def trigger_tvtv_cache_refresh():
     try:
         q = get_maintenance_queue()

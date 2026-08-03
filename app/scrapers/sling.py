@@ -65,13 +65,16 @@ class SlingScraper(BaseScraper):
     all_channels_require_drm_bridge = True
     license_url = 'https://p-drmwv.movetv.com/widevine/proxy'
     config_schema = [
-        ConfigField('username', 'Email', placeholder='you@example.com',
-                    help_text='Optional. Freestream does not require sign-in; enter this only to include paid Sling subscription channels.'),
-        ConfigField('password', 'Password', field_type='password', secret=True,
-                    help_text='Optional. Required only with a paid Sling account when subscription channels are enabled.'),
-        ConfigField('include_subscription_channels', 'Include paid subscription channels',
+        ConfigField('include_subscription_channels', 'Paid Sling account (premium channels)',
                     field_type='toggle', default='false',
-                    help_text='Off keeps Sling Freestream-only. Turn on only when email/password are saved for an active paid Sling account.'),
+                    help_text=(
+                        'Off = Freestream only (free, anonymous; no sign-in needed). '
+                        'On = also include paid subscription channels; requires a paid Sling account.'
+                    )),
+        ConfigField('username', 'Email', placeholder='you@example.com',
+                    help_text='Used by the "Sign in to Sling" button to auto-fill the sign-in form.'),
+        ConfigField('password', 'Password', field_type='password', secret=True,
+                    help_text='Used by the "Sign in to Sling" button to auto-fill the sign-in form.'),
     ]
     kodi_props = {
         'inputstream': 'inputstream.adaptive',
@@ -320,7 +323,6 @@ class SlingScraper(BaseScraper):
     def _ensure_subscription_auth(self) -> None:
         username = (self.config.get('username') or '').strip()
         password = (self.config.get('password') or '').strip()
-        browser_token = self._browser_auth_token()
 
         token = (self.config.get('oauth_token') or '').strip()
         token_secret = (self.config.get('oauth_token_secret') or '').strip()
@@ -338,31 +340,33 @@ class SlingScraper(BaseScraper):
                 raise RuntimeError(f'Sling account is {account_status}; paid subscription channels require an active account')
 
         if not username or not password:
-            if not browser_token:
-                logger.warning('[sling] include_subscription_channels is enabled but no cached OAuth, browser token, or username/password are saved')
-                return
-
-        if browser_token:
-            try:
-                self._exchange_browser_auth_token(browser_token)
-                return
-            except Exception as exc:  # noqa: BLE001
-                logger.info('[sling] browser auth token exchange failed; trying legacy login: %s', exc)
-
-        if not username or not password:
-            logger.warning('[sling] legacy Sling login requires username/password')
+            logger.warning('[sling] paid mode is enabled but no cached OAuth token or username/password are saved')
             return
 
+        # Best-effort: Sling's edge has consistently rejected this direct password
+        # login in testing (HTTP 403 regardless of client). The "Sign in to Sling"
+        # button in the admin UI (a real browser a human solves the captcha in) is
+        # the supported path — this is kept as a fallback in case that ever changes.
         device_id = self._ensure_device_id()
         payload = f"email={quote(username)}&password={quote(password)}&device_guid={quote(device_id)}"
-        resp = self.session.put(
-            f'{self.UMS}/v3/xauth/access_token.json',
-            headers=self._subscription_headers(content_type='application/x-www-form-urlencoded'),
-            data=payload,
-            auth=self._oauth(),
-            timeout=30,
-        )
-        resp.raise_for_status()
+        try:
+            resp = self.session.put(
+                f'{self.UMS}/v3/xauth/access_token.json',
+                headers=self._subscription_headers(content_type='application/x-www-form-urlencoded'),
+                data=payload,
+                auth=self._oauth(),
+                timeout=30,
+            )
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            if getattr(exc.response, 'status_code', None) == 403:
+                raise RuntimeError(
+                    'Sling has blocked the legacy password login (HTTP 403 at'
+                    ' ums.p.sling.com/v3/xauth/access_token.json) — this is expected, Sling\'s'
+                    ' edge rejects scripted logins outright. Use the "Sign in to Sling" button'
+                    ' in this source\'s admin config to sign in with a real browser instead.'
+                ) from exc
+            raise
         data = resp.json()
         token = (data.get('oauth_token') or '').strip()
         token_secret = (data.get('oauth_token_secret') or '').strip()
@@ -378,16 +382,6 @@ class SlingScraper(BaseScraper):
             (self.config.get('oauth_token') or '').strip(),
             (self.config.get('oauth_token_secret') or '').strip(),
         )
-
-    def _browser_auth_token(self) -> str:
-        token = (self.config.get('browser_auth_token') or '').strip()
-        if not token:
-            return ''
-        if 'AUTHORIZATION:Token=' in token:
-            token = token.split('AUTHORIZATION:Token=', 1)[1].split(';', 1)[0].strip()
-        if token.lower().startswith('bearer '):
-            token = token.split(None, 1)[1].strip()
-        return token
 
     def _watch_headers(self, *, content_type: str | None = 'application/json; charset=UTF-8') -> dict[str, str]:
         headers = dict(self.session.headers)
@@ -418,7 +412,20 @@ class SlingScraper(BaseScraper):
             auth=self._oauth(),
             timeout=30,
         )
-        oauth_resp.raise_for_status()
+        if not oauth_resp.ok:
+            detail = ''
+            try:
+                detail = str((oauth_resp.json() or {}).get('error') or '')
+            except Exception:  # noqa: BLE001
+                pass
+            if oauth_resp.status_code == 403 and 'jwt' in detail.lower():
+                raise RuntimeError(
+                    'Sling rejected the browser auth token as invalid. Paste the full sign-in '
+                    'URL (the one containing transient_token=...) or a jwt from a signed-in '
+                    'watch.sling.com session (persist:root -> user -> userData -> jwt), not an '
+                    'anonymous Freestream session.'
+                ) from None
+            oauth_resp.raise_for_status()
         access_token = (oauth_resp.json().get('access_token') or {})
         token = (access_token.get('token') or '').strip()
         token_secret = (access_token.get('secret') or '').strip()

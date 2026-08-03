@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     sqlite3 \
     libxml2-utils \
+    xvfb \
+    libgtk-3-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 24 (NodeSource). yt-dlp's EJS engine needs a JS runtime to solve
@@ -49,6 +51,9 @@ ARG YTDLP_REFRESH=unset
 RUN pip install --force-reinstall "yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
 
 RUN playwright install-deps chromium && playwright install chromium
+# Camoufox (anti-detect Firefox) for the interactive Sling sign-in - fetches its
+# own prebuilt browser binary; libgtk-3-0/xvfb above cover its runtime deps.
+RUN python -m camoufox fetch
 
 COPY . .
 
