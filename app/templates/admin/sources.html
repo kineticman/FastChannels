@@ -129,6 +129,8 @@
     .source-category-header {
       --cat-color: var(--text-muted);
       --cat-border: var(--border);
+      cursor: pointer;
+      user-select: none;
     }
     .source-category-header td {
       padding: 0.55rem 1rem 0.45rem 1.1rem;
@@ -143,6 +145,7 @@
       border-left: 3px solid var(--cat-border);
     }
     .source-category-header:first-child td { border-top: none; }
+    .source-category-header:hover td { color: var(--text-soft); }
     .source-category-header.cat-fast,
     .source-category-header.cat-premium,
     .source-category-header.cat-tve,
@@ -151,6 +154,37 @@
       --cat-color: var(--accent-soft);
       --cat-border: var(--accent-strong);
     }
+    .cat-chevron { display: inline-block; width: 0.9em; margin-right: 0.3em; }
+    .cat-count { font-weight: 600; opacity: 0.75; margin-left: 0.3em; letter-spacing: normal; }
+
+    /* Quick access bar: filter + category jump chips */
+    .sources-quicknav {
+      display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+      margin-bottom: 1rem; padding: 0.75rem 1.25rem; background: var(--surface);
+      border: 1px solid var(--border); border-radius: 10px;
+    }
+    .source-filter-input {
+      flex: 1 1 14rem; min-width: 12rem; padding: 0.5rem 0.75rem;
+      background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; font-size: 0.85rem;
+    }
+    .source-filter-input:focus { outline: none; border-color: var(--accent-strong); }
+    .quicknav-chips { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .quicknav-chip {
+      background: var(--bg); color: var(--text-soft); border: 1px solid var(--border);
+      border-radius: 999px; padding: 0.3rem 0.7rem; font-size: 0.76rem; font-weight: 600;
+      cursor: pointer; white-space: nowrap;
+    }
+    .quicknav-chip:hover { color: var(--text); border-color: var(--text-muted); }
+    .quicknav-chip-count { opacity: 0.65; font-weight: 500; }
+
+    /* Row visibility: collapsed category or filtered-out by search */
+    tr.dash-row.cat-collapsed, tr.config-panel-row.cat-collapsed,
+    tr.dash-row.filter-hidden, tr.config-panel-row.filter-hidden,
+    tr.source-category-header.filter-hidden {
+      display: none !important;
+    }
+    .no-results-row td { padding: 1.5rem 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem; }
 
     /* Source cell content */
     .source-name-wrap { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.2rem; }
@@ -696,6 +730,22 @@
     </div>
     {% endif %}
 
+    {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'tve': 'TVE Sources', 'specialty': 'Specialty Sources', 'drm': 'DRM Sources'} %}
+    {% set _CAT_ORDER = ['fast', 'premium', 'tve', 'specialty', 'drm'] %}
+    <div class="sources-quicknav">
+      <input type="text" id="source-filter-input" class="source-filter-input"
+             placeholder="Filter sources by name…" oninput="filterSources(this.value)">
+      <div class="quicknav-chips">
+        {% for cat in _CAT_ORDER %}
+          {% if category_counts.get(cat) %}
+          <button type="button" class="quicknav-chip" onclick="jumpToCategory('{{ cat }}')">
+            {{ _CAT_LABELS.get(cat, cat | title) }} <span class="quicknav-chip-count">{{ category_counts[cat] }}</span>
+          </button>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+
     <div class="dashboard-panel">
       <table class="dashboard-table">
         <thead>
@@ -707,7 +757,6 @@
           </tr>
         </thead>
         <tbody>
-          {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'tve': 'TVE Sources', 'specialty': 'Specialty Sources', 'drm': 'DRM Sources'} %}
           {% set ns = namespace(last_cat=None) %}
           {% for source in sources %}
           {% set cfg_status = source_config_status.get(source.id, 'none') %}
@@ -715,12 +764,16 @@
           {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'specialty' %}
           {% if this_cat != ns.last_cat %}
             {% set ns.last_cat = this_cat %}
-            <tr class="source-category-header cat-{{ this_cat }}">
-              <td colspan="4">{{ _CAT_LABELS.get(this_cat, this_cat | title) }}</td>
+            <tr class="source-category-header cat-{{ this_cat }}" id="cat-header-{{ this_cat }}"
+                data-cat="{{ this_cat }}" onclick="toggleCategoryCollapse('{{ this_cat }}')">
+              <td colspan="4">
+                <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}<span class="cat-count">{{ category_counts.get(this_cat, 0) }}</span>
+              </td>
             </tr>
           {% endif %}
 
           <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}"
+              data-cat="{{ this_cat }}" data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
               {% if is_custom %}data-custom="true"{% endif %}>
             <td class="col-source">
               <div class="source-name-wrap">
@@ -849,7 +902,7 @@
 
           <!-- Custom source: collapsible channel list panel -->
           {% if is_custom %}
-          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" style="display:none">
+          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}" style="display:none">
             <td colspan="4" class="config-panel-cell">
               <div class="config-panel" id="card-{{ source.id }}">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
@@ -869,7 +922,7 @@
 
           <!-- Collapsible config panel row (not shown for custom source) -->
           {% if not is_custom %}
-          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" style="display:none">
+          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}" style="display:none">
             <td colspan="4" class="config-panel-cell">
               <div class="config-panel" id="card-{{ source.id }}"
                    data-source-name="{{ source.name }}"
@@ -877,6 +930,10 @@
 
                 {% if source.name in ('amazon_prime_free', 'sling') %}
                 <div class="drm-note">⚠ All streams from this source are DRM-protected and will not play on most clients.</div>
+                {% endif %}
+
+                {% if this_cat == 'tve' %}
+                <div class="config-note">This source authenticates with your TV-provider account under <a href="/admin/settings#settings-card-tve">Settings → Credentials</a> — nothing to configure here.</div>
                 {% endif %}
 
                 {% set interval_meta = source_interval_meta.get(source.name, {'recommended': source.scrape_interval, 'min': 30, 'max': 10080}) %}
@@ -968,6 +1025,9 @@
           </tr>
           {% endif %}
           {% endfor %}
+          <tr class="no-results-row" id="no-sources-match-row" style="display:none">
+            <td colspan="4">No sources match "<span id="no-sources-match-query"></span>".</td>
+          </tr>
         </tbody>
       </table>
     </div>
@@ -1207,6 +1267,13 @@
 
     function scrollToConfig(sourceId) {
       const row = document.getElementById(`config-panel-row-${sourceId}`);
+      const cat = row?.dataset.cat;
+      if (cat && row.classList.contains('cat-collapsed')) {
+        const collapsedCats = _loadCollapsedCats();
+        collapsedCats.delete(cat);
+        _saveCollapsedCats(collapsedCats);
+        _applyCategoryCollapse(cat, false);
+      }
       if (!row || row.style.display !== 'none') {
         row?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
@@ -3589,8 +3656,81 @@
         .replace(/'/g,'&#39;');
     }
 
+    // ── Quick access: search filter + collapsible categories ───────────────
+    const SOURCES_COLLAPSE_KEY = 'fc_sources_collapsed_cats';
+
+    function _loadCollapsedCats() {
+      try { return new Set(JSON.parse(localStorage.getItem(SOURCES_COLLAPSE_KEY)) || []); }
+      catch { return new Set(); }
+    }
+    function _saveCollapsedCats(set) {
+      localStorage.setItem(SOURCES_COLLAPSE_KEY, JSON.stringify([...set]));
+    }
+    function _applyCategoryCollapse(cat, collapsed) {
+      document.querySelectorAll(`tr.dash-row[data-cat="${cat}"], tr.config-panel-row[data-cat="${cat}"]`)
+        .forEach(row => row.classList.toggle('cat-collapsed', collapsed));
+      const chevron = document.getElementById(`cat-chevron-${cat}`);
+      if (chevron) chevron.textContent = collapsed ? '▸' : '▾';
+    }
+
+    function toggleCategoryCollapse(cat) {
+      const collapsedCats = _loadCollapsedCats();
+      const willCollapse = !collapsedCats.has(cat);
+      if (willCollapse) collapsedCats.add(cat); else collapsedCats.delete(cat);
+      _saveCollapsedCats(collapsedCats);
+      _applyCategoryCollapse(cat, willCollapse);
+    }
+
+    function jumpToCategory(cat) {
+      const input = document.getElementById('source-filter-input');
+      if (input && input.value) { input.value = ''; filterSources(''); }
+      const collapsedCats = _loadCollapsedCats();
+      if (collapsedCats.has(cat)) {
+        collapsedCats.delete(cat);
+        _saveCollapsedCats(collapsedCats);
+        _applyCategoryCollapse(cat, false);
+      }
+      const header = document.getElementById(`cat-header-${cat}`);
+      if (header) header.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function filterSources(rawQuery) {
+      const query = rawQuery.trim().toLowerCase();
+      const collapsedCats = _loadCollapsedCats();
+      const catHasMatch = {};
+
+      document.querySelectorAll('tr.dash-row').forEach(row => {
+        const cat = row.dataset.cat;
+        const matches = !query || (row.dataset.search || '').includes(query);
+        if (matches) catHasMatch[cat] = true;
+        row.classList.toggle('filter-hidden', !matches);
+        const sourceId = row.id.replace('dash-row-', '');
+        const panelRow = document.getElementById(`config-panel-row-${sourceId}`);
+        if (panelRow) panelRow.classList.toggle('filter-hidden', !matches);
+      });
+
+      let anyMatch = false;
+      document.querySelectorAll('tr.source-category-header').forEach(header => {
+        const cat = header.dataset.cat;
+        const hasMatch = !!catHasMatch[cat];
+        anyMatch = anyMatch || hasMatch;
+        header.classList.toggle('filter-hidden', !hasMatch);
+        // While filtering, force-expand categories with matches; restore the
+        // user's persisted collapse choice once the query is cleared.
+        _applyCategoryCollapse(cat, query ? false : collapsedCats.has(cat));
+      });
+
+      const noResultsRow = document.getElementById('no-sources-match-row');
+      if (noResultsRow) {
+        noResultsRow.style.display = (query && !anyMatch) ? '' : 'none';
+        document.getElementById('no-sources-match-query').textContent = rawQuery;
+      }
+    }
+
     // ── Page load ─────────────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
+      _loadCollapsedCats().forEach(cat => _applyCategoryCollapse(cat, true));
+
       // Load persisted audit results
       document.querySelectorAll('[id^="audit-last-result-"]').forEach(el => {
         const sourceId = el.id.replace('audit-last-result-', '');

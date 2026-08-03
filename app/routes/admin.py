@@ -551,10 +551,16 @@ def sources():
     ]
 
     _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'drm': 4}
-    sources_list.sort(key=lambda s: (
-        _CAT_ORDER.get(source_categories.get(s.name, 'fast') if s.name != 'custom' else 'specialty', 99),
-        s.display_name,
-    ))
+
+    def _cat_for(s):
+        return source_categories.get(s.name, 'fast') if s.name != 'custom' else 'specialty'
+
+    sources_list.sort(key=lambda s: (_CAT_ORDER.get(_cat_for(s), 99), s.display_name))
+
+    category_counts = {}
+    for s in sources_list:
+        cat = _cat_for(s)
+        category_counts[cat] = category_counts.get(cat, 0) + 1
 
     from ..scrapers.category_utils import CANONICAL_CATEGORIES
     _app_settings = AppSettings.get()
@@ -572,7 +578,8 @@ def sources():
                            channel_fetch_meta=channel_fetch_meta,
                            epg_meta=_epg_freshness_meta(sources_list, _now),
                            needs_config=needs_config,
-                           canonical_categories=CANONICAL_CATEGORIES)
+                           canonical_categories=CANONICAL_CATEGORIES,
+                           category_counts=category_counts)
 
 
 @admin_bp.route('/channels')

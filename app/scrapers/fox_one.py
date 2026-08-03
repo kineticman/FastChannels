@@ -8,15 +8,19 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
-from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS
+from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS, _cox_saml_login, _jwt_exp
 
 _SCHEME = 'fox-one://'
 _API_BASE = 'https://api.fox.com/dtc'
 _LIVE_PAGE = '/product/page/v1/landing/653897111489?page=1&size=25'
 _API_KEY = 'sVMTVogE67faKqBLOlZBVoYuay2FquzW'
 _PLAYBACK_API = 'https://prod.api.digitalvideoplatform.com/foxdtc/v3.0/watchlive'
-_HYDRA_TOKEN_API = 'https://id.fox.com/identityhydra/oauth2/token'
+_ID_BASE = 'https://id.fox.com'
+_HYDRA_TOKEN_API = f'{_ID_BASE}/identityhydra/oauth2/token'
 _HYDRA_CLIENT_ID = '21af937a-0ed4-4321-b87f-51d3b93976d4'
+# Platform-level API Gateway key fronting id.fox.com's mvpd/regcode endpoints; distinct
+# from _API_KEY, which identifies the FOX One client app itself (sent alongside it).
+_PLATFORM_API_KEY = '049f8b7844b84b9cb5f830f28f08648c'
 _ENT_BASE = 'https://ent.fox.com'
 _TOKEN_REFRESH_SKEW = 300
 _LOCATION_TTL = 6 * 60 * 60
@@ -147,32 +151,10 @@ class FoxOneScraper(BaseScraper):
     stream_audit_enabled = True
     config_schema = [
         ConfigField(
-            'refresh_token',
-            'FOX One refresh token',
-            field_type='password',
-            secret=True,
-            help_text='Required for FOX One-only channels. Capture the identityhydra refresh_token from an authenticated fox.com browser session.',
-        ),
-        ConfigField(
             'home_zip_code',
             'Home ZIP code',
             placeholder='10001',
             help_text='Optional. Used when FOX asks to initialize home location; otherwise the current locator ZIP is used.',
-        ),
-        ConfigField(
-            'access_token',
-            'FOX One access token (advanced)',
-            field_type='password',
-            secret=True,
-            placeholder='Bearer ...',
-            help_text='Optional fallback for debugging. The scraper refreshes this automatically when refresh_token is present.',
-        ),
-        ConfigField(
-            'platform_location',
-            'FOX One platform location (advanced)',
-            field_type='password',
-            secret=True,
-            help_text='Optional fallback for debugging. The scraper derives and refreshes this automatically from FOX location services.',
         ),
     ]
 
@@ -347,16 +329,112 @@ class FoxOneScraper(BaseScraper):
                 return expires
         return 0
 
+    def _cox_account(self):
+        from ..models import TVEAccount
+
+        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        if account and account.is_enabled and account.has_credentials():
+            return account
+        return None
+
+    def _authenticate_via_cox_mvpd(self, username: str, password: str) -> tuple[str, float]:
+        """Link this device to FOX One's entitlement system through a Cox TV-provider
+        sign-in, mirroring the same Adobe Pass/Cox SAML dance fox_tve.py already
+        automates — just via FOX One's own adobeauthn/regcode endpoints instead of
+        fox_tve's legacy api3.fox.com ones. Tokens from the two are not interchangeable
+        (different OAuth client_id), so FOX One needs its own pass at this."""
+        device_id = self._ensure_device_id()
+        xid = str(uuid.uuid4())
+        session = self.new_session(headers={'User-Agent': _UA})
+
+        start_url = (
+            f'{_ID_BASE}/adobeauthn/v1/auth?client_id={_HYDRA_CLIENT_ID}&device_id={device_id}'
+            '&redirect_uri=https%3A%2F%2Fwww.fox.com%2Fcallback'
+            f'&options=apikey%3D{_API_KEY}%26xid%3D{xid}'
+        )
+        r = session.get(start_url, allow_redirects=True, timeout=20)
+        r.raise_for_status()
+        match = re.search(r'request_id=([^&]+)', r.url)
+        if not match:
+            raise RuntimeError('FOX One adobeauthn did not return a request_id')
+        request_id = match.group(1)
+
+        headers = {
+            'Accept': 'application/json',
+            'x-api-key': _PLATFORM_API_KEY,
+            'x-ori-client-api-key': _API_KEY,
+            'Referer': 'https://auth.fox.com/',
+            'Origin': 'https://auth.fox.com',
+        }
+        params = {'mvpd_id': 'Cox', 'device_id': device_id, 'first_screen': 'true', 'redirect_url': r.url}
+        r2 = session.get(f'{_ID_BASE}/regcode/v1/adoberegcode', params=params, headers=headers, timeout=20)
+        r2.raise_for_status()
+        auth_url = r2.json().get('authenticateURL')
+        if not auth_url:
+            raise RuntimeError('FOX One adoberegcode did not return authenticateURL')
+
+        r3 = session.get(auth_url, allow_redirects=False, timeout=20)
+        cox_saml_url = r3.headers.get('location') or ''
+        if 'login.cox.com' not in cox_saml_url:
+            raise RuntimeError(f'Unexpected FOX One Adobe redirect host: {urlparse(cox_saml_url).netloc}')
+
+        _cox_saml_login(session, cox_saml_url, username, password)
+
+        rc = session.post(
+            f'{_ID_BASE}/adobeauthn/v1/requests/complete',
+            json={'request_id': request_id, 'mvpd_id': 'Cox', 'status': 'authenticated'},
+            headers={**headers, 'Content-Type': 'application/json'},
+            timeout=20,
+        )
+        rc.raise_for_status()
+        if not rc.json().get('redirect_to'):
+            raise RuntimeError('FOX One MVPD completion did not report success')
+
+        check = session.get(
+            f'{_ID_BASE}/adobeauthn/v3/checkauthn',
+            params={'device_id': device_id, 'requestor': 'foxone', 'client_id': _HYDRA_CLIENT_ID},
+            headers=headers,
+            timeout=20,
+        )
+        check.raise_for_status()
+        access_token = self._clean_token(check.json().get('accessToken'))
+        if not access_token:
+            raise RuntimeError('FOX One checkauthn did not return accessToken')
+
+        expires_at = _jwt_exp(access_token) or (time.time() + 3600)
+        return access_token, expires_at
+
     def _ensure_access_token(self) -> str:
+        from .. import db
+
         access_token = self._clean_token(self.config.get('access_token'))
         if access_token and self._token_expires_at() > time.time() + _TOKEN_REFRESH_SKEW:
             return access_token
+
+        account = self._cox_account()
+        if account:
+            try:
+                access_token, expires_at = self._authenticate_via_cox_mvpd(account.username, account.password)
+                account.last_auth_status = 'ok'
+                account.last_auth_message = 'FOX One access token obtained through Cox MVPD.'
+                account.last_auth_at = datetime.now(timezone.utc)
+                db.session.commit()
+                self._update_config('access_token', access_token)
+                self._update_config('access_expires_at', expires_at)
+                return access_token
+            except Exception as exc:
+                account.last_auth_status = 'error'
+                account.last_auth_message = f'FOX One Cox MVPD auth failed: {exc}'[:500]
+                account.last_auth_at = datetime.now(timezone.utc)
+                db.session.commit()
+                if not access_token:
+                    raise
 
         refresh_token = self._clean_token(self.config.get('refresh_token') or self.config.get('fox_one_refresh_token'))
         if not refresh_token:
             if access_token:
                 return access_token
-            raise ValueError('FOX One native playback requires refresh_token config.')
+            raise ValueError('FOX One native playback requires either a linked Cox TV-provider account or a configured refresh_token.')
 
         r = self.session.post(
             _HYDRA_TOKEN_API,
@@ -425,7 +503,8 @@ class FoxOneScraper(BaseScraper):
             cached_at = float(self.config.get('platform_location_cached_at') or 0)
         except (TypeError, ValueError):
             cached_at = 0
-        if configured and (not self.config.get('refresh_token') or cached_at > time.time() - _LOCATION_TTL):
+        has_dynamic_auth = bool(self.config.get('refresh_token')) or bool(self._cox_account())
+        if configured and (not has_dynamic_auth or cached_at > time.time() - _LOCATION_TTL):
             return configured
 
         locator = self.session.get(
@@ -485,6 +564,7 @@ class FoxOneScraper(BaseScraper):
         return bool(
             self.config.get('refresh_token')
             or (self.config.get('access_token') and self.config.get('platform_location'))
+            or self._cox_account()
         )
 
     def _resolve_dtc(self, container_id: str | None) -> str:
