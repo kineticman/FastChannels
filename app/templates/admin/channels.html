@@ -798,6 +798,10 @@
     .inactive-warn:hover { text-decoration: underline; }
     .scrape-pinned-badge { font-size: 0.7rem; color: var(--accent, #5b9bd5); margin-top: 0.25rem; white-space: nowrap; cursor: pointer; }
     .scrape-pinned-badge:hover { text-decoration: underline; }
+    /* Steady-state pin indicator — channel is pin-protected but not currently
+       missing any scrapes, so it's shown muted rather than as an active warning. */
+    .scrape-pinned-quiet { font-size: 0.7rem; color: var(--text-secondary, #888); opacity: 0.7; margin-top: 0.25rem; white-space: nowrap; cursor: pointer; }
+    .scrape-pinned-quiet:hover { text-decoration: underline; opacity: 1; }
     /* Missed-scrapes modal option buttons */
     .miss-opts { display: flex; flex-direction: column; gap: 0.5rem; margin: 1rem 0 1.25rem; }
     .miss-opt-btn { display: flex; flex-direction: column; align-items: flex-start; padding: 0.65rem 0.85rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; text-align: left; width: 100%; transition: border-color 0.15s, background 0.15s; }
@@ -1888,6 +1892,8 @@
               <div class="inactive-warn" id="inactive-warn-{{ ch.id }}" data-name="{{ ch.name|e }}" onclick="openMissedModal({{ ch.id }}, this.dataset.name, {{ ch.missed_scrapes or 0 }}, {{ 'true' if ch.scrape_pinned else 'false' }})" title="Missing from recent scrapes — click for options.">scraper lost</div>
               {% elif ch.scrape_pinned and ch.missed_scrapes %}
               <div class="scrape-pinned-badge" id="inactive-warn-{{ ch.id }}" data-name="{{ ch.name|e }}" onclick="openMissedModal({{ ch.id }}, this.dataset.name, {{ ch.missed_scrapes or 0 }}, true)" title="Pinned — staying active despite {{ ch.missed_scrapes }} missed scrape{{ 's' if ch.missed_scrapes != 1 else '' }}. Click for options.">pinned ⚑</div>
+              {% elif ch.scrape_pinned %}
+              <div class="scrape-pinned-quiet" id="inactive-warn-{{ ch.id }}" data-name="{{ ch.name|e }}" onclick="openMissedModal({{ ch.id }}, this.dataset.name, 0, true)" title="Pinned — stays active even if a scrape misses it. Click for options.">pinned ⚑</div>
               {% endif %}
             </td>
           </tr>
@@ -3396,9 +3402,11 @@
       document.getElementById('missed-modal-title').textContent = isPinned
         ? `${channelName} — pinned`
         : `${channelName} — scraper lost`;
-      document.getElementById('missed-modal-sub').textContent = missedCount === 1
-        ? `Missing from 1 scrape.`
-        : `Missing from ${missedCount} consecutive scrapes.`;
+      document.getElementById('missed-modal-sub').textContent = missedCount === 0
+        ? `Pinned — stays active even if a scrape misses it.`
+        : (missedCount === 1
+          ? `Missing from 1 scrape.`
+          : `Missing from ${missedCount} consecutive scrapes.`);
 
       const opts = document.getElementById('missed-modal-opts');
       opts.innerHTML = '';
@@ -3465,6 +3473,8 @@
         const ch = await r.json();
         if (ch.scrape_pinned && ch.missed_scrapes) {
           if (warn) { warn.className = 'scrape-pinned-badge'; warn.textContent = 'pinned ⚑'; warn.title = `Pinned — staying active despite ${ch.missed_scrapes} missed scrape${ch.missed_scrapes !== 1 ? 's' : ''}. Click for options.`; warn.onclick = () => openMissedModal(id, ch.name, ch.missed_scrapes, true); }
+        } else if (ch.scrape_pinned) {
+          if (warn) { warn.className = 'scrape-pinned-quiet'; warn.textContent = 'pinned ⚑'; warn.title = 'Pinned — stays active even if a scrape misses it. Click for options.'; warn.onclick = () => openMissedModal(id, ch.name, 0, true); }
         } else {
           if (warn) warn.remove();
         }
