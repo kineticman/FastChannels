@@ -3298,6 +3298,96 @@ def sling_dash_proxy(channel_id: str):
     )
 
 
+@play_bp.route('/play/pbs/<channel_id>/dash.mpd')
+def pbs_dash_proxy(channel_id: str):
+    """DASH (Widevine) manifest proxy for an opt-in PBS DRM station feed — the
+    browser/EME path the watch page and PrismCast bridge use.
+
+    PBS's drm_dash_url is a redirect stub (urs-anonymous-detect.pbs.org/redirect/...)
+    and CORS on the resolved CDN manifest is unconfirmed, so this proxies the
+    manifest body server-side with permissive CORS, same as Philo/Sling.
+    """
+    from urllib.parse import unquote as _unquote, urljoin as _urljoin
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'pbs', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper_cls = registry.get('pbs')
+    if not scraper_cls:
+        return _unavailable_response()
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        dash_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[pbs-dash] resolve failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    finally:
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            except Exception:
+                pass
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+            except Exception:
+                pass
+
+    if not dash_url or not dash_url.startswith('http'):
+        logger.warning('[pbs-dash] no DASH URL for %s', raw_id[:40])
+        return _unavailable_response()
+
+    try:
+        r = _requests.get(dash_url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+            'Origin': 'https://player.pbs.org',
+            'Referer': 'https://player.pbs.org/',
+        })
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[pbs-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+
+    # Same issue as Philo: the dynamic MPD includes a <Location> pointing back to
+    # PBS's own redirect stub. Shaka honors that on refresh and bypasses this
+    # proxy, so strip it — refreshes then keep hitting this same-origin route.
+    manifest_text = re.sub(r'<Location>.*?</Location>\s*', '', r.text, flags=re.DOTALL)
+
+    # Some PBS feed packagers (confirmed on the ga-main/PBS-KIDS profiles) omit
+    # <BaseURL> and use bare relative SegmentTemplate paths, which the DASH spec
+    # resolves against the *manifest's own retrieval URL* — since we're serving
+    # this manifest from our own /play/pbs/... URL, Shaka would resolve segments
+    # against our origin instead of the real CDN, 404ing every segment. Inject an
+    # explicit BaseURL pointing at the real upstream directory (r.url, the final
+    # URL after redirects) so relative paths resolve correctly. Other profiles
+    # (e.g. kids-main via MediaTailor) already ship an absolute BaseURL — leave
+    # those alone.
+    if '<BaseURL>' not in manifest_text:
+        upstream_dir = _urljoin(str(r.url), '.')
+        manifest_text = re.sub(
+            r'(<MPD\b[^>]*>)',
+            lambda m: f'{m.group(1)}<BaseURL>{upstream_dir}</BaseURL>',
+            manifest_text, count=1,
+        )
+
+    return Response(
+        manifest_text,
+        mimetype='application/dash+xml',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 @play_bp.route('/play/<source_name>/license', methods=['POST'])
 @play_bp.route('/play/<source_name>/license/<channel_id>', methods=['POST'])
 def license_proxy(source_name: str, channel_id: str | None = None):
@@ -3446,6 +3536,26 @@ def license_proxy(source_name: str, channel_id: str | None = None):
             source_name, channel_id or '-', r.status_code, len(r.content or b''),
         )
     response_bytes = scraper_cls.process_license_response(r.content)
+    # Some license servers (e.g. PBS's proxy.drm.pbs.org) report failure with an HTTP
+    # 2xx and a JSON error envelope in the body instead of a real 4xx/5xx. Handing that
+    # straight to the CDM produces a confusing DRM.LICENSE_RESPONSE_REJECTED instead of
+    # an obvious network error, so report it as one here.
+    _effective_status = r.status_code
+    _is_error_body = getattr(scraper_cls, 'is_license_error_response', None)
+    if callable(_is_error_body) and r.status_code < 400 and _is_error_body(response_bytes):
+        _effective_status = 502
+        logger.warning(
+            '[license-proxy] %s channel=%s upstream returned HTTP %s but the body looks '
+            'like an error envelope — reporting 502: %s',
+            source_name, channel_id or '-', r.status_code, (response_bytes or b'')[:300],
+        )
+        _record_proxy_failure(
+            label=f'{source_name}-license',
+            request_id=getattr(g, 'request_id', '-'),
+            upstream_status=r.status_code,
+            bytes_sent=len(response_bytes or b''),
+            error='license response looks like an error envelope despite HTTP 2xx',
+        )
     # If Amazon returned a SERVICE_CERTIFICATE (Widevine type 5), cache it for
     # the /certificate endpoint so Shaka can pre-fetch it via serverCertificateUri.
     if response_bytes and response_bytes[:2] == b'\x08\x05':
@@ -3467,8 +3577,8 @@ def license_proxy(source_name: str, channel_id: str | None = None):
         logger.warning('[directv-license] license HTTP 403 channel=%s body=%s',
                        channel_id or '-', r.content[:500])
     if source_name == 'directv' and directv_sid:
-        return _directv_response(response_bytes, r.status_code, directv_sid)
-    return Response(response_bytes, status=r.status_code, content_type='application/octet-stream')
+        return _directv_response(response_bytes, _effective_status, directv_sid)
+    return Response(response_bytes, status=_effective_status, content_type='application/octet-stream')
 
 
 @play_bp.route('/play/<source_name>/certificate', methods=['GET'])

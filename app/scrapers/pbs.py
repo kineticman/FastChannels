@@ -68,8 +68,11 @@ class PBSScraper(BaseScraper):
     """
     PBS station/feed scraper.
 
-    Imports only official PBS feeds that expose a clear non_drm_url. Local main
-    PBS and PBS KIDS feeds were DRM-only in checked markets, so they are ignored.
+    Auto-imports official PBS feeds that expose a clear non_drm_url. Local main
+    PBS and PBS KIDS feeds are DRM (Widevine) in most markets — those are opt-in
+    only, via the `drm_station_ids` config field (populated by the admin DRM
+    Station Finder), and play through the PrismCast DRM bridge like Roku/Philo/
+    Sling rather than the standard feed.
     """
 
     source_name = "pbs"
@@ -79,6 +82,13 @@ class PBSScraper(BaseScraper):
     source_category = "specialty"
     config_required = False
     epg_quality = "basic"
+
+    # Marks this source DRM-capable for the generic PrismCast bridge machinery
+    # (worker._sync_intrinsic_drm_bridge, routes/play.py license_proxy). PBS's
+    # real per-feed license URL is deterministic from the feed's tvss_feed id
+    # (see get_license_url) — this class-level value is just the truthy marker
+    # / Kodi-prop base.
+    license_url = "https://proxy.drm.pbs.org/license/widevine/"
 
     config_schema = [
         ConfigField(
@@ -98,6 +108,17 @@ class PBSScraper(BaseScraper):
             placeholder="20001, 94105",
             help_text="Optional comma-separated ZIP codes to search for more clear PBS feeds.",
         ),
+        ConfigField(
+            key="drm_station_ids",
+            label="DRM Station IDs",
+            field_type="text",
+            placeholder="92d89794-5ff0-4fe6-a443-cc888104e021",
+            help_text=(
+                "Comma-separated PBS station IDs whose main/PBS KIDS DRM feed should be "
+                "added and played through the PrismCast DRM bridge. Use the DRM Station "
+                "Finder below to search by ZIP and add stations."
+            ),
+        ),
     ]
 
     def __init__(self, config: dict | None = None):
@@ -111,12 +132,11 @@ class PBSScraper(BaseScraper):
 
     def fetch_channels(self) -> list[ChannelData]:
         station_ids = self._configured_station_ids()
-        if not station_ids:
-            logger.info("[%s] no station ids discovered/configured", self.source_name)
-            return []
-
         channels: list[ChannelData] = []
         seen: set[str] = set()
+
+        if not station_ids:
+            logger.info("[%s] no clear-feed station ids discovered/configured", self.source_name)
 
         for station_id in station_ids:
             try:
@@ -164,8 +184,64 @@ class PBSScraper(BaseScraper):
                     tags=["PBS", label],
                 ))
 
-        logger.info("[%s] %d non-DRM channels from %d stations", self.source_name, len(channels), len(station_ids))
+        drm_count = self._add_drm_channels(channels, seen)
+
+        logger.info(
+            "[%s] %d clear + %d DRM channels from %d stations",
+            self.source_name, len(channels) - drm_count, drm_count, len(station_ids),
+        )
         return channels
+
+    def _add_drm_channels(self, channels: list[ChannelData], seen: set[str]) -> int:
+        """Adds opt-in DRM (Widevine) feeds for stations listed in drm_station_ids.
+        Unlike the clear-feed loop, these are never auto-discovered — a user must
+        explicitly add a station via the admin DRM Station Finder."""
+        station_ids = [s for s in self._csv_values(self.config.get("drm_station_ids")) if self._valid_station_id(s)]
+        added = 0
+        for station_id in station_ids:
+            try:
+                station = self._station(station_id)
+            except Exception as exc:
+                logger.warning("[%s] DRM station lookup failed for %s: %s", self.source_name, station_id, exc)
+                continue
+
+            attrs = station.get("attributes") or {}
+            call_sign = (attrs.get("call_sign") or "").strip()
+            logo_url = self._logo(attrs)
+
+            for feed in attrs.get("livestream_feeds") or []:
+                profile = (feed.get("profile") or "").strip()
+                drm_dash_url = (feed.get("drm_dash_url") or "").strip()
+                if not drm_dash_url:
+                    continue
+                feed_cid = (feed.get("associated_tvss_feed") or feed.get("cid") or profile).strip()
+                if not feed_cid:
+                    continue
+                source_channel_id = f"{station_id}:{profile}:{feed_cid}"
+                dedupe_key = self._dedupe_key(station_id, profile, feed_cid)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+
+                label = _PROFILE_LABELS.get(profile) or self._profile_label(profile)
+                name = f"PBS {label}"
+                if call_sign:
+                    name = f"{name} ({call_sign})"
+
+                channels.append(ChannelData(
+                    source_channel_id=source_channel_id,
+                    name=name,
+                    stream_url=f"{PBS_SCHEME}{station_id}/{profile}/{feed_cid}",
+                    logo_url=logo_url,
+                    category="Education",
+                    country="US",
+                    language="en",
+                    stream_type="dash",
+                    guide_key=f"pbs:{feed_cid}",
+                    tags=["PBS", label, "DRM"],
+                ))
+                added += 1
+        return added
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         by_station: dict[str, set[str]] = {}
@@ -214,11 +290,117 @@ class PBSScraper(BaseScraper):
                 non_drm_url = (feed.get("non_drm_url") or "").strip()
                 if non_drm_url:
                     return non_drm_url
-                raise StreamDeadError(f"PBS feed {profile} for {station_id} no longer exposes non-DRM HLS")
+                drm_dash_url = (feed.get("drm_dash_url") or "").strip()
+                if drm_dash_url:
+                    return drm_dash_url
+                raise StreamDeadError(f"PBS feed {profile} for {station_id} no longer exposes a playable URL")
         raise StreamDeadError(f"PBS feed {profile} not found for {station_id}")
 
     def audit_resolve(self, raw_url: str) -> str:
         return self.resolve(raw_url)
+
+    # ── DRM (Widevine) bridge support ───────────────────────────────────────
+    #
+    # PBS's Widevine license URL is deterministic from the feed's tvss_feed id
+    # (confirmed against the live station API: widevine_license is always
+    # f"https://proxy.drm.pbs.org/license/widevine/{associated_tvss_feed}-dash"),
+    # so no per-session capture/caching is needed — unlike Roku's resolve_dash().
+
+    @classmethod
+    def license_request_headers(cls, config: dict) -> dict:
+        return {
+            "Origin": "https://player.pbs.org",
+            "Referer": "https://player.pbs.org/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        }
+
+    @classmethod
+    def is_license_error_response(cls, response_bytes: bytes) -> bool:
+        # proxy.drm.pbs.org (a Node/Axios lambda) returns HTTP 200 even when its own
+        # upstream call failed — the failure only shows up as a JSON error envelope
+        # in the body (e.g. {"message":"Request failed with status code 403",
+        # "name":"AxiosError",...}), confirmed live for the PBS KIDS DRM feed. A real
+        # Widevine SignedMessage never starts with '{' (0x7B), so this is a safe check.
+        return bool(response_bytes) and response_bytes[:1] == b"{"
+
+    @classmethod
+    def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
+        """Looks up the feed's real widevine_license URL from the live station API.
+
+        NOTE: this is NOT reliably f"{tvss_feed}-dash" — confirmed live that PBS
+        KIDS (profile kids-main) uses a shared national identifier ("est") instead
+        of its own associated_tvss_feed, e.g. WETA's kids-main widevine_license is
+        ".../license/widevine/est-dash", not ".../license/widevine/
+        1f51028b-dea2-4a68-ae47-da1d1833b871-dash". Guessing the URL from the feed
+        id produced a plausible-looking but wrong URL that PBS's license server
+        403'd on every station's PBS KIDS feed. Always read the field PBS actually
+        publishes instead of assuming a pattern.
+        """
+        if not channel_id:
+            return cls.license_url
+        parts = channel_id.split(":", 2)
+        if len(parts) != 3:
+            return None
+        station_id, profile, feed_cid = parts
+        try:
+            station = cls(config=config)._station(station_id)
+        except Exception as exc:
+            logger.warning("[%s] license URL lookup failed for %s: %s", cls.source_name, channel_id, exc)
+            return None
+        attrs = station.get("attributes") or {}
+        for feed in attrs.get("livestream_feeds") or []:
+            candidate_profile = (feed.get("profile") or "").strip()
+            candidate_cid = (feed.get("associated_tvss_feed") or feed.get("cid") or candidate_profile).strip()
+            if candidate_profile == profile and candidate_cid == feed_cid:
+                return (feed.get("widevine_license") or "").strip() or None
+        return None
+
+    def search_stations(self, zip_code: str) -> list[dict]:
+        """ZIP → candidate PBS stations with clear/DRM feed availability, for the
+        admin DRM Station Finder. Fetches full station detail per candidate (the
+        ZIP endpoint alone doesn't expose feed URLs)."""
+        zip_code = re.sub(r"\D", "", zip_code or "")[:5]
+        if len(zip_code) != 5:
+            raise ValueError("valid 5-digit ZIP code required")
+        payload = self._get_json(LOCALIZE_ZIP_URL.format(zip=zip_code))
+        results: list[dict] = []
+        seen: set[str] = set()
+        for raw in payload.get("stations") or []:
+            station_id = raw.get("pbs_id") or raw.get("station_id") or raw.get("id")
+            if not self._valid_station_id(station_id) or station_id in seen:
+                continue
+            seen.add(station_id)
+            callsign = raw.get("callsign") or raw.get("flagship") or ""
+            name = (raw.get("common_name") or raw.get("common_name_full")
+                    or raw.get("common_name_short") or callsign or station_id)
+            try:
+                summary = self.station_drm_summary(station_id)
+            except Exception as exc:
+                logger.warning("[%s] station detail lookup failed for %s: %s", self.source_name, station_id, exc)
+                summary = {"has_clear": None, "has_drm": None, "drm_profiles": [], "already_curated": station_id in _DEFAULT_STATIONS}
+            results.append({
+                "station_id": station_id,
+                "callsign": callsign,
+                "name": name,
+                "city_state": ", ".join(x for x in (raw.get("city"), raw.get("state")) if x),
+                **summary,
+            })
+        return results
+
+    def station_drm_summary(self, station_id: str) -> dict:
+        station = self._station(station_id)
+        attrs = station.get("attributes") or {}
+        feeds = attrs.get("livestream_feeds") or []
+        drm_profiles = [f.get("profile") for f in feeds if (f.get("drm_dash_url") or "").strip()]
+        clear_profiles = [f.get("profile") for f in feeds if (f.get("non_drm_url") or "").strip()]
+        return {
+            "has_clear": bool(clear_profiles),
+            "has_drm": bool(drm_profiles),
+            "drm_profiles": drm_profiles,
+            "clear_profiles": clear_profiles,
+            "already_curated": station_id in _DEFAULT_STATIONS,
+        }
 
     def _configured_station_ids(self) -> list[str]:
         seen: set[str] = set()

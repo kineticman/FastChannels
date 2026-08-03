@@ -56,7 +56,7 @@ _SUCCESS_SUPPRESS_PATTERNS = (
     '/play/philo/license',     # Philo DRM license — noisy during startup/key rotation
 )
 _SUCCESS_SUPPRESS_RE = re.compile(r'(?:GET|HEAD) (?:/play/philo/[^/]+/dash\.mpd|/play/directv/browser-asset\?url=)')
-_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling)/([^/]+)/dash\.mpd')
+_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs)/([^/]+)/dash\.mpd')
 _LICENSE_RE = re.compile(r'POST /play/(cox)/license/([^/]+)')
 _DASH_COOLDOWN = 120  # seconds — log first request, suppress repeats within this window
 

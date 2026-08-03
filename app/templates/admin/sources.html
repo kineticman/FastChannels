@@ -430,6 +430,44 @@
       background: var(--bg); color: var(--text);
     }
 
+    /* PBS DRM station finder */
+    .pbs-drm-details {
+      margin-top: 0.9rem; border-top: 1px solid var(--border); padding-top: 0.75rem;
+    }
+    .pbs-drm-details summary {
+      cursor: pointer; color: var(--text-muted); font-size: 0.82rem; user-select: none;
+    }
+    .pbs-station-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+      padding: 0.55rem 0.7rem; border: 1px solid var(--border); border-radius: 7px;
+      background: var(--bg); margin-top: 0.5rem;
+    }
+    .pbs-station-info { min-width: 0; }
+    .pbs-station-name { font-size: 0.86rem; font-weight: 600; color: var(--text); }
+    .pbs-station-meta {
+      display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+      margin-top: 0.15rem; font-size: 0.74rem; color: var(--text-muted);
+    }
+    .pbs-badge {
+      display: inline-block; padding: 0.05rem 0.4rem; border-radius: 4px;
+      font-size: 0.68rem; font-weight: 600; letter-spacing: 0.02em;
+    }
+    .pbs-badge-clear { background: color-mix(in srgb, var(--success-soft) 20%, transparent); color: var(--success-soft); }
+    .pbs-badge-drm { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+    .pbs-badge-none { background: var(--surface-3); color: var(--text-muted); }
+    .pbs-badge-curated { background: var(--surface-3); color: var(--text-muted); }
+    .pbs-drm-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }
+    .pbs-drm-chip {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      padding: 0.2rem 0.5rem; border-radius: 5px; font-size: 0.76rem;
+      background: var(--surface-2); border: 1px solid var(--border); color: var(--text-soft);
+    }
+    .pbs-drm-chip-remove {
+      border: none; background: none; color: var(--text-muted); cursor: pointer;
+      font-size: 0.9rem; line-height: 1; padding: 0;
+    }
+    .pbs-drm-chip-remove:hover { color: var(--danger); }
+
     /* Custom channels */
     .custom-channel-card {
       display: flex;
@@ -2210,6 +2248,200 @@
         </div>`;
     }
 
+    function pbsRenderAddedChips(sourceId, stations) {
+      const el = document.getElementById(`pbs-drm-added-${sourceId}`);
+      if (el) el.innerHTML = pbsDrmChipsHtml(sourceId, stations || []);
+    }
+
+    async function pbsLoadDrmStations(sourceId) {
+      // drm_station_names isn't part of the generic config schema (it's a display-only
+      // lookup the finder maintains), so the initial config fetch only has bare ids —
+      // upgrade to real names once this resolves.
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/pbs-drm-stations`);
+        if (!r.ok) return;
+        const d = await r.json();
+        pbsRenderAddedChips(sourceId, d.stations || []);
+      } catch (e) {}
+    }
+
+    function renderPbsConfig(sourceId, schema, values) {
+      const includeField = schema.find(f => f.key === 'include_preconfigured') || {
+        key: 'include_preconfigured', label: 'Curated Station Set', default: true,
+        help_text: 'Use the built-in station list for clear PBS secondary feeds such as World, Create, NHK, FNX, and local subchannels.',
+      };
+      const zipField = schema.find(f => f.key === 'zip_codes') || {
+        key: 'zip_codes', label: 'Additional ZIP Codes', default: '',
+        help_text: 'Optional comma-separated ZIP codes to search for more clear PBS feeds.',
+      };
+      const includeChecked = ['1', 'true', 'yes', 'on'].includes(
+        String(values.include_preconfigured ?? includeField.default ?? true).trim().toLowerCase());
+      const drmIds = String(values.drm_station_ids || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+      const drmPlaceholder = drmIds.map(id => ({station_id: id, name: id}));
+
+      return `
+        <div class="config-title">PBS Settings</div>
+        <div class="config-note">The scraper automatically imports clear (non-DRM) HLS feeds from the curated station list and any ZIP codes below. DRM-protected main/PBS KIDS feeds are opt-in only (added below) and play through the PrismCast DRM bridge.</div>
+        <div class="fields-grid">
+          <div class="field field-full">
+            <div class="config-toggle-field">
+              <div class="config-toggle-text">
+                <label for="cfg-${sourceId}-include_preconfigured">${escapeHtml(includeField.label)}</label>
+                <div class="help">${escapeHtml(includeField.help_text || '')}</div>
+              </div>
+              <label class="toggle" title="${escapeHtml(includeField.label)}">
+                <input type="checkbox" id="cfg-${sourceId}-include_preconfigured" data-key="include_preconfigured" data-secret="false"${includeChecked ? ' checked' : ''}>
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+          <div class="field">
+            <label for="cfg-${sourceId}-zip_codes">${escapeHtml(zipField.label)}</label>
+            <input type="text" id="cfg-${sourceId}-zip_codes" data-key="zip_codes" data-secret="false"
+                   value="${escapeHtml(String(values.zip_codes || ''))}" placeholder="20001, 94105" autocomplete="off">
+            <div class="help">${escapeHtml(zipField.help_text || '')}</div>
+          </div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>
+
+        <details class="pbs-drm-details" open>
+          <summary>DRM Station Finder (PrismCast bridge)</summary>
+          <div class="config-note">Search by ZIP code, then add a station's main/PBS KIDS DRM feed. Added stations are picked up on the next scrape and play only through the PrismCast bridge — turn on PrismCast bridging in Settings to use them.</div>
+          <div style="display:flex;align-items:flex-end;gap:8px;margin:0.5rem 0;">
+            <div class="field" style="margin:0;flex:0 0 auto;max-width:160px;">
+              <label for="pbs-drm-zip-${sourceId}">ZIP code</label>
+              <input type="text" id="pbs-drm-zip-${sourceId}" inputmode="numeric" maxlength="5" placeholder="20001"
+                     onkeydown="if(event.key==='Enter'){event.preventDefault();pbsSearchStations(${sourceId});}">
+            </div>
+            <button class="btn btn-run btn-sm" type="button" onclick="pbsSearchStations(${sourceId})">Search</button>
+            <span id="pbs-drm-search-status-${sourceId}" class="config-note" style="margin:0"></span>
+          </div>
+          <div id="pbs-drm-results-${sourceId}"></div>
+          <div class="config-title" style="margin-top:1rem;font-size:0.9em;">
+            Added DRM Stations
+            <span id="pbs-drm-added-status-${sourceId}" class="config-note" style="margin:0"></span>
+          </div>
+          <div id="pbs-drm-added-${sourceId}" class="pbs-drm-chips">${pbsDrmChipsHtml(sourceId, drmPlaceholder)}</div>
+        </details>`;
+    }
+
+    function pbsDrmChipsHtml(sourceId, stations) {
+      return stations.length
+        ? stations.map(s => `
+            <span class="pbs-drm-chip" data-station-id="${escapeHtml(s.station_id)}" title="${escapeHtml(s.station_id)}">
+              ${escapeHtml(s.name || s.station_id)}
+              <button type="button" class="pbs-drm-chip-remove" onclick="pbsRemoveDrmStation(${sourceId}, '${escapeHtml(s.station_id)}')" title="Remove (deletes its channels)">&times;</button>
+            </span>`).join('')
+        : '<span class="config-note" style="margin:0">No DRM stations added yet.</span>';
+    }
+
+    async function pbsSearchStations(sourceId) {
+      const zipInput = document.getElementById(`pbs-drm-zip-${sourceId}`);
+      const status = document.getElementById(`pbs-drm-search-status-${sourceId}`);
+      const results = document.getElementById(`pbs-drm-results-${sourceId}`);
+      const zip = (zipInput.value || '').replace(/\D/g, '').slice(0, 5);
+      zipInput.value = zip;
+      if (zip.length !== 5) {
+        status.textContent = 'Enter a 5-digit ZIP code.';
+        return;
+      }
+      status.textContent = 'Searching…';
+      results.innerHTML = '';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/pbs-station-search?zip=${zip}`);
+        const d = await r.json();
+        if (!r.ok) {
+          status.textContent = d.error || 'Search failed';
+          return;
+        }
+        const stations = d.stations || [];
+        status.textContent = stations.length ? `${stations.length} station(s) found.` : 'No stations found for that ZIP.';
+        results.innerHTML = stations.map(s => {
+          const clearBadge = s.has_clear ? '<span class="pbs-badge pbs-badge-clear">Clear HLS</span>' : '';
+          const drmBadge = s.has_drm ? '<span class="pbs-badge pbs-badge-drm">DRM</span>' : '<span class="pbs-badge pbs-badge-none">No DRM feed</span>';
+          const curatedBadge = s.already_curated ? '<span class="pbs-badge pbs-badge-curated">Curated</span>' : '';
+          return `
+            <div class="pbs-station-row" data-station-id="${escapeHtml(s.station_id)}">
+              <div class="pbs-station-info">
+                <div class="pbs-station-name">${escapeHtml(s.name || s.callsign || s.station_id)}${s.callsign ? ` (${escapeHtml(s.callsign)})` : ''}</div>
+                <div class="pbs-station-meta">${escapeHtml(s.city_state || '')} ${clearBadge} ${drmBadge} ${curatedBadge}</div>
+              </div>
+              <button class="btn btn-run btn-sm" type="button" ${s.has_drm ? '' : 'disabled'}
+                      data-station-id="${escapeHtml(s.station_id)}"
+                      data-name="${escapeHtml(s.name || '')}"
+                      data-callsign="${escapeHtml(s.callsign || '')}"
+                      onclick="pbsAddDrmStation(${sourceId}, this)">Add DRM</button>
+            </div>`;
+        }).join('');
+      } catch (e) {
+        status.textContent = e.message || 'Search failed';
+      }
+    }
+
+    async function pbsAddDrmStation(sourceId, btn) {
+      // Read station id/name off the button's data-* attrs (not passed as inline JS
+      // string args) so station names with quotes/apostrophes can't break the onclick.
+      const stationId = btn.dataset.stationId;
+      const name = btn.dataset.name || '';
+      const callsign = btn.dataset.callsign || '';
+      btn.disabled = true;
+      btn.textContent = 'Adding…';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/pbs-add-drm-station`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({station_id: stationId, name, callsign}),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          btn.disabled = false;
+          btn.textContent = 'Add DRM';
+          alert(d.error || 'Failed to add station');
+          return;
+        }
+        btn.textContent = 'Added';
+        pbsRenderAddedChips(sourceId, d.stations || []);
+        const statusEl = document.getElementById(`pbs-drm-added-status-${sourceId}`);
+        if (statusEl) {
+          statusEl.textContent = d.scrape_queued
+            ? 'Scrape started — channels will appear shortly.'
+            : 'Added.';
+          setTimeout(() => { if (statusEl.textContent.startsWith('Scrape') || statusEl.textContent === 'Added.') statusEl.textContent = ''; }, 6000);
+        }
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Add DRM';
+      }
+    }
+
+    async function pbsRemoveDrmStation(sourceId, stationId) {
+      const statusEl = document.getElementById(`pbs-drm-added-status-${sourceId}`);
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/pbs-remove-drm-station`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({station_id: stationId}),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          if (statusEl) statusEl.textContent = d.error || 'Remove failed';
+          return;
+        }
+        pbsRenderAddedChips(sourceId, d.stations || []);
+        if (statusEl) {
+          const n = d.deleted_channels || 0;
+          statusEl.textContent = n
+            ? `Removed — ${n} channel${n === 1 ? '' : 's'} deleted.`
+            : 'Removed.';
+          setTimeout(() => { if (statusEl.textContent.startsWith('Removed')) statusEl.textContent = ''; }, 5000);
+        }
+      } catch (e) {
+        if (statusEl) statusEl.textContent = 'Remove failed';
+      }
+    }
+
     function renderVidaaConfig(sourceId, schema, values) {
       const geoField = schema.find(f => f.key === 'geo') || {
         key: 'geo',
@@ -2482,6 +2714,7 @@
         if (container) {
           container.innerHTML = renderConfigFields(sourceId, sourceName, schema, values, cfg);
           container.classList.remove('hidden');
+          if (sourceName === 'pbs') pbsLoadDrmStations(sourceId);
         }
       } catch (e) {
         if (badge) { badge.textContent = 'Config error'; badge.className = 'config-badge anon'; badge.style.display = ''; }
@@ -3108,6 +3341,8 @@
         return renderPhiloConfig(sourceId, schema, values);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'pbs') {
+        return renderPbsConfig(sourceId, schema, values);
       }
 
       const renderFieldSet = (fieldSchema) => fieldSchema.map(f => {

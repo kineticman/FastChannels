@@ -546,6 +546,16 @@ class BaseScraper(ABC):
         return response_bytes
 
     @classmethod
+    def is_license_error_response(cls, response_bytes: bytes) -> bool:
+        """Detect a license server that reports failure with a 2xx HTTP status (e.g. an
+        error envelope in the response body instead of a real 4xx/5xx). Returning True
+        here makes the license proxy report a clean 502 to the client instead of handing
+        the CDM a body it can't parse — which otherwise surfaces as a confusing
+        DRM.LICENSE_RESPONSE_REJECTED error instead of an obvious network failure.
+        Override in scrapers whose license server has this quirk."""
+        return False
+
+    @classmethod
     def get_kodi_props(cls, base_url: str) -> dict[str, str]:
         """Returns #KODIPROP key/value pairs for M3U output.
         If the scraper has a license_url, injects the proxy license_key automatically."""

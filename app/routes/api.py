@@ -1808,6 +1808,123 @@ def save_source_config(source_id):
     })
 
 
+# ── PBS DRM Station Finder ──────────────────────────────────────────────────
+# Lets the admin search PBS stations by ZIP and opt specific ones into the DRM
+# (Widevine) main/PBS KIDS feed, which plays only via the PrismCast bridge.
+# Clear (non-DRM) feeds stay auto-discovered via the existing zip_codes /
+# curated-station config — this only manages the `drm_station_ids` list.
+
+@api_bp.route('/sources/<int:source_id>/pbs-station-search')
+def pbs_station_search(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'pbs':
+        return jsonify({'error': 'not a pbs source'}), 400
+    zip_code = (request.args.get('zip') or '').strip()
+    from ..scrapers.pbs import PBSScraper
+    scraper = PBSScraper(config=source.config or {})
+    try:
+        stations = scraper.search_stations(zip_code)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.warning('[pbs-station-search] lookup failed for zip=%s: %s', zip_code, e)
+        return jsonify({'error': f'PBS lookup failed: {e}'}), 502
+    return jsonify({'stations': stations})
+
+
+def _pbs_drm_station_list(cfg: dict) -> list[dict]:
+    """Combines drm_station_ids (the scraper's source of truth) with the
+    display-only drm_station_names lookup, falling back to the raw id for
+    entries added before name-tracking existed."""
+    ids = [s.strip() for s in re.split(r'[\s,]+', str(cfg.get('drm_station_ids') or '')) if s.strip()]
+    names = cfg.get('drm_station_names') or {}
+    return [{'station_id': sid, 'name': names.get(sid) or sid} for sid in ids]
+
+
+@api_bp.route('/sources/<int:source_id>/pbs-drm-stations')
+def pbs_drm_stations(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'pbs':
+        return jsonify({'error': 'not a pbs source'}), 400
+    return jsonify({'stations': _pbs_drm_station_list(source.config or {})})
+
+
+@api_bp.route('/sources/<int:source_id>/pbs-add-drm-station', methods=['POST'])
+def pbs_add_drm_station(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'pbs':
+        return jsonify({'error': 'not a pbs source'}), 400
+    from ..scrapers.pbs import PBSScraper
+    data = request.get_json() or {}
+    station_id = (data.get('station_id') or '').strip()
+    if not PBSScraper._valid_station_id(station_id):
+        return jsonify({'error': 'invalid station_id'}), 400
+    display_name = (data.get('name') or '').strip()
+    callsign = (data.get('callsign') or '').strip()
+    if callsign and callsign not in display_name:
+        display_name = f'{display_name} ({callsign})' if display_name else callsign
+    cfg = dict(source.config or {})
+    existing = [s.strip() for s in re.split(r'[\s,]+', str(cfg.get('drm_station_ids') or '')) if s.strip()]
+    names = dict(cfg.get('drm_station_names') or {})
+    is_new = station_id not in existing
+    if is_new:
+        existing.append(station_id)
+    if display_name:
+        names[station_id] = display_name
+    cfg['drm_station_ids'] = ', '.join(existing)
+    cfg['drm_station_names'] = names
+    source.config = cfg
+    db.session.commit()
+    # The station's DRM channels won't exist until the scraper actually runs — without
+    # this, they wouldn't appear until the next scheduled scrape (scrape_interval=360min).
+    # Same immediate-refresh rationale as Sling's config save (credentials/lineup changes
+    # that add channels trigger a forced full scrape rather than making the user find
+    # "Run now" themselves).
+    scrape_queued = False
+    if is_new and source.is_enabled:
+        trigger_scrape('pbs', force_full=True)
+        scrape_queued = True
+    return jsonify({'status': 'ok', 'stations': _pbs_drm_station_list(cfg), 'scrape_queued': scrape_queued})
+
+
+@api_bp.route('/sources/<int:source_id>/pbs-remove-drm-station', methods=['POST'])
+def pbs_remove_drm_station(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'pbs':
+        return jsonify({'error': 'not a pbs source'}), 400
+    data = request.get_json() or {}
+    station_id = (data.get('station_id') or '').strip()
+    cfg = dict(source.config or {})
+    existing = [s.strip() for s in re.split(r'[\s,]+', str(cfg.get('drm_station_ids') or '')) if s.strip()]
+    existing = [s for s in existing if s != station_id]
+    names = dict(cfg.get('drm_station_names') or {})
+    names.pop(station_id, None)
+    cfg['drm_station_ids'] = ', '.join(existing)
+    cfg['drm_station_names'] = names
+    source.config = cfg
+
+    # The scraper won't emit this station's DRM channels on the next scrape once
+    # it's out of drm_station_ids, but that scrape may be hours away (scrape_interval)
+    # and the reconcile miss-threshold would otherwise leave the stale rows active
+    # in the meantime. Delete them immediately, same as removing/disabling a source
+    # deletes its channels — cascades to programs (ORM) and feed_channel_numbers
+    # (DB ondelete=CASCADE).
+    deleted = 0
+    if station_id:
+        orphans = Channel.query.filter(
+            Channel.source_id == source.id,
+            Channel.source_channel_id.like(f'{station_id}:%'),
+        ).all()
+        for ch in orphans:
+            db.session.delete(ch)
+            deleted += 1
+
+    db.session.commit()
+    if deleted:
+        _invalidate_and_refresh_xml()
+    return jsonify({'status': 'ok', 'stations': _pbs_drm_station_list(cfg), 'deleted_channels': deleted})
+
+
 # ── Sling interactive browser login ─────────────────────────────────────────
 # A real, human-operated sign-in: a Camoufox (anti-detect Firefox) tab loads
 # sling.com in the 'fast' RQ worker, auto-fills the saved credentials, and the
@@ -2835,6 +2952,15 @@ def _get_playback_info(ch, fast_mode=True):
     if ch.source and ch.source.name == 'sling' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/sling/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+        playback_mode = 'dash'
+        stream_type = 'dash'
+
+    # PBS DRM station feed (opt-in main/PBS KIDS) → DASH+Widevine via the same
+    # PrismCast bridge pattern as Philo/Sling. Clear HLS PBS feeds are untouched
+    # (stream_type stays 'hls', no license_url is returned for them).
+    if ch.source and ch.source.name == 'pbs' and ch.source_channel_id and (ch.stream_type or '').lower() == 'dash':
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/pbs/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
         playback_mode = 'dash'
         stream_type = 'dash'
 
