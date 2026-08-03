@@ -122,6 +122,13 @@ CHANNEL_PROGRAM_FILTER = {
 }
 _OFF_AIR_TITLE = "Off Air"
 
+# Generic filler for the Live Event channel's guide — see fetch_epg's EXCEPTION note.
+_OVERFLOW_TITLE = "C-SPAN Event Coverage"
+_OVERFLOW_DESC = (
+    "Whatever hearing, briefing, or event C-SPAN currently has live. "
+    "Best-effort — the channel may be unavailable between events."
+)
+
 # Schedule slugs that belong to a dedicated channel above, so the rotating
 # Live Event channel never doubles up on them.
 _DEDICATED_SLUGS = frozenset({
@@ -812,6 +819,16 @@ class CSpanScraper(BaseScraper):
         API key is unset/rotated or a network is unreachable, that channel falls
         back to one neutral 6h block so the guide never empties — the original
         behaviour. Regenerated every scrape_interval.
+
+        EXCEPTION — the Live Event channel gets generic overflow blocks, not the
+        network-3 titles: its real content is picked at play time from a
+        DIFFERENT source than this grid (resolve()'s network-1-first preference;
+        see _resolve_info), so a specific-sounding title here ("Reel America: ...")
+        would routinely name a program the channel isn't actually showing — and
+        when nothing's genuinely live the channel won't even load. A vague label
+        that's honestly vague beats a precise one that's routinely wrong. The one
+        exception is the current slot: _splice_live_event_title overwrites it with
+        the real title when discovery has actually confirmed something live.
         """
         now = datetime.now(timezone.utc)
         schedules: dict[int, Optional[list[dict]]] = {}  # network -> items | None
@@ -825,13 +842,15 @@ class CSpanScraper(BaseScraper):
                     schedules[net] = self._fetch_network_schedule(net)
                 items = schedules[net]
 
-            program_filter = CHANNEL_PROGRAM_FILTER.get(ch.source_channel_id)
-            if program_filter:
-                rows = self._filtered_epg_rows(ch, items, program_filter)
-            else:
-                rows = self._epg_rows_from_schedule(ch, items)
             if ch.source_channel_id == LIVE_EVENT_CHANNEL_ID:
+                rows = self._overflow_rows(ch, items)
                 self._splice_live_event_title(rows, now)
+            else:
+                program_filter = CHANNEL_PROGRAM_FILTER.get(ch.source_channel_id)
+                if program_filter:
+                    rows = self._filtered_epg_rows(ch, items, program_filter)
+                else:
+                    rows = self._epg_rows_from_schedule(ch, items)
             if rows:
                 programs.extend(rows)
             else:
@@ -948,6 +967,20 @@ class CSpanScraper(BaseScraper):
         if program_filter == "washington_journal":
             return title.startswith("washington journal") and live
         return False
+
+    @staticmethod
+    def _overflow_rows(ch: ChannelData, items: Optional[list[dict]]) -> list[ProgramData]:
+        """Generic 'something might be on, might be dark' guide for the Live Event
+        channel. Reuses the network-3 schedule purely for its time boundaries
+        (a reasonable proxy for grid granularity) — every title/description is
+        replaced with a generic overflow label rather than the network-3 program
+        actually airing there, since that program is very often NOT what the Live
+        Event channel is really showing (see fetch_epg's EXCEPTION note)."""
+        rows = CSpanScraper._epg_rows_from_schedule(ch, items)
+        for row in rows:
+            row.title = _OVERFLOW_TITLE
+            row.description = _OVERFLOW_DESC
+        return rows
 
     @staticmethod
     def _current_live_event_title() -> Optional[str]:
