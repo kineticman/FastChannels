@@ -1789,7 +1789,8 @@ class RokuScraper(BaseScraper):
         if not mpd_url:
             raise RuntimeError(f"[roku] resolve_dash — no DASH url for {station_id}")
         self._persist_session()
-        self._cache_dash(station_id, mpd_url, license_url)
+        if license_url:
+            self._cache_dash(station_id, mpd_url, license_url)
         logger.info("[roku] resolve_dash %s via playback_api (license=%s)",
                     station_id, "yes" if license_url else "no")
         return {"mpd_url": mpd_url, "license_url": license_url}
