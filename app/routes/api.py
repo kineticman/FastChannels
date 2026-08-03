@@ -1773,6 +1773,35 @@ def save_source_config(source_id):
         for tk in _AUTH_STATE:
             if data.get(tk) in (None, '', '••••••••'):  # skip values set in this save
                 current.pop(tk, None)
+    # Turning off PBS's curated station set drops those stations from the next
+    # scrape's fetch_channels() result, but the normal reconcile path only marks
+    # missed channels — it waits out a miss-threshold grace period before deleting,
+    # so nothing visibly changes for hours. That grace period exists to protect
+    # against a transient scrape failure, not an explicit "stop using this list"
+    # config change, so purge immediately here instead — computed entirely from
+    # config (no live PBS API calls, so no risk of a transient lookup failure
+    # deleting real data). Only clear (non-DRM) channels are affected; DRM feeds
+    # are never covered by the curated list.
+    pbs_deleted = 0
+    if source.name == 'pbs':
+        def _pbs_truthy(v):
+            return str(v or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+        old_curated = _pbs_truthy(old.get('include_preconfigured', True))
+        new_curated = _pbs_truthy(current.get('include_preconfigured', True))
+        if old_curated and not new_curated:
+            from ..scrapers.pbs import _DEFAULT_STATIONS
+            manual_station_ids = {
+                entry.split(':', 1)[0].strip()
+                for entry in re.split(r'[\s,]+', str(current.get('manual_feeds') or ''))
+                if entry.strip()
+            }
+            curated_ids = set(_DEFAULT_STATIONS) - manual_station_ids
+            if curated_ids:
+                for ch in Channel.query.filter(Channel.source_id == source.id, Channel.stream_type != 'dash').all():
+                    if (ch.source_channel_id or '').split(':', 1)[0] in curated_ids:
+                        db.session.delete(ch)
+                        pbs_deleted += 1
+
     source.config = current
     auto_enabled = False
     if (
@@ -1784,12 +1813,21 @@ def save_source_config(source_id):
         source.is_enabled = True
         auto_enabled = True
     db.session.commit()
+    if pbs_deleted:
+        _invalidate_and_refresh_xml()
     full_scrape_queued = False
     if source.name == 'sling' and (creds_changed or sling_lineup_changed) and source.is_enabled:
         # Credentials and the subscription toggle can add/remove channels.
         # A normal scheduled scrape may be EPG-only for other sources, so make
         # this refresh deterministic and immediate after the config commit.
         trigger_scrape(source.name, force_full=True)
+        full_scrape_queued = True
+    elif source.name == 'pbs' and old != current and source.is_enabled:
+        # Any PBS config change (curated toggle, ZIP codes, or hand-editing
+        # manual_feeds directly) can change the channel set — same immediate-
+        # refresh rationale as Sling above, rather than waiting up to
+        # scrape_interval (360min) for the next scheduled scrape.
+        trigger_scrape('pbs', force_full=True)
         full_scrape_queued = True
     config_complete = bool(scraper_cls and is_source_config_complete(source.name, scraper_cls, current))
     config_status = (
@@ -1803,6 +1841,7 @@ def save_source_config(source_id):
         'is_enabled': source.is_enabled,
         'auto_enabled': auto_enabled,
         'full_scrape_queued': full_scrape_queued,
+        'deleted_channels': pbs_deleted,
         'config_complete': config_complete,
         'config_status': config_status,
     })
