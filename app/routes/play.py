@@ -1848,6 +1848,16 @@ def _record_watch_debug_snapshot(request_id: str, channel: Channel, event: str, 
     if event == 'player-error':
         snapshot['player_error'] = True
         snapshot['player_error_extra'] = snapshot['last_extra']
+    # A single "last event" overwrites on every call, so a fast cascade (a fatal
+    # decode error followed by appendBuffer failures once the media element is
+    # dead, or transient status lines that flash by faster than a person can
+    # read them) silently loses everything but the tail. Keep the full
+    # chronological sequence instead — skip 'heartbeat' since that's just a
+    # periodic liveness ping, not a state transition worth keeping.
+    if event != 'heartbeat':
+        event_log = list(existing.get('event_log') or [])
+        event_log.append({'age_ms': state.get('age_ms'), 'event': event, 'extra': snapshot['last_extra']})
+        snapshot['event_log'] = event_log[-60:]
     try:
         rdb.setex(key, _WATCH_DEBUG_TTL, json.dumps(snapshot))
     except Exception:
@@ -3402,6 +3412,107 @@ def pbs_dash_proxy(channel_id: str):
     # URL after redirects) so relative paths resolve correctly. Other profiles
     # (e.g. kids-main via MediaTailor) already ship an absolute BaseURL — leave
     # those alone.
+    if '<BaseURL>' not in manifest_text:
+        upstream_dir = _urljoin(str(r.url), '.')
+        manifest_text = re.sub(
+            r'(<MPD\b[^>]*>)',
+            lambda m: f'{m.group(1)}<BaseURL>{upstream_dir}</BaseURL>',
+            manifest_text, count=1,
+        )
+
+    return Response(
+        manifest_text,
+        mimetype='application/dash+xml',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
+@play_bp.route('/play/nbc_tve/<channel_id>/dash.mpd')
+def nbc_tve_dash_proxy(channel_id: str):
+    """DASH (Widevine) manifest proxy for nbc_tve — drops the Dolby Digital+
+    (ec-3) audio AdaptationSet before handing the manifest to Shaka.
+
+    NBC publishes both an ec-3 and a plain AAC (mp4a.40.2) audio track, but
+    Chrome refuses to negotiate a Widevine key system at all for ec-3: asking
+    for it fails the whole load with Shaka 6001
+    (DRM.REQUESTED_KEY_SYSTEM_CONFIG_UNAVAILABLE), verified on Chrome/Windows.
+    AAC is therefore the only playable track here, and dropping ec-3 outright
+    is more reliable than the player-side `preferredAudioCodecs` hint.
+
+    Also injects a <BaseURL>: NBC's manifest has none and uses relative
+    SegmentTemplate paths, which the DASH spec resolves against the manifest's
+    own URL — i.e. our /play/... origin — so without it every segment 404s.
+    Same fix as pbs_dash_proxy.
+    """
+    from urllib.parse import unquote as _unquote, urljoin as _urljoin
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'nbc_tve', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper_cls = registry.get('nbc_tve')
+    if not scraper_cls:
+        return _unavailable_response()
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        dash_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[nbc-tve-dash] resolve failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    finally:
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            except Exception:
+                pass
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+            except Exception:
+                pass
+
+    if not dash_url or not dash_url.startswith('http'):
+        logger.warning('[nbc-tve-dash] no DASH URL for %s', raw_id[:40])
+        return _unavailable_response()
+
+    try:
+        r = _requests.get(dash_url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+            'Referer': 'https://www.nbc.com/',
+        })
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[nbc-tve-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+
+    # NBC publishes two audio AdaptationSets: AAC (mp4a.40.2) and Dolby Digital+
+    # (ec-3). Which one actually plays is client-dependent, so make it selectable
+    # via ?audio= for diagnosis:
+    #   aac (default) — drop ec-3. The only combination that plays under Widevine.
+    #   ec3           — drop AAC. Fails with Shaka 6001 on Chrome; kept as a
+    #                   diagnostic to re-confirm that, not as a usable mode.
+    #   all           — leave both and let the client pick.
+    audio_pref = (request.args.get('audio') or 'aac').strip().lower()
+    drop_codec = {'aac': 'ec-3', 'ec3': 'mp4a.40.2'}.get(audio_pref)
+
+    def _drop_audio(match):
+        return '' if drop_codec and f'codecs="{drop_codec}"' in match.group(0) else match.group(0)
+
+    manifest_text = re.sub(
+        r'<AdaptationSet mimeType="audio/mp4".*?</AdaptationSet>\s*',
+        _drop_audio, r.text, flags=re.DOTALL,
+    )
+
     if '<BaseURL>' not in manifest_text:
         upstream_dir = _urljoin(str(r.url), '.')
         manifest_text = re.sub(

@@ -91,6 +91,17 @@
       const minSeek = Number((opts && opts.minSeek) || 5);
       const target = Math.max(range.start || 0, range.end - liveDelay);
       const from = video.currentTime || 0;
+      // A live seek range that starts well past 0 (DASH periods with a large
+      // presentationTimeOffset put the timeline at millions of seconds) means a
+      // currentTime of 0 is just "the media element hasn't reported a position
+      // yet", NOT a real playhead 33M seconds behind live. Seeking on that bogus
+      // delta forces a redundant jump to where Shaka already positioned us, and
+      // that jump flushes MSE + the CDM mid-startup: both decoders report
+      // "no key for key ID ...", and the first audio packet decoded after the key
+      // recovers fails outright (PIPELINE_ERROR_DECODE -> Shaka 3016, then 3015
+      // appendBuffer errors once the media element is dead). Shaka already starts
+      // live content at the live edge on its own, so skip it.
+      if (from < (range.start || 0)) return;
       const delta = target - from;
       if (Number.isFinite(target) && Math.abs(delta) > minSeek) {
         video.currentTime = target;
@@ -164,13 +175,16 @@
     onStatus('Loading stream…');
     const player = new shaka.Player();
     player.attach(video).then(() => {
+      // Prefer plain AAC when a manifest offers several audio codecs. Chrome
+      // refuses Widevine outright for ec-3 (Dolby Digital+) — requesting it
+      // fails the whole load with DRM.REQUESTED_KEY_SYSTEM_CONFIG_UNAVAILABLE
+      // (6001), verified on Chrome/Windows against NBC's dual-codec manifest.
+      const shakaConfig = { preferredAudioCodecs: ['mp4a.40.2', 'mp4a.40.5', 'aac'] };
       if (license) {
-        const shakaConfig = {
-          drm: {
-            servers: {
-              'com.widevine.alpha':      license,
-              'com.microsoft.playready': license,
-            },
+        shakaConfig.drm = {
+          servers: {
+            'com.widevine.alpha':      license,
+            'com.microsoft.playready': license,
           },
         };
         if (liveEdgeSync) {
@@ -190,7 +204,9 @@
         if (maxHeight > 0) {
           shakaConfig.restrictions = { maxHeight };
         }
-        player.configure(shakaConfig);
+      }
+      player.configure(shakaConfig);
+      if (license) {
         player.getNetworkingEngine().registerRequestFilter((reqType, request) => {
           if (reqType === 2 /* LICENSE */) request.uris = [license];
         });
@@ -234,7 +250,11 @@
           }
         },
       });
-      video.muted = false;
+      // Do NOT unmute here: Chrome's autoplay policy rejects play() on an unmuted
+      // element without a user gesture, and that rejection is swallowed below —
+      // leaving the stream loaded, fully buffered, and silently paused on a single
+      // frame with no error anywhere. Stay muted so autoplay is actually allowed;
+      // the page's click/keypress handler unmutes and re-plays on a real gesture.
       video.play().catch(() => {});
     }).catch((err) => {
       onError({ phase: 'load', err, message: formatError(err) });

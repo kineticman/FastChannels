@@ -113,7 +113,14 @@
     const LIVE_EDGE_SYNC = {{ live_edge_sync | default(false) | tojson }};
     const WATCH_DEBUG_URL = {{ url_for('play.watch_debug', channel_id=channel.id) | tojson }};
   </script>
+  {#- The default compiled build strips shaka.log entirely (it's a no-op), so it can
+      never explain *why* Shaka did something. In debug mode load the debug build,
+      which keeps the internal logging that the code below forwards to the server. -#}
+  {% if watch_debug %}
+  <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.debug.js"></script>
+  {% else %}
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
+  {% endif %}
   <script src="{{ url_for('static', filename='js/fc_player.js') }}?v={{ app_version }}"></script>
   <script>
     const video       = document.getElementById('player');
@@ -231,7 +238,10 @@
         maxHeight: MAX_HEIGHT,
         liveEdgeSync: LIVE_EDGE_SYNC,
         onLiveEdgeSeek: (info) => emitWatchDebug('live-edge-seek', info),
-        onStatus: () => {},   // fullscreen overlay stays clean on success / native playback
+        // Fullscreen overlay stays clean (no visible text) on success/native playback —
+        // but still forward every transient status line to the debug log, since these
+        // can flash by faster than a person can read them in the preview modal.
+        onStatus: (msg) => emitWatchDebug('status', { msg }),
         onError: onPlayerError,
       });
       if (_shaka) {
@@ -249,6 +259,10 @@
       emitWatchDebug('activate-fullscreen');
       video.muted = false;
       video.volume = 1.0;
+      // This click is the user gesture that lets an unmuted element play, so it
+      // has to actually start playback — autoplay stays muted-only (see
+      // fc_player.js), and without this the video sits paused on one frame.
+      video.play().catch((e) => emitWatchDebug('play-rejected', { msg: String(e && e.message || e) }));
       const el = document.documentElement;
       if (el.requestFullscreen) el.requestFullscreen();
       else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
@@ -296,6 +310,31 @@
         }));
       });
       setInterval(() => emitWatchDebug('heartbeat'), 5000);
+
+      // With the debug build loaded above, shaka.log is real — turn it up and
+      // mirror warnings/errors to the server. Shaka's own diagnostics (why it
+      // seeked, which variant it chose, stream/DRM state transitions) otherwise
+      // only ever exist in a console nobody is watching at the moment it breaks.
+      if (window.shaka && shaka.log && shaka.log.setLevel && shaka.log.Level) {
+        shaka.log.setLevel(shaka.log.Level.DEBUG);
+      }
+      let _forwarded = 0;
+      ['warn', 'error'].forEach((level) => {
+        const original = console[level].bind(console);
+        console[level] = (...args) => {
+          original(...args);
+          if (_forwarded++ > 60) return;   // don't let a log storm flood the server
+          try {
+            emitWatchDebug('console-' + level, {
+              msg: args.map((a) => {
+                if (a instanceof Error) return a.message;
+                if (typeof a === 'object') { try { return JSON.stringify(a); } catch (_) { return String(a); } }
+                return String(a);
+              }).join(' ').slice(0, 700),
+            });
+          } catch (_) {}
+        };
+      });
     }
 
     document.addEventListener('keydown', (e) => {

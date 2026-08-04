@@ -3054,6 +3054,18 @@ def _get_playback_info(ch, fast_mode=True):
         playback_mode = 'dash'
         stream_type = 'dash'
 
+    # NBC TVE: route through the manifest proxy that picks a single audio track —
+    # see nbc_tve_dash_proxy's docstring in play.py. ?audio= is forwarded so the
+    # codec choice can be exercised from the watch page without a code change.
+    if ch.source and ch.source.name == 'nbc_tve' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/nbc_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+        _audio_pref = (request.args.get('audio') or '').strip().lower()
+        if _audio_pref in {'aac', 'ec3', 'all'}:
+            preview_url += f'?audio={_audio_pref}'
+        playback_mode = 'dash'
+        stream_type = 'dash'
+
     return {
         'stream_type': stream_type,
         'preview_url': preview_url,
