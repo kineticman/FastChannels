@@ -127,10 +127,12 @@ def _fetch_items_cached(lineup: str, station_id: str, session) -> list:
             return []
         try:
             from .tvtv_cache import _fetch_fragment_station
-            items = _fetch_fragment_station(session, station_id, start, end) or []
+            items = _fetch_fragment_station(session, station_id, start, end)
         except Exception as fallback_exc:
             log.warning("[tvtv] fragment fallback failed for %s/%s: %s", lineup, station_id, fallback_exc)
             return []
+        if items is None:
+            return None  # transient fragment-fetch failure; don't cache as a confirmed-empty schedule
 
     _grid_cache[cache_key] = (now_ts, items)
     return items

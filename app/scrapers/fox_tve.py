@@ -426,16 +426,23 @@ def resolve_fox_page_signed_hls(channel: FoxTVEChannel) -> str:
                 finally:
                     browser.close()
 
+        # The Flask/gevent request path can already have an asyncio loop in the
+        # current thread. Playwright's sync API rejects that, so run the capture
+        # in a fresh native thread where it owns its own event loop. Don't use
+        # ThreadPoolExecutor as a context manager here: its __exit__ calls
+        # shutdown(wait=True), which blocks this (gevent) thread until the
+        # background thread actually finishes even after .result(timeout=90)
+        # times out — defeating the timeout. shutdown(wait=False) lets the
+        # background thread finish closing the browser on its own time.
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='fox-tve-playwright')
         try:
-            # The Flask/gevent request path can already have an asyncio loop in the
-            # current thread. Playwright's sync API rejects that, so run the capture
-            # in a fresh native thread where it owns its own event loop.
-            with ThreadPoolExecutor(max_workers=1, thread_name_prefix='fox-tve-playwright') as pool:
-                pool.submit(_capture_with_playwright).result(timeout=90)
+            pool.submit(_capture_with_playwright).result(timeout=90)
         except FuturesTimeoutError as exc:
             raise ValueError(f'FOX page signed HLS capture timed out for {channel.name}') from exc
         except Exception as exc:
             raise ValueError(f'FOX page did not expose signed HLS for {channel.name}: {exc}') from exc
+        finally:
+            pool.shutdown(wait=False)
 
         if not matches:
             raise ValueError(f'FOX page did not expose signed HLS for {channel.name}')
