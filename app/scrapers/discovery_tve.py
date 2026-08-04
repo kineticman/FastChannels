@@ -258,7 +258,7 @@ class DiscoveryTVEScraper(BaseScraper):
     display_name = 'Discovery TVE'
     source_category = 'tve'
     is_premium = True
-    scrape_interval = 720
+    scrape_interval = 180  # upstream CMS route only returns a few hours of listings ahead
     stream_audit_enabled = True
 
     def _session(self) -> requests.Session:

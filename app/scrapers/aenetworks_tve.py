@@ -65,6 +65,8 @@ _NETWORKS: dict[str, AENetwork] = {
         schedule_url='https://www.history.com/schedule',
         logo_url='https://www.history.com/assets/images/history/apple-touch-icon.png',
         schedule_data_prefix='https://www.history.com/schedule/data',
+        schedule_days_before=0,
+        schedule_days_after=2,
     ),
     'aetv': AENetwork(
         channel_id='aetv',
@@ -76,6 +78,8 @@ _NETWORKS: dict[str, AENetwork] = {
         schedule_url='https://www.aetv.com/schedule',
         logo_url='https://www.aetv.com/assets/images/aetv/apple-touch-icon.png',
         schedule_data_prefix='https://www.aetv.com/schedule/data',
+        schedule_days_before=0,
+        schedule_days_after=2,
     ),
     'lifetime': AENetwork(
         channel_id='lifetime',
@@ -102,6 +106,8 @@ _NETWORKS: dict[str, AENetwork] = {
         logo_url='https://www.fyi.tv/assets/images/fyi/apple-touch-icon.png',
         category='Lifestyle',
         schedule_data_prefix='https://www.fyi.tv/schedule/data',
+        schedule_days_before=0,
+        schedule_days_after=2,
     ),
 }
 
