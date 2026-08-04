@@ -478,6 +478,7 @@ def _first_text(value) -> str | None:
             text = _first_text(item)
             if text:
                 return text
+        return None
     return str(value) if value else None
 
 
@@ -909,7 +910,7 @@ class FoxTVEScraper(BaseScraper):
             channel = CHANNELS[channel_id]
             try:
                 shows = fetch_fox_news_business_schedule(channel_id)
-            except requests.RequestException:
+            except (requests.RequestException, ValueError):
                 shows = []
             for show in shows:
                 program = _fox_news_business_program(channel, show)

@@ -2411,7 +2411,7 @@ def update_channel(channel_id):
             ch.review_state = 'approved'
         if data.get('is_enabled') is True and 'is_active' not in data:
             ch.is_active = True
-            if ch.disable_reason in ('Dead', 'VOD') or (ch.disable_reason or '').startswith('DRM'):
+            if ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized') or (ch.disable_reason or '').startswith('DRM'):
                 ch.disable_reason = None
             ch.last_seen_at = datetime.now(timezone.utc)
             ch.missed_scrapes = 0

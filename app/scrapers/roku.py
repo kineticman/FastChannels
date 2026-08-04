@@ -1601,7 +1601,7 @@ class RokuScraper(BaseScraper):
                         need_content_details,
                     )
                     return stream_url
-            if r2.status_code in (502, 503, 504):
+            if r2.status_code in (502, 503, 504) and media_format == "m3u":
                 stream_url = self._cached_synthetic_osm_url(selector_url)
                 if not stream_url and self._seed_osm_session_from_cache(skip_station_id=station_id):
                     stream_url = self._cached_synthetic_osm_url(selector_url)
@@ -1622,7 +1622,7 @@ class RokuScraper(BaseScraper):
                     bool(selector_url),
                     bool(self._cached_osm_session()),
                 )
-            if r2.status_code in (401, 403, 404):
+            if r2.status_code in (401, 403, 404, 502, 503, 504):
                 self._invalidate_play_id(station_id)
                 self._invalidate_selector_url(station_id)
                 self._invalidate_stream_url(station_id)
