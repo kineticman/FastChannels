@@ -13,7 +13,7 @@ import re
 import secrets
 import threading
 import time as _time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import xml.etree.ElementTree as ET
 from urllib.parse import quote as _url_quote, urljoin, urlsplit, urlunsplit, parse_qs as _parse_qs
 
@@ -353,9 +353,11 @@ def _distro_filter_ts_video_only(data: bytes) -> bytes:
 from ..scrapers.cspan import (
     CDN_HEADERS as _CSPAN_CDN_HEADERS,
     CDN_HOST_SUFFIX as _CSPAN_CDN_HOST_SUFFIX,
+    STALE_VOD_MINUTES as _CSPAN_STALE_VOD_MINUTES,
     pick_best_variant as _cspan_pick_best_variant,
     build_live_window as _cspan_build_live_window,
     rewrite_media_playlist as _cspan_rewrite_media_playlist,
+    latest_program_date_time as _cspan_latest_program_date_time,
     CSpanScraper,
 )
 
@@ -1217,6 +1219,24 @@ def cspan_manifest_proxy(channel_id: str):
         alt, _alt_reason = _fetch_live(force=True)
         if alt is not None and '#EXT-X-ENDLIST' not in alt[0].text:
             variant_r, master_r = alt
+
+    # Still ended after the recheck above: only serve it as a "just wrapped up"
+    # VOD if it's actually recent. /congress/?chamber=<x> has no live/ended
+    # signal of its own — it keeps pointing at the last-aired event's manifest
+    # long after it ended (observed: still serving a session from the PREVIOUS
+    # day) — so without this check a quiet chamber replays a stale clip from the
+    # top on every play, which looks like the stream is "stuck on repeat".
+    if '#EXT-X-ENDLIST' in variant_r.text:
+        last = _cspan_latest_program_date_time(variant_r.text)
+        if last is not None:
+            age = datetime.now(timezone.utc) - last
+            if age > timedelta(minutes=_CSPAN_STALE_VOD_MINUTES):
+                logger.info(
+                    '[cspan-proxy] %s ended session is stale (last segment %s, %.0fm old) — '
+                    'unavailable instead of replaying it',
+                    raw_id, last.isoformat(), age.total_seconds() / 60,
+                )
+                return _unavailable_response()
 
     # Refresh the resolution/codec badge off the master we just fetched.
     from flask import current_app as _current_app

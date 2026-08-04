@@ -25,11 +25,17 @@ Channels
     embeds the live event's manifest URL directly. The schedule page is
     C-SPAN-1-centric and does not reliably surface the Senate floor, so the
     floors use their own authoritative page.
-  * Washington Journal / C-SPAN 3 / C-SPAN Live Event — older builds attempted
-    to discover these from the public /schedule/ page. C-SPAN's current schedule
-    HTML is a TV grid and no longer exposes reliable live event manifest IDs, so
-    these channels are hidden by default unless a user explicitly opts into the
-    best-effort discovery path.
+  * Washington Journal / Overflow — Hearings / Overflow — Events — older builds
+    attempted to discover these from the public /schedule/ page. C-SPAN's current
+    schedule HTML is a TV grid and no longer exposes reliable live event manifest
+    IDs, so these channels are hidden by default unless a user explicitly opts
+    into the best-effort discovery path. The two "Overflow" channels are NOT the
+    real 24/7 linear C-SPAN 3 / C-SPAN 1 networks — each just plays whatever is
+    currently live-badged on its schedule view (Network 3's view for Hearings,
+    the default C-SPAN-1-centric view for Events) and goes dark between events.
+    They were originally named "C-SPAN 3" / "C-SPAN Live Event", which read as
+    an always-on channel and misled users when it went dark; renamed + given an
+    on-channel description note instead.
 
 The event ID is not published ahead of air — it appears only once the event
 goes live, and the manifest opens with a short "starting soon" bumper. So
@@ -48,6 +54,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urljoin
+
+import requests
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 
@@ -80,6 +88,21 @@ WJ_CHANNEL_ID = "washington-journal"
 LIVE_EVENT_CHANNEL_ID = "live-event"
 CSPAN3_CHANNEL_ID = "cspan3"
 CSPAN3_NETWORK = 3  # /schedule/?channel=3 — the per-network C-SPAN 3 view
+
+# Display names for the two rotating overflow channels. Neither is the real
+# 24/7 linear network (see the module docstring) — each is just "whatever is
+# currently live-badged" on its schedule view, dark the rest of the time. The
+# old names ("C-SPAN 3", "C-SPAN Live Event") read like an always-on channel
+# and misled users when it went dark between events; "Overflow" plus the
+# on-channel description (_OVERFLOW_NOTE_*) make the intermittent nature explicit.
+_CSPAN3_NAME = "C-SPAN Overflow — Hearings"
+_LIVE_EVENT_NAME = "C-SPAN Overflow — Events"
+_OVERFLOW_NOTE_CSPAN3 = (
+    "Best-effort feed of whatever C-SPAN currently has live on its Network 3 "
+    "schedule (committee hearings, etc). Not a 24/7 channel — dark between events."
+)
+# The Live Event channel's note reuses _OVERFLOW_DESC (below) — same "dark between
+# events" framing already used for its EPG filler blocks, kept as one string.
 
 # ---- C-SPAN Now app API (EPG only) ------------------------------------------
 # api.c-spanarchives.org is the C-SPAN Now app's backend (AWS API Gateway). Its
@@ -114,7 +137,8 @@ CHANNEL_NETWORK = {
 # gavel-to-gavel floor description), so avoid broad substring matching: network 2
 # regularly airs clips titled "U.S. Senate: ..." that are not the Senate floor.
 # Network / rotating channels (cspan3, live-event) are intentionally absent: they
-# have no single program to key off, so they keep the full network grid.
+# have no single program to key off, so they get the OVERFLOW_CONFIG treatment
+# below instead (generic blocks, not the raw network grid).
 CHANNEL_PROGRAM_FILTER = {
     "house":  "house_floor",
     "senate": "senate_floor",
@@ -122,12 +146,32 @@ CHANNEL_PROGRAM_FILTER = {
 }
 _OFF_AIR_TITLE = "Off Air"
 
-# Generic filler for the Live Event channel's guide — see fetch_epg's EXCEPTION note.
-_OVERFLOW_TITLE = "C-SPAN Event Coverage"
 _OVERFLOW_DESC = (
     "Whatever hearing, briefing, or event C-SPAN currently has live. "
     "Best-effort — the channel may be unavailable between events."
 )
+
+# Both rotating channels show the real network-3 schedule grid's TITLES only
+# rarely: the network-3 API grid is the actual 24/7 linear feed for that network
+# (hearings when Congress is in session, archival/library reruns otherwise — see
+# fetch_epg's EXCEPTION note), which is routinely NOT what these channels are
+# actually playing at play time. So every block gets a generic overflow label,
+# except the slot covering "now", which is spliced with the real title IF
+# discovery has actually confirmed something live for that specific channel
+# (mirrors each channel's own resolve() preference in _resolve_info, so the
+# spliced title matches what play would actually load).
+_OVERFLOW_CONFIG = {
+    CSPAN3_CHANNEL_ID: {
+        "description": _OVERFLOW_NOTE_CSPAN3,
+        "cache_keys": (f"schedule:{CSPAN3_NETWORK}",),
+        "exclude_dedicated": False,
+    },
+    LIVE_EVENT_CHANNEL_ID: {
+        "description": _OVERFLOW_DESC,
+        "cache_keys": ("schedule:default", f"schedule:{CSPAN3_NETWORK}"),
+        "exclude_dedicated": True,
+    },
+}
 
 # Schedule slugs that belong to a dedicated channel above, so the rotating
 # Live Event channel never doubles up on them.
@@ -528,6 +572,91 @@ def discover_schedule(scraper: "CSpanScraper", channel: Optional[int] = None,
                      parse=_parse_schedule, empty=[], force=force, log=_log)
 
 
+# How stale an ENDED session's own embedded timestamp can be before the
+# manifest-proxy VOD fallback (see rewrite_media_playlist below) refuses to
+# serve it. The fallback exists for the few minutes right after a floor
+# session's Part actually just wrapped, so the player shows the recording
+# instead of failing outright — NOT for indefinitely replaying whatever the
+# last video happens to be. /congress/?chamber=<x> has no live/ended signal of
+# its own (_parse_floor just grabs data-videofile unconditionally) and keeps
+# pointing at the last-aired event's manifest even a day+ after it ended, so
+# without this check a dead/quiet chamber replays yesterday's clip from the top
+# on every play — which is exactly what looks like "stuck on repeat" to a user.
+STALE_VOD_MINUTES = 30
+
+_PROGRAM_DATE_TIME_RE = re.compile(r"^#EXT-X-PROGRAM-DATE-TIME:(\S+)", re.M)
+
+
+def latest_program_date_time(media_text: str) -> Optional[datetime]:
+    """Return the latest #EXT-X-PROGRAM-DATE-TIME timestamp in a media playlist
+    (aware UTC), or None if it has none/none parse. Used to tell "this session
+    ended a minute ago" apart from "this session ended over a day ago"."""
+    latest: Optional[datetime] = None
+    for m in _PROGRAM_DATE_TIME_RE.finditer(media_text):
+        dt = _parse_iso(m.group(1))
+        if dt and (latest is None or dt > latest):
+            latest = dt
+    return latest
+
+
+# Lazy, process-shared session carrying CDN_HEADERS (Referer) for manifest
+# freshness checks — separate from a scraper's self.session (PAGE_HEADERS, for
+# the WAF-protected HTML discovery pages) and from play.py's own persistent
+# proxy session, since fetch_epg runs in the scraper worker, not the web workers.
+_floor_check_session: Optional["requests.Session"] = None
+
+
+def _floor_check_http() -> "requests.Session":
+    global _floor_check_session
+    if _floor_check_session is None:
+        s = requests.Session()
+        s.headers.update(CDN_HEADERS)
+        _floor_check_session = s
+    return _floor_check_session
+
+
+def floor_manifest_is_fresh(manifest_url: str) -> bool:
+    """Fetch a floor event's manifest from the OPEN CDN — never the WAF-protected
+    /congress/ or /schedule/ pages, so this is safe to call from fetch_epg on
+    every scrape without risking a WAF challenge — and report whether it's
+    currently playable: genuinely still live, or ended recently enough for the
+    play proxy's own VOD fallback (STALE_VOD_MINUTES).
+
+    Exists because /congress/?chamber=<x> has no live/ended signal of its own
+    (_parse_floor just grabs data-videofile unconditionally) and keeps pointing
+    at the last-aired event's manifest long after it ended. Without this check,
+    fetch_epg's floor-title splice (_current_floor_title) would keep claiming a
+    session is airing right now — on the EPG's own generous multi-day filler
+    block, no less — even after the play proxy has already started refusing to
+    serve that same stale recording. Fails closed (False) on any error, so a
+    network hiccup here degrades to the honest "Off Air" filler, never a false
+    claim of live content.
+    """
+    try:
+        session = _floor_check_http()
+        m_r = session.get(manifest_url, timeout=8)
+        if m_r.status_code != 200:
+            return False
+        text, base_url = m_r.text, m_r.url
+        v_url = pick_best_variant(text, base_url)
+        if v_url:
+            v_r = session.get(v_url, timeout=8)
+            if v_r.status_code != 200:
+                return False
+            text = v_r.text
+        elif "#EXTINF" not in text:
+            return False  # neither a master nor a media playlist
+        if "#EXT-X-ENDLIST" not in text:
+            return True  # still growing — genuinely live
+        last = latest_program_date_time(text)
+        if last is None:
+            return False
+        return (datetime.now(timezone.utc) - last) <= timedelta(minutes=STALE_VOD_MINUTES)
+    except Exception as e:
+        logger.warning("[cspan] floor manifest freshness check failed for %s: %s", manifest_url, e)
+        return False
+
+
 def rewrite_media_playlist(media_text: str, variant_url: str, rewrite_segment) -> str:
     """Rewrite segment URLs through `rewrite_segment`, keeping every tag intact —
     including #EXT-X-ENDLIST. Used to serve an ENDED floor session as a finite VOD
@@ -677,20 +806,22 @@ class CSpanScraper(BaseScraper):
             field_type="toggle",
             default=False,
             help_text=(
-                "Add C-SPAN 3, Washington Journal, and the rotating Live Event "
-                "channel. These depend on C-SPAN's public schedule HTML and may "
-                "be unavailable when that page does not expose a live event ID."
+                "Add C-SPAN Overflow — Hearings, Washington Journal, and the "
+                "rotating Overflow — Events channel. These depend on C-SPAN's "
+                "public schedule HTML and may be unavailable when that page does "
+                "not expose a live event ID."
             ),
         ),
         ConfigField(
             "include_live_events",
-            'Rotating "Live Event" Channel',
+            '"Overflow — Events" Channel',
             field_type="toggle",
             default=False,
             help_text=(
                 "Add a channel that plays whatever hearing, briefing, or White "
                 "House event C-SPAN currently has live (discovered from the public "
-                "schedule; best-effort — may miss a C-SPAN-3-only hearing)."
+                "schedule; best-effort — may miss a hearing that only aired on the "
+                "Overflow — Hearings feed)."
             ),
         ),
     ]
@@ -707,13 +838,15 @@ class CSpanScraper(BaseScraper):
 
     def fetch_channels(self) -> list[ChannelData]:
         defs = [
-            (cid, meta["name"], meta["logo"]) for cid, meta in FLOOR_CHANNELS.items()
+            (cid, meta["name"], meta["logo"], None, None) for cid, meta in FLOOR_CHANNELS.items()
         ]
         if self._schedule_channels_enabled():
-            defs.append((CSPAN3_CHANNEL_ID, "C-SPAN 3", _LOGO_CSPAN3))
-            defs.append((WJ_CHANNEL_ID, "C-SPAN Washington Journal", _LOGO_CSPAN))
+            defs.append((CSPAN3_CHANNEL_ID, _CSPAN3_NAME, _LOGO_CSPAN3,
+                        "cspan-overflow-hearings", _OVERFLOW_NOTE_CSPAN3))
+            defs.append((WJ_CHANNEL_ID, "C-SPAN Washington Journal", _LOGO_CSPAN, None, None))
             if self._live_events_enabled():
-                defs.append((LIVE_EVENT_CHANNEL_ID, "C-SPAN Live Event", _LOGO_CSPAN3))
+                defs.append((LIVE_EVENT_CHANNEL_ID, _LIVE_EVENT_NAME, _LOGO_CSPAN3,
+                            "cspan-overflow-events", _OVERFLOW_DESC))
 
         channels = [
             ChannelData(
@@ -725,8 +858,10 @@ class CSpanScraper(BaseScraper):
                 category="News",
                 language="en",
                 country="US",
+                slug=slug,
+                description=desc,
             )
-            for cid, name, logo in defs
+            for cid, name, logo, slug, desc in defs
         ]
         logger.info("[cspan] published %d channels", len(channels))
         return channels
@@ -820,15 +955,19 @@ class CSpanScraper(BaseScraper):
         back to one neutral 6h block so the guide never empties — the original
         behaviour. Regenerated every scrape_interval.
 
-        EXCEPTION — the Live Event channel gets generic overflow blocks, not the
-        network-3 titles: its real content is picked at play time from a
-        DIFFERENT source than this grid (resolve()'s network-1-first preference;
-        see _resolve_info), so a specific-sounding title here ("Reel America: ...")
-        would routinely name a program the channel isn't actually showing — and
-        when nothing's genuinely live the channel won't even load. A vague label
-        that's honestly vague beats a precise one that's routinely wrong. The one
-        exception is the current slot: _splice_live_event_title overwrites it with
-        the real title when discovery has actually confirmed something live.
+        EXCEPTION — the two rotating overflow channels (cspan3, live-event) get
+        generic overflow blocks, not the raw network-3 titles: their real content
+        is picked at play time from schedule discovery (resolve()'s per-channel
+        preference; see _resolve_info), which routinely disagrees with this grid —
+        the network-3 API grid is C-SPAN's actual 24/7 linear feed (hearings when
+        Congress is in session, archival/library reruns the rest of the time), so
+        a specific-sounding title here ("Bryan Burrough, The Gunfighters") would
+        routinely name a program the channel isn't actually showing — and when
+        nothing's genuinely live the channel won't even load. A vague label that's
+        honestly vague beats a precise one that's routinely wrong. The one
+        exception is the current slot: _splice_overflow_title overwrites it with
+        the real title when discovery has actually confirmed something live for
+        that specific channel.
         """
         now = datetime.now(timezone.utc)
         schedules: dict[int, Optional[list[dict]]] = {}  # network -> items | None
@@ -842,13 +981,26 @@ class CSpanScraper(BaseScraper):
                     schedules[net] = self._fetch_network_schedule(net)
                 items = schedules[net]
 
-            if ch.source_channel_id == LIVE_EVENT_CHANNEL_ID:
-                rows = self._overflow_rows(ch, items)
-                self._splice_live_event_title(rows, now)
+            overflow_cfg = _OVERFLOW_CONFIG.get(ch.source_channel_id)
+            if overflow_cfg:
+                rows = self._overflow_rows(ch, items, overflow_cfg["description"])
+                self._splice_overflow_title(
+                    rows, now, overflow_cfg["cache_keys"], overflow_cfg["exclude_dedicated"],
+                )
             else:
                 program_filter = CHANNEL_PROGRAM_FILTER.get(ch.source_channel_id)
                 if program_filter:
                     rows = self._filtered_epg_rows(ch, items, program_filter)
+                    if ch.source_channel_id in FLOOR_CHANNELS:
+                        # network-1/2's schedule grid only itemizes a full floor
+                        # session (title == "U.S. House/Senate..."); a brief
+                        # recess pro-forma session shows up there only as the
+                        # generic umbrella block, so _filtered_epg_rows falls
+                        # back to "Off Air" for the whole day even while the
+                        # chamber is genuinely live. discover_floor() (what
+                        # resolve() actually plays) catches those — splice its
+                        # title in for "now" when it has confirmed live.
+                        self._splice_floor_title(rows, now, ch.source_channel_id)
                 else:
                     rows = self._epg_rows_from_schedule(ch, items)
             if rows:
@@ -969,48 +1121,86 @@ class CSpanScraper(BaseScraper):
         return False
 
     @staticmethod
-    def _overflow_rows(ch: ChannelData, items: Optional[list[dict]]) -> list[ProgramData]:
-        """Generic 'something might be on, might be dark' guide for the Live Event
-        channel. Reuses the network-3 schedule purely for its time boundaries
-        (a reasonable proxy for grid granularity) — every title/description is
-        replaced with a generic overflow label rather than the network-3 program
-        actually airing there, since that program is very often NOT what the Live
-        Event channel is really showing (see fetch_epg's EXCEPTION note)."""
+    def _overflow_rows(ch: ChannelData, items: Optional[list[dict]],
+                       description: str) -> list[ProgramData]:
+        """Generic 'something might be on, might be dark' guide for a rotating
+        overflow channel. Reuses the network-3 schedule purely for its time
+        boundaries (a reasonable proxy for grid granularity) — every title is
+        replaced with the channel's own name and description with the given
+        overflow note, rather than showing the network-3 program actually airing
+        there, since that program is very often NOT what this channel is really
+        showing (see fetch_epg's EXCEPTION note)."""
         rows = CSpanScraper._epg_rows_from_schedule(ch, items)
         for row in rows:
-            row.title = _OVERFLOW_TITLE
-            row.description = _OVERFLOW_DESC
+            row.title = ch.name
+            row.description = description
         return rows
 
     @staticmethod
-    def _current_live_event_title() -> Optional[str]:
-        """Title of whatever the Live Event channel is actually airing right now,
-        read from the shared discovery cache — NEVER fetches. fetch_epg runs on a
-        timer regardless of viewership, and only real plays / the play-triggered
-        prewarm are allowed to hit the WAF-protected schedule pages, so this only
-        reads whatever those already populated. Mirrors the network preference
-        order in _resolve_info's LIVE_EVENT_CHANNEL_ID branch (default view, then
-        the C-SPAN 3 network view) so the spliced title matches what resolve()
-        would actually pick. Returns None if nothing is cached, or the cache is
-        stale, or nothing live is outside the dedicated (house/senate/WJ) slugs."""
-        for key in ("schedule:default", f"schedule:{CSPAN3_NETWORK}"):
+    def _current_overflow_title(cache_keys: tuple, exclude_dedicated: bool) -> Optional[str]:
+        """Title of whatever a rotating overflow channel is actually airing right
+        now, read from the shared discovery cache — NEVER fetches. fetch_epg runs
+        on a timer regardless of viewership, and only real plays / the
+        play-triggered prewarm are allowed to hit the WAF-protected schedule
+        pages, so this only reads whatever those already populated. `cache_keys`
+        and `exclude_dedicated` mirror the calling channel's own preference order
+        in _resolve_info, so the spliced title matches what resolve() would
+        actually pick for THAT channel. Returns None if nothing is cached, the
+        cache is stale, or (when exclude_dedicated) nothing live is outside the
+        dedicated (house/senate/WJ) slugs."""
+        for key in cache_keys:
             cached = _cache_get(key)
             if not cached or (time.time() - cached[0]) >= _DISCOVERY_TTL:
                 continue
             for ev in cached[1]:
-                if ev["slug"] not in _DEDICATED_SLUGS and ev.get("title"):
+                if exclude_dedicated and ev["slug"] in _DEDICATED_SLUGS:
+                    continue
+                if ev.get("title"):
                     return ev["title"]
         return None
 
     @classmethod
-    def _splice_live_event_title(cls, rows: list[ProgramData], now: datetime) -> None:
-        """Override the network-3 grid block covering `now` with the real live
-        title, in place. The Live Event channel's guide is sourced from network 3
-        (cspan.py:CHANNEL_NETWORK) because that grid has real per-program titles,
-        but resolve() actually prefers a *different* network's live pick first —
-        so the "now" slot can show the wrong program. This corrects just that one
-        slot from cache; future slots stay best-effort from the network-3 grid."""
-        title = cls._current_live_event_title()
+    def _splice_overflow_title(cls, rows: list[ProgramData], now: datetime,
+                               cache_keys: tuple, exclude_dedicated: bool) -> None:
+        """Override the generic block covering `now` with the real live title, in
+        place, IF discovery has actually confirmed something live for this channel
+        right now. Future slots stay generic (best-effort from the network-3 grid
+        boundaries only)."""
+        title = cls._current_overflow_title(cache_keys, exclude_dedicated)
+        if not title:
+            return
+        for row in rows:
+            if row.start_time <= now < row.end_time:
+                row.title = title
+                row.description = None
+                return
+
+    @staticmethod
+    def _current_floor_title(chamber: str) -> Optional[str]:
+        """Real title of a floor chamber's live event right now, read from the
+        shared discover_floor cache (never re-fetches the WAF-protected
+        /congress/ page itself) but VERIFIED against the actual open-CDN
+        manifest via floor_manifest_is_fresh before trusting it — the cached
+        discovery info alone doesn't know whether that event has since gone
+        stale (see floor_manifest_is_fresh's docstring). Returns None if nothing
+        is cached, the cache is stale, or the manifest isn't actually playable
+        right now."""
+        cached = _cache_get(f"floor:{chamber}")
+        if not cached or (time.time() - cached[0]) >= _DISCOVERY_TTL:
+            return None
+        info = cached[1]
+        if not info or not info.get("manifest_url"):
+            return None
+        if not floor_manifest_is_fresh(info["manifest_url"]):
+            return None
+        return info.get("title")
+
+    @classmethod
+    def _splice_floor_title(cls, rows: list[ProgramData], now: datetime, chamber: str) -> None:
+        """Override the block covering `now` with the real floor session title
+        when discover_floor confirms the chamber is actually live — see the call
+        site in fetch_epg for why the network schedule API alone misses this."""
+        title = cls._current_floor_title(chamber)
         if not title:
             return
         for row in rows:
