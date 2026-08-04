@@ -38,6 +38,12 @@ _TVTV_BASE = "https://tvtv.us"
 _FRAGMENT_FALLBACK_LOGGED = False
 _FRAGMENT_THREAD_STATE = threading.local()
 
+# Synthetic lineup bucket for station IDs not present in the bundled
+# station_index.json. tvtv's htmx fragment endpoint is keyed by station_id
+# alone (no lineup needed), so these still get fetched — just via the
+# fragment path directly instead of a lineup-scoped JSON grid batch.
+_UNINDEXED_LINEUP = "UNINDEXED"
+
 
 # ---------------------------------------------------------------------------
 # Helpers (shared with tvtv_lookup — kept in sync manually)
@@ -376,6 +382,13 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
         if lineup:
             lineup_stations.setdefault(lineup, []).append(sid)
 
+    # Station IDs not in the bundled index (or with no lineup listed) still
+    # get fetched, via the fragment fallback below — see _UNINDEXED_LINEUP.
+    indexed_ids = {sid for ids in lineup_stations.values() for sid in ids}
+    unindexed_ids = sorted(station_set - indexed_ids)
+    if unindexed_ids:
+        lineup_stations[_UNINDEXED_LINEUP] = unindexed_ids
+
     total_batches = 0
     total_rows    = 0
     total_errors  = 0
@@ -392,7 +405,8 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
             ]
 
             log.info("[tvtv-cache] %s day+%d: %d stations in %d batches",
-                     lineup, day_offset, len(station_ids), len(batches))
+                     lineup if lineup != _UNINDEXED_LINEUP else "unindexed (fragment-only)",
+                     day_offset, len(station_ids), len(batches))
 
             day_errors = 0
             day_error_reasons: dict[str, int] = {}
@@ -401,7 +415,10 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
                     total_batches += 1
                     continue
 
-                results, failure_reason = _fetch_batch(session, lineup, batch, start, end)
+                if lineup == _UNINDEXED_LINEUP:
+                    results, failure_reason = _fetch_batch_via_fragments(session, batch, start, end)
+                else:
+                    results, failure_reason = _fetch_batch(session, lineup, batch, start, end)
                 if not results:
                     total_errors += 1
                     day_errors   += 1

@@ -1728,11 +1728,14 @@ def run_tvtv_cache_refresh():
         from app.gracenote_map import get_all_tmsids
         community = set(str(t) for t in (get_all_tmsids() or []) if t)
 
-        # Only include IDs that are actually in the station index.
-        station_ids = [sid for sid in (applied | community) if get_station_entry(sid)]
-        logger.info('[tvtv-cache] fetching %d station IDs (%d applied + %d community-only)',
-                    len(station_ids), len(applied & set(station_ids)),
-                    len(community & set(station_ids) - applied))
+        # Fetch every applied/community ID, not just ones in the bundled
+        # station_index.json — tvtv's fragment endpoint can serve guide data
+        # for stations outside the index (see _UNINDEXED_LINEUP in tvtv_cache).
+        station_ids = sorted(applied | community)
+        unindexed = sum(1 for sid in station_ids if not get_station_entry(sid))
+        logger.info('[tvtv-cache] fetching %d station IDs (%d applied + %d community-only, %d unindexed)',
+                    len(station_ids), len(applied),
+                    len(community - applied), unindexed)
 
         summary = refresh_tvtv_cache(days=2, station_ids=station_ids)
         logger.info('[tvtv-cache] refresh complete: %s', summary)

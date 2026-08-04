@@ -136,6 +136,34 @@ def _fetch_items_cached(lineup: str, station_id: str, session) -> list:
     return items
 
 
+def _fetch_items_cached_unindexed(station_id: str, session) -> list | None:
+    """
+    Same as _fetch_items_cached, but for stations not in the bundled index
+    (or with no lineup listed) — skips straight to tvtv's htmx fragment
+    endpoint, which is keyed by station_id alone and needs no lineup.
+    """
+    cache_key = ("_UNINDEXED_", station_id)
+    cached = _grid_cache.get(cache_key)
+    now_ts = time.monotonic()
+
+    if cached and (now_ts - cached[0]) < _GRID_CACHE_TTL:
+        return cached[1]
+
+    now_utc = datetime.now(timezone.utc)
+    start, end = _grid_window(now_utc)
+    try:
+        from .tvtv_cache import _fetch_fragment_station
+        items = _fetch_fragment_station(session, station_id, start, end)
+    except Exception as exc:
+        log.warning("[tvtv] unindexed fragment fetch failed for %s: %s", station_id, exc)
+        return None
+    if items is None:
+        return None
+
+    _grid_cache[cache_key] = (now_ts, items)
+    return items
+
+
 # ---------------------------------------------------------------------------
 # Now/next extraction
 # ---------------------------------------------------------------------------
@@ -250,21 +278,19 @@ def lookup_now_playing(station_id: str) -> dict[str, Any]:
         return cached
 
     entry = get_station_entry(station_id)
-    if not entry:
-        result["error"] = "not_in_index"
-        return result
+    lineup = (entry.get("lineups") or [None])[0] if entry else None
 
-    lineup = entry["lineups"][0] if entry.get("lineups") else None
-    if not lineup:
-        result["error"] = "no_lineup"
-        return result
-
-    result["call_sign"] = entry.get("call_sign")
+    result["call_sign"] = entry.get("call_sign") if entry else None
     result["lineup"] = lineup
     result["found"] = True
 
     session = _make_session()
-    items = _fetch_items_cached(lineup, station_id, session)
+    if lineup:
+        items = _fetch_items_cached(lineup, station_id, session)
+    else:
+        # Not in the bundled index (or no lineup listed) — tvtv's fragment
+        # endpoint doesn't need one, so try it directly rather than giving up.
+        items = _fetch_items_cached_unindexed(station_id, session)
     if items is None:
         result["error"] = "rate_limited"
         return result
