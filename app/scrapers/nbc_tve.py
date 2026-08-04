@@ -65,11 +65,12 @@ verified byte-for-byte against a real captured license request):
   to preauthorize), and a `stationId` (what `lemonade.nbc.com/v2/linear/
   <stationId>` needs to hand back a DASH manifest) — plus roughly 12h of
   forward program listings per channel. No separate EPG call needed.
-- That guide grid mixes national feeds with a single-market one: the "nbc"
-  row is the caller's LOCAL NBC affiliate (WCMH/PK22 in the captured HAR),
-  and `necn` plus four `rsn-*` rows are regional cable/sports networks. This
-  scraper keeps the local NBC affiliate but skips the regional-only rows —
-  see _INCLUDED_BRANDS.
+- That guide grid mixes national feeds with regional/single-market ones: the
+  "nbc" row is the caller's LOCAL NBC affiliate (WCMH/PK22 in the captured
+  HAR), `necn` is New England Cable News, and four `rsn-*` rows are regional
+  sports networks. This scraper keeps the local affiliate and NECN but skips
+  the RSN rows (near-certain blackout restrictions outside their home
+  market) — see _INCLUDED_BRANDS.
 - The `name` GraphQL variable is NOT the fixed literal "live" it first
   appeared to be — the HAR that pattern was copied from happened to be a
   ?brand=nbc-sports-now page load, where NBC's own client also sends
@@ -137,8 +138,10 @@ ADOBE_BASE = 'https://sp.auth.adobe.com'
 REQUESTOR_ID = 'nbcentertainment'
 DEFAULT_REDIRECT_URL = 'https://www.nbc.com/mvpd-complete'
 
-# National networks + the caller's local NBC affiliate — see module docstring.
-# Regional/local-only rows (necn, rsn-*) are deliberately excluded.
+# National networks + the caller's local NBC affiliate + NECN — see module
+# docstring. The 4 RSN rows (Bay Area, Boston, California, Philadelphia) are
+# still deliberately excluded: single-market regional sports, almost always
+# blackout-restricted to that market's own MVPD footprint.
 _INCLUDED_BRANDS: dict[str, tuple[str, str]] = {  # machineName -> (display name, category)
     'nbc': ('NBC', 'Entertainment'),
     'nbc-news': ('NBC News NOW', 'News'),
@@ -150,6 +153,7 @@ _INCLUDED_BRANDS: dict[str, tuple[str, str]] = {  # machineName -> (display name
     'telemundo-deportes-ahora': ('Telemundo Deportes Ahora', 'Sports'),
     'noticias-telemundo-ahora': ('Noticias Telemundo Ahora', 'News'),
     'nbc-universo': ('NBC Universo', 'Entertainment'),
+    'necn': ('NECN', 'News'),
 }
 
 # Page config (software statement / drm proxy secret) is baked into a versioned,
@@ -556,10 +560,17 @@ class NbcTveScraper(BaseScraper):
 
         cached = self.cache.get('nbc_entitlements') or {}
         decisions = cached.get('decisions') or {}
+        checked = set(cached.get('checked') or ())
         fresh = decisions and (time.time() - float(cached.get('cached_at', 0))) < _ENTITLEMENT_TTL
-        # Adobe silently omitting a resource (rather than authorized:false) means it
-        # isn't MVPD-gated at all — see module docstring. Only an explicit False blocks.
-        if fresh and decisions.get(resource_id, True):
+        # Adobe silently omitting a resource it WAS ASKED ABOUT (rather than
+        # returning authorized:false) means that resource isn't MVPD-gated at all
+        # — see module docstring. That's a different thing from "we've simply
+        # never asked Adobe about this resource yet" (e.g. it was just added to
+        # _INCLUDED_BRANDS after the cache was last populated) — `checked` tracks
+        # which resource_ids were actually part of the last preauthorize request,
+        # so a not-yet-asked-about resource always gets a real check instead of
+        # silently inheriting "permitted" from decisions.get(..., True).
+        if fresh and resource_id in checked and decisions.get(resource_id, True):
             return
 
         account = self._cox_account()
@@ -592,7 +603,9 @@ class NbcTveScraper(BaseScraper):
             db.session.commit()
             raise TVEAuthError(f'NBC TVE: Adobe Pass auth failed: {exc}') from exc
 
-        self._update_cache('nbc_entitlements', {'decisions': decisions, 'cached_at': time.time()})
+        self._update_cache('nbc_entitlements', {
+            'decisions': decisions, 'checked': sorted(resource_ids), 'cached_at': time.time(),
+        })
         if not decisions.get(resource_id, True):
             raise TVENotAuthorizedError(f'NBC TVE: Cox account is not entitled to {resource_id}.')
 
