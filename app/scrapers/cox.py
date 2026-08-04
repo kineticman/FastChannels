@@ -429,7 +429,7 @@ def _cox_license_access_attributes(playback: dict[str, Any] | None, config: dict
     if not stream_type and isinstance(playback, dict) and playback.get('is_tve') is True:
         stream_type = 'TVE'
     if not stream_type:
-        stream_type = _first_text(config.get('cox_license_stream_type'))
+        stream_type = _first_text(config.get('cox_license_stream_type')) or 'Geofenced'
     attributes: dict[str, str] = {}
     if stream_type:
         attributes['content:xcal:streamType'] = stream_type
