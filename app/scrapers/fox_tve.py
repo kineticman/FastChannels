@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -52,6 +53,22 @@ FOX_NEWS_BUSINESS_ADOBE: dict[str, dict[str, str]] = {
 }
 _SIGNED_HLS_CACHE: dict[str, tuple[str, int]] = {}
 SIGNED_HLS_CACHE_KEY_PREFIX = 'signed_hls:'
+
+# In-worker single-flight for the Playwright fallback below: without it, concurrent
+# requests for the same cold/expired channel each launch their own headless browser
+# and can exhaust the gevent worker pool. Per-channel so one slow channel can't block
+# another.
+_SIGNED_HLS_LOCK_GUARD = threading.Lock()
+_SIGNED_HLS_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _signed_hls_lock_for(channel_id: str) -> threading.Lock:
+    with _SIGNED_HLS_LOCK_GUARD:
+        lock = _SIGNED_HLS_LOCKS.get(channel_id)
+        if lock is None:
+            lock = threading.Lock()
+            _SIGNED_HLS_LOCKS[channel_id] = lock
+        return lock
 
 
 @dataclass(frozen=True)
@@ -367,59 +384,66 @@ def resolve_fox_page_signed_hls(channel: FoxTVEChannel) -> str:
     if cached and cached[1] > now + 120:
         return cached[0]
 
-    matches: list[str] = []
-    expected_host = urlsplit(channel.fallback_stream_url or '').netloc.lower()
+    with _signed_hls_lock_for(channel.channel_id):
+        # Re-check: another thread may have just refreshed the cache while we waited.
+        now = int(time.time())
+        cached = _SIGNED_HLS_CACHE.get(channel.channel_id)
+        if cached and cached[1] > now + 120:
+            return cached[0]
 
-    def _maybe_capture(url: str) -> None:
-        if 'master.m3u8' not in url or 'hdne' not in url:
-            return
-        host = urlsplit(url).netloc.lower()
-        if expected_host and host != expected_host:
-            return
-        if FOX_SIGNED_HLS_RE.search(url) and url not in matches:
-            matches.append(url)
+        matches: list[str] = []
+        expected_host = urlsplit(channel.fallback_stream_url or '').netloc.lower()
 
-    def _capture_with_playwright() -> None:
-        try:
-            from playwright.sync_api import sync_playwright
-        except Exception as exc:
-            raise ValueError('Playwright is not available for FOX signed HLS resolution') from exc
+        def _maybe_capture(url: str) -> None:
+            if 'master.m3u8' not in url or 'hdne' not in url:
+                return
+            host = urlsplit(url).netloc.lower()
+            if expected_host and host != expected_host:
+                return
+            if FOX_SIGNED_HLS_RE.search(url) and url not in matches:
+                matches.append(url)
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+        def _capture_with_playwright() -> None:
             try:
-                context = browser.new_context(
-                    user_agent=UA,
-                    viewport={'width': 1365, 'height': 900},
-                )
-                page = context.new_page()
-                page.on('request', lambda req: _maybe_capture(req.url))
-                page.on('response', lambda resp: _maybe_capture(resp.url))
-                page.goto(channel.page_url, wait_until='domcontentloaded', timeout=60000)
-                deadline = time.time() + 18
-                while time.time() < deadline and not matches:
-                    page.wait_for_timeout(250)
-            finally:
-                browser.close()
+                from playwright.sync_api import sync_playwright
+            except Exception as exc:
+                raise ValueError('Playwright is not available for FOX signed HLS resolution') from exc
 
-    try:
-        # The Flask/gevent request path can already have an asyncio loop in the
-        # current thread. Playwright's sync API rejects that, so run the capture
-        # in a fresh native thread where it owns its own event loop.
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix='fox-tve-playwright') as pool:
-            pool.submit(_capture_with_playwright).result(timeout=90)
-    except FuturesTimeoutError as exc:
-        raise ValueError(f'FOX page signed HLS capture timed out for {channel.name}') from exc
-    except Exception as exc:
-        raise ValueError(f'FOX page did not expose signed HLS for {channel.name}: {exc}') from exc
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                try:
+                    context = browser.new_context(
+                        user_agent=UA,
+                        viewport={'width': 1365, 'height': 900},
+                    )
+                    page = context.new_page()
+                    page.on('request', lambda req: _maybe_capture(req.url))
+                    page.on('response', lambda resp: _maybe_capture(resp.url))
+                    page.goto(channel.page_url, wait_until='domcontentloaded', timeout=60000)
+                    deadline = time.time() + 18
+                    while time.time() < deadline and not matches:
+                        page.wait_for_timeout(250)
+                finally:
+                    browser.close()
 
-    if not matches:
-        raise ValueError(f'FOX page did not expose signed HLS for {channel.name}')
+        try:
+            # The Flask/gevent request path can already have an asyncio loop in the
+            # current thread. Playwright's sync API rejects that, so run the capture
+            # in a fresh native thread where it owns its own event loop.
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix='fox-tve-playwright') as pool:
+                pool.submit(_capture_with_playwright).result(timeout=90)
+        except FuturesTimeoutError as exc:
+            raise ValueError(f'FOX page signed HLS capture timed out for {channel.name}') from exc
+        except Exception as exc:
+            raise ValueError(f'FOX page did not expose signed HLS for {channel.name}: {exc}') from exc
 
-    signed_url = matches[0]
-    exp = _signed_hls_exp(signed_url)
-    _SIGNED_HLS_CACHE[channel.channel_id] = (signed_url, exp)
-    return signed_url
+        if not matches:
+            raise ValueError(f'FOX page did not expose signed HLS for {channel.name}')
+
+        signed_url = matches[0]
+        exp = _signed_hls_exp(signed_url)
+        _SIGNED_HLS_CACHE[channel.channel_id] = (signed_url, exp)
+        return signed_url
 
 def _parse_fox_time(value: str | None) -> datetime | None:
     if not value:
