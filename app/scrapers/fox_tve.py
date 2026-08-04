@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 import time
 import uuid
@@ -14,6 +15,8 @@ import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..tve.adobe_pass import TVENotAuthorizedError
+
+logger = logging.getLogger(__name__)
 
 SCHEME = 'fox-tve://'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
@@ -964,6 +967,10 @@ class FoxTVEScraper(BaseScraper):
             try:
                 signed_url = resolve_fox_http_signed_hls(channel)
             except Exception:
+                logger.warning(
+                    'FOX HTTP signed-HLS resolution failed for %s, falling back to Playwright',
+                    channel.channel_id, exc_info=True,
+                )
                 signed_url = resolve_fox_page_signed_hls(channel)
             self._update_cache(cache_key, {
                 'url': signed_url,
