@@ -1059,7 +1059,16 @@ function deselectAllChannels() {
   if (_selectedChannelIds.size > 0) {
     visible.forEach(ch => _selectedChannelIds.delete(ch.id));
   } else {
-    visible.forEach(ch => _excludedChannelIds.add(ch.id));
+    // No explicit selection: only excluding the visible set makes sense when
+    // filters are actually narrowing it down. With no filters active, "visible"
+    // is every channel, and excluding all of them would silently empty the feed.
+    const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
+    const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
+    const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
+    const hasFilters    = activeSources.size > 0 || activeCats.size > 0 || activeLangs.size > 0;
+    if (hasFilters) {
+      visible.forEach(ch => _excludedChannelIds.add(ch.id));
+    }
   }
   renderChannelList();
   schedulePreview();

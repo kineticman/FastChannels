@@ -1969,9 +1969,16 @@ def pbs_remove_manual_feed(source_id):
     source = Source.query.get_or_404(source_id)
     if source.name != 'pbs':
         return jsonify({'error': 'not a pbs source'}), 400
+    from ..scrapers.pbs import PBSScraper
     data = request.get_json() or {}
     station_id = (data.get('station_id') or '').strip()
     profile = (data.get('profile') or '').strip()
+    # station_id/profile feed the LIKE pattern below that deletes channels;
+    # validate station_id as a UUID (can't contain % or _) and reject LIKE
+    # wildcard characters in profile so a bad/malicious value can't broaden
+    # the delete beyond the one feed being removed.
+    if not PBSScraper._valid_station_id(station_id) or not profile or '%' in profile or '_' in profile:
+        return jsonify({'error': 'invalid station_id or profile'}), 400
     key = f'{station_id}:{profile}'
 
     cfg = dict(source.config or {})
