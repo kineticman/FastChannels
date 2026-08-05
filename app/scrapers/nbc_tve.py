@@ -295,6 +295,8 @@ class AdobePassV2CoxClient:
             _cox_saml_login(self.session, cox_saml_url, username, password)
         except ValueError as exc:
             raise TVENotAuthorizedError(str(exc)) from exc
+        except requests.RequestException as exc:
+            raise TVEAuthError(str(exc)) from exc
 
         r = self._get(f'{ADOBE_BASE}/api/v2/{self.requestor_id}/profiles/Cox', headers=self._bearer_headers())
         profile = ((r.json() or {}).get('profiles') or {}).get('Cox')
