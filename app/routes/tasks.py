@@ -423,6 +423,108 @@ def stop_sling_browser_login():
         logger.warning(f'Failed to signal Sling browser login stop: {e}')
 
 
+def trigger_mvpd_browser_login(requestor_id: str, resource: str, software_statement: str, redirect_url: str, mso_id: str):
+    """Returns True if a job was enqueued, False if one is already running."""
+    try:
+        q = get_fast_queue()
+        job_id = 'mvpd-browser-login'
+        if _job_already_active(q, job_id):
+            logger.info('MVPD browser login already running')
+            return False
+        q.enqueue(
+            'app.worker.run_mvpd_browser_login',
+            requestor_id, resource, software_statement, redirect_url, mso_id,
+            job_timeout=1830, job_id=job_id,
+        )
+        logger.info('Enqueued MVPD browser login for requestor_id=%s mso_id=%s', requestor_id, mso_id)
+        return True
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for MVPD browser login')
+        import threading
+        from app.worker import run_mvpd_browser_login
+        # Same persistent-profile-dir collision concern as Sling's fallback.
+        thread_name = 'mvpd-browser-login-fallback'
+        if any(t.name == thread_name and t.is_alive() for t in threading.enumerate()):
+            logger.info('MVPD browser login fallback thread already running')
+            return False
+        threading.Thread(
+            target=run_mvpd_browser_login,
+            args=(requestor_id, resource, software_statement, redirect_url, mso_id),
+            daemon=True, name=thread_name,
+        ).start()
+        return True
+
+
+def stop_mvpd_browser_login():
+    try:
+        r = redis.from_url(current_app.config['REDIS_URL'])
+        r.setex('mvpd:browser-login:stop', 30, '1')
+    except Exception as e:
+        logger.warning(f'Failed to signal MVPD browser login stop: {e}')
+
+
+def trigger_nbc_browser_login(mso_id: str):
+    """Returns True if a job was enqueued, False if one is already running."""
+    try:
+        q = get_fast_queue()
+        job_id = 'nbc-mvpd-browser-login'
+        if _job_already_active(q, job_id):
+            logger.info('NBC MVPD browser login already running')
+            return False
+        q.enqueue('app.worker.run_nbc_browser_login', mso_id, job_timeout=1830, job_id=job_id)
+        logger.info('Enqueued NBC MVPD browser login for mso_id=%s', mso_id)
+        return True
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for NBC MVPD browser login')
+        import threading
+        from app.worker import run_nbc_browser_login
+        thread_name = 'nbc-mvpd-browser-login-fallback'
+        if any(t.name == thread_name and t.is_alive() for t in threading.enumerate()):
+            logger.info('NBC MVPD browser login fallback thread already running')
+            return False
+        threading.Thread(target=run_nbc_browser_login, args=(mso_id,), daemon=True, name=thread_name).start()
+        return True
+
+
+def stop_nbc_browser_login():
+    try:
+        r = redis.from_url(current_app.config['REDIS_URL'])
+        r.setex('nbc-mvpd:browser-login:stop', 30, '1')
+    except Exception as e:
+        logger.warning(f'Failed to signal NBC MVPD browser login stop: {e}')
+
+
+def trigger_fox_browser_login(mso_id: str):
+    """Returns True if a job was enqueued, False if one is already running."""
+    try:
+        q = get_fast_queue()
+        job_id = 'fox-mvpd-browser-login'
+        if _job_already_active(q, job_id):
+            logger.info('FOX MVPD browser login already running')
+            return False
+        q.enqueue('app.worker.run_fox_browser_login', mso_id, job_timeout=1830, job_id=job_id)
+        logger.info('Enqueued FOX MVPD browser login for mso_id=%s', mso_id)
+        return True
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for FOX MVPD browser login')
+        import threading
+        from app.worker import run_fox_browser_login
+        thread_name = 'fox-mvpd-browser-login-fallback'
+        if any(t.name == thread_name and t.is_alive() for t in threading.enumerate()):
+            logger.info('FOX MVPD browser login fallback thread already running')
+            return False
+        threading.Thread(target=run_fox_browser_login, args=(mso_id,), daemon=True, name=thread_name).start()
+        return True
+
+
+def stop_fox_browser_login():
+    try:
+        r = redis.from_url(current_app.config['REDIS_URL'])
+        r.setex('fox-mvpd:browser-login:stop', 30, '1')
+    except Exception as e:
+        logger.warning(f'Failed to signal FOX MVPD browser login stop: {e}')
+
+
 def trigger_tvtv_cache_refresh():
     try:
         q = get_maintenance_queue()

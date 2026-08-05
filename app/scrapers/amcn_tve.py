@@ -581,6 +581,13 @@ class AMCNetworksTVEScraper(BaseScraper):
             or AMCN_SOFTWARE_STATEMENTS.get(channel.requestor_id)
             or AMCN_SOFTWARE_STATEMENT
         ).strip()
+        # AMCN's own v2 REST API, not the legacy XML protocol yt-dlp's generic
+        # MVPD login flows speak — so unlike warner_tve.py/aenetworks_tve.py,
+        # non-Cox MSOs here can't fall back to authorize_mvpd()/yt-dlp. Native
+        # scripted login only exists for Cox (below); every other MSO needs
+        # its own browser-assisted pairing built against this v2 flow
+        # specifically (not built yet — see the ValueError below).
+        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
         client = AdobePassCoxClient(
             requestor_id=channel.requestor_id,
             resource=channel.requestor_id,
@@ -593,14 +600,19 @@ class AMCNetworksTVEScraper(BaseScraper):
         r = client.session.post(
             f'{ADOBE_BASE}/api/v2/{channel.requestor_id}/sessions',
             data={
-                'mvpd': MVPD,
+                'mvpd': mso_id,
                 'domainName': f'https://{channel.domain}',
                 'redirectUrl': channel.live_url,
             },
             headers={**auth_headers, 'Content-Type': 'application/x-www-form-urlencoded'},
             timeout=30,
         )
-        r.raise_for_status()
+        if not r.ok:
+            try:
+                detail = r.json().get('message') or r.text[:300]
+            except ValueError:
+                detail = r.text[:300]
+            raise TVEAuthError(f'{channel.name}: Adobe session request failed for MVPD {mso_id}: {detail}')
         session_data = r.json()
         code = (session_data.get('code') or '').strip()
         auth_path = (session_data.get('url') or '').strip()
@@ -614,14 +626,22 @@ class AMCNetworksTVEScraper(BaseScraper):
             timeout=30,
         )
         if r.status_code in {301, 302, 303, 307, 308}:
-            cox_saml_url = r.headers.get('location') or ''
+            mso_login_url = r.headers.get('location') or ''
         else:
             r.raise_for_status()
-            cox_saml_url = r.url if 'login.cox.com' in r.url else ''
-        if 'login.cox.com' not in cox_saml_url:
-            raise TVEAuthError(f'{channel.name}: unexpected Adobe redirect host {urlsplit(cox_saml_url).netloc}.')
+            mso_login_url = r.url
+        if not mso_login_url:
+            raise TVEAuthError(f'{channel.name}: Adobe did not return an MVPD login redirect.')
 
-        _cox_saml_login(client.session, cox_saml_url, account.username or '', account.password or '')
+        if mso_id == 'Cox':
+            if 'login.cox.com' not in mso_login_url:
+                raise TVEAuthError(f'{channel.name}: unexpected Adobe redirect host {urlsplit(mso_login_url).netloc}.')
+            _cox_saml_login(client.session, mso_login_url, account.username or '', account.password or '')
+        else:
+            raise TVEAuthError(
+                f'{channel.name}: browser-assisted sign-in for AMC Networks TVE is not built yet for '
+                f'MVPD {mso_id} (only native Cox login is wired up here).'
+            )
 
         profile = client.session.get(
             f'{ADOBE_BASE}/api/v2/{channel.requestor_id}/profiles/code/{code}',
@@ -629,14 +649,14 @@ class AMCNetworksTVEScraper(BaseScraper):
             timeout=30,
         )
         profile.raise_for_status()
-        cox_profile = ((profile.json().get('profiles') or {}).get(MVPD) or {})
-        attrs = cox_profile.get('attributes') or {}
+        mso_profile = ((profile.json().get('profiles') or {}).get(mso_id) or {})
+        attrs = mso_profile.get('attributes') or {}
         adobe_id = (((attrs.get('userID') or {}).get('value')) or '').strip()
         if not adobe_id:
-            raise TVEAuthError(f'{channel.name}: Adobe profile did not include Cox userID.')
+            raise TVEAuthError(f'{channel.name}: Adobe profile did not include a {mso_id} userID.')
 
         decision = client.session.post(
-            f'{ADOBE_BASE}/api/v2/{channel.requestor_id}/decisions/authorize/{MVPD}',
+            f'{ADOBE_BASE}/api/v2/{channel.requestor_id}/decisions/authorize/{mso_id}',
             json={'resources': [channel.requestor_id]},
             headers={**auth_headers, 'Content-Type': 'application/json'},
             timeout=30,
@@ -646,7 +666,7 @@ class AMCNetworksTVEScraper(BaseScraper):
         authorized = next((item for item in decisions if item.get('authorized') is True), None)
         serialized = ((authorized or {}).get('token') or {}).get('serializedToken')
         if not serialized:
-            raise TVENotAuthorizedError(f'{channel.name}: Adobe did not authorize {channel.requestor_id} for Cox.')
+            raise TVENotAuthorizedError(f'{channel.name}: Adobe did not authorize {channel.requestor_id} for {mso_id}.')
         return serialized, adobe_id
 
     def _mvpd_access_token(
@@ -656,6 +676,7 @@ class AMCNetworksTVEScraper(BaseScraper):
         *,
         adobe_id: str,
         device_id: str,
+        mso_id: str = MVPD,
     ) -> tuple[str, str | None]:
         bootstrap, _, _feature_flags = self._bootstrap_token(session, channel)
         cached = self.cache.get(f'bootstrap:{channel.channel_id}') or {}
@@ -666,7 +687,7 @@ class AMCNetworksTVEScraper(BaseScraper):
             device_id=device_id,
             entitlement='unauth',
             adobe_id=adobe_id,
-            mvpd=MVPD,
+            mvpd=mso_id,
             cache_hash=cached.get('cache_hash') if isinstance(cached, dict) else None,
             user_cache_hash=cached.get('user_cache_hash') if isinstance(cached, dict) else None,
         )
@@ -694,7 +715,7 @@ class AMCNetworksTVEScraper(BaseScraper):
                 device_id=device_id,
                 entitlement='unauth',
                 adobe_id=adobe_id,
-                mvpd=MVPD,
+                mvpd=mso_id,
                 feature_flags=feature_flags,
             ),
             timeout=30,
@@ -715,7 +736,10 @@ class AMCNetworksTVEScraper(BaseScraper):
 
         account = TVEAccount.query.filter_by(provider_id='cox').first()
         if not account or not account.is_enabled or not account.has_credentials():
-            raise TVEAuthError('Cox TVE credentials are not configured in Settings.')
+            raise TVEAuthError('TVE credentials are not configured in Settings.')
+
+        cfg = account.config or {}
+        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
 
         session = self._session()
         device_id = self._device_id()
@@ -725,6 +749,7 @@ class AMCNetworksTVEScraper(BaseScraper):
             channel,
             adobe_id=adobe_id,
             device_id=device_id,
+            mso_id=mso_id,
         )
         playback = session.post(
             f'{API_BASE}/playback-id/api/v1/livestream/{channel.livestream_id}',
@@ -744,7 +769,7 @@ class AMCNetworksTVEScraper(BaseScraper):
                 device_id=device_id,
                 entitlement='mvpd-auth',
                 adobe_id=adobe_id,
-                mvpd=MVPD,
+                mvpd=mso_id,
                 feature_flags=feature_flags,
             ),
             timeout=30,

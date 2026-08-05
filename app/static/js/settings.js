@@ -247,13 +247,9 @@ function updateTveProviderFields() {
   if (adobeMso && (providerChanged || !adobeMso.value.trim())) adobeMso.value = provider.id;
   if (ytdlpMso && (providerChanged || !ytdlpMso.value.trim())) ytdlpMso.value = provider.id;
   if (hint) {
-    const backend = document.getElementById('tve-cox-auth-backend')?.value || 'native';
-    const base = provider.id === 'Cox'
-      ? 'Used by TVE sources such as A+E Networks TVE.'
-      : `${provider.name} is available through yt-dlp Adobe Pass. Native A+E testing currently supports Cox only.`;
-    hint.textContent = backend === 'yt_dlp'
-      ? `${base} Advanced engine set to yt-dlp for future compatible TVE sources.`
-      : base;
+    hint.textContent = provider.id === 'Cox'
+      ? 'Used by TVE sources such as A+E Networks TVE and Warner TVE (TBS/TNT/truTV), via a fast native sign-in.'
+      : `Used by A+E Networks TVE and Warner TVE (TBS/TNT/truTV) — signs in through ${provider.name}'s own login via yt-dlp's Adobe Pass support. Other TVE sources (AMC Networks, NBC, Discovery, Fox) are Cox-only for now.`;
   }
   if (select) select.dataset.previousProvider = provider.id;
 }
@@ -308,7 +304,7 @@ async function testTveCox() {
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
     status.className = 'save-status ok';
     status.textContent = '✓ Authorized';
-    if (last) last.textContent = data.account?.last_auth_message || 'Cox authorized History via Adobe Pass.';
+    if (last) last.textContent = data.account?.last_auth_message || 'Authorized History via Adobe Pass.';
   } catch (e) {
     status.className = 'save-status error';
     status.textContent = '✕ Auth failed';
@@ -316,6 +312,161 @@ async function testTveCox() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ── MVPD interactive browser sign-in (Adobe Pass second-screen pairing) ────
+// Same streamed-screenshot/forwarded-input pattern as Sling's own FAST
+// sign-in (app/templates/admin/sources.html), applied to Adobe Pass instead —
+// see app/worker.py's run_mvpd_browser_login docstring for why this exists
+// (some MSO login pages block scripted clients outright, browser TLS
+// impersonation included).
+let _mvpdLoginActive = false;
+let _mvpdLoginDone = false;
+let _mvpdLoginPollTimer = null;
+
+async function loadMvpdRequestorChoices() {
+  const select = document.getElementById('tve-mvpd-requestor');
+  if (!select) return;
+  try {
+    const r = await fetch('/api/settings/tve/browser-login/requestors');
+    const d = await r.json();
+    select.innerHTML = (d.requestors || []).map(req => `<option value="${req.requestor_id}">${req.name}</option>`).join('');
+  } catch (e) {
+    // leave the select empty — the Sign in button will just no-op
+  }
+}
+
+function openMvpdLoginModal() {
+  const requestorId = document.getElementById('tve-mvpd-requestor')?.value;
+  if (!requestorId) return;
+  _mvpdLoginActive = true;
+  _mvpdLoginDone = false;
+  if (_mvpdLoginPollTimer) { clearTimeout(_mvpdLoginPollTimer); _mvpdLoginPollTimer = null; }
+  const modal = document.getElementById('mvpd-login-modal');
+  const frame = document.getElementById('mvpd-login-frame');
+  const status = document.getElementById('mvpd-login-status');
+  frame.removeAttribute('src');
+  frame.style.visibility = 'hidden';  // no src yet - avoid showing a broken-image icon
+  status.style.color = '';
+  status.textContent = 'Launching browser…';
+  modal.classList.add('open');
+  fetch('/api/settings/tve/browser-login/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requestor_id: requestorId }),
+  })
+    .then(r => r.json())
+    .catch(() => {})
+    .finally(() => _pollMvpdLoginModal());
+}
+
+function closeMvpdLoginModal(event) {
+  if (event && event.target !== document.getElementById('mvpd-login-modal')) return;
+  _closeMvpdLoginModal(true);
+}
+
+function _closeMvpdLoginModal(cancel) {
+  document.getElementById('mvpd-login-modal').classList.remove('open');
+  if (_mvpdLoginPollTimer) { clearTimeout(_mvpdLoginPollTimer); _mvpdLoginPollTimer = null; }
+  const wasActive = _mvpdLoginActive;
+  _mvpdLoginActive = false;
+  if (cancel && !_mvpdLoginDone && wasActive) {
+    fetch('/api/settings/tve/browser-login/stop', { method: 'POST' }).catch(() => {});
+  }
+}
+
+async function _pollMvpdLoginModal() {
+  if (!_mvpdLoginActive) return;
+  try {
+    const r = await fetch('/api/settings/tve/browser-login/state');
+    const d = await r.json();
+    if (!_mvpdLoginActive) return;  // modal was closed mid-poll
+
+    const status = document.getElementById('mvpd-login-status');
+    const frame = document.getElementById('mvpd-login-frame');
+    if (d.screenshot) {
+      frame.src = `data:image/jpeg;base64,${d.screenshot}`;
+      frame.style.visibility = 'visible';
+    }
+
+    if (d.state === 'success') {
+      _mvpdLoginDone = true;
+      status.style.color = 'var(--success-soft)';
+      status.textContent = '✓ ' + (d.message || 'Signed in.');
+      setTimeout(() => { _closeMvpdLoginModal(false); }, 1800);
+      return;
+    }
+    if (d.state === 'error' || d.state === 'stopped') {
+      _mvpdLoginDone = true;
+      status.style.color = d.state === 'error' ? 'var(--danger)' : '';
+      const prefix = d.state === 'error' ? '✗ ' : '';
+      status.textContent = prefix + (d.message || 'Sign-in stopped.');
+      return;  // leave the modal open showing the message; user closes manually
+    }
+    status.style.color = '';
+    status.textContent = d.message || 'Signing in…';
+  } catch (e) {
+    // transient — keep polling
+  }
+  _mvpdLoginPollTimer = setTimeout(_pollMvpdLoginModal, 400);
+}
+
+function _mvpdLoginFrameScale(frame) {
+  const rect = frame.getBoundingClientRect();
+  return {
+    x: (frame.naturalWidth || rect.width) / rect.width,
+    y: (frame.naturalHeight || rect.height) / rect.height,
+    rect,
+  };
+}
+
+function _mvpdLoginSendInput(payload) {
+  if (!_mvpdLoginActive) return;
+  fetch('/api/settings/tve/browser-login/input', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
+let _mvpdLoginDragging = false;
+
+function mvpdLoginFrameMousedown(event) {
+  if (!_mvpdLoginActive) return;
+  const frame = event.currentTarget;
+  frame.focus();
+  _mvpdLoginDragging = true;
+  const { x: sx, y: sy, rect } = _mvpdLoginFrameScale(frame);
+  _mvpdLoginSendInput({ type: 'mousedown', x: (event.clientX - rect.left) * sx, y: (event.clientY - rect.top) * sy });
+}
+
+document.addEventListener('mouseup', function (event) {
+  if (!_mvpdLoginDragging) return;
+  _mvpdLoginDragging = false;
+  const frame = document.getElementById('mvpd-login-frame');
+  if (!frame) return;
+  const { x: sx, y: sy, rect } = _mvpdLoginFrameScale(frame);
+  _mvpdLoginSendInput({ type: 'mouseup', x: (event.clientX - rect.left) * sx, y: (event.clientY - rect.top) * sy });
+});
+
+let _mvpdLoginLastMoveSent = 0;
+
+function mvpdLoginFrameMousemove(event) {
+  if (!_mvpdLoginActive) return;
+  const now = performance.now();
+  if (now - _mvpdLoginLastMoveSent < 60) return;  // throttle to ~16/s
+  _mvpdLoginLastMoveSent = now;
+  const frame = event.currentTarget;
+  const { x: sx, y: sy, rect } = _mvpdLoginFrameScale(frame);
+  const x = (event.clientX - rect.left) * sx;
+  const y = (event.clientY - rect.top) * sy;
+  _mvpdLoginSendInput({ type: 'mousemove', x, y });
+}
+
+function mvpdLoginFrameKeydown(event) {
+  if (!_mvpdLoginActive) return;
+  event.preventDefault();
+  _mvpdLoginSendInput({ type: 'key', key: event.key });
 }
 
 let _lastPrismcastDiagnostics = '';
@@ -1145,6 +1296,7 @@ async function saveContributionUrl() {
 initSettingsSectionNav();
 loadSystemStats();
 updateTveProviderFields();
+loadMvpdRequestorChoices();
 
 // ── Community Gracenote map remote status ───────────────────────────────────
 async function loadRemoteGracenoteStatus() {

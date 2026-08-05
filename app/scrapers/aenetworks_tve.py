@@ -15,7 +15,7 @@ from ..models import TVEAccount
 from ..tve.adobe_pass import (
     TVEAuthError,
     TVENotAuthorizedError,
-    AdobePassCoxClient,
+    authorize_mvpd,
     discover_aenetworks_software_statement,
     invalidate_aenetworks_software_statement,
 )
@@ -443,17 +443,17 @@ class AENetworksTVEScraper(BaseScraper):
             configured_statement = (cfg.get('software_statement') or '').strip()
             try:
                 statement = configured_statement or discover_aenetworks_software_statement(network.brand)
-                client = AdobePassCoxClient(
+                authorize_mvpd(
+                    account,
                     requestor_id=network.requestor_id,
                     resource=network.resource,
                     software_statement=statement,
                     redirect_url=network.redirect_url,
                 )
-                client.authorize_with_cox(account.username or '', account.password or '')
             except TVENotAuthorizedError as exc:
-                logger.warning('[aenetworks-tve] Cox not authorized for %s: %s', network.brand, exc)
+                logger.warning('[aenetworks-tve] MVPD not authorized for %s: %s', network.brand, exc)
             except TVEAuthError as exc:
                 if not configured_statement:
                     invalidate_aenetworks_software_statement(network.brand)
-                logger.warning('[aenetworks-tve] Cox auth failed for %s: %s', network.brand, exc)
+                logger.warning('[aenetworks-tve] MVPD auth failed for %s: %s', network.brand, exc)
         return network.dai_master

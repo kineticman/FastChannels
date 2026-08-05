@@ -63,7 +63,7 @@ from ..generators.m3u import (
 )
 from .. import logfile
 from ..timezone_utils import normalize_timezone_name, write_timezone_cache
-from ..tve.adobe_pass import TVEAuthError, verify_cox_history
+from ..tve.adobe_pass import TVEAuthError, verify_mvpd_history
 from ..tve.providers import ytdlp_adobe_mso_providers
 from ..xml_cache import (
     get_artifact,
@@ -5116,18 +5116,14 @@ def test_tve_cox_settings():
     if not account.has_credentials():
         return jsonify({'error': 'TVE username and password are required.'}), 400
     cfg = account.config or {}
-    selected_mso_id = (cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
-    auth_backend = (cfg.get('auth_backend') or 'native').strip()
-    if selected_mso_id != 'Cox' or auth_backend != 'native':
-        return jsonify({'error': 'The built-in auth test currently only verifies Cox with Native Adobe Pass.'}), 400
+    selected_mso_name = (cfg.get('selected_mso_name') or cfg.get('selected_mso_id') or 'Cox').strip()
     try:
-        result = verify_cox_history(
-            account.username or '',
-            account.password or '',
+        result = verify_mvpd_history(
+            account,
             software_statement=(account.config or {}).get('software_statement'),
         )
         account.last_auth_status = 'ok'
-        account.last_auth_message = 'Cox authorized History via Adobe Pass.'
+        account.last_auth_message = f'{selected_mso_name} authorized History via Adobe Pass.'
         account.last_auth_at = datetime.now(timezone.utc)
         db.session.commit()
         return jsonify({'ok': True, 'account': account.to_safe_dict(), 'result': result})
@@ -5137,6 +5133,218 @@ def test_tve_cox_settings():
         account.last_auth_at = datetime.now(timezone.utc)
         db.session.commit()
         return jsonify({'ok': False, 'error': str(exc), 'account': account.to_safe_dict()}), 502
+
+
+# ── MVPD interactive browser sign-in (Adobe Pass "second screen" pairing) ──
+# For MSOs whose login page blocks scripted clients outright (e.g. Sling's
+# identity.sling.com returns HTTP 417 even to a browser-impersonating HTTP
+# client — see app/tve/ytdlp_mvpd.py), a real, human-operated Camoufox tab
+# completes the MSO's actual login page while this process polls Adobe for
+# the resulting authn_token using the same reg_code — see the docstring on
+# app.worker.run_mvpd_browser_login for the full mechanism. Same streamed-
+# screenshot/forwarded-input pattern as the Sling FAST sign-in above, just
+# not tied to a Source (the TVE account isn't one).
+
+@api_bp.route('/settings/tve/browser-login/requestors')
+def mvpd_browser_login_requestors():
+    from ..tve.mvpd_targets import REQUESTOR_CHOICES
+    return jsonify({'requestors': REQUESTOR_CHOICES})
+
+
+@api_bp.route('/settings/tve/browser-login/start', methods=['POST'])
+def mvpd_browser_login_start():
+    from ..tve.mvpd_targets import resolve_requestor_target
+    from .tasks import trigger_mvpd_browser_login
+
+    account = _get_tve_account('cox', 'Cox')
+    if not account.is_enabled:
+        return jsonify({'error': 'Enable and save the TVE account first.'}), 400
+    data = request.get_json(force=True) or {}
+    requestor_id = (data.get('requestor_id') or '').strip().upper()
+    if not requestor_id:
+        return jsonify({'error': 'requestor_id is required.'}), 400
+    cfg = account.config or {}
+    mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
+    try:
+        target = resolve_requestor_target(requestor_id)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    started = trigger_mvpd_browser_login(
+        requestor_id, target['resource'], target['software_statement'], target['redirect_url'], mso_id,
+    )
+    return jsonify({'status': 'started' if started else 'already_running'})
+
+
+@api_bp.route('/settings/tve/browser-login/state')
+def mvpd_browser_login_state():
+    import base64
+    import redis as _redis
+
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw_status = r.get('mvpd:browser-login:status')
+    result = json.loads(raw_status) if raw_status else {'state': 'idle'}
+    shot = r.get('mvpd:browser-login:screenshot')
+    if shot:
+        result['screenshot'] = base64.b64encode(shot).decode('ascii')
+    return jsonify(result)
+
+
+@api_bp.route('/settings/tve/browser-login/input', methods=['POST'])
+def mvpd_browser_login_input():
+    import redis as _redis
+
+    data = request.get_json() or {}
+    kind = data.get('type')
+    if kind in ('click', 'mousemove', 'mousedown', 'mouseup'):
+        try:
+            payload = {'type': kind, 'x': float(data['x']), 'y': float(data['y'])}
+        except (KeyError, TypeError, ValueError):
+            return jsonify({'error': f'{kind} requires numeric x/y'}), 400
+    elif kind == 'key':
+        key = str(data.get('key') or '')
+        if not key:
+            return jsonify({'error': 'key requires a non-empty key'}), 400
+        payload = {'type': 'key', 'key': key}
+    else:
+        return jsonify({'error': 'invalid input type'}), 400
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    r.rpush('mvpd:browser-login:input', json.dumps(payload))
+    r.expire('mvpd:browser-login:input', 60)
+    return jsonify({'status': 'ok'})
+
+
+@api_bp.route('/settings/tve/browser-login/stop', methods=['POST'])
+def mvpd_browser_login_stop():
+    from .tasks import stop_mvpd_browser_login
+    stop_mvpd_browser_login()
+    return jsonify({'status': 'stopping'})
+
+
+# ── NBC TVE browser sign-in (Adobe Pass v2 "second screen" pairing) ────────
+# NBC TVE uses a different Adobe Pass generation (v2 JSON REST) than Warner/
+# A+E's legacy XML protocol — see app.worker.run_nbc_browser_login and
+# app/scrapers/nbc_tve.py's AdobePassV2CoxClient. Separate Redis-key
+# namespace (nbc-mvpd:*) so it doesn't collide with the legacy job above.
+
+@api_bp.route('/settings/tve/nbc/browser-login/start', methods=['POST'])
+def nbc_browser_login_start():
+    from .tasks import trigger_nbc_browser_login
+
+    account = _get_tve_account('cox', 'Cox')
+    if not account.is_enabled:
+        return jsonify({'error': 'Enable and save the TVE account first.'}), 400
+    cfg = account.config or {}
+    mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
+    started = trigger_nbc_browser_login(mso_id)
+    return jsonify({'status': 'started' if started else 'already_running'})
+
+
+@api_bp.route('/settings/tve/nbc/browser-login/state')
+def nbc_browser_login_state():
+    import base64
+    import redis as _redis
+
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw_status = r.get('nbc-mvpd:browser-login:status')
+    result = json.loads(raw_status) if raw_status else {'state': 'idle'}
+    shot = r.get('nbc-mvpd:browser-login:screenshot')
+    if shot:
+        result['screenshot'] = base64.b64encode(shot).decode('ascii')
+    return jsonify(result)
+
+
+@api_bp.route('/settings/tve/nbc/browser-login/input', methods=['POST'])
+def nbc_browser_login_input():
+    import redis as _redis
+
+    data = request.get_json() or {}
+    kind = data.get('type')
+    if kind in ('click', 'mousemove', 'mousedown', 'mouseup'):
+        try:
+            payload = {'type': kind, 'x': float(data['x']), 'y': float(data['y'])}
+        except (KeyError, TypeError, ValueError):
+            return jsonify({'error': f'{kind} requires numeric x/y'}), 400
+    elif kind == 'key':
+        key = str(data.get('key') or '')
+        if not key:
+            return jsonify({'error': 'key requires a non-empty key'}), 400
+        payload = {'type': 'key', 'key': key}
+    else:
+        return jsonify({'error': 'invalid input type'}), 400
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    r.rpush('nbc-mvpd:browser-login:input', json.dumps(payload))
+    r.expire('nbc-mvpd:browser-login:input', 60)
+    return jsonify({'status': 'ok'})
+
+
+@api_bp.route('/settings/tve/nbc/browser-login/stop', methods=['POST'])
+def nbc_browser_login_stop():
+    from .tasks import stop_nbc_browser_login
+    stop_nbc_browser_login()
+    return jsonify({'status': 'stopping'})
+
+
+# ── FOX Sports TVE browser sign-in ──────────────────────────────────────────
+# api3.fox.com's own REST flow (app.worker.run_fox_browser_login /
+# app/scrapers/fox_tve.py's _fox_sports_mvpd_token) — a third distinct Adobe
+# Pass integration style. Separate Redis-key namespace (fox-mvpd:*).
+
+@api_bp.route('/settings/tve/fox/browser-login/start', methods=['POST'])
+def fox_browser_login_start():
+    from .tasks import trigger_fox_browser_login
+
+    account = _get_tve_account('cox', 'Cox')
+    if not account.is_enabled:
+        return jsonify({'error': 'Enable and save the TVE account first.'}), 400
+    cfg = account.config or {}
+    mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
+    started = trigger_fox_browser_login(mso_id)
+    return jsonify({'status': 'started' if started else 'already_running'})
+
+
+@api_bp.route('/settings/tve/fox/browser-login/state')
+def fox_browser_login_state():
+    import base64
+    import redis as _redis
+
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw_status = r.get('fox-mvpd:browser-login:status')
+    result = json.loads(raw_status) if raw_status else {'state': 'idle'}
+    shot = r.get('fox-mvpd:browser-login:screenshot')
+    if shot:
+        result['screenshot'] = base64.b64encode(shot).decode('ascii')
+    return jsonify(result)
+
+
+@api_bp.route('/settings/tve/fox/browser-login/input', methods=['POST'])
+def fox_browser_login_input():
+    import redis as _redis
+
+    data = request.get_json() or {}
+    kind = data.get('type')
+    if kind in ('click', 'mousemove', 'mousedown', 'mouseup'):
+        try:
+            payload = {'type': kind, 'x': float(data['x']), 'y': float(data['y'])}
+        except (KeyError, TypeError, ValueError):
+            return jsonify({'error': f'{kind} requires numeric x/y'}), 400
+    elif kind == 'key':
+        key = str(data.get('key') or '')
+        if not key:
+            return jsonify({'error': 'key requires a non-empty key'}), 400
+        payload = {'type': 'key', 'key': key}
+    else:
+        return jsonify({'error': 'invalid input type'}), 400
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    r.rpush('fox-mvpd:browser-login:input', json.dumps(payload))
+    r.expire('fox-mvpd:browser-login:input', 60)
+    return jsonify({'status': 'ok'})
+
+
+@api_bp.route('/settings/tve/fox/browser-login/stop', methods=['POST'])
+def fox_browser_login_stop():
+    from .tasks import stop_fox_browser_login
+    stop_fox_browser_login()
+    return jsonify({'status': 'stopping'})
 
 
 @api_bp.route('/settings', methods=['GET', 'POST'])

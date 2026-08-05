@@ -267,14 +267,20 @@ class AdobePassV2CoxClient:
             raise TVEAuthError('Adobe Pass v2: client token exchange did not return an access_token.')
         self.access_token = access_token
 
-    def authorize_with_cox(self, username: str, password: str) -> dict:
+    def authorize(self, mso_id: str, username: str, password: str) -> dict:
         self._register_client()
 
         r = self._post(
             f'{ADOBE_BASE}/api/v2/{self.requestor_id}/sessions',
-            data={'mvpd': 'Cox', 'redirectUrl': self.redirect_url, 'domainName': 'nbc.com'},
+            data={'mvpd': mso_id, 'redirectUrl': self.redirect_url, 'domainName': 'nbc.com'},
             headers={**self._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
         )
+        if not r.ok:
+            try:
+                detail = r.json().get('message') or r.text[:300]
+            except ValueError:
+                detail = r.text[:300]
+            raise TVEAuthError(f'Adobe Pass v2: sessions request failed for MVPD {mso_id}: {detail}')
         session_data = r.json()
         auth_path = session_data.get('url')
         if not auth_path:
@@ -287,21 +293,29 @@ class AdobePassV2CoxClient:
             )
         except requests.RequestException as exc:
             raise TVEAuthError(str(exc)) from exc
-        cox_saml_url = r.headers.get('location') or ''
-        if 'login.cox.com' not in cox_saml_url:
-            raise TVEAuthError(f'Adobe Pass v2: unexpected authenticate redirect host {urlsplit(cox_saml_url).netloc!r}.')
+        mso_login_url = r.headers.get('location') or ''
+        if not mso_login_url:
+            raise TVEAuthError('Adobe Pass v2: sessions authenticate call did not return an MVPD login redirect.')
 
-        try:
-            _cox_saml_login(self.session, cox_saml_url, username, password)
-        except ValueError as exc:
-            raise TVENotAuthorizedError(str(exc)) from exc
-        except requests.RequestException as exc:
-            raise TVEAuthError(str(exc)) from exc
+        if mso_id == 'Cox':
+            if 'login.cox.com' not in mso_login_url:
+                raise TVEAuthError(f'Adobe Pass v2: unexpected authenticate redirect host {urlsplit(mso_login_url).netloc!r}.')
+            try:
+                _cox_saml_login(self.session, mso_login_url, username, password)
+            except ValueError as exc:
+                raise TVENotAuthorizedError(str(exc)) from exc
+            except requests.RequestException as exc:
+                raise TVEAuthError(str(exc)) from exc
+        else:
+            raise TVEAuthError(
+                f'Adobe Pass v2: browser-assisted sign-in for NBC TVE is not built yet for MVPD {mso_id} '
+                f'(only native Cox login is wired up here).'
+            )
 
-        r = self._get(f'{ADOBE_BASE}/api/v2/{self.requestor_id}/profiles/Cox', headers=self._bearer_headers())
-        profile = ((r.json() or {}).get('profiles') or {}).get('Cox')
+        r = self._get(f'{ADOBE_BASE}/api/v2/{self.requestor_id}/profiles/{mso_id}', headers=self._bearer_headers())
+        profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)
         if not profile:
-            raise TVENotAuthorizedError('Adobe Pass v2: no Cox profile after login — MVPD did not authorize this account.')
+            raise TVENotAuthorizedError(f'Adobe Pass v2: no {mso_id} profile after login — MVPD did not authorize this account.')
         return profile
 
     def _get(self, url: str, **kwargs) -> requests.Response:
@@ -312,9 +326,9 @@ class AdobePassV2CoxClient:
         except requests.RequestException as exc:
             raise TVEAuthError(str(exc)) from exc
 
-    def preauthorize(self, resource_ids: list[str]) -> dict[str, bool]:
+    def preauthorize(self, mso_id: str, resource_ids: list[str]) -> dict[str, bool]:
         r = self._post(
-            f'{ADOBE_BASE}/api/v2/{self.requestor_id}/decisions/preauthorize/Cox',
+            f'{ADOBE_BASE}/api/v2/{self.requestor_id}/decisions/preauthorize/{mso_id}',
             json={'resources': resource_ids},
             headers={**self._bearer_headers(), 'Content-Type': 'application/json'},
         )
@@ -577,27 +591,57 @@ class NbcTveScraper(BaseScraper):
 
         account = self._cox_account()
         if not account:
-            raise TVEAuthError('Cox TVE credentials are not configured in Settings.')
+            raise TVEAuthError('TVE credentials are not configured in Settings.')
+        cfg = account.config or {}
+        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
 
         page_config = self._discover_page_config()
+
+        # A human may have already completed a one-time browser-assisted sign-in
+        # for this MVPD (app.worker.run_nbc_browser_login), for MSOs whose login
+        # page blocks scripted clients. Reuse that access_token+device
+        # fingerprint instead of re-registering a client and requiring the
+        # human again, until Adobe actually stops recognizing it.
+        cached_auth = cfg.get('nbc_mvpd_auth') or {}
+        if mso_id != 'Cox' and cached_auth.get('mso_id') == mso_id and cached_auth.get('access_token'):
+            cached_client = AdobePassV2CoxClient(
+                REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL,
+                cached_auth.get('device_fingerprint') or self._ensure_device_fingerprint(),
+            )
+            cached_client.access_token = cached_auth['access_token']
+            try:
+                r = cached_client._get(f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{mso_id}', headers=cached_client._bearer_headers())
+                profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)
+            except TVEAuthError:
+                profile = None
+            if profile:
+                resource_ids = sorted({e.resource_id for e in self._fetch_guide().values()} | {resource_id})
+                decisions = cached_client.preauthorize(mso_id, resource_ids)
+                self._update_cache('nbc_entitlements', {
+                    'decisions': decisions, 'checked': sorted(resource_ids), 'cached_at': time.time(),
+                })
+                if not decisions.get(resource_id, True):
+                    raise TVENotAuthorizedError(f'NBC TVE: {mso_id} account is not entitled to {resource_id}.')
+                return
+
         client = AdobePassV2CoxClient(
             REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL,
             self._ensure_device_fingerprint(),
         )
         try:
-            client.authorize_with_cox(account.username or '', account.password or '')
+            client.authorize(mso_id, account.username or '', account.password or '')
             resource_ids = sorted({e.resource_id for e in self._fetch_guide().values()} | {resource_id})
-            decisions = client.preauthorize(resource_ids)
+            decisions = client.preauthorize(mso_id, resource_ids)
             account.last_auth_status = 'ok'
-            account.last_auth_message = 'NBC TVE access token obtained through Cox MVPD.'
+            account.last_auth_message = f'NBC TVE access token obtained through {mso_id} MVPD.'
             account.last_auth_at = datetime.now(timezone.utc)
             db.session.commit()
         except TVENotAuthorizedError as exc:
             account.last_auth_status = 'error'
-            account.last_auth_message = f'NBC TVE: Cox is not authorized: {exc}'[:500]
+            account.last_auth_message = f'NBC TVE: {mso_id} is not authorized: {exc}'[:500]
             account.last_auth_at = datetime.now(timezone.utc)
             db.session.commit()
-            raise TVENotAuthorizedError(f'NBC TVE: Cox is not authorized: {exc}') from exc
+            raise TVENotAuthorizedError(f'NBC TVE: {mso_id} is not authorized: {exc}') from exc
         except TVEAuthError as exc:
             account.last_auth_status = 'error'
             account.last_auth_message = f'NBC TVE: Adobe Pass auth failed: {exc}'[:500]

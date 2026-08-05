@@ -37,6 +37,15 @@ class TVENotAuthorizedError(TVEAuthError):
     pass
 
 
+class TVEPendingAuthError(TVEAuthError):
+    """Adobe session isn't authenticated yet — not a failure, just not done.
+
+    Raised by fetch_session_token() while polling during a browser-assisted
+    pairing, before the human has finished logging in at the MSO.
+    """
+    pass
+
+
 @dataclass
 class AdobeContext:
     software_statement: str
@@ -216,6 +225,20 @@ class AdobePassCoxClient:
         except requests.RequestException as exc:
             raise TVEAuthError(str(exc)) from exc
 
+    def _post_lenient(self, url: str, **kwargs) -> requests.Response:
+        """Like _post(), but doesn't raise on a non-2xx status.
+
+        Adobe returns error XML bodies (including notAuthorized) under a mix
+        of HTTP statuses — sometimes 200, sometimes 400 — so callers that need
+        to inspect the body for a specific error code (authorize()) use this
+        instead of _post(), which would raise_for_status() and discard the
+        body before that inspection ever runs.
+        """
+        try:
+            return self.session.post(url, timeout=30, **kwargs)
+        except requests.RequestException as exc:
+            raise TVEAuthError(str(exc)) from exc
+
     def setup_client(self) -> None:
         r = self._post(
             f'{ADOBE_BASE}/o/client/register',
@@ -262,6 +285,26 @@ class AdobePassCoxClient:
             headers={'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
         )
         self.ctx.reg_code = r.json()['code']
+
+    def authenticate_redirect_url(self, mso_id: str) -> str:
+        """Build the authenticate/saml URL for a given MSO without fetching it.
+
+        Requires setup_client()/register_device()/create_regcode() to have run
+        first. Used by browser-assisted pairing: a real browser (not this
+        client) opens this URL and a human completes the MSO's own login page,
+        which redirects through Adobe's SAML consumer and binds the resulting
+        auth to this client's reg_code server-side — so fetch_session_token()
+        can later pick it up from an entirely different HTTP session.
+        """
+        return AUTHENTICATE_URL + '?' + urlencode({
+            'noflash': 'true',
+            'mso_id': mso_id,
+            'requestor_id': self.requestor_id,
+            'no_iframe': 'false',
+            'domain_name': 'adobe.com',
+            'redirect_url': self.redirect_url,
+            'reg_code': self.ctx.reg_code,
+        })
 
     def authenticate_with_cox(self, username: str, password: str) -> None:
         try:
@@ -341,13 +384,31 @@ class AdobePassCoxClient:
             raise TVEAuthError(f'Adobe SAML consumer returned HTTP {r.status_code}.')
 
     def fetch_session_token(self) -> None:
-        r = self._post(
-            f'{ADOBE_BASE}/adobe-services/session',
-            data={'_method': 'GET', 'reg_code': self.ctx.reg_code, 'requestor_id': self.requestor_id},
-            headers={'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
-        )
+        try:
+            r = self.session.post(
+                f'{ADOBE_BASE}/adobe-services/session',
+                data={'_method': 'GET', 'reg_code': self.ctx.reg_code, 'requestor_id': self.requestor_id},
+                headers={'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise TVEAuthError(str(exc)) from exc
+        # 401 "Data not found" is Adobe's response when no session record
+        # exists yet for this reg_code at all — before the MSO round-trip has
+        # completed even once. That's a *different* not-done-yet state than
+        # the 200 "<pendingLogout" response (a session exists but isn't
+        # authenticated yet), but both mean the same thing to a caller: the
+        # human hasn't finished signing in at the MSO. Only surfaced during
+        # browser-assisted pairing polling (app.worker.run_mvpd_browser_login)
+        # — the scripted Cox flow never observes this, since it only calls
+        # fetch_session_token() after authenticate_with_cox() has already
+        # completed the round-trip synchronously.
+        if r.status_code == 401:
+            raise TVEPendingAuthError('Adobe has no session yet for this reg_code.')
+        if r.status_code >= 400:
+            raise TVEAuthError(f'Adobe session endpoint returned HTTP {r.status_code}: {r.text[:300]}')
         if '<pendingLogout' in r.text:
-            raise TVEAuthError('Adobe session returned pendingLogout.')
+            raise TVEPendingAuthError('Adobe session is not authenticated yet.')
         self.ctx.authn_token = html.unescape(_text_between(r.text, 'authnToken'))
 
     def authorize(self) -> str:
@@ -357,7 +418,7 @@ class AdobePassCoxClient:
         session_guid = _text_between(self.ctx.authn_token, 'simpleTokenAuthenticationGuid')
         self.session.headers.update({'ap_19': guid, 'ap_23': session_index})
 
-        r = self._post(
+        r = self._post_lenient(
             f'{ADOBE_BASE}/adobe-services/authorize',
             data={
                 'resource_id': self.resource,
@@ -369,14 +430,21 @@ class AdobePassCoxClient:
             },
             headers={'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
         )
+        if '<pendingLogout' in r.text:
+            # A cached authn_token that's since expired/logged-out looks
+            # exactly like this — a normal, expected staleness case (see
+            # authorize_mvpd()'s cached-token fast path), not a real failure.
+            raise TVEAuthError('Adobe authorize: session has expired (pendingLogout) — authn_token needs re-pairing.')
         if '<error' in r.text:
             message = _adobe_error_message(r.text)
             if _adobe_error_code(r.text) == 'notAuthorized':
                 raise TVENotAuthorizedError(message)
             raise TVEAuthError(message)
+        if r.status_code >= 400:
+            raise TVEAuthError(f'Adobe authorize returned HTTP {r.status_code}: {r.text[:300]}')
         self.ctx.authz_token = html.unescape(_text_between(r.text, 'authzToken'))
 
-        r = self._post(
+        r = self._post_lenient(
             f'{ADOBE_BASE}/adobe-services/shortAuthorize',
             data={
                 'authz_token': self.ctx.authz_token,
@@ -394,6 +462,8 @@ class AdobePassCoxClient:
             if _adobe_error_code(r.text) == 'notAuthorized':
                 raise TVENotAuthorizedError(message)
             raise TVEAuthError(message)
+        if r.status_code >= 400:
+            raise TVEAuthError(f'Adobe shortAuthorize returned HTTP {r.status_code}: {r.text[:300]}')
         self.ctx.short_token = r.text
         return self.ctx.short_token
 
@@ -404,6 +474,90 @@ class AdobePassCoxClient:
         self.authenticate_with_cox(username, password)
         self.fetch_session_token()
         return self.authorize()
+
+
+def authorize_mvpd(
+    account,
+    *,
+    requestor_id: str,
+    resource: str,
+    software_statement: str,
+    redirect_url: str,
+) -> tuple[str, requests.Session]:
+    """Authenticate a TVEAccount against whichever MSO it's configured for.
+
+    Uses the fast native Cox client when the account is Cox + native backend
+    (the validated, proven-working path). Any other MSO goes through yt-dlp's
+    generic per-provider Adobe Pass login flows (app/tve/ytdlp_mvpd.py) — the
+    same legacy sp.auth.adobe.com protocol, just with that MSO's login handled
+    by yt-dlp instead of a hand-rolled client. Returns (token, session); the
+    session is a plain requests.Session for the yt-dlp path since downstream
+    token-exchange calls (NGTV, etc.) authenticate via the token itself, not
+    session cookies.
+    """
+    cfg = account.config or {}
+    selected_mso_id = (cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+    auth_backend = (cfg.get('auth_backend') or 'native').strip()
+    username = account.username or ''
+    password = account.password or ''
+
+    if selected_mso_id == 'Cox' and auth_backend == 'native':
+        client = AdobePassCoxClient(
+            requestor_id=requestor_id,
+            resource=resource,
+            software_statement=software_statement,
+            redirect_url=redirect_url,
+        )
+        token = client.authorize_with_cox(username, password)
+        return token, client.session
+
+    # A human may have already completed a one-time browser-assisted sign-in
+    # for this requestor_id (app/worker.py's run_mvpd_browser_login) for MSOs
+    # whose login page blocks scripted clients outright (e.g. Sling). That
+    # produces a long-lived authn_token we can keep resuming from here without
+    # ever going back through yt-dlp or bothering the human again, until Adobe
+    # actually rejects it (expired/revoked).
+    cached_authn = ((cfg.get('mvpd_authn') or {}).get(requestor_id) or {}).get('authn_token')
+    if cached_authn:
+        try:
+            client = AdobePassCoxClient(
+                requestor_id=requestor_id,
+                resource=resource,
+                software_statement=software_statement,
+                redirect_url=redirect_url,
+            )
+            client.setup_client()
+            # authorize() sends the ap_42/ap_11/ap_z/Ap_21/pass_sfp headers
+            # register_device() sets on self.session — Adobe 400s without them
+            # even though the fresh device_id here doesn't need to match
+            # whichever device the cached authn_token was originally issued to.
+            client.register_device()
+            client.ctx.authn_token = cached_authn
+            token = client.authorize()
+            return token, client.session
+        except TVENotAuthorizedError:
+            raise  # definitive answer from Adobe — retrying via yt-dlp won't change it
+        except TVEAuthError:
+            pass  # cached authn_token expired/invalid — fall through and re-pair
+
+    yt_dlp_mso_id = (cfg.get('yt_dlp_mso_id') or selected_mso_id).strip()
+    from .ytdlp_mvpd import authorize_via_ytdlp
+    token = authorize_via_ytdlp(
+        mso_id=yt_dlp_mso_id,
+        username=username,
+        password=password,
+        requestor_id=requestor_id,
+        resource=resource,
+        software_statement=software_statement,
+        redirect_url=redirect_url,
+    )
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': UA,
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+    })
+    return token, session
 
 
 def verify_cox_history(username: str, password: str, software_statement: Optional[str] = None) -> dict:
@@ -418,6 +572,31 @@ def verify_cox_history(username: str, password: str, software_statement: Optiona
     return {
         'requestor_id': 'HISTORY',
         'mso_id': 'Cox',
+        'short_authorize_obtained': bool(token),
+        'short_authorize_len': len(token or ''),
+    }
+
+
+def verify_mvpd_history(account, software_statement: Optional[str] = None) -> dict:
+    """Same validation as verify_cox_history, but MSO-aware via authorize_mvpd.
+
+    Works for Cox (native) and any other MSO yt-dlp supports (Sling, Spectrum,
+    Fubo, etc.) since it exercises whichever backend the account is configured
+    for. Used by the Settings TVE test button.
+    """
+    cfg = account.config or {}
+    selected_mso_id = (cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+    statement = software_statement or discover_aenetworks_software_statement('history')
+    token, _session = authorize_mvpd(
+        account,
+        requestor_id='HISTORY',
+        resource=HISTORY_RESOURCE,
+        software_statement=statement,
+        redirect_url=DEFAULT_HISTORY_REDIRECT_URL,
+    )
+    return {
+        'requestor_id': 'HISTORY',
+        'mso_id': selected_mso_id,
         'short_authorize_obtained': bool(token),
         'short_authorize_len': len(token or ''),
     }

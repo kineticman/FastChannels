@@ -59,7 +59,7 @@ import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..models import TVEAccount
-from ..tve.adobe_pass import AdobePassCoxClient, TVEAuthError, TVENotAuthorizedError
+from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, authorize_mvpd
 
 SCHEME = 'warner-tve://'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
@@ -442,25 +442,25 @@ class WarnerTVEScraper(BaseScraper):
 
         account = TVEAccount.query.filter_by(provider_id='cox').first()
         if not account or not account.is_enabled or not account.has_credentials():
-            raise TVEAuthError('Cox TVE credentials are not configured in Settings.')
+            raise TVEAuthError('TVE credentials are not configured in Settings.')
 
         brand_cfg = self._brand_config(channel.brand_key)
         site = BRAND_SITES[channel.brand_key]
 
-        client = AdobePassCoxClient(
-            requestor_id=brand_cfg['requestor_id'],
-            resource=brand_cfg['requestor_id'],
-            software_statement=brand_cfg['software_statement'],
-            redirect_url=site.url,
-        )
         try:
-            adobe_token = client.authorize_with_cox(account.username or '', account.password or '')
+            adobe_token, session = authorize_mvpd(
+                account,
+                requestor_id=brand_cfg['requestor_id'],
+                resource=brand_cfg['requestor_id'],
+                software_statement=brand_cfg['software_statement'],
+                redirect_url=site.url,
+            )
         except TVENotAuthorizedError as exc:
-            raise TVENotAuthorizedError(f'Warner TVE: Cox is not authorized for {channel.brand_key}: {exc}') from exc
+            raise TVENotAuthorizedError(f'Warner TVE: MVPD is not authorized for {channel.brand_key}: {exc}') from exc
         except TVEAuthError as exc:
             raise TVEAuthError(f'Warner TVE: Adobe Pass auth failed for {channel.brand_key}: {exc}') from exc
 
-        manifest_url, isp_token = self._resolve_manifest(client.session, brand_cfg, channel, adobe_token)
+        manifest_url, isp_token = self._resolve_manifest(session, brand_cfg, channel, adobe_token)
         if not manifest_url:
             raise RuntimeError(f'Warner TVE: could not resolve manifest for {channel.channel_id}')
 

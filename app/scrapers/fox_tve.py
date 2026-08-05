@@ -724,7 +724,7 @@ def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str,
     r.raise_for_status()
 
 
-def _fox_sports_cox_token(session: requests.Session, device_id: str, username: str, password: str) -> str:
+def _fox_sports_mvpd_token(session: requests.Session, device_id: str, mso_id: str, username: str, password: str) -> str:
     anon = session.post(
         'https://api3.fox.com/v2.0/login',
         headers=_fox_json_headers(),
@@ -738,7 +738,7 @@ def _fox_sports_cox_token(session: requests.Session, device_id: str, username: s
     reg = session.post(
         'https://api3.fox.com/v2.0/accountregcode/v2',
         headers=headers,
-        json={'deviceId': device_id, 'isRegister': False, 'isMvpd': True, 'selectedMvpdId': 'Cox'},
+        json={'deviceId': device_id, 'isRegister': False, 'isMvpd': True, 'selectedMvpdId': mso_id},
         timeout=30,
     )
     reg.raise_for_status()
@@ -747,7 +747,7 @@ def _fox_sports_cox_token(session: requests.Session, device_id: str, username: s
     mvpd = session.post(
         f'https://api3.fox.com/v2.0/accountregcode/{code}/mvpdlogin',
         headers=headers,
-        json={'mvpdId': 'Cox', 'redirectUrl': 'https://www.foxsports.com/live/fs1'},
+        json={'mvpdId': mso_id, 'redirectUrl': 'https://www.foxsports.com/live/fs1'},
         timeout=30,
     )
     mvpd.raise_for_status()
@@ -760,11 +760,20 @@ def _fox_sports_cox_token(session: requests.Session, device_id: str, username: s
         timeout=30,
     )
     r.raise_for_status()
-    cox_saml_url = r.headers.get('location') or ''
-    if 'login.cox.com' not in cox_saml_url:
-        raise ValueError(f'Unexpected FOX Adobe redirect host: {urlsplit(cox_saml_url).netloc}')
+    mso_login_url = r.headers.get('location') or ''
+    if not mso_login_url:
+        raise ValueError('FOX Adobe authenticate call did not return an MVPD login redirect.')
 
-    _cox_saml_login(session, cox_saml_url, username, password)
+    if mso_id == 'Cox':
+        if 'login.cox.com' not in mso_login_url:
+            raise ValueError(f'Unexpected FOX Adobe redirect host: {urlsplit(mso_login_url).netloc}')
+        _cox_saml_login(session, mso_login_url, username, password)
+    else:
+        raise ValueError(
+            f'Browser-assisted sign-in for FOX Sports TVE is not built yet for MVPD {mso_id} '
+            f'(only native Cox login is wired up here).'
+        )
+
     check = session.get(
         'https://api3.fox.com/v2.0/checkadobeauthn/v2',
         headers=headers,
@@ -773,7 +782,7 @@ def _fox_sports_cox_token(session: requests.Session, device_id: str, username: s
     )
     check.raise_for_status()
     token = check.json()['accessToken']
-    if 'Cox' not in token:
+    if mso_id not in token:
         # JWT is opaque to callers; this cheap text check only catches obviously
         # wrong anonymous/PreviewPass responses before handing it to DVP.
         exp = _jwt_exp(token)
@@ -790,24 +799,27 @@ def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
     now = int(datetime.now(timezone.utc).timestamp())
     if account and account.is_enabled and account.has_credentials():
         cfg = dict(account.config or {})
+        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
         cached_token = cfg.get('fox_sports_access_token') or ''
         cached_exp = int(cfg.get('fox_sports_access_token_exp') or 0)
-        if cached_token and cached_exp > now + 300:
+        cached_mso = cfg.get('fox_sports_access_token_mso') or 'Cox'
+        if cached_token and cached_exp > now + 300 and cached_mso == mso_id:
             return cached_token
         try:
-            token = _fox_sports_cox_token(session, device_id, account.username or '', account.password or '')
+            token = _fox_sports_mvpd_token(session, device_id, mso_id, account.username or '', account.password or '')
             exp = _jwt_exp(token) or (now + 3600)
             cfg['fox_sports_access_token'] = token
             cfg['fox_sports_access_token_exp'] = exp
+            cfg['fox_sports_access_token_mso'] = mso_id
             account.config = cfg
             account.last_auth_status = 'ok'
-            account.last_auth_message = 'FOX Sports MVPD token obtained through Cox.'
+            account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id}.'
             account.last_auth_at = datetime.now(timezone.utc)
             db.session.commit()
             return token
         except Exception as exc:
             account.last_auth_status = 'error'
-            account.last_auth_message = f'FOX Sports Cox auth failed: {exc}'[:500]
+            account.last_auth_message = f'FOX Sports {mso_id} auth failed: {exc}'[:500]
             account.last_auth_at = datetime.now(timezone.utc)
             db.session.commit()
 

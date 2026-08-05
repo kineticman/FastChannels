@@ -289,7 +289,22 @@ class DiscoveryTVEScraper(BaseScraper):
     def _authenticate(self) -> requests.Session:
         account = TVEAccount.query.filter_by(provider_id='cox').first()
         if not account or not account.is_enabled or not account.has_credentials():
-            raise TVEAuthError('Cox TVE credentials are not configured in Settings.')
+            raise TVEAuthError('TVE credentials are not configured in Settings.')
+        cfg = account.config or {}
+        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+        if mso_id != 'Cox':
+            # Unlike warner_tve/aenetworks_tve/amcn_tve/nbc_tve, Discovery's own
+            # gauth/authorize endpoint picks the MSO server-side (always
+            # returns mso_id=Cox in its response) regardless of any request
+            # parameter tried — confirmed live 2026-08-05 (mso_id, mvpd,
+            # mvpd_id, provider, mso all had no effect). Their real site must
+            # set this via an earlier provider-picker step we haven't
+            # reverse-engineered, so fail clearly here rather than silently
+            # attempting a Cox-only login flow with a different MSO's creds.
+            raise TVEAuthError(
+                f'Discovery TVE only supports Cox — MSO selection for {mso_id} is not '
+                f'exposed by Discovery\'s auth API (not yet reverse-engineered).'
+            )
 
         session = self._session()
         device_id = self.config.get('device_id') or str(uuid.uuid4())

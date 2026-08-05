@@ -33,7 +33,7 @@ from app.config_store import (
 )
 from app.extensions import db
 from app.hls import inspect_hls_drm, parse_stream_info as _parse_stream_info, parse_dash_stream_info as _parse_dash_stream_info, WIDEVINE_UUID, PLAYREADY_UUID
-from app.models import Source, Channel, Program, Feed, AppSettings, SourceCache
+from app.models import Source, Channel, Program, Feed, AppSettings, SourceCache, TVEAccount
 import time as _time
 from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
@@ -44,7 +44,7 @@ from app.scrapers.base import (
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
-from app.tve.adobe_pass import TVENotAuthorizedError
+from app.tve.adobe_pass import AdobePassCoxClient, TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
 from app.routes.images import delete_cached_logo
 
@@ -1922,6 +1922,15 @@ SLING_BROWSER_LOGIN_INPUT_KEY = 'sling:browser-login:input'
 SLING_BROWSER_LOGIN_STOP_KEY = 'sling:browser-login:stop'
 _SLING_BROWSER_LOGIN_TIMEOUT_SECONDS = 1800
 
+MVPD_BROWSER_LOGIN_STATUS_KEY = 'mvpd:browser-login:status'
+MVPD_BROWSER_LOGIN_SHOT_KEY = 'mvpd:browser-login:screenshot'
+MVPD_BROWSER_LOGIN_INPUT_KEY = 'mvpd:browser-login:input'
+MVPD_BROWSER_LOGIN_STOP_KEY = 'mvpd:browser-login:stop'
+_MVPD_BROWSER_LOGIN_TIMEOUT_SECONDS = 1800
+# Adobe's own session polling — short and frequent, since this is a plain
+# GET/POST exchange, not something that needs to be rate-limited.
+_MVPD_SESSION_POLL_SECONDS = 2.0
+
 
 def _safe_page_url(page) -> str:
     try:
@@ -2232,6 +2241,690 @@ def run_sling_browser_login():
             # process died mid-session - whatever that was didn't surface as a
             # plain Exception here, so widen the net to actually see it next time.
             logger.exception('[sling-login] browser session failed')
+            try:
+                set_status('error', f'Browser session failed: {exc}')
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+
+def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
+    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    if not account:
+        return
+    cfg = dict(account.config or {})
+    mvpd_authn = dict(cfg.get('mvpd_authn') or {})
+    mvpd_authn[requestor_id] = {'authn_token': authn_token, 'captured_at': int(time.time())}
+    cfg['mvpd_authn'] = mvpd_authn
+    account.config = cfg
+    db.session.commit()
+
+
+def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str) -> None:
+    """Best-effort: after a human completes one browser-assisted MVPD pairing,
+    try the other known TVE requestor_ids silently using the same already-
+    authenticated browser tab. The MSO's login session (cookies) is already
+    present in this tab, so these usually complete via a silent SSO redirect
+    with zero human input — no captcha, no login form. Never raises; a
+    requestor that doesn't pair this way just stays unpaired until someone
+    runs the browser-assisted flow for it directly.
+    """
+    from ..tve.mvpd_targets import all_requestor_ids, resolve_requestor_target
+
+    for sibling_id in all_requestor_ids():
+        if sibling_id == paired_requestor_id:
+            continue
+        try:
+            target = resolve_requestor_target(sibling_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.info('[mvpd-login] sibling %s: could not resolve target: %s', sibling_id, exc)
+            continue
+
+        sib_client = AdobePassCoxClient(
+            requestor_id=sibling_id,
+            resource=target['resource'],
+            software_statement=target['software_statement'],
+            redirect_url=target['redirect_url'],
+        )
+        try:
+            sib_client.setup_client()
+            sib_client.register_device()
+            sib_client.create_regcode()
+            auth_url = sib_client.authenticate_redirect_url(mso_id)
+            page.goto(auth_url, wait_until='domcontentloaded', timeout=20000)
+        except Exception as exc:  # noqa: BLE001
+            logger.info('[mvpd-login] sibling %s: navigation failed: %s', sibling_id, exc)
+            continue
+
+        paired = False
+        for _ in range(15):  # ~15s budget, 1s apart — silent SSO is fast when it works
+            page.wait_for_timeout(1000)
+            try:
+                sib_client.fetch_session_token()
+                sib_client.authorize()
+                _save_mvpd_authn_token(sibling_id, sib_client.ctx.authn_token)
+                logger.info('[mvpd-login] sibling %s paired silently via existing MSO session', sibling_id)
+                paired = True
+                break
+            except TVEPendingAuthError:
+                continue
+            except TVEAuthError as exc:
+                logger.info('[mvpd-login] sibling %s: not paired (likely needs its own human login): %s', sibling_id, exc)
+                break
+        if not paired:
+            logger.info('[mvpd-login] sibling %s: gave up after silent-pairing budget', sibling_id)
+
+
+def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement: str, redirect_url: str, mso_id: str):
+    """Drive a real, human-operated sign-in to an MVPD's Adobe Pass login page.
+
+    For MSOs whose login page blocks scripted clients outright (Sling's
+    identity.sling.com returns HTTP 417 to yt-dlp even with browser TLS
+    impersonation — see app/tve/ytdlp_mvpd.py), the only thing that reliably
+    gets through is an actual browser. Adobe Pass's legacy protocol is built
+    for exactly this "second screen" case: setup_client/register_device/
+    create_regcode happen here, scripted, same as always (that part was never
+    blocked — only the MSO's own login form is). We then hand the resulting
+    authenticate/saml URL to a real Camoufox tab for a human to complete
+    Sling's actual login in, while polling Adobe's /adobe-services/session
+    endpoint with our own reg_code from this process. Adobe's backend binds
+    the browser's completed SAML round-trip to our reg_code server-side, so
+    polling picks it up regardless of the browser and this process being
+    entirely separate HTTP sessions — no token-scraping from the page needed.
+    The resulting authn_token is long-lived and cached, so this browser
+    session is a one-time cost per requestor_id (see authorize_mvpd()).
+    """
+    with flask_app.app_context():
+        import json as _json_login
+
+        try:
+            r = redis.from_url(flask_app.config['REDIS_URL'])
+            r.ping()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[mvpd-login] Redis unavailable, aborting: %s', exc)
+            return
+
+        def set_status(state: str, message: str = '', url: str = ''):
+            try:
+                r.setex(
+                    MVPD_BROWSER_LOGIN_STATUS_KEY, 120,
+                    _json_login.dumps({'state': state, 'message': message, 'url': url, 'requestor_id': requestor_id}),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        r.delete(MVPD_BROWSER_LOGIN_STOP_KEY)
+        r.delete(MVPD_BROWSER_LOGIN_INPUT_KEY)
+        set_status('starting', 'Registering with Adobe Pass…')
+
+        client = AdobePassCoxClient(
+            requestor_id=requestor_id,
+            resource=resource,
+            software_statement=software_statement,
+            redirect_url=redirect_url,
+        )
+        try:
+            client.setup_client()
+            client.register_device()
+            client.create_regcode()
+        except TVEAuthError as exc:
+            set_status('error', f'Adobe Pass registration failed: {exc}')
+            return
+        auth_url = client.authenticate_redirect_url(mso_id)
+
+        try:
+            from camoufox.sync_api import Camoufox
+        except ImportError:
+            set_status('error', 'Camoufox is not installed on this container')
+            return
+
+        profile_dir = '/data/browser_profiles/mvpd_tve'
+        try:
+            import os as _os_login
+            _os_login.makedirs(profile_dir, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[mvpd-login] could not create profile dir %s: %s', profile_dir, exc)
+
+        try:
+            # Same persistent-profile Camoufox setup as run_sling_browser_login
+            # (see its comments for why: real, non-headless Firefox behind a
+            # virtual display so WebGL/fingerprinting stays intact, and a
+            # persistent profile so the MSO's session cookies survive across
+            # runs — which is what lets sibling requestor_ids pair silently
+            # afterward without a human involved again).
+            with Camoufox(
+                headless='virtual',
+                os='windows',
+                persistent_context=True,
+                user_data_dir=profile_dir,
+                window=(1280, 800),
+            ) as context:
+                page = context.pages[0] if context.pages else context.new_page()
+                page.on('crash', lambda p: logger.warning('[mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
+                page.on('close', lambda p: logger.warning('[mvpd-login] page CLOSE event fired'))
+                page.on('pageerror', lambda exc: logger.warning('[mvpd-login] page JS error: %s', str(exc)[:500]))
+                try:
+                    page.goto(auth_url, wait_until='domcontentloaded', timeout=30000)
+                except Exception as exc:  # noqa: BLE001
+                    set_status('error', f'Failed to load provider sign-in page: {exc}')
+                    return
+                set_status('running', 'Sign in below, including any captcha if shown.', page.url)
+
+                deadline = time.monotonic() + _MVPD_BROWSER_LOGIN_TIMEOUT_SECONDS
+                last_shot = 0.0
+                last_heartbeat = 0.0
+                last_poll = 0.0
+                consecutive_failures = 0
+                current_job = get_current_job()
+                _MAX_CONSECUTIVE_FAILURES = 15
+                while time.monotonic() < deadline:
+                    if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                        set_status('stopped', 'Cancelled')
+                        return
+
+                    if page.is_closed():
+                        set_status('error', 'Browser page closed unexpectedly.')
+                        return
+
+                    for _ in range(20):
+                        raw = r.lpop(MVPD_BROWSER_LOGIN_INPUT_KEY)
+                        if raw is None:
+                            break
+                        try:
+                            _apply_sling_browser_login_input(page, _json_login.loads(raw))
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug('[mvpd-login] input apply failed: %s', exc)
+
+                    now = time.monotonic()
+                    if current_job and now - last_heartbeat > 60:
+                        try:
+                            current_job.heartbeat(datetime.now(timezone.utc), 180)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug('[mvpd-login] self-heartbeat failed: %s', exc)
+                        last_heartbeat = now
+
+                    if now - last_shot > 0.25:
+                        try:
+                            shot = page.screenshot(type='jpeg', quality=60)
+                            r.setex(MVPD_BROWSER_LOGIN_SHOT_KEY, 30, shot)
+                            set_status('running', 'Sign in below, including any captcha if shown.', _safe_page_url(page))
+                            consecutive_failures = 0
+                        except Exception as exc:  # noqa: BLE001
+                            consecutive_failures += 1
+                            if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                                logger.warning('[mvpd-login] page unresponsive after %d failed screenshots: %s', consecutive_failures, exc)
+                                set_status('error', f'Browser session died: {exc}')
+                                return
+                        last_shot = now
+
+                    if now - last_poll > _MVPD_SESSION_POLL_SECONDS:
+                        last_poll = now
+                        try:
+                            client.fetch_session_token()
+                            # authn_token proves the MSO login itself succeeded — save it
+                            # now, independent of whether authorize() below finds THIS
+                            # requestor_id entitled. It's still reusable for any other
+                            # requestor_id under the same MSO account (see authorize_mvpd()
+                            # in app/tve/adobe_pass.py).
+                            _save_mvpd_authn_token(requestor_id, client.ctx.authn_token)
+                        except TVEPendingAuthError:
+                            continue  # human hasn't finished the MSO login yet
+                        except TVEAuthError as exc:
+                            set_status('error', f'Adobe Pass error: {exc}')
+                            return
+                        try:
+                            token = client.authorize()
+                            set_status('success', f'Signed in — {requestor_id} authorized.')
+                            logger.info('[mvpd-login] paired requestor_id=%s (token len=%d)', requestor_id, len(token or ''))
+                            try:
+                                _pair_sibling_requestors(page, requestor_id, mso_id)
+                            except Exception as exc:  # noqa: BLE001
+                                logger.warning('[mvpd-login] sibling pairing pass failed: %s', exc)
+                            return
+                        except TVENotAuthorizedError as exc:
+                            set_status('error', f'Signed in, but not entitled for {requestor_id}: {exc}')
+                            return
+                        except TVEAuthError as exc:
+                            set_status('error', f'Adobe Pass error: {exc}')
+                            return
+
+                    page.wait_for_timeout(80)
+
+                set_status('error', 'Timed out waiting for sign-in to complete.')
+                return
+        except BaseException as exc:  # noqa: BLE001
+            logger.exception('[mvpd-login] browser session failed')
+            try:
+                set_status('error', f'Browser session failed: {exc}')
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+
+NBC_BROWSER_LOGIN_STATUS_KEY = 'nbc-mvpd:browser-login:status'
+NBC_BROWSER_LOGIN_SHOT_KEY = 'nbc-mvpd:browser-login:screenshot'
+NBC_BROWSER_LOGIN_INPUT_KEY = 'nbc-mvpd:browser-login:input'
+NBC_BROWSER_LOGIN_STOP_KEY = 'nbc-mvpd:browser-login:stop'
+_NBC_BROWSER_LOGIN_TIMEOUT_SECONDS = 1800
+_NBC_SESSION_POLL_SECONDS = 2.0
+
+
+def _save_nbc_mvpd_auth(mso_id: str, access_token: str, device_fingerprint: str) -> None:
+    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    if not account:
+        return
+    cfg = dict(account.config or {})
+    cfg['nbc_mvpd_auth'] = {
+        'mso_id': mso_id,
+        'access_token': access_token,
+        'device_fingerprint': device_fingerprint,
+        'captured_at': int(time.time()),
+    }
+    account.config = cfg
+    db.session.commit()
+
+
+def run_nbc_browser_login(mso_id: str):
+    """Drive a real, human-operated sign-in for NBC TVE's Adobe Pass v2 flow.
+
+    Same "second screen" idea as run_mvpd_browser_login, adapted to nbc.com's
+    JSON REST Adobe Pass v2 API (app/scrapers/nbc_tve.py's AdobePassV2CoxClient)
+    instead of the legacy XML protocol — different endpoints (POST /sessions
+    instead of regcode, GET /profiles/<mvpd> instead of /adobe-services/session),
+    but the same underlying design: client registration + session creation are
+    scripted (never blocked), a real browser completes the MVPD's own login
+    page, and this process polls /profiles/<mvpd> independently using the same
+    access_token + device fingerprint — confirmed live (2026-08-05) that this
+    poll works from an entirely separate HTTP session as long as those two
+    values match, so it doesn't matter that the browser and this process are
+    different clients.
+
+    Unlike the legacy protocol's authn_token, it's untested how long NBC's v2
+    "authenticated" state survives reuse of the same access_token/device
+    fingerprint across resolve() calls — cached in TVEAccount.config either
+    way; if it stops working, resolve() will surface a clear error and this
+    flow needs to be re-run.
+    """
+    with flask_app.app_context():
+        import json as _json_login
+        from app.scrapers.nbc_tve import NbcTveScraper, AdobePassV2CoxClient, REQUESTOR_ID, DEFAULT_REDIRECT_URL, ADOBE_BASE as ADOBE_BASE_NBC
+
+        try:
+            r = redis.from_url(flask_app.config['REDIS_URL'])
+            r.ping()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[nbc-mvpd-login] Redis unavailable, aborting: %s', exc)
+            return
+
+        def set_status(state: str, message: str = '', url: str = ''):
+            try:
+                r.setex(
+                    NBC_BROWSER_LOGIN_STATUS_KEY, 120,
+                    _json_login.dumps({'state': state, 'message': message, 'url': url}),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        r.delete(NBC_BROWSER_LOGIN_STOP_KEY)
+        r.delete(NBC_BROWSER_LOGIN_INPUT_KEY)
+        set_status('starting', 'Registering with Adobe Pass…')
+
+        source = Source.query.filter_by(name='nbc_tve').first()
+        scraper = NbcTveScraper(config=dict((source.config if source else {}) or {}))
+
+        try:
+            page_config = scraper._discover_page_config()
+            device_fingerprint = scraper._ensure_device_fingerprint()
+            if source:
+                persist_source_config_updates(source.id, scraper._pending_config_updates)
+        except Exception as exc:  # noqa: BLE001
+            set_status('error', f'Could not discover NBC page config: {exc}')
+            return
+
+        client = AdobePassV2CoxClient(REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL, device_fingerprint)
+        try:
+            client._register_client()
+            r_sessions = client._post(
+                f'{ADOBE_BASE_NBC}/api/v2/{client.requestor_id}/sessions',
+                data={'mvpd': mso_id, 'redirectUrl': client.redirect_url, 'domainName': 'nbc.com'},
+                headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+            )
+            if not r_sessions.ok:
+                try:
+                    detail = r_sessions.json().get('message') or r_sessions.text[:300]
+                except ValueError:
+                    detail = r_sessions.text[:300]
+                set_status('error', f'Adobe session request failed for MVPD {mso_id}: {detail}')
+                return
+            auth_path = r_sessions.json().get('url')
+            if not auth_path:
+                set_status('error', 'Adobe Pass v2: sessions call did not return an authenticate url.')
+                return
+            r_redirect = client.session.get(
+                f'{ADOBE_BASE_NBC}{auth_path}', headers=client._bearer_headers(),
+                allow_redirects=False, timeout=20,
+            )
+            mso_login_url = r_redirect.headers.get('location') or ''
+            if not mso_login_url:
+                set_status('error', 'Adobe Pass v2: sessions authenticate call did not return an MVPD login redirect.')
+                return
+        except TVEAuthError as exc:
+            set_status('error', f'Adobe Pass registration failed: {exc}')
+            return
+
+        try:
+            from camoufox.sync_api import Camoufox
+        except ImportError:
+            set_status('error', 'Camoufox is not installed on this container')
+            return
+
+        profile_dir = '/data/browser_profiles/mvpd_tve'
+        try:
+            import os as _os_login
+            _os_login.makedirs(profile_dir, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[nbc-mvpd-login] could not create profile dir %s: %s', profile_dir, exc)
+
+        try:
+            with Camoufox(
+                headless='virtual',
+                os='windows',
+                persistent_context=True,
+                user_data_dir=profile_dir,
+                window=(1280, 800),
+            ) as context:
+                page = context.pages[0] if context.pages else context.new_page()
+                page.on('crash', lambda p: logger.warning('[nbc-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
+                page.on('close', lambda p: logger.warning('[nbc-mvpd-login] page CLOSE event fired'))
+                page.on('pageerror', lambda exc: logger.warning('[nbc-mvpd-login] page JS error: %s', str(exc)[:500]))
+                try:
+                    page.goto(mso_login_url, wait_until='domcontentloaded', timeout=30000)
+                except Exception as exc:  # noqa: BLE001
+                    set_status('error', f'Failed to load provider sign-in page: {exc}')
+                    return
+                set_status('running', 'Sign in below, including any captcha if shown.', page.url)
+
+                deadline = time.monotonic() + _NBC_BROWSER_LOGIN_TIMEOUT_SECONDS
+                last_shot = 0.0
+                last_heartbeat = 0.0
+                last_poll = 0.0
+                consecutive_failures = 0
+                current_job = get_current_job()
+                _MAX_CONSECUTIVE_FAILURES = 15
+                while time.monotonic() < deadline:
+                    if r.exists(NBC_BROWSER_LOGIN_STOP_KEY):
+                        set_status('stopped', 'Cancelled')
+                        return
+                    if page.is_closed():
+                        set_status('error', 'Browser page closed unexpectedly.')
+                        return
+
+                    for _ in range(20):
+                        raw = r.lpop(NBC_BROWSER_LOGIN_INPUT_KEY)
+                        if raw is None:
+                            break
+                        try:
+                            _apply_sling_browser_login_input(page, _json_login.loads(raw))
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug('[nbc-mvpd-login] input apply failed: %s', exc)
+
+                    now = time.monotonic()
+                    if current_job and now - last_heartbeat > 60:
+                        try:
+                            current_job.heartbeat(datetime.now(timezone.utc), 180)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug('[nbc-mvpd-login] self-heartbeat failed: %s', exc)
+                        last_heartbeat = now
+
+                    if now - last_shot > 0.25:
+                        try:
+                            shot = page.screenshot(type='jpeg', quality=60)
+                            r.setex(NBC_BROWSER_LOGIN_SHOT_KEY, 30, shot)
+                            set_status('running', 'Sign in below, including any captcha if shown.', _safe_page_url(page))
+                            consecutive_failures = 0
+                        except Exception as exc:  # noqa: BLE001
+                            consecutive_failures += 1
+                            if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                                logger.warning('[nbc-mvpd-login] page unresponsive after %d failed screenshots: %s', consecutive_failures, exc)
+                                set_status('error', f'Browser session died: {exc}')
+                                return
+                        last_shot = now
+
+                    if now - last_poll > _NBC_SESSION_POLL_SECONDS:
+                        last_poll = now
+                        try:
+                            r_profile = client._get(
+                                f'{ADOBE_BASE_NBC}/api/v2/{client.requestor_id}/profiles/{mso_id}',
+                                headers=client._bearer_headers(),
+                            )
+                            profile = ((r_profile.json() or {}).get('profiles') or {}).get(mso_id)
+                        except TVEAuthError as exc:
+                            set_status('error', f'Adobe Pass error: {exc}')
+                            return
+                        if not profile:
+                            continue  # human hasn't finished the MSO login yet
+                        _save_nbc_mvpd_auth(mso_id, client.access_token, device_fingerprint)
+                        set_status('success', f'Signed in — NBC TVE authorized via {mso_id}.')
+                        logger.info('[nbc-mvpd-login] paired mso_id=%s', mso_id)
+                        return
+
+                    page.wait_for_timeout(80)
+
+                set_status('error', 'Timed out waiting for sign-in to complete.')
+                return
+        except BaseException as exc:  # noqa: BLE001
+            logger.exception('[nbc-mvpd-login] browser session failed')
+            try:
+                set_status('error', f'Browser session failed: {exc}')
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+
+FOX_BROWSER_LOGIN_STATUS_KEY = 'fox-mvpd:browser-login:status'
+FOX_BROWSER_LOGIN_SHOT_KEY = 'fox-mvpd:browser-login:screenshot'
+FOX_BROWSER_LOGIN_INPUT_KEY = 'fox-mvpd:browser-login:input'
+FOX_BROWSER_LOGIN_STOP_KEY = 'fox-mvpd:browser-login:stop'
+_FOX_BROWSER_LOGIN_TIMEOUT_SECONDS = 1800
+_FOX_SESSION_POLL_SECONDS = 2.0
+
+
+def run_fox_browser_login(mso_id: str):
+    """Drive a real, human-operated sign-in for FOX Sports TVE's Adobe Pass flow.
+
+    Same "second screen" idea as run_mvpd_browser_login/run_nbc_browser_login,
+    adapted to fox.com's own api3.fox.com REST flow (app/scrapers/fox_tve.py's
+    _fox_sports_mvpd_token) — POST /accountregcode/v2 + /mvpdlogin (scripted,
+    never blocked) instead of the legacy protocol's regcode, GET
+    /checkadobeauthn/v2 instead of /adobe-services/session or /profiles/<mvpd>.
+    Confirmed live (2026-08-05) that /checkadobeauthn/v2 returns 404 "Token Not
+    Found" pre-completion and works identically from a separate HTTP session as
+    long as the anon access_token + device_id match, so cross-client polling
+    works the same way here too. On success, saves directly into the SAME
+    account config keys _fox_sports_access_token() already checks
+    (fox_sports_access_token/_exp/_mso), so no extra wiring is needed there.
+    """
+    with flask_app.app_context():
+        import json as _json_login
+        import requests
+        from app.scrapers.fox_tve import _fox_json_headers, _jwt_exp
+
+        try:
+            r = redis.from_url(flask_app.config['REDIS_URL'])
+            r.ping()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[fox-mvpd-login] Redis unavailable, aborting: %s', exc)
+            return
+
+        def set_status(state: str, message: str = '', url: str = ''):
+            try:
+                r.setex(
+                    FOX_BROWSER_LOGIN_STATUS_KEY, 120,
+                    _json_login.dumps({'state': state, 'message': message, 'url': url}),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        r.delete(FOX_BROWSER_LOGIN_STOP_KEY)
+        r.delete(FOX_BROWSER_LOGIN_INPUT_KEY)
+        set_status('starting', 'Registering with FOX…')
+
+        import uuid as _uuid
+        session = requests.Session()
+        device_id = str(_uuid.uuid4())
+        try:
+            anon = session.post('https://api3.fox.com/v2.0/login', headers=_fox_json_headers(), json={'deviceId': device_id}, timeout=30)
+            anon.raise_for_status()
+            anon_token = anon.json()['accessToken']
+            headers = _fox_json_headers(anon_token)
+
+            reg = session.post(
+                'https://api3.fox.com/v2.0/accountregcode/v2', headers=headers,
+                json={'deviceId': device_id, 'isRegister': False, 'isMvpd': True, 'selectedMvpdId': mso_id},
+                timeout=30,
+            )
+            reg.raise_for_status()
+            code = reg.json()['code']
+
+            mvpd = session.post(
+                f'https://api3.fox.com/v2.0/accountregcode/{code}/mvpdlogin', headers=headers,
+                json={'mvpdId': mso_id, 'redirectUrl': 'https://www.foxsports.com/live/fs1'},
+                timeout=30,
+            )
+            mvpd.raise_for_status()
+            auth_url = mvpd.json()['authenticateUrl']
+
+            r_redirect = session.get(auth_url, headers={'Accept': 'text/html,application/json'}, allow_redirects=False, timeout=30)
+            mso_login_url = r_redirect.headers.get('location') or ''
+            if not mso_login_url:
+                set_status('error', 'FOX Adobe authenticate call did not return an MVPD login redirect.')
+                return
+        except requests.RequestException as exc:
+            set_status('error', f'FOX registration failed: {exc}')
+            return
+        except (KeyError, ValueError) as exc:
+            set_status('error', f'FOX registration returned an unexpected response: {exc}')
+            return
+
+        try:
+            from camoufox.sync_api import Camoufox
+        except ImportError:
+            set_status('error', 'Camoufox is not installed on this container')
+            return
+
+        profile_dir = '/data/browser_profiles/mvpd_tve'
+        try:
+            import os as _os_login
+            _os_login.makedirs(profile_dir, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[fox-mvpd-login] could not create profile dir %s: %s', profile_dir, exc)
+
+        try:
+            with Camoufox(
+                headless='virtual',
+                os='windows',
+                persistent_context=True,
+                user_data_dir=profile_dir,
+                window=(1280, 800),
+            ) as context:
+                page = context.pages[0] if context.pages else context.new_page()
+                page.on('crash', lambda p: logger.warning('[fox-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
+                page.on('close', lambda p: logger.warning('[fox-mvpd-login] page CLOSE event fired'))
+                page.on('pageerror', lambda exc: logger.warning('[fox-mvpd-login] page JS error: %s', str(exc)[:500]))
+                try:
+                    page.goto(mso_login_url, wait_until='domcontentloaded', timeout=30000)
+                except Exception as exc:  # noqa: BLE001
+                    set_status('error', f'Failed to load provider sign-in page: {exc}')
+                    return
+                set_status('running', 'Sign in below, including any captcha if shown.', page.url)
+
+                deadline = time.monotonic() + _FOX_BROWSER_LOGIN_TIMEOUT_SECONDS
+                last_shot = 0.0
+                last_heartbeat = 0.0
+                last_poll = 0.0
+                consecutive_failures = 0
+                current_job = get_current_job()
+                _MAX_CONSECUTIVE_FAILURES = 15
+                while time.monotonic() < deadline:
+                    if r.exists(FOX_BROWSER_LOGIN_STOP_KEY):
+                        set_status('stopped', 'Cancelled')
+                        return
+                    if page.is_closed():
+                        set_status('error', 'Browser page closed unexpectedly.')
+                        return
+
+                    for _ in range(20):
+                        raw = r.lpop(FOX_BROWSER_LOGIN_INPUT_KEY)
+                        if raw is None:
+                            break
+                        try:
+                            _apply_sling_browser_login_input(page, _json_login.loads(raw))
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug('[fox-mvpd-login] input apply failed: %s', exc)
+
+                    now = time.monotonic()
+                    if current_job and now - last_heartbeat > 60:
+                        try:
+                            current_job.heartbeat(datetime.now(timezone.utc), 180)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug('[fox-mvpd-login] self-heartbeat failed: %s', exc)
+                        last_heartbeat = now
+
+                    if now - last_shot > 0.25:
+                        try:
+                            shot = page.screenshot(type='jpeg', quality=60)
+                            r.setex(FOX_BROWSER_LOGIN_SHOT_KEY, 30, shot)
+                            set_status('running', 'Sign in below, including any captcha if shown.', _safe_page_url(page))
+                            consecutive_failures = 0
+                        except Exception as exc:  # noqa: BLE001
+                            consecutive_failures += 1
+                            if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                                logger.warning('[fox-mvpd-login] page unresponsive after %d failed screenshots: %s', consecutive_failures, exc)
+                                set_status('error', f'Browser session died: {exc}')
+                                return
+                        last_shot = now
+
+                    if now - last_poll > _FOX_SESSION_POLL_SECONDS:
+                        last_poll = now
+                        try:
+                            check = session.get(
+                                'https://api3.fox.com/v2.0/checkadobeauthn/v2', headers=headers,
+                                params={'device_id': device_id, 'requestor': 'fbc-fox'},
+                                timeout=30,
+                            )
+                        except requests.RequestException as exc:
+                            set_status('error', f'FOX checkadobeauthn request failed: {exc}')
+                            return
+                        if check.status_code == 404:
+                            continue  # human hasn't finished the MSO login yet
+                        if not check.ok:
+                            set_status('error', f'FOX checkadobeauthn returned HTTP {check.status_code}: {check.text[:300]}')
+                            return
+                        token = (check.json() or {}).get('accessToken')
+                        if not token:
+                            continue
+                        exp = _jwt_exp(token) or int(time.time()) + 3600
+                        account = TVEAccount.query.filter_by(provider_id='cox').first()
+                        if account:
+                            acct_cfg = dict(account.config or {})
+                            acct_cfg['fox_sports_access_token'] = token
+                            acct_cfg['fox_sports_access_token_exp'] = exp
+                            acct_cfg['fox_sports_access_token_mso'] = mso_id
+                            account.config = acct_cfg
+                            account.last_auth_status = 'ok'
+                            account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (browser-assisted).'
+                            account.last_auth_at = datetime.now(timezone.utc)
+                            db.session.commit()
+                        set_status('success', f'Signed in — FOX Sports authorized via {mso_id}.')
+                        logger.info('[fox-mvpd-login] paired mso_id=%s', mso_id)
+                        return
+
+                    page.wait_for_timeout(80)
+
+                set_status('error', 'Timed out waiting for sign-in to complete.')
+                return
+        except BaseException as exc:  # noqa: BLE001
+            logger.exception('[fox-mvpd-login] browser session failed')
             try:
                 set_status('error', f'Browser session failed: {exc}')
             except Exception:  # noqa: BLE001
