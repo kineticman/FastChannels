@@ -604,6 +604,20 @@ def run_scraper(source_name: str, force_full: bool = False):
             source.last_error = str(e)
             db.session.commit()
             _progress('done')
+        except TVENotAuthorizedError as e:
+            # A known, understood condition (e.g. the configured MVPD isn't a
+            # participating provider for this network) — the stream audit
+            # already logs the exact same exception at INFO with no
+            # traceback (see _audit_progress's not_authorized handling); the
+            # scrape path should be just as quiet instead of an ERROR-level
+            # full traceback for something that isn't a surprise.
+            elapsed = time.monotonic() - t0
+            logger.info('[%s] Scrape skipped after %.1fs: not authorized — %s', source_name, elapsed, e)
+            db.session.rollback()
+            _apply_scraper_config_updates(source, scraper)
+            source.last_error = str(e)
+            db.session.commit()
+            _progress('done')
         except Exception as e:
             elapsed = time.monotonic() - t0
             if _is_transient_network_error(e):
