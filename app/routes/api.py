@@ -1734,6 +1734,12 @@ def save_source_config(source_id):
     # — a hardcoded list would silently miss a future credential field.
     _CRED_IDENTITY_KEYS = {'username', 'email', 'amazon_email'}
     _CRED_KEYS   = _CRED_IDENTITY_KEYS | secret_keys
+    # Sling's username/password only autofill the interactive browser sign-in
+    # form (see sling.py ConfigField help text) — the live session lives in
+    # the oauth_token/etc AUTH_STATE fields below, decoupled from these two.
+    # Editing them shouldn't purge a working session or force a rescrape.
+    if source.name == 'sling':
+        _CRED_KEYS = _CRED_KEYS - {'username', 'password'}
     _AUTH_STATE  = ('access_token', 'refresh_token', 'token_time',
                     'bearer_token', 'activation_token', 'token_captured_at',
                     'client_context', 'cookies', 'identity_cookie',

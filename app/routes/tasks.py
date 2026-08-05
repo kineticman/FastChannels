@@ -404,7 +404,14 @@ def trigger_sling_browser_login():
         logger.warning(f'RQ unavailable ({e}), falling back to thread for Sling browser login')
         import threading
         from app.worker import run_sling_browser_login
-        threading.Thread(target=run_sling_browser_login, daemon=True).start()
+        # Sling's browser login locks a persistent Camoufox profile dir, so two
+        # concurrent runs collide. The RQ path dedups via job_id; this fallback
+        # has no queue to check, so dedup on a named thread instead.
+        thread_name = 'sling-browser-login-fallback'
+        if any(t.name == thread_name and t.is_alive() for t in threading.enumerate()):
+            logger.info('Sling browser login fallback thread already running')
+            return False
+        threading.Thread(target=run_sling_browser_login, daemon=True, name=thread_name).start()
         return True
 
 
