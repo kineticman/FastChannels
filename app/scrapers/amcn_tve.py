@@ -616,6 +616,14 @@ class AMCNetworksTVEScraper(BaseScraper):
                 detail = r.json().get('message') or r.text[:300]
             except ValueError:
                 detail = r.text[:300]
+            # "integration...does not exist or is disabled" is Adobe's own
+            # definitive rejection (confirmed live 2026-08-05: Sling isn't
+            # registered for AMC Networks at all) — not a transient failure,
+            # so the audit should disable these instead of treating it as a
+            # possibly-temporary error. Any other session-request failure
+            # (network blip, Adobe outage) stays generic/non-disabling.
+            if 'does not exist or is disabled' in detail.lower():
+                raise TVENotAuthorizedError(f'{channel.name}: {mso_id} is not a participating provider for AMC Networks: {detail}')
             raise TVEAuthError(f'{channel.name}: Adobe session request failed for MVPD {mso_id}: {detail}')
         session_data = r.json()
         code = (session_data.get('code') or '').strip()
@@ -670,17 +678,49 @@ class AMCNetworksTVEScraper(BaseScraper):
             raise TVENotAuthorizedError(f'{channel.name}: Adobe did not authorize {channel.requestor_id} for {mso_id}.')
         return serialized, adobe_id
 
+    def _adobe_auth_cache_key(self, channel: AMCNChannel) -> str:
+        return f'adobe_auth:{channel.requestor_id}'
+
+    def _cached_adobe_auth(self, channel: AMCNChannel, mso_id: str) -> tuple[str, str] | None:
+        cached = self.cache.get(self._adobe_auth_cache_key(channel))
+        if not isinstance(cached, dict):
+            return None
+        if cached.get('mso_id') != mso_id or not cached.get('adobe_token') or not cached.get('adobe_id'):
+            return None
+        if int(cached.get('expires_at') or 0) <= int(time.time()) + TOKEN_SKEW_SECONDS:
+            return None
+        return cached['adobe_token'], cached['adobe_id']
+
+    def _save_adobe_auth_cache(self, channel: AMCNChannel, mso_id: str, adobe_token: str, adobe_id: str) -> None:
+        # serializedToken is a JWT in practice (Adobe issues these as
+        # long-lived MVPD auth tokens, same as the legacy protocol's
+        # authn_token) — decode its real exp when present instead of
+        # guessing a TTL. Falls back to a conservative 24h if it isn't a
+        # JWT, relying on resolve()'s retry-on-401 to recover either way.
+        now = int(time.time())
+        expires_at = _jwt_exp(adobe_token) or (now + 86400)
+        self._update_cache(self._adobe_auth_cache_key(channel), {
+            'mso_id': mso_id, 'adobe_token': adobe_token, 'adobe_id': adobe_id,
+            'cached_at': now, 'expires_at': expires_at,
+        })
+
     def _adobe_decision_token(self, channel: AMCNChannel, account: TVEAccount, device_id: str) -> tuple[str, str]:
         cfg = account.config or {}
-        statement = self._amcn_software_statement(channel, account)
         # AMCN's own v2 REST API, not the legacy XML protocol yt-dlp's generic
         # MVPD login flows speak — so unlike warner_tve.py/aenetworks_tve.py,
         # non-Cox MSOs here can't fall back to authorize_mvpd()/yt-dlp. Native
-        # scripted login only exists for Cox (below); every other MSO needs
-        # its own browser-assisted pairing (app.worker._silent_pair_amcn,
-        # part of the "sign in once" cascade — resolve() itself still only
-        # does the synchronous Cox path).
+        # scripted login only exists for Cox (below); every other MSO relies
+        # entirely on a cached token from browser-assisted pairing
+        # (app.worker._silent_pair_amcn, part of the "sign in once" cascade —
+        # resolve() itself still only does the synchronous Cox path when the
+        # cache is empty/expired).
         mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+
+        cached = self._cached_adobe_auth(channel, mso_id)
+        if cached:
+            return cached
+
+        statement = self._amcn_software_statement(channel, account)
         client, code, mso_login_url, auth_headers = self._adobe_session_redirect(channel, statement, device_id, mso_id)
 
         if mso_id == 'Cox':
@@ -689,11 +729,13 @@ class AMCNetworksTVEScraper(BaseScraper):
             _cox_saml_login(client.session, mso_login_url, account.username or '', account.password or '')
         else:
             raise TVEAuthError(
-                f'{channel.name}: browser-assisted sign-in for AMC Networks TVE is not built yet for '
-                f'MVPD {mso_id} (only native Cox login is wired up here).'
+                f'{channel.name}: no cached sign-in for MVPD {mso_id} — run "Sign in to all" (or AMC Networks TVE '
+                f'specifically) in Settings once, then this will keep reusing it until it expires.'
             )
 
-        return self._adobe_decision_finish(client, channel, code, mso_id, auth_headers)
+        adobe_token, adobe_id = self._adobe_decision_finish(client, channel, code, mso_id, auth_headers)
+        self._save_adobe_auth_cache(channel, mso_id, adobe_token, adobe_id)
+        return adobe_token, adobe_id
 
     def _mvpd_access_token(
         self,
@@ -769,37 +811,48 @@ class AMCNetworksTVEScraper(BaseScraper):
 
         session = self._session()
         device_id = self._device_id()
-        adobe_token, adobe_id = self._adobe_decision_token(channel, account, device_id)
-        amcn_token, feature_flags = self._mvpd_access_token(
-            session,
-            channel,
-            adobe_id=adobe_id,
-            device_id=device_id,
-            mso_id=mso_id,
-        )
-        playback = session.post(
-            f'{API_BASE}/playback-id/api/v1/livestream/{channel.livestream_id}',
-            json={
-                'adobeShortMediaToken': adobe_token,
-                'hba': False,
-                'adtags': {
-                    'lat': 0,
-                    'url': channel.live_url,
-                    'playerWidth': 1920,
-                    'playerHeight': 1080,
+
+        def _attempt(adobe_token: str, adobe_id: str) -> requests.Response:
+            amcn_token, feature_flags = self._mvpd_access_token(
+                session, channel, adobe_id=adobe_id, device_id=device_id, mso_id=mso_id,
+            )
+            return session.post(
+                f'{API_BASE}/playback-id/api/v1/livestream/{channel.livestream_id}',
+                json={
+                    'adobeShortMediaToken': adobe_token,
+                    'hba': False,
+                    'adtags': {
+                        'lat': 0,
+                        'url': channel.live_url,
+                        'playerWidth': 1920,
+                        'playerHeight': 1080,
+                    },
                 },
-            },
-            headers=_amcn_headers(
-                channel,
-                token=amcn_token,
-                device_id=device_id,
-                entitlement='mvpd-auth',
-                adobe_id=adobe_id,
-                mvpd=mso_id,
-                feature_flags=feature_flags,
-            ),
-            timeout=30,
-        )
+                headers=_amcn_headers(
+                    channel,
+                    token=amcn_token,
+                    device_id=device_id,
+                    entitlement='mvpd-auth',
+                    adobe_id=adobe_id,
+                    mvpd=mso_id,
+                    feature_flags=feature_flags,
+                ),
+                timeout=30,
+            )
+
+        adobe_token, adobe_id = self._adobe_decision_token(channel, account, device_id)
+        try:
+            playback = _attempt(adobe_token, adobe_id)
+            playback.raise_for_status()
+        except (requests.HTTPError, TVEAuthError):
+            # Cached token rejected (expired server-side before our TTL guess
+            # expected, or Adobe revoked it) — clear it and fall through to a
+            # fresh decision token (Cox: re-logs in; others: raises the clear
+            # "no cached sign-in" error) rather than silently looping forever
+            # on a dead cached token.
+            self._update_cache(self._adobe_auth_cache_key(channel), {})
+            adobe_token, adobe_id = self._adobe_decision_token(channel, account, device_id)
+            playback = _attempt(adobe_token, adobe_id)
         playback.raise_for_status()
         data = playback.json()
         hls_url = _find_hls_source(data)

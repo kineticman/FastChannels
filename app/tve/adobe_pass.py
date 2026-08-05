@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 ADOBE_BASE = 'https://sp.auth.adobe.com'
 AUTHENTICATE_URL = f'{ADOBE_BASE}/adobe-services/authenticate/saml'
@@ -476,6 +479,41 @@ class AdobePassCoxClient:
         return self.authorize()
 
 
+def _same_redirect_target(actual: str, expected: str) -> bool:
+    a, e = urlsplit(actual), urlsplit(expected)
+    return (a.scheme, a.netloc, a.path.rstrip('/')) == (e.scheme, e.netloc, e.path.rstrip('/'))
+
+
+def _bounced_back_without_mso(requestor_id: str, resource: str, software_statement: str, redirect_url: str, mso_id: str) -> bool:
+    """Scripted pre-check for "MSO isn't registered for this content owner at
+    all" — mirrors app.worker's browser-flow bounce-back detection, confirmed
+    live (2026-08-05, Turner/TNT+Sling) to happen entirely server-side on
+    Adobe's end, via a single redirect straight back to redirect_url, BEFORE
+    the MSO's own domain is ever touched. That makes this check safe to run
+    even for MSOs whose real login page blocks scripted clients outright
+    (Sling) — we never reach that domain here. Gives resolve() a clean,
+    mechanism-based "definitely not authorized" signal instead of whatever
+    cryptic error yt-dlp's generic extractor happens to raise when handed a
+    redirect chain it doesn't recognize (e.g. "Unable to extract post url").
+    Returns False (inconclusive) rather than raising on any failure, so a
+    network hiccup here just falls through to the normal yt-dlp attempt.
+    """
+    try:
+        client = AdobePassCoxClient(
+            requestor_id=requestor_id, resource=resource,
+            software_statement=software_statement, redirect_url=redirect_url,
+        )
+        client.setup_client()
+        client.register_device()
+        client.create_regcode()
+        auth_url = client.authenticate_redirect_url(mso_id)
+        r = client.session.get(auth_url, allow_redirects=True, timeout=20)
+        return _same_redirect_target(r.url, redirect_url)
+    except Exception as exc:  # noqa: BLE001
+        logger.info('[adobe-pass] bounce-back pre-check for %s/%s inconclusive: %s', requestor_id, mso_id, exc)
+        return False
+
+
 def authorize_mvpd(
     account,
     *,
@@ -537,10 +575,14 @@ def authorize_mvpd(
             return token, client.session
         except TVENotAuthorizedError:
             raise  # definitive answer from Adobe — retrying via yt-dlp won't change it
-        except TVEAuthError:
-            pass  # cached authn_token expired/invalid — fall through and re-pair
+        except TVEAuthError as exc:
+            logger.info('[adobe-pass] cached authn_token for %s rejected, falling back to yt-dlp: %s', requestor_id, exc)
 
     yt_dlp_mso_id = (cfg.get('yt_dlp_mso_id') or selected_mso_id).strip()
+
+    if _bounced_back_without_mso(requestor_id, resource, software_statement, redirect_url, yt_dlp_mso_id):
+        raise TVENotAuthorizedError(f'{yt_dlp_mso_id} is not a participating provider for {requestor_id}.')
+
     from .ytdlp_mvpd import authorize_via_ytdlp
     token = authorize_via_ytdlp(
         mso_id=yt_dlp_mso_id,

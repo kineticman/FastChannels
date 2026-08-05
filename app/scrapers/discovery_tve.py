@@ -351,7 +351,12 @@ class DiscoveryTVEScraper(BaseScraper):
         else:
             partner_id = self._discovery_partner_id(session, device_id, mso_name, mso_id)
             if not partner_id:
-                raise TVEAuthError(f'Discovery TVE: {mso_name} is not a participating TV provider for Discovery.')
+                # Definitive: a live lookup against Discovery's own partner
+                # list found no match, not a transient/network failure — the
+                # audit should disable these rather than treat it as a
+                # possibly-temporary error (confirmed live 2026-08-05: Sling
+                # isn't a Discovery partner at all).
+                raise TVENotAuthorizedError(f'Discovery TVE: {mso_name} is not a participating TV provider for Discovery.')
 
         redirect_url = f'{AUTH_HOST}/gauth-sync'
         r = session.get(

@@ -10,6 +10,8 @@ account's "Sign in (browser)" flow re-establishes it.
 """
 from __future__ import annotations
 
+_AMCN_REQUESTOR_IDS = ('AMC', 'BBCA', 'IFC', 'WETV')
+
 
 def tve_network_status(account) -> list[dict]:
     from .mvpd_targets import REQUESTOR_CHOICES
@@ -52,10 +54,19 @@ def tve_network_status(account) -> list[dict]:
         'requestor_id': None,
     })
 
+    amcn_cached_at = None
+    try:
+        from ..config_store import load_source_cache_by_name
+        amcn_keys = [f'adobe_auth:{rid}' for rid in _AMCN_REQUESTOR_IDS]
+        amcn_cache = load_source_cache_by_name('amcn_tve', keys=amcn_keys)
+        stamps = [v.get('cached_at') for v in amcn_cache.values() if isinstance(v, dict) and v.get('cached_at')]
+        amcn_cached_at = max(stamps) if stamps else None
+    except Exception:  # noqa: BLE001
+        pass
     entries.append({
         'label': 'AMC Networks TVE',
-        'last_signed_in_at': None,
-        'note': "Only native Cox sign-in is cached today — signs in fresh on every play regardless. Signed in automatically when you sign into another network above.",
+        'last_signed_in_at': amcn_cached_at,
+        'note': "No standalone button — signed in automatically when you sign into another network above. Cox always re-authenticates fresh; other providers reuse the cached sign-in until it expires.",
         'family': None,
         'requestor_id': None,
     })
@@ -70,7 +81,7 @@ def tve_network_status(account) -> list[dict]:
     entries.append({
         'label': 'Discovery TVE',
         'last_signed_in_at': disco_cached_at,
-        'note': "Signed in automatically when you sign into another network above." if not disco_cached_at else None,
+        'note': "No standalone button — signed in automatically when you sign into another network above.",
         'family': None,
         'requestor_id': None,
     })

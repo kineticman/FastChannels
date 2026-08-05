@@ -2727,10 +2727,14 @@ def _silent_pair_amcn(page, mso_id: str, username: str, password: str, r) -> tup
             continue
 
         try:
-            scraper._adobe_decision_finish(client, channel, code, mso_id, auth_headers)
+            adobe_token, adobe_id = scraper._adobe_decision_finish(client, channel, code, mso_id, auth_headers)
+            scraper._save_adobe_auth_cache(channel, mso_id, adobe_token, adobe_id)
             paired_channels.append(channel.name)
         except TVEAuthError as exc:
             last_message = str(exc)[:120]
+
+    if scraper._pending_cache_updates:
+        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
 
     if paired_channels:
         return True, f'authorized ({", ".join(paired_channels)})'
@@ -3226,6 +3230,10 @@ def run_nbc_browser_login(mso_id: str):
         r.delete(NBC_BROWSER_LOGIN_INPUT_KEY)
         set_status('starting', 'Registering with Adobe Pass…')
 
+        account_row = TVEAccount.query.filter_by(provider_id='cox').first()
+        mvpd_username = (account_row.username if account_row else '') or ''
+        mvpd_password = (account_row.password if account_row else '') or ''
+
         source = Source.query.filter_by(name='nbc_tve').first()
         scraper = NbcTveScraper(config=dict((source.config if source else {}) or {}))
 
@@ -3299,6 +3307,11 @@ def run_nbc_browser_login(mso_id: str):
                 except Exception as exc:  # noqa: BLE001
                     set_status('error', f'Failed to load provider sign-in page: {exc}')
                     return
+                if _same_page_url(_safe_page_url(page), client.redirect_url):
+                    set_status('error', f'{mso_id} does not appear to be a participating provider for NBC TVE.')
+                    return
+                if mvpd_username and mvpd_password:
+                    _try_autofill_credentials(page, mvpd_username, mvpd_password, wait_seconds=8.0)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 deadline = time.monotonic() + _NBC_BROWSER_LOGIN_TIMEOUT_SECONDS
@@ -3426,6 +3439,11 @@ def run_fox_browser_login(mso_id: str):
         r.delete(FOX_BROWSER_LOGIN_INPUT_KEY)
         set_status('starting', 'Registering with FOX…')
 
+        account_row = TVEAccount.query.filter_by(provider_id='cox').first()
+        mvpd_username = (account_row.username if account_row else '') or ''
+        mvpd_password = (account_row.password if account_row else '') or ''
+
+        fox_redirect_url = 'https://www.foxsports.com/live/fs1'
         import uuid as _uuid
         session = requests.Session()
         device_id = str(_uuid.uuid4())
@@ -3445,7 +3463,7 @@ def run_fox_browser_login(mso_id: str):
 
             mvpd = session.post(
                 f'https://api3.fox.com/v2.0/accountregcode/{code}/mvpdlogin', headers=headers,
-                json={'mvpdId': mso_id, 'redirectUrl': 'https://www.foxsports.com/live/fs1'},
+                json={'mvpdId': mso_id, 'redirectUrl': fox_redirect_url},
                 timeout=30,
             )
             mvpd.raise_for_status()
@@ -3493,6 +3511,11 @@ def run_fox_browser_login(mso_id: str):
                 except Exception as exc:  # noqa: BLE001
                     set_status('error', f'Failed to load provider sign-in page: {exc}')
                     return
+                if _same_page_url(_safe_page_url(page), fox_redirect_url):
+                    set_status('error', f'{mso_id} does not appear to be a participating provider for FOX Sports TVE.')
+                    return
+                if mvpd_username and mvpd_password:
+                    _try_autofill_credentials(page, mvpd_username, mvpd_password, wait_seconds=8.0)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 deadline = time.monotonic() + _FOX_BROWSER_LOGIN_TIMEOUT_SECONDS
