@@ -100,8 +100,12 @@
       // "no key for key ID ...", and the first audio packet decoded after the key
       // recovers fails outright (PIPELINE_ERROR_DECODE -> Shaka 3016, then 3015
       // appendBuffer errors once the media element is dead). Shaka already starts
-      // live content at the live edge on its own, so skip it.
-      if (from < (range.start || 0)) return;
+      // live content at the live edge on its own, so skip it. Only on the
+      // initial load, though — chaseLive()'s later re-syncs call this same
+      // function with a genuinely stale `from` after a real stall (the live
+      // seek range can slide past the old playhead on segment eviction), and
+      // that's exactly the case chaseLive exists to recover from.
+      if (opts && opts.isInitialLoad && from < (range.start || 0)) return;
       const delta = target - from;
       if (Number.isFinite(target) && Math.abs(delta) > minSeek) {
         video.currentTime = target;
@@ -244,6 +248,7 @@
       seekNearLiveEdge(player, video, {
         liveDelay: 3,
         minSeek: liveEdgeSync ? 3 : 5,
+        isInitialLoad: true,
         onSeek: (info) => {
           if (typeof opts.onLiveEdgeSeek === 'function') {
             opts.onLiveEdgeSeek(Object.assign({ reason: 'load' }, info));

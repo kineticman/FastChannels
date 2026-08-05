@@ -3515,6 +3515,14 @@ def nbc_tve_dash_proxy(channel_id: str):
         logger.warning('[nbc-tve-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
         return _unavailable_response()
 
+    # Same issue as Philo/PBS: NBC's manifest includes an absolute <Location>
+    # pointing straight back at MediaTailor's own origin. Shaka honors that on
+    # its next periodic manifest refresh and bypasses this proxy entirely —
+    # undoing both the ec-3 audio drop and the injected <BaseURL> below, and
+    # breaking playback shortly after it starts. Strip it so refreshes keep
+    # hitting this same-origin route.
+    manifest_text = re.sub(r'<Location>.*?</Location>\s*', '', r.text, flags=re.DOTALL)
+
     # NBC publishes two audio AdaptationSets: AAC (mp4a.40.2) and Dolby Digital+
     # (ec-3). Which one actually plays is client-dependent, so make it selectable
     # via ?audio= for diagnosis:
@@ -3530,7 +3538,7 @@ def nbc_tve_dash_proxy(channel_id: str):
 
     manifest_text = re.sub(
         r'<AdaptationSet mimeType="audio/mp4".*?</AdaptationSet>\s*',
-        _drop_audio, r.text, flags=re.DOTALL,
+        _drop_audio, manifest_text, flags=re.DOTALL,
     )
 
     if '<BaseURL>' not in manifest_text:
