@@ -286,25 +286,49 @@ class DiscoveryTVEScraper(BaseScraper):
             return None
         return None
 
+    def _discovery_partner_id(self, session: requests.Session, device_id: str, mso_name: str, mso_id: str) -> str | None:
+        """Look up Discovery's own partner_id for an MVPD by name.
+
+        Reverse-engineered from a real HAR capture of discovery.com's own
+        provider picker (2026-08-05): `partner_id` on /v1/gauth/authorize
+        ISN'T a fixed Discovery-app constant — it's the selected MVPD's own
+        id from this /v1/gauth/partners list (Cox's id happened to already be
+        hardcoded here as PARTNER_ID, which is why Cox-only login worked
+        before this was understood). Discovery's real site never sends any
+        other signal to /v1/gauth/authorize — no cookie, no header, nothing
+        that differed between an anonymous partners-list call and the
+        authorize call in the capture — so this lookup itself IS the
+        selection mechanism, not a proxy for one.
+        """
+        try:
+            r = session.get(
+                f'{API_BASE}/v1/gauth/partners',
+                params={'brand_id': BRAND_ID},
+                headers=_gauth_headers(device_id),
+                timeout=30,
+            )
+            r.raise_for_status()
+            partners = r.json() or []
+        except (requests.RequestException, ValueError):
+            return None
+        candidates = [c.strip().lower() for c in (mso_name, mso_id) if c]
+        for candidate in candidates:
+            for p in partners:
+                if (p.get('name') or '').strip().lower() == candidate:
+                    return p.get('id')
+        for candidate in candidates:
+            for p in partners:
+                if candidate in (p.get('name') or '').strip().lower():
+                    return p.get('id')
+        return None
+
     def _authenticate(self) -> requests.Session:
         account = TVEAccount.query.filter_by(provider_id='cox').first()
         if not account or not account.is_enabled or not account.has_credentials():
             raise TVEAuthError('TVE credentials are not configured in Settings.')
         cfg = account.config or {}
         mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
-        if mso_id != 'Cox':
-            # Unlike warner_tve/aenetworks_tve/amcn_tve/nbc_tve, Discovery's own
-            # gauth/authorize endpoint picks the MSO server-side (always
-            # returns mso_id=Cox in its response) regardless of any request
-            # parameter tried — confirmed live 2026-08-05 (mso_id, mvpd,
-            # mvpd_id, provider, mso all had no effect). Their real site must
-            # set this via an earlier provider-picker step we haven't
-            # reverse-engineered, so fail clearly here rather than silently
-            # attempting a Cox-only login flow with a different MSO's creds.
-            raise TVEAuthError(
-                f'Discovery TVE only supports Cox — MSO selection for {mso_id} is not '
-                f'exposed by Discovery\'s auth API (not yet reverse-engineered).'
-            )
+        mso_name = (cfg.get('selected_mso_name') or mso_id).strip()
 
         session = self._session()
         device_id = self.config.get('device_id') or str(uuid.uuid4())
@@ -322,13 +346,20 @@ class DiscoveryTVEScraper(BaseScraper):
         )
         r.raise_for_status()
 
+        if mso_id == 'Cox':
+            partner_id = PARTNER_ID
+        else:
+            partner_id = self._discovery_partner_id(session, device_id, mso_name, mso_id)
+            if not partner_id:
+                raise TVEAuthError(f'Discovery TVE: {mso_name} is not a participating TV provider for Discovery.')
+
         redirect_url = f'{AUTH_HOST}/gauth-sync'
         r = session.get(
             f'{API_BASE}/v1/gauth/authorize',
             params={
                 'brand_id': BRAND_ID,
                 'no_redirect': '1',
-                'partner_id': PARTNER_ID,
+                'partner_id': partner_id,
                 'redirect_url': redirect_url,
             },
             headers=_gauth_headers(device_id),
@@ -342,11 +373,20 @@ class DiscoveryTVEScraper(BaseScraper):
         r = session.get(target_url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*'}, allow_redirects=False, timeout=30)
         if r.status_code in {301, 302, 303, 307, 308}:
             r = session.get(r.headers.get('location') or target_url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*'}, allow_redirects=False, timeout=30)
-        cox_saml_url = r.headers.get('location') or ''
-        if 'login.cox.com' not in cox_saml_url:
-            raise TVEAuthError(f'Unexpected Adobe authenticate redirect host: {urlsplit(cox_saml_url).netloc}.')
+        mso_login_url = r.headers.get('location') or ''
+        if not mso_login_url:
+            raise TVEAuthError('Adobe authenticate call did not return an MVPD login redirect.')
 
-        callback_url = _cox_saml_login(session, cox_saml_url, account.username or '', account.password or '')
+        if mso_id == 'Cox':
+            if 'login.cox.com' not in mso_login_url:
+                raise TVEAuthError(f'Unexpected Adobe authenticate redirect host: {urlsplit(mso_login_url).netloc}.')
+        else:
+            raise TVEAuthError(
+                f'Browser-assisted sign-in for Discovery TVE is not built yet for MVPD {mso_id} '
+                f'(only native Cox login is wired up here).'
+            )
+
+        callback_url = _cox_saml_login(session, mso_login_url, account.username or '', account.password or '')
         if CALLBACK_BASE not in callback_url:
             raise TVEAuthError(f'Unexpected Discovery callback host: {urlsplit(callback_url).netloc}.')
         r = session.get(callback_url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*'}, allow_redirects=False, timeout=30)
