@@ -238,18 +238,13 @@ function updateTveProviderFields() {
   const provider = selectedTveProvider();
   const username = document.getElementById('tve-cox-username');
   const password = document.getElementById('tve-cox-password');
-  const adobeMso = document.getElementById('tve-cox-adobe-mso');
-  const ytdlpMso = document.getElementById('tve-cox-ytdlp-mso');
   const hint = document.getElementById('tve-provider-hint');
-  const providerChanged = select && select.dataset.previousProvider && select.dataset.previousProvider !== provider.id;
   if (username) username.placeholder = `${provider.name} username`;
   if (password) password.placeholder = tvePasswordPlaceholder;
-  if (adobeMso && (providerChanged || !adobeMso.value.trim())) adobeMso.value = provider.id;
-  if (ytdlpMso && (providerChanged || !ytdlpMso.value.trim())) ytdlpMso.value = provider.id;
   if (hint) {
     hint.textContent = provider.id === 'Cox'
-      ? 'Used by TVE sources such as A+E Networks TVE and Warner TVE (TBS/TNT/truTV), via a fast native sign-in.'
-      : `Used by A+E Networks TVE and Warner TVE (TBS/TNT/truTV) — signs in through ${provider.name}'s own login via yt-dlp's Adobe Pass support. Other TVE sources (AMC Networks, NBC, Discovery, Fox) are Cox-only for now.`;
+      ? 'Used by all TVE sources, via a fast native sign-in.'
+      : `Used by all TVE sources — signs in through ${provider.name}'s own login (scripted where possible, browser-assisted sign-in below otherwise).`;
   }
   if (select) select.dataset.previousProvider = provider.id;
 }
@@ -261,10 +256,6 @@ async function saveTveCoxSettings() {
     is_enabled: document.getElementById('tve-cox-enabled').checked,
     username: document.getElementById('tve-cox-username').value.trim(),
     password: document.getElementById('tve-cox-password').value,
-    auth_backend: document.getElementById('tve-cox-auth-backend').value,
-    adobe_mso_id: document.getElementById('tve-cox-adobe-mso').value.trim() || selectedTveProvider().id,
-    yt_dlp_mso_id: document.getElementById('tve-cox-ytdlp-mso').value.trim() || document.getElementById('tve-cox-adobe-mso').value.trim() || selectedTveProvider().id,
-    software_statement: document.getElementById('tve-cox-software-statement').value.trim(),
   };
   status.className = 'save-status';
   status.textContent = 'Saving…';

@@ -571,27 +571,31 @@ class AMCNetworksTVEScraper(BaseScraper):
             programs.extend(parsed or _placeholder_epg(channel))
         return programs
 
-    def _adobe_decision_token(self, channel: AMCNChannel, account: TVEAccount, device_id: str) -> tuple[str, str]:
+    def _amcn_software_statement(self, channel: AMCNChannel, account: TVEAccount) -> str:
         cfg = account.config or {}
         statements = cfg.get('amcn_software_statements') if isinstance(cfg.get('amcn_software_statements'), dict) else {}
-        statement = (
+        return (
             cfg.get(f'amcn_software_statement_{channel.requestor_id.lower()}')
             or statements.get(channel.requestor_id)
             or cfg.get('amcn_software_statement')
             or AMCN_SOFTWARE_STATEMENTS.get(channel.requestor_id)
             or AMCN_SOFTWARE_STATEMENT
         ).strip()
-        # AMCN's own v2 REST API, not the legacy XML protocol yt-dlp's generic
-        # MVPD login flows speak — so unlike warner_tve.py/aenetworks_tve.py,
-        # non-Cox MSOs here can't fall back to authorize_mvpd()/yt-dlp. Native
-        # scripted login only exists for Cox (below); every other MSO needs
-        # its own browser-assisted pairing built against this v2 flow
-        # specifically (not built yet — see the ValueError below).
-        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+
+    def _adobe_session_redirect(
+        self, channel: AMCNChannel, software_statement: str, device_id: str, mso_id: str,
+    ) -> tuple[AdobePassCoxClient, str, str, dict[str, str]]:
+        """Registers an Adobe Pass v2 client and starts a session for `mso_id`.
+
+        Returns (client, code, mso_login_url, auth_headers) without completing
+        any login — this is the scripted part that's never blocked by an MSO's
+        bot defense, shared by both the synchronous Cox flow below and the
+        browser-assisted cascade (app.worker._silent_pair_amcn).
+        """
         client = AdobePassCoxClient(
             requestor_id=channel.requestor_id,
             resource=channel.requestor_id,
-            software_statement=statement,
+            software_statement=software_statement,
             redirect_url=channel.live_url,
         )
         client.setup_client()
@@ -632,17 +636,14 @@ class AMCNetworksTVEScraper(BaseScraper):
             mso_login_url = r.url
         if not mso_login_url:
             raise TVEAuthError(f'{channel.name}: Adobe did not return an MVPD login redirect.')
+        return client, code, mso_login_url, auth_headers
 
-        if mso_id == 'Cox':
-            if 'login.cox.com' not in mso_login_url:
-                raise TVEAuthError(f'{channel.name}: unexpected Adobe redirect host {urlsplit(mso_login_url).netloc}.')
-            _cox_saml_login(client.session, mso_login_url, account.username or '', account.password or '')
-        else:
-            raise TVEAuthError(
-                f'{channel.name}: browser-assisted sign-in for AMC Networks TVE is not built yet for '
-                f'MVPD {mso_id} (only native Cox login is wired up here).'
-            )
-
+    def _adobe_decision_finish(
+        self, client: AdobePassCoxClient, channel: AMCNChannel, code: str, mso_id: str, auth_headers: dict[str, str],
+    ) -> tuple[str, str]:
+        """The poll-by-code + entitlement-decision tail, shared by the
+        synchronous Cox flow and the browser-assisted cascade — both call this
+        once the MVPD login (whoever did it) has completed."""
         profile = client.session.get(
             f'{ADOBE_BASE}/api/v2/{channel.requestor_id}/profiles/code/{code}',
             headers={**auth_headers, 'Content-Type': 'application/json'},
@@ -668,6 +669,31 @@ class AMCNetworksTVEScraper(BaseScraper):
         if not serialized:
             raise TVENotAuthorizedError(f'{channel.name}: Adobe did not authorize {channel.requestor_id} for {mso_id}.')
         return serialized, adobe_id
+
+    def _adobe_decision_token(self, channel: AMCNChannel, account: TVEAccount, device_id: str) -> tuple[str, str]:
+        cfg = account.config or {}
+        statement = self._amcn_software_statement(channel, account)
+        # AMCN's own v2 REST API, not the legacy XML protocol yt-dlp's generic
+        # MVPD login flows speak — so unlike warner_tve.py/aenetworks_tve.py,
+        # non-Cox MSOs here can't fall back to authorize_mvpd()/yt-dlp. Native
+        # scripted login only exists for Cox (below); every other MSO needs
+        # its own browser-assisted pairing (app.worker._silent_pair_amcn,
+        # part of the "sign in once" cascade — resolve() itself still only
+        # does the synchronous Cox path).
+        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+        client, code, mso_login_url, auth_headers = self._adobe_session_redirect(channel, statement, device_id, mso_id)
+
+        if mso_id == 'Cox':
+            if 'login.cox.com' not in mso_login_url:
+                raise TVEAuthError(f'{channel.name}: unexpected Adobe redirect host {urlsplit(mso_login_url).netloc}.')
+            _cox_saml_login(client.session, mso_login_url, account.username or '', account.password or '')
+        else:
+            raise TVEAuthError(
+                f'{channel.name}: browser-assisted sign-in for AMC Networks TVE is not built yet for '
+                f'MVPD {mso_id} (only native Cox login is wired up here).'
+            )
+
+        return self._adobe_decision_finish(client, channel, code, mso_id, auth_headers)
 
     def _mvpd_access_token(
         self,
