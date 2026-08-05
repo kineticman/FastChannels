@@ -53,7 +53,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
@@ -185,6 +185,19 @@ _DEDICATED_SLUGS = frozenset({
 # this suffix, so the proxy routes any segment on it through the Referer proxy.
 CDN_HOST_SUFFIX = "c-spanvideo.org"
 REFERER = "https://www.c-span.org/"
+
+
+def _host_in_cdn_suffix(host: str, suffix: str = CDN_HOST_SUFFIX) -> bool:
+    """True only if ``host`` is exactly ``suffix`` or a real subdomain of it.
+
+    A bare ``host.endswith(suffix)`` matches attacker-registrable siblings like
+    ``xc-spanvideo.org`` (no label boundary). Same check as play.py's
+    _host_in_cdn_suffix, duplicated locally rather than imported since routes
+    depend on scrapers, not the other way around.
+    """
+    host = host.lower()
+    suffix = suffix.lower()
+    return host == suffix or host.endswith('.' + suffix)
 
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -633,6 +646,14 @@ def floor_manifest_is_fresh(manifest_url: str) -> bool:
     claim of live content.
     """
     try:
+        # manifest_url comes from _parse_floor scraping data-videofile off the
+        # /congress/ page unconditionally — the same untrusted-data shape
+        # play.py's _fetch_live guards against for the identical SSRF reason
+        # (a poisoned/injected page turning this into a server-side GET to an
+        # attacker-controlled host).
+        if not _host_in_cdn_suffix(urlsplit(manifest_url).hostname or ''):
+            logger.warning("[cspan] floor manifest host outside %s, refusing: %s", CDN_HOST_SUFFIX, manifest_url)
+            return False
         session = _floor_check_http()
         m_r = session.get(manifest_url, timeout=8)
         if m_r.status_code != 200:

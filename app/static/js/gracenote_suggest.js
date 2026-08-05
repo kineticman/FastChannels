@@ -51,6 +51,10 @@
       el.innerHTML = '<div class="gs-now-missing">Guide preview unavailable (rate limited)</div>';
       return;
     }
+    if (data.error === 'unavailable') {
+      el.innerHTML = '<div class="gs-now-missing">Guide preview unavailable</div>';
+      return;
+    }
     if (!data.now && !data.next) {
       el.innerHTML = '<div class="gs-now-missing">No guide data available</div>';
       return;

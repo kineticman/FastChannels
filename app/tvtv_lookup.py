@@ -158,10 +158,11 @@ def _fetch_items_cached_unindexed(station_id: str, session) -> list | None:
         items = _fetch_fragment_station(session, station_id, start, end)
     except Exception as exc:
         log.warning("[tvtv] unindexed fragment fetch failed for %s: %s", station_id, exc)
-        return None
-    if items is None:
-        return None
+        items = None
 
+    # Cache a failure too (timeout, 5xx, or a station ID that just doesn't
+    # exist), same TTL as success — otherwise a bad/typo'd ID pays the full
+    # live-fetch cost (up to two ~20s HTTP round-trips) on every page load.
     _grid_cache[cache_key] = (now_ts, items)
     return items
 
@@ -289,13 +290,20 @@ def lookup_now_playing(station_id: str) -> dict[str, Any]:
     session = _make_session()
     if lineup:
         items = _fetch_items_cached(lineup, station_id, session)
+        if items is None:
+            result["error"] = "rate_limited"
+            return result
     else:
         # Not in the bundled index (or no lineup listed) — tvtv's fragment
         # endpoint doesn't need one, so try it directly rather than giving up.
         items = _fetch_items_cached_unindexed(station_id, session)
-    if items is None:
-        result["error"] = "rate_limited"
-        return result
+        if items is None:
+            # _fetch_items_cached_unindexed collapses every failure cause
+            # (timeout, 5xx, or a station ID that just doesn't exist) into
+            # None — unlike the indexed path above, it can't distinguish a
+            # real tvtv rate limit from those, so don't claim one.
+            result["error"] = "unavailable"
+            return result
 
     now_utc = datetime.now(timezone.utc)
     now_entry, next_entry = _pick_now_next(items, now_utc)
