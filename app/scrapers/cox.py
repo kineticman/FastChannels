@@ -404,7 +404,8 @@ def _cox_device_type(value: str | None) -> str | None:
     normalized = aliases.get(normalized, normalized)
     if normalized in {'PHONE', 'TABLET', 'COMPUTER'}:
         return f'{COX_DEVICE_URN_PREFIX}{normalized}'
-    return value
+    logger.warning('[cox] unrecognized device_type %r, dropping instead of sending a malformed value to Cox', value)
+    return None
 
 
 def _cox_postal_code(value: str | None) -> str | None:

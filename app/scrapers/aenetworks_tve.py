@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,8 @@ from ..tve.adobe_pass import (
     discover_aenetworks_software_statement,
     invalidate_aenetworks_software_statement,
 )
+
+logger = logging.getLogger(__name__)
 
 _SCHEME = 'aenetworks-tve://'
 _UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
@@ -429,25 +432,28 @@ class AENetworksTVEScraper(BaseScraper):
         if not raw_url.startswith(_SCHEME) or not network:
             raise TVEAuthError(f'Unsupported A+E TVE stream URL: {raw_url}')
 
+        # The Google DAI event stream itself is unauthenticated today — verified
+        # live against all four networks, no MVPD/Cox token required. Still
+        # attempt Cox auth when an account is configured, on the chance that's
+        # an oversight on A+E's end rather than a deliberate design, but never
+        # let it block or slow down what already plays without it.
         account = TVEAccount.query.filter_by(provider_id='cox').first()
-        if not account or not account.is_enabled or not account.has_credentials():
-            raise TVEAuthError('Cox TVE credentials are not configured in Settings.')
-
-        cfg = account.config or {}
-        configured_statement = (cfg.get('software_statement') or '').strip()
-        statement = configured_statement or discover_aenetworks_software_statement(network.brand)
-        client = AdobePassCoxClient(
-            requestor_id=network.requestor_id,
-            resource=network.resource,
-            software_statement=statement,
-            redirect_url=network.redirect_url,
-        )
-        try:
-            client.authorize_with_cox(account.username or '', account.password or '')
-        except TVENotAuthorizedError:
-            raise
-        except TVEAuthError:
-            if not configured_statement:
-                invalidate_aenetworks_software_statement(network.brand)
-            raise
+        if account and account.is_enabled and account.has_credentials():
+            cfg = account.config or {}
+            configured_statement = (cfg.get('software_statement') or '').strip()
+            try:
+                statement = configured_statement or discover_aenetworks_software_statement(network.brand)
+                client = AdobePassCoxClient(
+                    requestor_id=network.requestor_id,
+                    resource=network.resource,
+                    software_statement=statement,
+                    redirect_url=network.redirect_url,
+                )
+                client.authorize_with_cox(account.username or '', account.password or '')
+            except TVENotAuthorizedError as exc:
+                logger.warning('[aenetworks-tve] Cox not authorized for %s: %s', network.brand, exc)
+            except TVEAuthError as exc:
+                if not configured_statement:
+                    invalidate_aenetworks_software_statement(network.brand)
+                logger.warning('[aenetworks-tve] Cox auth failed for %s: %s', network.brand, exc)
         return network.dai_master
