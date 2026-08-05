@@ -3703,8 +3703,9 @@ def license_proxy(source_name: str, channel_id: str | None = None):
             error=f'license HTTP {r.status_code}',
         )
         logger.warning(
-            '[license-proxy] %s channel=%s upstream returned HTTP %s (%d bytes)',
+            '[license-proxy] %s channel=%s upstream returned HTTP %s (%d bytes): %s',
             source_name, channel_id or '-', r.status_code, len(r.content or b''),
+            (r.content or b'')[:300],
         )
     response_bytes = scraper_cls.process_license_response(r.content)
     # Some license servers (e.g. PBS's proxy.drm.pbs.org) report failure with an HTTP
