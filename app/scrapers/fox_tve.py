@@ -313,10 +313,19 @@ def resolve_fox_http_signed_hls(channel: FoxTVEChannel) -> str:
     if not access_token:
         raise ValueError(f'FOX Adobe client token response missing access token for {channel.name}')
 
+    # Adobe's FNFB anonymous temp-pass grants a daily viewing-time budget per
+    # device identifier. A static identifier here means every resolve, for
+    # every channel, across every process, shares one budget — it gets
+    # exhausted quickly and then 403s with temporary_access_duration_limit_exceeded
+    # until Adobe's window resets, forcing the slow Playwright fallback. A
+    # fresh identifier per acquisition avoids sharing (and exhausting) one
+    # global allowance; the signed URL itself is what gets cached/reused, not
+    # this identity, so there's no continuity to preserve across calls.
+    device_fingerprint = base64.b64encode(uuid.uuid4().hex.encode()).decode()
     auth_headers = {
         **headers,
         'Authorization': f'Bearer {access_token}',
-        'AP-Device-Identifier': 'fingerprint ZmFzdGNoYW5uZWxz',
+        'AP-Device-Identifier': f'fingerprint {device_fingerprint}',
         'X-Device-Info': _fox_device_info(cfg['requestor']),
     }
     session_resp = session.post(
