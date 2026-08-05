@@ -378,7 +378,7 @@ async function loadTveNetworkStatus() {
       const note = n.note ? `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${n.note}</div>` : '';
       const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
       const button = n.family
-        ? `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in (browser)</button>`
+        ? `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`
         : '';
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
         <span>${n.label}</span>
@@ -393,7 +393,7 @@ async function loadTveNetworkStatus() {
   }
 }
 
-function openMvpdLoginModal(family, requestorId) {
+function openMvpdLoginModal(family, requestorId, cascade) {
   family = family || 'legacy';
   const cfg = MVPD_LOGIN_FAMILIES[family];
   if (!cfg) return;
@@ -409,11 +409,14 @@ function openMvpdLoginModal(family, requestorId) {
   frame.style.visibility = 'hidden';  // no src yet - avoid showing a broken-image icon
   status.style.color = '';
   status.textContent = 'Launching browser…';
+  _renderMvpdLoginSteps([]);
   modal.classList.add('open');
+  const body = cfg.needsRequestor ? { requestor_id: requestorId } : {};
+  if (cascade) body.cascade = true;
   fetch(`${cfg.base}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(cfg.needsRequestor ? { requestor_id: requestorId } : {}),
+    body: JSON.stringify(body),
   })
     .then(r => r.json())
     .catch(() => {})
@@ -435,6 +438,29 @@ function _closeMvpdLoginModal(cancel) {
   }
 }
 
+const MVPD_STEP_LABELS = {
+  HISTORY: 'History', AETV: 'A&E', LIFETIME: 'Lifetime', FYI: 'FYI',
+  TNT: 'TNT', TBS: 'TBS', TRUTV: 'truTV',
+};
+
+function _renderMvpdLoginSteps(steps) {
+  const el = document.getElementById('mvpd-login-steps');
+  if (!el) return;
+  if (!Array.isArray(steps) || !steps.length) { el.innerHTML = ''; return; }
+  const styleFor = (state) => {
+    if (state === 'done') return { bg: 'var(--success-soft)', fg: '#fff', icon: '✓' };
+    if (state === 'failed') return { bg: 'var(--bg-hover)', fg: 'var(--text-muted)', icon: '·' };
+    if (state === 'running') return { bg: 'var(--accent)', fg: '#fff', icon: '…' };
+    return { bg: 'var(--bg-hover)', fg: 'var(--text-subtle)', icon: '' };  // pending
+  };
+  el.innerHTML = steps.map(s => {
+    const label = MVPD_STEP_LABELS[s.label] || s.label;
+    const st = styleFor(s.state);
+    const title = s.message ? ` title="${String(s.message).replace(/"/g, '&quot;')}"` : '';
+    return `<span${title} style="display:inline-flex;align-items:center;gap:0.3rem;padding:0.15rem 0.55rem;border-radius:999px;font-size:0.74rem;background:${st.bg};color:${st.fg}">${st.icon ? st.icon + ' ' : ''}${label}</span>`;
+  }).join('');
+}
+
 async function _pollMvpdLoginModal() {
   if (!_mvpdLoginActive) return;
   try {
@@ -448,6 +474,7 @@ async function _pollMvpdLoginModal() {
       frame.src = `data:image/jpeg;base64,${d.screenshot}`;
       frame.style.visibility = 'visible';
     }
+    _renderMvpdLoginSteps(d.steps);
 
     if (d.state === 'success') {
       _mvpdLoginDone = true;

@@ -38,7 +38,10 @@
             {% endif %}
           </div>
           <div style="margin-top:0.75rem">
-            <div style="color:var(--text-muted);font-size:0.78rem;margin-bottom:0.3rem">TVE network sign-in status — one sign-in attempts every other network automatically afterward, reusing your saved credentials; use a row's button below if a specific one still needs its own.</div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:0.75rem;margin-bottom:0.3rem">
+              <div style="color:var(--text-muted);font-size:0.78rem">TVE network sign-in status — "Sign in to all" attempts every network in one pass, reusing your saved credentials; a row's own "Sign in" button re-does just that one network, useful for debugging.</div>
+              <button class="btn btn-audit" style="padding:0.15rem 0.6rem;font-size:0.74rem;white-space:nowrap" type="button" onclick="openMvpdLoginModal('legacy', 'HISTORY', true)">Sign in to all</button>
+            </div>
             <div id="tve-network-status" style="font-size:0.82rem;color:var(--text-soft)">Loading…</div>
           </div>
         </div>
@@ -60,6 +63,7 @@
     <div class="modal-box" onclick="event.stopPropagation()" style="max-width:1340px;">
       <h3 style="margin:0 0 0.75rem">Sign in for TV Everywhere</h3>
       <p id="mvpd-login-status" style="color:var(--text-subtle);margin:0 0 0.75rem;font-size:0.9rem;line-height:1.5">Launching browser…</p>
+      <div id="mvpd-login-steps" style="display:flex;flex-wrap:wrap;gap:0.35rem;margin:0 0 0.75rem"></div>
       <img id="mvpd-login-frame" alt="Provider sign-in" tabindex="0" draggable="false"
            onmousedown="mvpdLoginFrameMousedown(event)" onkeydown="mvpdLoginFrameKeydown(event)"
            onmousemove="mvpdLoginFrameMousemove(event)" ondragstart="return false;"

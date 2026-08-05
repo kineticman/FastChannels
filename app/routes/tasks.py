@@ -423,8 +423,14 @@ def stop_sling_browser_login():
         logger.warning(f'Failed to signal Sling browser login stop: {e}')
 
 
-def trigger_mvpd_browser_login(requestor_id: str, resource: str, software_statement: str, redirect_url: str, mso_id: str):
-    """Returns True if a job was enqueued, False if one is already running."""
+def trigger_mvpd_browser_login(requestor_id: str, resource: str, software_statement: str, redirect_url: str, mso_id: str, cascade: bool = False):
+    """Returns True if a job was enqueued, False if one is already running.
+
+    cascade=True also silently sweeps every other TVE network afterward,
+    reusing the same browser session (the "sign in once" flow). cascade=False
+    signs in only requestor_id — useful for re-testing/debugging one specific
+    network without disturbing the others' cached sign-ins.
+    """
     try:
         q = get_fast_queue()
         job_id = 'mvpd-browser-login'
@@ -433,10 +439,10 @@ def trigger_mvpd_browser_login(requestor_id: str, resource: str, software_statem
             return False
         q.enqueue(
             'app.worker.run_mvpd_browser_login',
-            requestor_id, resource, software_statement, redirect_url, mso_id,
+            requestor_id, resource, software_statement, redirect_url, mso_id, cascade,
             job_timeout=1830, job_id=job_id,
         )
-        logger.info('Enqueued MVPD browser login for requestor_id=%s mso_id=%s', requestor_id, mso_id)
+        logger.info('Enqueued MVPD browser login for requestor_id=%s mso_id=%s cascade=%s', requestor_id, mso_id, cascade)
         return True
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for MVPD browser login')
@@ -449,7 +455,7 @@ def trigger_mvpd_browser_login(requestor_id: str, resource: str, software_statem
             return False
         threading.Thread(
             target=run_mvpd_browser_login,
-            args=(requestor_id, resource, software_statement, redirect_url, mso_id),
+            args=(requestor_id, resource, software_statement, redirect_url, mso_id, cascade),
             daemon=True, name=thread_name,
         ).start()
         return True

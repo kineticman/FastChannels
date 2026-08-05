@@ -5176,8 +5176,10 @@ def mvpd_browser_login_start():
         target = resolve_requestor_target(requestor_id)
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
+    cascade = bool(data.get('cascade'))
     started = trigger_mvpd_browser_login(
         requestor_id, target['resource'], target['software_statement'], target['redirect_url'], mso_id,
+        cascade=cascade,
     )
     return jsonify({'status': 'started' if started else 'already_running'})
 

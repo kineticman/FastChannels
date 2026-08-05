@@ -1972,38 +1972,62 @@ def _try_autofill_credentials(page, username: str, password: str, wait_seconds: 
         try:
             if page.locator('input').count() >= 2:
                 break
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.info('[mvpd-login] autofill: locator query failed: %s', exc)
             return False
         page.wait_for_timeout(300)
     else:
+        try:
+            n = page.locator('input').count()
+        except Exception:  # noqa: BLE001
+            n = -1
+        logger.info('[mvpd-login] autofill: timed out after %.1fs waiting for >=2 inputs (saw %d) url=%s', wait_seconds, n, _safe_page_url(page))
         return False
+
+    # Some login pages (observed on Sling's authSynacor form) hydrate/re-render
+    # shortly after the inputs first appear, which can leave a locator briefly
+    # pointing at a detached node — Playwright's default 30s auto-wait on
+    # get_attribute() then burns the entire autofill budget on one bad read.
+    # A short settle pause plus a tight per-call timeout keeps a single flaky
+    # input from aborting the whole attempt.
+    page.wait_for_timeout(500)
 
     try:
         inputs = page.locator('input')
+        n = inputs.count()
         email_idx = None
-        for i in range(min(inputs.count(), 6)):
-            typ = (inputs.nth(i).get_attribute('type') or '').lower()
-            name = (inputs.nth(i).get_attribute('name') or '').lower()
-            placeholder = (inputs.nth(i).get_attribute('placeholder') or '').lower()
+        seen = []
+        for i in range(min(n, 6)):
+            try:
+                typ = (inputs.nth(i).get_attribute('type', timeout=1000) or '').lower()
+                name = (inputs.nth(i).get_attribute('name', timeout=1000) or '').lower()
+                placeholder = (inputs.nth(i).get_attribute('placeholder', timeout=1000) or '').lower()
+            except Exception as exc:  # noqa: BLE001
+                logger.info('[mvpd-login] autofill: input %d attribute read failed, skipping: %s', i, exc)
+                continue
+            seen.append((typ, name, placeholder))
             if typ in ('email', 'text') and ('email' in name or 'email' in placeholder or 'user' in name):
                 email_idx = i
                 break
-        if email_idx is None and inputs.count() >= 2:
+        if email_idx is None and n >= 2:
             email_idx = 0
         if email_idx is None:
+            logger.info('[mvpd-login] autofill: no usable email/text input among %d inputs: %s', n, seen)
             return False
 
-        inputs.nth(email_idx).click()
+        inputs.nth(email_idx).click(timeout=3000)
         page.keyboard.type(username, delay=30)
         pw_idx = email_idx + 1
-        if pw_idx >= inputs.count():
+        if pw_idx >= n:
+            logger.info('[mvpd-login] autofill: no password input after email idx %d (n=%d): %s', email_idx, n, seen)
             return False
-        inputs.nth(pw_idx).click()
+        inputs.nth(pw_idx).click(timeout=3000)
         page.keyboard.type(password, delay=30)
         page.wait_for_timeout(300)
         inputs.nth(pw_idx).press('Enter')
         return True
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logger.info('[mvpd-login] autofill: exception mid-fill: %s', exc)
         return False
 
 
@@ -2378,7 +2402,7 @@ def _relay_input_and_screenshot(page, r) -> bool:
     return stopped
 
 
-def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, username: str, password: str, r) -> dict[str, tuple[bool, str]]:
+def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, username: str, password: str, r, on_step=None) -> dict[str, tuple[bool, str]]:
     """Best-effort: after a human completes one browser-assisted MVPD pairing,
     try the other known TVE requestor_ids using the same browser tab. Sling's
     session did NOT reliably carry over via cookies alone between separate
@@ -2389,8 +2413,20 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
     raises; a requestor that doesn't pair this way just stays unpaired until
     someone runs the browser-assisted flow for it directly. Returns
     {requestor_id: (paired, message)} for every sibling attempted.
+
+    If given, on_step(label, state, message) is called with state='running'
+    right before each sibling is attempted, and state='done'/'failed' with the
+    final message right after — lets the caller surface live progress instead
+    of a single message that appears frozen for the whole sweep.
     """
     from app.tve.mvpd_targets import all_requestor_ids, resolve_requestor_target
+
+    def _report(state: str, message: str = ''):
+        if on_step:
+            try:
+                on_step(sibling_id, state, message)
+            except Exception:  # noqa: BLE001
+                pass
 
     results: dict[str, tuple[bool, str]] = {}
     for sibling_id in all_requestor_ids():
@@ -2398,10 +2434,12 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
             continue
         if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
             break
+        _report('running')
         try:
             target = resolve_requestor_target(sibling_id)
         except Exception as exc:  # noqa: BLE001
             logger.info('[mvpd-login] sibling %s: could not resolve target: %s', sibling_id, exc)
+            _report('failed', 'not applicable')
             continue
 
         sib_client = AdobePassCoxClient(
@@ -2419,14 +2457,17 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
         except Exception as exc:  # noqa: BLE001
             logger.info('[mvpd-login] sibling %s: navigation failed: %s', sibling_id, exc)
             results[sibling_id] = (False, f'registration failed: {exc}')
+            _report('failed', results[sibling_id][1])
             continue
         if _same_page_url(_safe_page_url(page), target['redirect_url']):
             logger.info('[mvpd-login] sibling %s: bounced straight back to redirect_url — %s not a participating provider', sibling_id, mso_id)
             results[sibling_id] = (False, 'not a participating provider')
+            _report('failed', results[sibling_id][1])
             continue
         _try_autofill_credentials(page, username, password)
         if _relay_input_and_screenshot(page, r):
             results[sibling_id] = (False, 'cancelled')
+            _report('failed', 'cancelled')
             break
 
         paired = False
@@ -2457,6 +2498,7 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
         if not paired and message != 'cancelled':
             logger.info('[mvpd-login] sibling %s: gave up after silent-pairing budget', sibling_id)
         results[sibling_id] = (paired, message)
+        _report('done' if paired else 'failed', message)
         if message == 'cancelled':
             break
     return results
@@ -2811,8 +2853,14 @@ def _summarize_pairing_results(results: dict[str, tuple[bool, str]]) -> str:
     return ' '.join(parts)
 
 
-def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement: str, redirect_url: str, mso_id: str):
+def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement: str, redirect_url: str, mso_id: str, cascade: bool = False):
     """Drive a real, human-operated sign-in to an MVPD's Adobe Pass login page.
+
+    cascade=True additionally sweeps every other known TVE network afterward,
+    reusing the same browser session ("sign in once" — see _pair_sibling_requestors
+    and the NBC/FOX/AMCN/Discovery loop below). cascade=False signs in only
+    requestor_id, useful for re-testing/debugging one specific network without
+    touching the others' already-cached sign-ins.
 
     For MSOs whose login page blocks scripted clients outright (Sling's
     identity.sling.com returns HTTP 417 to yt-dlp even with browser TLS
@@ -2840,12 +2888,39 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
             logger.warning('[mvpd-login] Redis unavailable, aborting: %s', exc)
             return
 
+        # Live-updated per-network checklist so the modal shows real progress
+        # during the automated cascade instead of one message that appears
+        # frozen for a minute or more while several networks are swept.
+        steps: list[dict] = [{'label': requestor_id, 'state': 'running'}]
+
+        def _step(label: str, state: str, message: str = ''):
+            for entry in steps:
+                if entry['label'] == label:
+                    entry['state'] = state
+                    entry['message'] = message
+                    break
+            else:
+                steps.append({'label': label, 'state': state, 'message': message})
+
+        # Camoufox's underlying Firefox process has been observed to die on its
+        # own partway through a long cascade (many rapid cross-origin
+        # navigations — confirmed live 2026-08-05). By that point the job has
+        # often already finished its real work and called set_status('success'/
+        # 'stopped', ...). The `with Camoufox(...)` block's own teardown then
+        # tries to close the already-dead browser, raises, and — since that
+        # happens while Python is unwinding this function's `return` — REPLACES
+        # the good terminal status with a misleading crash message unless we
+        # explicitly remember a terminal status was already recorded.
+        _terminal_status_set = {'v': False}
+
         def set_status(state: str, message: str = '', url: str = ''):
             try:
                 r.setex(
                     MVPD_BROWSER_LOGIN_STATUS_KEY, 120,
-                    _json_login.dumps({'state': state, 'message': message, 'url': url, 'requestor_id': requestor_id}),
+                    _json_login.dumps({'state': state, 'message': message, 'url': url, 'requestor_id': requestor_id, 'steps': steps}),
                 )
+                if state in ('success', 'error', 'stopped'):
+                    _terminal_status_set['v'] = True
             except Exception:  # noqa: BLE001
                 pass
 
@@ -2868,6 +2943,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
             client.register_device()
             client.create_regcode()
         except TVEAuthError as exc:
+            _step(requestor_id, 'failed', str(exc)[:120])
             set_status('error', f'Adobe Pass registration failed: {exc}')
             return
         auth_url = client.authenticate_redirect_url(mso_id)
@@ -2875,6 +2951,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
         try:
             from camoufox.sync_api import Camoufox
         except ImportError:
+            _step(requestor_id, 'failed', 'Camoufox not installed')
             set_status('error', 'Camoufox is not installed on this container')
             return
 
@@ -2906,6 +2983,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 try:
                     page.goto(auth_url, wait_until='domcontentloaded', timeout=30000)
                 except Exception as exc:  # noqa: BLE001
+                    _step(requestor_id, 'failed', 'failed to load sign-in page')
                     set_status('error', f'Failed to load provider sign-in page: {exc}')
                     return
                 # If Adobe doesn't have this MVPD registered for this content
@@ -2918,6 +2996,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 # need at least one MSO-domain hop first, so seeing
                 # redirect_url immediately here is unambiguous.
                 if _same_page_url(_safe_page_url(page), redirect_url):
+                    _step(requestor_id, 'failed', 'not a participating provider')
                     set_status('error', f'{requestor_id}: {mso_id} does not appear to be a participating provider for this network.')
                     return
                 if mvpd_username and mvpd_password:
@@ -2933,10 +3012,12 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 _MAX_CONSECUTIVE_FAILURES = 15
                 while time.monotonic() < deadline:
                     if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                        _step(requestor_id, 'failed', 'cancelled')
                         set_status('stopped', 'Cancelled')
                         return
 
                     if page.is_closed():
+                        _step(requestor_id, 'failed', 'browser page closed')
                         set_status('error', 'Browser page closed unexpectedly.')
                         return
 
@@ -2967,6 +3048,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                             consecutive_failures += 1
                             if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
                                 logger.warning('[mvpd-login] page unresponsive after %d failed screenshots: %s', consecutive_failures, exc)
+                                _step(requestor_id, 'failed', 'browser session died')
                                 set_status('error', f'Browser session died: {exc}')
                                 return
                         last_shot = now
@@ -2984,6 +3066,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                         except TVEPendingAuthError:
                             continue  # human hasn't finished the MSO login yet
                         except TVEAuthError as exc:
+                            _step(requestor_id, 'failed', str(exc)[:120])
                             set_status('error', f'Adobe Pass error: {exc}')
                             return
 
@@ -2996,16 +3079,36 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                         try:
                             token = client.authorize()
                             results[requestor_id] = (True, 'authorized')
+                            _step(requestor_id, 'done', 'authorized')
                             logger.info('[mvpd-login] paired requestor_id=%s (token len=%d)', requestor_id, len(token or ''))
                         except TVENotAuthorizedError:
                             results[requestor_id] = (False, 'not entitled')
+                            _step(requestor_id, 'failed', 'not entitled')
                         except TVEAuthError as exc:
                             results[requestor_id] = (False, str(exc)[:120])
+                            _step(requestor_id, 'failed', str(exc)[:120])
                             logger.warning('[mvpd-login] %s authorize failed: %s', requestor_id, exc)
+
+                        if not cascade:
+                            set_status('success', _summarize_pairing_results(results))
+                            return
+
+                        # Seed the full checklist up front (all pending) so the
+                        # modal shows what's left to check instead of just a
+                        # single rotating message during the sweep.
+                        try:
+                            from app.tve.mvpd_targets import all_requestor_ids as _all_req_ids
+                            for sib_id in _all_req_ids():
+                                if sib_id != requestor_id:
+                                    steps.append({'label': sib_id, 'state': 'pending'})
+                        except Exception:  # noqa: BLE001
+                            pass
+                        for cascade_label in ('NBC', 'FOX Sports', 'AMC Networks', 'Discovery'):
+                            steps.append({'label': cascade_label, 'state': 'pending'})
 
                         set_status('running', 'Signed in — checking other TVE networks (still interactive if any of them need you)…', _safe_page_url(page))
                         try:
-                            results.update(_pair_sibling_requestors(page, requestor_id, mso_id, mvpd_username, mvpd_password, r))
+                            results.update(_pair_sibling_requestors(page, requestor_id, mso_id, mvpd_username, mvpd_password, r, on_step=_step))
                         except Exception as exc:  # noqa: BLE001
                             logger.warning('[mvpd-login] sibling pairing pass failed: %s', exc)
                         for label, fn in (
@@ -3016,13 +3119,17 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                         ):
                             if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
                                 results[label] = (False, 'cancelled')
+                                _step(label, 'failed', 'cancelled')
                                 continue
+                            _step(label, 'running')
                             set_status('running', f'Checking {label}…', _safe_page_url(page))
                             try:
                                 results[label] = fn(page, mso_id, mvpd_username, mvpd_password, r)
+                                _step(label, 'done' if results[label][0] else 'failed', results[label][1])
                             except Exception as exc:  # noqa: BLE001
                                 logger.warning('[mvpd-login] %s cascade failed: %s', label, exc)
                                 results[label] = (False, str(exc)[:120])
+                                _step(label, 'failed', str(exc)[:120])
                         if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
                             set_status('stopped', 'Cancelled. ' + _summarize_pairing_results(results))
                         else:
@@ -3031,11 +3138,20 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
 
                     page.wait_for_timeout(80)
 
+                _step(requestor_id, 'failed', 'timed out')
                 set_status('error', 'Timed out waiting for sign-in to complete.')
                 return
         except BaseException as exc:  # noqa: BLE001
+            if _terminal_status_set['v']:
+                # A real success/error/stopped status was already recorded
+                # before this — almost certainly the Camoufox `with` block's
+                # own teardown failing to close an already-dead browser, not
+                # an actual job failure. Don't clobber the real result.
+                logger.info('[mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
+                return
             logger.exception('[mvpd-login] browser session failed')
             try:
+                _step(requestor_id, 'failed', str(exc)[:120])
                 set_status('error', f'Browser session failed: {exc}')
             except Exception:  # noqa: BLE001
                 pass
