@@ -30,20 +30,16 @@
             <input type="password" id="tve-cox-password" autocomplete="current-password" placeholder="{% if tve_cox_account.password_configured %}Password saved - leave blank to keep{% else %}TV provider password{% endif %}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
           </div>
           <div id="tve-provider-hint" style="margin-top:0.45rem;color:var(--text-muted);font-size:0.82rem">Used by TVE sources such as A+E Networks TVE.</div>
-          <div style="margin-top:0.65rem;display:flex;align-items:flex-end;gap:0.5rem;flex-wrap:wrap">
-            <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem">
-              Browser sign-in (for providers scripted sign-in can't get past)
-              <select id="tve-mvpd-requestor" style="min-width:220px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem"></select>
-            </label>
-            <button class="btn btn-audit" type="button" onclick="openMvpdLoginModal()">Sign in (browser)</button>
-          </div>
-          <div style="margin-top:0.35rem;color:var(--text-muted);font-size:0.78rem">One sign-in attempts every TVE network automatically afterward, reusing your saved credentials — no need to repeat this per network. Some networks may still need their own separate sign-in if that pass-through doesn't go through; the result after signing in lists exactly which ones.</div>
           <div id="tve-cox-last-status" style="margin-top:0.55rem;color:var(--text-muted);font-size:0.82rem">
             {% if tve_cox_account.last_auth_status %}
               Last test: {{ tve_cox_account.last_auth_status }}{% if tve_cox_account.last_auth_at %} at {{ tve_cox_account.last_auth_at }}{% endif %}{% if tve_cox_account.last_auth_message %} — {{ tve_cox_account.last_auth_message }}{% endif %}
             {% else %}
               No auth test has run yet.
             {% endif %}
+          </div>
+          <div style="margin-top:0.75rem">
+            <div style="color:var(--text-muted);font-size:0.78rem;margin-bottom:0.3rem">TVE network sign-in status — one sign-in attempts every other network automatically afterward, reusing your saved credentials; use a row's button below if a specific one still needs its own.</div>
+            <div id="tve-network-status" style="font-size:0.82rem;color:var(--text-soft)">Loading…</div>
           </div>
         </div>
         <div class="toggle-row-control" style="gap:0.5rem;flex-wrap:wrap">

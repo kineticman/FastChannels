@@ -5110,6 +5110,13 @@ def tve_cox_settings():
     return jsonify(account.to_safe_dict())
 
 
+@api_bp.route('/settings/tve/status')
+def tve_network_status_route():
+    from ..tve.status import tve_network_status
+    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    return jsonify({'networks': tve_network_status(account)})
+
+
 @api_bp.route('/settings/tve/cox/test', methods=['POST'])
 def test_tve_cox_settings():
     account = _get_tve_account('cox', 'Cox')

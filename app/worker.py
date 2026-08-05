@@ -36,6 +36,7 @@ from app.hls import inspect_hls_drm, parse_stream_info as _parse_stream_info, pa
 from app.models import Source, Channel, Program, Feed, AppSettings, SourceCache, TVEAccount
 import time as _time
 from urllib.parse import urljoin as _urljoin
+from urllib.parse import urlsplit as _urlsplit
 from app.scrapers import registry
 from app.scrapers.base import (
     StreamDeadError,
@@ -1939,6 +1940,18 @@ def _safe_page_url(page) -> str:
         return '<unknown - page unresponsive>'
 
 
+def _same_page_url(actual: str, expected: str) -> bool:
+    """Compares scheme+host+path only, ignoring query/fragment — Adobe or the
+    destination site sometimes appends tracking params on the bounce-back, so
+    an exact string match would miss real matches."""
+    try:
+        a = _urlsplit(actual)
+        e = _urlsplit(expected)
+        return (a.scheme, a.netloc, a.path.rstrip('/')) == (e.scheme, e.netloc, e.path.rstrip('/'))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _try_autofill_credentials(page, username: str, password: str, wait_seconds: float = 5.0) -> bool:
     """Best-effort, short-timeout sibling of _autofill_sling_credentials for
     the "sign in once" cascade (app.worker._silent_pair_* / sibling pairing).
@@ -2315,7 +2328,57 @@ def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
     db.session.commit()
 
 
-def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, username: str, password: str) -> dict[str, tuple[bool, str]]:
+def _relay_input_and_screenshot(page, r) -> bool:
+    """Keep the streamed browser modal alive and interactive during the "sign
+    in once" cascade's silent phase, and report whether the human clicked
+    Stop/Cancel.
+
+    Without the relay half, human input queued via the modal is never
+    drained (none of the cascade poll loops read it) and no new screenshots
+    are ever taken once the primary loop hands off — so the modal freezes on
+    whatever page was showing the instant the cascade started, while the
+    real browser has already moved on to a different site entirely. A human
+    watching that frozen frame and clicking on it looks exactly like "stuck,
+    can't click" (confirmed live 2026-08-05) even though their clicks WERE
+    being queued server-side the whole time, just never applied.
+
+    Without the stop-check half, clicking Stop/Cancel during the cascade
+    does nothing at all — only the primary loop ever checked that key, so a
+    human canceling mid-cascade would see repeated Stop/Start clicks fail
+    silently while the job kept working through the remaining networks on
+    its own budget (confirmed live 2026-08-05). Returns True if the human
+    asked to stop — callers should break out of their own loop when this
+    happens rather than press on to the next network.
+
+    Best-effort; never raises. Call this every ~1s from within each cascade
+    step's own poll loop, same cadence as the primary loop.
+    """
+    import json as _json
+    stopped = False
+    try:
+        stopped = bool(r.exists(MVPD_BROWSER_LOGIN_STOP_KEY))
+    except Exception:  # noqa: BLE001
+        pass
+    for _ in range(20):
+        try:
+            raw = r.lpop(MVPD_BROWSER_LOGIN_INPUT_KEY)
+        except Exception:  # noqa: BLE001
+            break
+        if raw is None:
+            break
+        try:
+            _apply_sling_browser_login_input(page, _json.loads(raw))
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        shot = page.screenshot(type='jpeg', quality=60)
+        r.setex(MVPD_BROWSER_LOGIN_SHOT_KEY, 30, shot)
+    except Exception:  # noqa: BLE001
+        pass
+    return stopped
+
+
+def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, username: str, password: str, r) -> dict[str, tuple[bool, str]]:
     """Best-effort: after a human completes one browser-assisted MVPD pairing,
     try the other known TVE requestor_ids using the same browser tab. Sling's
     session did NOT reliably carry over via cookies alone between separate
@@ -2333,6 +2396,8 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
     for sibling_id in all_requestor_ids():
         if sibling_id == paired_requestor_id:
             continue
+        if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+            break
         try:
             target = resolve_requestor_target(sibling_id)
         except Exception as exc:  # noqa: BLE001
@@ -2355,12 +2420,22 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
             logger.info('[mvpd-login] sibling %s: navigation failed: %s', sibling_id, exc)
             results[sibling_id] = (False, f'registration failed: {exc}')
             continue
+        if _same_page_url(_safe_page_url(page), target['redirect_url']):
+            logger.info('[mvpd-login] sibling %s: bounced straight back to redirect_url — %s not a participating provider', sibling_id, mso_id)
+            results[sibling_id] = (False, 'not a participating provider')
+            continue
         _try_autofill_credentials(page, username, password)
+        if _relay_input_and_screenshot(page, r):
+            results[sibling_id] = (False, 'cancelled')
+            break
 
         paired = False
         message = 'needs its own sign-in'
         for _ in range(15):  # ~15s budget, 1s apart — silent SSO is fast when it works
             page.wait_for_timeout(1000)
+            if _relay_input_and_screenshot(page, r):
+                message = 'cancelled'
+                break
             try:
                 sib_client.fetch_session_token()
                 sib_client.authorize()
@@ -2379,13 +2454,15 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
                 logger.info('[mvpd-login] sibling %s: not paired (likely needs its own human login): %s', sibling_id, exc)
                 message = str(exc)[:120]
                 break
-        if not paired:
+        if not paired and message != 'cancelled':
             logger.info('[mvpd-login] sibling %s: gave up after silent-pairing budget', sibling_id)
         results[sibling_id] = (paired, message)
+        if message == 'cancelled':
+            break
     return results
 
 
-def _silent_pair_nbc(page, mso_id: str, username: str, password: str) -> tuple[bool, str]:
+def _silent_pair_nbc(page, mso_id: str, username: str, password: str, r) -> tuple[bool, str]:
     """Best-effort: attempt NBC TVE pairing silently, reusing the already-
     authenticated browser tab from a just-completed human login elsewhere.
     Same registration+poll logic as run_nbc_browser_login, minus the
@@ -2432,10 +2509,14 @@ def _silent_pair_nbc(page, mso_id: str, username: str, password: str) -> tuple[b
     except Exception as exc:  # noqa: BLE001
         return False, f'could not load MVPD redirect: {exc}'
     _try_autofill_credentials(page, username, password)
+    if _relay_input_and_screenshot(page, r):
+        return False, 'cancelled'
 
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         page.wait_for_timeout(1000)
+        if _relay_input_and_screenshot(page, r):
+            return False, 'cancelled'
         try:
             r_profile = client._get(
                 f'{ADOBE_BASE_NBC}/api/v2/{client.requestor_id}/profiles/{mso_id}',
@@ -2450,7 +2531,7 @@ def _silent_pair_nbc(page, mso_id: str, username: str, password: str) -> tuple[b
     return False, 'needs its own sign-in'
 
 
-def _silent_pair_fox(page, mso_id: str, username: str, password: str) -> tuple[bool, str]:
+def _silent_pair_fox(page, mso_id: str, username: str, password: str, r) -> tuple[bool, str]:
     """Best-effort: attempt FOX Sports TVE pairing silently, same idea as
     _silent_pair_nbc but against api3.fox.com's own REST flow
     (run_fox_browser_login's registration+poll logic, minus streaming)."""
@@ -2495,10 +2576,14 @@ def _silent_pair_fox(page, mso_id: str, username: str, password: str) -> tuple[b
     except Exception as exc:  # noqa: BLE001
         return False, f'could not load MVPD redirect: {exc}'
     _try_autofill_credentials(page, username, password)
+    if _relay_input_and_screenshot(page, r):
+        return False, 'cancelled'
 
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         page.wait_for_timeout(1000)
+        if _relay_input_and_screenshot(page, r):
+            return False, 'cancelled'
         try:
             check = session.get(
                 'https://api3.fox.com/v2.0/checkadobeauthn/v2', headers=headers,
@@ -2520,13 +2605,14 @@ def _silent_pair_fox(page, mso_id: str, username: str, password: str) -> tuple[b
             acct_cfg['fox_sports_access_token'] = token
             acct_cfg['fox_sports_access_token_exp'] = exp
             acct_cfg['fox_sports_access_token_mso'] = mso_id
+            acct_cfg['fox_sports_access_token_captured_at'] = int(time.time())
             account.config = acct_cfg
             db.session.commit()
         return True, 'authorized'
     return False, 'needs its own sign-in'
 
 
-def _silent_pair_amcn(page, mso_id: str, username: str, password: str) -> tuple[bool, str]:
+def _silent_pair_amcn(page, mso_id: str, username: str, password: str, r) -> tuple[bool, str]:
     """Best-effort: attempt AMC Networks TVE pairing silently. Tries one
     representative channel first (amc); if that MVPD integration doesn't
     even exist for the provider, the other 3 channels almost certainly won't
@@ -2537,6 +2623,7 @@ def _silent_pair_amcn(page, mso_id: str, username: str, password: str) -> tuple[
     loop's "pending" shape is inferred from NBC's proven-identical v2 API
     behavior, not independently confirmed for AMCN specifically.
     """
+    import requests
     from app.scrapers.amcn_tve import AMCNetworksTVEScraper, CHANNELS, ADOBE_BASE as amcn_ADOBE_BASE
 
     source = Source.query.filter_by(name='amcn_tve').first()
@@ -2549,6 +2636,9 @@ def _silent_pair_amcn(page, mso_id: str, username: str, password: str) -> tuple[
     paired_channels: list[str] = []
     last_message = 'not a participating provider'
     for key, channel in CHANNELS.items():
+        if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+            last_message = 'cancelled'
+            break
         statement = scraper._amcn_software_statement(channel, account)
         try:
             client, code, mso_login_url, auth_headers = scraper._adobe_session_redirect(channel, statement, device_id, mso_id)
@@ -2564,11 +2654,18 @@ def _silent_pair_amcn(page, mso_id: str, username: str, password: str) -> tuple[
             last_message = f'could not load MVPD redirect: {exc}'
             continue
         _try_autofill_credentials(page, username, password)
+        if _relay_input_and_screenshot(page, r):
+            last_message = 'cancelled'
+            break
 
         deadline = time.monotonic() + 20
         found_profile = False
+        cancelled = False
         while time.monotonic() < deadline:
             page.wait_for_timeout(1000)
+            if _relay_input_and_screenshot(page, r):
+                cancelled = True
+                break
             try:
                 profile_resp = client.session.get(
                     f'{amcn_ADOBE_BASE}/api/v2/{channel.requestor_id}/profiles/code/{code}',
@@ -2580,6 +2677,9 @@ def _silent_pair_amcn(page, mso_id: str, username: str, password: str) -> tuple[
             if mso_profile:
                 found_profile = True
                 break
+        if cancelled:
+            last_message = 'cancelled'
+            break
         if not found_profile:
             last_message = 'needs its own sign-in'
             continue
@@ -2595,7 +2695,7 @@ def _silent_pair_amcn(page, mso_id: str, username: str, password: str) -> tuple[
     return False, last_message
 
 
-def _silent_pair_discovery(page, mso_id: str, username: str, password: str) -> tuple[bool, str]:
+def _silent_pair_discovery(page, mso_id: str, username: str, password: str, redis_client) -> tuple[bool, str]:
     """Best-effort: attempt Discovery TVE pairing silently. Unlike the other
     three, Discovery's flow delivers the final auth code via a direct browser
     redirect rather than an independently-pollable regcode/session-code — so
@@ -2603,6 +2703,9 @@ def _silent_pair_discovery(page, mso_id: str, username: str, password: str) -> t
     param to appear (same technique app.worker.run_sling_browser_login uses
     for Sling's own transient_token), then finishes the token exchange +
     login POST scripted, exactly like discovery_tve.py's own _authenticate().
+    Redis client is named redis_client here (not r) since this function
+    already uses `r` locally for HTTP responses, matching discovery_tve.py's
+    own convention.
     """
     import requests
     from app.scrapers.discovery_tve import (
@@ -2648,11 +2751,15 @@ def _silent_pair_discovery(page, mso_id: str, username: str, password: str) -> t
     except Exception as exc:  # noqa: BLE001
         return False, f'could not load MVPD redirect: {exc}'
     _try_autofill_credentials(page, username, password)
+    if _relay_input_and_screenshot(page, redis_client):
+        return False, 'cancelled'
 
     deadline = time.monotonic() + 20
     code = None
     while time.monotonic() < deadline:
         page.wait_for_timeout(500)
+        if _relay_input_and_screenshot(page, redis_client):
+            return False, 'cancelled'
         url = _safe_page_url(page)
         if 'code=' in url:
             code = (parse_qs(urlsplit(url).query).get('code') or [''])[0]
@@ -2801,6 +2908,18 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 except Exception as exc:  # noqa: BLE001
                     set_status('error', f'Failed to load provider sign-in page: {exc}')
                     return
+                # If Adobe doesn't have this MVPD registered for this content
+                # owner at all (confirmed live for Turner/TNT+Sling: a single
+                # 302 straight back, never even touching Sling's login), the
+                # very FIRST landing page is redirect_url itself — no MSO
+                # domain was ever visited. Left undetected, the human just
+                # stares at a dead, unexplained page for up to 30 minutes
+                # (confirmed live 2026-08-05). A later, real completion would
+                # need at least one MSO-domain hop first, so seeing
+                # redirect_url immediately here is unambiguous.
+                if _same_page_url(_safe_page_url(page), redirect_url):
+                    set_status('error', f'{requestor_id}: {mso_id} does not appear to be a participating provider for this network.')
+                    return
                 if mvpd_username and mvpd_password:
                     _try_autofill_credentials(page, mvpd_username, mvpd_password, wait_seconds=8.0)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
@@ -2884,9 +3003,9 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                             results[requestor_id] = (False, str(exc)[:120])
                             logger.warning('[mvpd-login] %s authorize failed: %s', requestor_id, exc)
 
-                        set_status('running', 'Signed in — checking other TVE networks…', _safe_page_url(page))
+                        set_status('running', 'Signed in — checking other TVE networks (still interactive if any of them need you)…', _safe_page_url(page))
                         try:
-                            results.update(_pair_sibling_requestors(page, requestor_id, mso_id, mvpd_username, mvpd_password))
+                            results.update(_pair_sibling_requestors(page, requestor_id, mso_id, mvpd_username, mvpd_password, r))
                         except Exception as exc:  # noqa: BLE001
                             logger.warning('[mvpd-login] sibling pairing pass failed: %s', exc)
                         for label, fn in (
@@ -2895,12 +3014,19 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                             ('AMC Networks', _silent_pair_amcn),
                             ('Discovery', _silent_pair_discovery),
                         ):
+                            if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                                results[label] = (False, 'cancelled')
+                                continue
+                            set_status('running', f'Checking {label}…', _safe_page_url(page))
                             try:
-                                results[label] = fn(page, mso_id, mvpd_username, mvpd_password)
+                                results[label] = fn(page, mso_id, mvpd_username, mvpd_password, r)
                             except Exception as exc:  # noqa: BLE001
                                 logger.warning('[mvpd-login] %s cascade failed: %s', label, exc)
                                 results[label] = (False, str(exc)[:120])
-                        set_status('success', _summarize_pairing_results(results))
+                        if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                            set_status('stopped', 'Cancelled. ' + _summarize_pairing_results(results))
+                        else:
+                            set_status('success', _summarize_pairing_results(results))
                         return
 
                     page.wait_for_timeout(80)
@@ -3325,6 +3451,7 @@ def run_fox_browser_login(mso_id: str):
                             acct_cfg['fox_sports_access_token'] = token
                             acct_cfg['fox_sports_access_token_exp'] = exp
                             acct_cfg['fox_sports_access_token_mso'] = mso_id
+                            acct_cfg['fox_sports_access_token_captured_at'] = int(time.time())
                             account.config = acct_cfg
                             account.last_auth_status = 'ok'
                             account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (browser-assisted).'

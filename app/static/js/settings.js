@@ -239,6 +239,8 @@ function updateTveProviderFields() {
   const username = document.getElementById('tve-cox-username');
   const password = document.getElementById('tve-cox-password');
   const hint = document.getElementById('tve-provider-hint');
+  const testBtn = document.getElementById('tve-cox-test-btn');
+  const lastStatus = document.getElementById('tve-cox-last-status');
   if (username) username.placeholder = `${provider.name} username`;
   if (password) password.placeholder = tvePasswordPlaceholder;
   if (hint) {
@@ -246,6 +248,16 @@ function updateTveProviderFields() {
       ? 'Used by all TVE sources, via a fast native sign-in.'
       : `Used by all TVE sources — signs in through ${provider.name}'s own login (scripted where possible, browser-assisted sign-in below otherwise).`;
   }
+  // "Test" is a fast, genuine credential check only for Cox (native scripted
+  // login). For every other provider it's now redundant with the network
+  // list's own "Sign in (browser)" buttons below — and the "Last test" line
+  // it feeds just shows stale, out-of-context text once you're using those
+  // instead (confirmed live 2026-08-05: a months-old scripted-auth error sat
+  // there sandwiched between unrelated hint/status text). Hide both for
+  // non-Cox rather than let them accumulate irrelevant leftovers.
+  const isCox = provider.id === 'Cox';
+  if (testBtn) testBtn.style.display = isCox ? '' : 'none';
+  if (lastStatus) lastStatus.style.display = isCox ? '' : 'none';
   if (select) select.dataset.previousProvider = provider.id;
 }
 
@@ -286,6 +298,18 @@ async function testTveCox() {
   const last = document.getElementById('tve-cox-last-status');
   const saved = await saveTveCoxSettings();
   if (!saved) return;
+
+  // Cox's native sign-in is a fast, genuine credential check (~2-3s), so it
+  // stays a quick synchronous request below. Every other provider has no
+  // scripted way to verify credentials at all — even Sling's own native
+  // login rejects scripted checks outright (see app/scrapers/sling.py) — so
+  // "Test" for those just IS the real browser-assisted sign-in; there's no
+  // lighter-weight check to fall back to.
+  if (selectedTveProvider().id !== 'Cox') {
+    openMvpdLoginModal('legacy', 'HISTORY');
+    return;
+  }
+
   status.className = 'save-status';
   status.textContent = 'Testing…';
   btn.disabled = true;
@@ -311,25 +335,70 @@ async function testTveCox() {
 // see app/worker.py's run_mvpd_browser_login docstring for why this exists
 // (some MSO login pages block scripted clients outright, browser TLS
 // impersonation included).
+// Three different networks share this one streamed-browser modal, each with
+// its own backend flow and endpoint prefix (see app/tve/status.py's 'family'
+// field): 'legacy' (A+E/Warner, needs a requestor_id), 'nbc' and 'fox' (each
+// a single fixed target, no requestor_id). AMC Networks and Discovery have
+// no standalone endpoint at all — only reachable via another row's cascade.
+const MVPD_LOGIN_FAMILIES = {
+  legacy: { base: '/api/settings/tve/browser-login', needsRequestor: true },
+  nbc:    { base: '/api/settings/tve/nbc/browser-login', needsRequestor: false },
+  fox:    { base: '/api/settings/tve/fox/browser-login', needsRequestor: false },
+};
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;
+let _mvpdLoginFamily = 'legacy';
 
-async function loadMvpdRequestorChoices() {
-  const select = document.getElementById('tve-mvpd-requestor');
-  if (!select) return;
+// This deliberately shows "last signed in" timestamps, not a live "signed
+// in ✓" badge — cached TVE credentials have been observed to expire
+// unpredictably, so a badge implying current validity would be misleading
+// the same way the old scripted-only "Test" button was. See app/tve/status.py.
+function _tveRelativeTime(unixSeconds) {
+  if (!unixSeconds) return 'Never';
+  const deltaMs = Date.now() - unixSeconds * 1000;
+  const mins = Math.floor(deltaMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+async function loadTveNetworkStatus() {
+  const container = document.getElementById('tve-network-status');
+  if (!container) return;
   try {
-    const r = await fetch('/api/settings/tve/browser-login/requestors');
+    const r = await fetch('/api/settings/tve/status');
     const d = await r.json();
-    select.innerHTML = (d.requestors || []).map(req => `<option value="${req.requestor_id}">${req.name}</option>`).join('');
+    const rows = (d.networks || []).map(n => {
+      const age = _tveRelativeTime(n.last_signed_in_at);
+      const ageColor = n.last_signed_in_at ? 'var(--text-soft)' : 'var(--text-dim)';
+      const note = n.note ? `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${n.note}</div>` : '';
+      const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
+      const button = n.family
+        ? `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in (browser)</button>`
+        : '';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
+        <span>${n.label}</span>
+        <span style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap">
+          <span style="color:${ageColor}">${age}</span>${button}
+        </span>
+      </div>${note}`;
+    });
+    container.innerHTML = rows.join('') || 'No TVE networks configured.';
   } catch (e) {
-    // leave the select empty — the Sign in button will just no-op
+    container.textContent = 'Could not load network status.';
   }
 }
 
-function openMvpdLoginModal() {
-  const requestorId = document.getElementById('tve-mvpd-requestor')?.value;
-  if (!requestorId) return;
+function openMvpdLoginModal(family, requestorId) {
+  family = family || 'legacy';
+  const cfg = MVPD_LOGIN_FAMILIES[family];
+  if (!cfg) return;
+  if (cfg.needsRequestor && !requestorId) return;
+  _mvpdLoginFamily = family;
   _mvpdLoginActive = true;
   _mvpdLoginDone = false;
   if (_mvpdLoginPollTimer) { clearTimeout(_mvpdLoginPollTimer); _mvpdLoginPollTimer = null; }
@@ -341,10 +410,10 @@ function openMvpdLoginModal() {
   status.style.color = '';
   status.textContent = 'Launching browser…';
   modal.classList.add('open');
-  fetch('/api/settings/tve/browser-login/start', {
+  fetch(`${cfg.base}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ requestor_id: requestorId }),
+    body: JSON.stringify(cfg.needsRequestor ? { requestor_id: requestorId } : {}),
   })
     .then(r => r.json())
     .catch(() => {})
@@ -362,14 +431,14 @@ function _closeMvpdLoginModal(cancel) {
   const wasActive = _mvpdLoginActive;
   _mvpdLoginActive = false;
   if (cancel && !_mvpdLoginDone && wasActive) {
-    fetch('/api/settings/tve/browser-login/stop', { method: 'POST' }).catch(() => {});
+    fetch(`${MVPD_LOGIN_FAMILIES[_mvpdLoginFamily].base}/stop`, { method: 'POST' }).catch(() => {});
   }
 }
 
 async function _pollMvpdLoginModal() {
   if (!_mvpdLoginActive) return;
   try {
-    const r = await fetch('/api/settings/tve/browser-login/state');
+    const r = await fetch(`${MVPD_LOGIN_FAMILIES[_mvpdLoginFamily].base}/state`);
     const d = await r.json();
     if (!_mvpdLoginActive) return;  // modal was closed mid-poll
 
@@ -384,6 +453,7 @@ async function _pollMvpdLoginModal() {
       _mvpdLoginDone = true;
       status.style.color = 'var(--success-soft)';
       status.textContent = '✓ ' + (d.message || 'Signed in.');
+      loadTveNetworkStatus();
       setTimeout(() => { _closeMvpdLoginModal(false); }, 1800);
       return;
     }
@@ -392,6 +462,7 @@ async function _pollMvpdLoginModal() {
       status.style.color = d.state === 'error' ? 'var(--danger)' : '';
       const prefix = d.state === 'error' ? '✗ ' : '';
       status.textContent = prefix + (d.message || 'Sign-in stopped.');
+      loadTveNetworkStatus();  // even a cancelled/failed run may have paired some networks first
       return;  // leave the modal open showing the message; user closes manually
     }
     status.style.color = '';
@@ -413,7 +484,7 @@ function _mvpdLoginFrameScale(frame) {
 
 function _mvpdLoginSendInput(payload) {
   if (!_mvpdLoginActive) return;
-  fetch('/api/settings/tve/browser-login/input', {
+  fetch(`${MVPD_LOGIN_FAMILIES[_mvpdLoginFamily].base}/input`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -1287,7 +1358,7 @@ async function saveContributionUrl() {
 initSettingsSectionNav();
 loadSystemStats();
 updateTveProviderFields();
-loadMvpdRequestorChoices();
+loadTveNetworkStatus();
 
 // ── Community Gracenote map remote status ───────────────────────────────────
 async function loadRemoteGracenoteStatus() {

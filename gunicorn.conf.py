@@ -10,6 +10,12 @@ _SUPPRESS_PATTERNS = (
     'directv-auth-status',     # admin UI polls every 2s during DirecTV login
     'sling-browser-login/state', # admin UI polls every ~400ms during Sling sign-in
     'sling-browser-login/input', # mousemove/click/key forwarding — up to ~16/s while dragging
+    'tve/browser-login/state',  # admin UI polls every ~400ms during MVPD browser sign-in
+    'tve/browser-login/input',  # mousemove/click/key forwarding — up to ~16/s while dragging
+    'tve/nbc/browser-login/state',
+    'tve/nbc/browser-login/input',
+    'tve/fox/browser-login/state',
+    'tve/fox/browser-login/input',
     '/api/custom-channels/detect/', # stream detection status polling
     '/images/proxy',           # per-image cache hits — too noisy
     '/logos/',                 # cached logo file hits — too noisy

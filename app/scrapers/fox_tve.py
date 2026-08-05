@@ -811,6 +811,7 @@ def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
             cfg['fox_sports_access_token'] = token
             cfg['fox_sports_access_token_exp'] = exp
             cfg['fox_sports_access_token_mso'] = mso_id
+            cfg['fox_sports_access_token_captured_at'] = now
             account.config = cfg
             account.last_auth_status = 'ok'
             account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id}.'
