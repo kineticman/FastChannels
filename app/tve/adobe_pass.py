@@ -479,6 +479,19 @@ class AdobePassCoxClient:
         return self.authorize()
 
 
+def _save_mvpd_authn_token(account, requestor_id: str, authn_token: str) -> None:
+    if not authn_token:
+        return
+    from time import time as _wall_time
+    from ..extensions import db
+    cfg = dict(account.config or {})
+    mvpd_authn = dict(cfg.get('mvpd_authn') or {})
+    mvpd_authn[requestor_id] = {'authn_token': authn_token, 'captured_at': int(_wall_time())}
+    cfg['mvpd_authn'] = mvpd_authn
+    account.config = cfg
+    db.session.commit()
+
+
 def _same_redirect_target(actual: str, expected: str) -> bool:
     a, e = urlsplit(actual), urlsplit(expected)
     return (a.scheme, a.netloc, a.path.rstrip('/')) == (e.scheme, e.netloc, e.path.rstrip('/'))
@@ -539,22 +552,16 @@ def authorize_mvpd(
     username = account.username or ''
     password = account.password or ''
 
-    if selected_mso_id == 'Cox' and auth_backend == 'native':
-        client = AdobePassCoxClient(
-            requestor_id=requestor_id,
-            resource=resource,
-            software_statement=software_statement,
-            redirect_url=redirect_url,
-        )
-        token = client.authorize_with_cox(username, password)
-        return token, client.session
-
-    # A human may have already completed a one-time browser-assisted sign-in
-    # for this requestor_id (app/worker.py's run_mvpd_browser_login) for MSOs
-    # whose login page blocks scripted clients outright (e.g. Sling). That
-    # produces a long-lived authn_token we can keep resuming from here without
-    # ever going back through yt-dlp or bothering the human again, until Adobe
-    # actually rejects it (expired/revoked).
+    # A prior login — this scripted path's own previous run, OR a human's
+    # one-time browser-assisted sign-in (app/worker.py's run_mvpd_browser_login,
+    # for MSOs whose login page blocks scripted clients outright, e.g. Sling)
+    # — may have already produced a long-lived authn_token for this
+    # requestor_id. Try resuming it before ever doing a full fresh login.
+    # This applies to Cox too: confirmed live (2026-08-05) that without this,
+    # the Cox native path did a REAL POST to login.cox.com with live account
+    # credentials on every single resolve() call — the same login-retry-storm
+    # risk already fixed once for fubo, just not previously caught here since
+    # Cox itself never errors, it just silently re-authenticates every time.
     cached_authn = ((cfg.get('mvpd_authn') or {}).get(requestor_id) or {}).get('authn_token')
     if cached_authn:
         try:
@@ -574,9 +581,20 @@ def authorize_mvpd(
             token = client.authorize()
             return token, client.session
         except TVENotAuthorizedError:
-            raise  # definitive answer from Adobe — retrying via yt-dlp won't change it
+            raise  # definitive answer from Adobe — retrying won't change it
         except TVEAuthError as exc:
-            logger.info('[adobe-pass] cached authn_token for %s rejected, falling back to yt-dlp: %s', requestor_id, exc)
+            logger.info('[adobe-pass] cached authn_token for %s rejected, re-authenticating: %s', requestor_id, exc)
+
+    if selected_mso_id == 'Cox' and auth_backend == 'native':
+        client = AdobePassCoxClient(
+            requestor_id=requestor_id,
+            resource=resource,
+            software_statement=software_statement,
+            redirect_url=redirect_url,
+        )
+        token = client.authorize_with_cox(username, password)
+        _save_mvpd_authn_token(account, requestor_id, client.ctx.authn_token)
+        return token, client.session
 
     yt_dlp_mso_id = (cfg.get('yt_dlp_mso_id') or selected_mso_id).strip()
 

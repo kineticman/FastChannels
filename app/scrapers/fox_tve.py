@@ -30,8 +30,8 @@ FOX_NEWS_BUSINESS_SCHEDULE_FEEDS = {
     'fox_news': 'https://apps.foxnews.com/schedule_new/feed/fox-news.jn',
     'fox_business': 'https://apps.foxnews.com/schedule_new/feed/fox-business.jn',
 }
-FOX_SIGNED_HLS_RE = re.compile(r'https://247\.(?:foxnews|foxbusiness)\.com/[^\s\"\'<>]+?master\.m3u8\?hdne[at]=[^\s\"\'<>]+', re.I)
-FOX_HLS_TOKEN_EXP_RE = re.compile(r'hdne[at]=exp=(\d+)~', re.I)
+FOX_SIGNED_HLS_RE = re.compile(r'https://247\.(?:foxnews|foxbusiness)\.com/[^\s\"\'<>]+?master\.m3u8\?hdn(?:ea|et|ts)=[^\s\"\'<>]+', re.I)
+FOX_HLS_TOKEN_EXP_RE = re.compile(r'hdn(?:ea|et|ts)=exp=(\d+)~', re.I)
 FOX_ADOBE_API = 'https://sp.auth.adobe.com'
 FOX_TOKEN_GENERATOR_API = 'https://tve-auth.foxnews.com/atk/token/generator'
 FOX_FNFB_TEMP_PASS_MVPD = 'FNFB_tempPass_1'
@@ -404,7 +404,7 @@ def resolve_fox_page_signed_hls(channel: FoxTVEChannel) -> str:
         expected_host = urlsplit(channel.fallback_stream_url or '').netloc.lower()
 
         def _maybe_capture(url: str) -> None:
-            if 'master.m3u8' not in url or 'hdne' not in url:
+            if 'master.m3u8' not in url or ('hdne' not in url and 'hdnts' not in url):
                 return
             host = urlsplit(url).netloc.lower()
             if expected_host and host != expected_host:

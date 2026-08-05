@@ -508,8 +508,10 @@ class NbcTveScraper(BaseScraper):
                 episode_title = (gp.get('episodeTitle') or '').strip() or None
                 if episode_title == title:
                     episode_title = None
-                season_raw = str(gp.get('seasonNumber') or '')
-                episode_raw = str(gp.get('episodeNumber') or '')
+                season_val = gp.get('seasonNumber')
+                episode_val = gp.get('episodeNumber')
+                season_raw = str(season_val) if season_val is not None else ''
+                episode_raw = str(episode_val) if episode_val is not None else ''
                 programs.append(ProgramData(
                     source_channel_id=stream_access_name,
                     title=title,

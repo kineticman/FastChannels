@@ -285,7 +285,6 @@ def lookup_now_playing(station_id: str) -> dict[str, Any]:
 
     result["call_sign"] = entry.get("call_sign") if entry else None
     result["lineup"] = lineup
-    result["found"] = True
 
     session = _make_session()
     if lineup:
@@ -308,6 +307,7 @@ def lookup_now_playing(station_id: str) -> dict[str, Any]:
     now_utc = datetime.now(timezone.utc)
     now_entry, next_entry = _pick_now_next(items, now_utc)
 
+    result["found"] = True
     result["now"] = _program_dict(now_entry)
     result["next"] = _program_dict(next_entry)
     return result

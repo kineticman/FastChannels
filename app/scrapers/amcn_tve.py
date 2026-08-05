@@ -746,7 +746,15 @@ class AMCNetworksTVEScraper(BaseScraper):
         device_id: str,
         mso_id: str = MVPD,
     ) -> tuple[str, str | None]:
-        bootstrap, _, _feature_flags = self._bootstrap_token(session, channel)
+        # Use the device_id the bootstrap token is actually bound to (its own
+        # JWT device-id claim when present), not the caller-supplied one —
+        # the cookie-token path (channel.schedule_url response with no
+        # device_id in the request) can mint a token bound to a DIFFERENT
+        # device-id than self._device_id(), and sending a mismatched header
+        # here risks rejection by a backend that validates identity against
+        # the token's own claim. _fetch_schedule_day already does this right.
+        bootstrap, bootstrap_device_id, _feature_flags = self._bootstrap_token(session, channel)
+        device_id = bootstrap_device_id or device_id
         cached = self.cache.get(f'bootstrap:{channel.channel_id}') or {}
         refresh_bearer = (cached.get('refresh_token') or bootstrap) if isinstance(cached, dict) else bootstrap
         headers = _amcn_headers(

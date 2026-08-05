@@ -308,8 +308,10 @@ class WarnerTVEScraper(BaseScraper):
                     or (show.get('seriesDesc') or '').strip()
                     or None
                 )
-                season_raw = str(entry.get('seasonNumber') or '')
-                episode_raw = str(episode.get('episodeNumber') or '')
+                season_val = entry.get('seasonNumber')
+                episode_val = episode.get('episodeNumber')
+                season_raw = str(season_val) if season_val is not None else ''
+                episode_raw = str(episode_val) if episode_val is not None else ''
                 series_id = show.get('seriesId')
 
                 key = (start, end, title, episode_title or '')
