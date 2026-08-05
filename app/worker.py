@@ -2026,7 +2026,14 @@ def _try_autofill_credentials(page, username: str, password: str, wait_seconds: 
         if email_idx is None and n >= 2:
             email_idx = 0
         if email_idx is None:
-            logger.info('[mvpd-login] autofill: no usable email/text input among %d inputs: %s', n, seen)
+            if n == 0:
+                # Inputs were present a moment ago (the wait loop saw >=2) but
+                # are gone after the settle — the page is navigating away,
+                # which is what a silent SSO auto-redirect looks like. Nothing
+                # to fill; the caller's poll loop will pick up the result.
+                logger.info('[mvpd-login] autofill: inputs disappeared before fill (page likely mid-redirect) url=%s', _safe_page_url(page))
+            else:
+                logger.info('[mvpd-login] autofill: no usable email/text input among %d inputs: %s', n, seen)
             return False
 
         inputs.nth(email_idx).click(timeout=3000)
@@ -2416,6 +2423,36 @@ def _relay_input_and_screenshot(page, r) -> bool:
     return stopped
 
 
+def _try_cached_sibling_authn(sibling_id: str, target: dict) -> tuple[bool, str] | None:
+    """If a still-valid authn_token is cached for sibling_id, resolve its
+    pairing without touching the browser (mirrors authorize_mvpd()'s play-time
+    fast path). Returns (paired, message) on a definitive answer, or None to
+    fall through to the normal browser-assisted attempt."""
+    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    cached_authn = ((((account.config if account else {}) or {}).get('mvpd_authn') or {}).get(sibling_id) or {}).get('authn_token')
+    if not cached_authn:
+        return None
+    try:
+        client = AdobePassCoxClient(
+            requestor_id=sibling_id,
+            resource=target['resource'],
+            software_statement=target['software_statement'],
+            redirect_url=target['redirect_url'],
+        )
+        client.setup_client()
+        client.register_device()
+        client.ctx.authn_token = cached_authn
+        client.authorize()
+        logger.info('[mvpd-login] sibling %s: already signed in (cached authn_token still valid)', sibling_id)
+        return True, 'already signed in'
+    except TVENotAuthorizedError:
+        logger.info('[mvpd-login] sibling %s: cached authn_token valid but not entitled', sibling_id)
+        return False, 'not entitled'
+    except Exception as exc:  # noqa: BLE001
+        logger.info('[mvpd-login] sibling %s: cached authn_token rejected, doing a fresh attempt: %s', sibling_id, exc)
+        return None
+
+
 def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, username: str, password: str, r, on_step=None) -> dict[str, tuple[bool, str]]:
     """Best-effort: after a human completes one browser-assisted MVPD pairing,
     try the other known TVE requestor_ids using the same browser tab. Sling's
@@ -2456,6 +2493,18 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
             _report('failed', 'not applicable')
             continue
 
+        # A previous pairing (this cascade, an earlier run, or a direct
+        # browser sign-in) may have left a still-valid authn_token — resume it
+        # exactly like authorize_mvpd()'s play-time fast path does, so re-runs
+        # don't re-drive Sling's login (and its bot defense) for networks that
+        # are already signed in. A definitive not-entitled from the cached
+        # token is just as final as one from a fresh login.
+        cached_result = _try_cached_sibling_authn(sibling_id, target)
+        if cached_result is not None:
+            results[sibling_id] = cached_result
+            _report('done' if cached_result[0] else 'failed', cached_result[1])
+            continue
+
         sib_client = AdobePassCoxClient(
             requestor_id=sibling_id,
             resource=target['resource'],
@@ -2478,7 +2527,7 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
             results[sibling_id] = (False, 'not a participating provider')
             _report('failed', results[sibling_id][1])
             continue
-        _try_autofill_credentials(page, username, password)
+        filled = _try_autofill_credentials(page, username, password)
         if _relay_input_and_screenshot(page, r):
             results[sibling_id] = (False, 'cancelled')
             _report('failed', 'cancelled')
@@ -2486,15 +2535,24 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
 
         paired = False
         message = 'needs its own sign-in'
-        for _ in range(15):  # ~15s budget, 1s apart — silent SSO is fast when it works
+        # Silent SSO completes in a few seconds when it works; but when
+        # autofill actually SUBMITTED credentials, a full Sling login (SAML
+        # round trip, sometimes a captcha the human can solve via the still-
+        # relayed screenshots) is in flight and needs a real window — 15s was
+        # observed cutting off an in-progress AETV login (2026-08-05).
+        poll_deadline = time.monotonic() + (45 if filled else 15)
+        while time.monotonic() < poll_deadline:
             page.wait_for_timeout(1000)
             if _relay_input_and_screenshot(page, r):
                 message = 'cancelled'
                 break
             try:
                 sib_client.fetch_session_token()
-                sib_client.authorize()
+                # Login succeeded — save the authn_token before the entitlement
+                # check, same reasoning as the primary flow: it stays valid for
+                # this requestor_id regardless of what authorize() says.
                 _save_mvpd_authn_token(sibling_id, sib_client.ctx.authn_token)
+                sib_client.authorize()
                 logger.info('[mvpd-login] sibling %s paired silently via existing MSO session', sibling_id)
                 paired = True
                 message = 'authorized'
@@ -2509,7 +2567,7 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
                 logger.info('[mvpd-login] sibling %s: not paired (likely needs its own human login): %s', sibling_id, exc)
                 message = str(exc)[:120]
                 break
-        if not paired and message != 'cancelled':
+        if not paired and message == 'needs its own sign-in':
             logger.info('[mvpd-login] sibling %s: gave up after silent-pairing budget', sibling_id)
         results[sibling_id] = (paired, message)
         _report('done' if paired else 'failed', message)
@@ -2536,6 +2594,29 @@ def _silent_pair_nbc(page, mso_id: str, username: str, password: str, r) -> tupl
             persist_source_config_updates(source.id, scraper._pending_config_updates)
     except Exception as exc:  # noqa: BLE001
         return False, f'could not discover NBC page config: {exc}'
+
+    # A prior NBC pairing (run_nbc_browser_login or an earlier cascade) may
+    # still be valid — verify it with one cheap /profiles poll before driving
+    # a whole fresh login. Without this, a cascade run a minute after a
+    # successful NBC sign-in reported "needs its own sign-in" (observed live
+    # 2026-08-05) because the fresh attempt failed even though the cached
+    # pairing was fine.
+    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    cached_auth = ((account.config if account else {}) or {}).get('nbc_mvpd_auth') or {}
+    if cached_auth.get('mso_id') == mso_id and cached_auth.get('access_token'):
+        cached_client = AdobePassV2CoxClient(
+            REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL,
+            cached_auth.get('device_fingerprint') or device_fingerprint,
+        )
+        cached_client.access_token = cached_auth['access_token']
+        try:
+            r_profile = cached_client._get(f'{ADOBE_BASE_NBC}/api/v2/{REQUESTOR_ID}/profiles/{mso_id}', headers=cached_client._bearer_headers())
+            profile = ((r_profile.json() or {}).get('profiles') or {}).get(mso_id)
+        except Exception:  # noqa: BLE001
+            profile = None
+        if profile:
+            logger.info('[mvpd-login] NBC: already signed in (cached pairing still valid)')
+            return True, 'already signed in'
 
     client = AdobePassV2CoxClient(REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL, device_fingerprint)
     try:
@@ -2564,11 +2645,14 @@ def _silent_pair_nbc(page, mso_id: str, username: str, password: str, r) -> tupl
         page.goto(mso_login_url, wait_until='domcontentloaded', timeout=20000)
     except Exception as exc:  # noqa: BLE001
         return False, f'could not load MVPD redirect: {exc}'
-    _try_autofill_credentials(page, username, password)
+    filled = _try_autofill_credentials(page, username, password)
     if _relay_input_and_screenshot(page, r):
         return False, 'cancelled'
 
-    deadline = time.monotonic() + 20
+    # Wider window when autofill actually submitted credentials — a full MSO
+    # login (SAML, maybe a human-solved captcha) is in flight, not just a
+    # silent SSO redirect.
+    deadline = time.monotonic() + (45 if filled else 20)
     while time.monotonic() < deadline:
         page.wait_for_timeout(1000)
         if _relay_input_and_screenshot(page, r):
@@ -2594,6 +2678,17 @@ def _silent_pair_fox(page, mso_id: str, username: str, password: str, r) -> tupl
     import requests
     from app.scrapers.fox_tve import _fox_json_headers, _jwt_exp
     import uuid as _uuid
+
+    # A prior FOX pairing may still be valid — its token carries its own JWT
+    # expiry, so this needs no network round trip at all. Same "don't re-drive
+    # the MSO login for an already-paired network" reasoning as _silent_pair_nbc.
+    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    acct_cfg = (account.config if account else {}) or {}
+    if (acct_cfg.get('fox_sports_access_token')
+            and acct_cfg.get('fox_sports_access_token_mso') == mso_id
+            and int(acct_cfg.get('fox_sports_access_token_exp') or 0) > time.time() + 300):
+        logger.info('[mvpd-login] FOX Sports: already signed in (cached token still valid)')
+        return True, 'already signed in'
 
     session = requests.Session()
     device_id = str(_uuid.uuid4())
@@ -2631,11 +2726,13 @@ def _silent_pair_fox(page, mso_id: str, username: str, password: str, r) -> tupl
         page.goto(mso_login_url, wait_until='domcontentloaded', timeout=20000)
     except Exception as exc:  # noqa: BLE001
         return False, f'could not load MVPD redirect: {exc}'
-    _try_autofill_credentials(page, username, password)
+    filled = _try_autofill_credentials(page, username, password)
     if _relay_input_and_screenshot(page, r):
         return False, 'cancelled'
 
-    deadline = time.monotonic() + 20
+    # Wider window when autofill actually submitted credentials — see
+    # _silent_pair_nbc.
+    deadline = time.monotonic() + (45 if filled else 20)
     while time.monotonic() < deadline:
         page.wait_for_timeout(1000)
         if _relay_input_and_screenshot(page, r):
@@ -2709,12 +2806,14 @@ def _silent_pair_amcn(page, mso_id: str, username: str, password: str, r) -> tup
         except Exception as exc:  # noqa: BLE001
             last_message = f'could not load MVPD redirect: {exc}'
             continue
-        _try_autofill_credentials(page, username, password)
+        filled = _try_autofill_credentials(page, username, password)
         if _relay_input_and_screenshot(page, r):
             last_message = 'cancelled'
             break
 
-        deadline = time.monotonic() + 20
+        # Wider window when autofill actually submitted credentials — see
+        # _silent_pair_nbc.
+        deadline = time.monotonic() + (45 if filled else 20)
         found_profile = False
         cancelled = False
         while time.monotonic() < deadline:
