@@ -2871,7 +2871,34 @@ def _summarize_pairing_results(results: dict[str, tuple[bool, str]]) -> str:
     return ' '.join(parts)
 
 
-def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement: str, redirect_url: str, mso_id: str, cascade: bool = False):
+_BROWSER_LOGIN_MAX_ATTEMPTS = 3
+
+
+class _BrowserSessionDied(Exception):
+    """The Camoufox page/browser died mid-login (page CLOSE fired, target
+    crashed, or the page stopped answering screenshots). Observed
+    intermittently on first attempts across NBC/FOX/legacy flows (2026-08-05,
+    cause unknown — a plain retry has worked every time), so the login jobs
+    treat it as retryable and relaunch the browser instead of failing out to
+    the user."""
+
+
+def _is_browser_death(exc: BaseException) -> bool:
+    """True if exc means the browser/page itself died (retryable), as opposed
+    to a real auth/protocol failure."""
+    if isinstance(exc, _BrowserSessionDied):
+        return True
+    try:
+        from playwright.sync_api import Error as _PlaywrightError
+    except ImportError:
+        return False
+    if not isinstance(exc, _PlaywrightError):
+        return False
+    msg = str(exc)
+    return 'has been closed' in msg or 'Target crashed' in msg or 'Connection closed' in msg
+
+
+def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement: str, redirect_url: str, mso_id: str, cascade: bool = False, _attempt: int = 1, _deadline: float | None = None):
     """Drive a real, human-operated sign-in to an MVPD's Adobe Pass login page.
 
     cascade=True additionally sweeps every other known TVE network afterward,
@@ -2946,6 +2973,11 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
         r.delete(MVPD_BROWSER_LOGIN_INPUT_KEY)
         set_status('starting', 'Registering with Adobe Pass…')
 
+        # One deadline shared across browser-crash retries (the RQ job_timeout
+        # is only ~30s above _MVPD_BROWSER_LOGIN_TIMEOUT_SECONDS, so a retry
+        # must never reset the clock).
+        deadline = _deadline if _deadline is not None else time.monotonic() + _MVPD_BROWSER_LOGIN_TIMEOUT_SECONDS
+
         account_row = TVEAccount.query.filter_by(provider_id='cox').first()
         mvpd_username = (account_row.username if account_row else '') or ''
         mvpd_password = (account_row.password if account_row else '') or ''
@@ -3001,6 +3033,8 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 try:
                     page.goto(auth_url, wait_until='domcontentloaded', timeout=30000)
                 except Exception as exc:  # noqa: BLE001
+                    if _is_browser_death(exc):
+                        raise
                     _step(requestor_id, 'failed', 'failed to load sign-in page')
                     set_status('error', f'Failed to load provider sign-in page: {exc}')
                     return
@@ -3021,7 +3055,6 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     _try_autofill_credentials(page, mvpd_username, mvpd_password, wait_seconds=8.0)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
-                deadline = time.monotonic() + _MVPD_BROWSER_LOGIN_TIMEOUT_SECONDS
                 last_shot = 0.0
                 last_heartbeat = 0.0
                 last_poll = 0.0
@@ -3035,9 +3068,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                         return
 
                     if page.is_closed():
-                        _step(requestor_id, 'failed', 'browser page closed')
-                        set_status('error', 'Browser page closed unexpectedly.')
-                        return
+                        raise _BrowserSessionDied('browser page closed unexpectedly')
 
                     for _ in range(20):
                         raw = r.lpop(MVPD_BROWSER_LOGIN_INPUT_KEY)
@@ -3066,9 +3097,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                             consecutive_failures += 1
                             if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
                                 logger.warning('[mvpd-login] page unresponsive after %d failed screenshots: %s', consecutive_failures, exc)
-                                _step(requestor_id, 'failed', 'browser session died')
-                                set_status('error', f'Browser session died: {exc}')
-                                return
+                                raise _BrowserSessionDied(f'page stopped answering screenshots: {exc}')
                         last_shot = now
 
                     if now - last_poll > _MVPD_SESSION_POLL_SECONDS:
@@ -3167,6 +3196,12 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 # an actual job failure. Don't clobber the real result.
                 logger.info('[mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
                 return
+            if (_is_browser_death(exc) and _attempt < _BROWSER_LOGIN_MAX_ATTEMPTS
+                    and time.monotonic() < deadline - 30
+                    and not r.exists(MVPD_BROWSER_LOGIN_STOP_KEY)):
+                logger.warning('[mvpd-login] browser died (attempt %d/%d), relaunching: %s', _attempt, _BROWSER_LOGIN_MAX_ATTEMPTS, exc)
+                set_status('starting', 'Browser hiccuped — relaunching…')
+                return run_mvpd_browser_login(requestor_id, resource, software_statement, redirect_url, mso_id, cascade, _attempt=_attempt + 1, _deadline=deadline)
             logger.exception('[mvpd-login] browser session failed')
             try:
                 _step(requestor_id, 'failed', str(exc)[:120])
@@ -3199,7 +3234,7 @@ def _save_nbc_mvpd_auth(mso_id: str, access_token: str, device_fingerprint: str)
     db.session.commit()
 
 
-def run_nbc_browser_login(mso_id: str):
+def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | None = None):
     """Drive a real, human-operated sign-in for NBC TVE's Adobe Pass v2 flow.
 
     Same "second screen" idea as run_mvpd_browser_login, adapted to nbc.com's
@@ -3231,18 +3266,30 @@ def run_nbc_browser_login(mso_id: str):
             logger.warning('[nbc-mvpd-login] Redis unavailable, aborting: %s', exc)
             return
 
+        # Same teardown-clobber guard as run_mvpd_browser_login: a dead
+        # browser's `with` teardown can raise while unwinding a successful
+        # return and must not replace the real terminal status.
+        _terminal_status_set = {'v': False}
+
         def set_status(state: str, message: str = '', url: str = ''):
             try:
                 r.setex(
                     NBC_BROWSER_LOGIN_STATUS_KEY, 120,
                     _json_login.dumps({'state': state, 'message': message, 'url': url}),
                 )
+                if state in ('success', 'error', 'stopped'):
+                    _terminal_status_set['v'] = True
             except Exception:  # noqa: BLE001
                 pass
 
         r.delete(NBC_BROWSER_LOGIN_STOP_KEY)
         r.delete(NBC_BROWSER_LOGIN_INPUT_KEY)
         set_status('starting', 'Registering with Adobe Pass…')
+
+        # One deadline shared across browser-crash retries (RQ job_timeout is
+        # only ~30s above _NBC_BROWSER_LOGIN_TIMEOUT_SECONDS, so a retry must
+        # never reset the clock).
+        deadline = _deadline if _deadline is not None else time.monotonic() + _NBC_BROWSER_LOGIN_TIMEOUT_SECONDS
 
         account_row = TVEAccount.query.filter_by(provider_id='cox').first()
         mvpd_username = (account_row.username if account_row else '') or ''
@@ -3319,6 +3366,8 @@ def run_nbc_browser_login(mso_id: str):
                 try:
                     page.goto(mso_login_url, wait_until='domcontentloaded', timeout=30000)
                 except Exception as exc:  # noqa: BLE001
+                    if _is_browser_death(exc):
+                        raise
                     set_status('error', f'Failed to load provider sign-in page: {exc}')
                     return
                 if _same_page_url(_safe_page_url(page), client.redirect_url):
@@ -3328,7 +3377,6 @@ def run_nbc_browser_login(mso_id: str):
                     _try_autofill_credentials(page, mvpd_username, mvpd_password, wait_seconds=8.0)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
-                deadline = time.monotonic() + _NBC_BROWSER_LOGIN_TIMEOUT_SECONDS
                 last_shot = 0.0
                 last_heartbeat = 0.0
                 last_poll = 0.0
@@ -3340,8 +3388,7 @@ def run_nbc_browser_login(mso_id: str):
                         set_status('stopped', 'Cancelled')
                         return
                     if page.is_closed():
-                        set_status('error', 'Browser page closed unexpectedly.')
-                        return
+                        raise _BrowserSessionDied('browser page closed unexpectedly')
 
                     for _ in range(20):
                         raw = r.lpop(NBC_BROWSER_LOGIN_INPUT_KEY)
@@ -3370,8 +3417,7 @@ def run_nbc_browser_login(mso_id: str):
                             consecutive_failures += 1
                             if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
                                 logger.warning('[nbc-mvpd-login] page unresponsive after %d failed screenshots: %s', consecutive_failures, exc)
-                                set_status('error', f'Browser session died: {exc}')
-                                return
+                                raise _BrowserSessionDied(f'page stopped answering screenshots: {exc}')
                         last_shot = now
 
                     if now - last_poll > _NBC_SESSION_POLL_SECONDS:
@@ -3397,6 +3443,15 @@ def run_nbc_browser_login(mso_id: str):
                 set_status('error', 'Timed out waiting for sign-in to complete.')
                 return
         except BaseException as exc:  # noqa: BLE001
+            if _terminal_status_set['v']:
+                logger.info('[nbc-mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
+                return
+            if (_is_browser_death(exc) and _attempt < _BROWSER_LOGIN_MAX_ATTEMPTS
+                    and time.monotonic() < deadline - 30
+                    and not r.exists(NBC_BROWSER_LOGIN_STOP_KEY)):
+                logger.warning('[nbc-mvpd-login] browser died (attempt %d/%d), relaunching: %s', _attempt, _BROWSER_LOGIN_MAX_ATTEMPTS, exc)
+                set_status('starting', 'Browser hiccuped — relaunching…')
+                return run_nbc_browser_login(mso_id, _attempt=_attempt + 1, _deadline=deadline)
             logger.exception('[nbc-mvpd-login] browser session failed')
             try:
                 set_status('error', f'Browser session failed: {exc}')
@@ -3413,7 +3468,7 @@ _FOX_BROWSER_LOGIN_TIMEOUT_SECONDS = 1800
 _FOX_SESSION_POLL_SECONDS = 2.0
 
 
-def run_fox_browser_login(mso_id: str):
+def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | None = None):
     """Drive a real, human-operated sign-in for FOX Sports TVE's Adobe Pass flow.
 
     Same "second screen" idea as run_mvpd_browser_login/run_nbc_browser_login,
@@ -3440,18 +3495,30 @@ def run_fox_browser_login(mso_id: str):
             logger.warning('[fox-mvpd-login] Redis unavailable, aborting: %s', exc)
             return
 
+        # Same teardown-clobber guard as run_mvpd_browser_login: a dead
+        # browser's `with` teardown can raise while unwinding a successful
+        # return and must not replace the real terminal status.
+        _terminal_status_set = {'v': False}
+
         def set_status(state: str, message: str = '', url: str = ''):
             try:
                 r.setex(
                     FOX_BROWSER_LOGIN_STATUS_KEY, 120,
                     _json_login.dumps({'state': state, 'message': message, 'url': url}),
                 )
+                if state in ('success', 'error', 'stopped'):
+                    _terminal_status_set['v'] = True
             except Exception:  # noqa: BLE001
                 pass
 
         r.delete(FOX_BROWSER_LOGIN_STOP_KEY)
         r.delete(FOX_BROWSER_LOGIN_INPUT_KEY)
         set_status('starting', 'Registering with FOX…')
+
+        # One deadline shared across browser-crash retries (RQ job_timeout is
+        # only ~30s above _FOX_BROWSER_LOGIN_TIMEOUT_SECONDS, so a retry must
+        # never reset the clock).
+        deadline = _deadline if _deadline is not None else time.monotonic() + _FOX_BROWSER_LOGIN_TIMEOUT_SECONDS
 
         account_row = TVEAccount.query.filter_by(provider_id='cox').first()
         mvpd_username = (account_row.username if account_row else '') or ''
@@ -3523,6 +3590,8 @@ def run_fox_browser_login(mso_id: str):
                 try:
                     page.goto(mso_login_url, wait_until='domcontentloaded', timeout=30000)
                 except Exception as exc:  # noqa: BLE001
+                    if _is_browser_death(exc):
+                        raise
                     set_status('error', f'Failed to load provider sign-in page: {exc}')
                     return
                 if _same_page_url(_safe_page_url(page), fox_redirect_url):
@@ -3532,7 +3601,6 @@ def run_fox_browser_login(mso_id: str):
                     _try_autofill_credentials(page, mvpd_username, mvpd_password, wait_seconds=8.0)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
-                deadline = time.monotonic() + _FOX_BROWSER_LOGIN_TIMEOUT_SECONDS
                 last_shot = 0.0
                 last_heartbeat = 0.0
                 last_poll = 0.0
@@ -3544,8 +3612,7 @@ def run_fox_browser_login(mso_id: str):
                         set_status('stopped', 'Cancelled')
                         return
                     if page.is_closed():
-                        set_status('error', 'Browser page closed unexpectedly.')
-                        return
+                        raise _BrowserSessionDied('browser page closed unexpectedly')
 
                     for _ in range(20):
                         raw = r.lpop(FOX_BROWSER_LOGIN_INPUT_KEY)
@@ -3574,8 +3641,7 @@ def run_fox_browser_login(mso_id: str):
                             consecutive_failures += 1
                             if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
                                 logger.warning('[fox-mvpd-login] page unresponsive after %d failed screenshots: %s', consecutive_failures, exc)
-                                set_status('error', f'Browser session died: {exc}')
-                                return
+                                raise _BrowserSessionDied(f'page stopped answering screenshots: {exc}')
                         last_shot = now
 
                     if now - last_poll > _FOX_SESSION_POLL_SECONDS:
@@ -3619,6 +3685,15 @@ def run_fox_browser_login(mso_id: str):
                 set_status('error', 'Timed out waiting for sign-in to complete.')
                 return
         except BaseException as exc:  # noqa: BLE001
+            if _terminal_status_set['v']:
+                logger.info('[fox-mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
+                return
+            if (_is_browser_death(exc) and _attempt < _BROWSER_LOGIN_MAX_ATTEMPTS
+                    and time.monotonic() < deadline - 30
+                    and not r.exists(FOX_BROWSER_LOGIN_STOP_KEY)):
+                logger.warning('[fox-mvpd-login] browser died (attempt %d/%d), relaunching: %s', _attempt, _BROWSER_LOGIN_MAX_ATTEMPTS, exc)
+                set_status('starting', 'Browser hiccuped — relaunching…')
+                return run_fox_browser_login(mso_id, _attempt=_attempt + 1, _deadline=deadline)
             logger.exception('[fox-mvpd-login] browser session failed')
             try:
                 set_status('error', f'Browser session failed: {exc}')
