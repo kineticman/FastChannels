@@ -86,14 +86,6 @@ def _int_value(*values: Any) -> int | None:
     return None
 
 
-def _bool_config(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
-
-
 def _positive_int(value: Any, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
     try:
         parsed = int(str(value).strip())
@@ -941,10 +933,6 @@ class CoxScraper(BaseScraper):
             hls_url = _first_text(data.get('content_url'), data.get('hd_content_url'))
         else:
             hls_url = _first_text(data.get('hd_content_url'), data.get('content_url'))
-        if _bool_config(self.config.get('allow_experimental_direct_hls')):
-            if not hls_url:
-                raise ScrapeSkipError('Cox Contour channel did not include a CloudTV content URL.')
-            return hls_url.replace('http://', 'https://', 1)
         if not channel_id or not hls_url:
             raise ScrapeSkipError('Cox Contour channel did not include TVE playback metadata.')
 
@@ -1013,22 +1001,7 @@ class CoxScraper(BaseScraper):
         return mpd_url
 
     def audit_resolve(self, raw_url: str) -> str:
-        """Resolve Cox audits through DASH so DRM is classified correctly.
-
-        The optional direct-HLS mode exposes HLS-shaped playlists for inspection,
-        but observed Cox media segments are still XCal/CENC protected. The
-        generic HLS audit can misclassify those playlists as clear, so force the
-        normal DASH/Widevine resolution path during Stream Audit.
-        """
-        original = self.config.get("allow_experimental_direct_hls")
-        self.config["allow_experimental_direct_hls"] = False
-        try:
-            return self.resolve(raw_url)
-        finally:
-            if original is None:
-                self.config.pop("allow_experimental_direct_hls", None)
-            else:
-                self.config["allow_experimental_direct_hls"] = original
+        return self.resolve(raw_url)
 
     @classmethod
     def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:

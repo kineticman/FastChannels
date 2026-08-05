@@ -676,6 +676,8 @@ class AMCNetworksTVEScraper(BaseScraper):
             headers=headers,
             timeout=30,
         )
+        if refreshed.status_code == 401:
+            self._update_cache(f'bootstrap:{channel.channel_id}', {})
         refreshed.raise_for_status()
         refresh_data = refreshed.json().get('data') or {}
         unauth_token = (refresh_data.get('access_token') or '').strip()
@@ -697,6 +699,8 @@ class AMCNetworksTVEScraper(BaseScraper):
             ),
             timeout=30,
         )
+        if auth.status_code == 401:
+            self._update_cache(f'bootstrap:{channel.channel_id}', {})
         auth.raise_for_status()
         auth_data = auth.json().get('data') or {}
         token = (auth_data.get('access_token') or '').strip()

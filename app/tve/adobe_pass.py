@@ -185,6 +185,16 @@ def discover_aenetworks_software_statement(brand: str = 'history', session: Opti
     raise TVEAuthError('Could not discover A+E Adobe software statement from the live site.')
 
 
+def invalidate_aenetworks_software_statement(brand: str) -> None:
+    """Drop a cached discovered statement so the next call re-discovers it.
+
+    Called when a client bootstrapped from the cached value fails during
+    setup, since a stale/rotated statement is rejected before credentials
+    are ever checked.
+    """
+    _STATEMENT_CACHE.pop(brand.lower(), None)
+
+
 class AdobePassCoxClient:
     def __init__(self, *, requestor_id: str, resource: str, software_statement: str, redirect_url: str = DEFAULT_HISTORY_REDIRECT_URL) -> None:
         self.requestor_id = requestor_id
@@ -379,6 +389,11 @@ class AdobePassCoxClient:
         )
         if '<pendingLogout' in r.text:
             raise TVEAuthError('Adobe shortAuthorize returned pendingLogout.')
+        if '<error' in r.text:
+            message = _adobe_error_message(r.text)
+            if _adobe_error_code(r.text) == 'notAuthorized':
+                raise TVENotAuthorizedError(message)
+            raise TVEAuthError(message)
         self.ctx.short_token = r.text
         return self.ctx.short_token
 

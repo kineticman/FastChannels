@@ -156,6 +156,28 @@ class FoxOneScraper(BaseScraper):
             placeholder='10001',
             help_text='Optional. Used when FOX asks to initialize home location; otherwise the current locator ZIP is used.',
         ),
+        ConfigField(
+            'refresh_token',
+            'FOX One refresh token (fallback)',
+            field_type='password',
+            secret=True,
+            help_text='Optional fallback used only if no linked Cox TV-provider account is configured, or Cox re-auth fails. Capture the identityhydra refresh_token from an authenticated fox.com browser session. Anonymous-only: cannot unlock paid FOX Sports channels.',
+        ),
+        ConfigField(
+            'access_token',
+            'FOX One access token (advanced)',
+            field_type='password',
+            secret=True,
+            placeholder='Bearer ...',
+            help_text='Optional fallback for debugging. The scraper refreshes this automatically through the linked Cox account when configured.',
+        ),
+        ConfigField(
+            'platform_location',
+            'FOX One platform location (advanced)',
+            field_type='password',
+            secret=True,
+            help_text='Optional fallback for debugging. The scraper derives and refreshes this automatically from FOX location services.',
+        ),
     ]
 
     def _get_json(self, path_or_url: str) -> dict:
@@ -412,6 +434,7 @@ class FoxOneScraper(BaseScraper):
             return access_token
 
         account = self._cox_account()
+        cox_exc: Exception | None = None
         if account:
             try:
                 access_token, expires_at = self._authenticate_via_cox_mvpd(account.username, account.password)
@@ -427,14 +450,20 @@ class FoxOneScraper(BaseScraper):
                 account.last_auth_message = f'FOX One Cox MVPD auth failed: {exc}'[:500]
                 account.last_auth_at = datetime.now(timezone.utc)
                 db.session.commit()
+                cox_exc = exc
                 if not access_token:
                     raise
 
         refresh_token = self._clean_token(self.config.get('refresh_token') or self.config.get('fox_one_refresh_token'))
         if not refresh_token:
-            if access_token:
+            # Only reuse the existing token if it hasn't actually expired yet
+            # (it failed the refresh-skew check above, but may still be good
+            # for a few more minutes). A genuinely expired token must not be
+            # handed out as if auth succeeded — that just turns a clear Cox
+            # auth failure into an opaque 401 further downstream.
+            if access_token and self._token_expires_at() > time.time():
                 return access_token
-            raise ValueError('FOX One native playback requires either a linked Cox TV-provider account or a configured refresh_token.')
+            raise cox_exc or ValueError('FOX One native playback requires either a linked Cox TV-provider account or a configured refresh_token.')
 
         r = self.session.post(
             _HYDRA_TOKEN_API,

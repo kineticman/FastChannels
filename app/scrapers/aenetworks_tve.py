@@ -13,8 +13,10 @@ from .base import BaseScraper, ChannelData, ProgramData
 from ..models import TVEAccount
 from ..tve.adobe_pass import (
     TVEAuthError,
+    TVENotAuthorizedError,
     AdobePassCoxClient,
     discover_aenetworks_software_statement,
+    invalidate_aenetworks_software_statement,
 )
 
 _SCHEME = 'aenetworks-tve://'
@@ -432,12 +434,20 @@ class AENetworksTVEScraper(BaseScraper):
             raise TVEAuthError('Cox TVE credentials are not configured in Settings.')
 
         cfg = account.config or {}
-        statement = (cfg.get('software_statement') or '').strip() or discover_aenetworks_software_statement(network.brand)
+        configured_statement = (cfg.get('software_statement') or '').strip()
+        statement = configured_statement or discover_aenetworks_software_statement(network.brand)
         client = AdobePassCoxClient(
             requestor_id=network.requestor_id,
             resource=network.resource,
             software_statement=statement,
             redirect_url=network.redirect_url,
         )
-        client.authorize_with_cox(account.username or '', account.password or '')
+        try:
+            client.authorize_with_cox(account.username or '', account.password or '')
+        except TVENotAuthorizedError:
+            raise
+        except TVEAuthError:
+            if not configured_statement:
+                invalidate_aenetworks_software_statement(network.brand)
+            raise
         return network.dai_master
