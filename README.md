@@ -190,7 +190,7 @@ Streams never go stale — every play request gets a fresh URL.
 
 M3U and EPG XML outputs are cached to disk and served as fast file reads. The cache is invalidated automatically after each scrape. Cold builds of the full EPG can take a few seconds; subsequent requests are near-instant.
 
-Validate a saved XMLTV artifact against the upstream XMLTV DTD with `scripts/validate_xmltv.sh /path/to/epg.xml`. The Docker image includes `xmllint` via `libxml2-utils` for this check.
+Validate a saved XMLTV artifact against the upstream XMLTV DTD with `scripts/validate_xmltv.sh /path/to/epg.xml`. The Docker image includes `xmllint` via `libxml2-utils` for this check. Note: output intentionally includes `<series-id>`, a non-DTD element that Channels DVR requires for stable series/recording-pass identity — expect that one element to fail strict validation.
 
 ### Stream Audit
 

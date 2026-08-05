@@ -194,8 +194,6 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
 
             series_id  = getattr(prog, 'series_id',  None)
             episode_id = getattr(prog, 'episode_id', None)
-            if series_id:
-                episode_nums.append(('fastchannels_series', series_id))
             if episode_id:
                 system = 'dd_progid' if _is_tms_id(episode_id) else 'fastchannels'
                 episode_nums.append((system, episode_id))
@@ -240,6 +238,14 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                 else:
                     poster_src = prog.poster_url
                 SubElement(el, 'icon', src=poster_src)
+            # <series-id> isn't part of the XMLTV DTD, but Channels DVR's own
+            # docs document it as the way to give a recording pass a stable
+            # series identity (getchannels.com/docs/.../custom-channels) — an
+            # earlier DTD-compliance pass replaced this with an episode-num
+            # entry, which Channels DVR doesn't read for series grouping, so
+            # bring it back even though it fails strict --dtdvalid checks.
+            if series_id:
+                SubElement(el, 'series-id', system='fastchannels').text = series_id
             for system, value in episode_nums:
                 SubElement(el, 'episode-num', system=system).text = value
             if prog.rating:
