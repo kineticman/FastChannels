@@ -14,7 +14,7 @@ _AMCN_REQUESTOR_IDS = ('AMC', 'BBCA', 'IFC', 'WETV')
 
 
 def tve_network_status(account) -> list[dict]:
-    from .mvpd_targets import REQUESTOR_CHOICES
+    from .mvpd_targets import REQUESTOR_CHOICES, resolve_requestor_target
 
     cfg = (account.config or {}) if account else {}
     entries: list[dict] = []
@@ -32,7 +32,17 @@ def tve_network_status(account) -> list[dict]:
     # instead of repeating an explanation on every cascade-only row.
     mvpd_authn = cfg.get('mvpd_authn') or {}
     for choice in REQUESTOR_CHOICES:
-        cached = mvpd_authn.get(choice['requestor_id']) or {}
+        # Cached tokens are stored under the wire-protocol requestor_id
+        # (resolve_requestor_target's 'requestor_id'), which for Warner's
+        # truTV differs in case from this raw admin-UI key — see
+        # resolve_requestor_target's docstring. Falls back to the raw key on
+        # any resolution error so a transient failure just shows "Never"
+        # instead of breaking the whole status list.
+        try:
+            cache_key = resolve_requestor_target(choice['requestor_id'])['requestor_id']
+        except Exception:  # noqa: BLE001
+            cache_key = choice['requestor_id']
+        cached = mvpd_authn.get(cache_key) or {}
         entries.append({
             'label': choice['name'],
             'last_signed_in_at': cached.get('captured_at'),

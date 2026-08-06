@@ -2477,12 +2477,12 @@ def _try_cached_sibling_authn(sibling_id: str, target: dict) -> tuple[bool, str]
     fast path). Returns (paired, message) on a definitive answer, or None to
     fall through to the normal browser-assisted attempt."""
     account = TVEAccount.query.filter_by(provider_id='cox').first()
-    cached_authn = ((((account.config if account else {}) or {}).get('mvpd_authn') or {}).get(sibling_id) or {}).get('authn_token')
+    cached_authn = ((((account.config if account else {}) or {}).get('mvpd_authn') or {}).get(target['requestor_id']) or {}).get('authn_token')
     if not cached_authn:
         return None
     try:
         client = AdobePassCoxClient(
-            requestor_id=sibling_id,
+            requestor_id=target['requestor_id'],
             resource=target['resource'],
             software_statement=target['software_statement'],
             redirect_url=target['redirect_url'],
@@ -2554,7 +2554,7 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
             continue
 
         sib_client = AdobePassCoxClient(
-            requestor_id=sibling_id,
+            requestor_id=target['requestor_id'],
             resource=target['resource'],
             software_statement=target['software_statement'],
             redirect_url=target['redirect_url'],
@@ -2570,11 +2570,20 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
             results[sibling_id] = (False, f'registration failed: {exc}')
             _report('failed', results[sibling_id][1])
             continue
-        if _same_page_url(_safe_page_url(page), target['redirect_url']):
-            logger.info('[mvpd-login] sibling %s: bounced straight back to redirect_url — %s not a participating provider', sibling_id, mso_id)
-            results[sibling_id] = (False, 'not a participating provider')
-            _report('failed', results[sibling_id][1])
-            continue
+        # Landing directly on redirect_url here is ambiguous, NOT a definite
+        # "not a participating provider" — this profile is reused across
+        # every pairing run (persistent_context=True, same user_data_dir), so
+        # a warm Adobe SSO cookie left over from a sibling that JUST paired
+        # (e.g. TNT/TBS moments earlier in this same cascade) can bind the
+        # regcode server-side before the browser ever touches the MSO's
+        # domain, landing here on real success too. Only fetch_session_token()
+        # below can tell the two apart — confirmed live 2026-08-06: truTV
+        # bounced here immediately after TNT/TBS warmed the same profile,
+        # even though Cox is genuinely a listed truTV MVPD (a cold, cookie-
+        # free `requests` session redirects cleanly to Cox's real login page).
+        bounced = _same_page_url(_safe_page_url(page), target['redirect_url'])
+        if bounced:
+            logger.info('[mvpd-login] sibling %s: landed directly on redirect_url — checking whether the session bound silently before assuming %s is not a participating provider', sibling_id, mso_id)
         filled = _try_autofill_credentials(page, username, password)
         if _relay_input_and_screenshot(page, r):
             results[sibling_id] = (False, 'cancelled')
@@ -2604,7 +2613,7 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
                 # Login succeeded — save the authn_token before the entitlement
                 # check, same reasoning as the primary flow: it stays valid for
                 # this requestor_id regardless of what authorize() says.
-                _save_mvpd_authn_token(sibling_id, sib_client.ctx.authn_token)
+                _save_mvpd_authn_token(target['requestor_id'], sib_client.ctx.authn_token)
                 sib_client.authorize()
                 logger.info('[mvpd-login] sibling %s paired silently via existing MSO session', sibling_id)
                 paired = True
@@ -2621,6 +2630,8 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
                 message = str(exc)[:120]
                 break
         if not paired and message == 'needs its own sign-in':
+            if bounced:
+                message = 'not a participating provider'
             logger.info('[mvpd-login] sibling %s: gave up after silent-pairing budget', sibling_id)
         results[sibling_id] = (paired, message)
         _report('done' if paired else 'failed', message)
@@ -3249,10 +3260,26 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 # very FIRST landing page is redirect_url itself — no MSO
                 # domain was ever visited. Left undetected, the human just
                 # stares at a dead, unexplained page for up to 30 minutes
-                # (confirmed live 2026-08-05). A later, real completion would
-                # need at least one MSO-domain hop first, so seeing
-                # redirect_url immediately here is unambiguous.
+                # (confirmed live 2026-08-05).
+                #
+                # But that landing is NOT unambiguous — this browser profile
+                # is reused across every pairing run (persistent_context=True,
+                # same user_data_dir below), so a warm Adobe SSO cookie left
+                # over from an earlier successful pairing can bind the
+                # regcode server-side before the browser ever touches the
+                # MSO's domain, landing here on real success too. Give
+                # fetch_session_token() (via _grace_poll_pairing, same helper
+                # used when the MSO completion page closes itself) a real
+                # chance to find a bound session before concluding this
+                # network truly isn't participating — confirmed live
+                # 2026-08-06: truTV reported "not a participating provider"
+                # via this exact bounce right after TNT/TBS had just warmed
+                # the same profile's Adobe session, even though Cox is
+                # genuinely a listed truTV MVPD (a cold, cookie-free
+                # `requests` session redirects cleanly to Cox's real login).
                 if _same_page_url(_safe_page_url(page), redirect_url):
+                    if _grace_poll_pairing('landed directly on redirect_url'):
+                        return
                     _step(requestor_id, 'failed', 'not a participating provider')
                     set_status('error', f'{requestor_id}: {mso_id} does not appear to be a participating provider for this network.')
                     return

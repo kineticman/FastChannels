@@ -5177,8 +5177,14 @@ def mvpd_browser_login_start():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
     cascade = bool(data.get('cascade'))
+    # Use target['requestor_id'] (the wire-protocol value Adobe actually
+    # expects), not the raw admin-UI key — they differ for Warner's truTV
+    # (see resolve_requestor_target's docstring). This keeps every use of
+    # requestor_id inside run_mvpd_browser_login (AdobePassCoxClient, cached
+    # authn_token storage, display labels) consistent with authorize_mvpd()'s
+    # play-time cache lookup.
     started = trigger_mvpd_browser_login(
-        requestor_id, target['resource'], target['software_statement'], target['redirect_url'], mso_id,
+        target['requestor_id'], target['resource'], target['software_statement'], target['redirect_url'], mso_id,
         cascade=cascade,
     )
     return jsonify({'status': 'started' if started else 'already_running'})
