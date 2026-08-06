@@ -335,15 +335,19 @@ async function testTveCox() {
 // see app/worker.py's run_mvpd_browser_login docstring for why this exists
 // (some MSO login pages block scripted clients outright, browser TLS
 // impersonation included).
-// Three different networks share this one streamed-browser modal, each with
-// its own backend flow and endpoint prefix (see app/tve/status.py's 'family'
-// field): 'legacy' (A+E/Warner, needs a requestor_id), 'nbc' and 'fox' (each
-// a single fixed target, no requestor_id). AMC Networks and Discovery have
-// no standalone endpoint at all — only reachable via another row's cascade.
+// Five networks share this one streamed-browser modal, each with its own
+// backend flow and endpoint prefix (see app/tve/status.py's 'family' field):
+// 'legacy' (A+E/Warner, needs a requestor_id) and 'nbc'/'fox'/'amcn'/
+// 'discovery' (each a single fixed target, no requestor_id). amcn/discovery
+// route to a thin wrapper (app.worker._run_amcn_or_discovery_standalone_login)
+// around the same pairing logic the legacy family's "sign in once" cascade
+// already uses, sharing its redis keys — see that function's docstring.
 const MVPD_LOGIN_FAMILIES = {
-  legacy: { base: '/api/settings/tve/browser-login', needsRequestor: true },
-  nbc:    { base: '/api/settings/tve/nbc/browser-login', needsRequestor: false },
-  fox:    { base: '/api/settings/tve/fox/browser-login', needsRequestor: false },
+  legacy:    { base: '/api/settings/tve/browser-login', needsRequestor: true },
+  nbc:       { base: '/api/settings/tve/nbc/browser-login', needsRequestor: false },
+  fox:       { base: '/api/settings/tve/fox/browser-login', needsRequestor: false },
+  amcn:      { base: '/api/settings/tve/amcn/browser-login', needsRequestor: false },
+  discovery: { base: '/api/settings/tve/discovery/browser-login', needsRequestor: false },
 };
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
@@ -372,13 +376,7 @@ async function loadTveNetworkStatus() {
   try {
     const r = await fetch('/api/settings/tve/status');
     const d = await r.json();
-    let lastGroup = null;
     const rows = (d.networks || []).map(n => {
-      let header = '';
-      if (n.group === 'cascade' && lastGroup !== 'cascade') {
-        header = `<div style="margin:0.6rem 0 0.3rem;padding-top:0.5rem;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.72rem">Signed in automatically via the cascade above — Cox always re-authenticates fresh; other providers reuse the cached sign-in until it expires.</div>`;
-      }
-      lastGroup = n.group;
       const age = _tveRelativeTime(n.last_signed_in_at);
       const ageColor = n.last_signed_in_at ? 'var(--text-soft)' : 'var(--text-dim)';
       const note = n.note ? `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${n.note}</div>` : '';
@@ -386,7 +384,7 @@ async function loadTveNetworkStatus() {
       const button = n.family
         ? `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`
         : '';
-      return `${header}<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
         <span>${n.label}</span>
         <span style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap">
           <span style="color:${ageColor}">${age}</span>${button}

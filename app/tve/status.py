@@ -19,17 +19,17 @@ def tve_network_status(account) -> list[dict]:
     cfg = (account.config or {}) if account else {}
     entries: list[dict] = []
 
-    # 'family' + 'requestor_id' tell the admin UI which sign-in endpoint (if
-    # any) a row's "Sign in (browser)" button should drive:
-    #   'legacy' -> POST /api/settings/tve/browser-login/start {requestor_id}
-    #   'nbc'    -> POST /api/settings/tve/nbc/browser-login/start (fixed target)
-    #   'fox'    -> POST /api/settings/tve/fox/browser-login/start (fixed target)
-    #   None     -> no standalone trigger exists; only reachable via another
-    #               row's cascade (see app.worker._silent_pair_amcn/_discovery)
-    # 'group' separates rows you can trigger directly ('direct') from rows
-    # that only ever get signed in as a side effect of another row's cascade
-    # ('cascade') — the admin UI renders a section header between the two
-    # instead of repeating an explanation on every cascade-only row.
+    # 'family' + 'requestor_id' tell the admin UI which sign-in endpoint a
+    # row's "Sign in (browser)" button should drive:
+    #   'legacy'    -> POST /api/settings/tve/browser-login/start {requestor_id}
+    #   'nbc'       -> POST /api/settings/tve/nbc/browser-login/start (fixed target)
+    #   'fox'       -> POST /api/settings/tve/fox/browser-login/start (fixed target)
+    #   'amcn'      -> POST /api/settings/tve/amcn/browser-login/start (fixed target)
+    #   'discovery' -> POST /api/settings/tve/discovery/browser-login/start (fixed target)
+    # AMC Networks TVE and Discovery TVE are ALSO still swept for free by the
+    # legacy family's "sign in once" cascade (app.worker._silent_pair_amcn/
+    # _discovery, triggered by "Sign in to all") — these standalone buttons
+    # just mean you no longer have to run that whole sweep only to reach them.
     mvpd_authn = cfg.get('mvpd_authn') or {}
     for choice in REQUESTOR_CHOICES:
         # Cached tokens are stored under the wire-protocol requestor_id
@@ -49,7 +49,6 @@ def tve_network_status(account) -> list[dict]:
             'note': None,
             'family': 'legacy',
             'requestor_id': choice['requestor_id'],
-            'group': 'direct',
         })
 
     nbc = cfg.get('nbc_mvpd_auth') or {}
@@ -59,7 +58,6 @@ def tve_network_status(account) -> list[dict]:
         'note': None,
         'family': 'nbc',
         'requestor_id': None,
-        'group': 'direct',
     })
 
     entries.append({
@@ -68,7 +66,6 @@ def tve_network_status(account) -> list[dict]:
         'note': None,
         'family': 'fox',
         'requestor_id': None,
-        'group': 'direct',
     })
 
     amcn_cached_at = None
@@ -84,9 +81,8 @@ def tve_network_status(account) -> list[dict]:
         'label': 'AMC Networks TVE',
         'last_signed_in_at': amcn_cached_at,
         'note': None,
-        'family': None,
+        'family': 'amcn',
         'requestor_id': None,
-        'group': 'cascade',
     })
 
     disco_cached_at = None
@@ -100,9 +96,8 @@ def tve_network_status(account) -> list[dict]:
         'label': 'Discovery TVE',
         'last_signed_in_at': disco_cached_at,
         'note': None,
-        'family': None,
+        'family': 'discovery',
         'requestor_id': None,
-        'group': 'cascade',
     })
 
     return entries

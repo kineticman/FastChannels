@@ -5235,6 +5235,38 @@ def mvpd_browser_login_stop():
     return jsonify({'status': 'stopping'})
 
 
+# AMC Networks TVE / Discovery TVE standalone sign-in — neither has a
+# dedicated Adobe Pass client to register up front, so these reuse the
+# legacy flow's redis keys/job (see app.worker._run_amcn_or_discovery_
+# standalone_login) and its existing state/input/stop routes above; only a
+# /start endpoint is needed per network.
+
+@api_bp.route('/settings/tve/amcn/browser-login/start', methods=['POST'])
+def amcn_browser_login_start():
+    from .tasks import trigger_amcn_browser_login
+
+    account = _get_tve_account('cox', 'Cox')
+    if not account.is_enabled:
+        return jsonify({'error': 'Enable and save the TVE account first.'}), 400
+    cfg = account.config or {}
+    mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
+    started = trigger_amcn_browser_login(mso_id)
+    return jsonify({'status': 'started' if started else 'already_running'})
+
+
+@api_bp.route('/settings/tve/discovery/browser-login/start', methods=['POST'])
+def discovery_browser_login_start():
+    from .tasks import trigger_discovery_browser_login
+
+    account = _get_tve_account('cox', 'Cox')
+    if not account.is_enabled:
+        return jsonify({'error': 'Enable and save the TVE account first.'}), 400
+    cfg = account.config or {}
+    mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
+    started = trigger_discovery_browser_login(mso_id)
+    return jsonify({'status': 'started' if started else 'already_running'})
+
+
 # ── NBC TVE browser sign-in (Adobe Pass v2 "second screen" pairing) ────────
 # NBC TVE uses a different Adobe Pass generation (v2 JSON REST) than Warner/
 # A+E's legacy XML protocol — see app.worker.run_nbc_browser_login and

@@ -3036,6 +3036,116 @@ def _silent_pair_discovery(page, mso_id: str, username: str, password: str, redi
     return True, 'authorized'
 
 
+def _run_amcn_or_discovery_standalone_login(pair_fn, log_prefix: str, display_name: str, mso_id: str, _attempt: int = 1, _deadline: float | None = None):
+    """Shared browser-launch/status/retry scaffolding for AMC Networks TVE's
+    and Discovery TVE's standalone "Sign in" buttons.
+
+    Neither network has a dedicated Adobe Pass client to register up front
+    like NBC/FOX/legacy do — _silent_pair_amcn/_silent_pair_discovery already
+    implement each network's full registration+poll dance (originally
+    written for the "sign in once" cascade, see _pair_sibling_requestors),
+    so this just wraps one call to pair_fn in the same launch/retry/status
+    shape as run_nbc_browser_login. Deliberately reuses the legacy flow's
+    redis keys (MVPD_BROWSER_LOGIN_*) rather than a dedicated namespace, so
+    the existing sign-in modal and its state/input/stop routes work
+    unchanged — no new polling plumbing needed, just a /start route per
+    network (see api.py). This also means an AMC/Discovery standalone run
+    and a legacy/cascade run can't overlap, which is correct: they'd
+    otherwise fight over the same persistent Camoufox profile directory.
+    """
+    with flask_app.app_context():
+        import json as _json_login
+
+        try:
+            r = redis.from_url(flask_app.config['REDIS_URL'])
+            r.ping()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[%s] Redis unavailable, aborting: %s', log_prefix, exc)
+            return
+
+        # Same teardown-clobber guard as run_mvpd_browser_login/run_nbc_browser_login.
+        _terminal_status_set = {'v': False}
+
+        def set_status(state: str, message: str = '', url: str = ''):
+            try:
+                r.setex(
+                    MVPD_BROWSER_LOGIN_STATUS_KEY, 120,
+                    _json_login.dumps({'state': state, 'message': message, 'url': url, 'requestor_id': display_name, 'steps': []}),
+                )
+                if state in ('success', 'error', 'stopped'):
+                    _terminal_status_set['v'] = True
+            except Exception:  # noqa: BLE001
+                pass
+
+        r.delete(MVPD_BROWSER_LOGIN_STOP_KEY)
+        r.delete(MVPD_BROWSER_LOGIN_INPUT_KEY)
+        set_status('starting', f'Signing in to {display_name}…')
+
+        deadline = _deadline if _deadline is not None else time.monotonic() + _MVPD_BROWSER_LOGIN_TIMEOUT_SECONDS
+
+        account_row = TVEAccount.query.filter_by(provider_id='cox').first()
+        mvpd_username = (account_row.username if account_row else '') or ''
+        mvpd_password = (account_row.password if account_row else '') or ''
+
+        try:
+            from camoufox.sync_api import Camoufox
+        except ImportError:
+            set_status('error', 'Camoufox is not installed on this container')
+            return
+
+        profile_dir = '/data/browser_profiles/mvpd_tve'
+        try:
+            import os as _os_login
+            _os_login.makedirs(profile_dir, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[%s] could not create profile dir %s: %s', log_prefix, profile_dir, exc)
+
+        try:
+            with Camoufox(
+                headless='virtual', os='windows', persistent_context=True,
+                user_data_dir=profile_dir, window=(1280, 800),
+            ) as context:
+                page = context.pages[0] if context.pages else context.new_page()
+                page.on('crash', lambda p: logger.warning('[%s] page CRASH event fired (url was %s)', log_prefix, _safe_page_url(p)))
+                page.on('close', lambda p: logger.warning('[%s] page CLOSE event fired', log_prefix))
+                page.on('pageerror', lambda exc: logger.warning('[%s] page JS error: %s', log_prefix, str(exc)[:500]))
+                set_status('running', f'Signing in to {display_name}…', _safe_page_url(page))
+                paired, message = pair_fn(page, mso_id, mvpd_username, mvpd_password, r)
+                if paired:
+                    set_status('success', f'Signed in — {display_name} {message}.')
+                    logger.info('[%s] paired mso_id=%s', log_prefix, mso_id)
+                else:
+                    set_status('error', f'{display_name}: {message}.')
+        except BaseException as exc:  # noqa: BLE001
+            if _terminal_status_set['v']:
+                logger.info('[%s] ignoring cleanup-time exception after terminal status was already set: %s', log_prefix, exc)
+                return
+            if (_is_browser_death(exc) and _attempt < _BROWSER_LOGIN_MAX_ATTEMPTS
+                    and time.monotonic() < deadline - 30
+                    and not r.exists(MVPD_BROWSER_LOGIN_STOP_KEY)):
+                logger.warning('[%s] browser died (attempt %d/%d), relaunching: %s', log_prefix, _attempt, _BROWSER_LOGIN_MAX_ATTEMPTS, exc)
+                set_status('starting', 'Browser hiccuped — relaunching…')
+                return _run_amcn_or_discovery_standalone_login(pair_fn, log_prefix, display_name, mso_id, _attempt=_attempt + 1, _deadline=deadline)
+            logger.exception('[%s] browser session failed', log_prefix)
+            try:
+                set_status('error', f'Browser session failed: {exc}')
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+
+def run_amcn_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | None = None):
+    """Standalone "Sign in" for AMC Networks TVE — see
+    _run_amcn_or_discovery_standalone_login for the shared mechanism."""
+    return _run_amcn_or_discovery_standalone_login(_silent_pair_amcn, 'amcn-mvpd-login', 'AMC Networks TVE', mso_id, _attempt=_attempt, _deadline=_deadline)
+
+
+def run_discovery_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | None = None):
+    """Standalone "Sign in" for Discovery TVE — see
+    _run_amcn_or_discovery_standalone_login for the shared mechanism."""
+    return _run_amcn_or_discovery_standalone_login(_silent_pair_discovery, 'discovery-mvpd-login', 'Discovery TVE', mso_id, _attempt=_attempt, _deadline=_deadline)
+
+
 def _summarize_pairing_results(results: dict[str, tuple[bool, str]]) -> str:
     authorized = [k for k, (ok, _) in results.items() if ok]
     other = [(k, msg) for k, (ok, msg) in results.items() if not ok]

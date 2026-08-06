@@ -531,6 +531,58 @@ def stop_fox_browser_login():
         logger.warning(f'Failed to signal FOX MVPD browser login stop: {e}')
 
 
+# AMC Networks TVE / Discovery TVE standalone sign-in. Both reuse the legacy
+# flow's job_id and redis keys (mvpd:browser-login:*) — see
+# app.worker._run_amcn_or_discovery_standalone_login — so there's no
+# dedicated stop_*/state route for either; the existing
+# /api/settings/tve/browser-login/{state,input,stop} endpoints already work.
+
+def trigger_amcn_browser_login(mso_id: str):
+    """Returns True if a job was enqueued, False if one is already running."""
+    try:
+        q = get_fast_queue()
+        job_id = 'mvpd-browser-login'
+        if _job_already_active(q, job_id):
+            logger.info('MVPD browser login already running')
+            return False
+        q.enqueue('app.worker.run_amcn_browser_login', mso_id, job_timeout=1830, job_id=job_id)
+        logger.info('Enqueued AMC Networks TVE browser login for mso_id=%s', mso_id)
+        return True
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for AMC Networks TVE browser login')
+        import threading
+        from app.worker import run_amcn_browser_login
+        thread_name = 'mvpd-browser-login-fallback'
+        if any(t.name == thread_name and t.is_alive() for t in threading.enumerate()):
+            logger.info('MVPD browser login fallback thread already running')
+            return False
+        threading.Thread(target=run_amcn_browser_login, args=(mso_id,), daemon=True, name=thread_name).start()
+        return True
+
+
+def trigger_discovery_browser_login(mso_id: str):
+    """Returns True if a job was enqueued, False if one is already running."""
+    try:
+        q = get_fast_queue()
+        job_id = 'mvpd-browser-login'
+        if _job_already_active(q, job_id):
+            logger.info('MVPD browser login already running')
+            return False
+        q.enqueue('app.worker.run_discovery_browser_login', mso_id, job_timeout=1830, job_id=job_id)
+        logger.info('Enqueued Discovery TVE browser login for mso_id=%s', mso_id)
+        return True
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for Discovery TVE browser login')
+        import threading
+        from app.worker import run_discovery_browser_login
+        thread_name = 'mvpd-browser-login-fallback'
+        if any(t.name == thread_name and t.is_alive() for t in threading.enumerate()):
+            logger.info('MVPD browser login fallback thread already running')
+            return False
+        threading.Thread(target=run_discovery_browser_login, args=(mso_id,), daemon=True, name=thread_name).start()
+        return True
+
+
 def trigger_tvtv_cache_refresh():
     try:
         q = get_maintenance_queue()
