@@ -3165,6 +3165,44 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
             return
         auth_url = client.authenticate_redirect_url(mso_id)
 
+        def _grace_poll_pairing(reason: str) -> bool:
+            """See run_nbc_browser_login's helper: MSO completion pages (Cox's
+            Okta widget) close themselves right after the credentials POST
+            while Adobe binds the session server-side — poll browser-free
+            before treating a dead page as a failed attempt. Returns True if
+            the sign-in reached a terminal answer (status already set)."""
+            logger.info('[mvpd-login] page gone (%s) — polling for server-side completion', reason)
+            grace_deadline = min(time.monotonic() + 30, deadline)
+            while time.monotonic() < grace_deadline:
+                if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                    return False
+                try:
+                    client.fetch_session_token()
+                except TVEPendingAuthError:
+                    time.sleep(2)
+                    continue
+                except TVEAuthError as exc:
+                    _step(requestor_id, 'failed', str(exc)[:120])
+                    set_status('error', f'Adobe Pass error: {exc}')
+                    return True  # definitive answer — nothing to relaunch for
+                _save_mvpd_authn_token(requestor_id, client.ctx.authn_token)
+                results: dict[str, tuple[bool, str]] = {}
+                try:
+                    client.authorize()
+                    results[requestor_id] = (True, 'authorized')
+                    _step(requestor_id, 'done', 'authorized')
+                    logger.info('[mvpd-login] paired requestor_id=%s (completed after the page closed itself)', requestor_id)
+                except TVENotAuthorizedError:
+                    results[requestor_id] = (False, 'not entitled')
+                    _step(requestor_id, 'failed', 'not entitled')
+                except TVEAuthError as exc:
+                    results[requestor_id] = (False, str(exc)[:120])
+                    _step(requestor_id, 'failed', str(exc)[:120])
+                suffix = ' (The browser window closed itself, so the other networks were not swept — run again to check them.)' if cascade else ''
+                set_status('success', _summarize_pairing_results(results) + suffix)
+                return True
+            return False
+
         try:
             from camoufox.sync_api import Camoufox
         except ImportError:
@@ -3236,7 +3274,13 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                         return
 
                     if page.is_closed():
-                        raise _BrowserSessionDied('browser page closed unexpectedly')
+                        if _grace_poll_pairing('page closed'):
+                            return
+                        if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                            _step(requestor_id, 'failed', 'cancelled')
+                            set_status('stopped', 'Cancelled')
+                            return
+                        raise _BrowserSessionDied('browser page closed and sign-in did not complete')
 
                     for _ in range(20):
                         raw = r.lpop(MVPD_BROWSER_LOGIN_INPUT_KEY)
@@ -3366,6 +3410,8 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 # own teardown failing to close an already-dead browser, not
                 # an actual job failure. Don't clobber the real result.
                 logger.info('[mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
+                return
+            if _is_browser_death(exc) and _grace_poll_pairing(str(exc)[:80]):
                 return
             if (_is_browser_death(exc) and _attempt < _BROWSER_LOGIN_MAX_ATTEMPTS
                     and time.monotonic() < deadline - 30
@@ -3509,6 +3555,36 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             set_status('error', f'Adobe Pass registration failed: {exc}')
             return
 
+        def _grace_poll_pairing(reason: str) -> bool:
+            """The pairing completes SERVER-side, and the MSO completion page
+            (Cox's Okta widget, observed 3-for-3 on 2026-08-06) calls
+            window.close() on itself ~1.5s after posting credentials — so the
+            browser usually dies at the exact moment the flow is FINISHING.
+            Before treating a dead page as a failed attempt (which would
+            relaunch and re-submit a real MSO login — a login-storm risk),
+            poll for completion browser-free. Returns True if it completed
+            (terminal status already set)."""
+            logger.info('[nbc-mvpd-login] page gone (%s) — polling for server-side completion', reason)
+            grace_deadline = min(time.monotonic() + 30, deadline)
+            while time.monotonic() < grace_deadline:
+                if r.exists(NBC_BROWSER_LOGIN_STOP_KEY):
+                    return False
+                try:
+                    r_profile = client._get(
+                        f'{ADOBE_BASE_NBC}/api/v2/{client.requestor_id}/profiles/{mso_id}',
+                        headers=client._bearer_headers(),
+                    )
+                    profile = ((r_profile.json() or {}).get('profiles') or {}).get(mso_id)
+                except Exception:  # noqa: BLE001
+                    profile = None
+                if profile:
+                    _save_nbc_mvpd_auth(mso_id, client.access_token, device_fingerprint)
+                    set_status('success', f'Signed in — NBC TVE authorized via {mso_id}.')
+                    logger.info('[nbc-mvpd-login] paired mso_id=%s (completed after the page closed itself)', mso_id)
+                    return True
+                time.sleep(2)
+            return False
+
         try:
             from camoufox.sync_api import Camoufox
         except ImportError:
@@ -3560,7 +3636,12 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                         set_status('stopped', 'Cancelled')
                         return
                     if page.is_closed():
-                        raise _BrowserSessionDied('browser page closed unexpectedly')
+                        if _grace_poll_pairing('page closed'):
+                            return
+                        if r.exists(NBC_BROWSER_LOGIN_STOP_KEY):
+                            set_status('stopped', 'Cancelled')
+                            return
+                        raise _BrowserSessionDied('browser page closed and pairing did not complete')
 
                     for _ in range(20):
                         raw = r.lpop(NBC_BROWSER_LOGIN_INPUT_KEY)
@@ -3620,6 +3701,8 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         except BaseException as exc:  # noqa: BLE001
             if _terminal_status_set['v']:
                 logger.info('[nbc-mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
+                return
+            if _is_browser_death(exc) and _grace_poll_pairing(str(exc)[:80]):
                 return
             if (_is_browser_death(exc) and _attempt < _BROWSER_LOGIN_MAX_ATTEMPTS
                     and time.monotonic() < deadline - 30
@@ -3737,6 +3820,48 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             set_status('error', f'FOX registration returned an unexpected response: {exc}')
             return
 
+        def _grace_poll_pairing(reason: str) -> bool:
+            """Same as run_nbc_browser_login's helper: the MSO completion page
+            (Cox's Okta widget) closes itself right after the credentials POST
+            while the pairing completes server-side — poll browser-free before
+            treating a dead page as a failed attempt. Returns True if it
+            completed (terminal status already set)."""
+            logger.info('[fox-mvpd-login] page gone (%s) — polling for server-side completion', reason)
+            grace_deadline = min(time.monotonic() + 30, deadline)
+            while time.monotonic() < grace_deadline:
+                if r.exists(FOX_BROWSER_LOGIN_STOP_KEY):
+                    return False
+                token = None
+                try:
+                    check = session.get(
+                        'https://api3.fox.com/v2.0/checkadobeauthn/v2', headers=headers,
+                        params={'device_id': device_id, 'requestor': 'fbc-fox'},
+                        timeout=30,
+                    )
+                    if check.ok:
+                        token = (check.json() or {}).get('accessToken')
+                except requests.RequestException:
+                    token = None
+                if token:
+                    exp = _jwt_exp(token) or int(time.time()) + 3600
+                    account = TVEAccount.query.filter_by(provider_id='cox').first()
+                    if account:
+                        acct_cfg = dict(account.config or {})
+                        acct_cfg['fox_sports_access_token'] = token
+                        acct_cfg['fox_sports_access_token_exp'] = exp
+                        acct_cfg['fox_sports_access_token_mso'] = mso_id
+                        acct_cfg['fox_sports_access_token_captured_at'] = int(time.time())
+                        account.config = acct_cfg
+                        account.last_auth_status = 'ok'
+                        account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (browser-assisted).'
+                        account.last_auth_at = datetime.now(timezone.utc)
+                        db.session.commit()
+                    set_status('success', f'Signed in — FOX Sports authorized via {mso_id}.')
+                    logger.info('[fox-mvpd-login] paired mso_id=%s (completed after the page closed itself)', mso_id)
+                    return True
+                time.sleep(2)
+            return False
+
         try:
             from camoufox.sync_api import Camoufox
         except ImportError:
@@ -3788,7 +3913,12 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                         set_status('stopped', 'Cancelled')
                         return
                     if page.is_closed():
-                        raise _BrowserSessionDied('browser page closed unexpectedly')
+                        if _grace_poll_pairing('page closed'):
+                            return
+                        if r.exists(FOX_BROWSER_LOGIN_STOP_KEY):
+                            set_status('stopped', 'Cancelled')
+                            return
+                        raise _BrowserSessionDied('browser page closed and pairing did not complete')
 
                     for _ in range(20):
                         raw = r.lpop(FOX_BROWSER_LOGIN_INPUT_KEY)
@@ -3866,6 +3996,8 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         except BaseException as exc:  # noqa: BLE001
             if _terminal_status_set['v']:
                 logger.info('[fox-mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
+                return
+            if _is_browser_death(exc) and _grace_poll_pairing(str(exc)[:80]):
                 return
             if (_is_browser_death(exc) and _attempt < _BROWSER_LOGIN_MAX_ATTEMPTS
                     and time.monotonic() < deadline - 30
