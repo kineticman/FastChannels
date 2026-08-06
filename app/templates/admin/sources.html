@@ -258,6 +258,11 @@
       color: #a78bfa;
       border-color: color-mix(in srgb, #7c3aed 35%, transparent);
     }
+    .config-badge.beta {
+      background: color-mix(in srgb, var(--info-soft, #7eb8f7) 14%, transparent);
+      color: var(--info-soft, #7eb8f7);
+      border-color: color-mix(in srgb, var(--info-soft, #7eb8f7) 35%, transparent);
+    }
 
     /* Scrape / audit status in dashboard row */
     .scrape-status { font-size: 0.75rem; margin-top: 0.2rem; display: flex; align-items: center; gap: 0.35rem; min-height: 0; }
@@ -794,6 +799,9 @@
                   {% if source.last_error %}<span class="err-pip" title="{{ source.last_error }}">⚠</span>{% endif %}
                   {% if premium_sources.get(source.name) %}
                     <span class="config-badge premium">Premium</span>
+                  {% endif %}
+                  {% if this_cat == 'tve' %}
+                    <span class="config-badge beta" title="TVE authentication is newer and less battle-tested than our other sources">Beta</span>
                   {% endif %}
                   {% if under_development.get(source.name) %}
                     <span class="config-badge development" title="This source is under development and disabled by default">Under development</span>
