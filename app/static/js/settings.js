@@ -372,7 +372,13 @@ async function loadTveNetworkStatus() {
   try {
     const r = await fetch('/api/settings/tve/status');
     const d = await r.json();
+    let lastGroup = null;
     const rows = (d.networks || []).map(n => {
+      let header = '';
+      if (n.group === 'cascade' && lastGroup !== 'cascade') {
+        header = `<div style="margin:0.6rem 0 0.3rem;padding-top:0.5rem;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.72rem">Signed in automatically via the cascade above — Cox always re-authenticates fresh; other providers reuse the cached sign-in until it expires.</div>`;
+      }
+      lastGroup = n.group;
       const age = _tveRelativeTime(n.last_signed_in_at);
       const ageColor = n.last_signed_in_at ? 'var(--text-soft)' : 'var(--text-dim)';
       const note = n.note ? `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${n.note}</div>` : '';
@@ -380,7 +386,7 @@ async function loadTveNetworkStatus() {
       const button = n.family
         ? `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`
         : '';
-      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
+      return `${header}<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
         <span>${n.label}</span>
         <span style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap">
           <span style="color:${ageColor}">${age}</span>${button}

@@ -26,6 +26,10 @@ def tve_network_status(account) -> list[dict]:
     #   'fox'    -> POST /api/settings/tve/fox/browser-login/start (fixed target)
     #   None     -> no standalone trigger exists; only reachable via another
     #               row's cascade (see app.worker._silent_pair_amcn/_discovery)
+    # 'group' separates rows you can trigger directly ('direct') from rows
+    # that only ever get signed in as a side effect of another row's cascade
+    # ('cascade') — the admin UI renders a section header between the two
+    # instead of repeating an explanation on every cascade-only row.
     mvpd_authn = cfg.get('mvpd_authn') or {}
     for choice in REQUESTOR_CHOICES:
         cached = mvpd_authn.get(choice['requestor_id']) or {}
@@ -35,6 +39,7 @@ def tve_network_status(account) -> list[dict]:
             'note': None,
             'family': 'legacy',
             'requestor_id': choice['requestor_id'],
+            'group': 'direct',
         })
 
     nbc = cfg.get('nbc_mvpd_auth') or {}
@@ -44,6 +49,7 @@ def tve_network_status(account) -> list[dict]:
         'note': None,
         'family': 'nbc',
         'requestor_id': None,
+        'group': 'direct',
     })
 
     entries.append({
@@ -52,6 +58,7 @@ def tve_network_status(account) -> list[dict]:
         'note': None,
         'family': 'fox',
         'requestor_id': None,
+        'group': 'direct',
     })
 
     amcn_cached_at = None
@@ -66,9 +73,10 @@ def tve_network_status(account) -> list[dict]:
     entries.append({
         'label': 'AMC Networks TVE',
         'last_signed_in_at': amcn_cached_at,
-        'note': "No standalone button — signed in automatically when you sign into another network above. Cox always re-authenticates fresh; other providers reuse the cached sign-in until it expires.",
+        'note': None,
         'family': None,
         'requestor_id': None,
+        'group': 'cascade',
     })
 
     disco_cached_at = None
@@ -81,9 +89,10 @@ def tve_network_status(account) -> list[dict]:
     entries.append({
         'label': 'Discovery TVE',
         'last_signed_in_at': disco_cached_at,
-        'note': "No standalone button — signed in automatically when you sign into another network above.",
+        'note': None,
         'family': None,
         'requestor_id': None,
+        'group': 'cascade',
     })
 
     return entries
