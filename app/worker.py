@@ -2015,6 +2015,16 @@ def _try_autofill_credentials(page, username: str, password: str, wait_seconds: 
                 field.click(timeout=2000, force=True)
             except Exception:  # noqa: BLE001
                 field.evaluate('el => el.focus()')
+        # Clear any prefilled/remembered value first — Cox's Okta widget
+        # remembers the username in the persistent profile, and typing appends
+        # (observed live 2026-08-06: 9 remembered + 17 typed = 26-char user
+        # field, compounding on the verify-retry). Also cleans up our own
+        # attempt-1 leftovers on a retry.
+        try:
+            if field.input_value(timeout=1500):
+                field.fill('', timeout=3000)
+        except Exception:  # noqa: BLE001
+            pass
         field.press_sequentially(value, delay=30, timeout=15000)
 
     try:
