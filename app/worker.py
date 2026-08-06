@@ -2433,6 +2433,34 @@ def _relay_input_and_screenshot(page, r) -> bool:
     return stopped
 
 
+_F5_REJECTION_MARKER = 'The requested URL was rejected'
+
+
+def _sling_f5_recover(page, login_url: str, username: str, password: str) -> bool:
+    """Detect Sling's F5 bot-defense block page ("The requested URL was
+    rejected. Please consult with your administrator.") that replaces the
+    login form in-place when a submitted POST gets flagged. Observed live
+    2026-08-05: AETV's autofilled submit was rejected while LIFETIME/FYI's
+    identical submits under a minute later passed — the block is transient
+    per-attempt scoring, so one backoff + reload + refill retry is usually
+    enough. Returns True if the block page was detected and a retry was
+    attempted (caller should extend its poll window), False otherwise."""
+    try:
+        if page.get_by_text(_F5_REJECTION_MARKER).count() == 0:
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    logger.info('[mvpd-login] Sling bot-defense rejected the submitted login — backing off 8s and retrying once')
+    try:
+        page.wait_for_timeout(8000)
+        page.goto(login_url, wait_until='domcontentloaded', timeout=30000)
+        if username and password:
+            _try_autofill_credentials(page, username, password)
+    except Exception as exc:  # noqa: BLE001
+        logger.info('[mvpd-login] F5-recovery reload failed: %s', exc)
+    return True
+
+
 def _try_cached_sibling_authn(sibling_id: str, target: dict) -> tuple[bool, str] | None:
     """If a still-valid authn_token is cached for sibling_id, resolve its
     pairing without touching the browser (mirrors authorize_mvpd()'s play-time
@@ -2545,6 +2573,7 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
 
         paired = False
         message = 'needs its own sign-in'
+        f5_retried = False
         # Silent SSO completes in a few seconds when it works; but when
         # autofill actually SUBMITTED credentials, a full Sling login (SAML
         # round trip, sometimes a captcha the human can solve via the still-
@@ -2556,6 +2585,10 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
             if _relay_input_and_screenshot(page, r):
                 message = 'cancelled'
                 break
+            if not f5_retried and _sling_f5_recover(page, auth_url, username, password):
+                f5_retried = True
+                poll_deadline = time.monotonic() + 45
+                continue
             try:
                 sib_client.fetch_session_token()
                 # Login succeeded — save the authn_token before the entitlement
@@ -2663,10 +2696,15 @@ def _silent_pair_nbc(page, mso_id: str, username: str, password: str, r) -> tupl
     # login (SAML, maybe a human-solved captcha) is in flight, not just a
     # silent SSO redirect.
     deadline = time.monotonic() + (45 if filled else 20)
+    f5_retried = False
     while time.monotonic() < deadline:
         page.wait_for_timeout(1000)
         if _relay_input_and_screenshot(page, r):
             return False, 'cancelled'
+        if not f5_retried and _sling_f5_recover(page, mso_login_url, username, password):
+            f5_retried = True
+            deadline = time.monotonic() + 45
+            continue
         try:
             r_profile = client._get(
                 f'{ADOBE_BASE_NBC}/api/v2/{client.requestor_id}/profiles/{mso_id}',
@@ -2743,10 +2781,15 @@ def _silent_pair_fox(page, mso_id: str, username: str, password: str, r) -> tupl
     # Wider window when autofill actually submitted credentials — see
     # _silent_pair_nbc.
     deadline = time.monotonic() + (45 if filled else 20)
+    f5_retried = False
     while time.monotonic() < deadline:
         page.wait_for_timeout(1000)
         if _relay_input_and_screenshot(page, r):
             return False, 'cancelled'
+        if not f5_retried and _sling_f5_recover(page, mso_login_url, username, password):
+            f5_retried = True
+            deadline = time.monotonic() + 45
+            continue
         try:
             check = session.get(
                 'https://api3.fox.com/v2.0/checkadobeauthn/v2', headers=headers,
@@ -2826,11 +2869,16 @@ def _silent_pair_amcn(page, mso_id: str, username: str, password: str, r) -> tup
         deadline = time.monotonic() + (45 if filled else 20)
         found_profile = False
         cancelled = False
+        f5_retried = False
         while time.monotonic() < deadline:
             page.wait_for_timeout(1000)
             if _relay_input_and_screenshot(page, r):
                 cancelled = True
                 break
+            if not f5_retried and _sling_f5_recover(page, mso_login_url, username, password):
+                f5_retried = True
+                deadline = time.monotonic() + 45
+                continue
             try:
                 profile_resp = client.session.get(
                     f'{amcn_ADOBE_BASE}/api/v2/{channel.requestor_id}/profiles/code/{code}',
@@ -3168,6 +3216,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 last_heartbeat = 0.0
                 last_poll = 0.0
                 consecutive_failures = 0
+                f5_retried = False
                 current_job = get_current_job()
                 _MAX_CONSECUTIVE_FAILURES = 15
                 while time.monotonic() < deadline:
@@ -3211,6 +3260,9 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
 
                     if now - last_poll > _MVPD_SESSION_POLL_SECONDS:
                         last_poll = now
+                        if not f5_retried and _sling_f5_recover(page, auth_url, mvpd_username, mvpd_password):
+                            f5_retried = True
+                            continue
                         try:
                             client.fetch_session_token()
                             # authn_token proves the MSO login itself succeeded — save it
@@ -3490,6 +3542,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 last_heartbeat = 0.0
                 last_poll = 0.0
                 consecutive_failures = 0
+                f5_retried = False
                 current_job = get_current_job()
                 _MAX_CONSECUTIVE_FAILURES = 15
                 while time.monotonic() < deadline:
@@ -3531,6 +3584,9 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
                     if now - last_poll > _NBC_SESSION_POLL_SECONDS:
                         last_poll = now
+                        if not f5_retried and _sling_f5_recover(page, mso_login_url, mvpd_username, mvpd_password):
+                            f5_retried = True
+                            continue
                         try:
                             r_profile = client._get(
                                 f'{ADOBE_BASE_NBC}/api/v2/{client.requestor_id}/profiles/{mso_id}',
@@ -3714,6 +3770,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 last_heartbeat = 0.0
                 last_poll = 0.0
                 consecutive_failures = 0
+                f5_retried = False
                 current_job = get_current_job()
                 _MAX_CONSECUTIVE_FAILURES = 15
                 while time.monotonic() < deadline:
@@ -3755,6 +3812,9 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
                     if now - last_poll > _FOX_SESSION_POLL_SECONDS:
                         last_poll = now
+                        if not f5_retried and _sling_f5_recover(page, mso_login_url, mvpd_username, mvpd_password):
+                            f5_retried = True
+                            continue
                         try:
                             check = session.get(
                                 'https://api3.fox.com/v2.0/checkadobeauthn/v2', headers=headers,
