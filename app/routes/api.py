@@ -5238,8 +5238,11 @@ def mvpd_browser_login_stop():
 # AMC Networks TVE / Discovery TVE standalone sign-in — neither has a
 # dedicated Adobe Pass client to register up front, so these reuse the
 # legacy flow's redis keys/job (see app.worker._run_amcn_or_discovery_
-# standalone_login) and its existing state/input/stop routes above; only a
-# /start endpoint is needed per network.
+# standalone_login). Only /start is a distinct route; /state, /input and
+# /stop are the SAME view functions as the legacy routes above, just
+# registered under these prefixes too — the frontend's MVPD_LOGIN_FAMILIES
+# builds state/input/stop URLs from each family's own `base`, so those need
+# to resolve even though the underlying redis keys are shared.
 
 @api_bp.route('/settings/tve/amcn/browser-login/start', methods=['POST'])
 def amcn_browser_login_start():
@@ -5265,6 +5268,14 @@ def discovery_browser_login_start():
     mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
     started = trigger_discovery_browser_login(mso_id)
     return jsonify({'status': 'started' if started else 'already_running'})
+
+
+api_bp.add_url_rule('/settings/tve/amcn/browser-login/state', 'amcn_browser_login_state', mvpd_browser_login_state)
+api_bp.add_url_rule('/settings/tve/amcn/browser-login/input', 'amcn_browser_login_input', mvpd_browser_login_input, methods=['POST'])
+api_bp.add_url_rule('/settings/tve/amcn/browser-login/stop', 'amcn_browser_login_stop', mvpd_browser_login_stop, methods=['POST'])
+api_bp.add_url_rule('/settings/tve/discovery/browser-login/state', 'discovery_browser_login_state', mvpd_browser_login_state)
+api_bp.add_url_rule('/settings/tve/discovery/browser-login/input', 'discovery_browser_login_input', mvpd_browser_login_input, methods=['POST'])
+api_bp.add_url_rule('/settings/tve/discovery/browser-login/stop', 'discovery_browser_login_stop', mvpd_browser_login_stop, methods=['POST'])
 
 
 # ── NBC TVE browser sign-in (Adobe Pass v2 "second screen" pairing) ────────
