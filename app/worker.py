@@ -1966,7 +1966,7 @@ def _same_page_url(actual: str, expected: str) -> bool:
         return False
 
 
-def _try_autofill_credentials(page, username: str, password: str, wait_seconds: float = 5.0) -> bool:
+def _try_autofill_credentials(page, username: str, password: str, wait_seconds: float = 12.0) -> bool:
     """Best-effort, short-timeout sibling of _autofill_sling_credentials for
     the "sign in once" cascade (app.worker._silent_pair_* / sibling pairing).
 
@@ -1980,73 +1980,83 @@ def _try_autofill_credentials(page, username: str, password: str, wait_seconds: 
     raises — returns False (and the caller falls through to its normal
     poll-and-give-up path) if no matching form shows up in time, e.g.
     because SSO actually DID carry over this time, or a captcha blocks it.
+
+    Mechanics proven by a live dry-run against Sling (2026-08-05): the Adobe
+    authenticate URL first lands on a BLANK F5 "bookend" interstitial
+    (firstbookend.php) whose only inputs are hidden SAML relay fields; the
+    real authSynacor login form replaces it ~4-5s later. So the wait keys on
+    a VISIBLE password field, never a raw input count — the old count>=2
+    check matched the hidden bookend fields and "filled" an invisible form,
+    which is why autofill appeared to do nothing. The real form also animates
+    in (clicks need a settle + generous timeout, with force/JS-focus
+    fallbacks) and can re-render mid-fill, so both values are verified to
+    have actually stuck before submitting, with one retry.
     """
     deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:
         try:
-            if page.locator('input').count() >= 2:
+            if page.locator('input[type="password"]:visible').count() > 0:
                 break
         except Exception as exc:  # noqa: BLE001
             logger.info('[mvpd-login] autofill: locator query failed: %s', exc)
             return False
         page.wait_for_timeout(300)
     else:
-        try:
-            n = page.locator('input').count()
-        except Exception:  # noqa: BLE001
-            n = -1
-        logger.info('[mvpd-login] autofill: timed out after %.1fs waiting for >=2 inputs (saw %d) url=%s', wait_seconds, n, _safe_page_url(page))
+        logger.info('[mvpd-login] autofill: no visible password field after %.1fs (SSO already past login, a captcha-first page, or an unrecognized form) url=%s', wait_seconds, _safe_page_url(page))
         return False
 
-    # Some login pages (observed on Sling's authSynacor form) hydrate/re-render
-    # shortly after the inputs first appear, which can leave a locator briefly
-    # pointing at a detached node — Playwright's default 30s auto-wait on
-    # get_attribute() then burns the entire autofill budget on one bad read.
-    # A short settle pause plus a tight per-call timeout keeps a single flaky
-    # input from aborting the whole attempt.
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(1200)  # the form animates in — let it become clickable/stable
+
+    def _focus_and_type(field, value):
+        try:
+            field.click(timeout=8000)
+        except Exception:  # noqa: BLE001
+            try:
+                field.click(timeout=2000, force=True)
+            except Exception:  # noqa: BLE001
+                field.evaluate('el => el.focus()')
+        field.press_sequentially(value, delay=30, timeout=15000)
 
     try:
-        inputs = page.locator('input')
-        n = inputs.count()
-        email_idx = None
-        seen = []
-        for i in range(min(n, 6)):
-            try:
-                typ = (inputs.nth(i).get_attribute('type', timeout=1000) or '').lower()
-                name = (inputs.nth(i).get_attribute('name', timeout=1000) or '').lower()
-                placeholder = (inputs.nth(i).get_attribute('placeholder', timeout=1000) or '').lower()
-            except Exception as exc:  # noqa: BLE001
-                logger.info('[mvpd-login] autofill: input %d attribute read failed, skipping: %s', i, exc)
-                continue
-            seen.append((typ, name, placeholder))
-            if typ in ('email', 'text') and ('email' in name or 'email' in placeholder or 'user' in name):
-                email_idx = i
-                break
-        if email_idx is None and n >= 2:
-            email_idx = 0
-        if email_idx is None:
-            if n == 0:
-                # Inputs were present a moment ago (the wait loop saw >=2) but
-                # are gone after the settle — the page is navigating away,
-                # which is what a silent SSO auto-redirect looks like. Nothing
-                # to fill; the caller's poll loop will pick up the result.
-                logger.info('[mvpd-login] autofill: inputs disappeared before fill (page likely mid-redirect) url=%s', _safe_page_url(page))
-            else:
-                logger.info('[mvpd-login] autofill: no usable email/text input among %d inputs: %s', n, seen)
-            return False
+        for fill_attempt in (1, 2):
+            pw_loc = page.locator('input[type="password"]:visible')
+            if pw_loc.count() == 0:
+                logger.info('[mvpd-login] autofill: password field disappeared before fill (page likely mid-redirect) url=%s', _safe_page_url(page))
+                return False
+            pw_field = pw_loc.first
 
-        inputs.nth(email_idx).click(timeout=3000)
-        page.keyboard.type(username, delay=30)
-        pw_idx = email_idx + 1
-        if pw_idx >= n:
-            logger.info('[mvpd-login] autofill: no password input after email idx %d (n=%d): %s', email_idx, n, seen)
-            return False
-        inputs.nth(pw_idx).click(timeout=3000)
-        page.keyboard.type(password, delay=30)
-        page.wait_for_timeout(300)
-        inputs.nth(pw_idx).press('Enter')
-        return True
+            user_field = None
+            for selector in (
+                'input[type="email"]:visible',
+                'input[type="text"][name*="email" i]:visible, input[type="text"][name*="user" i]:visible',
+                'input[type="text"]:visible',
+            ):
+                loc = page.locator(selector)
+                if loc.count() > 0:
+                    user_field = loc.first
+                    break
+            if user_field is None:
+                logger.info('[mvpd-login] autofill: password field present but no visible email/text input url=%s', _safe_page_url(page))
+                return False
+
+            _focus_and_type(user_field, username)
+            _focus_and_type(pw_field, password)
+            page.wait_for_timeout(300)
+
+            got_user = user_field.input_value(timeout=2000)
+            got_pw = pw_field.input_value(timeout=2000)
+            if got_user != username or got_pw != password:
+                logger.info('[mvpd-login] autofill: values did not stick (attempt %d): user %d/%d chars, password %d/%d chars — page likely re-rendered mid-fill',
+                            fill_attempt, len(got_user), len(username), len(got_pw), len(password))
+                page.wait_for_timeout(700)
+                continue
+
+            pw_field.press('Enter')
+            logger.info('[mvpd-login] autofill: filled and submitted credentials for %s (attempt %d)', username, fill_attempt)
+            return True
+
+        logger.info('[mvpd-login] autofill: gave up — could not get a stable filled form url=%s', _safe_page_url(page))
+        return False
     except Exception as exc:  # noqa: BLE001
         logger.info('[mvpd-login] autofill: exception mid-fill: %s', exc)
         return False
@@ -3151,7 +3161,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     set_status('error', f'{requestor_id}: {mso_id} does not appear to be a participating provider for this network.')
                     return
                 if mvpd_username and mvpd_password:
-                    _try_autofill_credentials(page, mvpd_username, mvpd_password, wait_seconds=8.0)
+                    _try_autofill_credentials(page, mvpd_username, mvpd_password)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
@@ -3473,7 +3483,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     set_status('error', f'{mso_id} does not appear to be a participating provider for NBC TVE.')
                     return
                 if mvpd_username and mvpd_password:
-                    _try_autofill_credentials(page, mvpd_username, mvpd_password, wait_seconds=8.0)
+                    _try_autofill_credentials(page, mvpd_username, mvpd_password)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
@@ -3697,7 +3707,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     set_status('error', f'{mso_id} does not appear to be a participating provider for FOX Sports TVE.')
                     return
                 if mvpd_username and mvpd_password:
-                    _try_autofill_credentials(page, mvpd_username, mvpd_password, wait_seconds=8.0)
+                    _try_autofill_credentials(page, mvpd_username, mvpd_password)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
