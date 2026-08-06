@@ -23,6 +23,7 @@ from flask import Blueprint, redirect, abort, request, Response, render_template
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
 from ..hls import inspect_hls_drm, parse_stream_info
 from ..models import Channel, Source
+from ..url import public_base_url
 from ..scrapers import registry
 from ..scrapers.distro import (
     CHANNEL_SCHEME as _DISTRO_SCHEME,
@@ -4210,6 +4211,53 @@ def play(source_name: str, channel_id: str):
             redirect_kind='direct',
         )
     return redirect(resolved_url, 302)
+
+
+_PRISMCAST_HLS_SESSION_RE = re.compile(r'^(.*)/hls/([^/]+)/stream\.m3u8(?:\?.*)?$')
+
+
+def _prismcast_ts_url(hls_url: str) -> str | None:
+    """PrismCast serves each capture two ways — HLS at /hls/<id>/stream.m3u8 and
+    raw MPEG-TS at /stream/<id>. Same session, sibling path."""
+    m = _PRISMCAST_HLS_SESSION_RE.match(hls_url)
+    if not m:
+        return None
+    return f'{m.group(1)}/stream/{m.group(2)}'
+
+
+@play_bp.route('/play/prismcast/<int:channel_id>.ts')
+def prismcast_bridge_ts(channel_id):
+    """MPEG-TS variant of the generic PrismCast DRM bridge (see generate_prismcast_m3u).
+
+    The M3U's normal bridge entry hands clients PrismCast's ad-hoc `/play?url=`
+    trigger directly, which resolves to an HLS capture. Some downstream players
+    (e.g. TS-only fallback chains) need a plain MPEG-TS stream instead, and
+    PrismCast exposes the same capture at a sibling /stream/<id> path — so this
+    route triggers the capture server-side, follows it to the resolved HLS
+    session URL, and 302s the client to the MPEG-TS sibling instead.
+    """
+    from ..models import AppSettings
+    from ..generators.m3u import _prismcast_bridge_url
+    channel = Channel.query.get_or_404(channel_id)
+    settings = AppSettings.get()
+    prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
+    if not prismcast_url:
+        return Response('PrismCast is not configured.\n', status=503, mimetype='text/plain')
+    inner_base_url = (settings.effective_prismcast_inner_url() or public_base_url()).strip().rstrip('/')
+    play_url = _prismcast_bridge_url(channel, prismcast_url, inner_base_url)
+    try:
+        r = _requests.get(play_url, timeout=35, allow_redirects=True, stream=True)
+        r.close()
+    except Exception as exc:
+        logger.warning('[prismcast-ts] resolve failed for channel=%s: %s', channel_id, exc)
+        abort(502)
+    if r.status_code >= 400:
+        abort(r.status_code)
+    ts_url = _prismcast_ts_url(r.url)
+    if not ts_url:
+        logger.warning('[prismcast-ts] unexpected PrismCast URL shape for channel=%s: %s', channel_id, r.url)
+        abort(502)
+    return redirect(ts_url, 302)
 
 
 @play_bp.route('/watch/<int:channel_id>')

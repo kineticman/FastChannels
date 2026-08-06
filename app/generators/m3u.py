@@ -1197,10 +1197,17 @@ def _prismcast_bridge_url(ch, prismcast_url: str, inner_base_url: str) -> str:
     return f'{prismcast_url}/play?url={_url_quote(watch_url, safe="")}&profile={_PRISMCAST_PROFILE}'
 
 
+def _prismcast_bridge_ts_url(ch, base_url: str) -> str:
+    # MPEG-TS variant: resolved server-side by /play/prismcast/<id>.ts (app/routes/play.py),
+    # which triggers the same PrismCast capture and 302s to its raw-TS sibling path
+    # instead of the HLS one — for fallback chains that need a consistent TS container.
+    return f'{base_url}/play/prismcast/{ch.id}.ts'
+
+
 def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
                            prismcast_url: str, inner_base_url: str = None,
                            feed_chnum_start: int = None, namespace_start: int = None,
-                           feed_id: int = None, gracenote: bool = False) -> str:
+                           feed_id: int = None, gracenote: bool = False, ts: bool = False) -> str:
     """
     Hybrid PrismCast playlist where each channel takes the cheapest viable path:
 
@@ -1226,6 +1233,12 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
     inner_base_url  — base URL PrismCast's Chrome uses to reach this server's
                       /watch pages; should be a secure context for DRM (loopback
                       or HTTPS). Falls back to base_url.
+    ts              — if True, DRM-bridged entries point at our own
+                      /play/prismcast/<id>.ts resolver (which 302s to PrismCast's
+                      raw MPEG-TS capture output) instead of PrismCast's HLS
+                      `/play?url=` trigger directly. Non-bridged entries are
+                      unaffected — they're already whatever container the direct
+                      /play proxy serves.
     """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
@@ -1292,7 +1305,8 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
         _append_experimental_stream_attrs(attrs, _s)
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         if _needs_prismcast_bridge(ch) and _prismcast_capturable(ch):
-            lines.append(_prismcast_bridge_url(ch, prismcast_url, inner_base_url))
+            lines.append(_prismcast_bridge_ts_url(ch, base_url) if ts
+                         else _prismcast_bridge_url(ch, prismcast_url, inner_base_url))
         else:
             # Non-DRM → direct play proxy, same URL the standard M3U emits.
             lines.append(_channel_play_url(ch, base_url))

@@ -322,6 +322,26 @@ def m3u_prismcast():
     )
 
 
+@output_bp.route('/m3u/prismcast/ts')
+def m3u_prismcast_ts():
+    """MPEG-TS variant of the PrismCast DRM-bridge M3U: DRM entries point at our
+    own /play/prismcast/<id>.ts resolver, which 302s to PrismCast's raw-TS
+    capture output instead of its HLS one. Generated live (not artifact-cached)
+    since it's meant for occasional consumption by external fallback tooling,
+    not repeated DVR polling."""
+    from ..models import AppSettings
+    settings = AppSettings.get()
+    prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
+    if not prismcast_url:
+        return _prismcast_not_configured()
+    base_url = public_base_url()
+    inner = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
+    content = generate_prismcast_m3u(_filters(), base_url=base_url,
+                                     prismcast_url=prismcast_url, inner_base_url=inner, ts=True)
+    return Response(content, mimetype='application/x-mpegurl',
+                    headers={'Content-Disposition': 'attachment; filename="fastchannels-prismcast-ts.m3u"'})
+
+
 @output_bp.route('/m3u/prismcast/gracenote')
 def m3u_prismcast_gracenote():
     """Gracenote-guide variant of the PrismCast M3U: only channels with a
@@ -392,6 +412,31 @@ def feed_m3u_prismcast(slug):
         mimetype='application/x-mpegurl',
         download_name=f'{slug}-prismcast.m3u',
     )
+
+
+@output_bp.route('/feeds/<slug>/m3u/prismcast/ts')
+def feed_m3u_prismcast_ts(slug):
+    """MPEG-TS variant of the PrismCast DRM-bridge M3U for a feed — see
+    m3u_prismcast_ts for what changes. Generated live (not artifact-cached),
+    matching the master ts route."""
+    from ..models import AppSettings
+    settings = AppSettings.get()
+    prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
+    if not prismcast_url:
+        return _prismcast_not_configured()
+    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    base_url = public_base_url()
+    inner = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
+    filters = feed_to_query_filters(feed.filters or {})
+    if feed.chnum_start is not None:
+        kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
+    else:
+        kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
+    content = generate_prismcast_m3u(filters, base_url=base_url,
+                                     prismcast_url=prismcast_url, inner_base_url=inner,
+                                     ts=True, **kw)
+    return Response(content, mimetype='application/x-mpegurl',
+                    headers={'Content-Disposition': f'attachment; filename="{slug}-prismcast-ts.m3u"'})
 
 
 @output_bp.route('/feeds/<slug>/m3u/prismcast/gracenote')
