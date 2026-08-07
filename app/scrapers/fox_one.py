@@ -597,6 +597,10 @@ class FoxOneScraper(BaseScraper):
         )
 
     def _resolve_dtc(self, container_id: str | None) -> str:
+        # NOTE: watchlive's playbackUrl is a single-use ticket — its embedded `exp`
+        # is a 24h signature window, but Fox's edge rejects a *second* GET to the
+        # same ticket URL with 403 "Too late" (replay protection). Do not cache or
+        # reuse the returned URL across calls; always redeem a fresh one.
         asset_id = self._current_asset_id(container_id)
         if not asset_id:
             raise ValueError(f'FOX One could not determine current asset for container {container_id}')

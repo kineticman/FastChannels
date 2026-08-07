@@ -3927,10 +3927,16 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
-    # FOX TVE/Fox One use source-specific live resolution and playlist handling.
-    # Redirect before generic resolution so slow token acquisition happens only
-    # inside the manifest proxy request, not on both the initial tune and proxy.
-    if source_name in {'fox_tve', 'fox_one'}:
+    # FOX TVE uses source-specific live resolution and playlist handling (Uplynk
+    # key proxying, 247.fox*.com segment auth rewriting) — those genuinely need
+    # our manifest proxy. FOX One's DTC playbackUrl is a single-use ticket to a
+    # master playlist that needs no rewriting (plain AES-128 key already served
+    # unproxied from Fox's own CDN, no 247.fox*.com auth-query quirk): redeeming
+    # it once and redirecting lets the client poll Fox's real media playlist
+    # directly from then on, instead of us re-redeeming a fresh ticket (with a
+    # ~1.1-1.3s Fox API round trip) on every single client poll — confirmed via
+    # live testing 2026-08-06 that this was the source of playback stutter.
+    if source_name == 'fox_tve':
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
