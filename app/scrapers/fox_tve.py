@@ -202,8 +202,23 @@ def channel_for_url(raw_url: str) -> FoxTVEChannel | None:
 
 
 def find_live_hls(page_url: str) -> str | None:
+    # The live page is served through a CDN with max-age=1200 (20min) public caching.
+    # Fox's own web player resolves the current asset through some other, uncached
+    # path, but this scrape reads the same cached HTML everyone else gets — so when
+    # Fox rotates the underlying Uplynk asset faster than the cache window, this can
+    # return an already-stale, no-longer-updating asset (confirmed 2026-08-06: an
+    # asset scraped this way was frozen at a fixed 8-segment/30s window while Fox's
+    # own site played fine). A cache-busting query param forces a fresh origin fetch.
+    from urllib.parse import urlsplit, urlunsplit
+    parts = urlsplit(page_url)
+    cache_bust_query = f'{parts.query}&_fcts={int(time.time())}' if parts.query else f'_fcts={int(time.time())}'
+    bust_url = urlunsplit((parts.scheme, parts.netloc, parts.path, cache_bust_query, parts.fragment))
     try:
-        r = requests.get(page_url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*'}, timeout=20)
+        r = requests.get(
+            bust_url,
+            headers={'User-Agent': UA, 'Accept': 'text/html,*/*', 'Cache-Control': 'no-cache', 'Pragma': 'no-cache'},
+            timeout=20,
+        )
         r.raise_for_status()
     except requests.RequestException:
         return None
@@ -926,6 +941,15 @@ class FoxTVEScraper(BaseScraper):
                 description=channel.description,
             )
             for channel in CHANNELS.values()
+            # fox_weather is deliberately excluded from the fox_tve lineup: find_live_hls()
+            # scrapes the public foxweather.com/live page, and confirmed 2026-08-06 that page's
+            # embedded asset can be a frozen/looping Uplynk decoy (byte-identical segments across
+            # fetches) unrelated to what Fox's own web player actually shows. fox_one's 'fwx'
+            # channel covers Fox Weather properly through the authenticated DTC ticket system
+            # (same one used for LiveNOW/FS1/etc.) when a native FOX One playback config (Cox
+            # account or refresh_token) is present, and CHANNELS['fox_weather'] here is kept
+            # around only as fox_one's delegate fallback for installs without native config.
+            if channel.channel_id != 'fox_weather'
         ]
 
     def fetch_epg(self, channels, **kwargs):

@@ -2737,6 +2737,21 @@ _FOX_TVE_SESSION.headers.update({
     'Accept': '*/*',
     'Referer': 'https://www.foxweather.com/live',
 })
+
+# fox_weather (static VOD-tagged Uplynk asset needing live-sequence synthesis) and
+# the signed_page_hls channels (fox_news/fox_business, needing 247.fox*.com segment
+# auth-query rewriting) genuinely need the manifest proxy. The fox_sports_* channels
+# resolve through a different, already-live-tagged backend that needs no rewriting —
+# see the routing check in play() for why they get a direct redirect instead.
+def _fox_tve_proxy_required_channels() -> frozenset[str]:
+    from ..scrapers.fox_tve import CHANNELS as _FOX_TVE_CHANNELS
+    return frozenset(
+        cid for cid, ch in _FOX_TVE_CHANNELS.items()
+        if cid == 'fox_weather' or ch.signed_page_hls
+    )
+
+
+_FOX_TVE_PROXY_REQUIRED_CHANNELS = _fox_tve_proxy_required_channels()
 _FOX_TVE_SEGMENT_SECONDS = 4.096
 _FOX_TVE_KEY_RE = re.compile(r'URI="([^"]+)"')
 
@@ -3927,16 +3942,18 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
-    # FOX TVE uses source-specific live resolution and playlist handling (Uplynk
-    # key proxying, 247.fox*.com segment auth rewriting) — those genuinely need
-    # our manifest proxy. FOX One's DTC playbackUrl is a single-use ticket to a
-    # master playlist that needs no rewriting (plain AES-128 key already served
-    # unproxied from Fox's own CDN, no 247.fox*.com auth-query quirk): redeeming
-    # it once and redirecting lets the client poll Fox's real media playlist
-    # directly from then on, instead of us re-redeeming a fresh ticket (with a
-    # ~1.1-1.3s Fox API round trip) on every single client poll — confirmed via
-    # live testing 2026-08-06 that this was the source of playback stutter.
-    if source_name == 'fox_tve':
+    # FOX TVE is not architecturally uniform: fox_weather is served as a static
+    # PLAYLIST-TYPE:VOD Uplynk asset with a frozen MEDIA-SEQUENCE that our proxy
+    # rewrites into a live-looking one (removing the proxy would break it), and
+    # fox_news/fox_business need 247.fox*.com segment auth-query rewriting. Both
+    # genuinely need the manifest proxy. The fox_sports_* channels (FS1/FS2/FOX/
+    # BTN/Deportes/Soccer Plus) are the opposite: resolve_fox_sports_hls() mints
+    # a fresh, uncached DVP session on every single client poll (~0.87s Fox API
+    # round trip each time) even though they're genuinely live-tagged already and
+    # need no rewriting — confirmed via live testing 2026-08-06 that the derived
+    # media playlist URL stays valid and correctly advancing for 2+ minutes past
+    # the master ticket's own ~90s expiry, same shape as the FOX One stutter fix.
+    if source_name == 'fox_tve' and channel.source_channel_id in _FOX_TVE_PROXY_REQUIRED_CHANNELS:
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
