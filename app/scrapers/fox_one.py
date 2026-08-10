@@ -22,6 +22,7 @@ _HYDRA_CLIENT_ID = '21af937a-0ed4-4321-b87f-51d3b93976d4'
 # from _API_KEY, which identifies the FOX One client app itself (sent alongside it).
 _PLATFORM_API_KEY = '049f8b7844b84b9cb5f830f28f08648c'
 _ENT_BASE = 'https://ent.fox.com'
+_ADOBE_AUTHENTICATE_HOST = 'api.auth.adobe.com'
 _TOKEN_REFRESH_SKEW = 300
 _LOCATION_TTL = 6 * 60 * 60
 _UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
@@ -367,44 +368,64 @@ class FoxOneScraper(BaseScraper):
         sign-in, mirroring the same Adobe Pass/Cox SAML dance fox_tve.py already
         automates — just via FOX One's own adobeauthn/regcode endpoints instead of
         fox_tve's legacy api3.fox.com ones. Tokens from the two are not interchangeable
-        (different OAuth client_id), so FOX One needs its own pass at this."""
-        device_id = self._ensure_device_id()
-        xid = str(uuid.uuid4())
-        session = self.new_session(headers={'User-Agent': _UA})
+        (different OAuth client_id), so FOX One needs its own pass at this.
 
-        start_url = (
-            f'{_ID_BASE}/adobeauthn/v1/auth?client_id={_HYDRA_CLIENT_ID}&device_id={device_id}'
-            '&redirect_uri=https%3A%2F%2Fwww.fox.com%2Fcallback'
-            f'&options=apikey%3D{_API_KEY}%26xid%3D{xid}'
-        )
-        r = session.get(start_url, allow_redirects=True, timeout=20)
-        r.raise_for_status()
-        match = re.search(r'request_id=([^&]+)', r.url)
-        if not match:
-            raise RuntimeError('FOX One adobeauthn did not return a request_id')
-        request_id = match.group(1)
+        A device_id can get stuck replaying an old, never-completed MVPD-link
+        request — adoberegcode just echoes our own redirect_url back as a no-op
+        authenticateURL instead of a real api.auth.adobe.com link, and retrying
+        with the same device_id never clears it. One retry with a freshly minted
+        device_id always gets a clean slot, so that's tried automatically before
+        giving up — no manual "re-auth" button needed."""
+        for attempt in range(2):
+            device_id = self._ensure_device_id()
+            xid = str(uuid.uuid4())
+            session = self.new_session(headers={'User-Agent': _UA})
 
-        headers = {
-            'Accept': 'application/json',
-            'x-api-key': _PLATFORM_API_KEY,
-            'x-ori-client-api-key': _API_KEY,
-            'Referer': 'https://auth.fox.com/',
-            'Origin': 'https://auth.fox.com',
-        }
-        # The redirect_url must be the SPA's own /callback route with polling_mvpd
-        # and a flat apikey param appended, matching what the real fox.com frontend
-        # sends — not the bare landing-page URL adobeauthn redirected to (r.url).
-        # A mismatched redirect_url makes adoberegcode degrade to echoing it back
-        # as a no-op authenticateURL instead of a real api.auth.adobe.com link,
-        # which just serves FOX's generic (long-cached, often stale) landing page.
-        callback_url = r.url.replace('/foxone/mvpd?', '/foxone/mvpd/callback?', 1)
-        redirect_url = f'{callback_url}&polling_mvpd=Cox&apikey={_API_KEY}'
-        params = {'mvpd_id': 'Cox', 'device_id': device_id, 'first_screen': 'true', 'redirect_url': redirect_url}
-        r2 = session.get(f'{_ID_BASE}/regcode/v1/adoberegcode', params=params, headers=headers, timeout=20)
-        r2.raise_for_status()
-        auth_url = r2.json().get('authenticateURL')
-        if not auth_url:
-            raise RuntimeError('FOX One adoberegcode did not return authenticateURL')
+            start_url = (
+                f'{_ID_BASE}/adobeauthn/v1/auth?client_id={_HYDRA_CLIENT_ID}&device_id={device_id}'
+                '&redirect_uri=https%3A%2F%2Fwww.fox.com%2Fcallback'
+                f'&options=apikey%3D{_API_KEY}%26xid%3D{xid}'
+            )
+            r = session.get(start_url, allow_redirects=True, timeout=20)
+            r.raise_for_status()
+            match = re.search(r'request_id=([^&]+)', r.url)
+            if not match:
+                raise RuntimeError('FOX One adobeauthn did not return a request_id')
+            request_id = match.group(1)
+
+            headers = {
+                'Accept': 'application/json',
+                'x-api-key': _PLATFORM_API_KEY,
+                'x-ori-client-api-key': _API_KEY,
+                'Referer': 'https://auth.fox.com/',
+                'Origin': 'https://auth.fox.com',
+            }
+            # The redirect_url must be the SPA's own /callback route with polling_mvpd
+            # and a flat apikey param appended, matching what the real fox.com frontend
+            # sends — not the bare landing-page URL adobeauthn redirected to (r.url).
+            # A mismatched redirect_url makes adoberegcode degrade to echoing it back
+            # as a no-op authenticateURL instead of a real api.auth.adobe.com link,
+            # which just serves FOX's generic (long-cached, often stale) landing page.
+            callback_url = r.url.replace('/foxone/mvpd?', '/foxone/mvpd/callback?', 1)
+            redirect_url = f'{callback_url}&polling_mvpd=Cox&apikey={_API_KEY}'
+            params = {'mvpd_id': 'Cox', 'device_id': device_id, 'first_screen': 'true', 'redirect_url': redirect_url}
+            r2 = session.get(f'{_ID_BASE}/regcode/v1/adoberegcode', params=params, headers=headers, timeout=20)
+            r2.raise_for_status()
+            auth_url = r2.json().get('authenticateURL')
+            if not auth_url:
+                raise RuntimeError('FOX One adoberegcode did not return authenticateURL')
+
+            if urlparse(auth_url).netloc == _ADOBE_AUTHENTICATE_HOST:
+                break
+            if attempt == 0:
+                self._update_config('device_id', '')
+                self._update_config('platform_location', '')
+                self._update_config('platform_location_cached_at', 0)
+                continue
+            raise RuntimeError(
+                f'FOX One adoberegcode returned a non-Adobe authenticateURL host '
+                f'even after a fresh device_id: {urlparse(auth_url).netloc}'
+            )
 
         r3 = session.get(auth_url, allow_redirects=False, timeout=20)
         cox_saml_url = r3.headers.get('location') or ''
