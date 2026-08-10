@@ -1748,7 +1748,10 @@
                 {% endfor %}
               </select>
             </th>
-            <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">Ch# <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
+            <th style="white-space:nowrap">
+              <span class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">Ch# <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></span>
+              <button type="button" class="chnum-pin-btn" onclick="event.stopPropagation(); chnumLockAll()" title="Lock all — pin every channel to its currently-shown number so it never shifts">🔒<sup>All</sup></button>
+            </th>
             <th>Gracenote ID</th>
             <th class="actions-col">Actions</th>
             <th class="toggle-col">Enabled</th>
@@ -1810,7 +1813,7 @@
                 data-chnum-cell="1"
                 data-channel-id="{{ ch.id }}"
                 data-pinned="{{ 'true' if ch.number_pinned else 'false' }}">
-              <span class="chnum-display">{{ chnum_map.get(ch.id) or '—' }}</span>
+              <span class="chnum-display"{% if ch.id in chnum_conflicts %} title="Locked to the same number as another channel. This channel's shown number was reassigned to avoid a clash — unlock one of the two (🔒) or give it a different number."{% endif %}>{{ chnum_map.get(ch.id) or '—' }}</span>
               {% if ch.number_pinned %}<button class="chnum-pin-btn" onclick="chnumUnpin(event,{{ ch.id }})" title="Unpin — let feed assign this number">🔒</button>{% endif %}
             </td>
 
@@ -2839,6 +2842,9 @@
         return s;
       })();
       span.textContent = displayVal;
+      span.title = conflict
+        ? 'Locked to the same number as another channel. This channel\'s shown number was reassigned to avoid a clash — unlock one of the two (🔒) or give it a different number.'
+        : '';
       // Pin button
       let btn = cell.querySelector('.chnum-pin-btn');
       if (pinned && !btn) {
@@ -2893,11 +2899,31 @@
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({number: val, number_pinned: true}),
         });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+          if (r.status === 422) {
+            const body = await r.json().catch(() => ({}));
+            if (body.error) alert(body.error);
+          }
+          throw new Error(`HTTP ${r.status}`);
+        }
         await refreshVisibleChnums();
       } catch (e) {
         console.error('Chnum save failed:', e);
         await refreshVisibleChnums();
+      }
+    }
+
+    async function chnumLockAll() {
+      if (!confirm('Lock every channel to its currently-shown number? Locked numbers never shift when channels are added, removed, or reordered.')) return;
+      try {
+        const r = await fetch('/api/channels/chnum-lock-all', { method: 'POST' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        await refreshVisibleChnums();
+        alert(`Locked ${data.locked} channel${data.locked === 1 ? '' : 's'}.`);
+      } catch (e) {
+        console.error('Lock all failed:', e);
+        alert('Lock all failed — see console for details.');
       }
     }
 

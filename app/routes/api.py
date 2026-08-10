@@ -70,7 +70,7 @@ from ..xml_cache import (
     get_xml_artifact,
     invalidate_xml_cache,
 )
-from .admin import _apply_admin_feed_membership_filters, _category_clause, _duplicate_name_sets, _feed_split_counts, _language_clause
+from .admin import _apply_admin_feed_membership_filters, _category_clause, _duplicate_name_sets, _feed_split_counts, _language_clause, _default_feed_chnum_map_full
 
 api_bp = Blueprint('api', __name__)
 
@@ -2362,6 +2362,31 @@ def bulk_update_channels():
     return jsonify({'status': 'queued' if matched else 'idle', 'updated': matched})
 
 
+@api_bp.route('/channels/chnum-lock-all', methods=['POST'])
+def chnum_lock_all():
+    """Pin every channel to its currently-displayed default-feed number.
+
+    Freezes the whole lineup in place so the sequential/sticky assignment
+    in _build_feed_chnum_map never reshuffles a channel's number again.
+    Already-pinned channels are left untouched (they're already frozen and
+    may be mid-conflict — this isn't a conflict-resolution tool).
+    """
+    full_map = _default_feed_chnum_map_full()
+    if not full_map:
+        return jsonify({'locked': 0})
+    unpinned = (
+        Channel.query
+        .filter(Channel.id.in_(full_map.keys()), Channel.number_pinned == False)
+        .all()
+    )
+    for ch in unpinned:
+        ch.number = full_map[ch.id]
+        ch.number_pinned = True
+    db.session.commit()
+    _invalidate_and_refresh_xml()
+    return jsonify({'locked': len(unpinned)})
+
+
 @api_bp.route('/channels/gracenote-bulk', methods=['POST'])
 def bulk_update_channel_gracenote():
     data = request.get_json(force=True) or {}
@@ -2416,6 +2441,21 @@ def update_channel(channel_id):
         # Setting a number without explicitly managing the pin auto-pins it.
         if 'number' in data and data['number'] is not None and 'number_pinned' not in data:
             ch.number_pinned = True
+        # Reject locking to a number another channel is already locked to,
+        # rather than silently saving a duplicate that only shows up later
+        # as a red conflict indicator with the "losing" channel bumped to a
+        # different displayed number.
+        if ('number' in data or 'number_pinned' in data) and ch.number_pinned and ch.number is not None:
+            conflict = Channel.query.filter(
+                Channel.id != ch.id,
+                Channel.number_pinned == True,
+                Channel.number == ch.number,
+            ).first()
+            if conflict:
+                raise ValueError(
+                    f'Channel number {ch.number} is already locked by "{conflict.name}". '
+                    'Unlock it first or choose a different number.'
+                )
         # Any explicit enable/disable counts as reviewing a new channel — clear the
         # 'pending' marker so it leaves the "Needs review" filter.
         if 'is_enabled' in data:

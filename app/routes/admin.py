@@ -128,37 +128,30 @@ def _duplicate_name_sets() -> tuple[set[str], set[str], set[int]]:
     return duplicate_names, possible_names, gn_duplicate_ids
 
 
-def _page_source_chnum_map(page_items) -> dict[int, int]:
-    if not page_items:
-        return {}
-    std_channels = _selected_channel_stubs({}, gracenote=False)
-    full_map, _ = _build_source_chnum_map(std_channels)
-    gn_channels = _selected_channel_stubs({}, gracenote=True)
+def _source_scheme_chnum_map(std_channels, gn_channels) -> dict[int, int]:
+    """Sequential numbering keyed off Source order — the 'no chnum_start' scheme."""
+    full_map, _ = _build_source_chnum_map(std_channels) if std_channels else ({}, [])
     if gn_channels:
         gn_start = (max(full_map.values()) + 1) if full_map else 1
         full_map.update(_build_sticky_gn_chnum_map(gn_channels, gn_start, set(full_map.values())))
-    page_ids = {ch.id for ch in page_items}
-    return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
+    return full_map
 
 
-def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
-    if not page_items:
-        return {}
+def _default_feed_chnum_map_full() -> dict[int, int]:
+    """The default feed's resolved chnum map for every channel, unfiltered.
 
+    Number every enabled channel with the default feed's numbering scheme
+    (chnum_start / sticky assignment), not just channels that happen to
+    match the default feed's own membership filters — otherwise a channel
+    excluded from that filter (but still shown on this admin page) gets no
+    entry here and renders as a blank dash, even though it's numbered fine
+    in whichever feed actually generates the user's CDVR/M3U import.
+    """
     default_feed = Feed.query.filter_by(slug='default', is_enabled=True).first()
-    if not default_feed:
-        return _page_source_chnum_map(page_items)
-
-    # Number every enabled channel with the default feed's numbering scheme
-    # (chnum_start / sticky assignment), not just channels that happen to
-    # match the default feed's own membership filters — otherwise a channel
-    # excluded from that filter (but still shown on this admin page) gets no
-    # entry here and renders as a blank dash, even though it's numbered fine
-    # in whichever feed actually generates the user's CDVR/M3U import.
     std_channels = _selected_channel_stubs({}, gracenote=False)
     gn_channels  = _selected_channel_stubs({}, gracenote=True)
 
-    if default_feed.chnum_start is not None:
+    if default_feed and default_feed.chnum_start is not None:
         stored_numbers = {
             row.channel_id: row.number
             for row in FeedChannelNumber.query.filter_by(feed_id=default_feed.id).all()
@@ -167,7 +160,7 @@ def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
             std_channels + gn_channels,
             key=lambda ch: (ch.number is None, ch.number or 0, (ch.name or '').lower()),
         )
-        full_map = (
+        return (
             _build_feed_chnum_map(
                 all_stubs,
                 default_feed.chnum_start,
@@ -175,12 +168,14 @@ def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
             )
             if all_stubs else {}
         )
-    else:
-        full_map, _ = _build_source_chnum_map(std_channels) if std_channels else ({}, [])
-        if gn_channels:
-            gn_start = (max(full_map.values()) + 1) if full_map else 1
-            full_map.update(_build_sticky_gn_chnum_map(gn_channels, gn_start, set(full_map.values())))
 
+    return _source_scheme_chnum_map(std_channels, gn_channels)
+
+
+def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
+    if not page_items:
+        return {}
+    full_map = _default_feed_chnum_map_full()
     page_ids = {ch.id for ch in page_items}
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
 
