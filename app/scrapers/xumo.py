@@ -252,12 +252,16 @@ class XumoScraper(BaseScraper):
 
                             content_type = str(asset.get("contentType") or "").upper()
                             _pfx = asset_id[:2]
+                            _is_music = bool(category) and "music" in category.casefold()
                             if content_type == "EPISODIC":
                                 _program_type = "episode"
                             elif content_type in ("MOVIE", "FEATURE"):
                                 _program_type = "movie"
-                            elif _pfx in ("MV", "XM"):
-                                # MV = Movie, XM = Xumo Movie — reliably movie content
+                            elif _pfx in ("MV", "XM") and not _is_music:
+                                # MV = Movie, XM = Xumo Movie — reliably movie content.
+                                # Guarded against music/radio assets (e.g. iHeartRadio
+                                # channels use "XM"-prefixed asset IDs too but are audio,
+                                # not movies — see GitHub issue #37).
                                 # XT omitted: full asset shows contentType=EPISODIC for many XT IDs
                                 _program_type = "movie"
                             elif _pfx == "SH":
