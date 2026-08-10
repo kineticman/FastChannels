@@ -2362,31 +2362,6 @@ def bulk_update_channels():
     return jsonify({'status': 'queued' if matched else 'idle', 'updated': matched})
 
 
-@api_bp.route('/channels/chnum-lock-all', methods=['POST'])
-def chnum_lock_all():
-    """Pin every channel to its currently-displayed default-feed number.
-
-    Freezes the whole lineup in place so the sequential/sticky assignment
-    in _build_feed_chnum_map never reshuffles a channel's number again.
-    Already-pinned channels are left untouched (they're already frozen and
-    may be mid-conflict — this isn't a conflict-resolution tool).
-    """
-    full_map = _default_feed_chnum_map_full()
-    if not full_map:
-        return jsonify({'locked': 0})
-    unpinned = (
-        Channel.query
-        .filter(Channel.id.in_(full_map.keys()), Channel.number_pinned == False)
-        .all()
-    )
-    for ch in unpinned:
-        ch.number = full_map[ch.id]
-        ch.number_pinned = True
-    db.session.commit()
-    _invalidate_and_refresh_xml()
-    return jsonify({'locked': len(unpinned)})
-
-
 @api_bp.route('/channels/gracenote-bulk', methods=['POST'])
 def bulk_update_channel_gracenote():
     data = request.get_json(force=True) or {}
@@ -2435,27 +2410,54 @@ def update_channel(channel_id):
 
     def _apply_changes():
         """Apply all field mutations to ch. Re-runnable after a rollback."""
-        for field in ('name', 'logo_url', 'logo_url_pinned', 'category', 'category_override', 'language', 'language_override', 'is_active', 'is_enabled', 'scrape_pinned', 'number', 'number_pinned', 'disable_reason', 'is_duplicate', 'user_note'):
-            if field in data:
-                setattr(ch, field, data[field])
+        # Resolve the requested lock target from CURRENT (pre-mutation) state,
+        # and validate it before touching ch, so the check reflects true prior
+        # DB state rather than an in-flight change the map-building algorithm
+        # could itself silently resolve out from under us (it always assigns
+        # unique numbers, bumping a "losing" contender to a fresh one instead
+        # of ever producing a literal duplicate — so checking the resolved map
+        # *after* mutating ch could miss a real collision that got auto-healed
+        # away in the same computation).
+        target_number = data['number'] if 'number' in data else ch.number
+        target_pinned = data['number_pinned'] if 'number_pinned' in data else ch.number_pinned
         # Setting a number without explicitly managing the pin auto-pins it.
         if 'number' in data and data['number'] is not None and 'number_pinned' not in data:
-            ch.number_pinned = True
-        # Reject locking to a number another channel is already locked to,
-        # rather than silently saving a duplicate that only shows up later
-        # as a red conflict indicator with the "losing" channel bumped to a
-        # different displayed number.
-        if ('number' in data or 'number_pinned' in data) and ch.number_pinned and ch.number is not None:
+            target_pinned = True
+        if ('number' in data or 'number_pinned' in data) and target_pinned and target_number is not None:
+            # Reject locking to a number another channel already has locked —
+            # a direct contradiction between two explicit locks.
             conflict = Channel.query.filter(
                 Channel.id != ch.id,
                 Channel.number_pinned == True,
-                Channel.number == ch.number,
+                Channel.number == target_number,
             ).first()
             if conflict:
                 raise ValueError(
-                    f'Channel number {ch.number} is already locked by "{conflict.name}". '
+                    f'Channel number {target_number} is already locked by "{conflict.name}". '
                     'Unlock it first or choose a different number.'
                 )
+            # Also reject locking to a number that's simply someone else's
+            # current auto-assigned slot in the Default feed — locking would
+            # silently bump that channel to a different number with no
+            # indication anywhere that it happened.
+            holder_id = next(
+                (cid for cid, num in _default_feed_chnum_map_full().items()
+                 if num == target_number and cid != ch.id),
+                None,
+            )
+            if holder_id is not None:
+                holder = Channel.query.get(holder_id)
+                raise ValueError(
+                    f'Channel number {target_number} is currently in use by '
+                    f'"{holder.name if holder else holder_id}" in the Default feed. '
+                    'Choose a different number.'
+                )
+
+        for field in ('name', 'logo_url', 'logo_url_pinned', 'category', 'category_override', 'language', 'language_override', 'is_active', 'is_enabled', 'scrape_pinned', 'number', 'number_pinned', 'disable_reason', 'is_duplicate', 'user_note'):
+            if field in data:
+                setattr(ch, field, data[field])
+        if target_pinned:
+            ch.number_pinned = True
         # Any explicit enable/disable counts as reviewing a new channel — clear the
         # 'pending' marker so it leaves the "Needs review" filter.
         if 'is_enabled' in data:

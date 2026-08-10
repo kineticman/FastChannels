@@ -2,6 +2,7 @@ import logging
 import re
 from dataclasses import dataclass
 from urllib.parse import quote as _url_quote
+from sqlalchemy import func
 from sqlalchemy.orm import contains_eager
 from ..extensions import db
 from ..models import Channel, Source, Feed, AppSettings
@@ -885,6 +886,31 @@ def get_global_chnum_overlaps() -> list[str]:
     # unified pool, so a number used on both sides is a real collision.
     for std_out, gn_out in unified_pairs:
         _check([std_out, gn_out])
+
+    # Two channels locked (number_pinned) to the same number never show up as
+    # a literal duplicate above — _build_feed_chnum_map / _build_source_chnum_map
+    # silently bump the losing channel to a fresh number in every output, so the
+    # per-output duplicate check above never sees the collision. Check the raw
+    # pin state directly so a locked conflict doesn't stay invisible outside the
+    # Channels admin page's red-number indicator.
+    dupe_numbers = [
+        row[0] for row in
+        db.session.query(Channel.number)
+        .filter(Channel.number_pinned == True, Channel.number.isnot(None))
+        .group_by(Channel.number)
+        .having(func.count(Channel.id) > 1)
+        .all()
+    ]
+    for number in dupe_numbers:
+        names = [
+            ch.name for ch in
+            Channel.query.filter_by(number_pinned=True, number=number).order_by(Channel.name).all()
+        ]
+        warnings.append(
+            f"ch {number} is locked (🔒) by {len(names)} channels: {', '.join(names)} "
+            "— only one keeps that number, the rest are silently renumbered"
+        )
+
     return warnings
 
 

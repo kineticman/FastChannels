@@ -254,6 +254,57 @@ def set_channel_order(feed_id):
     return jsonify(feed.to_dict(public_base_url()))
 
 
+@feeds_api_bp.route('/<int:feed_id>/chnum-lock-all', methods=['POST'])
+def chnum_lock_all(feed_id):
+    """Pin every member channel to its currently-displayed number in this feed.
+
+    Freezes this feed's numbering in place so sticky/sequential reassignment
+    never reshuffles a channel's number again. Already-pinned channels are
+    left untouched — this isn't a conflict-resolution tool. A lock is a
+    single global field on the channel (Channel.number_pinned), not scoped
+    to one feed, so it also fixes that number in every other feed the
+    channel happens to belong to.
+    """
+    from ..generators.m3u import _build_feed_chnum_map, feed_namespace_start
+    feed = Feed.query.get_or_404(feed_id)
+
+    if feed.slug == 'default':
+        # The default feed's "no explicit chnum_start" numbering is the
+        # source-chnum scheme, not the namespace-block scheme every other
+        # feed falls back to — reuse the admin page's already-correct
+        # resolver instead of re-deriving that special case here.
+        from .admin import _default_feed_chnum_map_full
+        num_map = _default_feed_chnum_map_full()
+    else:
+        q_filters = feed_to_query_filters(feed.filters or {})
+        stubs, _ = _feed_member_stubs(q_filters)
+        if not stubs:
+            return jsonify({'locked': 0})
+        start = feed.chnum_start or feed_namespace_start(feed, gracenote=False)
+        stored = {
+            r.channel_id: r.number
+            for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
+        }
+        num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
+
+    if not num_map:
+        return jsonify({'locked': 0})
+
+    unpinned = (
+        Channel.query
+        .filter(Channel.id.in_(num_map.keys()), Channel.number_pinned == False)
+        .all()
+    )
+    for ch in unpinned:
+        ch.number = num_map[ch.id]
+        ch.number_pinned = True
+    err = _safe_commit()
+    if err:
+        return err
+    _invalidate_and_refresh_xml()
+    return jsonify({'locked': len(unpinned)})
+
+
 @feeds_api_bp.route('', methods=['GET'])
 def list_feeds():
     base_url = public_base_url()
