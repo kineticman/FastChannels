@@ -161,6 +161,7 @@ class FoxOneScraper(BaseScraper):
             'FOX One refresh token (fallback)',
             field_type='password',
             secret=True,
+            hidden=True,
             help_text='Optional fallback used only if no linked Cox TV-provider account is configured, or Cox re-auth fails. Capture the identityhydra refresh_token from an authenticated fox.com browser session. Anonymous-only: cannot unlock paid FOX Sports channels.',
         ),
         ConfigField(
@@ -168,6 +169,7 @@ class FoxOneScraper(BaseScraper):
             'FOX One access token (advanced)',
             field_type='password',
             secret=True,
+            hidden=True,
             placeholder='Bearer ...',
             help_text='Optional fallback for debugging. The scraper refreshes this automatically through the linked Cox account when configured.',
         ),
@@ -176,6 +178,7 @@ class FoxOneScraper(BaseScraper):
             'FOX One platform location (advanced)',
             field_type='password',
             secret=True,
+            hidden=True,
             help_text='Optional fallback for debugging. The scraper derives and refreshes this automatically from FOX location services.',
         ),
     ]
@@ -388,7 +391,15 @@ class FoxOneScraper(BaseScraper):
             'Referer': 'https://auth.fox.com/',
             'Origin': 'https://auth.fox.com',
         }
-        params = {'mvpd_id': 'Cox', 'device_id': device_id, 'first_screen': 'true', 'redirect_url': r.url}
+        # The redirect_url must be the SPA's own /callback route with polling_mvpd
+        # and a flat apikey param appended, matching what the real fox.com frontend
+        # sends — not the bare landing-page URL adobeauthn redirected to (r.url).
+        # A mismatched redirect_url makes adoberegcode degrade to echoing it back
+        # as a no-op authenticateURL instead of a real api.auth.adobe.com link,
+        # which just serves FOX's generic (long-cached, often stale) landing page.
+        callback_url = r.url.replace('/foxone/mvpd?', '/foxone/mvpd/callback?', 1)
+        redirect_url = f'{callback_url}&polling_mvpd=Cox&apikey={_API_KEY}'
+        params = {'mvpd_id': 'Cox', 'device_id': device_id, 'first_screen': 'true', 'redirect_url': redirect_url}
         r2 = session.get(f'{_ID_BASE}/regcode/v1/adoberegcode', params=params, headers=headers, timeout=20)
         r2.raise_for_status()
         auth_url = r2.json().get('authenticateURL')
@@ -444,6 +455,7 @@ class FoxOneScraper(BaseScraper):
                 db.session.commit()
                 self._update_config('access_token', access_token)
                 self._update_config('access_expires_at', expires_at)
+                self._update_config('access_token_captured_at', int(time.time()))
                 return access_token
             except Exception as exc:
                 account.last_auth_status = 'error'
@@ -501,6 +513,7 @@ class FoxOneScraper(BaseScraper):
 
         self._update_config('access_token', access_token)
         self._update_config('access_expires_at', expires_at)
+        self._update_config('access_token_captured_at', int(time.time()))
         new_refresh = self._clean_token(data.get('refresh_token'))
         if new_refresh:
             self._update_config('refresh_token', new_refresh)

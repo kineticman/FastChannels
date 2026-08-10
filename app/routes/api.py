@@ -1676,7 +1676,7 @@ def delete_custom_channel(channel_id):
 def get_source_config(source_id):
     source      = Source.query.get_or_404(source_id)
     scraper_cls = registry.get(source.name)
-    schema      = [f.to_dict() for f in (scraper_cls.config_schema if scraper_cls else [])]
+    schema      = [f.to_dict() for f in (scraper_cls.config_schema if scraper_cls else []) if not f.hidden]
     saved       = source.config or {}
     secret_keys = {f['key'] for f in schema if f['secret']}
     values = {}

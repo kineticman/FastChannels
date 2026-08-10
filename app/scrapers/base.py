@@ -285,7 +285,8 @@ class ConfigField:
     def __init__(self, key: str, label: str, field_type: str = 'text',
                  required: bool = False, secret: bool = False,
                  placeholder: str = '', help_text: str = '', default=None,
-                 options: list | None = None, multiple: bool = False):
+                 options: list | None = None, multiple: bool = False,
+                 hidden: bool = False):
         self.key         = key          # key in source.config JSON
         self.label       = label        # human label in UI
         self.field_type  = field_type   # 'text' | 'password' | 'select' | 'toggle' | 'number'
@@ -296,6 +297,7 @@ class ConfigField:
         self.default     = default
         self.options     = options or []  # [{'value': ..., 'label': ...}] for select fields
         self.multiple    = multiple
+        self.hidden      = hidden       # internal/auto-managed only — never sent to the UI at all
 
     def to_dict(self):
         d = {

@@ -68,6 +68,28 @@ def tve_network_status(account) -> list[dict]:
         'requestor_id': None,
     })
 
+    # FOX One authenticates natively (username/password OAuth against Cox's
+    # own identityhydra endpoints, not a browser-pairing flow), so there's no
+    # dedicated sign-in button — it reuses the Cox login above automatically
+    # the first time a channel needs a token. The timestamp lives on the
+    # fox_one source's own config, not the shared account config the other
+    # entries in this function read from.
+    fox_one_captured_at = None
+    try:
+        from ..models import Source
+        fox_one_source = Source.query.filter_by(name='fox_one').first()
+        if fox_one_source:
+            fox_one_captured_at = (fox_one_source.config or {}).get('access_token_captured_at')
+    except Exception:  # noqa: BLE001
+        pass
+    entries.append({
+        'label': 'FOX One',
+        'last_signed_in_at': fox_one_captured_at,
+        'note': 'Uses the Cox login above — authenticates automatically, no separate sign-in.',
+        'family': None,
+        'requestor_id': None,
+    })
+
     amcn_cached_at = None
     try:
         from ..config_store import load_source_cache_by_name
