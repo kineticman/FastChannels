@@ -678,6 +678,7 @@ class PlexScraper(BaseScraper):
         except ET.ParseError:
             return programs
 
+        _NON_MOVIE_GENRES = {"music", "sports", "news", "food + home + culture"}
         for video in root.findall(".//Video"):
             media = video.find("Media")
             if media is None:
@@ -727,16 +728,21 @@ class PlexScraper(BaseScraper):
             genres = [g.attrib.get("tag") for g in video.findall("Genre") if g.attrib.get("tag")]
             category = genres[0] if genres else None
 
-            # Plex tags hour-long music-video blocks (Euro Hits, FilmRise Music,
-            # XITE, …) as type="movie", which otherwise leaks a bogus
-            # <category>Movie</category> into the guide. These carry a "Music"
-            # genre; real films — even on a music-misclassified channel like a
-            # "Non-Stop '90s" movie loop — never do (their genres are Action,
-            # Comedy, Movies, …). Keying off the genre rather than the channel
-            # category avoids demoting real movies and works on both the full
-            # and EPG-only scrape paths.
+            # Plex sets type="movie" on any standalone airing (no season/episode
+            # grouping), not just actual films — it also fires for one-off news
+            # segments, sports events and lifestyle content (see GitHub issue
+            # #38), which otherwise leaks a bogus <category>Movie</category>
+            # into the guide. Real films — even on a genre-misclassified channel
+            # like a "Non-Stop '90s" movie loop — never carry these genres (their
+            # genres are Action, Comedy, Movies, …). Keying off genre rather than
+            # channel category avoids demoting real movies (some movie channels
+            # have no genre metadata at all and rely on type="movie" alone) and
+            # works on both the full and EPG-only scrape paths. This blocklist is
+            # deliberately narrow — buckets like "Global" and "Adrenaline + Sci-Fi"
+            # mix real movie channels with non-movie ones and can't be blanket
+            # excluded.
             program_type = video.attrib.get("type") or None
-            if program_type == "movie" and any((g or "").casefold() == "music" for g in genres):
+            if program_type == "movie" and any((g or "").casefold() in _NON_MOVIE_GENRES for g in genres):
                 program_type = None
 
             programs.append(ProgramData(
