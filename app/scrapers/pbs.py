@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from ..gracenote_map import resolve_gracenote
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError
 
 logger = logging.getLogger(__name__)
@@ -234,6 +235,8 @@ class PBSScraper(BaseScraper):
         elif call_sign:
             name = f"{name} ({call_sign})"
 
+        gracenote_id = resolve_gracenote("pbs", lookup_key=self._gracenote_key(call_sign, profile))
+
         return ChannelData(
             source_channel_id=f"{station_id}:{profile}:{feed_cid}",
             name=name,
@@ -245,7 +248,20 @@ class PBSScraper(BaseScraper):
             stream_type="dash" if is_drm else "hls",
             guide_key=f"pbs:{feed_cid}",
             tags=["PBS", label] + (["DRM"] if is_drm else []),
+            gracenote_id=gracenote_id,
         )
+
+    @staticmethod
+    def _gracenote_key(call_sign: str, profile: str) -> str | None:
+        """Community Gracenote CSV lookup key, matching the
+        "PBS_<CALLSIGN>[_<profile-with-underscores>]" scheme from the
+        community-maintained pbs_gracenote_map.csv (main profile has no
+        suffix; e.g. PBS_KACV, PBS_KACV_ga_create, PBS_KACV_kids_main)."""
+        if not call_sign:
+            return None
+        if profile == "ga-main":
+            return f"PBS_{call_sign}"
+        return f"PBS_{call_sign}_{profile.replace('-', '_')}"
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         by_station: dict[str, set[str]] = {}
