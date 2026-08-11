@@ -394,6 +394,11 @@ let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;
 let _mvpdLoginFamily = 'legacy';
+// Which requestor_id the current single (non-batch) sign-in's poll loop
+// should accept a terminal status for — see _pollMvpdLoginModal's
+// requestor_id check for why this matters (the legacy family's 7
+// requestors share one status key).
+let _mvpdLoginRequestorId = null;
 
 // Every network's Cox sign-in is now a real, fast scripted login (no
 // browser) instead of a human-paced browser flow — clicking through several
@@ -487,6 +492,7 @@ function openMvpdLoginModal(family, requestorId, cascade) {
   if (cfg.needsRequestor && !requestorId) return;
   _mvpdLoginRetryArgs = { family, requestorId, cascade };
   _mvpdLoginFamily = family;
+  _mvpdLoginRequestorId = requestorId || null;
   _mvpdLoginActive = true;
   _mvpdLoginDone = false;
   if (_mvpdLoginPollTimer) { clearTimeout(_mvpdLoginPollTimer); _mvpdLoginPollTimer = null; }
@@ -506,7 +512,7 @@ function openMvpdLoginModal(family, requestorId, cascade) {
 // A login attempted too soon after another one just takes longer to respond
 // — see the comment above MVPD_LOGIN_FAMILIES — rather than anything here
 // pre-emptively waiting.
-function _mvpdLoginBeginRequest(cfg, requestorId, cascade) {
+function _mvpdLoginBeginRequest(cfg, requestorId, cascade, attempt = 1) {
   const status = document.getElementById('mvpd-login-status');
   const body = cfg.needsRequestor ? { requestor_id: requestorId } : {};
   if (cascade) body.cascade = true;
@@ -532,7 +538,22 @@ function _mvpdLoginBeginRequest(cfg, requestorId, cascade) {
       }
       _pollMvpdLoginModal();
     })
-    .catch(() => _pollMvpdLoginModal());
+    .catch(() => {
+      // A dropped/failed /start request (e.g. landing exactly during a
+      // gunicorn worker recycle) must NOT fall through to polling — there
+      // may be no job to poll for at all, and /state could show a stale
+      // leftover result from an unrelated earlier run instead (observed
+      // live 2026-08-11, correlated with a worker recycle mid sign-in).
+      // Retry /start itself a few times before giving up.
+      if (!_mvpdLoginActive) return;
+      if (attempt >= 5) {
+        _mvpdLoginDone = true;
+        status.style.color = 'var(--danger)';
+        status.textContent = 'Could not reach the server to start signing in. Try again.';
+        return;
+      }
+      _mvpdLoginPollTimer = setTimeout(() => _mvpdLoginBeginRequest(cfg, requestorId, cascade, attempt + 1), 1000);
+    });
 }
 
 async function forceStopMvpdLogin() {
@@ -606,6 +627,29 @@ async function _pollMvpdLoginModal() {
     const r = await fetch(`${MVPD_LOGIN_FAMILIES[_mvpdLoginFamily].base}/state`);
     const d = await r.json();
     if (!_mvpdLoginActive) return;  // modal was closed mid-poll
+
+    // The legacy family's 7 requestors (History/A&E/Lifetime/FYI/TNT/TBS/
+    // truTV) all share ONE status key server-side. Right after /start,
+    // there's a brief window before the newly-enqueued job has written its
+    // own first status update — a poll landing in that window would
+    // otherwise see the PREVIOUS requestor's still-fresh terminal status
+    // and misattribute it to this one (observed live 2026-08-11: caused a
+    // batch run to race far ahead of itself, treating stale successes as
+    // its own and skipping several networks as spurious "already running").
+    // Keep polling instead of accepting a status for a different requestor.
+    // Case-insensitive: the admin-UI key is always uppercase ('TRUTV'), but
+    // the server echoes back Adobe's actual wire-protocol casing (genuinely
+    // 'truTV' for Warner's truTV specifically — see resolve_requestor_
+    // target's docstring) — an exact-string compare here made this check
+    // permanently reject truTV's own correct status, hanging forever
+    // exactly one requestor (observed live 2026-08-11).
+    if (
+      _mvpdLoginRequestorId && d.requestor_id &&
+      d.requestor_id.toUpperCase() !== _mvpdLoginRequestorId.toUpperCase()
+    ) {
+      _mvpdLoginPollTimer = setTimeout(_pollMvpdLoginModal, 400);
+      return;
+    }
 
     const status = document.getElementById('mvpd-login-status');
     const frame = document.getElementById('mvpd-login-frame');
@@ -751,24 +795,56 @@ function _mvpdLoginRunFoxOneForBatch(label, status) {
 // this loop fires /start calls.
 function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
   return new Promise((resolve) => {
-    status.textContent = `Signing in to ${label}…`;
-    const body = cfg.needsRequestor ? { requestor_id: requestorId } : {};
-    fetch(`${cfg.base}/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then(r => r.json())
-      .then((d) => {
-        if (d && d.status === 'already_running') {
-          // Shouldn't normally happen — this loop is the only thing that
-          // should be running — but resolve rather than hang if it does.
-          resolve({ ok: false, message: 'already running' });
-          return;
-        }
-        poll();
+    let startAttempts = 0;
+    const MAX_START_ATTEMPTS = 30;  // ~30s of retrying a stuck lock before giving up on this network
+
+    const tryStart = () => {
+      if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
+      status.textContent = `Signing in to ${label}…`;
+      const body = cfg.needsRequestor ? { requestor_id: requestorId } : {};
+      fetch(`${cfg.base}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       })
-      .catch(() => poll());
+        .then(r => r.json())
+        .then((d) => {
+          if (d && d.status === 'already_running') {
+            // This loop is sequential and awaits each step to a terminal
+            // state before starting the next, so this shouldn't normally
+            // happen — but if something else IS holding the shared job
+            // lock (another tab, a leftover request), retrying instead of
+            // giving up immediately means this network still gets signed
+            // in once that clears, rather than being wrongly marked failed
+            // for a transient scheduling collision that has nothing to do
+            // with its own credentials (observed live 2026-08-11).
+            startAttempts += 1;
+            if (startAttempts >= MAX_START_ATTEMPTS) {
+              resolve({ ok: false, message: 'another sign-in stayed busy too long' });
+              return;
+            }
+            status.textContent = `Waiting for another sign-in to finish before starting ${label}…`;
+            _mvpdLoginPollTimer = setTimeout(tryStart, 1000);
+            return;
+          }
+          poll();
+        })
+        .catch(() => {
+          // A dropped/failed /start request (e.g. landing exactly during a
+          // gunicorn worker recycle) must NOT fall through to polling —
+          // there may be no job to poll for at all, and /state could show a
+          // stale leftover result from an unrelated earlier run instead
+          // (observed live 2026-08-11, correlated with a worker recycle
+          // mid-batch). Retry /start itself, sharing the same attempt
+          // budget as the already_running case above.
+          startAttempts += 1;
+          if (startAttempts >= MAX_START_ATTEMPTS) {
+            resolve({ ok: false, message: 'could not reach the server to start sign-in' });
+            return;
+          }
+          _mvpdLoginPollTimer = setTimeout(tryStart, 1000);
+        });
+    };
 
     const poll = () => {
       if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
@@ -776,6 +852,27 @@ function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
         .then(r => r.json())
         .then((d) => {
           if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
+          // Same requestor-mismatch guard as _pollMvpdLoginModal — the
+          // legacy family's 7 requestors share one status key, so a poll
+          // right after /start can still see the PREVIOUS requestor's
+          // terminal status before this job has written its own first
+          // update. Without this check the batch loop raced ahead of
+          // itself, treating a stale success as this network's own and
+          // moving on to the next one while this one was still actually
+          // running (observed live 2026-08-11 — the real cause of several
+          // networks in a row coming back spurious "already running").
+          // Case-insensitive — see _pollMvpdLoginModal's version of this
+          // same check for why (truTV's wire-protocol casing genuinely
+          // differs from its uppercase admin-UI key; an exact-string
+          // compare here hung the batch forever exactly at truTV, observed
+          // live 2026-08-11).
+          if (
+            cfg.needsRequestor && d.requestor_id &&
+            d.requestor_id.toUpperCase() !== requestorId.toUpperCase()
+          ) {
+            _mvpdLoginPollTimer = setTimeout(poll, 400);
+            return;
+          }
           if (d.hint) {
             hintEl.textContent = '⚠ ' + d.hint;
             hintEl.style.display = 'block';
@@ -789,6 +886,8 @@ function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
         })
         .catch(() => { _mvpdLoginPollTimer = setTimeout(poll, 400); });
     };
+
+    tryStart();
   });
 }
 
