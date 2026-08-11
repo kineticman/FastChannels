@@ -2459,6 +2459,33 @@ def _record_tve_login_error(key: str, message: str) -> None:
     db.session.commit()
 
 
+def _cox_login_error_detail(exc: Exception, label: str) -> str:
+    """Classifies an exception from a Cox-branch scripted sign-in attempt
+    into a short, human-readable detail (never includes the network's own
+    label/name — callers prepend that themselves only where it's not
+    already implied by context, e.g. the admin modal's status line but not
+    the "last attempt failed" note, which sits directly under that
+    network's own row label already).
+
+    Shared by run_mvpd_browser_login's and run_fox_browser_login's Cox
+    branches, which had this exact three-way classification hand-copied
+    and already drifted slightly inconsistent between them (code review,
+    2026-08-11). run_nbc_browser_login deliberately does NOT use this —
+    NbcTveScraper._ensure_entitled() raises exceptions that already have
+    their own full context baked in one layer down (e.g. "NBC TVE:
+    <mso_id> is not authorized: <reason>"), so wrapping them again here
+    would double up the framing instead of clarifying it. Legacy's
+    AdobePassCoxClient and FOX's _fox_sports_mvpd_token both raise bare,
+    terse exceptions that actually need this context added.
+    """
+    if isinstance(exc, TVENotAuthorizedError):
+        return f'not entitled — {exc}'
+    if isinstance(exc, TVEAuthError):
+        return str(exc)
+    logger.exception('[mvpd-login] unexpected failure for %s', label)
+    return str(exc)
+
+
 def _relay_input_and_screenshot(
     page, r, waiting_since: float | None = None,
     stop_key: str | None = None, input_key: str | None = None,
@@ -3476,20 +3503,11 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
             set_status('running', f'Signing in to {requestor_id}…')
             try:
                 client.authorize_with_cox(mvpd_username, mvpd_password)
-            except TVENotAuthorizedError as exc:
-                _step(requestor_id, 'failed', str(exc)[:120])
-                _record_tve_login_error(requestor_id, f'not entitled — {exc}')
-                set_status('error', f'{requestor_id}: not entitled — {exc}')
-                return
-            except TVEAuthError as exc:
-                _step(requestor_id, 'failed', str(exc)[:120])
-                _record_tve_login_error(requestor_id, str(exc))
-                set_status('error', f'{requestor_id}: {exc}')
-                return
             except Exception as exc:  # noqa: BLE001
-                logger.exception('[mvpd-login] unexpected failure for %s', requestor_id)
-                _record_tve_login_error(requestor_id, str(exc))
-                set_status('error', f'{requestor_id}: {exc}')
+                detail = _cox_login_error_detail(exc, requestor_id)
+                _step(requestor_id, 'failed', detail[:120])
+                _record_tve_login_error(requestor_id, detail)
+                set_status('error', f'{requestor_id}: {detail}')
                 return
             _save_mvpd_authn_token(requestor_id, client.ctx.authn_token)
             _step(requestor_id, 'done', 'authorized')
@@ -3908,6 +3926,12 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 # a deliberate "Sign in" click silently no-op.
                 scraper._update_cache('nbc_entitlements', {})
                 scraper._ensure_entitled(resource_id)
+            # Deliberately NOT using _cox_login_error_detail() here (unlike
+            # the legacy/FOX Cox branches, code review 2026-08-11) —
+            # _ensure_entitled()'s own exceptions already carry full context
+            # ("NBC TVE: <mso_id> is not authorized: <reason>"), so running
+            # them through that classifier too would double up the framing
+            # instead of clarifying it. See that function's docstring.
             except (TVENotAuthorizedError, TVEAuthError) as exc:
                 persist_source_config_updates(source.id, scraper._pending_config_updates)
                 persist_source_cache_updates(source.id, scraper._pending_cache_updates)
@@ -4242,14 +4266,14 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             try:
                 token = _fox_sports_mvpd_token(fox_session, str(_uuid.uuid4()), mso_id, account_row.username or '', account_row.password or '')
             except Exception as exc:  # noqa: BLE001
-                logger.exception('[fox-mvpd-login] unexpected failure')
-                message = f'FOX Sports {mso_id} auth failed: {exc}'
+                detail = _cox_login_error_detail(exc, 'FOX Sports TVE')
+                message = f'FOX Sports {mso_id} auth failed: {detail}'
                 account_row.last_auth_status = 'error'
                 account_row.last_auth_message = message[:500]
                 account_row.last_auth_at = datetime.now(timezone.utc)
                 db.session.commit()
-                _record_tve_login_error('fox', str(exc))
-                set_status('error', f'FOX Sports TVE: {exc}')
+                _record_tve_login_error('fox', detail)
+                set_status('error', f'FOX Sports TVE: {detail}')
                 return
             now = int(time.time())
             cfg = dict(account_row.config or {})
