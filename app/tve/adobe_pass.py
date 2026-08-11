@@ -208,10 +208,14 @@ def invalidate_aenetworks_software_statement(brand: str) -> None:
 
 
 class AdobePassCoxClient:
-    def __init__(self, *, requestor_id: str, resource: str, software_statement: str, redirect_url: str = DEFAULT_HISTORY_REDIRECT_URL) -> None:
+    def __init__(
+        self, *, requestor_id: str, resource: str, software_statement: str,
+        redirect_url: str = DEFAULT_HISTORY_REDIRECT_URL, device_fingerprint: str | None = None,
+    ) -> None:
         self.requestor_id = requestor_id
         self.resource = resource
         self.redirect_url = redirect_url
+        self._device_fingerprint = device_fingerprint
         self.ctx = AdobeContext(software_statement=software_statement)
         self.session = requests.Session()
         self.session.headers.update({
@@ -265,9 +269,22 @@ class AdobePassCoxClient:
         self.session.headers.update({'Authorization': f'Bearer {self.ctx.access_token}'})
 
     def register_device(self) -> None:
+        # A fresh random fingerprint on every call (the old unconditional
+        # uuid4().hex here) registers a NEW device with Adobe each time —
+        # confirmed live 2026-08-11 against Warner TVE that this invalidates
+        # whatever session a previously cached authn_token belonged to, so
+        # authorize_mvpd()'s cache-reuse fast path always got rejected with
+        # "session has expired (pendingLogout)" and fell through to a full
+        # fresh Cox login on every single play, defeating the cache
+        # entirely (same login-storm risk class as the fubo/Cox fixes,
+        # just triggered by device churn instead of no caching at all).
+        # Callers now pass a stable, persisted fingerprint (see
+        # _ensure_cox_device_fingerprint) so repeated calls register the
+        # SAME device and a cached authn_token's session stays valid.
+        fingerprint = self._device_fingerprint or uuid.uuid4().hex
         r = self._post(
             f'{ADOBE_BASE}/indiv/devices',
-            json={'fingerprint': uuid.uuid4().hex},
+            json={'fingerprint': fingerprint},
             headers={'Content-Type': 'application/json; charset=UTF-8'},
         )
         self.ctx.device_id = r.json()['deviceId']
@@ -479,6 +496,24 @@ class AdobePassCoxClient:
         return self.authorize()
 
 
+def _ensure_cox_device_fingerprint(account) -> str:
+    """Get-or-create a stable device fingerprint for this TVEAccount, reused
+    across every AdobePassCoxClient.register_device() call instead of a
+    fresh random one each time — see register_device()'s docstring for why
+    that mattered (it was invalidating cached authn_token sessions)."""
+    from ..extensions import db
+
+    cfg = dict(account.config or {})
+    fingerprint = cfg.get('device_fingerprint')
+    if fingerprint:
+        return fingerprint
+    fingerprint = uuid.uuid4().hex
+    cfg['device_fingerprint'] = fingerprint
+    account.config = cfg
+    db.session.commit()
+    return fingerprint
+
+
 def _save_mvpd_authn_token(account, requestor_id: str, authn_token: str) -> None:
     if not authn_token:
         return
@@ -562,6 +597,7 @@ def authorize_mvpd(
     # credentials on every single resolve() call — the same login-retry-storm
     # risk already fixed once for fubo, just not previously caught here since
     # Cox itself never errors, it just silently re-authenticates every time.
+    device_fingerprint = _ensure_cox_device_fingerprint(account)
     cached_authn = ((cfg.get('mvpd_authn') or {}).get(requestor_id) or {}).get('authn_token')
     if cached_authn:
         try:
@@ -570,12 +606,15 @@ def authorize_mvpd(
                 resource=resource,
                 software_statement=software_statement,
                 redirect_url=redirect_url,
+                device_fingerprint=device_fingerprint,
             )
             client.setup_client()
             # authorize() sends the ap_42/ap_11/ap_z/Ap_21/pass_sfp headers
-            # register_device() sets on self.session — Adobe 400s without them
-            # even though the fresh device_id here doesn't need to match
-            # whichever device the cached authn_token was originally issued to.
+            # register_device() sets on self.session — Adobe 400s without them.
+            # Must reuse the SAME persisted device_fingerprint as whatever
+            # call originally produced cached_authn, or this re-registration
+            # invalidates that session server-side (see register_device()'s
+            # docstring) and cached_authn always comes back rejected.
             client.register_device()
             client.ctx.authn_token = cached_authn
             token = client.authorize()
@@ -591,6 +630,7 @@ def authorize_mvpd(
             resource=resource,
             software_statement=software_statement,
             redirect_url=redirect_url,
+            device_fingerprint=device_fingerprint,
         )
         token = client.authorize_with_cox(username, password)
         _save_mvpd_authn_token(account, requestor_id, client.ctx.authn_token)

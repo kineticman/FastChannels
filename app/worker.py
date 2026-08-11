@@ -2568,6 +2568,8 @@ def _try_cached_sibling_authn(sibling_id: str, target: dict) -> tuple[bool, str]
     pairing without touching the browser (mirrors authorize_mvpd()'s play-time
     fast path). Returns (paired, message) on a definitive answer, or None to
     fall through to the normal browser-assisted attempt."""
+    from app.tve.adobe_pass import _ensure_cox_device_fingerprint
+
     account = TVEAccount.query.filter_by(provider_id='cox').first()
     cached_authn = ((((account.config if account else {}) or {}).get('mvpd_authn') or {}).get(target['requestor_id']) or {}).get('authn_token')
     if not cached_authn:
@@ -2578,6 +2580,7 @@ def _try_cached_sibling_authn(sibling_id: str, target: dict) -> tuple[bool, str]
             resource=target['resource'],
             software_statement=target['software_statement'],
             redirect_url=target['redirect_url'],
+            device_fingerprint=_ensure_cox_device_fingerprint(account) if account else None,
         )
         client.setup_client()
         client.register_device()
@@ -2611,6 +2614,7 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
     of a single message that appears frozen for the whole sweep.
     """
     from app.tve.mvpd_targets import all_requestor_ids, resolve_requestor_target
+    from app.tve.adobe_pass import _ensure_cox_device_fingerprint
 
     def _report(state: str, message: str = ''):
         if on_step:
@@ -2618,6 +2622,9 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
                 on_step(sibling_id, state, message)
             except Exception:  # noqa: BLE001
                 pass
+
+    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    device_fingerprint = _ensure_cox_device_fingerprint(account) if account else None
 
     results: dict[str, tuple[bool, str]] = {}
     for sibling_id in all_requestor_ids():
@@ -2650,6 +2657,7 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
             resource=target['resource'],
             software_statement=target['software_statement'],
             redirect_url=target['redirect_url'],
+            device_fingerprint=device_fingerprint,
         )
         try:
             sib_client.setup_client()
@@ -3378,11 +3386,13 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
         mvpd_username = (account_row.username if account_row else '') or ''
         mvpd_password = (account_row.password if account_row else '') or ''
 
+        from app.tve.adobe_pass import _ensure_cox_device_fingerprint
         client = AdobePassCoxClient(
             requestor_id=requestor_id,
             resource=resource,
             software_statement=software_statement,
             redirect_url=redirect_url,
+            device_fingerprint=_ensure_cox_device_fingerprint(account_row) if account_row else None,
         )
         try:
             client.setup_client()
