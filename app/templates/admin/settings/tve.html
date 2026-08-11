@@ -39,8 +39,8 @@
           </div>
           <div style="margin-top:0.75rem">
             <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:0.75rem;margin-bottom:0.3rem">
-              <div style="color:var(--text-muted);font-size:0.78rem">TVE network sign-in status — "Sign in to all" attempts every network in one pass, reusing your saved credentials; a row's own "Sign in" button re-does just that one network, useful for debugging.</div>
-              <button class="btn btn-audit" style="padding:0.15rem 0.6rem;font-size:0.74rem;white-space:nowrap" type="button" onclick="openMvpdLoginModal('legacy', 'HISTORY', true)">Sign in to all</button>
+              <div style="color:var(--text-muted);font-size:0.78rem">TVE network sign-in status — sign in to each network individually below; the underlying browser session is reused, so it's still quick after the first one.</div>
+              <button class="btn btn-audit" style="padding:0.15rem 0.6rem;font-size:0.74rem;white-space:nowrap;opacity:0.5;cursor:not-allowed" type="button" disabled title="Temporarily disabled — the shared browser can crash partway through a full sweep, silently skipping whatever networks hadn't run yet. Sign in to each network individually below until that's fixed.">Sign in to all (disabled)</button>
             </div>
             <div id="tve-network-status" style="font-size:0.82rem;color:var(--text-soft)">Loading…</div>
           </div>
@@ -52,6 +52,7 @@
           </label>
           <button class="btn btn-secondary" onclick="saveTveCoxSettings()">Save</button>
           <button class="btn btn-audit" id="tve-cox-test-btn" onclick="testTveCox()">Test</button>
+          <button class="btn btn-danger" onclick="resetTveState()" title="Deletes the saved TV provider username/password, every cached sign-in token, and the browser's saved login session — for testing sign-in from a clean slate">Reset</button>
           <span class="save-status" id="tve-cox-status"></span>
         </div>
       </div>
@@ -64,6 +65,7 @@
       <h3 style="margin:0 0 0.75rem">Sign in for TV Everywhere</h3>
       <p id="mvpd-login-status" style="color:var(--text-subtle);margin:0 0 0.75rem;font-size:0.9rem;line-height:1.5">Launching browser…</p>
       <div id="mvpd-login-steps" style="display:flex;flex-wrap:wrap;gap:0.35rem;margin:0 0 0.75rem"></div>
+      <p id="mvpd-login-hint" style="display:none;color:var(--warning-soft,#b8860b);background:var(--warning-bg-2,rgba(184,134,11,0.12));border:1px solid var(--warning-border,rgba(184,134,11,0.3));border-radius:4px;padding:0.5rem 0.7rem;margin:0 0 0.75rem;font-size:0.82rem;line-height:1.4"></p>
       <img id="mvpd-login-frame" alt="Provider sign-in" tabindex="0" draggable="false"
            onmousedown="mvpdLoginFrameMousedown(event)" onkeydown="mvpdLoginFrameKeydown(event)"
            onmousemove="mvpdLoginFrameMousemove(event)" ondragstart="return false;"

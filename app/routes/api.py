@@ -20,7 +20,7 @@ from sqlalchemy.orm import defer
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
 from app.config import VERSION
 from ..extensions import db
-from ..models import Source, Channel, Program, AppSettings, Feed, TVEAccount
+from ..models import Source, Channel, Program, AppSettings, Feed, TVEAccount, SourceCache
 from ..scrapers import registry
 from ..scrapers.base import StreamDeadError
 from ..gracenote_suggest import SuggestionChannel, suggest_gracenote_matches
@@ -5159,6 +5159,70 @@ def tve_network_status_route():
     return jsonify({'networks': tve_network_status(account)})
 
 
+# Sources whose auth identity is TVE/Adobe-Pass-tied. Kept as one list so
+# reset and any future TVE-wide admin action stay in sync automatically.
+_TVE_SOURCE_NAMES = ('aenetworks_tve', 'fox_tve', 'fox_one', 'discovery_tve', 'amcn_tve', 'warner_tve', 'nbc_tve')
+
+
+@api_bp.route('/settings/tve/reset', methods=['POST'])
+def tve_reset():
+    """Wipe every saved TVE credential and cached sign-in so the next test
+    starts genuinely cold — same four things a manual "test like a new user"
+    reset needs: the account row (username/password + cached Adobe Pass
+    tokens), each TVE source's own device-identity cache, the credential-tied
+    SourceCache rows (adobe_auth:*, discovery_tve_session, nbc_entitlements/
+    playback), and the on-disk Camoufox profile holding real Adobe SSO
+    cookies. Deliberately narrower than a full wipe — leaves non-auth scraper
+    cache (bootstrap configs, manifests, audit results) alone since that
+    isn't a credential and just repopulates on the next scrape regardless of
+    sign-in state.
+    """
+    import shutil
+
+    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    if account:
+        db.session.delete(account)
+
+    sources = Source.query.filter(Source.name.in_(_TVE_SOURCE_NAMES)).all()
+    source_ids = [s.id for s in sources]
+    for s in sources:
+        s.config = {}
+
+    if source_ids:
+        SourceCache.query.filter(
+            SourceCache.source_id.in_(source_ids),
+            db.or_(
+                SourceCache.cache_key.like('adobe_auth:%'),
+                SourceCache.cache_key.in_(('discovery_tve_session', 'nbc_entitlements', 'nbc_playback')),
+            ),
+        ).delete(synchronize_session=False)
+
+    db.session.commit()
+
+    profile_dir = '/data/browser_profiles/mvpd_tve'
+    removed_profile = False
+    try:
+        if _os.path.isdir(profile_dir):
+            shutil.rmtree(profile_dir)
+            removed_profile = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[tve-reset] could not remove browser profile dir: %s', exc)
+
+    try:
+        import redis as _redis
+        r = _redis.from_url(current_app.config['REDIS_URL'])
+        keys = []
+        for pattern in ('mvpd:browser-login:*', 'nbc-mvpd:browser-login:*', 'fox-mvpd:browser-login:*'):
+            keys.extend(r.keys(pattern))
+        if keys:
+            r.delete(*keys)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[tve-reset] could not flush redis keys: %s', exc)
+
+    logger.info('[tve-reset] cleared TVE account, %d source configs, browser profile removed=%s', len(sources), removed_profile)
+    return jsonify({'ok': True, 'sources_reset': len(sources), 'browser_profile_removed': removed_profile})
+
+
 @api_bp.route('/settings/tve/cox/test', methods=['POST'])
 def test_tve_cox_settings():
     account = _get_tve_account('cox', 'Cox')
@@ -5182,6 +5246,53 @@ def test_tve_cox_settings():
         account.last_auth_at = datetime.now(timezone.utc)
         db.session.commit()
         return jsonify({'ok': False, 'error': str(exc), 'account': account.to_safe_dict()}), 502
+
+
+@api_bp.route('/settings/tve/foxone/signin', methods=['POST'])
+def foxone_signin():
+    """FOX One authenticates natively (a scripted Cox MVPD OAuth dance, see
+    FoxOneScraper._authenticate_via_cox_mvpd) rather than through Adobe Pass
+    like every other TVE network — no browser needed, so unlike the rest of
+    the "Sign in" buttons this is a plain synchronous request/response, not
+    the streamed-screenshot modal.
+
+    Deliberately calls _authenticate_via_cox_mvpd directly instead of going
+    through _ensure_access_token's cache-first path — a "Sign in" click
+    should always exercise a live Cox login, not silently short-circuit on a
+    still-valid cached token (which would report success without actually
+    testing anything, undermining the whole point of a manual sign-in).
+    """
+    from ..models import Source
+    from ..scrapers.fox_one import FoxOneScraper
+    from ..config_store import persist_source_config_updates
+
+    account = _get_tve_account('cox', 'Cox')
+    if not account.has_credentials():
+        return jsonify({'error': 'TV provider username and password are required.'}), 400
+
+    source = Source.query.filter_by(name='fox_one').first()
+    scraper = FoxOneScraper(config=dict((source.config if source else {}) or {}))
+    try:
+        access_token, expires_at = scraper._authenticate_via_cox_mvpd(account.username, account.password)
+    except Exception as exc:  # noqa: BLE001
+        account.last_auth_status = 'error'
+        account.last_auth_message = f'FOX One Cox MVPD auth failed: {exc}'[:500]
+        account.last_auth_at = datetime.now(timezone.utc)
+        db.session.commit()
+        if source and scraper._pending_config_updates:
+            persist_source_config_updates(source.id, scraper._pending_config_updates)
+        return jsonify({'ok': False, 'error': str(exc)}), 502
+
+    scraper._update_config('access_token', access_token)
+    scraper._update_config('access_expires_at', expires_at)
+    scraper._update_config('access_token_captured_at', int(_time.time()))
+    if source:
+        persist_source_config_updates(source.id, scraper._pending_config_updates)
+    account.last_auth_status = 'ok'
+    account.last_auth_message = 'FOX One access token obtained through Cox MVPD.'
+    account.last_auth_at = datetime.now(timezone.utc)
+    db.session.commit()
+    return jsonify({'ok': True})
 
 
 # ── MVPD interactive browser sign-in (Adobe Pass "second screen" pairing) ──
@@ -5219,6 +5330,15 @@ def mvpd_browser_login_start():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
     cascade = bool(data.get('cascade'))
+    if cascade:
+        # "Sign in to all" is disabled for now (UI button too, see tve.html) —
+        # the shared Camoufox page has been observed dying mid-sweep (Firefox
+        # process death under many rapid cross-origin navigations), silently
+        # skipping whatever networks hadn't run yet while still reporting
+        # overall success. Reject here too so a stale cached page or direct
+        # API call can't trigger it. The cascade code itself is untouched —
+        # flip this back once the browser-stability issue is fixed.
+        return jsonify({'error': 'Cascade sign-in ("Sign in to all") is temporarily disabled — sign in to each network individually.'}), 400
     # Use target['requestor_id'] (the wire-protocol value Adobe actually
     # expects), not the raw admin-UI key — they differ for Warner's truTV
     # (see resolve_requestor_target's docstring). This keeps every use of
@@ -5243,6 +5363,9 @@ def mvpd_browser_login_state():
     shot = r.get('mvpd:browser-login:screenshot')
     if shot:
         result['screenshot'] = base64.b64encode(shot).decode('ascii')
+    hint = r.get('mvpd:browser-login:hint')
+    if hint:
+        result['hint'] = hint.decode('utf-8', 'replace') if isinstance(hint, bytes) else hint
     return jsonify(result)
 
 
@@ -5350,6 +5473,13 @@ def nbc_browser_login_state():
     shot = r.get('nbc-mvpd:browser-login:screenshot')
     if shot:
         result['screenshot'] = base64.b64encode(shot).decode('ascii')
+    # The autofill-wait hint is written to the shared 'mvpd:*' key even from
+    # here (_relay_input_and_screenshot hardcodes it — see worker.py) rather
+    # than a dedicated nbc-mvpd:* one, so read the same key NBC/legacy/AMC/
+    # Discovery all actually write to.
+    hint = r.get('mvpd:browser-login:hint')
+    if hint:
+        result['hint'] = hint.decode('utf-8', 'replace') if isinstance(hint, bytes) else hint
     return jsonify(result)
 
 
@@ -5413,6 +5543,11 @@ def fox_browser_login_state():
     shot = r.get('fox-mvpd:browser-login:screenshot')
     if shot:
         result['screenshot'] = base64.b64encode(shot).decode('ascii')
+    # See nbc_browser_login_state — the autofill-wait hint is always written
+    # to the shared 'mvpd:*' key regardless of family.
+    hint = r.get('mvpd:browser-login:hint')
+    if hint:
+        result['hint'] = hint.decode('utf-8', 'replace') if isinstance(hint, bytes) else hint
     return jsonify(result)
 
 

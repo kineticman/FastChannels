@@ -329,6 +329,46 @@ async function testTveCox() {
   }
 }
 
+async function foxOneSignIn(btn) {
+  // FOX One authenticates natively (scripted Cox OAuth, no browser) so unlike
+  // every other network's "Sign in" this is a plain synchronous call, not the
+  // streamed-screenshot modal — see api.foxone_signin.
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  try {
+    const r = await fetch('/api/settings/tve/foxone/signin', { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    loadTveNetworkStatus();  // re-render picks up the fresh timestamp
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = originalText;
+    btn.title = '✕ ' + e.message;
+  }
+}
+
+async function resetTveState() {
+  if (!confirm('Delete the saved TV provider username/password, every cached network sign-in, and the browser\'s saved login session?\n\nThis cannot be undone — you\'ll need to re-enter your TV provider credentials and sign in to each network again.')) return;
+  const status = document.getElementById('tve-cox-status');
+  status.className = 'save-status';
+  status.textContent = 'Resetting…';
+  try {
+    const r = await fetch('/api/settings/tve/reset', { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    status.className = 'save-status ok';
+    status.textContent = '✓ Reset';
+    document.getElementById('tve-cox-username').value = '';
+    document.getElementById('tve-cox-password').value = '';
+    document.getElementById('tve-cox-enabled').checked = false;
+    loadTveNetworkStatus();
+  } catch (e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ Reset failed: ' + e.message;
+  }
+}
+
 // ── MVPD interactive browser sign-in (Adobe Pass second-screen pairing) ────
 // Same streamed-screenshot/forwarded-input pattern as Sling's own FAST
 // sign-in (app/templates/admin/sources.html), applied to Adobe Pass instead —
@@ -381,9 +421,12 @@ async function loadTveNetworkStatus() {
       const ageColor = n.last_signed_in_at ? 'var(--text-soft)' : 'var(--text-dim)';
       const note = n.note ? `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${n.note}</div>` : '';
       const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
-      const button = n.family
-        ? `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`
-        : '';
+      let button = '';
+      if (n.family === 'foxone') {
+        button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Quick, no-browser native login — also doubles as a fast check that your saved TV provider credentials are still valid" onclick="foxOneSignIn(this)">Sign in</button>`;
+      } else if (n.family) {
+        button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`;
+      }
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
         <span>${n.label}</span>
         <span style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap">
@@ -413,6 +456,7 @@ function openMvpdLoginModal(family, requestorId, cascade) {
   frame.style.visibility = 'hidden';  // no src yet - avoid showing a broken-image icon
   status.style.color = '';
   status.textContent = 'Launching browser…';
+  document.getElementById('mvpd-login-hint').style.display = 'none';
   _renderMvpdLoginSteps([]);
   modal.classList.add('open');
   const body = cfg.needsRequestor ? { requestor_id: requestorId } : {};
@@ -423,8 +467,38 @@ function openMvpdLoginModal(family, requestorId, cascade) {
     body: JSON.stringify(body),
   })
     .then(r => r.json())
-    .catch(() => {})
-    .finally(() => _pollMvpdLoginModal());
+    .then((d) => {
+      // All TVE networks share one on-disk browser profile, so only one
+      // sign-in can run at a time. If this click lost that race, the job we'd
+      // be polling for was never started — polling anyway just shows a
+      // permanently blank "Signing in…" frame that looks hung. Say so instead.
+      if (d && d.status === 'already_running') {
+        _mvpdLoginDone = true;
+        status.style.color = 'var(--danger)';
+        status.innerHTML = 'A sign-in is already in progress for another network — they share one browser session. '
+          + '<a href="#" onclick="forceStopMvpdLogin(' + JSON.stringify(family) + ', ' + JSON.stringify(requestorId || null) + ', ' + JSON.stringify(!!cascade) + '); return false;" style="color:inherit;text-decoration:underline">'
+          + 'Force-stop it and retry</a> if it looks stuck, or wait for it to finish on its own.';
+        return;
+      }
+      _pollMvpdLoginModal();
+    })
+    .catch(() => _pollMvpdLoginModal());
+}
+
+async function forceStopMvpdLogin(family, requestorId, cascade) {
+  const status = document.getElementById('mvpd-login-status');
+  status.style.color = '';
+  status.textContent = 'Force-stopping the stuck sign-in…';
+  const cfg = MVPD_LOGIN_FAMILIES[family] || MVPD_LOGIN_FAMILIES.legacy;
+  try {
+    // Kills the actual browser process, not just a flag the stuck job might
+    // never get around to checking — see _force_kill_mvpd_browser in
+    // app/routes/tasks.py.
+    await fetch(`${cfg.base}/stop`, { method: 'POST' });
+  } catch (e) {
+    // best-effort — retry the sign-in below regardless
+  }
+  setTimeout(() => openMvpdLoginModal(family, requestorId, cascade), 1500);
 }
 
 function closeMvpdLoginModal(event) {
@@ -474,11 +548,24 @@ async function _pollMvpdLoginModal() {
 
     const status = document.getElementById('mvpd-login-status');
     const frame = document.getElementById('mvpd-login-frame');
+    const hintEl = document.getElementById('mvpd-login-hint');
     if (d.screenshot) {
       frame.src = `data:image/jpeg;base64,${d.screenshot}`;
       frame.style.visibility = 'visible';
     }
     _renderMvpdLoginSteps(d.steps);
+
+    // Server only sets this once a silent/automated wait has run long enough
+    // that it genuinely can't tell "still working in the background" from
+    // "actually needs a click" — landing on a generic sign-in gate page is
+    // usually harmless, so this is a hedge, not an alarm. Terminal states
+    // clear it immediately rather than waiting on its own short TTL.
+    if (d.hint && d.state !== 'success' && d.state !== 'error' && d.state !== 'stopped') {
+      hintEl.textContent = '⚠ ' + d.hint;
+      hintEl.style.display = 'block';
+    } else {
+      hintEl.style.display = 'none';
+    }
 
     if (d.state === 'success') {
       _mvpdLoginDone = true;

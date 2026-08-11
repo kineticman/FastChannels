@@ -67,8 +67,6 @@ _TITLE_TO_CALL_SIGN = {
 
 _CHANNEL_OVERRIDES: dict[str, tuple[str, str]] = {
     'FSD': ('FOX Sports Digital', 'Sports'),
-    'FMSC': ('FOX Movies', 'Movies'),
-    'FMSCFO': ('FOX Movies', 'Movies'),
     'LIVENOW': ('LiveNOW from FOX', 'News'),
     'SOUL': ('FOX Soul', 'Entertainment'),
     'TMZ': ('TMZ', 'Entertainment'),
@@ -78,6 +76,15 @@ _CHANNEL_OVERRIDES: dict[str, tuple[str, str]] = {
     'FXN1': ('FOX Nation 1', 'Entertainment'),
     'FXN2': ('FOX Nation 2', 'Entertainment'),
 }
+
+# FOX's own API gives this call sign no real identity (network: "FOX Digital",
+# station_name: null) — it's a rotating stunt/block channel, not a fixed
+# network. Content rotates independently of the name (confirmed live
+# 2026-08-10: labeled "FOX Movies" here while actually airing a Masked Singer
+# marathon — see community report). No reliable name AND no real Gracenote ID
+# (FOX's API literally returns the placeholder "TBD" for it), so it's dropped
+# rather than guessed at.
+_EXCLUDED_CALL_SIGNS = {'FMSC', 'FMSCFO'}
 
 
 def _headers() -> dict[str, str]:
@@ -223,6 +230,9 @@ class FoxOneScraper(BaseScraper):
                     call_sign = 'FOX'
             if not call_sign or call_sign in seen:
                 continue
+            if call_sign in _EXCLUDED_CALL_SIGNS:
+                seen.add(call_sign)
+                continue
 
             supported = _SUPPORTED_BY_CALL_SIGN.get(call_sign)
             override = _CHANNEL_OVERRIDES.get(call_sign)
@@ -237,6 +247,13 @@ class FoxOneScraper(BaseScraper):
                 or (FOX_TVE_CHANNELS[target_id].logo_url if target_id in FOX_TVE_CHANNELS else None)
             )
             gracenote = first.get('gracenote') if isinstance(first.get('gracenote'), dict) else {}
+            # FOX's API returns the literal placeholder string "TBD" for
+            # station_id on channels it hasn't assigned a real Gracenote ID
+            # to yet (confirmed live 2026-08-10) — stored as-is that becomes a
+            # bogus gracenote_id that breaks Channels DVR guide matching once
+            # routed through the Gracenote-variant output.
+            raw_station_id = str(gracenote.get('station_id') or '').strip()
+            gracenote_id = raw_station_id if raw_station_id and raw_station_id.upper() != 'TBD' else None
             channels.append(FoxOneChannel(
                 source_channel_id=call_sign.lower(),
                 name=(override[0] if override else str(first.get('network') or first.get('station_name') or fallback_name)),
@@ -245,7 +262,7 @@ class FoxOneScraper(BaseScraper):
                 target_fox_tve_id=target_id,
                 logo_url=logo,
                 category=category,
-                gracenote_id=str(gracenote.get('station_id') or '') or None,
+                gracenote_id=gracenote_id,
             ))
             seen.add(call_sign)
         return channels

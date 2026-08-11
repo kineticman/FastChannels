@@ -69,11 +69,14 @@ def tve_network_status(account) -> list[dict]:
     })
 
     # FOX One authenticates natively (username/password OAuth against Cox's
-    # own identityhydra endpoints, not a browser-pairing flow), so there's no
-    # dedicated sign-in button — it reuses the Cox login above automatically
-    # the first time a channel needs a token. The timestamp lives on the
-    # fox_one source's own config, not the shared account config the other
-    # entries in this function read from.
+    # own identityhydra endpoints, not Adobe Pass) — it also happens
+    # unprompted the first time a channel needs a token, but since it's a
+    # fast scripted request/response (no browser), it doubles as a good,
+    # low-friction way to check the raw Cox credentials are actually still
+    # valid — see api.foxone_signin. family='foxone' routes its "Sign in"
+    # button to that plain endpoint instead of the streamed-screenshot modal
+    # every other family uses. The timestamp lives on the fox_one source's
+    # own config, not the shared account config the other entries read from.
     fox_one_captured_at = None
     try:
         from ..models import Source
@@ -85,8 +88,8 @@ def tve_network_status(account) -> list[dict]:
     entries.append({
         'label': 'FOX One',
         'last_signed_in_at': fox_one_captured_at,
-        'note': 'Uses the Cox login above — authenticates automatically, no separate sign-in.',
-        'family': None,
+        'note': None,
+        'family': 'foxone',
         'requestor_id': None,
     })
 

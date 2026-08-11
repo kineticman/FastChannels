@@ -1941,6 +1941,15 @@ MVPD_BROWSER_LOGIN_STATUS_KEY = 'mvpd:browser-login:status'
 MVPD_BROWSER_LOGIN_SHOT_KEY = 'mvpd:browser-login:screenshot'
 MVPD_BROWSER_LOGIN_INPUT_KEY = 'mvpd:browser-login:input'
 MVPD_BROWSER_LOGIN_STOP_KEY = 'mvpd:browser-login:stop'
+MVPD_BROWSER_LOGIN_HINT_KEY = 'mvpd:browser-login:hint'
+# How long a single silent/automated wait (autofill detection, or the
+# post-submit poll-for-completion loop) can run before we admit we don't know
+# whether it's actually stuck or just slow, and suggest the human glance at
+# the screenshot. Most silent waits resolve well under this even when no
+# password field ever shows (SSO carries over via background API polling,
+# not anything visible on the page) — this is intentionally a "we're not
+# sure, take a look" nudge, not a "this IS broken" claim.
+_MVPD_STUCK_HINT_SECONDS = 10.0
 _MVPD_BROWSER_LOGIN_TIMEOUT_SECONDS = 1800
 # Adobe's own session polling — short and frequent, since this is a plain
 # GET/POST exchange, not something that needs to be rate-limited.
@@ -1966,9 +1975,17 @@ def _same_page_url(actual: str, expected: str) -> bool:
         return False
 
 
-def _try_autofill_credentials(page, username: str, password: str, wait_seconds: float = 12.0) -> bool:
+def _try_autofill_credentials(page, username: str, password: str, wait_seconds: float = 12.0, r=None) -> bool:
     """Best-effort, short-timeout sibling of _autofill_sling_credentials for
     the "sign in once" cascade (app.worker._silent_pair_* / sibling pairing).
+
+    If r (a redis client) is given, this also relays screenshots/input and
+    surfaces a "may need your input" hint the same way the poll loops after
+    it do (see _relay_input_and_screenshot) — previously this whole up-to-12s
+    wait had NO screenshot/input activity at all, so the modal looked frozen
+    for the first 12s of every single network, on top of whatever it froze
+    for afterward. Optional and defaults to off so callers that don't have a
+    redis client handy (e.g. the F5-recovery retry) still work unchanged.
 
     Empirically (2026-08-05), Sling's login session does NOT reliably carry
     over via cookies between separate Camoufox launches/navigations even
@@ -1993,6 +2010,16 @@ def _try_autofill_credentials(page, username: str, password: str, wait_seconds: 
     have actually stuck before submitting, with one retry.
     """
     deadline = time.monotonic() + wait_seconds
+    wait_started = time.monotonic()
+    # Seeded to wait_started, not 0 — this loop's very first iteration runs
+    # immediately after the caller's page.goto() to the NEXT provider, before
+    # the new page has had any time to actually paint. A screenshot taken
+    # that instant (0.0 makes the "at least 1s since last relay" check pass
+    # on iteration one) captures a stale/transitional frame — reported live
+    # 2026-08-10: "the initial screenshot when moving from one provider to
+    # the next provider is stale". Seeding to wait_started delays the first
+    # capture by ~1s, giving the new page time to settle first.
+    last_relay = wait_started
     while time.monotonic() < deadline:
         try:
             if page.locator('input[type="password"]:visible').count() > 0:
@@ -2000,6 +2027,13 @@ def _try_autofill_credentials(page, username: str, password: str, wait_seconds: 
         except Exception as exc:  # noqa: BLE001
             logger.info('[mvpd-login] autofill: locator query failed: %s', exc)
             return False
+        if r is not None:
+            now = time.monotonic()
+            if now - last_relay >= 1.0:
+                last_relay = now
+                if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
+                    logger.info('[mvpd-login] autofill: cancelled while waiting for a password field')
+                    return False
         page.wait_for_timeout(300)
     else:
         logger.info('[mvpd-login] autofill: no visible password field after %.1fs (SSO already past login, a captcha-first page, or an unrecognized form) url=%s', wait_seconds, _safe_page_url(page))
@@ -2393,7 +2427,7 @@ def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
     db.session.commit()
 
 
-def _relay_input_and_screenshot(page, r) -> bool:
+def _relay_input_and_screenshot(page, r, waiting_since: float | None = None) -> bool:
     """Keep the streamed browser modal alive and interactive during the "sign
     in once" cascade's silent phase, and report whether the human clicked
     Stop/Cancel.
@@ -2414,6 +2448,20 @@ def _relay_input_and_screenshot(page, r) -> bool:
     its own budget (confirmed live 2026-08-05). Returns True if the human
     asked to stop — callers should break out of their own loop when this
     happens rather than press on to the next network.
+
+    waiting_since, if given, is the monotonic time this particular silent
+    wait (autofill detection, or the post-submit poll-for-completion loop)
+    started. Once it's run longer than _MVPD_STUCK_HINT_SECONDS, a short-TTL
+    hint is published alongside the screenshot suggesting the human glance at
+    it — landing on a generic "Sign In" gate page and sitting there is USUALLY
+    fine (the real auth resolves via background API polling, independent of
+    what's on screen — confirmed live 2026-08-10 against AMC Networks TVE's
+    BBC America/IFC/WE tv gate pages), but occasionally a page genuinely does
+    need a manual click and there's no reliable way to tell those apart
+    server-side. The hint has a 5s TTL and this function is called ~1/s while
+    waiting, so it stays lit for the duration of a genuinely long wait and
+    disappears within 5s of the wait actually ending — no explicit clear call
+    needed.
 
     Best-effort; never raises. Call this every ~1s from within each cascade
     step's own poll loop, same cadence as the primary loop.
@@ -2440,13 +2488,22 @@ def _relay_input_and_screenshot(page, r) -> bool:
         r.setex(MVPD_BROWSER_LOGIN_SHOT_KEY, 30, shot)
     except Exception:  # noqa: BLE001
         pass
+    if waiting_since is not None and time.monotonic() - waiting_since > _MVPD_STUCK_HINT_SECONDS:
+        try:
+            r.setex(
+                MVPD_BROWSER_LOGIN_HINT_KEY, 5,
+                "Taking a while — if the screen below shows a Sign In or Continue button, "
+                "clicking it can help. It may also just be working in the background.",
+            )
+        except Exception:  # noqa: BLE001
+            pass
     return stopped
 
 
 _F5_REJECTION_MARKER = 'The requested URL was rejected'
 
 
-def _sling_f5_recover(page, login_url: str, username: str, password: str) -> bool:
+def _sling_f5_recover(page, login_url: str, username: str, password: str, r=None) -> bool:
     """Detect Sling's F5 bot-defense block page ("The requested URL was
     rejected. Please consult with your administrator.") that replaces the
     login form in-place when a submitted POST gets flagged. Observed live
@@ -2465,7 +2522,7 @@ def _sling_f5_recover(page, login_url: str, username: str, password: str) -> boo
         page.wait_for_timeout(8000)
         page.goto(login_url, wait_until='domcontentloaded', timeout=30000)
         if username and password:
-            _try_autofill_credentials(page, username, password)
+            _try_autofill_credentials(page, username, password, r=r)
     except Exception as exc:  # noqa: BLE001
         logger.info('[mvpd-login] F5-recovery reload failed: %s', exc)
     return True
@@ -2584,7 +2641,7 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
         bounced = _same_page_url(_safe_page_url(page), target['redirect_url'])
         if bounced:
             logger.info('[mvpd-login] sibling %s: landed directly on redirect_url — checking whether the session bound silently before assuming %s is not a participating provider', sibling_id, mso_id)
-        filled = _try_autofill_credentials(page, username, password)
+        filled = _try_autofill_credentials(page, username, password, r=r)
         if _relay_input_and_screenshot(page, r):
             results[sibling_id] = (False, 'cancelled')
             _report('failed', 'cancelled')
@@ -2599,12 +2656,13 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
         # relayed screenshots) is in flight and needs a real window — 15s was
         # observed cutting off an in-progress AETV login (2026-08-05).
         poll_deadline = time.monotonic() + (45 if filled else 15)
+        poll_started = time.monotonic()
         while time.monotonic() < poll_deadline:
             page.wait_for_timeout(1000)
-            if _relay_input_and_screenshot(page, r):
+            if _relay_input_and_screenshot(page, r, waiting_since=poll_started):
                 message = 'cancelled'
                 break
-            if not f5_retried and _sling_f5_recover(page, auth_url, username, password):
+            if not f5_retried and _sling_f5_recover(page, auth_url, username, password, r=r):
                 f5_retried = True
                 poll_deadline = time.monotonic() + 45
                 continue
@@ -2709,7 +2767,7 @@ def _silent_pair_nbc(page, mso_id: str, username: str, password: str, r) -> tupl
         page.goto(mso_login_url, wait_until='domcontentloaded', timeout=20000)
     except Exception as exc:  # noqa: BLE001
         return False, f'could not load MVPD redirect: {exc}'
-    filled = _try_autofill_credentials(page, username, password)
+    filled = _try_autofill_credentials(page, username, password, r=r)
     if _relay_input_and_screenshot(page, r):
         return False, 'cancelled'
 
@@ -2717,12 +2775,13 @@ def _silent_pair_nbc(page, mso_id: str, username: str, password: str, r) -> tupl
     # login (SAML, maybe a human-solved captcha) is in flight, not just a
     # silent SSO redirect.
     deadline = time.monotonic() + (45 if filled else 20)
+    poll_started = time.monotonic()
     f5_retried = False
     while time.monotonic() < deadline:
         page.wait_for_timeout(1000)
-        if _relay_input_and_screenshot(page, r):
+        if _relay_input_and_screenshot(page, r, waiting_since=poll_started):
             return False, 'cancelled'
-        if not f5_retried and _sling_f5_recover(page, mso_login_url, username, password):
+        if not f5_retried and _sling_f5_recover(page, mso_login_url, username, password, r=r):
             f5_retried = True
             deadline = time.monotonic() + 45
             continue
@@ -2795,19 +2854,20 @@ def _silent_pair_fox(page, mso_id: str, username: str, password: str, r) -> tupl
         page.goto(mso_login_url, wait_until='domcontentloaded', timeout=20000)
     except Exception as exc:  # noqa: BLE001
         return False, f'could not load MVPD redirect: {exc}'
-    filled = _try_autofill_credentials(page, username, password)
+    filled = _try_autofill_credentials(page, username, password, r=r)
     if _relay_input_and_screenshot(page, r):
         return False, 'cancelled'
 
     # Wider window when autofill actually submitted credentials — see
     # _silent_pair_nbc.
     deadline = time.monotonic() + (45 if filled else 20)
+    poll_started = time.monotonic()
     f5_retried = False
     while time.monotonic() < deadline:
         page.wait_for_timeout(1000)
-        if _relay_input_and_screenshot(page, r):
+        if _relay_input_and_screenshot(page, r, waiting_since=poll_started):
             return False, 'cancelled'
-        if not f5_retried and _sling_f5_recover(page, mso_login_url, username, password):
+        if not f5_retried and _sling_f5_recover(page, mso_login_url, username, password, r=r):
             f5_retried = True
             deadline = time.monotonic() + 45
             continue
@@ -2880,7 +2940,7 @@ def _silent_pair_amcn(page, mso_id: str, username: str, password: str, r) -> tup
         except Exception as exc:  # noqa: BLE001
             last_message = f'could not load MVPD redirect: {exc}'
             continue
-        filled = _try_autofill_credentials(page, username, password)
+        filled = _try_autofill_credentials(page, username, password, r=r)
         if _relay_input_and_screenshot(page, r):
             last_message = 'cancelled'
             break
@@ -2888,15 +2948,16 @@ def _silent_pair_amcn(page, mso_id: str, username: str, password: str, r) -> tup
         # Wider window when autofill actually submitted credentials — see
         # _silent_pair_nbc.
         deadline = time.monotonic() + (45 if filled else 20)
+        poll_started = time.monotonic()
         found_profile = False
         cancelled = False
         f5_retried = False
         while time.monotonic() < deadline:
             page.wait_for_timeout(1000)
-            if _relay_input_and_screenshot(page, r):
+            if _relay_input_and_screenshot(page, r, waiting_since=poll_started):
                 cancelled = True
                 break
-            if not f5_retried and _sling_f5_recover(page, mso_login_url, username, password):
+            if not f5_retried and _sling_f5_recover(page, mso_login_url, username, password, r=r):
                 f5_retried = True
                 deadline = time.monotonic() + 45
                 continue
@@ -2988,15 +3049,16 @@ def _silent_pair_discovery(page, mso_id: str, username: str, password: str, redi
         page.goto(target_url, wait_until='domcontentloaded', timeout=20000)
     except Exception as exc:  # noqa: BLE001
         return False, f'could not load MVPD redirect: {exc}'
-    _try_autofill_credentials(page, username, password)
+    _try_autofill_credentials(page, username, password, r=redis_client)
     if _relay_input_and_screenshot(page, redis_client):
         return False, 'cancelled'
 
     deadline = time.monotonic() + 20
+    poll_started = time.monotonic()
     code = None
     while time.monotonic() < deadline:
         page.wait_for_timeout(500)
-        if _relay_input_and_screenshot(page, redis_client):
+        if _relay_input_and_screenshot(page, redis_client, waiting_since=poll_started):
             return False, 'cancelled'
         url = _safe_page_url(page)
         if 'code=' in url:
@@ -3126,6 +3188,17 @@ def _run_amcn_or_discovery_standalone_login(pair_fn, log_prefix: str, display_na
                 logger.warning('[%s] browser died (attempt %d/%d), relaunching: %s', log_prefix, _attempt, _BROWSER_LOGIN_MAX_ATTEMPTS, exc)
                 set_status('starting', 'Browser hiccuped — relaunching…')
                 return _run_amcn_or_discovery_standalone_login(pair_fn, log_prefix, display_name, mso_id, _attempt=_attempt + 1, _deadline=deadline)
+            if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                # Force-stop kills the browser to interrupt whatever was blocking
+                # — that's the intended, expected way this exception happens, not
+                # a real crash. logger.exception's full traceback here would be
+                # misleading noise for a normal user-requested cancellation.
+                logger.info('[%s] stopped by request (browser force-killed to interrupt a stuck wait)', log_prefix)
+                try:
+                    set_status('stopped', 'Cancelled.')
+                except Exception:  # noqa: BLE001
+                    pass
+                return
             logger.exception('[%s] browser session failed', log_prefix)
             try:
                 set_status('error', f'Browser session failed: {exc}')
@@ -3394,7 +3467,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     set_status('error', f'{requestor_id}: {mso_id} does not appear to be a participating provider for this network.')
                     return
                 if mvpd_username and mvpd_password:
-                    _try_autofill_credentials(page, mvpd_username, mvpd_password)
+                    _try_autofill_credentials(page, mvpd_username, mvpd_password, r=r)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
@@ -3451,7 +3524,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
 
                     if now - last_poll > _MVPD_SESSION_POLL_SECONDS:
                         last_poll = now
-                        if not f5_retried and _sling_f5_recover(page, auth_url, mvpd_username, mvpd_password):
+                        if not f5_retried and _sling_f5_recover(page, auth_url, mvpd_username, mvpd_password, r=r):
                             f5_retried = True
                             continue
                         try:
@@ -3505,9 +3578,22 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                         for cascade_label in ('NBC', 'FOX Sports', 'AMC Networks', 'Discovery'):
                             steps.append({'label': cascade_label, 'state': 'pending'})
 
+                        def _step_and_report(label: str, state: str, message: str = ''):
+                            # _step() only mutates the local `steps` list — nothing
+                            # pushes it to redis until the *next* set_status() call,
+                            # which previously didn't happen again until this whole
+                            # sweep finished (~90s across 6 networks). That's why the
+                            # modal looked frozen: the frame updated a little, but the
+                            # status text and step badges never moved. Push on every
+                            # transition instead, same as the NBC/FOX/AMCN/Discovery
+                            # loop right below already does.
+                            _step(label, state, message)
+                            live_message = f'Checking {label}…' if state == 'running' else 'Signed in — checking other TVE networks (still interactive if any of them need you)…'
+                            set_status('running', live_message, _safe_page_url(page))
+
                         set_status('running', 'Signed in — checking other TVE networks (still interactive if any of them need you)…', _safe_page_url(page))
                         try:
-                            results.update(_pair_sibling_requestors(page, requestor_id, mso_id, mvpd_username, mvpd_password, r, on_step=_step))
+                            results.update(_pair_sibling_requestors(page, requestor_id, mso_id, mvpd_username, mvpd_password, r, on_step=_step_and_report))
                         except Exception as exc:  # noqa: BLE001
                             logger.warning('[mvpd-login] sibling pairing pass failed: %s', exc)
                         for label, fn in (
@@ -3556,6 +3642,14 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 logger.warning('[mvpd-login] browser died (attempt %d/%d), relaunching: %s', _attempt, _BROWSER_LOGIN_MAX_ATTEMPTS, exc)
                 set_status('starting', 'Browser hiccuped — relaunching…')
                 return run_mvpd_browser_login(requestor_id, resource, software_statement, redirect_url, mso_id, cascade, _attempt=_attempt + 1, _deadline=deadline)
+            if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                logger.info('[mvpd-login] stopped by request (browser force-killed to interrupt a stuck wait)')
+                try:
+                    _step(requestor_id, 'failed', 'cancelled')
+                    set_status('stopped', 'Cancelled.')
+                except Exception:  # noqa: BLE001
+                    pass
+                return
             logger.exception('[mvpd-login] browser session failed')
             try:
                 _step(requestor_id, 'failed', str(exc)[:120])
@@ -3758,7 +3852,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     set_status('error', f'{mso_id} does not appear to be a participating provider for NBC TVE.')
                     return
                 if mvpd_username and mvpd_password:
-                    _try_autofill_credentials(page, mvpd_username, mvpd_password)
+                    _try_autofill_credentials(page, mvpd_username, mvpd_password, r=r)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
@@ -3812,7 +3906,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
                     if now - last_poll > _NBC_SESSION_POLL_SECONDS:
                         last_poll = now
-                        if not f5_retried and _sling_f5_recover(page, mso_login_url, mvpd_username, mvpd_password):
+                        if not f5_retried and _sling_f5_recover(page, mso_login_url, mvpd_username, mvpd_password, r=r):
                             f5_retried = True
                             continue
                         try:
@@ -3847,6 +3941,13 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 logger.warning('[nbc-mvpd-login] browser died (attempt %d/%d), relaunching: %s', _attempt, _BROWSER_LOGIN_MAX_ATTEMPTS, exc)
                 set_status('starting', 'Browser hiccuped — relaunching…')
                 return run_nbc_browser_login(mso_id, _attempt=_attempt + 1, _deadline=deadline)
+            if r.exists(NBC_BROWSER_LOGIN_STOP_KEY):
+                logger.info('[nbc-mvpd-login] stopped by request (browser force-killed to interrupt a stuck wait)')
+                try:
+                    set_status('stopped', 'Cancelled.')
+                except Exception:  # noqa: BLE001
+                    pass
+                return
             logger.exception('[nbc-mvpd-login] browser session failed')
             try:
                 set_status('error', f'Browser session failed: {exc}')
@@ -4035,7 +4136,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     set_status('error', f'{mso_id} does not appear to be a participating provider for FOX Sports TVE.')
                     return
                 if mvpd_username and mvpd_password:
-                    _try_autofill_credentials(page, mvpd_username, mvpd_password)
+                    _try_autofill_credentials(page, mvpd_username, mvpd_password, r=r)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
@@ -4089,7 +4190,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
                     if now - last_poll > _FOX_SESSION_POLL_SECONDS:
                         last_poll = now
-                        if not f5_retried and _sling_f5_recover(page, mso_login_url, mvpd_username, mvpd_password):
+                        if not f5_retried and _sling_f5_recover(page, mso_login_url, mvpd_username, mvpd_password, r=r):
                             f5_retried = True
                             continue
                         try:
@@ -4142,6 +4243,13 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 logger.warning('[fox-mvpd-login] browser died (attempt %d/%d), relaunching: %s', _attempt, _BROWSER_LOGIN_MAX_ATTEMPTS, exc)
                 set_status('starting', 'Browser hiccuped — relaunching…')
                 return run_fox_browser_login(mso_id, _attempt=_attempt + 1, _deadline=deadline)
+            if r.exists(FOX_BROWSER_LOGIN_STOP_KEY):
+                logger.info('[fox-mvpd-login] stopped by request (browser force-killed to interrupt a stuck wait)')
+                try:
+                    set_status('stopped', 'Cancelled.')
+                except Exception:  # noqa: BLE001
+                    pass
+                return
             logger.exception('[fox-mvpd-login] browser session failed')
             try:
                 set_status('error', f'Browser session failed: {exc}')

@@ -16,6 +16,10 @@ _SUPPRESS_PATTERNS = (
     'tve/nbc/browser-login/input',
     'tve/fox/browser-login/state',
     'tve/fox/browser-login/input',
+    'tve/amcn/browser-login/state',
+    'tve/amcn/browser-login/input',
+    'tve/discovery/browser-login/state',
+    'tve/discovery/browser-login/input',
     '/api/custom-channels/detect/', # stream detection status polling
     '/images/proxy',           # per-image cache hits — too noisy
     '/logos/',                 # cached logo file hits — too noisy

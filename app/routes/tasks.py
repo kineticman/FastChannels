@@ -423,6 +423,61 @@ def stop_sling_browser_login():
         logger.warning(f'Failed to signal Sling browser login stop: {e}')
 
 
+# legacy/AMC/Discovery/NBC/FOX browser-login jobs are separate RQ job_ids
+# (so their modals can poll independent redis-key namespaces — see the "NBC
+# TVE browser sign-in" comment below) but they all drive Camoufox against the
+# SAME on-disk profile dir, /data/browser_profiles/mvpd_tve (app/worker.py).
+# Only one Firefox process can hold that profile at a time, so every trigger_*
+# below must check ALL of these job_ids before enqueueing, not just its own —
+# otherwise two families queue up back-to-back and the second one silently
+# waits (up to job_timeout) for the first to release the shared profile.
+_MVPD_TVE_PROFILE_JOB_IDS = ('mvpd-browser-login', 'nbc-mvpd-browser-login', 'fox-mvpd-browser-login')
+_MVPD_TVE_PROFILE_THREAD_NAMES = (
+    'mvpd-browser-login-fallback', 'nbc-mvpd-browser-login-fallback', 'fox-mvpd-browser-login-fallback',
+)
+
+
+def _mvpd_tve_profile_busy(q: Queue) -> bool:
+    return any(_job_already_active(q, jid) for jid in _MVPD_TVE_PROFILE_JOB_IDS)
+
+
+def _force_kill_mvpd_browser() -> None:
+    """Actually kill the Camoufox process for the shared mvpd_tve profile,
+    rather than just setting the soft stop-flag and hoping the job's own
+    poll loop notices it soon.
+
+    Confirmed live (2026-08-10): a job can be legitimately still running —
+    not crashed, heartbeat still fresh — while genuinely stuck (e.g. the
+    primary human-driven phase waiting on a login page that never resolves
+    the way the modal implied it would). The stop-flag ALONE only helps if
+    the job's Python code happens to be at a point where it checks that key;
+    if it's blocked inside a lower-level Playwright/network call, nothing
+    checks the flag until that call returns — which, for the primary loop's
+    job_timeout, can be up to 1830s (its docstring/log line literally says
+    "had to wait for it to time out").
+
+    Killing the browser process forces whatever blocking call is in flight
+    to fail immediately, which raises inside the job — and its own exception
+    handler already checks the stop-flag before deciding whether to retry
+    (see run_mvpd_browser_login's `not r.exists(MVPD_BROWSER_LOGIN_STOP_KEY)`
+    guard), so setting the flag FIRST and killing the process SECOND means
+    the job sees "stopped" and exits cleanly instead of relaunching a new
+    browser and continuing the wait. Matches on 'mvpd_tve' specifically (the
+    profile dir name) so it can't ever touch Sling's separate browser/profile.
+    """
+    import subprocess
+    try:
+        subprocess.run(['pkill', '-9', '-f', 'mvpd_tve'], timeout=5, check=False)
+    except Exception as e:
+        logger.warning(f'Failed to force-kill MVPD browser process: {e}')
+
+
+def _mvpd_tve_profile_busy_fallback() -> bool:
+    import threading
+    names = set(_MVPD_TVE_PROFILE_THREAD_NAMES)
+    return any(t.name in names and t.is_alive() for t in threading.enumerate())
+
+
 def trigger_mvpd_browser_login(requestor_id: str, resource: str, software_statement: str, redirect_url: str, mso_id: str, cascade: bool = False):
     """Returns True if a job was enqueued, False if one is already running.
 
@@ -434,7 +489,7 @@ def trigger_mvpd_browser_login(requestor_id: str, resource: str, software_statem
     try:
         q = get_fast_queue()
         job_id = 'mvpd-browser-login'
-        if _job_already_active(q, job_id):
+        if _mvpd_tve_profile_busy(q):
             logger.info('MVPD browser login already running')
             return False
         q.enqueue(
@@ -450,7 +505,7 @@ def trigger_mvpd_browser_login(requestor_id: str, resource: str, software_statem
         from app.worker import run_mvpd_browser_login
         # Same persistent-profile-dir collision concern as Sling's fallback.
         thread_name = 'mvpd-browser-login-fallback'
-        if any(t.name == thread_name and t.is_alive() for t in threading.enumerate()):
+        if _mvpd_tve_profile_busy_fallback():
             logger.info('MVPD browser login fallback thread already running')
             return False
         threading.Thread(
@@ -467,6 +522,7 @@ def stop_mvpd_browser_login():
         r.setex('mvpd:browser-login:stop', 30, '1')
     except Exception as e:
         logger.warning(f'Failed to signal MVPD browser login stop: {e}')
+    _force_kill_mvpd_browser()
 
 
 def trigger_nbc_browser_login(mso_id: str):
@@ -474,7 +530,7 @@ def trigger_nbc_browser_login(mso_id: str):
     try:
         q = get_fast_queue()
         job_id = 'nbc-mvpd-browser-login'
-        if _job_already_active(q, job_id):
+        if _mvpd_tve_profile_busy(q):
             logger.info('NBC MVPD browser login already running')
             return False
         q.enqueue('app.worker.run_nbc_browser_login', mso_id, job_timeout=1830, job_id=job_id)
@@ -485,7 +541,7 @@ def trigger_nbc_browser_login(mso_id: str):
         import threading
         from app.worker import run_nbc_browser_login
         thread_name = 'nbc-mvpd-browser-login-fallback'
-        if any(t.name == thread_name and t.is_alive() for t in threading.enumerate()):
+        if _mvpd_tve_profile_busy_fallback():
             logger.info('NBC MVPD browser login fallback thread already running')
             return False
         threading.Thread(target=run_nbc_browser_login, args=(mso_id,), daemon=True, name=thread_name).start()
@@ -498,6 +554,7 @@ def stop_nbc_browser_login():
         r.setex('nbc-mvpd:browser-login:stop', 30, '1')
     except Exception as e:
         logger.warning(f'Failed to signal NBC MVPD browser login stop: {e}')
+    _force_kill_mvpd_browser()
 
 
 def trigger_fox_browser_login(mso_id: str):
@@ -505,7 +562,7 @@ def trigger_fox_browser_login(mso_id: str):
     try:
         q = get_fast_queue()
         job_id = 'fox-mvpd-browser-login'
-        if _job_already_active(q, job_id):
+        if _mvpd_tve_profile_busy(q):
             logger.info('FOX MVPD browser login already running')
             return False
         q.enqueue('app.worker.run_fox_browser_login', mso_id, job_timeout=1830, job_id=job_id)
@@ -516,7 +573,7 @@ def trigger_fox_browser_login(mso_id: str):
         import threading
         from app.worker import run_fox_browser_login
         thread_name = 'fox-mvpd-browser-login-fallback'
-        if any(t.name == thread_name and t.is_alive() for t in threading.enumerate()):
+        if _mvpd_tve_profile_busy_fallback():
             logger.info('FOX MVPD browser login fallback thread already running')
             return False
         threading.Thread(target=run_fox_browser_login, args=(mso_id,), daemon=True, name=thread_name).start()
@@ -529,6 +586,7 @@ def stop_fox_browser_login():
         r.setex('fox-mvpd:browser-login:stop', 30, '1')
     except Exception as e:
         logger.warning(f'Failed to signal FOX MVPD browser login stop: {e}')
+    _force_kill_mvpd_browser()
 
 
 # AMC Networks TVE / Discovery TVE standalone sign-in. Both reuse the legacy
@@ -542,7 +600,7 @@ def trigger_amcn_browser_login(mso_id: str):
     try:
         q = get_fast_queue()
         job_id = 'mvpd-browser-login'
-        if _job_already_active(q, job_id):
+        if _mvpd_tve_profile_busy(q):
             logger.info('MVPD browser login already running')
             return False
         q.enqueue('app.worker.run_amcn_browser_login', mso_id, job_timeout=1830, job_id=job_id)
@@ -553,7 +611,7 @@ def trigger_amcn_browser_login(mso_id: str):
         import threading
         from app.worker import run_amcn_browser_login
         thread_name = 'mvpd-browser-login-fallback'
-        if any(t.name == thread_name and t.is_alive() for t in threading.enumerate()):
+        if _mvpd_tve_profile_busy_fallback():
             logger.info('MVPD browser login fallback thread already running')
             return False
         threading.Thread(target=run_amcn_browser_login, args=(mso_id,), daemon=True, name=thread_name).start()
@@ -565,7 +623,7 @@ def trigger_discovery_browser_login(mso_id: str):
     try:
         q = get_fast_queue()
         job_id = 'mvpd-browser-login'
-        if _job_already_active(q, job_id):
+        if _mvpd_tve_profile_busy(q):
             logger.info('MVPD browser login already running')
             return False
         q.enqueue('app.worker.run_discovery_browser_login', mso_id, job_timeout=1830, job_id=job_id)
@@ -576,7 +634,7 @@ def trigger_discovery_browser_login(mso_id: str):
         import threading
         from app.worker import run_discovery_browser_login
         thread_name = 'mvpd-browser-login-fallback'
-        if any(t.name == thread_name and t.is_alive() for t in threading.enumerate()):
+        if _mvpd_tve_profile_busy_fallback():
             logger.info('MVPD browser login fallback thread already running')
             return False
         threading.Thread(target=run_discovery_browser_login, args=(mso_id,), daemon=True, name=thread_name).start()
