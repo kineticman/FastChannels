@@ -5186,7 +5186,17 @@ def tve_reset():
     sources = Source.query.filter(Source.name.in_(_TVE_SOURCE_NAMES)).all()
     source_ids = [s.id for s in sources]
     for s in sources:
-        s.config = {}
+        # home_zip_code is a user preference (FOX One's ConfigField, used
+        # when FOX asks to initialize home location), not a credential or
+        # cached sign-in artifact — a reset shouldn't make the user re-enter
+        # it (code review, 2026-08-10: this docstring's "narrower than a full
+        # wipe" claim wasn't actually true for this field).
+        preserved = {}
+        if s.name == 'fox_one':
+            zip_code = (s.config or {}).get('home_zip_code')
+            if zip_code:
+                preserved['home_zip_code'] = zip_code
+        s.config = preserved
 
     if source_ids:
         SourceCache.query.filter(
@@ -5473,11 +5483,7 @@ def nbc_browser_login_state():
     shot = r.get('nbc-mvpd:browser-login:screenshot')
     if shot:
         result['screenshot'] = base64.b64encode(shot).decode('ascii')
-    # The autofill-wait hint is written to the shared 'mvpd:*' key even from
-    # here (_relay_input_and_screenshot hardcodes it — see worker.py) rather
-    # than a dedicated nbc-mvpd:* one, so read the same key NBC/legacy/AMC/
-    # Discovery all actually write to.
-    hint = r.get('mvpd:browser-login:hint')
+    hint = r.get('nbc-mvpd:browser-login:hint')
     if hint:
         result['hint'] = hint.decode('utf-8', 'replace') if isinstance(hint, bytes) else hint
     return jsonify(result)
@@ -5543,9 +5549,7 @@ def fox_browser_login_state():
     shot = r.get('fox-mvpd:browser-login:screenshot')
     if shot:
         result['screenshot'] = base64.b64encode(shot).decode('ascii')
-    # See nbc_browser_login_state — the autofill-wait hint is always written
-    # to the shared 'mvpd:*' key regardless of family.
-    hint = r.get('mvpd:browser-login:hint')
+    hint = r.get('fox-mvpd:browser-login:hint')
     if hint:
         result['hint'] = hint.decode('utf-8', 'replace') if isinstance(hint, bytes) else hint
     return jsonify(result)

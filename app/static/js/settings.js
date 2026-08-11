@@ -393,6 +393,11 @@ let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;
 let _mvpdLoginFamily = 'legacy';
+// What to retry with after a force-stop — set by openMvpdLoginModal itself so
+// forceStopMvpdLogin never needs family/requestorId/cascade embedded in an
+// inline onclick (JSON.stringify()'d values inside a double-quoted HTML
+// attribute broke on their own quote characters — code review, 2026-08-10).
+let _mvpdLoginRetryArgs = null;
 
 // This deliberately shows "last signed in" timestamps, not a live "signed
 // in ✓" badge — cached TVE credentials have been observed to expire
@@ -445,6 +450,7 @@ function openMvpdLoginModal(family, requestorId, cascade) {
   const cfg = MVPD_LOGIN_FAMILIES[family];
   if (!cfg) return;
   if (cfg.needsRequestor && !requestorId) return;
+  _mvpdLoginRetryArgs = { family, requestorId, cascade };
   _mvpdLoginFamily = family;
   _mvpdLoginActive = true;
   _mvpdLoginDone = false;
@@ -476,7 +482,7 @@ function openMvpdLoginModal(family, requestorId, cascade) {
         _mvpdLoginDone = true;
         status.style.color = 'var(--danger)';
         status.innerHTML = 'A sign-in is already in progress for another network — they share one browser session. '
-          + '<a href="#" onclick="forceStopMvpdLogin(' + JSON.stringify(family) + ', ' + JSON.stringify(requestorId || null) + ', ' + JSON.stringify(!!cascade) + '); return false;" style="color:inherit;text-decoration:underline">'
+          + '<a href="#" onclick="forceStopMvpdLogin(); return false;" style="color:inherit;text-decoration:underline">'
           + 'Force-stop it and retry</a> if it looks stuck, or wait for it to finish on its own.';
         return;
       }
@@ -485,20 +491,29 @@ function openMvpdLoginModal(family, requestorId, cascade) {
     .catch(() => _pollMvpdLoginModal());
 }
 
-async function forceStopMvpdLogin(family, requestorId, cascade) {
+async function forceStopMvpdLogin() {
   const status = document.getElementById('mvpd-login-status');
   status.style.color = '';
   status.textContent = 'Force-stopping the stuck sign-in…';
-  const cfg = MVPD_LOGIN_FAMILIES[family] || MVPD_LOGIN_FAMILIES.legacy;
-  try {
-    // Kills the actual browser process, not just a flag the stuck job might
-    // never get around to checking — see _force_kill_mvpd_browser in
-    // app/routes/tasks.py.
-    await fetch(`${cfg.base}/stop`, { method: 'POST' });
-  } catch (e) {
-    // best-effort — retry the sign-in below regardless
-  }
-  setTimeout(() => openMvpdLoginModal(family, requestorId, cascade), 1500);
+  // legacy/AMC/Discovery share one job_id+redis namespace, but NBC and FOX
+  // each have their own — from here we can't tell which family is actually
+  // holding the shared Camoufox profile, only that /start told US we lost
+  // the race. Stopping all three is safe: it's a no-op on whichever two
+  // aren't running (nothing ever checks their stop-flag), and
+  // _force_kill_mvpd_browser() kills the one real browser process regardless
+  // of which endpoint triggered it — so whichever family IS active still
+  // gets its own stop-flag set correctly, instead of stopping the wrong one
+  // and leaving the real blocker to burn through retries (code review, 2026-08-10).
+  const stopUrls = [
+    '/api/settings/tve/browser-login/stop',
+    '/api/settings/tve/nbc/browser-login/stop',
+    '/api/settings/tve/fox/browser-login/stop',
+  ];
+  await Promise.allSettled(stopUrls.map((u) => fetch(u, { method: 'POST' })));
+  const retry = _mvpdLoginRetryArgs;
+  setTimeout(() => {
+    if (retry) openMvpdLoginModal(retry.family, retry.requestorId, retry.cascade);
+  }, 1500);
 }
 
 function closeMvpdLoginModal(event) {

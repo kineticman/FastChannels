@@ -1975,7 +1975,11 @@ def _same_page_url(actual: str, expected: str) -> bool:
         return False
 
 
-def _try_autofill_credentials(page, username: str, password: str, wait_seconds: float = 12.0, r=None) -> bool:
+def _try_autofill_credentials(
+    page, username: str, password: str, wait_seconds: float = 12.0, r=None,
+    stop_key: str | None = None, input_key: str | None = None,
+    shot_key: str | None = None, hint_key: str | None = None,
+) -> bool:
     """Best-effort, short-timeout sibling of _autofill_sling_credentials for
     the "sign in once" cascade (app.worker._silent_pair_* / sibling pairing).
 
@@ -2031,7 +2035,10 @@ def _try_autofill_credentials(page, username: str, password: str, wait_seconds: 
             now = time.monotonic()
             if now - last_relay >= 1.0:
                 last_relay = now
-                if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
+                if _relay_input_and_screenshot(
+                    page, r, waiting_since=wait_started,
+                    stop_key=stop_key, input_key=input_key, shot_key=shot_key, hint_key=hint_key,
+                ):
                     logger.info('[mvpd-login] autofill: cancelled while waiting for a password field')
                     return False
         page.wait_for_timeout(300)
@@ -2427,7 +2434,11 @@ def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
     db.session.commit()
 
 
-def _relay_input_and_screenshot(page, r, waiting_since: float | None = None) -> bool:
+def _relay_input_and_screenshot(
+    page, r, waiting_since: float | None = None,
+    stop_key: str | None = None, input_key: str | None = None,
+    shot_key: str | None = None, hint_key: str | None = None,
+) -> bool:
     """Keep the streamed browser modal alive and interactive during the "sign
     in once" cascade's silent phase, and report whether the human clicked
     Stop/Cancel.
@@ -2465,16 +2476,33 @@ def _relay_input_and_screenshot(page, r, waiting_since: float | None = None) -> 
 
     Best-effort; never raises. Call this every ~1s from within each cascade
     step's own poll loop, same cadence as the primary loop.
+
+    stop_key/input_key/shot_key/hint_key default to the shared legacy
+    'mvpd:browser-login:*' keys — correct for legacy/AMC/Discovery (which
+    genuinely share one modal/redis-namespace by design) and for the
+    cascade-only _silent_pair_* siblings (which report through that SAME
+    shared modal). NBC's and FOX's own STANDALONE primary loops have their
+    own separate 'nbc-mvpd:*'/'fox-mvpd:*' namespace and must pass their own
+    keys explicitly — passing the defaults there would write screenshots
+    nobody's modal ever reads (confirmed live via code review, 2026-08-10:
+    the NBC/FOX autofill-wait screenshot fix silently didn't work because of
+    exactly this default). Params are keyword-only in spirit; resolved
+    inside the function body (not as literal defaults) since NBC_/FOX_
+    BROWSER_LOGIN_*_KEY aren't defined yet at this point in the file.
     """
     import json as _json
+    stop_key = stop_key or MVPD_BROWSER_LOGIN_STOP_KEY
+    input_key = input_key or MVPD_BROWSER_LOGIN_INPUT_KEY
+    shot_key = shot_key or MVPD_BROWSER_LOGIN_SHOT_KEY
+    hint_key = hint_key or MVPD_BROWSER_LOGIN_HINT_KEY
     stopped = False
     try:
-        stopped = bool(r.exists(MVPD_BROWSER_LOGIN_STOP_KEY))
+        stopped = bool(r.exists(stop_key))
     except Exception:  # noqa: BLE001
         pass
     for _ in range(20):
         try:
-            raw = r.lpop(MVPD_BROWSER_LOGIN_INPUT_KEY)
+            raw = r.lpop(input_key)
         except Exception:  # noqa: BLE001
             break
         if raw is None:
@@ -2485,13 +2513,13 @@ def _relay_input_and_screenshot(page, r, waiting_since: float | None = None) -> 
             pass
     try:
         shot = page.screenshot(type='jpeg', quality=60)
-        r.setex(MVPD_BROWSER_LOGIN_SHOT_KEY, 30, shot)
+        r.setex(shot_key, 30, shot)
     except Exception:  # noqa: BLE001
         pass
     if waiting_since is not None and time.monotonic() - waiting_since > _MVPD_STUCK_HINT_SECONDS:
         try:
             r.setex(
-                MVPD_BROWSER_LOGIN_HINT_KEY, 5,
+                hint_key, 5,
                 "Taking a while — if the screen below shows a Sign In or Continue button, "
                 "clicking it can help. It may also just be working in the background.",
             )
@@ -2503,7 +2531,11 @@ def _relay_input_and_screenshot(page, r, waiting_since: float | None = None) -> 
 _F5_REJECTION_MARKER = 'The requested URL was rejected'
 
 
-def _sling_f5_recover(page, login_url: str, username: str, password: str, r=None) -> bool:
+def _sling_f5_recover(
+    page, login_url: str, username: str, password: str, r=None,
+    stop_key: str | None = None, input_key: str | None = None,
+    shot_key: str | None = None, hint_key: str | None = None,
+) -> bool:
     """Detect Sling's F5 bot-defense block page ("The requested URL was
     rejected. Please consult with your administrator.") that replaces the
     login form in-place when a submitted POST gets flagged. Observed live
@@ -2522,7 +2554,10 @@ def _sling_f5_recover(page, login_url: str, username: str, password: str, r=None
         page.wait_for_timeout(8000)
         page.goto(login_url, wait_until='domcontentloaded', timeout=30000)
         if username and password:
-            _try_autofill_credentials(page, username, password, r=r)
+            _try_autofill_credentials(
+                page, username, password, r=r,
+                stop_key=stop_key, input_key=input_key, shot_key=shot_key, hint_key=hint_key,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.info('[mvpd-login] F5-recovery reload failed: %s', exc)
     return True
@@ -3663,6 +3698,7 @@ NBC_BROWSER_LOGIN_STATUS_KEY = 'nbc-mvpd:browser-login:status'
 NBC_BROWSER_LOGIN_SHOT_KEY = 'nbc-mvpd:browser-login:screenshot'
 NBC_BROWSER_LOGIN_INPUT_KEY = 'nbc-mvpd:browser-login:input'
 NBC_BROWSER_LOGIN_STOP_KEY = 'nbc-mvpd:browser-login:stop'
+NBC_BROWSER_LOGIN_HINT_KEY = 'nbc-mvpd:browser-login:hint'
 _NBC_BROWSER_LOGIN_TIMEOUT_SECONDS = 1800
 _NBC_SESSION_POLL_SECONDS = 2.0
 
@@ -3852,7 +3888,11 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     set_status('error', f'{mso_id} does not appear to be a participating provider for NBC TVE.')
                     return
                 if mvpd_username and mvpd_password:
-                    _try_autofill_credentials(page, mvpd_username, mvpd_password, r=r)
+                    _try_autofill_credentials(
+                        page, mvpd_username, mvpd_password, r=r,
+                        stop_key=NBC_BROWSER_LOGIN_STOP_KEY, input_key=NBC_BROWSER_LOGIN_INPUT_KEY,
+                        shot_key=NBC_BROWSER_LOGIN_SHOT_KEY, hint_key=NBC_BROWSER_LOGIN_HINT_KEY,
+                    )
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
@@ -3906,7 +3946,11 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
                     if now - last_poll > _NBC_SESSION_POLL_SECONDS:
                         last_poll = now
-                        if not f5_retried and _sling_f5_recover(page, mso_login_url, mvpd_username, mvpd_password, r=r):
+                        if not f5_retried and _sling_f5_recover(
+                            page, mso_login_url, mvpd_username, mvpd_password, r=r,
+                            stop_key=NBC_BROWSER_LOGIN_STOP_KEY, input_key=NBC_BROWSER_LOGIN_INPUT_KEY,
+                            shot_key=NBC_BROWSER_LOGIN_SHOT_KEY, hint_key=NBC_BROWSER_LOGIN_HINT_KEY,
+                        ):
                             f5_retried = True
                             continue
                         try:
@@ -3960,6 +4004,7 @@ FOX_BROWSER_LOGIN_STATUS_KEY = 'fox-mvpd:browser-login:status'
 FOX_BROWSER_LOGIN_SHOT_KEY = 'fox-mvpd:browser-login:screenshot'
 FOX_BROWSER_LOGIN_INPUT_KEY = 'fox-mvpd:browser-login:input'
 FOX_BROWSER_LOGIN_STOP_KEY = 'fox-mvpd:browser-login:stop'
+FOX_BROWSER_LOGIN_HINT_KEY = 'fox-mvpd:browser-login:hint'
 _FOX_BROWSER_LOGIN_TIMEOUT_SECONDS = 1800
 _FOX_SESSION_POLL_SECONDS = 2.0
 
@@ -4136,7 +4181,11 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     set_status('error', f'{mso_id} does not appear to be a participating provider for FOX Sports TVE.')
                     return
                 if mvpd_username and mvpd_password:
-                    _try_autofill_credentials(page, mvpd_username, mvpd_password, r=r)
+                    _try_autofill_credentials(
+                        page, mvpd_username, mvpd_password, r=r,
+                        stop_key=FOX_BROWSER_LOGIN_STOP_KEY, input_key=FOX_BROWSER_LOGIN_INPUT_KEY,
+                        shot_key=FOX_BROWSER_LOGIN_SHOT_KEY, hint_key=FOX_BROWSER_LOGIN_HINT_KEY,
+                    )
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
@@ -4190,7 +4239,11 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
                     if now - last_poll > _FOX_SESSION_POLL_SECONDS:
                         last_poll = now
-                        if not f5_retried and _sling_f5_recover(page, mso_login_url, mvpd_username, mvpd_password, r=r):
+                        if not f5_retried and _sling_f5_recover(
+                            page, mso_login_url, mvpd_username, mvpd_password, r=r,
+                            stop_key=FOX_BROWSER_LOGIN_STOP_KEY, input_key=FOX_BROWSER_LOGIN_INPUT_KEY,
+                            shot_key=FOX_BROWSER_LOGIN_SHOT_KEY, hint_key=FOX_BROWSER_LOGIN_HINT_KEY,
+                        ):
                             f5_retried = True
                             continue
                         try:
