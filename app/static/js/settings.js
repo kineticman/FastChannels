@@ -261,13 +261,43 @@ function updateTveProviderFields() {
   if (select) select.dataset.previousProvider = provider.id;
 }
 
+// Keeps the "TVE is disabled" banner in sync with the toggle without
+// needing a page reload — called on toggle change, and after any save/reset
+// that could have changed is_enabled. A disabled account fails every
+// scraper and every "Sign in" click with no other visible indication
+// otherwise (observed live 2026-08-11: resetTveState() correctly unchecks
+// this — nothing to enable right after wiping credentials — but nothing
+// told the user it was still off after they re-entered new credentials).
+function _updateTveDisabledWarning() {
+  const warning = document.getElementById('tve-cox-disabled-warning');
+  const enabledCheckbox = document.getElementById('tve-cox-enabled');
+  if (!warning || !enabledCheckbox) return;
+  warning.style.display = enabledCheckbox.checked ? 'none' : 'block';
+}
+
 async function saveTveCoxSettings() {
   const status = document.getElementById('tve-cox-status');
+  const usernameField = document.getElementById('tve-cox-username');
+  const passwordField = document.getElementById('tve-cox-password');
+  const enabledCheckbox = document.getElementById('tve-cox-enabled');
+  // resetTveState() explicitly unchecks this (correctly — there's nothing to
+  // enable right after a reset), but nothing re-checked it afterward: saving
+  // freshly re-entered credentials with "Enabled" still off silently left
+  // the whole account disabled, and "Sign in to all" then just failed with
+  // no visible explanation (observed live 2026-08-11). Auto-check it only
+  // when credentials are genuinely being set for the first time (no
+  // password was previously configured) — never overrides a deliberate
+  // uncheck on an account that already has saved credentials.
+  const hadNoPasswordBefore = passwordField.placeholder !== 'Password saved - leave blank to keep';
+  if (hadNoPasswordBefore && usernameField.value.trim() && passwordField.value && !enabledCheckbox.checked) {
+    enabledCheckbox.checked = true;
+  }
+  _updateTveDisabledWarning();
   const body = {
     provider_id: document.getElementById('tve-provider').value,
-    is_enabled: document.getElementById('tve-cox-enabled').checked,
-    username: document.getElementById('tve-cox-username').value.trim(),
-    password: document.getElementById('tve-cox-password').value,
+    is_enabled: enabledCheckbox.checked,
+    username: usernameField.value.trim(),
+    password: passwordField.value,
   };
   status.className = 'save-status';
   status.textContent = 'Saving…';
@@ -361,7 +391,9 @@ async function resetTveState() {
     status.textContent = '✓ Reset';
     document.getElementById('tve-cox-username').value = '';
     document.getElementById('tve-cox-password').value = '';
+    document.getElementById('tve-cox-password').placeholder = 'TV provider password';
     document.getElementById('tve-cox-enabled').checked = false;
+    _updateTveDisabledWarning();
     loadTveNetworkStatus();
   } catch (e) {
     status.className = 'save-status error';
@@ -521,8 +553,24 @@ function _mvpdLoginBeginRequest(cfg, requestorId, cascade, attempt = 1) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-    .then(r => r.json())
-    .then((d) => {
+    .then(r => r.json().then(d => ({ ok: r.ok, status: r.status, d })))
+    .then(({ ok, status: httpStatus, d }) => {
+      // A non-2xx (e.g. 400 "Enable and save the TVE account first.") is a
+      // DEFINITIVE failure — the request never got as far as enqueuing a
+      // job. fetch() doesn't reject on this, only on network-level errors,
+      // so without checking r.ok this looked identical to success from
+      // here: it fell through to polling /state for a job that was never
+      // created, which then hung forever (or picked up stale data from an
+      // unrelated earlier run) with the user never told why (observed live
+      // 2026-08-11: re-saved TVE credentials without re-checking "Enabled"
+      // first, "Sign in to all" looked permanently stuck with zero
+      // explanation on screen).
+      if (!ok) {
+        _mvpdLoginDone = true;
+        status.style.color = 'var(--danger)';
+        status.textContent = '✗ ' + ((d && d.error) || `HTTP ${httpStatus}`);
+        return;
+      }
       // Only one sign-in can run at a time (they used to share one on-disk
       // browser profile; now it's mainly to keep Cox login attempts spaced
       // out). If this click lost that race, the job we'd be polling for was
@@ -807,8 +855,20 @@ function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-        .then(r => r.json())
-        .then((d) => {
+        .then(r => r.json().then(d => ({ ok: r.ok, status: r.status, d })))
+        .then(({ ok, status: httpStatus, d }) => {
+          // A non-2xx (e.g. 400 "Enable and save the TVE account first.")
+          // is a DEFINITIVE failure — no job was ever enqueued. fetch()
+          // doesn't reject on this, only on network-level errors, so
+          // without checking r.ok this looked identical to success and
+          // fell through to polling /state for a job that didn't exist,
+          // hanging this step forever with the user never told why
+          // (observed live 2026-08-11: same underlying gap as
+          // openMvpdLoginModal's version of this check).
+          if (!ok) {
+            resolve({ ok: false, message: (d && d.error) || `HTTP ${httpStatus}` });
+            return;
+          }
           if (d && d.status === 'already_running') {
             // This loop is sequential and awaits each step to a terminal
             // state before starting the next, so this shouldn't normally

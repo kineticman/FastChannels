@@ -37,6 +37,9 @@
               No auth test has run yet.
             {% endif %}
           </div>
+          <div id="tve-cox-disabled-warning" style="display:{% if tve_cox_account.is_enabled %}none{% else %}block{% endif %};margin-top:0.75rem;color:var(--warning-soft,#b8860b);background:var(--warning-bg-2,rgba(184,134,11,0.12));border:1px solid var(--warning-border,rgba(184,134,11,0.3));border-radius:4px;padding:0.5rem 0.7rem;font-size:0.82rem;line-height:1.4">
+            ⚠ TVE is disabled — the toggle on the right is off, so every network's scraper and every "Sign in" click will fail until it's turned back on and saved.
+          </div>
           <div style="margin-top:0.75rem">
             <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:0.75rem;margin-bottom:0.3rem">
               <div style="color:var(--text-muted);font-size:0.78rem">TVE network sign-in status — sign in to each network individually below, or all at once.</div>
@@ -47,7 +50,7 @@
         </div>
         <div class="toggle-row-control" style="gap:0.5rem;flex-wrap:wrap">
           <label class="toggle-switch" title="Enable TVE credentials">
-            <input type="checkbox" id="tve-cox-enabled" {% if tve_cox_account.is_enabled %}checked{% endif %}>
+            <input type="checkbox" id="tve-cox-enabled" onchange="_updateTveDisabledWarning()" {% if tve_cox_account.is_enabled %}checked{% endif %}>
             <span class="toggle-slider"></span>
           </label>
           <button class="btn btn-secondary" onclick="saveTveCoxSettings()">Save</button>
