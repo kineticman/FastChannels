@@ -693,10 +693,11 @@ def _fox_json_headers(token: str | None = None) -> dict:
 
 
 def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str, password: str) -> None:
-    from ..tve.adobe_pass import _hidden_form
+    from ..tve.adobe_pass import _hidden_form, throttle_cox_login
 
     login_user = username.split('@', 1)[0] if username.lower().endswith('@cox.net') else username
     session.get(cox_saml_url, allow_redirects=True, timeout=30)
+    throttle_cox_login()
     r = session.post(
         'https://login.cox.com/api/v1/authn',
         json={

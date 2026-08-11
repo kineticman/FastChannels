@@ -14,7 +14,7 @@ import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..models import TVEAccount
-from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
+from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, throttle_cox_login
 
 
 SCHEME = 'discovery-tve://'
@@ -202,6 +202,7 @@ def _first_image_url(item: dict, images: dict[str, str]) -> str | None:
 
 def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str, password: str) -> str:
     session.get(cox_saml_url, allow_redirects=True, timeout=30)
+    throttle_cox_login()
     login_user = username.split('@', 1)[0] if username.lower().endswith('@cox.net') else username
     r = session.post(
         'https://login.cox.com/api/v1/authn',

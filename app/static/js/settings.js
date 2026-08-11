@@ -399,21 +399,20 @@ let _mvpdLoginFamily = 'legacy';
 // browser) instead of a human-paced browser flow — clicking through several
 // networks within a minute was firing that many real Okta logins back to
 // back and tripping Cox's own rate-limiting (observed live 2026-08-11: the
-// 6th rapid-fire login suddenly took ~25s instead of ~2-3s). This spaces out
-// the actual /start call, not just the UI. Stored in localStorage rather
-// than a plain variable because a successful sign-in reloads the page (see
-// _pollMvpdLoginModal's success branch) — an in-memory cooldown would reset
-// on every single click otherwise, defeating the point.
-const MVPD_LOGIN_COOLDOWN_MS = 8000;
+// 6th rapid-fire login suddenly took ~25s instead of ~2-3s). Originally
+// throttled from here via a localStorage-tracked client-side cooldown, but
+// that only protected clicks within one browser tab — a second tab, a
+// different device, or a direct API call bypassed it entirely, and it also
+// raced the server's own job-completion timing (a slow login, e.g. AMC's 4
+// sequential channel logins, could finish AFTER this cooldown had already
+// elapsed, so the next batch step's /start hit "already_running" and got
+// wrongly marked failed). Moved to the real enforcement point instead —
+// app.tve.adobe_pass.throttle_cox_login() sleeps server-side, inside the
+// actual login.cox.com POST, covering every entry point including FOX One's
+// own button and any direct API call — see its docstring (code review,
+// 2026-08-11). Nothing client-side needed anymore: a "Sign in" click just
+// takes longer to respond if another login happened moments ago.
 
-function _mvpdLoginCooldownRemainingMs() {
-  const until = parseInt(localStorage.getItem('mvpdLoginCooldownUntil') || '0', 10);
-  return Math.max(0, until - Date.now());
-}
-
-function _armMvpdLoginCooldown() {
-  localStorage.setItem('mvpdLoginCooldownUntil', String(Date.now() + MVPD_LOGIN_COOLDOWN_MS));
-}
 // What to retry with after a force-stop — set by openMvpdLoginModal itself so
 // forceStopMvpdLogin never needs family/requestorId/cascade embedded in an
 // inline onclick (JSON.stringify()'d values inside a double-quoted HTML
@@ -498,26 +497,15 @@ function openMvpdLoginModal(family, requestorId, cascade) {
   frame.style.visibility = 'hidden';  // no src yet - avoid showing a broken-image icon
   status.style.color = '';
   document.getElementById('mvpd-login-hint').style.display = 'none';
+  status.textContent = 'Starting…';
   _renderMvpdLoginSteps([]);
   modal.classList.add('open');
-  _mvpdLoginWaitThenStart(cfg, requestorId, cascade);
+  _mvpdLoginBeginRequest(cfg, requestorId, cascade);
 }
 
-function _mvpdLoginWaitThenStart(cfg, requestorId, cascade) {
-  const status = document.getElementById('mvpd-login-status');
-  const remaining = _mvpdLoginCooldownRemainingMs();
-  if (remaining <= 0) {
-    status.textContent = 'Starting…';
-    _armMvpdLoginCooldown();
-    _mvpdLoginBeginRequest(cfg, requestorId, cascade);
-    return;
-  }
-  if (!_mvpdLoginActive) return;  // modal closed while waiting
-  status.style.color = '';
-  status.textContent = `Waiting ${Math.ceil(remaining / 1000)}s before signing in — avoids triggering your TV provider's own rate limiting.`;
-  _mvpdLoginPollTimer = setTimeout(() => _mvpdLoginWaitThenStart(cfg, requestorId, cascade), 250);
-}
-
+// A login attempted too soon after another one just takes longer to respond
+// — see the comment above MVPD_LOGIN_FAMILIES — rather than anything here
+// pre-emptively waiting.
 function _mvpdLoginBeginRequest(cfg, requestorId, cascade) {
   const status = document.getElementById('mvpd-login-status');
   const body = cfg.needsRequestor ? { requestor_id: requestorId } : {};
@@ -741,67 +729,46 @@ async function signInToAllTve() {
   setTimeout(() => { window.location.reload(); }, 2200);
 }
 
-// FOX One's counterpart to _mvpdLoginRunOneForBatch below — same cooldown
-// wait, but a single synchronous POST instead of /start+/state polling (see
-// foxOneSignIn). Still counts as a real Cox login for rate-limiting
-// purposes, so it still arms the shared cooldown.
+// FOX One's counterpart to _mvpdLoginRunOneForBatch below — a single
+// synchronous POST instead of /start+/state polling (see foxOneSignIn). The
+// server throttles the real Cox login regardless (app.tve.adobe_pass.
+// throttle_cox_login(), shared with fox_tve's _cox_saml_login which FOX One
+// also uses), so this just fires and waits for the response — no
+// client-side pacing needed.
 function _mvpdLoginRunFoxOneForBatch(label, status) {
-  return new Promise((resolve) => {
-    const waitThenGo = () => {
-      if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
-      const remaining = _mvpdLoginCooldownRemainingMs();
-      if (remaining > 0) {
-        status.style.color = '';
-        status.textContent = `Waiting ${Math.ceil(remaining / 1000)}s before signing in to ${label} — avoids triggering your TV provider's own rate limiting.`;
-        _mvpdLoginPollTimer = setTimeout(waitThenGo, 250);
-        return;
-      }
-      status.textContent = `Signing in to ${label}…`;
-      _armMvpdLoginCooldown();
-      fetch('/api/settings/tve/foxone/signin', { method: 'POST' })
-        .then(r => r.json().then(data => ({ ok: r.ok && !!data.ok, message: data.error })))
-        .then(({ ok, message }) => resolve({ ok, message: ok ? 'Signed in.' : (message || 'Sign-in failed.') }))
-        .catch((e) => resolve({ ok: false, message: e.message || 'Sign-in failed.' }));
-    };
-    waitThenGo();
-  });
+  status.textContent = `Signing in to ${label}…`;
+  return fetch('/api/settings/tve/foxone/signin', { method: 'POST' })
+    .then(r => r.json().then(data => ({ ok: r.ok && !!data.ok, message: data.error })))
+    .then(({ ok, message }) => ({ ok, message: ok ? 'Signed in.' : (message || 'Sign-in failed.') }))
+    .catch((e) => ({ ok: false, message: e.message || 'Sign-in failed.' }));
 }
 
-// Runs one network's sign-in (cooldown wait, /start, poll /state to a
-// terminal state) as part of signInToAllTve()'s loop. Resolves rather than
-// rejects on failure — one network being not-entitled/erroring shouldn't
-// abort the rest of the batch.
+// Runs one network's sign-in (/start, poll /state to a terminal state) as
+// part of signInToAllTve()'s loop. Resolves rather than rejects on failure —
+// one network being not-entitled/erroring shouldn't abort the rest of the
+// batch. No client-side cooldown — the server throttles the actual Cox
+// login (app.tve.adobe_pass.throttle_cox_login()) regardless of how fast
+// this loop fires /start calls.
 function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
   return new Promise((resolve) => {
-    const waitThenGo = () => {
-      if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
-      const remaining = _mvpdLoginCooldownRemainingMs();
-      if (remaining > 0) {
-        status.style.color = '';
-        status.textContent = `Waiting ${Math.ceil(remaining / 1000)}s before signing in to ${label} — avoids triggering your TV provider's own rate limiting.`;
-        _mvpdLoginPollTimer = setTimeout(waitThenGo, 250);
-        return;
-      }
-      status.textContent = `Signing in to ${label}…`;
-      _armMvpdLoginCooldown();
-      const body = cfg.needsRequestor ? { requestor_id: requestorId } : {};
-      fetch(`${cfg.base}/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+    status.textContent = `Signing in to ${label}…`;
+    const body = cfg.needsRequestor ? { requestor_id: requestorId } : {};
+    fetch(`${cfg.base}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(r => r.json())
+      .then((d) => {
+        if (d && d.status === 'already_running') {
+          // Shouldn't normally happen — this loop is the only thing that
+          // should be running — but resolve rather than hang if it does.
+          resolve({ ok: false, message: 'already running' });
+          return;
+        }
+        poll();
       })
-        .then(r => r.json())
-        .then((d) => {
-          if (d && d.status === 'already_running') {
-            // Shouldn't normally happen — this loop is the only thing that
-            // should be running — but resolve rather than hang if it does.
-            resolve({ ok: false, message: 'already running' });
-            return;
-          }
-          poll();
-        })
-        .catch(() => poll());
-    };
+      .catch(() => poll());
 
     const poll = () => {
       if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
@@ -822,8 +789,6 @@ function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
         })
         .catch(() => { _mvpdLoginPollTimer = setTimeout(poll, 400); });
     };
-
-    waitThenGo();
   });
 }
 

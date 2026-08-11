@@ -4,6 +4,7 @@ import html
 import json
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -14,6 +15,49 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 import requests
 
 logger = logging.getLogger(__name__)
+
+_COX_LOGIN_THROTTLE_KEY = 'tve:cox-login:last-at'
+_COX_LOGIN_THROTTLE_SECONDS = 8.0
+
+
+def throttle_cox_login() -> None:
+    """Enforces a minimum gap between real Cox credential POSTs across every
+    TVE network and entry point — legacy/AMC/Discovery's _cox_saml_login,
+    FOX Sports, and FOX One (a different Cox endpoint, identityhydra rather
+    than Okta, but the same account and the same "don't hammer it" concern).
+
+    Code review, 2026-08-11: the client-side cooldown built into the admin
+    settings modal (settings.js's localStorage-based wait) only throttles
+    clicks within one browser tab — a second tab, a different device, or a
+    direct API/script call bypassed it completely, leaving the actual
+    invariant ("don't trigger Cox/Okta's rate limiting") unenforced where
+    the real risk lives. This is a plain wall-clock timestamp in Redis
+    (not app.worker's job-id locks, which don't cover FOX One's route at
+    all — that one isn't an RQ job) so it works the same regardless of
+    which process or route the login came through.
+
+    Sleep-based rather than reject-based so callers don't need special
+    handling — a login attempted too soon just waits out the remainder
+    instead of failing outright. Redis being unavailable fails open (skips
+    throttling) rather than blocking a real sign-in attempt over it.
+    """
+    try:
+        import redis
+        from ..config import Config
+        r = redis.from_url(Config.REDIS_URL)
+        last_raw = r.get(_COX_LOGIN_THROTTLE_KEY)
+    except Exception:  # noqa: BLE001
+        return
+    now = time.time()
+    last_at = float(last_raw) if last_raw else 0.0
+    remaining = _COX_LOGIN_THROTTLE_SECONDS - (now - last_at)
+    if remaining > 0:
+        logger.info('[adobe-pass] throttling Cox login by %.1fs (another network signed in recently)', remaining)
+        time.sleep(remaining)
+    try:
+        r.set(_COX_LOGIN_THROTTLE_KEY, str(time.time()), ex=60)
+    except Exception:  # noqa: BLE001
+        pass
 
 ADOBE_BASE = 'https://sp.auth.adobe.com'
 AUTHENTICATE_URL = f'{ADOBE_BASE}/adobe-services/authenticate/saml'
@@ -352,6 +396,7 @@ class AdobePassCoxClient:
 
         try:
             self.session.get(cox_saml_url, allow_redirects=True, timeout=30)
+            throttle_cox_login()
             login_user = username.split('@', 1)[0] if username.lower().endswith('@cox.net') else username
             r = self.session.post(
                 'https://login.cox.com/api/v1/authn',

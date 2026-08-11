@@ -3214,7 +3214,17 @@ def run_amcn_browser_login(mso_id: str):
         device_id = scraper._device_id()
 
         authorized, failed = [], []
+        stopped = False
         for channel in CHANNELS.values():
+            # Only meaningful interruption point left now that this is 4
+            # sequential scripted logins instead of one long browser session
+            # — code review, 2026-08-11: force-stop had become a no-op here
+            # (old flag was only ever checked by browser-poll loops that no
+            # longer exist, and there's no browser process left to kill
+            # either).
+            if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                stopped = True
+                break
             try:
                 scraper._adobe_decision_token(channel, account, device_id)
                 authorized.append(channel.name)
@@ -3229,7 +3239,9 @@ def run_amcn_browser_login(mso_id: str):
         persist_source_config_updates(source.id, scraper._pending_config_updates)
         persist_source_cache_updates(source.id, scraper._pending_cache_updates)
 
-        if authorized:
+        if stopped:
+            set_status('stopped', f'Cancelled — authorized: {", ".join(authorized)}.' if authorized else 'Cancelled.')
+        elif authorized:
             message = f'Signed in — authorized: {", ".join(authorized)}.'
             if failed:
                 message += ' Not authorized: ' + '; '.join(failed) + '.'
@@ -3259,6 +3271,12 @@ def run_discovery_browser_login(mso_id: str):
     Discovery's actual auth requirements. This only supports Cox (the only
     MSO _authenticate() has wired up); non-Cox reports back as an error
     same as before.
+
+    No stop-key check here (unlike run_amcn_browser_login's per-channel
+    loop, code review 2026-08-11) — _authenticate() is one ~3s scripted call
+    with no natural interruption point partway through, so there's nothing
+    meaningful to cancel into; worst case is bounded by its own per-request
+    timeouts (30s each) rather than the old ~30min browser session.
     """
     with flask_app.app_context():
         import json as _json_login
@@ -4195,33 +4213,57 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         r.delete(FOX_BROWSER_LOGIN_INPUT_KEY)
 
         if mso_id == 'Cox':
-            # Cox's login step is already fully scripted:
-            # fox_tve._fox_sports_access_token() calls _fox_sports_mvpd_token(),
-            # which does the direct login.cox.com/api/v1/authn POST
-            # (_cox_saml_login) exactly like resolve()'s own normal playback
-            # path, then saves the token into the same account.config keys
-            # play-time reads. No browser needed; confirmed live 2026-08-11
-            # (full token round trip with the real Cox account, zero Camoufox).
-            # Only non-Cox MSOs fall through to the browser-assisted flow below.
+            # Cox's login step is already fully scripted via
+            # fox_tve._fox_sports_mvpd_token() (the direct login.cox.com/
+            # api/v1/authn POST, same _cox_saml_login used elsewhere). No
+            # browser needed; confirmed live 2026-08-11. Only non-Cox MSOs
+            # fall through to the browser-assisted flow below.
+            #
+            # Calls _fox_sports_mvpd_token() directly rather than going
+            # through _fox_sports_access_token()'s cache-first path — same
+            # reasoning as foxone_signin()'s own docstring: a "Sign in"
+            # click should always exercise a live Cox login, not silently
+            # return a still-valid cached token untested. That cache-first
+            # wrapper also swallows its own exceptions and falls back to an
+            # anonymous preview token instead of raising (the right call at
+            # play time, wrong for this button — code review, 2026-08-11:
+            # this button was reading the account-wide last_auth_status
+            # afterward instead of the actual outcome, which a DIFFERENT
+            # network's more recent attempt could have overwritten, and the
+            # cache-hit path never touched that field at all).
             set_status('running', 'Signing in to FOX Sports TVE…')
             import uuid as _uuid
-            from app.scrapers.fox_tve import _fox_sports_access_token
+            from app.scrapers.fox_tve import _fox_sports_mvpd_token
+            account_row = TVEAccount.query.filter_by(provider_id='cox').first()
+            if not account_row or not account_row.is_enabled or not account_row.has_credentials():
+                set_status('error', 'TVE credentials are not configured in Settings.')
+                return
             fox_session = requests.Session()
             try:
-                _fox_sports_access_token(fox_session, str(_uuid.uuid4()))
+                token = _fox_sports_mvpd_token(fox_session, str(_uuid.uuid4()), mso_id, account_row.username or '', account_row.password or '')
             except Exception as exc:  # noqa: BLE001
                 logger.exception('[fox-mvpd-login] unexpected failure')
+                message = f'FOX Sports {mso_id} auth failed: {exc}'
+                account_row.last_auth_status = 'error'
+                account_row.last_auth_message = message[:500]
+                account_row.last_auth_at = datetime.now(timezone.utc)
+                db.session.commit()
                 _record_tve_login_error('fox', str(exc))
                 set_status('error', f'FOX Sports TVE: {exc}')
                 return
-            account_after = TVEAccount.query.filter_by(provider_id='cox').first()
-            if account_after and account_after.last_auth_status == 'ok':
-                set_status('success', 'Signed in — FOX Sports TVE authorized.')
-                logger.info('[fox-mvpd-login] paired mso_id=Cox (scripted, no browser)')
-            else:
-                message = (account_after.last_auth_message if account_after else '') or 'FOX Sports TVE: sign-in failed.'
-                _record_tve_login_error('fox', message)
-                set_status('error', message)
+            now = int(time.time())
+            cfg = dict(account_row.config or {})
+            cfg['fox_sports_access_token'] = token
+            cfg['fox_sports_access_token_exp'] = _jwt_exp(token) or (now + 3600)
+            cfg['fox_sports_access_token_mso'] = mso_id
+            cfg['fox_sports_access_token_captured_at'] = now
+            account_row.config = cfg
+            account_row.last_auth_status = 'ok'
+            account_row.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id}.'
+            account_row.last_auth_at = datetime.now(timezone.utc)
+            db.session.commit()
+            set_status('success', 'Signed in — FOX Sports TVE authorized.')
+            logger.info('[fox-mvpd-login] paired mso_id=Cox (scripted, no browser)')
             return
 
         set_status('starting', 'Registering with FOX…')
