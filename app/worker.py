@@ -10,6 +10,7 @@ import signal
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -3239,29 +3240,57 @@ def run_amcn_browser_login(mso_id: str):
             return
         scraper = AMCNetworksTVEScraper(config=dict(source.config or {}))
         device_id = scraper._device_id()
+        # Force the lazy cache load here, in this thread, before any worker
+        # threads touch scraper.cache below — otherwise two threads racing
+        # the "is it loaded yet" check could both trigger it concurrently.
+        scraper.cache  # noqa: B018
 
+        # The 4 channels' logins are fully independent (each its own
+        # requestor_id, own adobe_auth:<requestor_id> cache entry, own
+        # AdobePassCoxClient/requests.Session — nothing shared but this one
+        # scraper instance, and each writes to its own distinct dict key,
+        # safe under the GIL) — running them one at a time was ~4x slower
+        # than necessary. throttle_cox_login() still serializes the actual
+        # Cox POSTs to the same safe spacing either way, so this doesn't
+        # change how fast real credential attempts hit Cox/Okta — it only
+        # overlaps the OTHER three Adobe API calls each channel makes,
+        # which don't touch Cox at all (code review, 2026-08-11; measured
+        # live: 4 sequential cold-cache logins took ~30s, ~16s of which was
+        # pure serial throttle waiting).
+        #
+        # Force-stop is checked once up front rather than between channels
+        # now — once dispatched, an in-flight login couldn't be interrupted
+        # either way (same limitation the old sequential loop had for
+        # whichever channel was actively running), and the whole batch is
+        # now short enough (~5-10s) that mid-flight cancellation matters
+        # much less than it did at ~30s.
+        stopped = r.exists(MVPD_BROWSER_LOGIN_STOP_KEY)
         authorized, failed = [], []
-        stopped = False
-        for channel in CHANNELS.values():
-            # Only meaningful interruption point left now that this is 4
-            # sequential scripted logins instead of one long browser session
-            # — code review, 2026-08-11: force-stop had become a no-op here
-            # (old flag was only ever checked by browser-poll loops that no
-            # longer exist, and there's no browser process left to kill
-            # either).
-            if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
-                stopped = True
-                break
-            try:
-                scraper._adobe_decision_token(channel, account, device_id)
-                authorized.append(channel.name)
-            except TVENotAuthorizedError as exc:
-                failed.append(f'{channel.name}: not entitled ({exc})')
-            except TVEAuthError as exc:
-                failed.append(f'{channel.name}: {exc}')
-            except Exception as exc:  # noqa: BLE001
-                logger.exception('[amcn-mvpd-login] unexpected failure for %s', channel.name)
-                failed.append(f'{channel.name}: {exc}')
+        if not stopped:
+            def _sign_in_one(channel):
+                with flask_app.app_context():
+                    try:
+                        scraper._adobe_decision_token(channel, account, device_id)
+                        return channel.name, None
+                    except TVENotAuthorizedError as exc:
+                        return channel.name, f'not entitled ({exc})'
+                    except TVEAuthError as exc:
+                        return channel.name, str(exc)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception('[amcn-mvpd-login] unexpected failure for %s', channel.name)
+                        return channel.name, str(exc)
+
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix='amcn-mvpd-login') as pool:
+                # Submitted (not as_completed) order so the final message
+                # lists networks in CHANNELS' own order regardless of which
+                # thread happens to finish first.
+                futures = [pool.submit(_sign_in_one, channel) for channel in CHANNELS.values()]
+                for future in futures:
+                    name, error = future.result()
+                    if error is None:
+                        authorized.append(name)
+                    else:
+                        failed.append(f'{name}: {error}')
 
         persist_source_config_updates(source.id, scraper._pending_config_updates)
         persist_source_cache_updates(source.id, scraper._pending_cache_updates)
