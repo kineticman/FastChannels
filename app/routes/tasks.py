@@ -589,9 +589,10 @@ def stop_fox_browser_login():
     _force_kill_mvpd_browser()
 
 
-# AMC Networks TVE / Discovery TVE standalone sign-in. Both reuse the legacy
-# flow's job_id and redis keys (mvpd:browser-login:*) — see
-# app.worker._run_amcn_or_discovery_standalone_login — so there's no
+# AMC Networks TVE / Discovery TVE standalone sign-in. Both do a fully
+# scripted Cox login now (app.worker.run_amcn_browser_login/
+# run_discovery_browser_login — no browser), but still reuse the legacy
+# flow's job_id and redis keys (mvpd:browser-login:*), so there's no
 # dedicated stop_*/state route for either; the existing
 # /api/settings/tve/browser-login/{state,input,stop} endpoints already work.
 

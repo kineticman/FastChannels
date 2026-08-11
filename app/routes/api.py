@@ -5288,6 +5288,14 @@ def foxone_signin():
         account.last_auth_status = 'error'
         account.last_auth_message = f'FOX One Cox MVPD auth failed: {exc}'[:500]
         account.last_auth_at = datetime.now(timezone.utc)
+        # Same 'tve_last_error' shape app.worker._record_tve_login_error writes
+        # for the other networks — app.tve.status.tve_network_status() reads
+        # this so a network that's never succeeded shows why, not just "Never".
+        cfg = dict(account.config or {})
+        errors = dict(cfg.get('tve_last_error') or {})
+        errors['foxone'] = {'message': str(exc)[:300], 'at': int(_time.time())}
+        cfg['tve_last_error'] = errors
+        account.config = cfg
         db.session.commit()
         if source and scraper._pending_config_updates:
             persist_source_config_updates(source.id, scraper._pending_config_updates)

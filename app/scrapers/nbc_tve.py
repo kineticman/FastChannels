@@ -637,6 +637,24 @@ class NbcTveScraper(BaseScraper):
             account.last_auth_status = 'ok'
             account.last_auth_message = f'NBC TVE access token obtained through {mso_id} MVPD.'
             account.last_auth_at = datetime.now(timezone.utc)
+            # Also stamp nbc_mvpd_auth's captured_at, same as the browser-
+            # assisted flow's _save_nbc_mvpd_auth — the admin settings page's
+            # "last signed in" column reads this, not last_auth_at (which is
+            # shared across every TVE network and would show the wrong
+            # timestamp for NBC specifically). For mso_id != 'Cox' this also
+            # doubles as the actual reusable cached credential (see the
+            # cached_auth check above); for Cox it's status-display-only,
+            # since Cox always re-authorizes fresh here rather than reading it
+            # back. Confirmed missing live 2026-08-11: a successful scripted
+            # Cox sign-in from the "Sign in" button still showed "Never".
+            new_cfg = dict(account.config or {})
+            new_cfg['nbc_mvpd_auth'] = {
+                'mso_id': mso_id,
+                'access_token': client.access_token,
+                'device_fingerprint': self._ensure_device_fingerprint(),
+                'captured_at': int(time.time()),
+            }
+            account.config = new_cfg
             db.session.commit()
         except TVENotAuthorizedError as exc:
             account.last_auth_status = 'error'

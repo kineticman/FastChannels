@@ -379,9 +379,10 @@ async function resetTveState() {
 // backend flow and endpoint prefix (see app/tve/status.py's 'family' field):
 // 'legacy' (A+E/Warner, needs a requestor_id) and 'nbc'/'fox'/'amcn'/
 // 'discovery' (each a single fixed target, no requestor_id). amcn/discovery
-// route to a thin wrapper (app.worker._run_amcn_or_discovery_standalone_login)
-// around the same pairing logic the legacy family's "sign in once" cascade
-// already uses, sharing its redis keys — see that function's docstring.
+// sign in with a fully scripted Cox login now (app.worker.run_amcn_browser_login/
+// run_discovery_browser_login — no browser involved), but still report
+// through the same status/redis keys as the legacy family's modal, so this
+// same polling code works unchanged for them.
 const MVPD_LOGIN_FAMILIES = {
   legacy:    { base: '/api/settings/tve/browser-login', needsRequestor: true },
   nbc:       { base: '/api/settings/tve/nbc/browser-login', needsRequestor: false },
@@ -393,6 +394,26 @@ let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;
 let _mvpdLoginFamily = 'legacy';
+
+// Every network's Cox sign-in is now a real, fast scripted login (no
+// browser) instead of a human-paced browser flow — clicking through several
+// networks within a minute was firing that many real Okta logins back to
+// back and tripping Cox's own rate-limiting (observed live 2026-08-11: the
+// 6th rapid-fire login suddenly took ~25s instead of ~2-3s). This spaces out
+// the actual /start call, not just the UI. Stored in localStorage rather
+// than a plain variable because a successful sign-in reloads the page (see
+// _pollMvpdLoginModal's success branch) — an in-memory cooldown would reset
+// on every single click otherwise, defeating the point.
+const MVPD_LOGIN_COOLDOWN_MS = 8000;
+
+function _mvpdLoginCooldownRemainingMs() {
+  const until = parseInt(localStorage.getItem('mvpdLoginCooldownUntil') || '0', 10);
+  return Math.max(0, until - Date.now());
+}
+
+function _armMvpdLoginCooldown() {
+  localStorage.setItem('mvpdLoginCooldownUntil', String(Date.now() + MVPD_LOGIN_COOLDOWN_MS));
+}
 // What to retry with after a force-stop — set by openMvpdLoginModal itself so
 // forceStopMvpdLogin never needs family/requestorId/cascade embedded in an
 // inline onclick (JSON.stringify()'d values inside a double-quoted HTML
@@ -415,6 +436,12 @@ function _tveRelativeTime(unixSeconds) {
   return `${days}d ago`;
 }
 
+function _escapeHtml(value) {
+  const div = document.createElement('div');
+  div.textContent = String(value == null ? '' : value);
+  return div.innerHTML;
+}
+
 async function loadTveNetworkStatus() {
   const container = document.getElementById('tve-network-status');
   if (!container) return;
@@ -424,7 +451,16 @@ async function loadTveNetworkStatus() {
     const rows = (d.networks || []).map(n => {
       const age = _tveRelativeTime(n.last_signed_in_at);
       const ageColor = n.last_signed_in_at ? 'var(--text-soft)' : 'var(--text-dim)';
-      const note = n.note ? `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${n.note}</div>` : '';
+      let note = n.note ? `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${n.note}</div>` : '';
+      // Otherwise a network that's never signed in successfully just shows
+      // "Never" with no clue why (e.g. this specific network not entitled
+      // on an otherwise-working Cox account) — see app/tve/status.py's
+      // tve_network_status, which only sets this when the failure is newer
+      // than the last success.
+      if (!note && n.last_error_message) {
+        const errAge = _tveRelativeTime(n.last_error_at);
+        note = `<div style="color:var(--danger);font-size:0.72rem;margin:0.05rem 0 0.35rem">Last attempt failed ${errAge}: ${_escapeHtml(n.last_error_message)}</div>`;
+      }
       const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
       let button = '';
       if (n.family === 'foxone') {
@@ -461,10 +497,29 @@ function openMvpdLoginModal(family, requestorId, cascade) {
   frame.removeAttribute('src');
   frame.style.visibility = 'hidden';  // no src yet - avoid showing a broken-image icon
   status.style.color = '';
-  status.textContent = 'Launching browser…';
   document.getElementById('mvpd-login-hint').style.display = 'none';
   _renderMvpdLoginSteps([]);
   modal.classList.add('open');
+  _mvpdLoginWaitThenStart(cfg, requestorId, cascade);
+}
+
+function _mvpdLoginWaitThenStart(cfg, requestorId, cascade) {
+  const status = document.getElementById('mvpd-login-status');
+  const remaining = _mvpdLoginCooldownRemainingMs();
+  if (remaining <= 0) {
+    status.textContent = 'Starting…';
+    _armMvpdLoginCooldown();
+    _mvpdLoginBeginRequest(cfg, requestorId, cascade);
+    return;
+  }
+  if (!_mvpdLoginActive) return;  // modal closed while waiting
+  status.style.color = '';
+  status.textContent = `Waiting ${Math.ceil(remaining / 1000)}s before signing in — avoids triggering your TV provider's own rate limiting.`;
+  _mvpdLoginPollTimer = setTimeout(() => _mvpdLoginWaitThenStart(cfg, requestorId, cascade), 250);
+}
+
+function _mvpdLoginBeginRequest(cfg, requestorId, cascade) {
+  const status = document.getElementById('mvpd-login-status');
   const body = cfg.needsRequestor ? { requestor_id: requestorId } : {};
   if (cascade) body.cascade = true;
   fetch(`${cfg.base}/start`, {
@@ -474,14 +529,15 @@ function openMvpdLoginModal(family, requestorId, cascade) {
   })
     .then(r => r.json())
     .then((d) => {
-      // All TVE networks share one on-disk browser profile, so only one
-      // sign-in can run at a time. If this click lost that race, the job we'd
-      // be polling for was never started — polling anyway just shows a
-      // permanently blank "Signing in…" frame that looks hung. Say so instead.
+      // Only one sign-in can run at a time (they used to share one on-disk
+      // browser profile; now it's mainly to keep Cox login attempts spaced
+      // out). If this click lost that race, the job we'd be polling for was
+      // never started — polling anyway just shows a permanently blank
+      // "Signing in…" frame that looks hung. Say so instead.
       if (d && d.status === 'already_running') {
         _mvpdLoginDone = true;
         status.style.color = 'var(--danger)';
-        status.innerHTML = 'A sign-in is already in progress for another network — they share one browser session. '
+        status.innerHTML = 'A sign-in is already in progress for another network. '
           + '<a href="#" onclick="forceStopMvpdLogin(); return false;" style="color:inherit;text-decoration:underline">'
           + 'Force-stop it and retry</a> if it looks stuck, or wait for it to finish on its own.';
         return;
@@ -526,7 +582,9 @@ function _closeMvpdLoginModal(cancel) {
   if (_mvpdLoginPollTimer) { clearTimeout(_mvpdLoginPollTimer); _mvpdLoginPollTimer = null; }
   const wasActive = _mvpdLoginActive;
   _mvpdLoginActive = false;
-  if (cancel && !_mvpdLoginDone && wasActive) {
+  // FOX One (batch mode only, see signInToAllTve) has no /stop endpoint —
+  // it's one direct synchronous POST, nothing to interrupt server-side.
+  if (cancel && !_mvpdLoginDone && wasActive && MVPD_LOGIN_FAMILIES[_mvpdLoginFamily]) {
     fetch(`${MVPD_LOGIN_FAMILIES[_mvpdLoginFamily].base}/stop`, { method: 'POST' }).catch(() => {});
   }
 }
@@ -586,8 +644,11 @@ async function _pollMvpdLoginModal() {
       _mvpdLoginDone = true;
       status.style.color = 'var(--success-soft)';
       status.textContent = '✓ ' + (d.message || 'Signed in.');
-      loadTveNetworkStatus();
-      setTimeout(() => { _closeMvpdLoginModal(false); }, 1800);
+      // Full reload rather than just loadTveNetworkStatus() — a successful
+      // sign-in can also change tve-cox-last-status (the Test button's
+      // Jinja-rendered "last checked" line) and account.last_auth_*, which
+      // nothing else on this page re-fetches after the initial page load.
+      setTimeout(() => { window.location.reload(); }, 1800);
       return;
     }
     if (d.state === 'error' || d.state === 'stopped') {
@@ -604,6 +665,166 @@ async function _pollMvpdLoginModal() {
     // transient — keep polling
   }
   _mvpdLoginPollTimer = setTimeout(_pollMvpdLoginModal, 400);
+}
+
+// "Sign in to all" — re-implemented 2026-08-11 after the old browser-based
+// cascade (app.worker._pair_sibling_requestors, one shared Camoufox tab
+// swept across every network) was disabled for good: it doesn't apply
+// anymore. Every network's Cox login is now an independent scripted
+// request/poll (see openMvpdLoginModal), so this is just a client-side loop
+// over the same /start+/state endpoints the individual "Sign in" buttons
+// use, reusing the same cooldown between each one to avoid Cox/Okta rate-
+// limiting. No server-side batch endpoint — nothing here needs a shared
+// browser or shared job to coordinate.
+async function signInToAllTve() {
+  if (_mvpdLoginActive) return;  // a sign-in (single or batch) is already open
+  const modal = document.getElementById('mvpd-login-modal');
+  const frame = document.getElementById('mvpd-login-frame');
+  const status = document.getElementById('mvpd-login-status');
+  const hintEl = document.getElementById('mvpd-login-hint');
+  frame.removeAttribute('src');
+  frame.style.visibility = 'hidden';
+  status.style.color = '';
+  hintEl.style.display = 'none';
+  _mvpdLoginRetryArgs = null;  // "retry" doesn't cleanly apply to a whole batch
+  _mvpdLoginActive = true;
+  _mvpdLoginDone = false;
+  if (_mvpdLoginPollTimer) { clearTimeout(_mvpdLoginPollTimer); _mvpdLoginPollTimer = null; }
+  _renderMvpdLoginSteps([]);
+  modal.classList.add('open');
+  status.textContent = 'Loading network list…';
+
+  let networks;
+  try {
+    const r = await fetch('/api/settings/tve/status');
+    const d = await r.json();
+    // 'foxone' authenticates through a different, always-native endpoint
+    // (foxOneSignIn's single synchronous POST, not the /start+/state polling
+    // every other family uses) — handled as a special case in the loop below.
+    networks = (d.networks || []).filter(n => n.family === 'foxone' || (n.family && MVPD_LOGIN_FAMILIES[n.family]));
+  } catch (e) {
+    _mvpdLoginDone = true;
+    status.style.color = 'var(--danger)';
+    status.textContent = 'Could not load the TVE network list.';
+    return;
+  }
+  if (!_mvpdLoginActive) return;  // modal closed while loading the list
+  if (!networks.length) {
+    _mvpdLoginDone = true;
+    status.textContent = 'No TVE networks configured.';
+    return;
+  }
+
+  const steps = networks.map(n => ({ label: n.requestor_id || n.label, state: 'pending' }));
+  _renderMvpdLoginSteps(steps);
+
+  for (let i = 0; i < networks.length; i++) {
+    if (!_mvpdLoginActive) return;  // modal closed / force-stopped mid-batch
+    const n = networks[i];
+    _mvpdLoginFamily = n.family;  // so a mid-batch cancel/force-stop hits the right endpoint
+    steps[i].state = 'running';
+    _renderMvpdLoginSteps(steps);
+    const result = n.family === 'foxone'
+      ? await _mvpdLoginRunFoxOneForBatch(n.label, status)
+      : await _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES[n.family], n.requestor_id, n.label, status, hintEl);
+    if (!_mvpdLoginActive) return;
+    steps[i].state = result.ok ? 'done' : 'failed';
+    steps[i].message = result.message;
+    _renderMvpdLoginSteps(steps);
+  }
+
+  _mvpdLoginDone = true;
+  const okCount = steps.filter(s => s.state === 'done').length;
+  status.style.color = okCount === steps.length ? 'var(--success-soft)' : '';
+  status.textContent = `✓ Signed in to ${okCount}/${steps.length} networks.`;
+  loadTveNetworkStatus();
+  setTimeout(() => { window.location.reload(); }, 2200);
+}
+
+// FOX One's counterpart to _mvpdLoginRunOneForBatch below — same cooldown
+// wait, but a single synchronous POST instead of /start+/state polling (see
+// foxOneSignIn). Still counts as a real Cox login for rate-limiting
+// purposes, so it still arms the shared cooldown.
+function _mvpdLoginRunFoxOneForBatch(label, status) {
+  return new Promise((resolve) => {
+    const waitThenGo = () => {
+      if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
+      const remaining = _mvpdLoginCooldownRemainingMs();
+      if (remaining > 0) {
+        status.style.color = '';
+        status.textContent = `Waiting ${Math.ceil(remaining / 1000)}s before signing in to ${label} — avoids triggering your TV provider's own rate limiting.`;
+        _mvpdLoginPollTimer = setTimeout(waitThenGo, 250);
+        return;
+      }
+      status.textContent = `Signing in to ${label}…`;
+      _armMvpdLoginCooldown();
+      fetch('/api/settings/tve/foxone/signin', { method: 'POST' })
+        .then(r => r.json().then(data => ({ ok: r.ok && !!data.ok, message: data.error })))
+        .then(({ ok, message }) => resolve({ ok, message: ok ? 'Signed in.' : (message || 'Sign-in failed.') }))
+        .catch((e) => resolve({ ok: false, message: e.message || 'Sign-in failed.' }));
+    };
+    waitThenGo();
+  });
+}
+
+// Runs one network's sign-in (cooldown wait, /start, poll /state to a
+// terminal state) as part of signInToAllTve()'s loop. Resolves rather than
+// rejects on failure — one network being not-entitled/erroring shouldn't
+// abort the rest of the batch.
+function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
+  return new Promise((resolve) => {
+    const waitThenGo = () => {
+      if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
+      const remaining = _mvpdLoginCooldownRemainingMs();
+      if (remaining > 0) {
+        status.style.color = '';
+        status.textContent = `Waiting ${Math.ceil(remaining / 1000)}s before signing in to ${label} — avoids triggering your TV provider's own rate limiting.`;
+        _mvpdLoginPollTimer = setTimeout(waitThenGo, 250);
+        return;
+      }
+      status.textContent = `Signing in to ${label}…`;
+      _armMvpdLoginCooldown();
+      const body = cfg.needsRequestor ? { requestor_id: requestorId } : {};
+      fetch(`${cfg.base}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+        .then(r => r.json())
+        .then((d) => {
+          if (d && d.status === 'already_running') {
+            // Shouldn't normally happen — this loop is the only thing that
+            // should be running — but resolve rather than hang if it does.
+            resolve({ ok: false, message: 'already running' });
+            return;
+          }
+          poll();
+        })
+        .catch(() => poll());
+    };
+
+    const poll = () => {
+      if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
+      fetch(`${cfg.base}/state`)
+        .then(r => r.json())
+        .then((d) => {
+          if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
+          if (d.hint) {
+            hintEl.textContent = '⚠ ' + d.hint;
+            hintEl.style.display = 'block';
+          } else {
+            hintEl.style.display = 'none';
+          }
+          if (d.state === 'success') { resolve({ ok: true, message: d.message || 'Signed in.' }); return; }
+          if (d.state === 'error' || d.state === 'stopped') { resolve({ ok: false, message: d.message || d.state }); return; }
+          status.textContent = d.message || `Signing in to ${label}…`;
+          _mvpdLoginPollTimer = setTimeout(poll, 400);
+        })
+        .catch(() => { _mvpdLoginPollTimer = setTimeout(poll, 400); });
+    };
+
+    waitThenGo();
+  });
 }
 
 function _mvpdLoginFrameScale(frame) {

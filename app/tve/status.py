@@ -18,6 +18,21 @@ def tve_network_status(account) -> list[dict]:
 
     cfg = (account.config or {}) if account else {}
     entries: list[dict] = []
+    errors = cfg.get('tve_last_error') or {}
+
+    def _last_error(key: str, last_signed_in_at) -> tuple[str | None, int | None]:
+        """A network that's never signed in successfully just shows "Never"
+        with no indication why (confirmed live 2026-08-11: FYI came back
+        "not entitled" while its A+E siblings all succeeded, and there was
+        no way to tell that from the admin page). Only surfaces an error
+        that's NEWER than the last success — a later successful sign-in
+        naturally supersedes an older failure, no explicit clearing needed.
+        """
+        err = errors.get(key) or {}
+        at = err.get('at')
+        if not at or (last_signed_in_at and at <= last_signed_in_at):
+            return None, None
+        return err.get('message'), at
 
     # 'family' + 'requestor_id' tell the admin UI which sign-in endpoint a
     # row's "Sign in (browser)" button should drive:
@@ -43,29 +58,41 @@ def tve_network_status(account) -> list[dict]:
         except Exception:  # noqa: BLE001
             cache_key = choice['requestor_id']
         cached = mvpd_authn.get(cache_key) or {}
+        last_signed_in_at = cached.get('captured_at')
+        error_message, error_at = _last_error(cache_key, last_signed_in_at)
         entries.append({
             'label': choice['name'],
-            'last_signed_in_at': cached.get('captured_at'),
+            'last_signed_in_at': last_signed_in_at,
             'note': None,
             'family': 'legacy',
             'requestor_id': choice['requestor_id'],
+            'last_error_message': error_message,
+            'last_error_at': error_at,
         })
 
     nbc = cfg.get('nbc_mvpd_auth') or {}
+    nbc_last_signed_in_at = nbc.get('captured_at')
+    nbc_error_message, nbc_error_at = _last_error('nbc', nbc_last_signed_in_at)
     entries.append({
         'label': 'NBC TVE',
-        'last_signed_in_at': nbc.get('captured_at'),
+        'last_signed_in_at': nbc_last_signed_in_at,
         'note': None,
         'family': 'nbc',
         'requestor_id': None,
+        'last_error_message': nbc_error_message,
+        'last_error_at': nbc_error_at,
     })
 
+    fox_last_signed_in_at = cfg.get('fox_sports_access_token_captured_at')
+    fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at)
     entries.append({
         'label': 'FOX Sports TVE',
-        'last_signed_in_at': cfg.get('fox_sports_access_token_captured_at'),
+        'last_signed_in_at': fox_last_signed_in_at,
         'note': None,
         'family': 'fox',
         'requestor_id': None,
+        'last_error_message': fox_error_message,
+        'last_error_at': fox_error_at,
     })
 
     # FOX One authenticates natively (username/password OAuth against Cox's
@@ -85,12 +112,15 @@ def tve_network_status(account) -> list[dict]:
             fox_one_captured_at = (fox_one_source.config or {}).get('access_token_captured_at')
     except Exception:  # noqa: BLE001
         pass
+    foxone_error_message, foxone_error_at = _last_error('foxone', fox_one_captured_at)
     entries.append({
         'label': 'FOX One',
         'last_signed_in_at': fox_one_captured_at,
         'note': None,
         'family': 'foxone',
         'requestor_id': None,
+        'last_error_message': foxone_error_message,
+        'last_error_at': foxone_error_at,
     })
 
     amcn_cached_at = None
@@ -102,12 +132,15 @@ def tve_network_status(account) -> list[dict]:
         amcn_cached_at = max(stamps) if stamps else None
     except Exception:  # noqa: BLE001
         pass
+    amcn_error_message, amcn_error_at = _last_error('amcn', amcn_cached_at)
     entries.append({
         'label': 'AMC Networks TVE',
         'last_signed_in_at': amcn_cached_at,
         'note': None,
         'family': 'amcn',
         'requestor_id': None,
+        'last_error_message': amcn_error_message,
+        'last_error_at': amcn_error_at,
     })
 
     disco_cached_at = None
@@ -117,12 +150,15 @@ def tve_network_status(account) -> list[dict]:
         disco_cached_at = (disco_cache.get('discovery_tve_session') or {}).get('cached_at')
     except Exception:  # noqa: BLE001
         pass
+    disco_error_message, disco_error_at = _last_error('discovery', disco_cached_at)
     entries.append({
         'label': 'Discovery TVE',
         'last_signed_in_at': disco_cached_at,
         'note': None,
         'family': 'discovery',
         'requestor_id': None,
+        'last_error_message': disco_error_message,
+        'last_error_at': disco_error_at,
     })
 
     return entries

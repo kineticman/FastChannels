@@ -2434,6 +2434,31 @@ def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
     db.session.commit()
 
 
+def _record_tve_login_error(key: str, message: str) -> None:
+    """Records the last failed sign-in attempt for one TVE network/requestor,
+    keyed the same way app/tve/status.py's tve_network_status() keys its
+    per-network entries (requestor_id for the legacy family, 'nbc'/'fox'/
+    'amcn'/'discovery'/'foxone' for the rest). A network that has never
+    signed in successfully otherwise just shows "Never" on the admin
+    settings page with no indication why — e.g. bad entitlement for that
+    specific network on an otherwise-working Cox account (confirmed live
+    2026-08-11: FYI came back "not entitled" while its A+E siblings
+    succeeded). No need to explicitly clear this on a later success —
+    tve_network_status() only surfaces an error note when it's newer than
+    the last successful sign-in, so a subsequent success naturally
+    supersedes it.
+    """
+    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    if not account:
+        return
+    cfg = dict(account.config or {})
+    errors = dict(cfg.get('tve_last_error') or {})
+    errors[key] = {'message': str(message)[:300], 'at': int(time.time())}
+    cfg['tve_last_error'] = errors
+    account.config = cfg
+    db.session.commit()
+
+
 def _relay_input_and_screenshot(
     page, r, waiting_since: float | None = None,
     stop_key: str | None = None, input_key: str | None = None,
@@ -3141,22 +3166,99 @@ def _silent_pair_discovery(page, mso_id: str, username: str, password: str, redi
     return True, 'authorized'
 
 
-def _run_amcn_or_discovery_standalone_login(pair_fn, log_prefix: str, display_name: str, mso_id: str, _attempt: int = 1, _deadline: float | None = None):
-    """Shared browser-launch/status/retry scaffolding for AMC Networks TVE's
-    and Discovery TVE's standalone "Sign in" buttons.
+def run_amcn_browser_login(mso_id: str):
+    """Standalone "Sign in" for AMC Networks TVE.
 
-    Neither network has a dedicated Adobe Pass client to register up front
-    like NBC/FOX/legacy do — _silent_pair_amcn/_silent_pair_discovery already
-    implement each network's full registration+poll dance (originally
-    written for the "sign in once" cascade, see _pair_sibling_requestors),
-    so this just wraps one call to pair_fn in the same launch/retry/status
-    shape as run_nbc_browser_login. Deliberately reuses the legacy flow's
-    redis keys (MVPD_BROWSER_LOGIN_*) rather than a dedicated namespace, so
-    the existing sign-in modal and its state/input/stop routes work
-    unchanged — no new polling plumbing needed, just a /start route per
-    network (see api.py). This also means an AMC/Discovery standalone run
-    and a legacy/cascade run can't overlap, which is correct: they'd
-    otherwise fight over the same persistent Camoufox profile directory.
+    Same reasoning as run_discovery_browser_login: resolve() already does a
+    fully scripted Cox login per channel family via
+    AMCNetworksTVEScraper._adobe_decision_token() (register session, follow
+    the Adobe redirect, then _cox_saml_login()'s direct POST to
+    login.cox.com/api/v1/authn) — no browser needed. Unlike Discovery, AMCN
+    caches auth separately per requestor_id (AMC/BBCA/IFC/WETV each has its
+    own adobe_auth:<requestor_id> cache entry, see _adobe_auth_cache_key),
+    so "Sign in" here warms all four instead of just one.
+    """
+    with flask_app.app_context():
+        import json as _json_login
+        from app.scrapers.amcn_tve import AMCNetworksTVEScraper, CHANNELS
+
+        try:
+            r = redis.from_url(flask_app.config['REDIS_URL'])
+            r.ping()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[amcn-mvpd-login] Redis unavailable, aborting: %s', exc)
+            return
+
+        def set_status(state: str, message: str = ''):
+            try:
+                r.setex(
+                    MVPD_BROWSER_LOGIN_STATUS_KEY, 120,
+                    _json_login.dumps({'state': state, 'message': message, 'url': '', 'requestor_id': 'AMC Networks TVE', 'steps': []}),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        r.delete(MVPD_BROWSER_LOGIN_STOP_KEY)
+        r.delete(MVPD_BROWSER_LOGIN_INPUT_KEY)
+        set_status('running', 'Signing in to AMC Networks TVE…')
+
+        source = Source.query.filter_by(name='amcn_tve').first()
+        if not source:
+            set_status('error', 'AMC Networks TVE source not found.')
+            return
+        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        if not account or not account.is_enabled or not account.has_credentials():
+            set_status('error', 'TVE credentials are not configured in Settings.')
+            return
+        scraper = AMCNetworksTVEScraper(config=dict(source.config or {}))
+        device_id = scraper._device_id()
+
+        authorized, failed = [], []
+        for channel in CHANNELS.values():
+            try:
+                scraper._adobe_decision_token(channel, account, device_id)
+                authorized.append(channel.name)
+            except TVENotAuthorizedError as exc:
+                failed.append(f'{channel.name}: not entitled ({exc})')
+            except TVEAuthError as exc:
+                failed.append(f'{channel.name}: {exc}')
+            except Exception as exc:  # noqa: BLE001
+                logger.exception('[amcn-mvpd-login] unexpected failure for %s', channel.name)
+                failed.append(f'{channel.name}: {exc}')
+
+        persist_source_config_updates(source.id, scraper._pending_config_updates)
+        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+
+        if authorized:
+            message = f'Signed in — authorized: {", ".join(authorized)}.'
+            if failed:
+                message += ' Not authorized: ' + '; '.join(failed) + '.'
+            set_status('success', message)
+            logger.info('[amcn-mvpd-login] paired mso_id=%s authorized=%s failed=%s (scripted, no browser)', mso_id, authorized, failed)
+        else:
+            message = '; '.join(failed) or 'No AMC Networks channels authorized.'
+            _record_tve_login_error('amcn', message)
+            set_status('error', message)
+
+
+def run_discovery_browser_login(mso_id: str):
+    """Standalone "Sign in" for Discovery TVE.
+
+    Unlike AMC/NBC/FOX, Discovery's Cox login never actually needs a
+    browser: DiscoveryTVEScraper._authenticate() already does the whole
+    thing scripted (register, gauth authorize, _cox_saml_login's direct
+    POST to login.cox.com/api/v1/authn, code exchange, entitlement check)
+    on every session refresh during normal scraping. Confirmed live
+    2026-08-11: a full authenticate+entitlement round trip in ~3s with the
+    real Cox account, zero Camoufox involved. _silent_pair_discovery (the
+    old page.goto()+autofill version, still used by the disabled cascade
+    sweep in _pair_sibling_requestors) was routing this same login through
+    a full Firefox launch for no reason, which is almost certainly why
+    Discovery was one of the networks reported stuck/timing out in the
+    community thread — Camoufox render/timeout budgets, not anything about
+    Discovery's actual auth requirements. This only supports Cox (the only
+    MSO _authenticate() has wired up); non-Cox reports back as an error
+    same as before.
     """
     with flask_app.app_context():
         import json as _json_login
@@ -3165,101 +3267,47 @@ def _run_amcn_or_discovery_standalone_login(pair_fn, log_prefix: str, display_na
             r = redis.from_url(flask_app.config['REDIS_URL'])
             r.ping()
         except Exception as exc:  # noqa: BLE001
-            logger.warning('[%s] Redis unavailable, aborting: %s', log_prefix, exc)
+            logger.warning('[discovery-mvpd-login] Redis unavailable, aborting: %s', exc)
             return
 
-        # Same teardown-clobber guard as run_mvpd_browser_login/run_nbc_browser_login.
-        _terminal_status_set = {'v': False}
-
-        def set_status(state: str, message: str = '', url: str = ''):
+        def set_status(state: str, message: str = ''):
             try:
                 r.setex(
                     MVPD_BROWSER_LOGIN_STATUS_KEY, 120,
-                    _json_login.dumps({'state': state, 'message': message, 'url': url, 'requestor_id': display_name, 'steps': []}),
+                    _json_login.dumps({'state': state, 'message': message, 'url': '', 'requestor_id': 'Discovery TVE', 'steps': []}),
                 )
-                if state in ('success', 'error', 'stopped'):
-                    _terminal_status_set['v'] = True
             except Exception:  # noqa: BLE001
                 pass
 
         r.delete(MVPD_BROWSER_LOGIN_STOP_KEY)
         r.delete(MVPD_BROWSER_LOGIN_INPUT_KEY)
-        set_status('starting', f'Signing in to {display_name}…')
+        set_status('running', 'Signing in to Discovery TVE…')
 
-        deadline = _deadline if _deadline is not None else time.monotonic() + _MVPD_BROWSER_LOGIN_TIMEOUT_SECONDS
+        from app.scrapers.discovery_tve import DiscoveryTVEScraper
 
-        account_row = TVEAccount.query.filter_by(provider_id='cox').first()
-        mvpd_username = (account_row.username if account_row else '') or ''
-        mvpd_password = (account_row.password if account_row else '') or ''
-
-        try:
-            from camoufox.sync_api import Camoufox
-        except ImportError:
-            set_status('error', 'Camoufox is not installed on this container')
+        source = Source.query.filter_by(name='discovery_tve').first()
+        if not source:
+            set_status('error', 'Discovery TVE source not found.')
             return
-
-        profile_dir = '/data/browser_profiles/mvpd_tve'
+        scraper = DiscoveryTVEScraper(config=dict(source.config or {}))
         try:
-            import os as _os_login
-            _os_login.makedirs(profile_dir, exist_ok=True)
+            scraper._authenticate()
+        except TVENotAuthorizedError as exc:
+            _record_tve_login_error('discovery', f'not entitled — {exc}')
+            set_status('error', f'Discovery TVE: not entitled — {exc}')
+            return
+        except TVEAuthError as exc:
+            _record_tve_login_error('discovery', str(exc))
+            set_status('error', f'Discovery TVE: {exc}')
+            return
         except Exception as exc:  # noqa: BLE001
-            logger.warning('[%s] could not create profile dir %s: %s', log_prefix, profile_dir, exc)
-
-        try:
-            with Camoufox(
-                headless='virtual', os='windows', persistent_context=True,
-                user_data_dir=profile_dir, window=(1280, 800),
-            ) as context:
-                page = context.pages[0] if context.pages else context.new_page()
-                page.on('crash', lambda p: logger.warning('[%s] page CRASH event fired (url was %s)', log_prefix, _safe_page_url(p)))
-                page.on('close', lambda p: logger.warning('[%s] page CLOSE event fired', log_prefix))
-                page.on('pageerror', lambda exc: logger.warning('[%s] page JS error: %s', log_prefix, str(exc)[:500]))
-                set_status('running', f'Signing in to {display_name}…', _safe_page_url(page))
-                paired, message = pair_fn(page, mso_id, mvpd_username, mvpd_password, r)
-                if paired:
-                    set_status('success', f'Signed in — {display_name} {message}.')
-                    logger.info('[%s] paired mso_id=%s', log_prefix, mso_id)
-                else:
-                    set_status('error', f'{display_name}: {message}.')
-        except BaseException as exc:  # noqa: BLE001
-            if _terminal_status_set['v']:
-                logger.info('[%s] ignoring cleanup-time exception after terminal status was already set: %s', log_prefix, exc)
-                return
-            if (_is_browser_death(exc) and _attempt < _BROWSER_LOGIN_MAX_ATTEMPTS
-                    and time.monotonic() < deadline - 30
-                    and not r.exists(MVPD_BROWSER_LOGIN_STOP_KEY)):
-                logger.warning('[%s] browser died (attempt %d/%d), relaunching: %s', log_prefix, _attempt, _BROWSER_LOGIN_MAX_ATTEMPTS, exc)
-                set_status('starting', 'Browser hiccuped — relaunching…')
-                return _run_amcn_or_discovery_standalone_login(pair_fn, log_prefix, display_name, mso_id, _attempt=_attempt + 1, _deadline=deadline)
-            if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
-                # Force-stop kills the browser to interrupt whatever was blocking
-                # — that's the intended, expected way this exception happens, not
-                # a real crash. logger.exception's full traceback here would be
-                # misleading noise for a normal user-requested cancellation.
-                logger.info('[%s] stopped by request (browser force-killed to interrupt a stuck wait)', log_prefix)
-                try:
-                    set_status('stopped', 'Cancelled.')
-                except Exception:  # noqa: BLE001
-                    pass
-                return
-            logger.exception('[%s] browser session failed', log_prefix)
-            try:
-                set_status('error', f'Browser session failed: {exc}')
-            except Exception:  # noqa: BLE001
-                pass
+            logger.exception('[discovery-mvpd-login] unexpected failure')
+            _record_tve_login_error('discovery', str(exc))
+            set_status('error', f'Discovery TVE: {exc}')
             return
-
-
-def run_amcn_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | None = None):
-    """Standalone "Sign in" for AMC Networks TVE — see
-    _run_amcn_or_discovery_standalone_login for the shared mechanism."""
-    return _run_amcn_or_discovery_standalone_login(_silent_pair_amcn, 'amcn-mvpd-login', 'AMC Networks TVE', mso_id, _attempt=_attempt, _deadline=_deadline)
-
-
-def run_discovery_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | None = None):
-    """Standalone "Sign in" for Discovery TVE — see
-    _run_amcn_or_discovery_standalone_login for the shared mechanism."""
-    return _run_amcn_or_discovery_standalone_login(_silent_pair_discovery, 'discovery-mvpd-login', 'Discovery TVE', mso_id, _attempt=_attempt, _deadline=_deadline)
+        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+        set_status('success', 'Signed in — Discovery TVE authorized.')
+        logger.info('[discovery-mvpd-login] paired mso_id=%s (scripted, no browser)', mso_id)
 
 
 def _summarize_pairing_results(results: dict[str, tuple[bool, str]]) -> str:
@@ -3394,6 +3442,43 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
             redirect_url=redirect_url,
             device_fingerprint=_ensure_cox_device_fingerprint(account_row) if account_row else None,
         )
+
+        if mso_id == 'Cox' and not cascade:
+            # Cox's login step is already fully scripted:
+            # AdobePassCoxClient.authorize_with_cox() does the whole thing —
+            # register, regcode, direct login.cox.com/api/v1/authn POST
+            # (authenticate_with_cox), fetch_session_token, authorize — exactly
+            # what authorize_mvpd() already does automatically at play time for
+            # this same "legacy" family (History/A&E/Warner). No browser
+            # needed; confirmed live 2026-08-11 (History TVE authorized in a
+            # few seconds, zero Camoufox). Only non-Cox MSOs (e.g. Sling,
+            # whose login page blocks scripted clients outright) and the
+            # cascade sweep (still disabled at the API layer) fall through to
+            # the browser-assisted flow below.
+            set_status('running', f'Signing in to {requestor_id}…')
+            try:
+                client.authorize_with_cox(mvpd_username, mvpd_password)
+            except TVENotAuthorizedError as exc:
+                _step(requestor_id, 'failed', str(exc)[:120])
+                _record_tve_login_error(requestor_id, f'not entitled — {exc}')
+                set_status('error', f'{requestor_id}: not entitled — {exc}')
+                return
+            except TVEAuthError as exc:
+                _step(requestor_id, 'failed', str(exc)[:120])
+                _record_tve_login_error(requestor_id, str(exc))
+                set_status('error', f'{requestor_id}: {exc}')
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.exception('[mvpd-login] unexpected failure for %s', requestor_id)
+                _record_tve_login_error(requestor_id, str(exc))
+                set_status('error', f'{requestor_id}: {exc}')
+                return
+            _save_mvpd_authn_token(requestor_id, client.ctx.authn_token)
+            _step(requestor_id, 'done', 'authorized')
+            set_status('success', f'Signed in — {requestor_id} authorized.')
+            logger.info('[mvpd-login] paired requestor_id=%s mso_id=Cox (scripted, no browser)', requestor_id)
+            return
+
         try:
             client.setup_client()
             client.register_device()
@@ -3778,6 +3863,50 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
         r.delete(NBC_BROWSER_LOGIN_STOP_KEY)
         r.delete(NBC_BROWSER_LOGIN_INPUT_KEY)
+
+        if mso_id == 'Cox':
+            # Cox's login step is already fully scripted: NbcTveScraper.
+            # _ensure_entitled() calls AdobePassV2CoxClient.authorize(), which
+            # does the direct login.cox.com/api/v1/authn POST (_cox_saml_login,
+            # shared with fox_tve.py) on every entitlement refresh — same
+            # pattern as resolve()'s own normal playback path. No browser
+            # needed; confirmed live 2026-08-11 (full authorize+preauthorize
+            # round trip with the real Cox account, zero Camoufox). Only
+            # non-Cox MSOs fall through to the browser-assisted flow below.
+            set_status('running', 'Signing in to NBC TVE…')
+            source = Source.query.filter_by(name='nbc_tve').first()
+            if not source:
+                set_status('error', 'NBC TVE source not found.')
+                return
+            scraper = NbcTveScraper(config=dict(source.config or {}))
+            try:
+                guide = scraper._fetch_guide()
+                if not guide:
+                    set_status('error', 'NBC TVE: could not load channel guide.')
+                    return
+                resource_id = next(iter(guide.values())).resource_id
+                # Force a fresh entitlement check — _ensure_entitled() short-
+                # circuits on a still-fresh cached decision, which would make
+                # a deliberate "Sign in" click silently no-op.
+                scraper._update_cache('nbc_entitlements', {})
+                scraper._ensure_entitled(resource_id)
+            except (TVENotAuthorizedError, TVEAuthError) as exc:
+                persist_source_config_updates(source.id, scraper._pending_config_updates)
+                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                _record_tve_login_error('nbc', str(exc))
+                set_status('error', f'NBC TVE: {exc}')
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.exception('[nbc-mvpd-login] unexpected failure')
+                _record_tve_login_error('nbc', str(exc))
+                set_status('error', f'NBC TVE: {exc}')
+                return
+            persist_source_config_updates(source.id, scraper._pending_config_updates)
+            persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+            set_status('success', 'Signed in — NBC TVE authorized.')
+            logger.info('[nbc-mvpd-login] paired mso_id=Cox (scripted, no browser)')
+            return
+
         set_status('starting', 'Registering with Adobe Pass…')
 
         # One deadline shared across browser-crash retries (RQ job_timeout is
@@ -4064,6 +4193,37 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
         r.delete(FOX_BROWSER_LOGIN_STOP_KEY)
         r.delete(FOX_BROWSER_LOGIN_INPUT_KEY)
+
+        if mso_id == 'Cox':
+            # Cox's login step is already fully scripted:
+            # fox_tve._fox_sports_access_token() calls _fox_sports_mvpd_token(),
+            # which does the direct login.cox.com/api/v1/authn POST
+            # (_cox_saml_login) exactly like resolve()'s own normal playback
+            # path, then saves the token into the same account.config keys
+            # play-time reads. No browser needed; confirmed live 2026-08-11
+            # (full token round trip with the real Cox account, zero Camoufox).
+            # Only non-Cox MSOs fall through to the browser-assisted flow below.
+            set_status('running', 'Signing in to FOX Sports TVE…')
+            import uuid as _uuid
+            from app.scrapers.fox_tve import _fox_sports_access_token
+            fox_session = requests.Session()
+            try:
+                _fox_sports_access_token(fox_session, str(_uuid.uuid4()))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception('[fox-mvpd-login] unexpected failure')
+                _record_tve_login_error('fox', str(exc))
+                set_status('error', f'FOX Sports TVE: {exc}')
+                return
+            account_after = TVEAccount.query.filter_by(provider_id='cox').first()
+            if account_after and account_after.last_auth_status == 'ok':
+                set_status('success', 'Signed in — FOX Sports TVE authorized.')
+                logger.info('[fox-mvpd-login] paired mso_id=Cox (scripted, no browser)')
+            else:
+                message = (account_after.last_auth_message if account_after else '') or 'FOX Sports TVE: sign-in failed.'
+                _record_tve_login_error('fox', message)
+                set_status('error', message)
+            return
+
         set_status('starting', 'Registering with FOX…')
 
         # One deadline shared across browser-crash retries (RQ job_timeout is
