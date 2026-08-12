@@ -593,6 +593,65 @@ def _last_segment_url(manifest_text: str) -> str:
     return last
 
 
+_LIVE_PLAYLIST_MAX_SEGMENTS = 4
+
+
+def _trim_live_playlist(text: str, max_segments: int = _LIVE_PLAYLIST_MAX_SEGMENTS) -> str:
+    """
+    Drop the oldest segments from a live HLS variant playlist, keeping only
+    the last `max_segments`.
+
+    Some upstream CDNs (e.g. ViewTV) advertise a sliding window in the
+    manifest that is longer than how long they actually retain the segment
+    files — segments toward the front of the window 404 well before they
+    age out of the playlist.  Trimming forces every client to stay near the
+    live edge, inside the CDN's real retention window, regardless of how far
+    back that client would otherwise buffer.  No-op for VOD/finished
+    playlists (EXT-X-ENDLIST present) or playlists already at/under the cap.
+    """
+    if '#EXT-X-ENDLIST' in text:
+        return text
+
+    header: list[str] = []
+    groups: list[tuple[list[str], str]] = []
+    pending_tags: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('#EXTINF'):
+            pending_tags.append(line)
+        elif stripped and not stripped.startswith('#'):
+            groups.append((pending_tags, line))
+            pending_tags = []
+        elif not groups:
+            header.append(line)
+        else:
+            pending_tags.append(line)
+
+    dropped = len(groups) - max_segments
+    if dropped <= 0:
+        return text
+    kept = groups[dropped:]
+
+    out_header = []
+    for line in header:
+        stripped = line.strip()
+        if stripped.startswith('#EXT-X-MEDIA-SEQUENCE:'):
+            try:
+                seq = int(stripped.split(':', 1)[1])
+                line = f'#EXT-X-MEDIA-SEQUENCE:{seq + dropped}'
+            except ValueError:
+                pass
+        elif stripped.startswith('#EXT-X-PROGRAM-DATE-TIME:'):
+            continue  # no longer describes the new first segment
+        out_header.append(line)
+
+    out_lines = out_header
+    for tag_lines, uri in kept:
+        out_lines.extend(tag_lines)
+        out_lines.append(uri)
+    return '\n'.join(out_lines)
+
+
 def _variant_is_stale(channel_id: int, last_seg: str) -> bool:
     """Return True if last_seg hasn't changed for _SESSION_VARIANT_STALE_AFTER seconds.
 
@@ -2366,6 +2425,16 @@ def custom_manifest_proxy(channel_id: str):
                 logger.warning('[custom-proxy] variant fetch failed for %s: %s', raw_id, e)
                 return _unavailable_response()
 
+    # _session_variants marks ViewTV-style SSAI ad-stitched manifests, whose
+    # origin servers have been observed evicting segments (~35-45s) faster
+    # than the window they advertise (~58s), so untrimmed clients can be
+    # handed a segment URL that's already gone.  Scoped to that marker rather
+    # than all custom manifests, so channels without this CDN behavior keep
+    # their full look-ahead buffer.
+    session_variants = bool((channel.custom_headers or {}).get('_session_variants'))
+    if session_variants:
+        text = _trim_live_playlist(text)
+
     # Unless the channel explicitly requested segment proxying, leave segments
     # as direct absolute URLs.  YouTube/googlevideo HLS segment URLs already
     # work when fetched directly (from a matching IP, no CORS) for IPTV clients,
@@ -2377,7 +2446,6 @@ def custom_manifest_proxy(channel_id: str):
     encoded_id = _quote(raw_id, safe='')
     proxy_segments = bool(getattr(channel, 'proxy_segments', False)) or browser_preview
 
-    session_variants = bool((channel.custom_headers or {}).get('_session_variants'))
     lines = []
     for line in text.splitlines():
         stripped = line.strip()
