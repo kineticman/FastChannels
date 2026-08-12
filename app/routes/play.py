@@ -595,6 +595,22 @@ def _last_segment_url(manifest_text: str) -> str:
 
 _LIVE_PLAYLIST_MAX_SEGMENTS = 4
 
+# True playlist-level tags — anything else seen before the first segment URI
+# (e.g. a leading #EXT-X-DISCONTINUITY) actually describes that first
+# segment, not the playlist as a whole, and must be dropped/kept together
+# with it rather than pinned into the always-kept header.
+_PLAYLIST_HEADER_TAG_PREFIXES = (
+    '#EXTM3U',
+    '#EXT-X-VERSION',
+    '#EXT-X-TARGETDURATION',
+    '#EXT-X-MEDIA-SEQUENCE',
+    '#EXT-X-DISCONTINUITY-SEQUENCE',
+    '#EXT-X-PLAYLIST-TYPE',
+    '#EXT-X-INDEPENDENT-SEGMENTS',
+    '#EXT-X-START',
+    '#EXT-X-ALLOW-CACHE',
+)
+
 
 def _trim_live_playlist(text: str, max_segments: int = _LIVE_PLAYLIST_MAX_SEGMENTS) -> str:
     """
@@ -622,7 +638,7 @@ def _trim_live_playlist(text: str, max_segments: int = _LIVE_PLAYLIST_MAX_SEGMEN
         elif stripped and not stripped.startswith('#'):
             groups.append((pending_tags, line))
             pending_tags = []
-        elif not groups:
+        elif not groups and (not stripped or stripped.startswith(_PLAYLIST_HEADER_TAG_PREFIXES)):
             header.append(line)
         else:
             pending_tags.append(line)
@@ -631,8 +647,20 @@ def _trim_live_playlist(text: str, max_segments: int = _LIVE_PLAYLIST_MAX_SEGMEN
     if dropped <= 0:
         return text
     kept = groups[dropped:]
+    # Tags after the last segment URI (e.g. a trailing #EXT-X-DISCONTINUITY
+    # ahead of a segment the CDN hasn't published yet) describe none of the
+    # dropped groups — keep them instead of silently discarding them.
+    trailing_tags = pending_tags
+    # Any #EXT-X-DISCONTINUITY tags riding along with a dropped segment take
+    # its discontinuity with it, so DISCONTINUITY-SEQUENCE (which counts how
+    # many discontinuities preceded the playlist's first segment) has to
+    # advance by the same amount, the same way MEDIA-SEQUENCE does below.
+    discontinuities_dropped = sum(
+        1 for tag_lines, _ in groups[:dropped] for t in tag_lines if t.strip() == '#EXT-X-DISCONTINUITY'
+    )
 
     out_header = []
+    saw_discontinuity_seq = False
     for line in header:
         stripped = line.strip()
         if stripped.startswith('#EXT-X-MEDIA-SEQUENCE:'):
@@ -641,14 +669,27 @@ def _trim_live_playlist(text: str, max_segments: int = _LIVE_PLAYLIST_MAX_SEGMEN
                 line = f'#EXT-X-MEDIA-SEQUENCE:{seq + dropped}'
             except ValueError:
                 pass
+        elif stripped.startswith('#EXT-X-DISCONTINUITY-SEQUENCE:'):
+            saw_discontinuity_seq = True
+            if discontinuities_dropped:
+                try:
+                    seq = int(stripped.split(':', 1)[1])
+                    line = f'#EXT-X-DISCONTINUITY-SEQUENCE:{seq + discontinuities_dropped}'
+                except ValueError:
+                    pass
         elif stripped.startswith('#EXT-X-PROGRAM-DATE-TIME:'):
             continue  # no longer describes the new first segment
         out_header.append(line)
+
+    if discontinuities_dropped and not saw_discontinuity_seq:
+        insert_at = 1 if out_header and out_header[0].strip() == '#EXTM3U' else 0
+        out_header.insert(insert_at, f'#EXT-X-DISCONTINUITY-SEQUENCE:{discontinuities_dropped}')
 
     out_lines = out_header
     for tag_lines, uri in kept:
         out_lines.extend(tag_lines)
         out_lines.append(uri)
+    out_lines.extend(trailing_tags)
     return '\n'.join(out_lines)
 
 

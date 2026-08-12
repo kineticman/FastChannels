@@ -22,7 +22,7 @@ _DROP_WORDS = {
     "4k",
     "live",
 }
-_TRAILING_CALL_SIGN_RE = re.compile(r"\(([A-Za-z0-9]{2,10})\)\s*$")
+_TRAILING_CALL_SIGN_RE = re.compile(r"\(([A-Za-z0-9-]{2,10})\)\s*$")
 
 
 def _extract_call_sign(name: str | None) -> str | None:

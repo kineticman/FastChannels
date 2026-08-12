@@ -19,6 +19,18 @@ logger = logging.getLogger(__name__)
 _COX_LOGIN_THROTTLE_KEY = 'tve:cox-login:last-at'
 _COX_LOGIN_THROTTLE_SECONDS = 8.0
 
+# Atomically reserves the next login slot at least THROTTLE_SECONDS after the
+# previous one and returns it, so concurrent callers each get a distinct slot
+# instead of racing a separate GET (read) and SET (write).
+_RESERVE_SLOT_SCRIPT = """
+local last = tonumber(redis.call('GET', KEYS[1]) or '0')
+local interval = tonumber(ARGV[1])
+local now = tonumber(ARGV[2])
+local slot = math.max(now, last + interval)
+redis.call('SET', KEYS[1], tostring(slot), 'EX', 60)
+return tostring(slot)
+"""
+
 
 def throttle_cox_login() -> None:
     """Enforces a minimum gap between real Cox credential POSTs across every
@@ -40,24 +52,26 @@ def throttle_cox_login() -> None:
     handling — a login attempted too soon just waits out the remainder
     instead of failing outright. Redis being unavailable fails open (skips
     throttling) rather than blocking a real sign-in attempt over it.
+
+    Slot reservation (read-next-slot + advance-it) runs as a single Lua
+    script so concurrent callers (e.g. run_amcn_browser_login's 4-way
+    ThreadPoolExecutor, code review 2026-08-12) each get a distinct,
+    monotonically-spaced slot instead of racing a plain GET-then-SET: two
+    threads reading the same last-login timestamp before either writes back
+    would otherwise both compute zero remaining wait and fire on Cox at the
+    same instant, exactly what this throttle exists to prevent.
     """
     try:
         import redis
         from ..config import Config
         r = redis.from_url(Config.REDIS_URL)
-        last_raw = r.get(_COX_LOGIN_THROTTLE_KEY)
+        next_slot = r.eval(_RESERVE_SLOT_SCRIPT, 1, _COX_LOGIN_THROTTLE_KEY, _COX_LOGIN_THROTTLE_SECONDS, time.time())
     except Exception:  # noqa: BLE001
         return
-    now = time.time()
-    last_at = float(last_raw) if last_raw else 0.0
-    remaining = _COX_LOGIN_THROTTLE_SECONDS - (now - last_at)
+    remaining = float(next_slot) - time.time()
     if remaining > 0:
         logger.info('[adobe-pass] throttling Cox login by %.1fs (another network signed in recently)', remaining)
         time.sleep(remaining)
-    try:
-        r.set(_COX_LOGIN_THROTTLE_KEY, str(time.time()), ex=60)
-    except Exception:  # noqa: BLE001
-        pass
 
 ADOBE_BASE = 'https://sp.auth.adobe.com'
 AUTHENTICATE_URL = f'{ADOBE_BASE}/adobe-services/authenticate/saml'
