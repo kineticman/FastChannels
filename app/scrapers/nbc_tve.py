@@ -113,7 +113,7 @@ from urllib.parse import quote, urlsplit
 
 import requests
 
-from .base import BaseScraper, ChannelData, ProgramData
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from .fox_tve import _cox_saml_login
 from ..models import TVEAccount
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
@@ -127,6 +127,7 @@ SCHEME = 'nbc-tve://'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
 
 LIVE_PAGE_URL = 'https://www.nbc.com/live'
+GEOLOCATION_URL = 'https://geolocation.digitalsvc.apps.nbcuni.com/geolocation/live/'
 GRAPHQL_URL = 'https://friendship.nbc.com/v3/graphql'
 GUIDE_QUERY_HASH = 'e01be932ad1d10dd2473b136d52a8511636c46463e7f802f9fab584ae9f6f66b'
 # base64 of {"type":"TvGuide","implementation":"liveGuideTvGuide","name":"","app":""} — fixed constant.
@@ -163,6 +164,39 @@ _PAGE_CONFIG_TTL = 12 * 3600
 _GUIDE_TTL = 15 * 60
 # Cox Adobe Pass client token observed with a 6h exp; refresh a bit early.
 _ENTITLEMENT_TTL = 3 * 3600
+# Local-affiliate geolocation result — this install's outbound IP isn't
+# going anywhere, no need to re-check often.
+_GEO_TTL = 12 * 3600
+
+
+def _lookup_geo_channel(brand_key: str, auth_key: str) -> str | None:
+    """Ask NBC's own geolocation service which local affiliate it would hand
+    a browser making this exact call — same IP-based lookup nbc.com/live does
+    itself when no zip override is set client-side. See dev/nbc/NOTES.md: the
+    real site's `serviceZip` override is an opaque encrypted blob (AES scheme
+    not reversed), so there's no plaintext zip param to send here; this always
+    reflects wherever the scraper's own outbound requests originate."""
+    try:
+        r = requests.post(
+            f'{GEOLOCATION_URL}{brand_key}',
+            json={'adobeMvpdId': None, 'device': 'web'},
+            headers={
+                'User-Agent': UA,
+                'Accept': 'application/media.geo-v2+json',
+                'Content-Type': 'application/json',
+                'Origin': 'https://www.nbc.com',
+                'Referer': 'https://www.nbc.com/',
+                'client': 'oneapp',
+                'authorization': f'NBC-Basic key="{auth_key}", version="3.0", type="cpc"',
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, ValueError):
+        return None
+    geo_channel = ((data.get('localizedChannelInfo') or {}).get('geoChannel') or '').strip().lower()
+    return geo_channel or None
 
 
 def _decrypt_obfuscated_config(html: str) -> str | None:
@@ -371,8 +405,48 @@ class NbcTveScraper(BaseScraper):
                                           # to registry.drm_capable_source_names(); the real
                                           # per-request signed URL comes from get_license_url().
     all_channels_require_drm_bridge = True
+    config_schema = [
+        ConfigField(
+            'local_nbc_affiliate',
+            'Local NBC affiliate override',
+            placeholder='wjar',
+            help_text='Optional. The "NBC" channel is your market\'s local affiliate, auto-detected '
+                       'by IP geolocation the same way nbc.com/live does — set this only if that '
+                       'guess is wrong (e.g. this server is hosted somewhere other than where you '
+                       'watch). Use the station\'s call letters, lowercase, no "W"/"K" prefix stripped '
+                       '(e.g. wjar for Providence, knbc for Los Angeles).',
+        ),
+        ConfigField(
+            'local_telemundo_affiliate',
+            'Local Telemundo affiliate override',
+            placeholder='wdem',
+            help_text='Optional. Same as the NBC affiliate override above, for the local Telemundo station.',
+        ),
+    ]
 
     # ── channel + EPG discovery ──────────────────────────────────────────────
+
+    def _local_affiliates(self) -> tuple[str, str]:
+        nbc_override = (self.config.get('local_nbc_affiliate') or '').strip().lower()
+        telemundo_override = (self.config.get('local_telemundo_affiliate') or '').strip().lower()
+        if nbc_override and telemundo_override:
+            return nbc_override, telemundo_override
+
+        cached = self.cache.get('nbc_local_affiliate') or {}
+        if not (cached and (time.time() - float(cached.get('cached_at', 0))) < _GEO_TTL):
+            cached = {
+                'nbc': _lookup_geo_channel('nbc', 'nbc_live'),
+                'telemundo': _lookup_geo_channel('telemundo', 'telemundo_live'),
+                'cached_at': time.time(),
+            }
+            self._update_cache('nbc_local_affiliate', cached)
+
+        # 'wcmh'/'wdem' (Columbus, OH) are the last-resort fallback if geolocation
+        # is unreachable AND there's no cached result yet — matches the value this
+        # scraper hardcoded everywhere before per-install detection existed.
+        nbc_affiliate = nbc_override or cached.get('nbc') or 'wcmh'
+        telemundo_affiliate = telemundo_override or cached.get('telemundo') or 'wdem'
+        return nbc_affiliate, telemundo_affiliate
 
     def _graphql_user_id(self) -> str:
         user_id = self.config.get('graphql_user_id')
@@ -394,7 +468,13 @@ class NbcTveScraper(BaseScraper):
         # which silently breaks ONLY the local "nbc" row (returns a
         # stationId:null "Program Information Unavailable" placeholder) while
         # every other national row is unaffected either way.
-        affiliate = 'wcmh'
+        #
+        # The affiliate itself is per-install, not a fixed constant — see
+        # _local_affiliates(). `callSign` is sent empty: confirmed live
+        # (2026-08-12) that varying it (including blank) doesn't change the
+        # returned local-affiliate row at all, so there's nothing real to put
+        # there.
+        nbc_affiliate, telemundo_affiliate = self._local_affiliates()
         variables = {
             'userId': self._graphql_user_id(),
             'device': 'web',
@@ -402,14 +482,14 @@ class NbcTveScraper(BaseScraper):
             'language': 'en',
             'authorized': False,
             'isDayZero': True,
-            'name': affiliate,
+            'name': nbc_affiliate,
             'type': 'STREAM',
             'subType': 'home',
             'timeZone': 'America/New_York',
-            'nbcAffiliateName': affiliate,
-            'telemundoAffiliateName': 'wdem',
+            'nbcAffiliateName': nbc_affiliate,
+            'telemundoAffiliateName': telemundo_affiliate,
             'nationalBroadcastType': 'eastCoast',
-            'callSign': 'PK22',
+            'callSign': '',
             'app': 'nbc',
             'appVersion': 1253003,
             'componentConfigs': [GUIDE_COMPONENT_CONFIG_B64],
