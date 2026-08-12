@@ -706,7 +706,9 @@ class AMCNetworksTVEScraper(BaseScraper):
             'cached_at': now, 'expires_at': expires_at,
         })
 
-    def _adobe_decision_token(self, channel: AMCNChannel, account: TVEAccount, device_id: str) -> tuple[str, str]:
+    def _adobe_decision_token(
+        self, channel: AMCNChannel, account: TVEAccount, device_id: str, *, force: bool = False,
+    ) -> tuple[str, str]:
         cfg = account.config or {}
         # AMCN's own v2 REST API, not the legacy XML protocol yt-dlp's generic
         # MVPD login flows speak — so unlike warner_tve.py/aenetworks_tve.py,
@@ -718,9 +720,19 @@ class AMCNetworksTVEScraper(BaseScraper):
         # cache is empty/expired).
         mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
 
-        cached = self._cached_adobe_auth(channel, mso_id)
-        if cached:
-            return cached
+        # force=True skips a still-valid cached token — used by the admin
+        # "Sign in" button (app.worker.run_amcn_browser_login), which must
+        # always exercise a live Cox login so the attempt is real and
+        # last_signed_in_at actually advances, not silently return an
+        # untested cached token (same reasoning as FOX's and FOX One's own
+        # "Sign in" buttons — see run_fox_browser_login's docstring, code
+        # review 2026-08-12: this button was reporting "paired" and logging
+        # a success message off a pure cache hit, with no Cox request made
+        # and no timestamp movement to show for it).
+        if not force:
+            cached = self._cached_adobe_auth(channel, mso_id)
+            if cached:
+                return cached
 
         statement = self._amcn_software_statement(channel, account)
         client, code, mso_login_url, auth_headers = self._adobe_session_redirect(channel, statement, device_id, mso_id)

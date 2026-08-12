@@ -3204,7 +3204,14 @@ def run_amcn_browser_login(mso_id: str):
     login.cox.com/api/v1/authn) — no browser needed. Unlike Discovery, AMCN
     caches auth separately per requestor_id (AMC/BBCA/IFC/WETV each has its
     own adobe_auth:<requestor_id> cache entry, see _adobe_auth_cache_key),
-    so "Sign in" here warms all four instead of just one.
+    so "Sign in" here warms all four instead of just one. Passes force=True
+    to _adobe_decision_token so a click always exercises a live Cox login
+    instead of silently returning a still-valid cached token untested — same
+    "Sign in should be real" reasoning as FOX's and FOX One's own buttons
+    (see run_fox_browser_login's docstring); without it, re-clicking within
+    a token's ~24h lifetime logged a "paired"/"authorized" success in
+    milliseconds with no request actually sent and no admin/settings
+    timestamp movement to show for it (reported live 2026-08-12).
     """
     with flask_app.app_context():
         import json as _json_login
@@ -3270,7 +3277,7 @@ def run_amcn_browser_login(mso_id: str):
             def _sign_in_one(channel):
                 with flask_app.app_context():
                     try:
-                        scraper._adobe_decision_token(channel, account, device_id)
+                        scraper._adobe_decision_token(channel, account, device_id, force=True)
                         return channel.name, None
                     except TVENotAuthorizedError as exc:
                         return channel.name, f'not entitled ({exc})'
