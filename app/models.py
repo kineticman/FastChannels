@@ -161,6 +161,7 @@ class TVEAccount(db.Model):
             'yt_dlp_mso_id': (cfg.get('yt_dlp_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip(),
             'selected_mso_id': (cfg.get('selected_mso_id') or cfg.get('yt_dlp_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip(),
             'selected_mso_name': (cfg.get('selected_mso_name') or self.display_name or 'Cox').strip(),
+            'home_zip_code': (cfg.get('home_zip_code') or '').strip(),
             'last_auth_status': self.last_auth_status,
             'last_auth_message': self.last_auth_message,
             'last_auth_at': self.last_auth_at.isoformat() if self.last_auth_at else None,

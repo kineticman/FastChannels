@@ -5147,6 +5147,12 @@ def tve_cox_settings():
             statement = (data.get('software_statement') or '').strip()
             if statement:
                 cfg['software_statement'] = statement
+        # Shared across every TVE source that needs a home market — currently
+        # only fox_one (regional entitlement scoping), but this is where a
+        # future zip-driven local-affiliate lookup (e.g. for nbc_tve) would
+        # read from too, instead of each source collecting its own copy.
+        if 'home_zip_code' in data:
+            cfg['home_zip_code'] = (data.get('home_zip_code') or '').strip()
         account.config = cfg
         db.session.commit()
     return jsonify(account.to_safe_dict())
@@ -5180,23 +5186,25 @@ def tve_reset():
     import shutil
 
     account = TVEAccount.query.filter_by(provider_id='cox').first()
+    # home_zip_code is a user preference (shared across every TVE source that
+    # needs a home market — see /api/settings/tve/cox), not a credential or
+    # cached sign-in artifact — a reset shouldn't make the user re-enter it
+    # (code review, 2026-08-10, originally scoped to fox_one's own config
+    # before home_zip_code moved onto the shared account).
+    preserved_zip = ((account.config or {}).get('home_zip_code') or '').strip() if account else ''
     if account:
         db.session.delete(account)
+        db.session.flush()
+    if preserved_zip:
+        db.session.add(TVEAccount(
+            provider_id='cox', display_name='Cox', is_enabled=False,
+            config={'home_zip_code': preserved_zip},
+        ))
 
     sources = Source.query.filter(Source.name.in_(_TVE_SOURCE_NAMES)).all()
     source_ids = [s.id for s in sources]
     for s in sources:
-        # home_zip_code is a user preference (FOX One's ConfigField, used
-        # when FOX asks to initialize home location), not a credential or
-        # cached sign-in artifact — a reset shouldn't make the user re-enter
-        # it (code review, 2026-08-10: this docstring's "narrower than a full
-        # wipe" claim wasn't actually true for this field).
-        preserved = {}
-        if s.name == 'fox_one':
-            zip_code = (s.config or {}).get('home_zip_code')
-            if zip_code:
-                preserved['home_zip_code'] = zip_code
-        s.config = preserved
+        s.config = {}
 
     if source_ids:
         SourceCache.query.filter(

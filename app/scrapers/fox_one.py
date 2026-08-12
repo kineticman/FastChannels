@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import gzip
+import json
 import re
 import time
 import uuid
@@ -25,6 +28,7 @@ _ENT_BASE = 'https://ent.fox.com'
 _ADOBE_AUTHENTICATE_HOST = 'api.auth.adobe.com'
 _TOKEN_REFRESH_SKEW = 300
 _LOCATION_TTL = 6 * 60 * 60
+_ENTITLEMENTS_TTL = 6 * 60 * 60
 _UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
 
 
@@ -103,6 +107,19 @@ def _slug(value: str) -> str:
     return re.sub(r'[^a-z0-9]+', '-', value.lower()).strip('-')
 
 
+def _decode_location_part(value: str) -> dict:
+    """One comma-separated half of the opaque x-platform-location blob is
+    itself base64 JSON (see _ensure_platform_location) — decode it back out
+    to pull the plain zip/DMA values location-gated content APIs want as
+    separate headers (see _location_headers)."""
+    try:
+        padded = value + '=' * (-len(value) % 4)
+        data = json.loads(base64.b64decode(padded))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def _parse_time(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -157,13 +174,11 @@ class FoxOneScraper(BaseScraper):
     is_premium = True
     scrape_interval = 720
     stream_audit_enabled = True
+    # home_zip_code is NOT here — it moved to the shared TVEAccount config
+    # (Settings > TV Everywhere) so it's entered once and available to any
+    # TVE source that needs a home market, not just FOX One. See
+    # _shared_home_zip_code()/_persist_shared_home_zip_code().
     config_schema = [
-        ConfigField(
-            'home_zip_code',
-            'Home ZIP code',
-            placeholder='10001',
-            help_text='Optional. Used when FOX asks to initialize home location; otherwise the current locator ZIP is used.',
-        ),
         ConfigField(
             'refresh_token',
             'FOX One refresh token (fallback)',
@@ -191,12 +206,63 @@ class FoxOneScraper(BaseScraper):
         ),
     ]
 
+    def _location_headers(self) -> dict[str, str]:
+        """Extra headers FOX's real web client sends on every product/curated
+        content call, confirmed via a real-browser HAR capture
+        (dev/foxone/4.har): without these, the two D2C_LR_LINEAR_GUIDE
+        containers on the live landing page (the local-affiliate slot) come
+        back with item_count: 0 even though they're listed — the anonymous
+        _headers() alone only gets you the fixed national lineup. Distinct
+        from the opaque x-platform-location value _dtc_headers() uses for
+        *playback* — this API wants the zip/DMA split into their own plain
+        headers, plus a bearer token under a different header name
+        (x-fox-userauth, not x-access-token).
+
+        x-fox-zipcode/x-fox-dma must be the ACCOUNT'S HOME location (the
+        home_zip_code config, via TVEAccount), not the caller's IP-geolocated
+        "current" location — confirmed live 2026-08-12: sending the IP-geo
+        zip/DMA there populated whichever market this server's own outbound
+        IP happens to geolocate to (Ohio, in this box's case) and left the
+        SECOND local-guide container empty; sending the account's actual home
+        zip/DMA in all four fields populated BOTH containers with that home
+        market's real local stations instead. This is what makes
+        home_zip_code do something real rather than being a red herring next
+        to server-side IP geolocation.
+
+        Best-effort: swallows any auth/location failure and returns {} so an
+        install with no Cox account configured still gets the national
+        lineup exactly as before, just without the location-gated local
+        channel.
+        """
+        try:
+            access_token = self._ensure_access_token()
+            combined = self._ensure_platform_location(access_token)
+        except Exception:
+            return {}
+        parts = combined.split(',')
+        home = _decode_location_part(parts[1]) if len(parts) > 1 else {}
+        headers = {'x-fox-userauth': f'Bearer {access_token}'}
+        if home.get('home_zip_code'):
+            headers['x-fox-zipcode'] = str(home['home_zip_code'])
+            headers['x-fox-home-zipcode'] = str(home['home_zip_code'])
+        if home.get('home_metro_code'):
+            headers['x-fox-dma'] = str(home['home_metro_code'])
+            headers['x-fox-home-dma'] = str(home['home_metro_code'])
+        try:
+            entitlements = self._ensure_entitlements(access_token)
+        except Exception:
+            entitlements = ''
+        if entitlements:
+            headers['x-fox-content-entitlement'] = base64.b64encode(gzip.compress(entitlements.encode())).decode()
+        return headers
+
     def _get_json(self, path_or_url: str) -> dict:
         if path_or_url.startswith('http'):
             url = path_or_url
         else:
             url = f'{_API_BASE}/{path_or_url.lstrip("/")}'
-        r = self.session.get(url, headers=_headers(), timeout=30)
+        headers = {**_headers(), **self._location_headers()}
+        r = self.session.get(url, headers=headers, timeout=30)
         r.raise_for_status()
         data = r.json()
         if not data.get('status'):
@@ -239,6 +305,17 @@ class FoxOneScraper(BaseScraper):
             target_id = supported[0] if supported else None
             fallback_name = (supported[1] if supported else None) or (override[0] if override else call_sign)
             category = (supported[2] if supported else None) or (override[1] if override else 'Entertainment')
+            if override:
+                name = override[0]
+            elif supported:
+                name = str(first.get('network') or first.get('station_name') or fallback_name)
+            else:
+                # Unmapped call signs are local-affiliate/sister stations discovered
+                # via the geo-personalized live guide (see _location_headers) —
+                # their item's `network` field is just the generic literal
+                # "FOX"/"MNTV", not a real station name, so skip straight to the
+                # call sign instead of that unhelpful generic value.
+                name = str(first.get('station_name') or fallback_name)
             logo = (
                 _image(first.get('networks_info', [{}])[0].get('images') if first.get('networks_info') else None, 'primary', 'secondary')
                 or first.get('station_affiliate_logo')
@@ -256,7 +333,7 @@ class FoxOneScraper(BaseScraper):
             gracenote_id = raw_station_id if raw_station_id and raw_station_id.upper() != 'TBD' else None
             channels.append(FoxOneChannel(
                 source_channel_id=call_sign.lower(),
-                name=(override[0] if override else str(first.get('network') or first.get('station_name') or fallback_name)),
+                name=name,
                 container_id=container_id,
                 call_sign=call_sign,
                 target_fox_tve_id=target_id,
@@ -379,6 +456,32 @@ class FoxOneScraper(BaseScraper):
         if account and account.is_enabled and account.has_credentials():
             return account
         return None
+
+    def _shared_home_zip_code(self) -> str:
+        """Home ZIP lives on the shared TVEAccount config (Settings > TV
+        Everywhere), not per-source — it's a household fact, not something
+        specific to FOX One, and living there means any future TVE source
+        that needs a home market (e.g. an nbc_tve local-affiliate lookup)
+        can read the same value instead of collecting its own copy."""
+        from ..models import TVEAccount
+
+        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        return ((account.config or {}).get('home_zip_code') or '').strip() if account else ''
+
+    def _persist_shared_home_zip_code(self, zip_code: str) -> None:
+        from .. import db
+        from ..models import TVEAccount
+
+        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        if not account:
+            account = TVEAccount(provider_id='cox', display_name='Cox', is_enabled=False, config={})
+            db.session.add(account)
+        if (account.config or {}).get('home_zip_code'):
+            return
+        cfg = dict(account.config or {})
+        cfg['home_zip_code'] = zip_code
+        account.config = cfg
+        db.session.commit()
 
     def _authenticate_via_cox_mvpd(self, username: str, password: str) -> tuple[str, float]:
         """Link this device to FOX One's entitlement system through a Cox TV-provider
@@ -599,7 +702,7 @@ class FoxOneScraper(BaseScraper):
             raise RuntimeError('FOX locator response did not include x-platform-location')
 
         location_data = (locator_data.get('data') or {}).get('location') or {}
-        home_zip = (self.config.get('home_zip_code') or location_data.get('zip_code') or '').strip()
+        home_zip = (self._shared_home_zip_code() or location_data.get('zip_code') or '').strip()
         home_location = None
         home_headers = self._ent_headers(access_token, include_device=False)
         home = self.session.get(
@@ -621,9 +724,44 @@ class FoxOneScraper(BaseScraper):
         combined = ','.join(part for part in (platform_location, home_location) if part)
         self._update_config('platform_location', combined)
         self._update_config('platform_location_cached_at', time.time())
-        if home_zip and not self.config.get('home_zip_code'):
-            self._update_config('home_zip_code', home_zip)
+        if home_zip:
+            self._persist_shared_home_zip_code(home_zip)
         return combined
+
+    def _ensure_entitlements(self, access_token: str) -> str:
+        """The account's granted content SKUs, as the comma-joined
+        `sku:type` string FOX's own client sends verbatim in the
+        x-fox-content-entitlement header (see _location_headers). Confirmed
+        live via dev/foxone/4.har: without this header, location-gated
+        containers — including the local-affiliate guide slot, gated behind
+        the `us.foxlocal` SKU — silently return item_count: 0 instead of an
+        error, even though the caller is otherwise fully authenticated and
+        located."""
+        cached = self.cache.get('entitlements') or {}
+        cached_at = float(cached.get('cached_at') or 0)
+        if cached.get('value') and (time.time() - cached_at) < _ENTITLEMENTS_TTL:
+            return cached['value']
+
+        r = self.session.get(
+            f'{_ENT_BASE}/userentitlements/v1/userentitlements',
+            headers={
+                'User-Agent': _UA,
+                'Accept': 'application/json',
+                'Authorization': f'Bearer {access_token}',
+                'x-api-key': _API_KEY,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        results = ((r.json() or {}).get('data') or {}).get('results') or []
+        skus = [
+            f'{item["contentSku"]}:{item["entitlementType"][0]}'
+            for item in results
+            if isinstance(item, dict) and item.get('contentSku') and item.get('entitlementType')
+        ]
+        value = ','.join(skus)
+        self._update_cache('entitlements', {'value': value, 'cached_at': time.time()})
+        return value
 
     def _dtc_headers(self) -> dict[str, str]:
         access_token = self._ensure_access_token()

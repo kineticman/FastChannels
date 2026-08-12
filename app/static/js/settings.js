@@ -298,6 +298,7 @@ async function saveTveCoxSettings() {
     is_enabled: enabledCheckbox.checked,
     username: usernameField.value.trim(),
     password: passwordField.value,
+    home_zip_code: (document.getElementById('tve-home-zip')?.value || '').trim(),
   };
   status.className = 'save-status';
   status.textContent = 'Saving…';
