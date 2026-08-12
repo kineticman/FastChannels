@@ -86,7 +86,7 @@ def tve_network_status(account) -> list[dict]:
     fox_last_signed_in_at = cfg.get('fox_sports_access_token_captured_at')
     fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at)
     entries.append({
-        'label': 'FOX Sports TVE',
+        'label': 'FOX TVE',
         'last_signed_in_at': fox_last_signed_in_at,
         'note': None,
         'family': 'fox',

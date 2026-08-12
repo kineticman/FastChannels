@@ -786,7 +786,7 @@ def _fox_sports_mvpd_token(session: requests.Session, device_id: str, mso_id: st
         _cox_saml_login(session, mso_login_url, username, password)
     else:
         raise ValueError(
-            f'Browser-assisted sign-in for FOX Sports TVE is not built yet for MVPD {mso_id} '
+            f'Browser-assisted sign-in for FOX TVE is not built yet for MVPD {mso_id} '
             f'(only native Cox login is wired up here).'
         )
 

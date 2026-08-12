@@ -4291,7 +4291,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             # afterward instead of the actual outcome, which a DIFFERENT
             # network's more recent attempt could have overwritten, and the
             # cache-hit path never touched that field at all).
-            set_status('running', 'Signing in to FOX Sports TVE…')
+            set_status('running', 'Signing in to FOX TVE…')
             import uuid as _uuid
             from app.scrapers.fox_tve import _fox_sports_mvpd_token
             account_row = TVEAccount.query.filter_by(provider_id='cox').first()
@@ -4302,14 +4302,14 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             try:
                 token = _fox_sports_mvpd_token(fox_session, str(_uuid.uuid4()), mso_id, account_row.username or '', account_row.password or '')
             except Exception as exc:  # noqa: BLE001
-                detail = _cox_login_error_detail(exc, 'FOX Sports TVE')
+                detail = _cox_login_error_detail(exc, 'FOX TVE')
                 message = f'FOX Sports {mso_id} auth failed: {detail}'
                 account_row.last_auth_status = 'error'
                 account_row.last_auth_message = message[:500]
                 account_row.last_auth_at = datetime.now(timezone.utc)
                 db.session.commit()
                 _record_tve_login_error('fox', detail)
-                set_status('error', f'FOX Sports TVE: {detail}')
+                set_status('error', f'FOX TVE: {detail}')
                 return
             now = int(time.time())
             cfg = dict(account_row.config or {})
@@ -4322,7 +4322,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             account_row.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id}.'
             account_row.last_auth_at = datetime.now(timezone.utc)
             db.session.commit()
-            set_status('success', 'Signed in — FOX Sports TVE authorized.')
+            set_status('success', 'Signed in — FOX TVE authorized.')
             logger.info('[fox-mvpd-login] paired mso_id=Cox (scripted, no browser)')
             return
 
@@ -4450,7 +4450,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     set_status('error', f'Failed to load provider sign-in page: {exc}')
                     return
                 if _same_page_url(_safe_page_url(page), fox_redirect_url):
-                    set_status('error', f'{mso_id} does not appear to be a participating provider for FOX Sports TVE.')
+                    set_status('error', f'{mso_id} does not appear to be a participating provider for FOX TVE.')
                     return
                 if mvpd_username and mvpd_password:
                     _try_autofill_credentials(
