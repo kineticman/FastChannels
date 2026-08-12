@@ -22,6 +22,14 @@ _DROP_WORDS = {
     "4k",
     "live",
 }
+_TRAILING_CALL_SIGN_RE = re.compile(r"\(([A-Za-z0-9]{2,10})\)\s*$")
+
+
+def _extract_call_sign(name: str | None) -> str | None:
+    """Pull a trailing '(CALLSIGN)' out of a channel name, e.g. TVE scrapers like
+    Cox format channels as 'A&E (AENHD)'. Returns the call sign uppercased."""
+    match = _TRAILING_CALL_SIGN_RE.search((name or "").strip())
+    return match.group(1).upper() if match else None
 
 
 def _normalize_name(value: str | None, *, strip_generic_words: bool = False) -> str:
@@ -168,8 +176,14 @@ def _score_candidate(channel: SuggestionChannel, candidate: dict[str, Any]) -> t
 
     if candidate.get("affiliateCallSign"):
         score += 1
-    if candidate.get("callSign"):
+
+    cand_call_sign = str(candidate.get("callSign") or "").strip().upper()
+    if cand_call_sign:
         score += 1
+        query_call_sign = _extract_call_sign(query_name)
+        if query_call_sign and query_call_sign == cand_call_sign:
+            score += 150
+            reasons.append(f"call sign match ({cand_call_sign})")
 
     return score, reasons
 
