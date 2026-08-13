@@ -1081,6 +1081,29 @@ def run_directv_auth(
                     source.config = cfg
                     db.session.commit()
                     logger.info('[directv-auth] persisted session to source config source_id=%s', source_id)
+
+                    # A prior scrape may have hit the stale token, skipped itself,
+                    # and left DirecTV waiting for the next scheduled run (up to
+                    # scrape_interval away). Queue a fresh scrape now so the new
+                    # session gets used within seconds instead of hours.
+                    try:
+                        from rq import Queue
+                        from app.worker import _scrape_job_already_active
+                        q = Queue('scraper', connection=r)
+                        if not _scrape_job_already_active(q, source.name):
+                            q.enqueue(
+                                'app.worker.run_scraper', source.name,
+                                job_timeout=3600, job_id=f'scrape-{source.name}',
+                            )
+                            logger.info(
+                                '[directv-auth] queued follow-up scrape after session refresh source_id=%s',
+                                source_id,
+                            )
+                    except Exception:
+                        logger.warning(
+                            '[directv-auth] failed to queue follow-up scrape after refresh',
+                            exc_info=True,
+                        )
         except Exception as exc:
             logger.error('[directv-auth] failed to persist result directly: %s', exc)
 
