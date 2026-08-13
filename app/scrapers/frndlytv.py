@@ -14,7 +14,9 @@ from typing import Any
 
 import requests
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, StreamDeadError, infer_language_from_metadata
+from .base import (BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError,
+                   StreamDeadError, infer_language_from_metadata,
+                   dedupe_dominant_episode_id, null_placeholder_season_episode)
 from .category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
@@ -324,6 +326,8 @@ class FrndlyTVScraper(BaseScraper):
         if rich_targets:
             self._enrich_next_program_artwork(programs, rich_targets)
 
+        dedupe_dominant_episode_id(programs)
+        null_placeholder_season_episode(programs)
         return programs
 
     def _parse_program(self, ch_id: str, prog: dict) -> tuple[ProgramData | None, int, str]:
