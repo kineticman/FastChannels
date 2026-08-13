@@ -390,7 +390,7 @@ def _group_by_channel_excluding_movies(programs: list['ProgramData']) -> dict[st
     return by_channel
 
 
-def null_placeholder_season_episode(programs: list['ProgramData'], min_titles: int = 3) -> None:
+def null_placeholder_season_episode(programs: list['ProgramData'], min_titles: int = 3, min_repeats: int = 3) -> None:
     """Null season/episode where it looks like a source-assigned placeholder.
 
     Some upstream APIs give non-episodic content (news rotations, game-show
@@ -402,17 +402,29 @@ def null_placeholder_season_episode(programs: list['ProgramData'], min_titles: i
     (episode_id) disambiguating them, treat it as a placeholder and null it
     — otherwise it passes along a false shared identity to EPG clients
     (e.g. Channels DVR, which can collapse them into a single airing).
+
+    A second, narrower signal catches the same problem hiding under one
+    constant title: a single show repeating one (season, episode) pair many
+    times where the underlying content actually differs each airing (proven
+    by differing descriptions), rather than a genuine rerun of identical
+    content (which keeps the same description every time and is left
+    alone — nulling that would destroy a real shared identity Channels DVR
+    is correctly using to recognize a rerun).
+
     Mutates `programs` in place; scoped per channel_id/source_channel_id.
     """
     by_channel = _group_by_channel_excluding_movies(programs)
     for chan_programs in by_channel.values():
         pair_titles: dict[tuple, set] = {}
         pair_progs: dict[tuple, list] = {}
+        title_pair_progs: dict[tuple, list] = {}
         for p in chan_programs:
             if p.season is not None and p.episode is not None:
                 pair = (p.season, p.episode)
                 pair_titles.setdefault(pair, set()).add(p.title)
                 pair_progs.setdefault(pair, []).append(p)
+                title_pair_progs.setdefault((p.title, p.season, p.episode), []).append(p)
+
         placeholder_pairs = set()
         for pair, titles in pair_titles.items():
             if len(titles) < min_titles:
@@ -425,10 +437,32 @@ def null_placeholder_season_episode(programs: list['ProgramData'], min_titles: i
             distinguished = len(eids) == len(grp) and len(set(eids)) == len(grp)
             if not distinguished:
                 placeholder_pairs.add(pair)
-        if not placeholder_pairs:
+
+        placeholder_title_keys = set()
+        for key, grp in title_pair_progs.items():
+            if len(grp) < min_repeats:
+                continue
+            eids = [p.episode_id for p in grp if p.episode_id]
+            distinguished = len(eids) == len(grp) and len(set(eids)) == len(grp)
+            if distinguished:
+                continue
+            # description and episode_title are independent content signals —
+            # some sources reliably populate one but not the other (e.g. a
+            # "Tornado" episode_title with no description). Diversity in
+            # either one is evidence the content actually differs.
+            descs = {(p.description or '').strip() for p in grp}
+            descs.discard('')
+            titles = {(p.episode_title or '').strip() for p in grp}
+            titles.discard('')
+            if len(descs) >= 2 or len(titles) >= 2:
+                placeholder_title_keys.add(key)
+
+        if not placeholder_pairs and not placeholder_title_keys:
             continue
         for p in chan_programs:
-            if (p.season, p.episode) in placeholder_pairs:
+            if p.season is None or p.episode is None:
+                continue
+            if (p.season, p.episode) in placeholder_pairs or (p.title, p.season, p.episode) in placeholder_title_keys:
                 p.season = None
                 p.episode = None
 

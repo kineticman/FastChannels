@@ -1286,7 +1286,6 @@ class RokuScraper(BaseScraper):
                         cid = (entry.get("content") or {}).get("meta", {}).get("id")
                         if cid:
                             local_cid_map.setdefault(cid, []).append(prog)
-                null_placeholder_season_episode(result)
                 return result, local_cid_map, play_id, selector_url
             except Exception as exc:
                 if is_transient_network_error(exc):
@@ -1379,6 +1378,7 @@ class RokuScraper(BaseScraper):
             retried_selector,
         )
         logger.debug("[roku] %d EPG entries fetched for %d channels", len(programs), n_channels)
+        null_placeholder_season_episode(programs)
         return programs
 
     def _fetch_descriptions(
