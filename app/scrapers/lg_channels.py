@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from requests.utils import requote_uri
 
-from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata, dedupe_dominant_episode_id
 
 logger = logging.getLogger(__name__)
 
@@ -160,8 +160,18 @@ class LGChannelsScraper(BaseScraper):
                         category_value = base_category
 
                     raw_prog_id = self._clean_str(prog.get("programId")) or ""
-                    # Strip optional locale suffix (e.g. "MV014035030000-US" → "MV014035030000")
-                    tms_id = raw_prog_id.split("-")[0] if raw_prog_id else None
+                    # Strip a trailing locale code (e.g. "MV014035030000-US" →
+                    # "MV014035030000"). Some providers instead put the locale
+                    # as a *prefix* (e.g. "US-BBCStudios-84053887-56803812-
+                    # 56782175") — splitting on the first "-" there would
+                    # collapse every program on the channel down to "US",
+                    # so only strip when the trailing segment actually looks
+                    # like a 2-letter locale code.
+                    tms_id = raw_prog_id or None
+                    if tms_id and "-" in tms_id:
+                        prefix, _, suffix = tms_id.rpartition("-")
+                        if len(suffix) == 2 and suffix.isalpha() and suffix.isupper():
+                            tms_id = prefix
 
                     programs.append(
                         ProgramData(
@@ -184,6 +194,7 @@ class LGChannelsScraper(BaseScraper):
                         )
                     )
 
+        dedupe_dominant_episode_id(programs)
         logger.info("[lg-channels] %d EPG entries fetched", len(programs))
         return programs
 

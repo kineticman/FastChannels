@@ -15,7 +15,7 @@ from typing import Optional
 import pytz
 import requests
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata, null_placeholder_season_episode, dedupe_dominant_episode_id
 from .category_utils import category_for_channel, infer_category_from_name
 from ..gracenote_map import resolve_gracenote
 
@@ -439,6 +439,8 @@ class PlutoScraper(BaseScraper):
 
         logger.info("[pluto] %s: %d EPG entries total (%d dupes dropped)",
                     country_code, len(unique), len(programs) - len(unique))
+        dedupe_dominant_episode_id(unique)
+        null_placeholder_season_episode(unique)
         return unique
 
     def _parse_timelines(self, data: list) -> list[ProgramData]:
@@ -494,7 +496,8 @@ class PlutoScraper(BaseScraper):
 
         for entry in data:
             channel_id = entry.get('channelId')
-            for tl in entry.get('timelines', []):
+            timelines  = entry.get('timelines', [])
+            for tl in timelines:
                 try:
                     start = datetime.strptime(tl['start'], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=pytz.utc)
                     end   = datetime.strptime(tl['stop'],  "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=pytz.utc)

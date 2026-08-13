@@ -24,7 +24,7 @@ from urllib.parse import unquote
 
 import requests
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata, null_placeholder_season_episode
 from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
@@ -124,11 +124,13 @@ class TubiScraper(BaseScraper):
         ids = [ch.source_channel_id for ch in channels]
         if not ids:
             return []
+        programs = None
         if self._username and self._password:
             programs = self._epg_auth(ids)
-            if programs:
-                return programs
-        return self._epg_anon(ids)
+        if not programs:
+            programs = self._epg_anon(ids)
+        null_placeholder_season_episode(programs)
+        return programs
 
     def resolve(self, raw_url: str) -> str:
         """

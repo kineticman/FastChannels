@@ -24,10 +24,14 @@ _LOCALNOW_EPISODE_ONLY_RE = re.compile(
     r'^(?P<series>.+?)(?::\s*|,\s*|\s[-–]\s)Episode\s(?P<episode>\d+)\s*$',
     re.IGNORECASE,
 )
+# LocalNow returns this literal placeholder as program_id for some local news
+# channels instead of a real per-block id — passing it through would make
+# every distinct airing look like the same one to EPG clients.
+_LOCALNOW_INVALID_PROGRAM_IDS = {'epg-feed-not-available'}
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote, urljoin
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, infer_language_from_metadata, dedupe_dominant_episode_id
 from .category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
@@ -272,6 +276,8 @@ class LocalNowScraper(BaseScraper):
                     self._safe_int(item.get("episode"), None),
                     api_episode_title,
                 )
+                raw_program_id = (item.get("program_id") or "").strip()
+                program_id = raw_program_id if raw_program_id.lower() not in _LOCALNOW_INVALID_PROGRAM_IDS else None
 
                 programs.append(
                     ProgramData(
@@ -287,10 +293,11 @@ class LocalNowScraper(BaseScraper):
                         season=season,
                         episode=episode,
                         program_type="episode" if (season is not None or episode is not None) else None,
-                        episode_id=(item.get("program_id") or "").strip() or None,
+                        episode_id=program_id or None,
                     )
                 )
 
+        dedupe_dominant_episode_id(programs)
         logger.info("[localnow] %d EPG entries fetched", len(programs))
         return programs
 

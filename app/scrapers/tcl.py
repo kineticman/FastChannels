@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata, null_placeholder_season_episode
 from .category_utils import category_for_channel, infer_category_from_name
 
 _SPANISH_CAT_NAMES = frozenset({'en español', 'noticias'})
@@ -341,6 +341,7 @@ class TCLScraper(BaseScraper):
                 program_type="episode" if (season is not None or episode is not None) else None,
             ))
 
+        null_placeholder_season_episode(all_programs)
         return all_programs
 
     @staticmethod

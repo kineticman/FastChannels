@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, infer_language_from_metadata, dedupe_dominant_episode_id
 from .category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
@@ -291,6 +291,7 @@ class XumoScraper(BaseScraper):
                     # have data either.  Also stop when a page is completely empty.
                     break
 
+        dedupe_dominant_episode_id(programmes)
         logger.info("[xumo] %d EPG entries", len(programmes))
         return programmes
 

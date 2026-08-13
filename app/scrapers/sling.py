@@ -21,10 +21,10 @@ except ImportError:  # pragma: no cover - optional until Docker deps are rebuilt
     OAuth1 = None
 
 try:
-    from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
+    from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata, null_placeholder_season_episode
     from .category_utils import infer_category_from_name, normalize_category
 except ImportError:  # pragma: no cover - local staging outside FastChannels package
-    from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
+    from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata, null_placeholder_season_episode
     from app.scrapers.category_utils import infer_category_from_name, normalize_category
 
 logger = logging.getLogger(__name__)
@@ -218,6 +218,7 @@ class SlingScraper(BaseScraper):
                     raise exc
 
         programs.sort(key=lambda p: (p.source_channel_id, p.start_time, p.title))
+        null_placeholder_season_episode(programs)
         logger.info("[%s] %d EPG entries", self.source_name, len(programs))
         return programs
 

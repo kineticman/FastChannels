@@ -368,6 +368,85 @@ class ProgramData:
         self.episode_id   = episode_id   # stable source-level episode/content identifier
 
 
+def null_placeholder_season_episode(programs: list['ProgramData'], min_titles: int = 3) -> None:
+    """Null season/episode where it looks like a source-assigned placeholder.
+
+    Some upstream APIs give non-episodic content (news rotations, game-show
+    clip channels, shopping segments, sports rebroadcasts, one-off specials)
+    a generic season/episode pair (e.g. season 1, episode 0 or 1) instead of
+    leaving it blank. Real per-episode data doesn't repeat across unrelated
+    titles, so when the same (season, episode) pair is shared by several
+    distinct titles on one channel *and* those programs have no other id
+    (episode_id) disambiguating them, treat it as a placeholder and null it
+    — otherwise it passes along a false shared identity to EPG clients
+    (e.g. Channels DVR, which can collapse them into a single airing).
+    Mutates `programs` in place; scoped per channel_id/source_channel_id.
+    """
+    by_channel: dict[str, list['ProgramData']] = {}
+    for p in programs:
+        by_channel.setdefault(p.source_channel_id, []).append(p)
+    for chan_programs in by_channel.values():
+        pair_titles: dict[tuple, set] = {}
+        pair_progs: dict[tuple, list] = {}
+        for p in chan_programs:
+            if p.season is not None and p.episode is not None:
+                pair = (p.season, p.episode)
+                pair_titles.setdefault(pair, set()).add(p.title)
+                pair_progs.setdefault(pair, []).append(p)
+        placeholder_pairs = set()
+        for pair, titles in pair_titles.items():
+            if len(titles) < min_titles:
+                continue
+            grp = pair_progs[pair]
+            eids = [p.episode_id for p in grp if p.episode_id]
+            # Already disambiguated if every program in the group has its
+            # own distinct episode_id — a real per-airing identifier means
+            # a coincidental season/episode overlap isn't actually a bug.
+            distinguished = len(eids) == len(grp) and len(set(eids)) == len(grp)
+            if not distinguished:
+                placeholder_pairs.add(pair)
+        if not placeholder_pairs:
+            continue
+        for p in chan_programs:
+            if (p.season, p.episode) in placeholder_pairs:
+                p.season = None
+                p.episode = None
+
+
+def dedupe_dominant_episode_id(programs: list['ProgramData'], min_count: int = 4, min_ratio: float = 0.5) -> None:
+    """Disambiguate a per-channel dominant episode_id shared by many airings.
+
+    Some upstream APIs give an entire (or most of a) channel's schedule the
+    exact same episode/program id — a static placeholder rather than a real
+    per-airing identifier. This shows up on 24/7 unstructured live feeds
+    (e.g. a live-camera or dashcam-style channel) and on rolling news blocks
+    that reuse one generic segment id across genuinely different hourly
+    content. Passing that id straight through makes every airing look
+    identical to EPG clients (e.g. Channels DVR collapses them into one).
+    When one id accounts for most of a channel's fetched schedule, suffix it
+    with each airing's start time so every airing stays unique, and drop
+    season/episode since it's no longer meaningful. Mutates in place.
+    """
+    from collections import Counter
+    by_channel: dict[str, list['ProgramData']] = {}
+    for p in programs:
+        by_channel.setdefault(p.source_channel_id, []).append(p)
+    for chan_programs in by_channel.values():
+        if len(chan_programs) < min_count:
+            continue
+        ids = [p.episode_id for p in chan_programs if p.episode_id]
+        if not ids:
+            continue
+        top_id, top_n = Counter(ids).most_common(1)[0]
+        if top_n < min_count or top_n / len(chan_programs) <= min_ratio:
+            continue
+        for p in chan_programs:
+            if p.episode_id == top_id:
+                p.season = None
+                p.episode = None
+                p.episode_id = f"{top_id}-{p.start_time.strftime('%Y%m%d%H%M%S')}"
+
+
 class BaseScraper(ABC):
     source_name:     str = None
     source_aliases:  tuple[str, ...] = ()

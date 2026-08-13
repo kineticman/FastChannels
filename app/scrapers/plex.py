@@ -35,7 +35,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata, null_placeholder_season_episode
 from .category_utils import infer_category_from_name, category_for_channel as _category_for_channel
 from ..gracenote_map import resolve_gracenote
 
@@ -1038,6 +1038,7 @@ class PlexScraper(BaseScraper):
             programs.extend(luma_extras)
             logger.info("[plex] %d total EPG entries after luma gap-fill", len(programs))
 
+        null_placeholder_season_episode(programs)
         return programs
 
     # ── resolve ────────────────────────────────────────────────────────────────

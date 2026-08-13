@@ -21,7 +21,7 @@ import logging
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 
-from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata
+from .base import BaseScraper, ChannelData, ProgramData, infer_language_from_metadata, null_placeholder_season_episode
 from .category_utils import category_for_channel
 from ..gracenote_map import normalize_gracenote_id
 
@@ -170,6 +170,7 @@ class VizioScraper(BaseScraper):
         if not programs:
             programs = self._fetch_airings_per_channel(channels, start, end, station_map)
 
+        null_placeholder_season_episode(programs)
         logger.info('[vizio] %d EPG entries', len(programs))
         return programs
 

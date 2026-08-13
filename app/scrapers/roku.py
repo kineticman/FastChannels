@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
-from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, ScrapeSkipError, format_http_reason, infer_language_from_metadata, is_transient_network_error
+from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, ScrapeSkipError, format_http_reason, infer_language_from_metadata, is_transient_network_error, null_placeholder_season_episode
 from .category_utils import infer_category_from_name
 from ..gracenote_map import resolve_gracenote
 
@@ -1286,6 +1286,7 @@ class RokuScraper(BaseScraper):
                         cid = (entry.get("content") or {}).get("meta", {}).get("id")
                         if cid:
                             local_cid_map.setdefault(cid, []).append(prog)
+                null_placeholder_season_episode(result)
                 return result, local_cid_map, play_id, selector_url
             except Exception as exc:
                 if is_transient_network_error(exc):
