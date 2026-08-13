@@ -1,11 +1,22 @@
 import importlib
 import pkgutil
 import logging
+import time
 from pathlib import Path
 from .base import BaseScraper
 
 logger = logging.getLogger(__name__)
 _registry: dict[str, type[BaseScraper]] = {}
+_last_discovered_at = 0.0
+# Long-lived RQ worker processes never re-import app/scrapers on their own, so
+# re-discovering on every call is what lets the bind-mounted dev workflow (edit
+# a scraper file, no restart) show up without a restart. But callers like the
+# per-channel DRM-capability check in generators/m3u.py can call get_all() tens
+# of thousands of times within one artifact-refresh batch — re-scanning the
+# filesystem on every one of those turned into the dominant cost of that job.
+# A short TTL keeps live-reload responsive while collapsing that burst to
+# effectively one real scan.
+_DISCOVER_TTL_SECONDS = 2.0
 
 
 def _discover():
@@ -26,7 +37,11 @@ def _discover():
 
 
 def get_all() -> dict[str, type[BaseScraper]]:
-    _discover()   # always re-discover; fast filesystem scan, safe to call repeatedly
+    global _last_discovered_at
+    now = time.monotonic()
+    if now - _last_discovered_at > _DISCOVER_TTL_SECONDS:
+        _discover()
+        _last_discovered_at = now
     return _registry
 
 
