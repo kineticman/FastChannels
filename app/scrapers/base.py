@@ -468,35 +468,47 @@ def null_placeholder_season_episode(programs: list['ProgramData'], min_titles: i
 
 
 def dedupe_dominant_episode_id(programs: list['ProgramData'], min_count: int = 4, min_ratio: float = 0.5) -> None:
-    """Disambiguate a per-channel dominant episode_id shared by many airings.
+    """Disambiguate a per-title dominant episode_id shared by many airings.
 
-    Some upstream APIs give an entire (or most of a) channel's schedule the
-    exact same episode/program id — a static placeholder rather than a real
-    per-airing identifier. This shows up on 24/7 unstructured live feeds
-    (e.g. a live-camera or dashcam-style channel) and on rolling news blocks
-    that reuse one generic segment id across genuinely different hourly
-    content. Passing that id straight through makes every airing look
-    identical to EPG clients (e.g. Channels DVR collapses them into one).
-    When one id accounts for most of a channel's fetched schedule, suffix it
+    Some upstream APIs give an entire (or most of) a recurring title's
+    schedule the exact same episode/program id — a static placeholder
+    rather than a real per-airing identifier. This shows up on 24/7
+    unstructured live feeds (e.g. a live-camera or dashcam-style channel)
+    and on rolling news blocks that reuse one generic segment id across
+    genuinely different hourly content. Passing that id straight through
+    makes every airing look identical to EPG clients (e.g. Channels DVR
+    collapses them into one).
+
+    Scoped per (channel, title) rather than per whole channel: a news
+    affiliate airing several differently-titled placeholder blocks (e.g.
+    "Local News", "Latest Local News", "National News Now") alongside real
+    distinct programming would dilute a whole-channel ratio below the
+    threshold even though each individual title is 100% one static id.
+
+    When one id accounts for most of a title's fetched schedule, suffix it
     with each airing's start time so every airing stays unique, and drop
     season/episode since it's no longer meaningful. Mutates in place.
     """
     from collections import Counter
     by_channel = _group_by_channel_excluding_movies(programs)
     for chan_programs in by_channel.values():
-        if len(chan_programs) < min_count:
-            continue
-        ids = [p.episode_id for p in chan_programs if p.episode_id]
-        if not ids:
-            continue
-        top_id, top_n = Counter(ids).most_common(1)[0]
-        if top_n < min_count or top_n / len(chan_programs) <= min_ratio:
-            continue
+        by_title: dict[str, list['ProgramData']] = {}
         for p in chan_programs:
-            if p.episode_id == top_id:
-                p.season = None
-                p.episode = None
-                p.episode_id = f"{top_id}-{p.start_time.strftime('%Y%m%d%H%M%S')}"
+            by_title.setdefault(p.title, []).append(p)
+        for title_programs in by_title.values():
+            if len(title_programs) < min_count:
+                continue
+            ids = [p.episode_id for p in title_programs if p.episode_id]
+            if not ids:
+                continue
+            top_id, top_n = Counter(ids).most_common(1)[0]
+            if top_n < min_count or top_n / len(title_programs) <= min_ratio:
+                continue
+            for p in title_programs:
+                if p.episode_id == top_id:
+                    p.season = None
+                    p.episode = None
+                    p.episode_id = f"{top_id}-{p.start_time.strftime('%Y%m%d%H%M%S')}"
 
 
 class BaseScraper(ABC):
