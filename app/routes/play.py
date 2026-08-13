@@ -3786,6 +3786,59 @@ def license_certificate(source_name: str):
     abort(502)
 
 
+def _fetch_prismcast_with_retry(play_url: str, channel_id, label: str, stream: bool = False):
+    """GET play_url from PrismCast with one safe retry.
+
+    PrismCast serializes capture setup through a single navigation queue: a
+    request can wait up to its own navigationTimeout just for a hung/slow
+    predecessor's turn, THEN pay navigationTimeout again for its own capture —
+    confirmed live 2026-08-12 (dev/todo.md) that a cold Warner TVE capture
+    alone can take ~8-10s against PrismCast's default 10s navigationTimeout,
+    so a queued request can plausibly need close to double that. A single
+    generous timeout absorbs that worst case in one attempt.
+
+    Retrying after OUR OWN timeout is deliberately avoided: PrismCast has no
+    cancel/status API, so a slow response doesn't mean the capture failed —
+    it may still be running server-side. Firing a second `/play?url=...
+    &profile=keyboardFullscreen` trigger while the first is still in flight
+    risks a second concurrent capture (prod PrismCast shares the operator's
+    real desktop, so this isn't just a backend resource issue). A timeout is
+    therefore treated as final. Only a fast connection-level failure or a
+    fast 5xx response — cases where nothing was left in-flight — get one
+    retry after a short pause.
+
+    Returns the response (which may carry a 4xx/5xx status for the caller to
+    handle), or aborts 502 if PrismCast never returned anything usable.
+    """
+    def _attempt(is_retry: bool):
+        try:
+            resp = _requests.get(play_url, timeout=90, allow_redirects=True, stream=stream)
+            if stream:
+                resp.close()
+            return resp
+        except _requests.exceptions.Timeout as exc:
+            logger.warning('[%s] capture timed out for channel=%s%s: %s',
+                            label, channel_id, ' (retry)' if is_retry else '', exc)
+            abort(502)
+        except Exception as exc:
+            logger.info('[%s] attempt failed for channel=%s%s: %s',
+                        label, channel_id, ' (retry)' if is_retry else '', exc)
+            return None
+
+    r = _attempt(is_retry=False)
+    if r is None or r.status_code >= 500:
+        logger.info('[%s] retrying once for channel=%s', label, channel_id)
+        _time.sleep(3)
+        r = _attempt(is_retry=True)
+
+    if r is None:
+        logger.warning('[%s] resolve failed for channel=%s after retry', label, channel_id)
+        abort(502)
+    if r.status_code >= 500:
+        logger.warning('[%s] PrismCast returned %s for channel=%s after retry', label, r.status_code, channel_id)
+    return r
+
+
 def _directv_prismcast_play_url(channel) -> str | None:
     from ..models import AppSettings
     settings = AppSettings.get()
@@ -3969,11 +4022,7 @@ def directv_prismcast_playlist(channel_id: str):
     play_url = _directv_prismcast_play_url(channel)
     if not play_url:
         return Response('PrismCast is not configured.\n', status=503, mimetype='text/plain')
-    try:
-        r = _requests.get(play_url, timeout=35, allow_redirects=True)
-    except Exception as exc:
-        logger.warning('[directv-prismcast] playlist fetch failed for channel=%s: %s', channel_id, exc)
-        abort(502)
+    r = _fetch_prismcast_with_retry(play_url, channel_id, 'directv-prismcast')
     if r.status_code >= 400:
         return Response(r.content, status=r.status_code, content_type=r.headers.get('Content-Type') or 'text/plain')
     playlist = _rewrite_directv_prismcast_playlist(r.text, r.url)
@@ -4377,12 +4426,8 @@ def prismcast_bridge_ts(channel_id):
         return Response('PrismCast is not configured.\n', status=503, mimetype='text/plain')
     inner_base_url = (settings.effective_prismcast_inner_url() or public_base_url()).strip().rstrip('/')
     play_url = _prismcast_bridge_url(channel, prismcast_url, inner_base_url)
-    try:
-        r = _requests.get(play_url, timeout=35, allow_redirects=True, stream=True)
-        r.close()
-    except Exception as exc:
-        logger.warning('[prismcast-ts] resolve failed for channel=%s: %s', channel_id, exc)
-        abort(502)
+
+    r = _fetch_prismcast_with_retry(play_url, channel_id, 'prismcast-ts', stream=True)
     if r.status_code >= 400:
         abort(r.status_code)
     ts_url = _prismcast_ts_url(r.url)
