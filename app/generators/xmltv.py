@@ -6,9 +6,7 @@ Performance design:
     idx_programs_channel_end_start — each artifact's cost scales with its
     own channels, not the whole programs table.
   - Streaming generator — yields chunks so Flask/gunicorn never blocks
-    waiting for the full 56MB to build in memory.
-  - /epg.xml.gz endpoint serves pre-gzipped content (~5MB vs ~56MB).
-    Also honours Accept-Encoding: gzip on /epg.xml.
+    waiting for the full multi-hundred-MB document to build in memory.
 """
 from __future__ import annotations
 
