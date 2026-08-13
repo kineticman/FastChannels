@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from .base import BaseScraper, ChannelData, ProgramData
+from .base import BaseScraper, ChannelData, ProgramData, null_placeholder_season_episode
 from ..models import TVEAccount
 from ..tve.adobe_pass import (
     ADOBE_BASE,
@@ -571,6 +571,7 @@ class AMCNetworksTVEScraper(BaseScraper):
                 except Exception:
                     continue
             programs.extend(parsed or _placeholder_epg(channel))
+        null_placeholder_season_episode(programs)
         return programs
 
     def _amcn_software_statement(self, channel: AMCNChannel, account: TVEAccount) -> str:

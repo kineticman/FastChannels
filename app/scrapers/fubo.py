@@ -32,7 +32,8 @@ except ImportError:
     _CFFI_IMPERSONATE = None
 
 from .base import (BaseScraper, ChannelData, ConfigField, ProgramData,
-                   ScrapeSkipError, StreamDeadError, infer_language_from_metadata)
+                   ScrapeSkipError, StreamDeadError, infer_language_from_metadata,
+                   null_placeholder_season_episode, dedupe_dominant_episode_id)
 from .category_utils import category_for_channel, infer_category_from_name
 
 logger = logging.getLogger(__name__)
@@ -504,6 +505,8 @@ class FuboScraper(BaseScraper):
             len(programs), enriched, len(schedule) - enriched,
             _rs['exact'], _rs['suffix'], _rs['name'], _rs['unresolved'],
         )
+        dedupe_dominant_episode_id(programs)
+        null_placeholder_season_episode(programs)
         return programs
 
     # ── Stream resolution ─────────────────────────────────────────────────────

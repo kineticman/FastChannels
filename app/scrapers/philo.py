@@ -31,7 +31,8 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from .base import (BaseScraper, ChannelData, ProgramData, ConfigField,
-                   ScrapeSkipError, StreamDeadError)
+                   ScrapeSkipError, StreamDeadError,
+                   dedupe_dominant_episode_id, null_placeholder_season_episode)
 from .category_utils import category_for_channel
 
 logger = logging.getLogger(__name__)
@@ -515,6 +516,8 @@ class PhiloScraper(BaseScraper):
         n_desc = sum(1 for p in programs if p.description)
         logger.info("[philo] %d EPG entries across %d channels (%d with descriptions)",
                     len(programs), len({p.source_channel_id for p in programs}), n_desc)
+        dedupe_dominant_episode_id(programs)
+        null_placeholder_season_episode(programs)
         return programs
 
     # ── Description backfill (per-broadcast PRESENTATION page, batched+cached) ─

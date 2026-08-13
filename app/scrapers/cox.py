@@ -32,7 +32,7 @@ except ImportError:  # pragma: no cover - deployment dependency guard
     _cffi_requests = None
     _CFFI_IMPERSONATE = None
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, dedupe_dominant_episode_id
 from .category_utils import category_for_channel, infer_category_from_name
 
 logger = logging.getLogger(__name__)
@@ -863,7 +863,9 @@ class CoxScraper(BaseScraper):
         known_channel_ids = set(channel_ids)
         station_to_channel = {str(channel.guide_key): str(channel.source_channel_id) for channel in channels if channel.guide_key}
         tvgrid = self._fetch_tvgrid(channel_ids, hours=hours, batch_size=batch_size)
-        return self._programs_from_tvgrid(tvgrid, station_to_channel, known_channel_ids)
+        programs = self._programs_from_tvgrid(tvgrid, station_to_channel, known_channel_ids)
+        dedupe_dominant_episode_id(programs)
+        return programs
 
     def _programs_from_tvgrid(
         self,

@@ -368,6 +368,28 @@ class ProgramData:
         self.episode_id   = episode_id   # stable source-level episode/content identifier
 
 
+def _is_movie(p: 'ProgramData') -> bool:
+    cats = [c.strip().casefold() for c in (p.category or '').split(';') if c.strip()]
+    return p.program_type == 'movie' or 'movie' in cats or 'movies' in cats
+
+
+def _group_by_channel_excluding_movies(programs: list['ProgramData']) -> dict[str, list['ProgramData']]:
+    """Group programs by channel, excluding movies.
+
+    xmltv.py never emits season/episode/episode-num for anything flagged as
+    a movie, so movies are irrelevant noise for these heuristics — worse,
+    mixing them into a channel's program count dilutes ratio-based checks
+    (a real bug on a mostly-movie channel can look statistically
+    insignificant) without ever being visible in the actual EPG output.
+    """
+    by_channel: dict[str, list['ProgramData']] = {}
+    for p in programs:
+        if _is_movie(p):
+            continue
+        by_channel.setdefault(p.source_channel_id, []).append(p)
+    return by_channel
+
+
 def null_placeholder_season_episode(programs: list['ProgramData'], min_titles: int = 3) -> None:
     """Null season/episode where it looks like a source-assigned placeholder.
 
@@ -382,9 +404,7 @@ def null_placeholder_season_episode(programs: list['ProgramData'], min_titles: i
     (e.g. Channels DVR, which can collapse them into a single airing).
     Mutates `programs` in place; scoped per channel_id/source_channel_id.
     """
-    by_channel: dict[str, list['ProgramData']] = {}
-    for p in programs:
-        by_channel.setdefault(p.source_channel_id, []).append(p)
+    by_channel = _group_by_channel_excluding_movies(programs)
     for chan_programs in by_channel.values():
         pair_titles: dict[tuple, set] = {}
         pair_progs: dict[tuple, list] = {}
@@ -428,9 +448,7 @@ def dedupe_dominant_episode_id(programs: list['ProgramData'], min_count: int = 4
     season/episode since it's no longer meaningful. Mutates in place.
     """
     from collections import Counter
-    by_channel: dict[str, list['ProgramData']] = {}
-    for p in programs:
-        by_channel.setdefault(p.source_channel_id, []).append(p)
+    by_channel = _group_by_channel_excluding_movies(programs)
     for chan_programs in by_channel.values():
         if len(chan_programs) < min_count:
             continue

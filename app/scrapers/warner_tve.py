@@ -57,7 +57,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from .base import BaseScraper, ChannelData, ProgramData
+from .base import BaseScraper, ChannelData, ProgramData, null_placeholder_season_episode
 from ..models import TVEAccount
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, authorize_mvpd
 
@@ -267,6 +267,7 @@ class WarnerTVEScraper(BaseScraper):
                 continue
             parsed = self._parse_widget_schedule(channel, schedules.get(channel.brand_key) or {})
             programs.extend(parsed or self._placeholder_epg(channel))
+        null_placeholder_season_episode(programs)
         return programs
 
     @staticmethod
