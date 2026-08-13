@@ -152,11 +152,16 @@ class PBSScraper(BaseScraper):
             attrs = station.get("attributes") or {}
             call_sign = (attrs.get("call_sign") or "").strip()
             logo_url = self._logo(attrs)
+            feeds = attrs.get("livestream_feeds") or []
+            subchannel_labels = self._local_subchannel_labels(station_id, call_sign, attrs, feeds)
 
-            for feed in attrs.get("livestream_feeds") or []:
+            for feed in feeds:
                 # Bulk auto-discovery stays clear-only (allow_drm=False) — DRM feeds
                 # are opt-in only, via manual_feeds below.
-                ch = self._build_channel(station_id, call_sign, logo_url, feed, seen, allow_drm=False)
+                ch = self._build_channel(
+                    station_id, call_sign, logo_url, feed, seen, allow_drm=False,
+                    subchannel_labels=subchannel_labels,
+                )
                 if ch:
                     channels.append(ch)
 
@@ -192,11 +197,16 @@ class PBSScraper(BaseScraper):
             attrs = station.get("attributes") or {}
             call_sign = (attrs.get("call_sign") or "").strip()
             logo_url = self._logo(attrs)
+            feeds = attrs.get("livestream_feeds") or []
+            subchannel_labels = self._local_subchannel_labels(station_id, call_sign, attrs, feeds)
 
-            for feed in attrs.get("livestream_feeds") or []:
+            for feed in feeds:
                 if (feed.get("profile") or "").strip() not in profiles:
                     continue
-                ch = self._build_channel(station_id, call_sign, logo_url, feed, seen, allow_drm=True)
+                ch = self._build_channel(
+                    station_id, call_sign, logo_url, feed, seen, allow_drm=True,
+                    subchannel_labels=subchannel_labels,
+                )
                 if ch:
                     channels.append(ch)
                     added += 1
@@ -205,6 +215,7 @@ class PBSScraper(BaseScraper):
     def _build_channel(
         self, station_id: str, call_sign: str, logo_url: str | None,
         feed: dict, seen: set[str], *, allow_drm: bool,
+        subchannel_labels: dict[str, str] | None = None,
     ) -> ChannelData | None:
         """Builds a ChannelData for a single feed dict, preferring its clear
         (non_drm_url) stream; falls back to the DRM (drm_dash_url) one only when
@@ -231,7 +242,8 @@ class PBSScraper(BaseScraper):
         label = self._profile_label_for(profile)
         name = f"PBS {label}"
         if call_sign and profile.startswith("ga-local-subchannel"):
-            name = f"PBS {call_sign} {label}"
+            derived = (subchannel_labels or {}).get(profile)
+            name = f"PBS {call_sign} ({derived})" if derived else f"PBS {call_sign} {label}"
         elif call_sign:
             name = f"{name} ({call_sign})"
 
@@ -436,6 +448,43 @@ class PBSScraper(BaseScraper):
     @staticmethod
     def _profile_label_for(profile: str) -> str:
         return _PROFILE_LABELS.get(profile) or PBSScraper._profile_label(profile)
+
+    def _local_subchannel_labels(
+        self, station_id: str, call_sign: str, attrs: dict, feeds: list[dict],
+    ) -> dict[str, str]:
+        """Looks up PBS's own human-friendly names for a station's local
+        subchannel feeds (e.g. "KERA Create", "BTPM Create", "The West
+        Virginia Channel") — these vary station to station since many local
+        subchannels actually simulcast a national secondary network (Create,
+        World) under their own branding, rather than being generic "extra"
+        channels. The stations-list API (used for channel discovery) doesn't
+        expose this name; only the per-day schedule API does, via each
+        channel entry's `full_name` field. Best-effort: falls back to the
+        generic "Local Subchannel N" label (in _build_channel) if this lookup
+        fails or a profile isn't present in today's schedule."""
+        if not any((f.get("profile") or "").startswith("ga-local-subchannel") for f in feeds):
+            return {}
+        labels: dict[str, str] = {}
+        try:
+            timezone_name = attrs.get("timezone") or "America/New_York"
+            today = self._local_date(datetime.now(timezone.utc), timezone_name).isoformat()
+            for channel in self._schedule_channels(station_id, today, timezone_name):
+                profile = channel.get("profile") or ""
+                full_name = (channel.get("full_name") or "").strip()
+                if profile.startswith("ga-local-subchannel") and full_name:
+                    labels[profile] = self._derive_subchannel_label(full_name, call_sign)
+        except Exception as exc:
+            logger.warning("[%s] subchannel label lookup failed for %s: %s", self.source_name, station_id, exc)
+        return labels
+
+    @staticmethod
+    def _derive_subchannel_label(full_name: str, call_sign: str) -> str:
+        label = full_name.strip()
+        if call_sign and label.upper().startswith(f"{call_sign.upper()} "):
+            label = label[len(call_sign):].strip()
+        elif label.upper().startswith("PBS "):
+            label = label[4:].strip()
+        return label or full_name.strip()
 
     def _configured_station_ids(self) -> list[str]:
         seen: set[str] = set()
