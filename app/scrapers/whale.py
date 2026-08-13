@@ -244,7 +244,8 @@ class WhaleScraper(BaseScraper):
         logger.info("[whale] %d channels", len(channels))
         return channels
 
-    def _enrich_near_term(self, near_term: dict[str, ProgramData], token: str) -> None:
+    def _enrich_near_term(self, near_term: dict[str, ProgramData], token: str,
+                           progress_base: int = 0, progress_total: int | None = None) -> None:
         """Call /epg/detail for near-term programs to add descriptions, posters, episode metadata."""
         if not near_term:
             return
@@ -262,11 +263,18 @@ class WhaleScraper(BaseScraper):
                 pass
             return prgch_id, None
 
+        total = progress_total if progress_total is not None else len(near_term)
+        completed_lock = threading.Lock()
+        completed = 0
         enriched = errors = 0
         with ThreadPoolExecutor(max_workers=_EPG_DETAIL_WORKERS) as pool:
             futures = {pool.submit(_fetch_one, pid): pid for pid in near_term}
             for fut in as_completed(futures):
                 prgch_id, detail = fut.result()
+                with completed_lock:
+                    completed += 1
+                    if self._progress_cb:
+                        self._progress_cb('epg', progress_base + completed, total)
                 if detail is None:
                     errors += 1
                     continue
@@ -318,13 +326,14 @@ class WhaleScraper(BaseScraper):
             return []
 
         chl_ids = [str(ch.source_channel_id) for ch in channels]
+        total_channels = len(chl_ids)
         now_utc  = datetime.now(timezone.utc)
         start_ms = int(now_utc.timestamp() * 1000)
         end_ms   = int((now_utc.timestamp() + _EPG_DAYS * 86400) * 1000)
 
         # Fetch in batches using comma-separated channelIds (matches the website's API usage)
         all_ch_rows: list[dict] = []
-        for i in range(0, len(chl_ids), _EPG_BATCH_SIZE):
+        for i in range(0, total_channels, _EPG_BATCH_SIZE):
             batch = chl_ids[i : i + _EPG_BATCH_SIZE]
             url = (f"{_EPG_URL}?channelIds={','.join(batch)}"
                    f"&startTime={start_ms}&endTime={end_ms}&langCode=en&countryCode=US")
@@ -335,6 +344,8 @@ class WhaleScraper(BaseScraper):
                 all_ch_rows.extend(batch_data.get("data") or [])
             except Exception as exc:
                 logger.error("[whale] EPG batch fetch failed: %s", exc)
+            if self._progress_cb:
+                self._progress_cb('epg', min(i + _EPG_BATCH_SIZE, total_channels), total_channels)
 
         with _current_prog_desc_lock:
             prog_descs = dict(_current_prog_desc)
@@ -370,7 +381,9 @@ class WhaleScraper(BaseScraper):
                 if prgch_id and start.timestamp() < detail_cutoff:
                     near_term[prgch_id] = prog
 
-        self._enrich_near_term(near_term, token)
+        self._enrich_near_term(near_term, token,
+                                progress_base=total_channels,
+                                progress_total=total_channels + len(near_term))
 
         logger.info("[whale] %d EPG entries", len(programs))
         return programs
