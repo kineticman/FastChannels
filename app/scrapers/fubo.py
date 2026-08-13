@@ -16,6 +16,7 @@ EPG requests are unauthenticated and work with plain requests.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import time
@@ -393,6 +394,10 @@ class FuboScraper(BaseScraper):
 
         self._ensure_auth()
 
+        total_hours = _EPG_DAYS * 24
+        total_windows = math.ceil(total_hours / _EPG_HOURS) + math.ceil(total_hours / _RICH_EPG_HOURS)
+        windows_done = 0
+
         schedule: dict[tuple[str, datetime], dict[str, Any]] = {}
         papi_ok = True
         window_start = now
@@ -429,6 +434,9 @@ class FuboScraper(BaseScraper):
                     })
 
             window_start = window_end
+            windows_done += 1
+            if self._progress_cb:
+                self._progress_cb('epg', windows_done, total_windows)
 
         if not papi_ok:
             schedule.clear()
@@ -442,6 +450,9 @@ class FuboScraper(BaseScraper):
             except Exception as exc:
                 logger.warning('[fubo] rich EPG window %s failed: %s', window_start, exc)
                 window_start = window_end
+                windows_done += 1
+                if self._progress_cb:
+                    self._progress_cb('epg', windows_done, total_windows)
                 continue
 
             for item in data:
@@ -461,6 +472,9 @@ class FuboScraper(BaseScraper):
                             rich_schedule[(ch_id, start_key)] = parsed
 
             window_start = window_end
+            windows_done += 1
+            if self._progress_cb:
+                self._progress_cb('epg', windows_done, total_windows)
 
         for key, rich in rich_schedule.items():
             if key in schedule:

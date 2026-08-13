@@ -764,6 +764,8 @@ class CoxScraper(BaseScraper):
             rows = data.get('_embedded', {}).get('channels', []) if isinstance(data, dict) else []
             if isinstance(rows, list):
                 merged['_embedded']['channels'].extend(rows)
+            if self._progress_cb:
+                self._progress_cb('epg', min(index * batch_size, len(channel_ids)), len(channel_ids))
             if index < len(batches):
                 time.sleep(0.15)
         return merged

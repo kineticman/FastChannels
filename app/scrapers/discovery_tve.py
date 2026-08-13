@@ -538,6 +538,8 @@ class DiscoveryTVEScraper(BaseScraper):
     def fetch_epg(self, channels, **kwargs):
         now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         wanted = {ch.source_channel_id for ch in channels}
+        total = sum(1 for channel_id in CHANNELS if channel_id in wanted)
+        done = 0
         session = self._authorized_session()
         programs: list[ProgramData] = []
         for channel_id, channel in CHANNELS.items():
@@ -549,6 +551,9 @@ class DiscoveryTVEScraper(BaseScraper):
                 listings = []
             if listings:
                 programs.extend(listings)
+                done += 1
+                if self._progress_cb:
+                    self._progress_cb('epg', done, total)
                 continue
             programs.extend(
                 ProgramData(
@@ -562,6 +567,9 @@ class DiscoveryTVEScraper(BaseScraper):
                 )
                 for i in range(24)
             )
+            done += 1
+            if self._progress_cb:
+                self._progress_cb('epg', done, total)
         return programs
 
     def resolve(self, raw_url: str) -> str:

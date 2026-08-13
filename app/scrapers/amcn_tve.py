@@ -558,6 +558,8 @@ class AMCNetworksTVEScraper(BaseScraper):
 
     def fetch_epg(self, channels, **kwargs):
         wanted = {ch.source_channel_id for ch in channels}
+        total = sum(1 for channel_id in CHANNELS if channel_id in wanted)
+        done = 0
         local_today = datetime.now(ZoneInfo('America/New_York')).date()
         session = self._session()
         programs: list[ProgramData] = []
@@ -571,6 +573,9 @@ class AMCNetworksTVEScraper(BaseScraper):
                 except Exception:
                     continue
             programs.extend(parsed or _placeholder_epg(channel))
+            done += 1
+            if self._progress_cb:
+                self._progress_cb('epg', done, total)
         null_placeholder_season_episode(programs)
         return programs
 

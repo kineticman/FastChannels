@@ -413,6 +413,8 @@ class AENetworksTVEScraper(BaseScraper):
 
     def fetch_epg(self, channels, **kwargs):
         wanted = {ch.source_channel_id for ch in channels}
+        total = sum(1 for channel_id in _NETWORKS if channel_id in wanted)
+        done = 0
         programs: list[ProgramData] = []
         for channel_id, network in _NETWORKS.items():
             if channel_id not in wanted:
@@ -423,6 +425,9 @@ class AENetworksTVEScraper(BaseScraper):
                 parsed.append(live_now)
                 parsed.sort(key=lambda p: p.start_time)
             programs.extend(parsed or _placeholder_epg(network))
+            done += 1
+            if self._progress_cb:
+                self._progress_cb('epg', done, total)
         return programs
 
     def resolve(self, raw_url: str) -> str:

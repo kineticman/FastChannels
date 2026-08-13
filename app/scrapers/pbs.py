@@ -276,7 +276,8 @@ class PBSScraper(BaseScraper):
 
         now_utc = datetime.now(timezone.utc)
         programs: list[ProgramData] = []
-        for station_id, feed_cids in by_station.items():
+        total_stations = len(by_station)
+        for index, (station_id, feed_cids) in enumerate(by_station.items(), start=1):
             timezone_name = self._station_timezone(station_id)
             today = self._local_date(now_utc, timezone_name)
             for day_offset in range(2):
@@ -292,6 +293,8 @@ class PBSScraper(BaseScraper):
                         program = self._program(source_channel_id, item)
                         if program:
                             programs.append(program)
+            if self._progress_cb:
+                self._progress_cb("epg", index, total_stations)
 
         logger.info("[%s] %d EPG entries", self.source_name, len(programs))
         return programs
