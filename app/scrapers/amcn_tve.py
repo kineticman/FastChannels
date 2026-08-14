@@ -744,10 +744,27 @@ class AMCNetworksTVEScraper(BaseScraper):
             if 'login.cox.com' not in mso_login_url:
                 raise TVEAuthError(f'{channel.name}: unexpected Adobe redirect host {urlsplit(mso_login_url).netloc}.')
             _cox_saml_login(client.session, mso_login_url, account.username or '', account.password or '')
+        elif mso_id == 'Comcast_SSO':
+            if 'xfinity.com' not in mso_login_url:
+                raise TVEAuthError(f'{channel.name}: unexpected Adobe redirect host {urlsplit(mso_login_url).netloc}.')
+            cookie_jar = cfg.get('xfinity_cookie_jar')
+            if not cookie_jar:
+                raise TVEAuthError(
+                    f'{channel.name}: Comcast_SSO needs a saved Xfinity cookie jar — '
+                    'needs a browser-assisted sign-in to harvest one first.'
+                )
+            # Uses its own dedicated session internally (not client.session,
+            # which carries the Bearer/auth_headers needed by
+            # _adobe_decision_finish's /profiles/code/{code} poll below) —
+            # Adobe binds the completed login server-side to `code`
+            # regardless of which HTTP session did the MSO login, same
+            # pattern already proven for NBC TVE.
+            from ..tve.adobe_pass import xfinity_cookie_jar_login
+            xfinity_cookie_jar_login(mso_login_url, account.username or '', account.password or '', cookie_jar)
         else:
             raise TVEAuthError(
                 f'{channel.name}: browser-assisted sign-in for AMC Networks TVE is not built yet for MVPD '
-                f'{mso_id} (only native Cox login is wired up here).'
+                f'{mso_id} (only native Cox login and Comcast_SSO cookie-jar login are wired up here).'
             )
 
         adobe_token, adobe_id = self._adobe_decision_finish(client, channel, code, mso_id, auth_headers)

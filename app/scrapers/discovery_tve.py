@@ -312,14 +312,37 @@ class DiscoveryTVEScraper(BaseScraper):
             partners = r.json() or []
         except (requests.RequestException, ValueError):
             return None
+
+        # Each partner entry's own `flows[]` can carry an
+        # `external_partner_id` that's literally the Adobe Pass mso_id —
+        # confirmed live 2026-08-14: Comcast/Xfinity is listed here under
+        # the display name "Xfinity" (not "Comcast" or "Comcast XFINITY"),
+        # which the name-based matching below can't find (it was
+        # incorrectly read as "not a participating provider" before this
+        # check existed), but its flows explicitly say
+        # external_partner_id="Comcast_SSO" — an exact, unambiguous match
+        # to our own mso_id. Try this first since it can't have the same
+        # display-name-mismatch problem name matching has.
+        if mso_id:
+            for p in partners:
+                for flow in p.get('flows') or []:
+                    if (flow.get('external_partner_id') or '') == mso_id:
+                        return p.get('id')
+
         candidates = [c.strip().lower() for c in (mso_name, mso_id) if c]
         for candidate in candidates:
             for p in partners:
                 if (p.get('name') or '').strip().lower() == candidate:
                     return p.get('id')
+        # Bidirectional substring match — candidate-in-name catches e.g.
+        # candidate="sling" matching name="Sling TV"; name-in-candidate
+        # catches the Xfinity case above by display name alone if the
+        # flows-based exact match somehow isn't present (name="Xfinity"
+        # found inside candidate="comcast xfinity").
         for candidate in candidates:
             for p in partners:
-                if candidate in (p.get('name') or '').strip().lower():
+                name = (p.get('name') or '').strip().lower()
+                if name and (candidate in name or name in candidate):
                     return p.get('id')
         return None
 
@@ -386,19 +409,39 @@ class DiscoveryTVEScraper(BaseScraper):
         if mso_id == 'Cox':
             if 'login.cox.com' not in mso_login_url:
                 raise TVEAuthError(f'Unexpected Adobe authenticate redirect host: {urlsplit(mso_login_url).netloc}.')
+            callback_url = _cox_saml_login(session, mso_login_url, account.username or '', account.password or '')
+            if CALLBACK_BASE not in callback_url:
+                raise TVEAuthError(f'Unexpected Discovery callback host: {urlsplit(callback_url).netloc}.')
+            r = session.get(callback_url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*'}, allow_redirects=False, timeout=30)
+            if r.status_code not in {301, 302, 303, 307, 308}:
+                raise TVEAuthError(f'Discovery callback returned HTTP {r.status_code}.')
+            code_url = r.headers.get('location') or ''
+        elif mso_id == 'Comcast_SSO':
+            if 'xfinity.com' not in mso_login_url:
+                raise TVEAuthError(f'Unexpected Adobe authenticate redirect host: {urlsplit(mso_login_url).netloc}.')
+            cookie_jar = cfg.get('xfinity_cookie_jar')
+            if not cookie_jar:
+                raise TVEAuthError(
+                    'Discovery TVE: Comcast_SSO needs a saved Xfinity cookie jar — '
+                    'needs a browser-assisted sign-in to harvest one first.'
+                )
+            from ..tve.adobe_pass import xfinity_cookie_jar_login
+            # Unlike _cox_saml_login (which deliberately stops at the FIRST
+            # post-login redirect with allow_redirects=False, so the caller
+            # above does one more explicit hop to reach code_url),
+            # xfinity_cookie_jar_login follows redirects all the way through
+            # — its return value IS already the equivalent of that second
+            # hop (confirmed live 2026-08-14: lands directly on
+            # auth.watch.hgtv.com/gauth-sync?code=... , the same URL Cox's
+            # extra hop above extracts `code` from), so use it as code_url
+            # directly instead of repeating the CALLBACK_BASE/extra-hop dance.
+            code_url = xfinity_cookie_jar_login(mso_login_url, account.username or '', account.password or '', cookie_jar)
         else:
             raise TVEAuthError(
                 f'Browser-assisted sign-in for Discovery TVE is not built yet for MVPD {mso_id} '
-                f'(only native Cox login is wired up here).'
+                f'(only native Cox login and Comcast_SSO cookie-jar login are wired up here).'
             )
 
-        callback_url = _cox_saml_login(session, mso_login_url, account.username or '', account.password or '')
-        if CALLBACK_BASE not in callback_url:
-            raise TVEAuthError(f'Unexpected Discovery callback host: {urlsplit(callback_url).netloc}.')
-        r = session.get(callback_url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*'}, allow_redirects=False, timeout=30)
-        if r.status_code not in {301, 302, 303, 307, 308}:
-            raise TVEAuthError(f'Discovery callback returned HTTP {r.status_code}.')
-        code_url = r.headers.get('location') or ''
         code = (parse_qs(urlsplit(code_url).query).get('code') or [''])[0]
         if not code:
             raise TVEAuthError('Discovery callback did not return a gauth code.')

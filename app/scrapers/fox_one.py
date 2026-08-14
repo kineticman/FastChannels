@@ -488,7 +488,9 @@ class FoxOneScraper(BaseScraper):
         account.config = cfg
         db.session.commit()
 
-    def _authenticate_via_mvpd(self, mso_id: str, username: str, password: str) -> tuple[str, float]:
+    def _authenticate_via_mvpd(
+        self, mso_id: str, username: str, password: str, cookie_jar: dict | None = None,
+    ) -> tuple[str, float]:
         """Link this device to FOX One's entitlement system through an MVPD
         (TV-provider) sign-in, mirroring the same Adobe Pass SAML dance
         fox_tve.py already automates — just via FOX One's own adobeauthn/
@@ -572,11 +574,26 @@ class FoxOneScraper(BaseScraper):
             if 'login.cox.com' not in mso_login_url:
                 raise RuntimeError(f'Unexpected FOX One Adobe redirect host: {urlparse(mso_login_url).netloc}')
             _cox_saml_login(session, mso_login_url, username, password)
+        elif mso_id == 'Comcast_SSO':
+            if 'xfinity.com' not in mso_login_url:
+                raise RuntimeError(f'Unexpected FOX One Adobe redirect host: {urlparse(mso_login_url).netloc}')
+            if not cookie_jar:
+                raise ValueError(
+                    'FOX One: Comcast_SSO needs a saved Xfinity cookie jar — '
+                    'needs a browser-assisted sign-in to harvest one first.'
+                )
+            # Uses its own dedicated session internally, not `session` (which
+            # carries FOX's own request_id-linked state used by the
+            # completion call below) — FOX binds the completed login
+            # server-side to `request_id` regardless of which HTTP session
+            # did the MSO login, same pattern already proven for NBC/AMCN.
+            from ..tve.adobe_pass import xfinity_cookie_jar_login
+            xfinity_cookie_jar_login(mso_login_url, username, password, cookie_jar)
         else:
             raise ValueError(
                 f'FOX One native sign-in is not built yet for MVPD {mso_id} '
-                f'(only scripted Cox login is wired up here) — same gap as '
-                f'FOX TVE\'s _fox_sports_mvpd_token.'
+                f'(only scripted Cox login and Comcast_SSO cookie-jar login are wired up here) — '
+                f'same gap as FOX TVE\'s _fox_sports_mvpd_token.'
             )
 
         rc = session.post(
@@ -615,7 +632,9 @@ class FoxOneScraper(BaseScraper):
         if account:
             mso_id = self._account_mso_id(account)
             try:
-                access_token, expires_at = self._authenticate_via_mvpd(mso_id, account.username, account.password)
+                access_token, expires_at = self._authenticate_via_mvpd(
+                    mso_id, account.username, account.password, (account.config or {}).get('xfinity_cookie_jar'),
+                )
                 account.last_auth_status = 'ok'
                 account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD.'
                 account.last_auth_at = datetime.now(timezone.utc)

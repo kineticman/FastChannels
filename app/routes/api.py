@@ -5342,7 +5342,9 @@ def foxone_signin():
     scraper = FoxOneScraper(config=dict((source.config if source else {}) or {}))
     mso_id = scraper._account_mso_id(account)
     try:
-        access_token, expires_at = scraper._authenticate_via_mvpd(mso_id, account.username, account.password)
+        access_token, expires_at = scraper._authenticate_via_mvpd(
+            mso_id, account.username, account.password, (account.config or {}).get('xfinity_cookie_jar'),
+        )
     except Exception as exc:  # noqa: BLE001
         account.last_auth_status = 'error'
         account.last_auth_message = f'FOX One {mso_id} MVPD auth failed: {exc}'[:500]
