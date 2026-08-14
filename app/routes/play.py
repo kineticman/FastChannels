@@ -1861,6 +1861,186 @@ def fubo_segment_proxy():
     )
 
 
+@play_bp.route('/play/tcl/<channel_id>/proxy.m3u8')
+def tcl_manifest_proxy(channel_id: str):
+    """
+    Manifest proxy for TCL TV+ channels routed through FutureToday/Publica's
+    SSAI pipeline (stream-us-east-1.getpublica.com). That manifest CDN reflects
+    Access-Control-Allow-Origin correctly, but the raw content segments it
+    references live on a separate origin (e.g. ftlive.cachefly.net) that sends
+    no CORS headers at all — Shaka's browser fetch() gets blocked outright
+    (NETWORK.HTTP_ERROR). Proxy every tier so segments are always fetched
+    server-side, regardless of which CDN Publica points to.
+    """
+    from urllib.parse import unquote as _unquote, quote as _quote
+    import re as _re
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'tcl', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper_cls = registry.get('tcl')
+    if not scraper_cls:
+        return _unavailable_response()
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        master_url = scraper.resolve(channel.stream_url)
+    except Exception as e:
+        logger.warning('[tcl-proxy] resolve failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+
+    if not master_url or not master_url.startswith('http'):
+        return _unavailable_response()
+
+    try:
+        r = _requests.get(master_url, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[tcl-proxy] master fetch failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+
+    effective_url = r.url
+    base_url = request.host_url.rstrip('/')
+
+    def _proxy_url(abs_url: str) -> str:
+        return f'{base_url}/play/tcl/variant?url={_quote(abs_url, safe="")}'
+
+    def _abs(rel: str) -> str:
+        return rel if rel.startswith('http') else urljoin(effective_url, rel)
+
+    def _rewrite_uri(m):
+        return f'URI="{_proxy_url(_abs(m.group(1)))}"'
+
+    lines = []
+    for line in r.text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            line = _proxy_url(_abs(stripped))
+        elif stripped.startswith('#EXT-X-MEDIA') and 'URI=' in stripped:
+            line = _re.sub(r'URI="([^"]+)"', _rewrite_uri, line)
+        lines.append(line)
+
+    return Response(
+        '\n'.join(lines),
+        mimetype='application/vnd.apple.mpegurl',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
+@play_bp.route('/play/tcl/variant')
+def tcl_variant_proxy():
+    from urllib.parse import urlsplit, unquote as _unquote, quote as _quote
+    import re as _re
+
+    raw = request.args.get('url', '')
+    if not raw:
+        abort(400)
+    url = _unquote(raw)
+    parsed = urlsplit(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        abort(400)
+    host = parsed.netloc.split(':')[0].lower()
+    if not host.endswith('.getpublica.com'):
+        logger.warning('[tcl-variant] blocked non-Publica host: %s', host)
+        abort(403)
+    if _PRIVATE_IP_RE.match(host):
+        abort(403)
+
+    try:
+        r = _requests.get(url, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[tcl-variant] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+
+    base_url = request.host_url.rstrip('/')
+
+    def _seg_proxy(abs_url: str) -> str:
+        return f'{base_url}/play/tcl/seg?url={_quote(abs_url, safe="")}'
+
+    def _abs(rel: str) -> str:
+        return rel if rel.startswith('http') else urljoin(url, rel)
+
+    def _rewrite_key_uri(m):
+        return f'URI="{_seg_proxy(_abs(m.group(1)))}"'
+
+    lines = []
+    for line in r.text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            # Segment URL — may point at any CDN Publica's SSAI stitches in
+            # (content origin, ad-network creatives, etc.), not just cachefly.
+            line = _seg_proxy(_abs(stripped))
+        elif stripped.startswith('#EXT-X-KEY') and 'URI=' in stripped:
+            line = _re.sub(r'URI="([^"]+)"', _rewrite_key_uri, line)
+        lines.append(line)
+
+    return Response(
+        '\n'.join(lines),
+        mimetype='application/vnd.apple.mpegurl',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
+@play_bp.route('/play/tcl/seg')
+def tcl_segment_proxy():
+    """
+    Fetch a TCL/Publica content segment server-side and hand it back with a
+    permissive CORS header. Segments are only reachable via URLs we ourselves
+    extracted from a variant playlist already validated in tcl_variant_proxy,
+    so no host allowlist beyond blocking private IPs is applied here — Publica's
+    SSAI stitches in segments from whatever CDN a given ad/content slot uses.
+    """
+    from urllib.parse import urlsplit, unquote as _unquote
+    raw = request.args.get('url', '')
+    if not raw:
+        abort(400)
+    url = _unquote(raw)
+    parsed = urlsplit(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        abort(400)
+    host = parsed.netloc.split(':')[0].lower()
+    if _PRIVATE_IP_RE.match(host):
+        abort(403)
+
+    try:
+        r = _requests.get(url, timeout=(5, 30), stream=True)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[tcl-seg] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+
+    # cachefly's Wasabi-backed origin sends a bogus Content-Type for .ts
+    # segments (observed: text/vnd.trolltech.linguist) which can confuse
+    # Shaka's segment sniffing. Only override for .ts video segments — this
+    # proxy also serves the subtitle track's .vtt segments, which need their
+    # real Content-Type preserved.
+    upstream_ct = r.headers.get('Content-Type', '')
+    if parsed.path.lower().endswith('.ts') and not upstream_ct.startswith(('video/', 'audio/')):
+        content_type = 'video/mp2t'
+    else:
+        content_type = upstream_ct or 'application/octet-stream'
+
+    return _stream_upstream_response(
+        r,
+        content_type=content_type,
+        headers={'Access-Control-Allow-Origin': '*'},
+        label='tcl-seg',
+    )
+
+
 _STIRR_PROXY_SESSION: _requests.Session | None = None
 
 # Redis client for Amazon SHT (sessionHandoffToken) caching across gunicorn workers.
@@ -4307,6 +4487,22 @@ def play(source_name: str, channel_id: str):
             encoded_id = _quote(channel.source_channel_id, safe='')
             return redirect(
                 f"{request.host_url.rstrip('/')}/play/distro/{encoded_id}/proxy.m3u8",
+                302,
+            )
+
+    # TCL channels routed through FutureToday/Publica's SSAI pipeline: the
+    # manifest CDN (getpublica.com) sets CORS correctly, but the content
+    # segments it stitches in live on a separate origin (e.g. cachefly.net)
+    # that sends none at all, blocking Shaka's browser fetch(). Gated on the
+    # resolved host (not the stored source= tag) so any future TCL channel
+    # that resolves through this same CDN picks up the proxy automatically.
+    if source_name == 'tcl' and resolved_url:
+        from urllib.parse import urlsplit as _urlsplit
+        if _urlsplit(resolved_url).netloc.lower().endswith('.getpublica.com'):
+            from urllib.parse import quote as _quote
+            encoded_id = _quote(channel.source_channel_id, safe='')
+            return redirect(
+                f"{request.host_url.rstrip('/')}/play/tcl/{encoded_id}/proxy.m3u8",
                 302,
             )
 
