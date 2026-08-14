@@ -1388,6 +1388,7 @@ def settings():
                                'yt_dlp_mso_id': 'Cox',
                                'selected_mso_id': 'Cox',
                                'selected_mso_name': 'Cox',
+                               'home_zip_code': '',
                            },
                            drm_bridge_recoverable_count=_drm_bridge_recoverable_count(),
                            gracenote_contribution_url=app_settings.gracenote_contribution_url or '')

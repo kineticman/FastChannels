@@ -43,11 +43,11 @@ from ..url import public_base_url
 from .tasks import (
     trigger_bulk_channel_update,
     trigger_bulk_channel_review,
-    cancel_source_jobs,
     trigger_scrape,
     trigger_source_channel_purge,
     trigger_source_disable,
-    is_source_disable_pending,
+    get_source_disable_status,
+    cancel_pending_source_disable,
     trigger_stream_audit,
     trigger_stream_audit_recheck,
     trigger_tvtv_cache_refresh,
@@ -1031,28 +1031,37 @@ def update_source(source_id):
     source = Source.query.get_or_404(source_id)
     data = request.get_json()
 
-    # The admin UI's toggle only ever sends this one field on its own (see
-    # sources.html's setSourceEnabled) — special-case it to run off the
-    # request thread. SQLite's writer lock is database-wide, not per-row, so
-    # committing this inline can otherwise mean waiting out busy_timeout
-    # (30s) behind an unrelated active scrape's chunked commits, freezing
-    # the gunicorn worker handling this request for that whole window
-    # (observed live 2026-08-14: with 2 workers, made the whole admin UI
-    # look locked up). Only the disable direction is worth queuing —
-    # enabling doesn't purge/lock anything and the request completing a beat
-    # late isn't the same "is the app dead" experience as a stuck toggle.
-    if set(data.keys()) == {'is_enabled'} and not data['is_enabled'] and source.is_enabled:
+    # Disabling always runs off the request thread via run_source_disable —
+    # never inline — regardless of what else is in the payload. SQLite's
+    # writer lock is database-wide, not per-row, so committing this inline
+    # can otherwise mean waiting out busy_timeout (30s) behind an unrelated
+    # active scrape's chunked commits, freezing the gunicorn worker handling
+    # this request for that whole window (observed live 2026-08-14: with 2
+    # workers, made the whole admin UI look locked up). Keeping this the
+    # ONLY place the disable+cancel+purge+xml-refresh sequence is
+    # implemented also avoids a second inline copy silently drifting from
+    # it (code review, 2026-08-14). Enabling doesn't purge/lock anything, so
+    # it's cheap enough to stay inline below.
+    disabling_now = data.get('is_enabled') is False and source.is_enabled
+    if disabling_now:
         trigger_source_disable(source.id)
-        return jsonify({'status': 'queued'}), 202
+        if set(data.keys()) == {'is_enabled'}:
+            return jsonify({'status': 'queued'}), 202
+        # Other fields are also changing in this same request — apply them
+        # below as normal. is_enabled itself is deliberately left untouched
+        # here; the queued job above owns flipping it.
 
     changed = False
-    if 'is_enabled' in data:
+    if 'is_enabled' in data and not disabling_now:
         new_enabled = bool(data['is_enabled'])
-        should_purge = not new_enabled and source.is_enabled
+        if new_enabled and not source.is_enabled:
+            # Re-enabling — cancel any disable that's still queued from a
+            # moment ago (e.g. a quick off/on click) so it doesn't run after
+            # this commit and silently flip the source back off, see
+            # cancel_pending_source_disable's docstring.
+            cancel_pending_source_disable(source.id)
         source.is_enabled = new_enabled
         changed = True
-    else:
-        should_purge = False
     if 'scrape_interval' in data:
         try:
             interval = int(data['scrape_interval'])
@@ -1104,11 +1113,12 @@ def update_source(source_id):
             db.session.rollback()
             return jsonify({'error': 'Channel number overlaps detected', 'warnings': new_warnings}), 409
     db.session.commit()
-    if should_purge:
-        cancel_source_jobs(source.name)
-    _invalidate_and_refresh_xml()
-    if should_purge and source.name != 'custom':
-        trigger_source_channel_purge(source.id)
+    # Disabling's own cancel/purge/xml-refresh follow-up is entirely owned by
+    # the queued run_source_disable job triggered above — nothing to do here
+    # for that case. For every other change, keep the existing unconditional
+    # refresh so M3U/EPG output picks up whatever just changed.
+    if not disabling_now:
+        _invalidate_and_refresh_xml()
     return jsonify(source.to_dict())
 
 
@@ -1116,9 +1126,9 @@ def update_source(source_id):
 def source_disable_status(source_id):
     """Polled by the admin UI while a disable toggle is queued (see
     setSourceEnabled/update_source's async disable path) to know when it's
-    safe to drop the "Disabling…" indicator."""
-    pending = is_source_disable_pending(source_id)
-    return jsonify({'status': 'pending' if pending else 'done'})
+    safe to drop the "Disabling…" indicator. status is 'pending'/'done'/
+    'error' — see get_source_disable_status."""
+    return jsonify(get_source_disable_status(source_id))
 
 
 @api_bp.route('/sources/<int:source_id>/channels', methods=['DELETE'])

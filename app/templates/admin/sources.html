@@ -1698,15 +1698,28 @@
     // lock (see update_source's async disable path) — so poll until the
     // background job actually flips is_enabled rather than assuming the
     // 202 response means it's already done (code review, 2026-08-14).
+    //
+    // Budget (135s) deliberately exceeds run_source_disable's own 120s
+    // job_timeout so a legitimately slow disable (the exact DB-lock/
+    // scrape-pile-up conditions this was built for) doesn't get given up on
+    // before the backend itself would — a prior version timed out at 60s
+    // and unconditionally showed "Off" regardless of what the job actually
+    // did (code review, 2026-08-14).
+    //
+    // Returns {ok: true} once done, or {ok: false, error} on an actual job
+    // failure or a poll timeout — callers must NOT assume the toggle
+    // succeeded just because polling stopped.
     async function _pollSourceDisable(sourceId) {
-      for (let i = 0; i < 60; i++) {
+      for (let i = 0; i < 135; i++) {
         await new Promise(res => setTimeout(res, 1000));
         try {
           const r = await fetch(`/api/sources/${sourceId}/disable-status`);
           const d = await r.json();
-          if (d.status !== 'pending') return;
+          if (d.status === 'error') return {ok: false, error: d.error || 'Disable failed.'};
+          if (d.status !== 'pending') return {ok: true};
         } catch (e) { /* transient — keep polling */ }
       }
+      return {ok: false, error: 'Timed out waiting for the disable to finish.'};
     }
 
     async function setSourceEnabled(sourceId, enabled, checkbox) {
@@ -1728,7 +1741,16 @@
         if (r.status === 202) {
           if (labelEl)       { labelEl.textContent = 'Disabling…'; labelEl.className = 'toggle-label off'; }
           if (mobileLabelEl) { mobileLabelEl.textContent = 'Disabling…'; mobileLabelEl.className = 'toggle-label off'; }
-          await _pollSourceDisable(sourceId);
+          const result = await _pollSourceDisable(sourceId);
+          if (!result.ok) {
+            // Don't claim success the backend never confirmed — leave the
+            // toggle showing enabled (its actual last-known state) rather
+            // than reporting "Off" for a disable that may not have
+            // finished or actually failed (code review, 2026-08-14).
+            console.error('Source disable did not complete:', result.error);
+            applySourceEnabledState(sourceId, true);
+            return;
+          }
         }
 
         if (!enabled) document.getElementById(`ch-count-${sourceId}`).textContent = '0';

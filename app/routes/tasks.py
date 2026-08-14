@@ -299,12 +299,63 @@ def trigger_source_disable(source_id: int) -> bool:
         return True
 
 
-def is_source_disable_pending(source_id: int) -> bool:
-    """For the admin UI's disable-status poll — True while run_source_disable
-    is still queued/running for this source (see trigger_source_disable)."""
+def get_source_disable_status(source_id: int) -> dict:
+    """For the admin UI's disable-status poll (see trigger_source_disable).
+
+    Returns {'status': 'pending'|'done'|'error', 'error': str|None}.
+    'error' means the job actually raised — distinct from 'done', which
+    previously covered both "genuinely finished" and "failed/vanished",
+    silently reporting success either way (code review, 2026-08-14).
+
+    Known gap: the raw-thread fallback used when RQ/Redis itself is
+    unavailable isn't visible to any of this — same blind spot every other
+    trigger_*'s thread fallback already has, not specific to this endpoint.
+    """
+    job_id = f'source-disable-{source_id}'
     try:
-        return _job_already_active(get_fast_queue(), f'source-disable-{source_id}')
+        q = get_fast_queue()
     except Exception:
+        return {'status': 'done', 'error': None}
+    if _job_already_active(q, job_id):
+        return {'status': 'pending', 'error': None}
+    try:
+        from rq.registry import FailedJobRegistry
+        failed_ids = FailedJobRegistry(q.name, connection=q.connection).get_job_ids()
+        if job_id in failed_ids:
+            job = Job.fetch(job_id, connection=q.connection)
+            return {'status': 'error', 'error': (job.exc_info or '').strip().splitlines()[-1] if job.exc_info else 'Disable job failed.'}
+    except Exception:
+        pass
+    return {'status': 'done', 'error': None}
+
+
+def cancel_pending_source_disable(source_id: int) -> bool:
+    """Cancel a still-QUEUED run_source_disable job for this source, if any.
+
+    Called when a source is re-enabled — without this, a disable queued
+    moments earlier (still waiting behind a busy queue) can run AFTER the
+    re-enable commits, see is_enabled back to True (nothing marks it stale),
+    and silently flip it back off + purge the channels the user just chose
+    to keep (code review, 2026-08-14). Same idiom as cancel_source_jobs.
+
+    Only helps if the job hasn't started yet — same residual gap
+    cancel_source_jobs already accepts elsewhere: a job already past
+    run_source_disable's own is_enabled check by the time this runs can't be
+    stopped here. That window is milliseconds wide in practice.
+    """
+    try:
+        q = get_fast_queue()
+        job = Job.fetch(f'source-disable-{source_id}', connection=q.connection)
+    except Exception:
+        return False
+    if job.get_status(refresh=False) not in {'queued', 'deferred', 'scheduled'}:
+        return False
+    try:
+        job.delete()
+        logger.info('Canceled pending source-disable job for source_id=%s (re-enabled)', source_id)
+        return True
+    except Exception as e:
+        logger.warning('Failed to cancel pending source-disable for source_id=%s: %s', source_id, e)
         return False
 
 

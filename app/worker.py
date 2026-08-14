@@ -484,8 +484,6 @@ def run_scraper(source_name: str, force_full: bool = False):
                                        source_name, _attempt + 1, _wait)
                         time.sleep(_wait)
                 invalidate_xml_cache()
-                if _no_scrapes_pending(source_name):
-                    _enqueue_xml_refresh_job()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] EPG-only run complete — %d channels, %d programs (%.1fs)',
                             source_name, len(db_channels), len(programs), elapsed)
@@ -588,8 +586,6 @@ def run_scraper(source_name: str, force_full: bool = False):
                                        source_name, _attempt + 1, _wait)
                         time.sleep(_wait)
                 invalidate_xml_cache()
-                if _no_scrapes_pending(source_name):
-                    _enqueue_xml_refresh_job()
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
@@ -655,6 +651,18 @@ def run_scraper(source_name: str, force_full: bool = False):
                 logger.warning('[%s] Could not persist last_error to DB', source_name)
             _progress('done')
         finally:
+            # Unconditional (not just on the success path) — a scrape pile-up's
+            # deferred startup refresh must still fire once the queue drains
+            # even if the LAST job to finish hit an exception (e.g. not
+            # authorized, DB lock exhausted); otherwise M3U/EPG output stays
+            # stale until that source's next scheduled cycle. Idempotent/
+            # dedup-safe (see _enqueue_xml_refresh_job), so this is harmless
+            # alongside any other trigger.
+            try:
+                if _no_scrapes_pending(source_name):
+                    _enqueue_xml_refresh_job()
+            except Exception:
+                logger.warning('[%s] deferred xml-refresh check failed', source_name, exc_info=True)
             channels = None
             programs = None
             db_channels = None
@@ -1867,9 +1875,21 @@ def run_source_disable(source_id: int):
 
         from app.routes.tasks import cancel_source_jobs, trigger_source_channel_purge
         cancel_source_jobs(source.name)
-        _invalidate_and_refresh_xml()
         if source.name != 'custom':
+            # Mark stale now (cheap — old M3U/EPG stays on disk and keeps
+            # being served, see invalidate_xml_cache's docstring) rather than
+            # running the full subprocess rebuild here: the queued purge job
+            # below does its own _invalidate_and_refresh_xml() right after,
+            # against a query that already excludes this source's channels
+            # via Source.is_enabled == True — a rebuild here would produce
+            # byte-identical output to that one, just paid for twice.
+            invalidate_xml_cache()
             trigger_source_channel_purge(source.id)
+        else:
+            # No purge job follows for 'custom' (its channels aren't
+            # deleted on disable), so this is the only rebuild that will
+            # happen — must be the real one.
+            _invalidate_and_refresh_xml()
         logger.info('[source-disable] %s disabled', source.name)
 
 
