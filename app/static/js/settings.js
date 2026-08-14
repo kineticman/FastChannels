@@ -845,7 +845,19 @@ function _mvpdLoginRunFoxOneForBatch(label, status) {
 function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
   return new Promise((resolve) => {
     let startAttempts = 0;
-    const MAX_START_ATTEMPTS = 30;  // ~30s of retrying a stuck lock before giving up on this network
+    // ~90s of retrying a stuck lock before giving up on this network. AMCN
+    // (which shares this same lock, see MVPD_LOGIN_FAMILIES/app/routes/
+    // tasks.py's _mvpd_tve_profile_busy) runs 4 Cox logins each spaced
+    // 8s apart by throttle_cox_login(), so its own worst case is already
+    // ~30s+ — a 30-attempt/1s budget left the next step in line (Discovery)
+    // one bad throttle roll from spuriously failing with "another sign-in
+    // stayed busy too long" purely from sequencing, nothing actually wrong
+    // (observed live 2026-08-14: Discovery retried the full 30s while AMCN
+    // was still legitimately running). 2s between attempts instead of 1s
+    // also halves how many "already running" log lines a normal wait like
+    // this produces.
+    const MAX_START_ATTEMPTS = 45;
+    const START_RETRY_MS = 2000;
 
     const tryStart = () => {
       if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
@@ -885,7 +897,7 @@ function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
               return;
             }
             status.textContent = `Waiting for another sign-in to finish before starting ${label}…`;
-            _mvpdLoginPollTimer = setTimeout(tryStart, 1000);
+            _mvpdLoginPollTimer = setTimeout(tryStart, START_RETRY_MS);
             return;
           }
           poll();
@@ -903,7 +915,7 @@ function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
             resolve({ ok: false, message: 'could not reach the server to start sign-in' });
             return;
           }
-          _mvpdLoginPollTimer = setTimeout(tryStart, 1000);
+          _mvpdLoginPollTimer = setTimeout(tryStart, START_RETRY_MS);
         });
     };
 

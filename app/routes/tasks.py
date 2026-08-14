@@ -490,7 +490,13 @@ def trigger_mvpd_browser_login(requestor_id: str, resource: str, software_statem
         q = get_fast_queue()
         job_id = 'mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
-            logger.info('MVPD browser login already running')
+            # DEBUG, not INFO: the batch "Sign in to all" loop (settings.js's
+            # signInToAllTve) hits this constantly by design while waiting
+            # for a slow prior step (e.g. AMCN's ~30s run) to release the
+            # shared profile lock, retrying once a second — at INFO that
+            # single expected wait floods the log with ~30 near-identical
+            # lines (reported live 2026-08-14).
+            logger.debug('MVPD browser login already running')
             return False
         q.enqueue(
             'app.worker.run_mvpd_browser_login',
@@ -531,7 +537,7 @@ def trigger_nbc_browser_login(mso_id: str):
         q = get_fast_queue()
         job_id = 'nbc-mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
-            logger.info('NBC MVPD browser login already running')
+            logger.debug('NBC MVPD browser login already running')  # see trigger_mvpd_browser_login
             return False
         q.enqueue('app.worker.run_nbc_browser_login', mso_id, job_timeout=1830, job_id=job_id)
         logger.info('Enqueued NBC MVPD browser login for mso_id=%s', mso_id)
@@ -563,7 +569,7 @@ def trigger_fox_browser_login(mso_id: str):
         q = get_fast_queue()
         job_id = 'fox-mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
-            logger.info('FOX MVPD browser login already running')
+            logger.debug('FOX MVPD browser login already running')  # see trigger_mvpd_browser_login
             return False
         q.enqueue('app.worker.run_fox_browser_login', mso_id, job_timeout=1830, job_id=job_id)
         logger.info('Enqueued FOX MVPD browser login for mso_id=%s', mso_id)
@@ -602,7 +608,7 @@ def trigger_amcn_browser_login(mso_id: str):
         q = get_fast_queue()
         job_id = 'mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
-            logger.info('MVPD browser login already running')
+            logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
             return False
         q.enqueue('app.worker.run_amcn_browser_login', mso_id, job_timeout=1830, job_id=job_id)
         logger.info('Enqueued AMC Networks TVE browser login for mso_id=%s', mso_id)
@@ -625,7 +631,7 @@ def trigger_discovery_browser_login(mso_id: str):
         q = get_fast_queue()
         job_id = 'mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
-            logger.info('MVPD browser login already running')
+            logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
             return False
         q.enqueue('app.worker.run_discovery_browser_login', mso_id, job_timeout=1830, job_id=job_id)
         logger.info('Enqueued Discovery TVE browser login for mso_id=%s', mso_id)
