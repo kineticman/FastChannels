@@ -46,6 +46,8 @@ from .tasks import (
     cancel_source_jobs,
     trigger_scrape,
     trigger_source_channel_purge,
+    trigger_source_disable,
+    is_source_disable_pending,
     trigger_stream_audit,
     trigger_stream_audit_recheck,
     trigger_tvtv_cache_refresh,
@@ -1028,6 +1030,21 @@ def chnum_overlaps():
 def update_source(source_id):
     source = Source.query.get_or_404(source_id)
     data = request.get_json()
+
+    # The admin UI's toggle only ever sends this one field on its own (see
+    # sources.html's setSourceEnabled) — special-case it to run off the
+    # request thread. SQLite's writer lock is database-wide, not per-row, so
+    # committing this inline can otherwise mean waiting out busy_timeout
+    # (30s) behind an unrelated active scrape's chunked commits, freezing
+    # the gunicorn worker handling this request for that whole window
+    # (observed live 2026-08-14: with 2 workers, made the whole admin UI
+    # look locked up). Only the disable direction is worth queuing —
+    # enabling doesn't purge/lock anything and the request completing a beat
+    # late isn't the same "is the app dead" experience as a stuck toggle.
+    if set(data.keys()) == {'is_enabled'} and not data['is_enabled'] and source.is_enabled:
+        trigger_source_disable(source.id)
+        return jsonify({'status': 'queued'}), 202
+
     changed = False
     if 'is_enabled' in data:
         new_enabled = bool(data['is_enabled'])
@@ -1093,6 +1110,15 @@ def update_source(source_id):
     if should_purge and source.name != 'custom':
         trigger_source_channel_purge(source.id)
     return jsonify(source.to_dict())
+
+
+@api_bp.route('/sources/<int:source_id>/disable-status')
+def source_disable_status(source_id):
+    """Polled by the admin UI while a disable toggle is queued (see
+    setSourceEnabled/update_source's async disable path) to know when it's
+    safe to drop the "Disabling…" indicator."""
+    pending = is_source_disable_pending(source_id)
+    return jsonify({'status': 'pending' if pending else 'done'})
 
 
 @api_bp.route('/sources/<int:source_id>/channels', methods=['DELETE'])

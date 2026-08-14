@@ -1844,6 +1844,35 @@ def run_source_channel_purge(source_id: int):
         )
 
 
+def run_source_disable(source_id: int):
+    """Background counterpart to update_source's disable path (app/routes/
+    api.py) — flips is_enabled off, then runs the same cancel/purge/xml-
+    refresh follow-up, off the request thread.
+
+    Queued instead of committing inline because SQLite's writer lock is
+    database-wide, not per-row: disabling one source could otherwise have to
+    wait out busy_timeout (30s) behind an unrelated active scrape's chunked
+    commits — and since that wait happened inside the HTTP request, it froze
+    whichever gunicorn worker was holding it for the full 30s (observed live
+    2026-08-14: with only 2 workers, this made the whole admin UI look
+    locked up). A background job can absorb that same wait fine; a browser
+    tab shouldn't have to sit through it.
+    """
+    with flask_app.app_context():
+        source = Source.query.get(source_id)
+        if not source or not source.is_enabled:
+            return  # already disabled, or deleted, before this job ran
+        source.is_enabled = False
+        db.session.commit()
+
+        from app.routes.tasks import cancel_source_jobs, trigger_source_channel_purge
+        cancel_source_jobs(source.name)
+        _invalidate_and_refresh_xml()
+        if source.name != 'custom':
+            trigger_source_channel_purge(source.id)
+        logger.info('[source-disable] %s disabled', source.name)
+
+
 def run_bulk_channel_update(filters: dict, enable: bool):
     with flask_app.app_context():
         ids = _channel_ids_for_filters(filters or {})
@@ -6244,8 +6273,32 @@ if __name__ == '__main__':
                 total_sources,
                 enabled_feeds,
             )
+            # Run the first due-scrape sweep now instead of waiting for
+            # auto_scrape's own first 60s tick, so the scraper queue is
+            # already populated by the time we decide (right below) whether
+            # to fire the startup xml-refresh — a container restart routinely
+            # leaves EVERY enabled source overdue at once (their intervals
+            # all lapsed while it was down), and this refresh's own
+            # "was it enqueued" check has nothing to see if it runs first.
             try:
-                _enqueue_xml_refresh_job()
+                _schedule_due_scrapes()
+            except Exception:
+                logger.exception('[scheduler] startup due-scrape sweep failed')
+            try:
+                # Same courtesy the post-scrape completion path already gives
+                # this job (_no_scrapes_pending, see run_scraper) — skip it
+                # here too when the sweep above just queued a pile of overdue
+                # sources, rather than firing unconditionally and forcing the
+                # ~150-200MB rebuild to run concurrently with that whole
+                # marathon. Nothing is lost by skipping: the last scraper job
+                # to finish re-triggers this exact call once the queue is
+                # actually idle (observed live 2026-08-14 — a cold restart
+                # with several overdue sources drove the host disk to ~100%
+                # util and made gunicorn briefly unresponsive).
+                if _any_scrapes_active():
+                    logger.info('[xml-cache] deferring startup refresh — scraper work active')
+                else:
+                    _enqueue_xml_refresh_job()
             except Exception:
                 logger.exception('[xml-cache] startup refresh failed')
 

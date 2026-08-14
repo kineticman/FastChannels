@@ -1693,9 +1693,27 @@
       if (schedSaveBtn)    schedSaveBtn.disabled      = !enabled;
     }
 
+    // Disabling a source while it's mid-scrape can't apply instantly — the
+    // backend queues it instead of blocking the request on SQLite's writer
+    // lock (see update_source's async disable path) — so poll until the
+    // background job actually flips is_enabled rather than assuming the
+    // 202 response means it's already done (code review, 2026-08-14).
+    async function _pollSourceDisable(sourceId) {
+      for (let i = 0; i < 60; i++) {
+        await new Promise(res => setTimeout(res, 1000));
+        try {
+          const r = await fetch(`/api/sources/${sourceId}/disable-status`);
+          const d = await r.json();
+          if (d.status !== 'pending') return;
+        } catch (e) { /* transient — keep polling */ }
+      }
+    }
+
     async function setSourceEnabled(sourceId, enabled, checkbox) {
       const toggleEl       = document.getElementById(`toggle-${sourceId}`);
       const mobileToggleEl = document.getElementById(`mobile-toggle-${sourceId}`);
+      const labelEl        = document.getElementById(`toggle-label-${sourceId}`);
+      const mobileLabelEl  = document.getElementById(`mobile-toggle-label-${sourceId}`);
       toggleEl?.classList.add('saving');
       mobileToggleEl?.classList.add('saving');
 
@@ -1706,6 +1724,12 @@
           body:    JSON.stringify({is_enabled: enabled}),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
+        if (r.status === 202) {
+          if (labelEl)       { labelEl.textContent = 'Disabling…'; labelEl.className = 'toggle-label off'; }
+          if (mobileLabelEl) { mobileLabelEl.textContent = 'Disabling…'; mobileLabelEl.className = 'toggle-label off'; }
+          await _pollSourceDisable(sourceId);
+        }
 
         if (!enabled) document.getElementById(`ch-count-${sourceId}`).textContent = '0';
         applySourceEnabledState(sourceId, enabled);

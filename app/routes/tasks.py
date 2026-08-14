@@ -279,6 +279,35 @@ def trigger_xml_refresh_catchup() -> None:
         logger.warning(f'RQ unavailable ({e}), skipping catch-up XML refresh: {e}')
 
 
+def trigger_source_disable(source_id: int) -> bool:
+    """Returns True if a disable job was enqueued, False if one is already
+    queued/running for this source (e.g. a double-click)."""
+    try:
+        q = get_fast_queue()
+        job_id = f'source-disable-{source_id}'
+        if _job_already_active(q, job_id):
+            logger.info('Source disable already queued/running for source_id=%s', source_id)
+            return False
+        q.enqueue('app.worker.run_source_disable', source_id, job_timeout=120, job_id=job_id)
+        logger.info('Enqueued source disable for source_id=%s', source_id)
+        return True
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for source disable {source_id}')
+        import threading
+        from app.worker import run_source_disable
+        threading.Thread(target=run_source_disable, args=(source_id,), daemon=True).start()
+        return True
+
+
+def is_source_disable_pending(source_id: int) -> bool:
+    """For the admin UI's disable-status poll — True while run_source_disable
+    is still queued/running for this source (see trigger_source_disable)."""
+    try:
+        return _job_already_active(get_fast_queue(), f'source-disable-{source_id}')
+    except Exception:
+        return False
+
+
 def trigger_source_channel_purge(source_id: int):
     try:
         q = get_maintenance_queue()

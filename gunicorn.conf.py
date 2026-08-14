@@ -6,6 +6,7 @@ import time
 # Suppress high-frequency / low-signal endpoints from the access log.
 _SUPPRESS_PATTERNS = (
     'scrape-status',           # admin UI polls every 2s during scrape
+    'disable-status',          # admin UI polls every 1s while a source disable is queued
     'audit-status',            # admin UI polls every 2s during audit
     'directv-auth-status',     # admin UI polls every 2s during DirecTV login
     'sling-browser-login/state', # admin UI polls every ~400ms during Sling sign-in
