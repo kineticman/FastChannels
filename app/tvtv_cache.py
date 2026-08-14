@@ -25,6 +25,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy.exc import OperationalError
+
 log = logging.getLogger(__name__)
 
 _BATCH_SIZE  = 20    # station IDs per grid request — Cloudflare blocks >20
@@ -446,8 +448,25 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
                             "fetched_at": fetched_at,
                         })
 
-                total_rows    += _upsert_rows(rows)
-                db.session.commit()
+                try:
+                    total_rows += _upsert_rows(rows)
+                    db.session.commit()
+                except OperationalError as exc:
+                    db.session.rollback()
+                    if "locked" not in str(exc).lower():
+                        raise
+                    # A concurrent scrape (separate worker process, separate
+                    # connection) can hold SQLite's single writer lock past
+                    # our busy_timeout. Treat it like any other batch failure
+                    # — skip this batch and keep going — rather than letting
+                    # it abort the whole run and lose every remaining lineup.
+                    log.warning("[tvtv-cache] %s day+%d: batch write hit 'database is locked', skipping batch",
+                                lineup, day_offset)
+                    total_errors += 1
+                    day_errors   += 1
+                    day_error_reasons["database is locked"] = day_error_reasons.get("database is locked", 0) + 1
+                    time.sleep(_BATCH_DELAY)
+                    continue
                 total_batches += 1
                 time.sleep(_BATCH_DELAY)
 

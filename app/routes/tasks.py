@@ -642,19 +642,31 @@ def trigger_discovery_browser_login(mso_id: str):
         return True
 
 
-def trigger_tvtv_cache_refresh():
+def trigger_tvtv_cache_refresh() -> str:
+    """Returns 'queued', 'deferred' (scraper work active), or 'active'
+    (refresh already queued/running)."""
     try:
+        from app.worker import _any_scrapes_active
+        if _any_scrapes_active():
+            # The scheduled 3am run defers for the same reason: the tvtv
+            # refresh writes on the maintenance queue's own connection, and a
+            # concurrent scrape (scraper queue, separate process/connection)
+            # can hold SQLite's single writer lock past our busy_timeout,
+            # surfacing as 'database is locked'. Manual triggers hit this too
+            # if fired while a scrape is running.
+            logger.info('tvtv cache refresh deferred: scraper work active')
+            return 'deferred'
         q = get_maintenance_queue()
         job_id = 'tvtv-cache-refresh'
         if _job_already_active(q, job_id):
             logger.info('tvtv cache refresh already queued/running')
-            return False
+            return 'active'
         q.enqueue('app.worker.run_tvtv_cache_refresh', job_timeout=1800, job_id=job_id)
         logger.info('Enqueued tvtv cache refresh')
-        return True
+        return 'queued'
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for tvtv cache refresh')
         import threading
         from app.worker import run_tvtv_cache_refresh
         threading.Thread(target=run_tvtv_cache_refresh, daemon=True).start()
-        return True
+        return 'queued'

@@ -272,15 +272,26 @@ def _scrape_job_already_active(q: Queue, source_name: str) -> bool:
 
 
 def _any_scrapes_active() -> bool:
-    """Return True if any scraper jobs are queued or running."""
+    """Return True if any scraper jobs are queued or running.
+
+    tvtv-cache-refresh (both the nightly cron and manual triggers) defers
+    while this is True, so a started-job marker left behind by a scrape
+    worker that died mid-job must not count as "active" forever — reuse the
+    same heartbeat-based staleness check _scrape_job_already_active() uses,
+    or a single stuck marker would starve tvtv-cache-refresh indefinitely.
+    """
     try:
         r = redis.from_url(flask_app.config['REDIS_URL'])
         q = Queue('scraper', connection=r)
         queued = [jid for jid in q.get_job_ids() if jid.startswith('scrape-')]
-        running = [
-            jid for jid in StartedJobRegistry(q.name, connection=r).get_job_ids()
-            if jid.startswith('scrape-')
-        ]
+        registry = StartedJobRegistry(q.name, connection=r)
+        running = []
+        for jid in registry.get_job_ids():
+            if not jid.startswith('scrape-'):
+                continue
+            if _cleanup_stale_started_job(q, jid):
+                continue
+            running.append(jid)
         return bool(queued or running)
     except Exception:
         return False

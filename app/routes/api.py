@@ -3345,10 +3345,17 @@ def station_now_playing(station_id):
 @api_bp.route('/tvtv/cache/refresh', methods=['POST'])
 def tvtv_cache_refresh():
     """Queue an immediate refresh of the tvtv guide cache."""
-    queued = trigger_tvtv_cache_refresh()
-    if queued:
-        return jsonify({'status': 'queued', 'job_id': 'tvtv-cache-refresh'}), 202
-    return jsonify({'status': 'already_running', 'job_id': 'tvtv-cache-refresh'}), 202
+    status = trigger_tvtv_cache_refresh()
+    messages = {
+        'queued':   'Refresh queued.',
+        'active':   'Refresh is already queued or running.',
+        'deferred': 'Refresh deferred: a scraper job is active. Try again once it finishes.',
+    }
+    return jsonify({
+        'status': status,
+        'job_id': 'tvtv-cache-refresh',
+        'message': messages.get(status, ''),
+    }), 202
 
 
 @api_bp.route('/gracenote/community-summary', methods=['GET'])
