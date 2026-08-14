@@ -79,7 +79,7 @@ class FoxTVEChannel:
     fallback_stream_url: str | None
     logo_url: str
     category: str
-    description: str
+    description: str | None
     guide_title: str
     call_signs: tuple[str, ...] = ()
     playable: bool = True
@@ -98,7 +98,7 @@ CHANNELS: dict[str, FoxTVEChannel] = {
         fallback_stream_url='https://247.foxnews.com/hls/live/2003586/FNCHLSv3/master.m3u8',
         logo_url='https://static.foxnews.com/static/orion/styles/img/fox-news/og/og-fox-news.png',
         category='News',
-        description='FOX News TVE live stream. Playback resolves through the official FOX page to obtain a short-lived Akamai-signed HLS URL.',
+        description=None,
         guide_title='Fox News Channel',
         signed_page_hls=True,
     ),
@@ -109,7 +109,7 @@ CHANNELS: dict[str, FoxTVEChannel] = {
         fallback_stream_url='https://247.foxbusiness.com/hls/live/2003756/FBNHLSv3/master.m3u8',
         logo_url='https://static.foxnews.com/static/orion/styles/img/fox-business/og/og-fox-business.png',
         category='Business',
-        description='FOX Business TVE live stream. Playback resolves through the official FOX Business page to obtain a short-lived Akamai-signed HLS URL.',
+        description=None,
         guide_title='Fox Business Network',
         signed_page_hls=True,
     ),
@@ -120,7 +120,7 @@ CHANNELS: dict[str, FoxTVEChannel] = {
         fallback_stream_url='https://content.uplynk.com/db88cebb80ea46269a1b2691871f3660.m3u8?rays=g',
         logo_url='https://static.foxnews.com/static/orion/styles/img/fox-weather/og/og-fox-weather.png',
         category='News',
-        description='Live FOX Weather stream discovered from the FOX Weather live page.',
+        description=None,
         guide_title='Fox Weather Live',
         playable=True,
     ),
@@ -131,7 +131,7 @@ CHANNELS: dict[str, FoxTVEChannel] = {
         fallback_stream_url=None,
         logo_url='https://assets.platform.foxsports.com/stations_v1/FS1/7bd193561008c5a.png',
         category='Sports',
-        description='FOX Sports TVE channel. EPG is sourced from the FOX Product API; playback resolves through FOX Sports DVP with Cox MVPD auth when configured, falling back to Fox PreviewPass when MVPD auth is unavailable.',
+        description=None,
         guide_title='FS1',
         call_signs=('FS1', 'FS1-DIGITAL'),
     ),
@@ -142,7 +142,7 @@ CHANNELS: dict[str, FoxTVEChannel] = {
         fallback_stream_url=None,
         logo_url='https://assets.foxdcg.com/dpp-uploaded/images/stations/fs2.png',
         category='Sports',
-        description='FOX Sports TVE channel. EPG is sourced from the FOX Product API; playback resolves through FOX Sports DVP with Cox MVPD auth when configured, falling back to Fox PreviewPass when MVPD auth is unavailable.',
+        description=None,
         guide_title='FS2',
         call_signs=('FS2', 'FS2-DIGITAL'),
     ),
@@ -153,7 +153,7 @@ CHANNELS: dict[str, FoxTVEChannel] = {
         fallback_stream_url=None,
         logo_url='https://assets.platform.foxsports.com/stations_v1/FOX-DIGITAL/7c0393e220035d0.png',
         category='Sports',
-        description='FOX Sports TVE channel for national FOX/digital sports listings. Playback resolves through FOX Sports DVP with Cox MVPD auth when configured, falling back to Fox PreviewPass when MVPD auth is unavailable.',
+        description=None,
         guide_title='FOX Sports',
         call_signs=('FOX', 'FOX-DIGITAL'),
     ),
@@ -164,7 +164,7 @@ CHANNELS: dict[str, FoxTVEChannel] = {
         fallback_stream_url=None,
         logo_url='https://assets.foxdcg.com/dpp-uploaded/images/stations/btnv2.png',
         category='Sports',
-        description='FOX Sports TVE channel. EPG is sourced from the FOX Product API; playback resolves through FOX Sports DVP with Cox MVPD auth when configured, falling back to Fox PreviewPass when MVPD auth is unavailable.',
+        description=None,
         guide_title='Big Ten Network',
         call_signs=('BTN',),
     ),
@@ -175,7 +175,7 @@ CHANNELS: dict[str, FoxTVEChannel] = {
         fallback_stream_url=None,
         logo_url='https://assets.foxdcg.com/dpp-uploaded/images/stations/foxdep.png',
         category='Sports',
-        description='FOX Deportes TVE channel. EPG is sourced from the FOX Product API; playback resolves through FOX Sports DVP with Cox MVPD auth when configured, falling back to Fox PreviewPass when MVPD auth is unavailable.',
+        description=None,
         guide_title='FOX Deportes',
         call_signs=('FOXDEP',),
     ),
@@ -186,7 +186,7 @@ CHANNELS: dict[str, FoxTVEChannel] = {
         fallback_stream_url=None,
         logo_url='https://assets.foxdcg.com/dpp-uploaded/images/stations/fsp-v2.png',
         category='Sports',
-        description='FOX Soccer Plus TVE channel. EPG is sourced from the FOX Product API; playback resolves through FOX Sports DVP with Cox MVPD auth when configured, falling back to Fox PreviewPass when MVPD auth is unavailable.',
+        description=None,
         guide_title='FOX Soccer Plus',
         call_signs=('FSP',),
     ),

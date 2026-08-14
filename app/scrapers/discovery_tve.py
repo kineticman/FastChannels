@@ -479,7 +479,7 @@ class DiscoveryTVEScraper(BaseScraper):
                 language='en',
                 country='US',
                 guide_key=channel.code,
-                description='Discovery-family TV Everywhere live stream authorized through the configured Cox account.',
+                description=None,
             )
             for channel in CHANNELS.values()
         ]

@@ -406,7 +406,7 @@ class AENetworksTVEScraper(BaseScraper):
                 language='en',
                 country='US',
                 guide_key=network.requestor_id,
-                description='TV Everywhere live stream authorized through the configured Cox account.',
+                description=None,
             )
             for network in _NETWORKS.values()
         ]

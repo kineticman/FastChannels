@@ -565,7 +565,7 @@ class NbcTveScraper(BaseScraper):
                 language='es' if entry.brand.startswith('telemundo') or entry.brand == 'nbc-universo' else 'en',
                 country='US',
                 guide_key=f'NBCTVE:{entry.stream_access_name.upper()}',
-                description=f'{entry.name} live stream authorized through the configured Cox account.',
+                description=None,
             ))
         return channels
 

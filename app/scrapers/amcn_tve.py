@@ -462,7 +462,7 @@ class AMCNetworksTVEScraper(BaseScraper):
                 language='en',
                 country='US',
                 guide_key=channel.requestor_id,
-                description='AMC Networks TV Everywhere live stream authorized through the configured Cox account.',
+                description=None,
             )
             for channel in CHANNELS.values() if channel.enabled
         ]

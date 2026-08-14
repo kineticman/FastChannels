@@ -245,7 +245,7 @@ class WarnerTVEScraper(BaseScraper):
                 language='en',
                 country='US',
                 guide_key=channel.brand_key.upper(),
-                description='Warner Bros Discovery TV Everywhere live stream authorized through the configured Cox account.',
+                description=None,
             )
             for channel in CHANNELS.values()
         ]

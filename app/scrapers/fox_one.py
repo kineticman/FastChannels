@@ -358,7 +358,7 @@ class FoxOneScraper(BaseScraper):
                 country='US',
                 gracenote_id=channel.gracenote_id,
                 guide_key=f'FOXONE:{channel.source_channel_id.upper()}',
-                description='FOX One live channel. Playback uses FOX One native DTC when a refresh token is configured; overlapping channels can fall back to FOX TVE.',
+                description=None,
             )
             for channel in self._discover_channels()
         ]
