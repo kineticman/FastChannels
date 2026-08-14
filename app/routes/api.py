@@ -5144,9 +5144,9 @@ def _get_tve_account(provider_id: str, display_name: str) -> TVEAccount:
     return account
 
 
-@api_bp.route('/settings/tve/cox', methods=['GET', 'POST'])
-def tve_cox_settings():
-    account = _get_tve_account('cox', 'Cox')
+@api_bp.route('/settings/tve/mvpd', methods=['GET', 'POST'])
+def tve_mvpd_settings():
+    account = _get_tve_account('mvpd', 'TV Provider')
     if request.method == 'POST':
         data = request.get_json(force=True) or {}
         provider_choices = {p['id']: p for p in ytdlp_adobe_mso_providers()}
@@ -5199,7 +5199,7 @@ def tve_cox_settings():
 @api_bp.route('/settings/tve/status')
 def tve_network_status_route():
     from ..tve.status import tve_network_status
-    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     return jsonify({'networks': tve_network_status(account)})
 
 
@@ -5223,9 +5223,9 @@ def tve_reset():
     """
     import shutil
 
-    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     # home_zip_code is a user preference (shared across every TVE source that
-    # needs a home market — see /api/settings/tve/cox), not a credential or
+    # needs a home market — see /api/settings/tve/mvpd), not a credential or
     # cached sign-in artifact — a reset shouldn't make the user re-enter it
     # (code review, 2026-08-10, originally scoped to fox_one's own config
     # before home_zip_code moved onto the shared account).
@@ -5235,7 +5235,7 @@ def tve_reset():
         db.session.flush()
     if preserved_zip:
         db.session.add(TVEAccount(
-            provider_id='cox', display_name='Cox', is_enabled=False,
+            provider_id='mvpd', display_name='TV Provider', is_enabled=False,
             config={'home_zip_code': preserved_zip},
         ))
 
@@ -5279,9 +5279,9 @@ def tve_reset():
     return jsonify({'ok': True, 'sources_reset': len(sources), 'browser_profile_removed': removed_profile})
 
 
-@api_bp.route('/settings/tve/cox/test', methods=['POST'])
-def test_tve_cox_settings():
-    account = _get_tve_account('cox', 'Cox')
+@api_bp.route('/settings/tve/mvpd/test', methods=['POST'])
+def test_tve_mvpd_settings():
+    account = _get_tve_account('mvpd', 'TV Provider')
     if not account.has_credentials():
         return jsonify({'error': 'TVE username and password are required.'}), 400
     cfg = account.config or {}
@@ -5322,7 +5322,7 @@ def foxone_signin():
     from ..scrapers.fox_one import FoxOneScraper
     from ..config_store import persist_source_config_updates
 
-    account = _get_tve_account('cox', 'Cox')
+    account = _get_tve_account('mvpd', 'TV Provider')
     if not account.has_credentials():
         return jsonify({'error': 'TV provider username and password are required.'}), 400
 
@@ -5380,7 +5380,7 @@ def mvpd_browser_login_start():
     from ..tve.mvpd_targets import resolve_requestor_target
     from .tasks import trigger_mvpd_browser_login
 
-    account = _get_tve_account('cox', 'Cox')
+    account = _get_tve_account('mvpd', 'TV Provider')
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     data = request.get_json(force=True) or {}
@@ -5477,7 +5477,7 @@ def mvpd_browser_login_stop():
 def amcn_browser_login_start():
     from .tasks import trigger_amcn_browser_login
 
-    account = _get_tve_account('cox', 'Cox')
+    account = _get_tve_account('mvpd', 'TV Provider')
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     cfg = account.config or {}
@@ -5490,7 +5490,7 @@ def amcn_browser_login_start():
 def discovery_browser_login_start():
     from .tasks import trigger_discovery_browser_login
 
-    account = _get_tve_account('cox', 'Cox')
+    account = _get_tve_account('mvpd', 'TV Provider')
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     cfg = account.config or {}
@@ -5517,7 +5517,7 @@ api_bp.add_url_rule('/settings/tve/discovery/browser-login/stop', 'discovery_bro
 def nbc_browser_login_start():
     from .tasks import trigger_nbc_browser_login
 
-    account = _get_tve_account('cox', 'Cox')
+    account = _get_tve_account('mvpd', 'TV Provider')
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     cfg = account.config or {}
@@ -5583,7 +5583,7 @@ def nbc_browser_login_stop():
 def fox_browser_login_start():
     from .tasks import trigger_fox_browser_login
 
-    account = _get_tve_account('cox', 'Cox')
+    account = _get_tve_account('mvpd', 'TV Provider')
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     cfg = account.config or {}

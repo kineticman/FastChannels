@@ -443,7 +443,7 @@ class WarnerTVEScraper(BaseScraper):
         if cached and (time.time() - float(cached.get('cached_at', 0))) < _MANIFEST_CACHE_TTL:
             return cached['url']
 
-        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         if not account or not account.is_enabled or not account.has_credentials():
             raise TVEAuthError('TVE credentials are not configured in Settings.')
 

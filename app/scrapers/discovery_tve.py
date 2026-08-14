@@ -324,7 +324,7 @@ class DiscoveryTVEScraper(BaseScraper):
         return None
 
     def _authenticate(self) -> requests.Session:
-        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         if not account or not account.is_enabled or not account.has_credentials():
             raise TVEAuthError('TVE credentials are not configured in Settings.')
         cfg = account.config or {}

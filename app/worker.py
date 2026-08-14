@@ -2464,7 +2464,7 @@ def run_sling_browser_login():
 
 
 def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
-    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     if not account:
         return
     cfg = dict(account.config or {})
@@ -2489,7 +2489,7 @@ def _record_tve_login_error(key: str, message: str) -> None:
     the last successful sign-in, so a subsequent success naturally
     supersedes it.
     """
-    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     if not account:
         return
     cfg = dict(account.config or {})
@@ -2663,7 +2663,7 @@ def _try_cached_sibling_authn(sibling_id: str, target: dict) -> tuple[bool, str]
     fall through to the normal browser-assisted attempt."""
     from app.tve.adobe_pass import _ensure_cox_device_fingerprint
 
-    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     cached_authn = ((((account.config if account else {}) or {}).get('mvpd_authn') or {}).get(target['requestor_id']) or {}).get('authn_token')
     if not cached_authn:
         return None
@@ -2716,7 +2716,7 @@ def _pair_sibling_requestors(page, paired_requestor_id: str, mso_id: str, userna
             except Exception:  # noqa: BLE001
                 pass
 
-    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     device_fingerprint = _ensure_cox_device_fingerprint(account) if account else None
 
     results: dict[str, tuple[bool, str]] = {}
@@ -2859,7 +2859,7 @@ def _silent_pair_nbc(page, mso_id: str, username: str, password: str, r) -> tupl
     # successful NBC sign-in reported "needs its own sign-in" (observed live
     # 2026-08-05) because the fresh attempt failed even though the cached
     # pairing was fine.
-    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     cached_auth = ((account.config if account else {}) or {}).get('nbc_mvpd_auth') or {}
     if cached_auth.get('mso_id') == mso_id and cached_auth.get('access_token'):
         cached_client = AdobePassV2CoxClient(
@@ -2946,7 +2946,7 @@ def _silent_pair_fox(page, mso_id: str, username: str, password: str, r) -> tupl
     # A prior FOX pairing may still be valid — its token carries its own JWT
     # expiry, so this needs no network round trip at all. Same "don't re-drive
     # the MSO login for an already-paired network" reasoning as _silent_pair_nbc.
-    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     acct_cfg = (account.config if account else {}) or {}
     if (acct_cfg.get('fox_sports_access_token')
             and acct_cfg.get('fox_sports_access_token_mso') == mso_id
@@ -3022,7 +3022,7 @@ def _silent_pair_fox(page, mso_id: str, username: str, password: str, r) -> tupl
         if not token:
             continue
         exp = _jwt_exp(token) or int(time.time()) + 3600
-        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         if account:
             acct_cfg = dict(account.config or {})
             acct_cfg['fox_sports_access_token'] = token
@@ -3050,7 +3050,7 @@ def _silent_pair_amcn(page, mso_id: str, username: str, password: str, r) -> tup
     from app.scrapers.amcn_tve import AMCNetworksTVEScraper, CHANNELS, ADOBE_BASE as amcn_ADOBE_BASE
 
     source = Source.query.filter_by(name='amcn_tve').first()
-    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     if not source or not account:
         return False, 'AMCN TVE source or TVE account not found'
     scraper = AMCNetworksTVEScraper(config=dict(source.config or {}))
@@ -3281,7 +3281,7 @@ def run_amcn_browser_login(mso_id: str):
         if not source:
             set_status('error', 'AMC Networks TVE source not found.')
             return
-        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         if not account or not account.is_enabled or not account.has_credentials():
             set_status('error', 'TVE credentials are not configured in Settings.')
             return
@@ -3551,7 +3551,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
         # must never reset the clock).
         deadline = _deadline if _deadline is not None else time.monotonic() + _MVPD_BROWSER_LOGIN_TIMEOUT_SECONDS
 
-        account_row = TVEAccount.query.filter_by(provider_id='cox').first()
+        account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
         mvpd_username = (account_row.username if account_row else '') or ''
         mvpd_password = (account_row.password if account_row else '') or ''
 
@@ -3911,7 +3911,7 @@ _NBC_SESSION_POLL_SECONDS = 2.0
 
 
 def _save_nbc_mvpd_auth(mso_id: str, access_token: str, device_fingerprint: str) -> None:
-    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     if not account:
         return
     cfg = dict(account.config or {})
@@ -4032,7 +4032,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         # never reset the clock).
         deadline = _deadline if _deadline is not None else time.monotonic() + _NBC_BROWSER_LOGIN_TIMEOUT_SECONDS
 
-        account_row = TVEAccount.query.filter_by(provider_id='cox').first()
+        account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
         mvpd_username = (account_row.username if account_row else '') or ''
         mvpd_password = (account_row.password if account_row else '') or ''
 
@@ -4334,7 +4334,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             set_status('running', 'Signing in to FOX TVE…')
             import uuid as _uuid
             from app.scrapers.fox_tve import _fox_sports_mvpd_token
-            account_row = TVEAccount.query.filter_by(provider_id='cox').first()
+            account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
             if not account_row or not account_row.is_enabled or not account_row.has_credentials():
                 set_status('error', 'TVE credentials are not configured in Settings.')
                 return
@@ -4373,7 +4373,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         # never reset the clock).
         deadline = _deadline if _deadline is not None else time.monotonic() + _FOX_BROWSER_LOGIN_TIMEOUT_SECONDS
 
-        account_row = TVEAccount.query.filter_by(provider_id='cox').first()
+        account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
         mvpd_username = (account_row.username if account_row else '') or ''
         mvpd_password = (account_row.password if account_row else '') or ''
 
@@ -4439,7 +4439,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     token = None
                 if token:
                     exp = _jwt_exp(token) or int(time.time()) + 3600
-                    account = TVEAccount.query.filter_by(provider_id='cox').first()
+                    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
                     if account:
                         acct_cfg = dict(account.config or {})
                         acct_cfg['fox_sports_access_token'] = token
@@ -4576,7 +4576,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                         if not token:
                             continue
                         exp = _jwt_exp(token) or int(time.time()) + 3600
-                        account = TVEAccount.query.filter_by(provider_id='cox').first()
+                        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
                         if account:
                             acct_cfg = dict(account.config or {})
                             acct_cfg['fox_sports_access_token'] = token

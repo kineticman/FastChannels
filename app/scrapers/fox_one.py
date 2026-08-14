@@ -452,7 +452,7 @@ class FoxOneScraper(BaseScraper):
     def _cox_account(self):
         from ..models import TVEAccount
 
-        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         if account and account.is_enabled and account.has_credentials():
             return account
         return None
@@ -465,16 +465,16 @@ class FoxOneScraper(BaseScraper):
         can read the same value instead of collecting its own copy."""
         from ..models import TVEAccount
 
-        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         return ((account.config or {}).get('home_zip_code') or '').strip() if account else ''
 
     def _persist_shared_home_zip_code(self, zip_code: str) -> None:
         from .. import db
         from ..models import TVEAccount
 
-        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         if not account:
-            account = TVEAccount(provider_id='cox', display_name='Cox', is_enabled=False, config={})
+            account = TVEAccount(provider_id='mvpd', display_name='TV Provider', is_enabled=False, config={})
             db.session.add(account)
         if (account.config or {}).get('home_zip_code'):
             return

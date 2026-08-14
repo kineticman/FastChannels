@@ -236,11 +236,11 @@ function filterTveProviders() {
 function updateTveProviderFields() {
   const select = document.getElementById('tve-provider');
   const provider = selectedTveProvider();
-  const username = document.getElementById('tve-cox-username');
-  const password = document.getElementById('tve-cox-password');
+  const username = document.getElementById('tve-username');
+  const password = document.getElementById('tve-password');
   const hint = document.getElementById('tve-provider-hint');
-  const testBtn = document.getElementById('tve-cox-test-btn');
-  const lastStatus = document.getElementById('tve-cox-last-status');
+  const testBtn = document.getElementById('tve-test-btn');
+  const lastStatus = document.getElementById('tve-last-status');
   if (username) username.placeholder = `${provider.name} username`;
   if (password) password.placeholder = tvePasswordPlaceholder;
   if (hint) {
@@ -269,17 +269,17 @@ function updateTveProviderFields() {
 // this — nothing to enable right after wiping credentials — but nothing
 // told the user it was still off after they re-entered new credentials).
 function _updateTveDisabledWarning() {
-  const warning = document.getElementById('tve-cox-disabled-warning');
-  const enabledCheckbox = document.getElementById('tve-cox-enabled');
+  const warning = document.getElementById('tve-disabled-warning');
+  const enabledCheckbox = document.getElementById('tve-enabled');
   if (!warning || !enabledCheckbox) return;
   warning.style.display = enabledCheckbox.checked ? 'none' : 'block';
 }
 
-async function saveTveCoxSettings() {
-  const status = document.getElementById('tve-cox-status');
-  const usernameField = document.getElementById('tve-cox-username');
-  const passwordField = document.getElementById('tve-cox-password');
-  const enabledCheckbox = document.getElementById('tve-cox-enabled');
+async function saveTveMvpdSettings() {
+  const status = document.getElementById('tve-status');
+  const usernameField = document.getElementById('tve-username');
+  const passwordField = document.getElementById('tve-password');
+  const enabledCheckbox = document.getElementById('tve-enabled');
   // resetTveState() explicitly unchecks this (correctly — there's nothing to
   // enable right after a reset), but nothing re-checked it afterward: saving
   // freshly re-entered credentials with "Enabled" still off silently left
@@ -303,15 +303,15 @@ async function saveTveCoxSettings() {
   status.className = 'save-status';
   status.textContent = 'Saving…';
   try {
-    const r = await fetch('/api/settings/tve/cox', {
+    const r = await fetch('/api/settings/tve/mvpd', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    document.getElementById('tve-cox-password').value = '';
-    document.getElementById('tve-cox-password').placeholder = data.password_configured ? 'Password saved - leave blank to keep' : 'TV provider password';
+    document.getElementById('tve-password').value = '';
+    document.getElementById('tve-password').placeholder = data.password_configured ? 'Password saved - leave blank to keep' : 'TV provider password';
     status.className = 'save-status ok';
     status.textContent = '✓ Saved';
     setTimeout(() => { status.textContent = ''; }, 2500);
@@ -323,11 +323,11 @@ async function saveTveCoxSettings() {
   }
 }
 
-async function testTveCox() {
-  const status = document.getElementById('tve-cox-status');
-  const btn = document.getElementById('tve-cox-test-btn');
-  const last = document.getElementById('tve-cox-last-status');
-  const saved = await saveTveCoxSettings();
+async function testTveMvpd() {
+  const status = document.getElementById('tve-status');
+  const btn = document.getElementById('tve-test-btn');
+  const last = document.getElementById('tve-last-status');
+  const saved = await saveTveMvpdSettings();
   if (!saved) return;
 
   // Cox's native sign-in is a fast, genuine credential check (~2-3s), so it
@@ -345,7 +345,7 @@ async function testTveCox() {
   status.textContent = 'Testing…';
   btn.disabled = true;
   try {
-    const r = await fetch('/api/settings/tve/cox/test', { method: 'POST' });
+    const r = await fetch('/api/settings/tve/mvpd/test', { method: 'POST' });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
     status.className = 'save-status ok';
@@ -381,7 +381,7 @@ async function foxOneSignIn(btn) {
 
 async function resetTveState() {
   if (!confirm('Delete the saved TV provider username/password, every cached network sign-in, and the browser\'s saved login session?\n\nThis cannot be undone — you\'ll need to re-enter your TV provider credentials and sign in to each network again.')) return;
-  const status = document.getElementById('tve-cox-status');
+  const status = document.getElementById('tve-status');
   status.className = 'save-status';
   status.textContent = 'Resetting…';
   try {
@@ -390,10 +390,10 @@ async function resetTveState() {
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
     status.className = 'save-status ok';
     status.textContent = '✓ Reset';
-    document.getElementById('tve-cox-username').value = '';
-    document.getElementById('tve-cox-password').value = '';
-    document.getElementById('tve-cox-password').placeholder = 'TV provider password';
-    document.getElementById('tve-cox-enabled').checked = false;
+    document.getElementById('tve-username').value = '';
+    document.getElementById('tve-password').value = '';
+    document.getElementById('tve-password').placeholder = 'TV provider password';
+    document.getElementById('tve-enabled').checked = false;
     _updateTveDisabledWarning();
     loadTveNetworkStatus();
   } catch (e) {
@@ -726,7 +726,7 @@ async function _pollMvpdLoginModal() {
       status.style.color = 'var(--success-soft)';
       status.textContent = '✓ ' + (d.message || 'Signed in.');
       // Full reload rather than just loadTveNetworkStatus() — a successful
-      // sign-in can also change tve-cox-last-status (the Test button's
+      // sign-in can also change tve-last-status (the Test button's
       // Jinja-rendered "last checked" line) and account.last_auth_*, which
       // nothing else on this page re-fetches after the initial page load.
       setTimeout(() => { window.location.reload(); }, 1800);

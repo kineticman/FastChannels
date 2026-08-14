@@ -20,29 +20,29 @@
               <input type="text" id="tve-provider-search" placeholder="Search supported TV providers" oninput="filterTveProviders()" autocomplete="off" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
               <select id="tve-provider" onchange="updateTveProviderFields()" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
                 {% for provider in tve_provider_choices %}
-                <option value="{{ provider.id }}" {% if provider.id == tve_cox_account.selected_mso_id %}selected{% endif %}>{{ provider.name }}{% if provider.id != provider.name %} ({{ provider.id }}){% endif %}</option>
+                <option value="{{ provider.id }}" {% if provider.id == tve_account.selected_mso_id %}selected{% endif %}>{{ provider.name }}{% if provider.id != provider.name %} ({{ provider.id }}){% endif %}</option>
                 {% endfor %}
               </select>
             </label>
           </div>
           <div style="margin-top:0.65rem;display:grid;grid-template-columns:1fr 1fr;gap:0.6rem">
-            <input type="text" id="tve-cox-username" autocomplete="username" placeholder="TV provider username" value="{{ tve_cox_account.username }}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
-            <input type="password" id="tve-cox-password" autocomplete="current-password" placeholder="{% if tve_cox_account.password_configured %}Password saved - leave blank to keep{% else %}TV provider password{% endif %}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+            <input type="text" id="tve-username" autocomplete="username" placeholder="TV provider username" value="{{ tve_account.username }}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+            <input type="password" id="tve-password" autocomplete="current-password" placeholder="{% if tve_account.password_configured %}Password saved - leave blank to keep{% else %}TV provider password{% endif %}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
           </div>
           <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem;margin-top:0.6rem;max-width:260px">
             Home ZIP code
-            <input type="text" id="tve-home-zip" inputmode="numeric" autocomplete="postal-code" placeholder="10001" value="{{ tve_cox_account.home_zip_code }}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+            <input type="text" id="tve-home-zip" inputmode="numeric" autocomplete="postal-code" placeholder="10001" value="{{ tve_account.home_zip_code }}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
           </label>
           <div style="margin-top:0.3rem;color:var(--text-muted);font-size:0.78rem">Optional. Shared by any TVE source that needs a home market — currently just FOX One, where it drives both regional entitlement/blackout scoping and which local FOX affiliate shows up as a channel. Enter it once here rather than per source.</div>
           <div id="tve-provider-hint" style="margin-top:0.45rem;color:var(--text-muted);font-size:0.82rem">Used by TVE sources such as A+E Networks TVE.</div>
-          <div id="tve-cox-last-status" style="margin-top:0.55rem;color:var(--text-muted);font-size:0.82rem">
-            {% if tve_cox_account.last_auth_status %}
-              Last test: {{ tve_cox_account.last_auth_status }}{% if tve_cox_account.last_auth_at %} at {{ tve_cox_account.last_auth_at }}{% endif %}{% if tve_cox_account.last_auth_message %} — {{ tve_cox_account.last_auth_message }}{% endif %}
+          <div id="tve-last-status" style="margin-top:0.55rem;color:var(--text-muted);font-size:0.82rem">
+            {% if tve_account.last_auth_status %}
+              Last test: {{ tve_account.last_auth_status }}{% if tve_account.last_auth_at %} at {{ tve_account.last_auth_at }}{% endif %}{% if tve_account.last_auth_message %} — {{ tve_account.last_auth_message }}{% endif %}
             {% else %}
               No auth test has run yet.
             {% endif %}
           </div>
-          <div id="tve-cox-disabled-warning" style="display:{% if tve_cox_account.is_enabled %}none{% else %}block{% endif %};margin-top:0.75rem;color:var(--warning-soft,#b8860b);background:var(--warning-bg-2,rgba(184,134,11,0.12));border:1px solid var(--warning-border,rgba(184,134,11,0.3));border-radius:4px;padding:0.5rem 0.7rem;font-size:0.82rem;line-height:1.4">
+          <div id="tve-disabled-warning" style="display:{% if tve_account.is_enabled %}none{% else %}block{% endif %};margin-top:0.75rem;color:var(--warning-soft,#b8860b);background:var(--warning-bg-2,rgba(184,134,11,0.12));border:1px solid var(--warning-border,rgba(184,134,11,0.3));border-radius:4px;padding:0.5rem 0.7rem;font-size:0.82rem;line-height:1.4">
             ⚠ TVE is disabled — the toggle on the right is off, so every network's scraper and every "Sign in" click will fail until it's turned back on and saved.
           </div>
           <div style="margin-top:0.75rem">
@@ -55,13 +55,13 @@
         </div>
         <div class="toggle-row-control" style="gap:0.5rem;flex-wrap:wrap">
           <label class="toggle-switch" title="Enable TVE credentials">
-            <input type="checkbox" id="tve-cox-enabled" onchange="_updateTveDisabledWarning()" {% if tve_cox_account.is_enabled %}checked{% endif %}>
+            <input type="checkbox" id="tve-enabled" onchange="_updateTveDisabledWarning()" {% if tve_account.is_enabled %}checked{% endif %}>
             <span class="toggle-slider"></span>
           </label>
-          <button class="btn btn-secondary" onclick="saveTveCoxSettings()">Save</button>
-          <button class="btn btn-audit" id="tve-cox-test-btn" onclick="testTveCox()">Test</button>
+          <button class="btn btn-secondary" onclick="saveTveMvpdSettings()">Save</button>
+          <button class="btn btn-audit" id="tve-test-btn" onclick="testTveMvpd()">Test</button>
           <button class="btn btn-danger" onclick="resetTveState()" title="Deletes the saved TV provider username/password, every cached sign-in token, and the browser's saved login session — for testing sign-in from a clean slate">Reset</button>
-          <span class="save-status" id="tve-cox-status"></span>
+          <span class="save-status" id="tve-status"></span>
         </div>
       </div>
     </div>

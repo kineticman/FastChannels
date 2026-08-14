@@ -811,7 +811,7 @@ def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
     from .. import db
     from ..models import TVEAccount
 
-    account = TVEAccount.query.filter_by(provider_id='cox').first()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     now = int(datetime.now(timezone.utc).timestamp())
     if account and account.is_enabled and account.has_credentials():
         cfg = dict(account.config or {})

@@ -442,7 +442,7 @@ class AENetworksTVEScraper(BaseScraper):
         # attempt Cox auth when an account is configured, on the chance that's
         # an oversight on A+E's end rather than a deliberate design, but never
         # let it block or slow down what already plays without it.
-        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         if account and account.is_enabled and account.has_credentials():
             cfg = account.config or {}
             configured_statement = (cfg.get('software_statement') or '').strip()

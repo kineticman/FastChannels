@@ -1337,7 +1337,7 @@ def settings():
             'anchor': 'settings-card-timezone',
         })
     tz_health = timezone_health(app_settings.timezone_name)
-    tve_cox_account = TVEAccount.query.filter_by(provider_id='cox').first()
+    tve_account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     tve_provider_choices = ytdlp_adobe_mso_providers()
     _url_from_env = _url_source in {'FASTCHANNELS_SERVER_URL', 'PUBLIC_BASE_URL'}
     _no_port_warning = False
@@ -1373,9 +1373,9 @@ def settings():
                            prismcast_max_height=int(app_settings.prismcast_max_height or 0),
                            drm_bridge_enabled=bool(app_settings.drm_bridge_enabled),
                            tve_provider_choices=tve_provider_choices,
-                           tve_cox_account=tve_cox_account.to_safe_dict() if tve_cox_account else {
-                               'provider_id': 'cox',
-                               'display_name': 'Cox',
+                           tve_account=tve_account.to_safe_dict() if tve_account else {
+                               'provider_id': 'mvpd',
+                               'display_name': 'TV Provider',
                                'username': '',
                                'password_configured': False,
                                'is_enabled': False,

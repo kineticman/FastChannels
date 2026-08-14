@@ -641,7 +641,7 @@ class NbcTveScraper(BaseScraper):
         return config
 
     def _cox_account(self) -> TVEAccount | None:
-        account = TVEAccount.query.filter_by(provider_id='cox').first()
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         if account and account.is_enabled and account.has_credentials():
             return account
         return None

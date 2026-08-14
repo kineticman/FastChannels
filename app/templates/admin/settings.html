@@ -115,7 +115,7 @@ window.FC_SETTINGS_BOOTSTRAP = {
     timezone_name: {{ 'true' if settings_needs_config | selectattr('key', 'equalto', 'timezone_name') | list else 'false' }},
   },
   tveProviders: {{ tve_provider_choices | tojson }},
-  tvePasswordPlaceholder: {{ ('Password saved - leave blank to keep' if tve_cox_account.password_configured else 'TV provider password') | tojson }},
+  tvePasswordPlaceholder: {{ ('Password saved - leave blank to keep' if tve_account.password_configured else 'TV provider password') | tojson }},
   timezoneChoices: {{ timezone_choices | tojson }},
   channelsDvrUrlFromEnv: {{ 'true' if channels_dvr_url_from_env else 'false' }},
 };
