@@ -364,7 +364,7 @@ class XumoScraper(BaseScraper):
         if not source_url:
             return raw_url
 
-        return self._process_stream_uri(source_url)
+        return self._unwrap_playlist_indirection(self._process_stream_uri(source_url))
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -495,6 +495,62 @@ class XumoScraper(BaseScraper):
         query_pairs = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=False) if v != ""]
         cleaned_query = urlencode(query_pairs, doseq=True)
         return urlunparse(parsed._replace(query=cleaned_query))
+
+    # Suffixes that mark a URL as already being a playable manifest.
+    _MANIFEST_SUFFIXES = (".m3u8", ".mpd")
+
+    def _unwrap_playlist_indirection(self, url: str) -> str:
+        """Follow one hop when a channel resolves to a JSON pointer, not a manifest.
+
+        A few Xumo channels are delivered through a provider API that returns
+        the real playlist URL as a bare JSON string instead of serving the
+        manifest itself — Local Now via ottcms.weathergroup.com is the one in
+        the current lineup:
+
+            GET /api/v1/scte35stream/XumoV3  ->  200 application/json
+            "https://…mediatailor….amazonaws.com/…/playlist.m3u8?…"
+
+        Lenient players (VLC) sniff that and follow it; strict ones do not.
+        Shaka requires a leading #EXTM3U and reports the JSON body as
+        HLS_PLAYLIST_HEADER_MISSING (error 4015), so the channel is unplayable
+        in the browser and through the PrismCast bridge.
+
+        Only probed when the resolved URL has no manifest suffix — true for
+        exactly one of 72 channels here — so the common path costs no extra
+        request. Deliberately narrow: a non-JSON content type, a non-string
+        payload, or anything that is not an https URL is left untouched, so a
+        provider returning JSON for some other reason cannot break playback.
+        """
+        if urlparse(url).path.lower().endswith(self._MANIFEST_SUFFIXES):
+            return url
+
+        try:
+            response = self.session.get(url, timeout=self.REQUEST_TIMEOUT_SECONDS)
+            response.raise_for_status()
+        except Exception as exc:  # noqa: BLE001 - never let a probe break playback
+            logger.debug("[xumo] indirection probe failed for %s: %s", url[:80], exc)
+            return url
+
+        content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if "json" not in content_type:
+            return url
+
+        try:
+            payload = response.json()
+        except ValueError:
+            return url
+
+        if not isinstance(payload, str):
+            return url
+        candidate = payload.strip()
+        if not candidate.startswith("https://"):
+            return url
+
+        logger.info(
+            "[xumo] unwrapped playlist indirection: %s -> %s",
+            urlparse(url).netloc, urlparse(candidate).netloc,
+        )
+        return candidate
 
     @staticmethod
     def _parse_xumo_dt(value: Any) -> datetime | None:
