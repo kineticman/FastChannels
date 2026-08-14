@@ -185,7 +185,7 @@ class FoxOneScraper(BaseScraper):
             field_type='password',
             secret=True,
             hidden=True,
-            help_text='Optional fallback used only if no linked Cox TV-provider account is configured, or Cox re-auth fails. Capture the identityhydra refresh_token from an authenticated fox.com browser session. Anonymous-only: cannot unlock paid FOX Sports channels.',
+            help_text='Optional fallback used only if no linked TV-provider (MVPD) account is configured, or MVPD re-auth fails. Capture the identityhydra refresh_token from an authenticated fox.com browser session. Anonymous-only: cannot unlock paid FOX Sports channels.',
         ),
         ConfigField(
             'access_token',
@@ -194,7 +194,7 @@ class FoxOneScraper(BaseScraper):
             secret=True,
             hidden=True,
             placeholder='Bearer ...',
-            help_text='Optional fallback for debugging. The scraper refreshes this automatically through the linked Cox account when configured.',
+            help_text='Optional fallback for debugging. The scraper refreshes this automatically through the linked TV-provider (MVPD) account when configured.',
         ),
         ConfigField(
             'platform_location',
@@ -230,7 +230,7 @@ class FoxOneScraper(BaseScraper):
         to server-side IP geolocation.
 
         Best-effort: swallows any auth/location failure and returns {} so an
-        install with no Cox account configured still gets the national
+        install with no TV-provider (MVPD) account configured still gets the national
         lineup exactly as before, just without the location-gated local
         channel.
         """
@@ -449,13 +449,18 @@ class FoxOneScraper(BaseScraper):
                 return expires
         return 0
 
-    def _cox_account(self):
+    def _mvpd_account(self):
         from ..models import TVEAccount
 
         account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         if account and account.is_enabled and account.has_credentials():
             return account
         return None
+
+    @staticmethod
+    def _account_mso_id(account) -> str:
+        cfg = account.config or {}
+        return (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
 
     def _shared_home_zip_code(self) -> str:
         """Home ZIP lives on the shared TVEAccount config (Settings > TV
@@ -483,12 +488,25 @@ class FoxOneScraper(BaseScraper):
         account.config = cfg
         db.session.commit()
 
-    def _authenticate_via_cox_mvpd(self, username: str, password: str) -> tuple[str, float]:
-        """Link this device to FOX One's entitlement system through a Cox TV-provider
-        sign-in, mirroring the same Adobe Pass/Cox SAML dance fox_tve.py already
-        automates — just via FOX One's own adobeauthn/regcode endpoints instead of
-        fox_tve's legacy api3.fox.com ones. Tokens from the two are not interchangeable
-        (different OAuth client_id), so FOX One needs its own pass at this.
+    def _authenticate_via_mvpd(self, mso_id: str, username: str, password: str) -> tuple[str, float]:
+        """Link this device to FOX One's entitlement system through an MVPD
+        (TV-provider) sign-in, mirroring the same Adobe Pass SAML dance
+        fox_tve.py already automates — just via FOX One's own adobeauthn/
+        regcode endpoints instead of fox_tve's legacy api3.fox.com ones.
+        Tokens from the two are not interchangeable (different OAuth
+        client_id), so FOX One needs its own pass at this.
+
+        adoberegcode/adobeauthn are already MVPD-agnostic — mso_id flows
+        straight through to Adobe Pass, which redirects to whichever MVPD's
+        real login page. Only the final login step is currently wired up:
+        Cox gets a fast scripted native login (_cox_saml_login, same Okta
+        API fox_tve.py's legacy path uses). Any other MVPD raises a clear
+        error below rather than silently POSTing its credentials into Cox's
+        login form — a scripted login for it hasn't been built yet, same
+        gap as fox_tve.py's _fox_sports_mvpd_token. Wiring one up (or
+        falling back to the shared browser-assisted pairing flow) is
+        future work, gated on having real credentials for that MVPD to
+        verify against.
 
         A device_id can get stuck replaying an old, never-completed MVPD-link
         request — adoberegcode just echoes our own redirect_url back as a no-op
@@ -527,8 +545,8 @@ class FoxOneScraper(BaseScraper):
             # as a no-op authenticateURL instead of a real api.auth.adobe.com link,
             # which just serves FOX's generic (long-cached, often stale) landing page.
             callback_url = r.url.replace('/foxone/mvpd?', '/foxone/mvpd/callback?', 1)
-            redirect_url = f'{callback_url}&polling_mvpd=Cox&apikey={_API_KEY}'
-            params = {'mvpd_id': 'Cox', 'device_id': device_id, 'first_screen': 'true', 'redirect_url': redirect_url}
+            redirect_url = f'{callback_url}&polling_mvpd={mso_id}&apikey={_API_KEY}'
+            params = {'mvpd_id': mso_id, 'device_id': device_id, 'first_screen': 'true', 'redirect_url': redirect_url}
             r2 = session.get(f'{_ID_BASE}/regcode/v1/adoberegcode', params=params, headers=headers, timeout=20)
             r2.raise_for_status()
             auth_url = r2.json().get('authenticateURL')
@@ -548,15 +566,22 @@ class FoxOneScraper(BaseScraper):
             )
 
         r3 = session.get(auth_url, allow_redirects=False, timeout=20)
-        cox_saml_url = r3.headers.get('location') or ''
-        if 'login.cox.com' not in cox_saml_url:
-            raise RuntimeError(f'Unexpected FOX One Adobe redirect host: {urlparse(cox_saml_url).netloc}')
+        mso_login_url = r3.headers.get('location') or ''
 
-        _cox_saml_login(session, cox_saml_url, username, password)
+        if mso_id == 'Cox':
+            if 'login.cox.com' not in mso_login_url:
+                raise RuntimeError(f'Unexpected FOX One Adobe redirect host: {urlparse(mso_login_url).netloc}')
+            _cox_saml_login(session, mso_login_url, username, password)
+        else:
+            raise ValueError(
+                f'FOX One native sign-in is not built yet for MVPD {mso_id} '
+                f'(only scripted Cox login is wired up here) — same gap as '
+                f'FOX TVE\'s _fox_sports_mvpd_token.'
+            )
 
         rc = session.post(
             f'{_ID_BASE}/adobeauthn/v1/requests/complete',
-            json={'request_id': request_id, 'mvpd_id': 'Cox', 'status': 'authenticated'},
+            json={'request_id': request_id, 'mvpd_id': mso_id, 'status': 'authenticated'},
             headers={**headers, 'Content-Type': 'application/json'},
             timeout=20,
         )
@@ -585,13 +610,14 @@ class FoxOneScraper(BaseScraper):
         if access_token and self._token_expires_at() > time.time() + _TOKEN_REFRESH_SKEW:
             return access_token
 
-        account = self._cox_account()
-        cox_exc: Exception | None = None
+        account = self._mvpd_account()
+        mvpd_exc: Exception | None = None
         if account:
+            mso_id = self._account_mso_id(account)
             try:
-                access_token, expires_at = self._authenticate_via_cox_mvpd(account.username, account.password)
+                access_token, expires_at = self._authenticate_via_mvpd(mso_id, account.username, account.password)
                 account.last_auth_status = 'ok'
-                account.last_auth_message = 'FOX One access token obtained through Cox MVPD.'
+                account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD.'
                 account.last_auth_at = datetime.now(timezone.utc)
                 db.session.commit()
                 self._update_config('access_token', access_token)
@@ -600,10 +626,10 @@ class FoxOneScraper(BaseScraper):
                 return access_token
             except Exception as exc:
                 account.last_auth_status = 'error'
-                account.last_auth_message = f'FOX One Cox MVPD auth failed: {exc}'[:500]
+                account.last_auth_message = f'FOX One {mso_id} MVPD auth failed: {exc}'[:500]
                 account.last_auth_at = datetime.now(timezone.utc)
                 db.session.commit()
-                cox_exc = exc
+                mvpd_exc = exc
                 if not access_token:
                     raise
 
@@ -612,11 +638,11 @@ class FoxOneScraper(BaseScraper):
             # Only reuse the existing token if it hasn't actually expired yet
             # (it failed the refresh-skew check above, but may still be good
             # for a few more minutes). A genuinely expired token must not be
-            # handed out as if auth succeeded — that just turns a clear Cox
+            # handed out as if auth succeeded — that just turns a clear MVPD
             # auth failure into an opaque 401 further downstream.
             if access_token and self._token_expires_at() > time.time():
                 return access_token
-            raise cox_exc or ValueError('FOX One native playback requires either a linked Cox TV-provider account or a configured refresh_token.')
+            raise mvpd_exc or ValueError('FOX One native playback requires either a linked TV-provider (MVPD) account or a configured refresh_token.')
 
         r = self.session.post(
             _HYDRA_TOKEN_API,
@@ -686,7 +712,7 @@ class FoxOneScraper(BaseScraper):
             cached_at = float(self.config.get('platform_location_cached_at') or 0)
         except (TypeError, ValueError):
             cached_at = 0
-        has_dynamic_auth = bool(self.config.get('refresh_token')) or bool(self._cox_account())
+        has_dynamic_auth = bool(self.config.get('refresh_token')) or bool(self._mvpd_account())
         if configured and (not has_dynamic_auth or cached_at > time.time() - _LOCATION_TTL):
             return configured
 
@@ -782,7 +808,7 @@ class FoxOneScraper(BaseScraper):
         return bool(
             self.config.get('refresh_token')
             or (self.config.get('access_token') and self.config.get('platform_location'))
-            or self._cox_account()
+            or self._mvpd_account()
         )
 
     def _resolve_dtc(self, container_id: str | None) -> str:

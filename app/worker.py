@@ -2841,7 +2841,7 @@ def _silent_pair_nbc(page, mso_id: str, username: str, password: str, r) -> tupl
     screenshot/input relay — if the MSO's session doesn't carry over within
     the budget, this just reports that NBC needs its own sign-in.
     """
-    from app.scrapers.nbc_tve import NbcTveScraper, AdobePassV2CoxClient, REQUESTOR_ID, DEFAULT_REDIRECT_URL, ADOBE_BASE as ADOBE_BASE_NBC
+    from app.scrapers.nbc_tve import NbcTveScraper, AdobePassV2Client, REQUESTOR_ID, DEFAULT_REDIRECT_URL, ADOBE_BASE as ADOBE_BASE_NBC
 
     source = Source.query.filter_by(name='nbc_tve').first()
     scraper = NbcTveScraper(config=dict((source.config if source else {}) or {}))
@@ -2862,7 +2862,7 @@ def _silent_pair_nbc(page, mso_id: str, username: str, password: str, r) -> tupl
     account = TVEAccount.query.filter_by(provider_id='mvpd').first()
     cached_auth = ((account.config if account else {}) or {}).get('nbc_mvpd_auth') or {}
     if cached_auth.get('mso_id') == mso_id and cached_auth.get('access_token'):
-        cached_client = AdobePassV2CoxClient(
+        cached_client = AdobePassV2Client(
             REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL,
             cached_auth.get('device_fingerprint') or device_fingerprint,
         )
@@ -2876,7 +2876,7 @@ def _silent_pair_nbc(page, mso_id: str, username: str, password: str, r) -> tupl
             logger.info('[mvpd-login] NBC: already signed in (cached pairing still valid)')
             return True, 'already signed in'
 
-    client = AdobePassV2CoxClient(REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL, device_fingerprint)
+    client = AdobePassV2Client(REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL, device_fingerprint)
     try:
         client._register_client()
         r_sessions = client._post(
@@ -3929,7 +3929,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
     """Drive a real, human-operated sign-in for NBC TVE's Adobe Pass v2 flow.
 
     Same "second screen" idea as run_mvpd_browser_login, adapted to nbc.com's
-    JSON REST Adobe Pass v2 API (app/scrapers/nbc_tve.py's AdobePassV2CoxClient)
+    JSON REST Adobe Pass v2 API (app/scrapers/nbc_tve.py's AdobePassV2Client)
     instead of the legacy XML protocol — different endpoints (POST /sessions
     instead of regcode, GET /profiles/<mvpd> instead of /adobe-services/session),
     but the same underlying design: client registration + session creation are
@@ -3948,7 +3948,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
     """
     with flask_app.app_context():
         import json as _json_login
-        from app.scrapers.nbc_tve import NbcTveScraper, AdobePassV2CoxClient, REQUESTOR_ID, DEFAULT_REDIRECT_URL, ADOBE_BASE as ADOBE_BASE_NBC
+        from app.scrapers.nbc_tve import NbcTveScraper, AdobePassV2Client, REQUESTOR_ID, DEFAULT_REDIRECT_URL, ADOBE_BASE as ADOBE_BASE_NBC
 
         try:
             r = redis.from_url(flask_app.config['REDIS_URL'])
@@ -3978,7 +3978,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
         if mso_id == 'Cox':
             # Cox's login step is already fully scripted: NbcTveScraper.
-            # _ensure_entitled() calls AdobePassV2CoxClient.authorize(), which
+            # _ensure_entitled() calls AdobePassV2Client.authorize(), which
             # does the direct login.cox.com/api/v1/authn POST (_cox_saml_login,
             # shared with fox_tve.py) on every entitlement refresh — same
             # pattern as resolve()'s own normal playback path. No browser
@@ -4048,7 +4048,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             set_status('error', f'Could not discover NBC page config: {exc}')
             return
 
-        client = AdobePassV2CoxClient(REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL, device_fingerprint)
+        client = AdobePassV2Client(REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL, device_fingerprint)
         try:
             client._register_client()
             r_sessions = client._post(

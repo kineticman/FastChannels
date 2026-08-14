@@ -250,7 +250,7 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
-class AdobePassV2CoxClient:
+class AdobePassV2Client:
     """Minimal client for Adobe Pass's newer JSON REST API (`/api/v2/...`),
     as used by nbc.com — distinct from the XML-based flow in
     app/tve/adobe_pass.py's AdobePassCoxClient. See module docstring."""
@@ -640,7 +640,7 @@ class NbcTveScraper(BaseScraper):
         self._update_cache('nbc_page_config', config)
         return config
 
-    def _cox_account(self) -> TVEAccount | None:
+    def _mvpd_account(self) -> TVEAccount | None:
         account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         if account and account.is_enabled and account.has_credentials():
             return account
@@ -671,7 +671,7 @@ class NbcTveScraper(BaseScraper):
         if fresh and resource_id in checked and decisions.get(resource_id, True):
             return
 
-        account = self._cox_account()
+        account = self._mvpd_account()
         if not account:
             raise TVEAuthError('TVE credentials are not configured in Settings.')
         cfg = account.config or {}
@@ -686,7 +686,7 @@ class NbcTveScraper(BaseScraper):
         # human again, until Adobe actually stops recognizing it.
         cached_auth = cfg.get('nbc_mvpd_auth') or {}
         if mso_id != 'Cox' and cached_auth.get('mso_id') == mso_id and cached_auth.get('access_token'):
-            cached_client = AdobePassV2CoxClient(
+            cached_client = AdobePassV2Client(
                 REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL,
                 cached_auth.get('device_fingerprint') or self._ensure_device_fingerprint(),
             )
@@ -706,7 +706,7 @@ class NbcTveScraper(BaseScraper):
                     raise TVENotAuthorizedError(f'NBC TVE: {mso_id} account is not entitled to {resource_id}.')
                 return
 
-        client = AdobePassV2CoxClient(
+        client = AdobePassV2Client(
             REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL,
             self._ensure_device_fingerprint(),
         )

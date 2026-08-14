@@ -5306,16 +5306,18 @@ def test_tve_mvpd_settings():
 
 @api_bp.route('/settings/tve/foxone/signin', methods=['POST'])
 def foxone_signin():
-    """FOX One authenticates natively (a scripted Cox MVPD OAuth dance, see
-    FoxOneScraper._authenticate_via_cox_mvpd) rather than through Adobe Pass
-    like every other TVE network — no browser needed, so unlike the rest of
-    the "Sign in" buttons this is a plain synchronous request/response, not
-    the streamed-screenshot modal.
+    """FOX One authenticates natively (a scripted Adobe Pass MVPD OAuth
+    dance, see FoxOneScraper._authenticate_via_mvpd) rather than through
+    Adobe Pass "second screen" pairing like every other TVE network — no
+    browser needed, so unlike the rest of the "Sign in" buttons this is a
+    plain synchronous request/response, not the streamed-screenshot modal.
+    Only Cox has a scripted login wired up right now — other MVPDs fail
+    with a clear error instead of silently trying Cox's login form.
 
-    Deliberately calls _authenticate_via_cox_mvpd directly instead of going
+    Deliberately calls _authenticate_via_mvpd directly instead of going
     through _ensure_access_token's cache-first path — a "Sign in" click
-    should always exercise a live Cox login, not silently short-circuit on a
-    still-valid cached token (which would report success without actually
+    should always exercise a live MVPD login, not silently short-circuit on
+    a still-valid cached token (which would report success without actually
     testing anything, undermining the whole point of a manual sign-in).
     """
     from ..models import Source
@@ -5328,11 +5330,12 @@ def foxone_signin():
 
     source = Source.query.filter_by(name='fox_one').first()
     scraper = FoxOneScraper(config=dict((source.config if source else {}) or {}))
+    mso_id = scraper._account_mso_id(account)
     try:
-        access_token, expires_at = scraper._authenticate_via_cox_mvpd(account.username, account.password)
+        access_token, expires_at = scraper._authenticate_via_mvpd(mso_id, account.username, account.password)
     except Exception as exc:  # noqa: BLE001
         account.last_auth_status = 'error'
-        account.last_auth_message = f'FOX One Cox MVPD auth failed: {exc}'[:500]
+        account.last_auth_message = f'FOX One {mso_id} MVPD auth failed: {exc}'[:500]
         account.last_auth_at = datetime.now(timezone.utc)
         # Same 'tve_last_error' shape app.worker._record_tve_login_error writes
         # for the other networks — app.tve.status.tve_network_status() reads
@@ -5353,7 +5356,7 @@ def foxone_signin():
     if source:
         persist_source_config_updates(source.id, scraper._pending_config_updates)
     account.last_auth_status = 'ok'
-    account.last_auth_message = 'FOX One access token obtained through Cox MVPD.'
+    account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD.'
     account.last_auth_at = datetime.now(timezone.utc)
     db.session.commit()
     return jsonify({'ok': True})
@@ -5510,7 +5513,7 @@ api_bp.add_url_rule('/settings/tve/discovery/browser-login/stop', 'discovery_bro
 # ── NBC TVE browser sign-in (Adobe Pass v2 "second screen" pairing) ────────
 # NBC TVE uses a different Adobe Pass generation (v2 JSON REST) than Warner/
 # A+E's legacy XML protocol — see app.worker.run_nbc_browser_login and
-# app/scrapers/nbc_tve.py's AdobePassV2CoxClient. Separate Redis-key
+# app/scrapers/nbc_tve.py's AdobePassV2Client. Separate Redis-key
 # namespace (nbc-mvpd:*) so it doesn't collide with the legacy job above.
 
 @api_bp.route('/settings/tve/nbc/browser-login/start', methods=['POST'])
