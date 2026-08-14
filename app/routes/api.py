@@ -5396,16 +5396,6 @@ def mvpd_browser_login_start():
         target = resolve_requestor_target(requestor_id)
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
-    cascade = bool(data.get('cascade'))
-    if cascade:
-        # "Sign in to all" is disabled for now (UI button too, see tve.html) —
-        # the shared Camoufox page has been observed dying mid-sweep (Firefox
-        # process death under many rapid cross-origin navigations), silently
-        # skipping whatever networks hadn't run yet while still reporting
-        # overall success. Reject here too so a stale cached page or direct
-        # API call can't trigger it. The cascade code itself is untouched —
-        # flip this back once the browser-stability issue is fixed.
-        return jsonify({'error': 'Cascade sign-in ("Sign in to all") is temporarily disabled — sign in to each network individually.'}), 400
     # Use target['requestor_id'] (the wire-protocol value Adobe actually
     # expects), not the raw admin-UI key — they differ for Warner's truTV
     # (see resolve_requestor_target's docstring). This keeps every use of
@@ -5414,7 +5404,6 @@ def mvpd_browser_login_start():
     # play-time cache lookup.
     started = trigger_mvpd_browser_login(
         target['requestor_id'], target['resource'], target['software_statement'], target['redirect_url'], mso_id,
-        cascade=cascade,
     )
     return jsonify({'status': 'started' if started else 'already_running'})
 

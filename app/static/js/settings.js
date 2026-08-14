@@ -452,9 +452,9 @@ let _mvpdLoginRequestorId = null;
 // takes longer to respond if another login happened moments ago.
 
 // What to retry with after a force-stop — set by openMvpdLoginModal itself so
-// forceStopMvpdLogin never needs family/requestorId/cascade embedded in an
-// inline onclick (JSON.stringify()'d values inside a double-quoted HTML
-// attribute broke on their own quote characters — code review, 2026-08-10).
+// forceStopMvpdLogin never needs family/requestorId embedded in an inline
+// onclick (JSON.stringify()'d values inside a double-quoted HTML attribute
+// broke on their own quote characters — code review, 2026-08-10).
 let _mvpdLoginRetryArgs = null;
 
 // This deliberately shows "last signed in" timestamps, not a live "signed
@@ -518,12 +518,12 @@ async function loadTveNetworkStatus() {
   }
 }
 
-function openMvpdLoginModal(family, requestorId, cascade) {
+function openMvpdLoginModal(family, requestorId) {
   family = family || 'legacy';
   const cfg = MVPD_LOGIN_FAMILIES[family];
   if (!cfg) return;
   if (cfg.needsRequestor && !requestorId) return;
-  _mvpdLoginRetryArgs = { family, requestorId, cascade };
+  _mvpdLoginRetryArgs = { family, requestorId };
   _mvpdLoginFamily = family;
   _mvpdLoginRequestorId = requestorId || null;
   _mvpdLoginActive = true;
@@ -539,16 +539,15 @@ function openMvpdLoginModal(family, requestorId, cascade) {
   status.textContent = 'Starting…';
   _renderMvpdLoginSteps([]);
   modal.classList.add('open');
-  _mvpdLoginBeginRequest(cfg, requestorId, cascade);
+  _mvpdLoginBeginRequest(cfg, requestorId);
 }
 
 // A login attempted too soon after another one just takes longer to respond
 // — see the comment above MVPD_LOGIN_FAMILIES — rather than anything here
 // pre-emptively waiting.
-function _mvpdLoginBeginRequest(cfg, requestorId, cascade, attempt = 1) {
+function _mvpdLoginBeginRequest(cfg, requestorId, attempt = 1) {
   const status = document.getElementById('mvpd-login-status');
   const body = cfg.needsRequestor ? { requestor_id: requestorId } : {};
-  if (cascade) body.cascade = true;
   fetch(`${cfg.base}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -601,7 +600,7 @@ function _mvpdLoginBeginRequest(cfg, requestorId, cascade, attempt = 1) {
         status.textContent = 'Could not reach the server to start signing in. Try again.';
         return;
       }
-      _mvpdLoginPollTimer = setTimeout(() => _mvpdLoginBeginRequest(cfg, requestorId, cascade, attempt + 1), 1000);
+      _mvpdLoginPollTimer = setTimeout(() => _mvpdLoginBeginRequest(cfg, requestorId, attempt + 1), 1000);
     });
 }
 
@@ -626,7 +625,7 @@ async function forceStopMvpdLogin() {
   await Promise.allSettled(stopUrls.map((u) => fetch(u, { method: 'POST' })));
   const retry = _mvpdLoginRetryArgs;
   setTimeout(() => {
-    if (retry) openMvpdLoginModal(retry.family, retry.requestorId, retry.cascade);
+    if (retry) openMvpdLoginModal(retry.family, retry.requestorId);
   }, 1500);
 }
 

@@ -597,8 +597,8 @@ class AMCNetworksTVEScraper(BaseScraper):
 
         Returns (client, code, mso_login_url, auth_headers) without completing
         any login — this is the scripted part that's never blocked by an MSO's
-        bot defense, shared by both the synchronous Cox flow below and the
-        browser-assisted cascade (app.worker._silent_pair_amcn).
+        bot defense. Only the Cox login itself is wired up below; other MSOs
+        raise (see _adobe_decision_token).
         """
         client = AdobePassCoxClient(
             requestor_id=channel.requestor_id,
@@ -657,9 +657,8 @@ class AMCNetworksTVEScraper(BaseScraper):
     def _adobe_decision_finish(
         self, client: AdobePassCoxClient, channel: AMCNChannel, code: str, mso_id: str, auth_headers: dict[str, str],
     ) -> tuple[str, str]:
-        """The poll-by-code + entitlement-decision tail, shared by the
-        synchronous Cox flow and the browser-assisted cascade — both call this
-        once the MVPD login (whoever did it) has completed."""
+        """The poll-by-code + entitlement-decision tail, called once the
+        synchronous Cox login has completed."""
         profile = client.session.get(
             f'{ADOBE_BASE}/api/v2/{channel.requestor_id}/profiles/code/{code}',
             headers={**auth_headers, 'Content-Type': 'application/json'},
@@ -719,11 +718,9 @@ class AMCNetworksTVEScraper(BaseScraper):
         # AMCN's own v2 REST API, not the legacy XML protocol yt-dlp's generic
         # MVPD login flows speak — so unlike warner_tve.py/aenetworks_tve.py,
         # non-Cox MSOs here can't fall back to authorize_mvpd()/yt-dlp. Native
-        # scripted login only exists for Cox (below); every other MSO relies
-        # entirely on a cached token from browser-assisted pairing
-        # (app.worker._silent_pair_amcn, part of the "sign in once" cascade —
-        # resolve() itself still only does the synchronous Cox path when the
-        # cache is empty/expired).
+        # scripted login only exists for Cox (below); no non-Cox path is wired
+        # up at all right now (same gap as discovery_tve.py/fox_one.py) — a
+        # non-Cox mso_id raises below instead of silently misfiring.
         mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
 
         # force=True skips a still-valid cached token — used by the admin
@@ -749,8 +746,8 @@ class AMCNetworksTVEScraper(BaseScraper):
             _cox_saml_login(client.session, mso_login_url, account.username or '', account.password or '')
         else:
             raise TVEAuthError(
-                f'{channel.name}: no cached sign-in for MVPD {mso_id} — run "Sign in to all" (or AMC Networks TVE '
-                f'specifically) in Settings once, then this will keep reusing it until it expires.'
+                f'{channel.name}: browser-assisted sign-in for AMC Networks TVE is not built yet for MVPD '
+                f'{mso_id} (only native Cox login is wired up here).'
             )
 
         adobe_token, adobe_id = self._adobe_decision_finish(client, channel, code, mso_id, auth_headers)

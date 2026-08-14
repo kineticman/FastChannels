@@ -2,9 +2,9 @@
 
 Reports *when* each network last had a sign-in succeed (browser-assisted or
 scripted), not whether it's currently valid — cached credentials have been
-observed to expire unpredictably (see app/worker.py's cascade functions), so
-a "signed in" badge implying current truth would be misleading in exactly
-the way the old "Test" button already was. A timestamp is honest; resolve()
+observed to expire unpredictably, so a "signed in" badge implying current
+truth would be misleading in exactly the way the old "Test" button already
+was. A timestamp is honest; resolve()
 still surfaces a real error if a cached credential has gone stale, and the
 account's "Sign in (browser)" flow re-establishes it.
 """
@@ -41,10 +41,6 @@ def tve_network_status(account) -> list[dict]:
     #   'fox'       -> POST /api/settings/tve/fox/browser-login/start (fixed target)
     #   'amcn'      -> POST /api/settings/tve/amcn/browser-login/start (fixed target)
     #   'discovery' -> POST /api/settings/tve/discovery/browser-login/start (fixed target)
-    # AMC Networks TVE and Discovery TVE are ALSO still swept for free by the
-    # legacy family's "sign in once" cascade (app.worker._silent_pair_amcn/
-    # _discovery, triggered by "Sign in to all") — these standalone buttons
-    # just mean you no longer have to run that whole sweep only to reach them.
     mvpd_authn = cfg.get('mvpd_authn') or {}
     for choice in REQUESTOR_CHOICES:
         # Cached tokens are stored under the wire-protocol requestor_id
