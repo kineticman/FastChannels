@@ -28,15 +28,21 @@ class HallmarkScraper(BaseScraper):
     config_schema = []
 
     _BASE_URL = "https://www.hallmarkplus.com"
+    _CATALOG_URL = _BASE_URL + "/api/core/catalog/channels"
     _SCHEDULE_URL = _BASE_URL + "/api/core/catalog/channels/{linear_id}/schedule"
     _GUIDE_HOURS = 48
     _ALLOWED_MINUTES = (0, 30, 45)
 
     _LOGO_BASE = "/static/logos/hallmark"
 
+    # "linear_id" is a fallback only — Hallmark has renamed these content-item
+    # IDs before (e.g. "Linear-1543-Hallmark" -> "...-Non-Stop-Hallmark-Hits-DRM"),
+    # which 404s the schedule endpoint. fetch_epg() re-resolves the live ID each
+    # scrape via the catalog endpoint, keyed on the (so far stable) channel_identifier.
     _CHANNELS = [
         {
-            "linear_id": "Linear-1543-Hallmark",
+            "linear_id": "Linear-1543-Non-Stop-Hallmark-Hits-DRM",
+            "channel_identifier": "HLIVE_HMH",
             "tvg_id":    "hallmark_hits",
             "name":      "Non-Stop Hallmark Hits",
             "stream_url": "https://crwn-hits.akamaized.net/hls/playlist.m3u8",
@@ -44,7 +50,8 @@ class HallmarkScraper(BaseScraper):
             "number":    9001,
         },
         {
-            "linear_id": "Linear-1268-Hallmark",
+            "linear_id": "Linear-1268-Non-Stop-RomComs-DRM",
+            "channel_identifier": "HLIVE_ROMCOM",
             "tvg_id":    "hallmark_romcoms",
             "name":      "Non-Stop Rom-Coms",
             "stream_url": "https://crwn-nsrc.akamaized.net/hls/playlist.m3u8",
@@ -52,7 +59,8 @@ class HallmarkScraper(BaseScraper):
             "number":    9002,
         },
         {
-            "linear_id": "Linear-1187-Hallmark",
+            "linear_id": "Linear-1187-Non-Stop-Christmas-DRM",
+            "channel_identifier": "HLIVE_NSC",
             "tvg_id":    "hallmark_christmas",
             "name":      "Non-Stop Christmas",
             "stream_url": "https://crwn-christmas.akamaized.net/hls/playlist.m3u8",
@@ -60,7 +68,8 @@ class HallmarkScraper(BaseScraper):
             "number":    9003,
         },
         {
-            "linear_id": "Linear-1186-Hallmark",
+            "linear_id": "Linear-1186-Non-Stop-Mysteries-DRM",
+            "channel_identifier": "HLIVE_MSM",
             "tvg_id":    "hallmark_mysteries",
             "name":      "Non-Stop Mysteries",
             "stream_url": "https://crwn-mysteries.akamaized.net/hls/playlist.m3u8",
@@ -71,6 +80,7 @@ class HallmarkScraper(BaseScraper):
 
     _STREAM_URLS = {ch["tvg_id"]: ch["stream_url"] for ch in _CHANNELS}
     _TVG_TO_LINEAR = {ch["tvg_id"]: ch["linear_id"] for ch in _CHANNELS}
+    _IDENTIFIER_TO_TVG = {ch["channel_identifier"]: ch["tvg_id"] for ch in _CHANNELS}
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
@@ -106,9 +116,11 @@ class HallmarkScraper(BaseScraper):
         guide_start = self._align(now, "floor")
         guide_end = self._align(now + timedelta(hours=self._GUIDE_HOURS), "floor")
 
+        linear_ids = {**self._TVG_TO_LINEAR, **self._resolve_linear_ids()}
+
         programs: list[ProgramData] = []
         for ch in channels:
-            linear_id = self._TVG_TO_LINEAR.get(ch.source_channel_id)
+            linear_id = linear_ids.get(ch.source_channel_id)
             if not linear_id:
                 continue
             items = self._fetch_schedule(linear_id, guide_start, guide_end)
@@ -128,6 +140,41 @@ class HallmarkScraper(BaseScraper):
         return self._STREAM_URLS.get(tvg_id, raw_url)
 
     # ── Internals ─────────────────────────────────────────────
+
+    def _resolve_linear_ids(self) -> dict[str, str]:
+        """Look up current linear_ids from the catalog endpoint, keyed by the
+        stable channel_identifier. Returns {} (falling back to the hardcoded
+        defaults) if the catalog is unreachable or its shape changes too."""
+        r = self.get(self._CATALOG_URL)
+        if not r:
+            return {}
+        try:
+            data = r.json().get("data", [])
+        except Exception as exc:
+            logger.warning("[%s] catalog JSON parse error: %s", self.source_name, exc)
+            return {}
+
+        resolved: dict[str, str] = {}
+        for item in data if isinstance(data, list) else []:
+            identifier = item.get("extras", {}).get("channelIdentifier")
+            item_id = item.get("id")
+            tvg_id = self._IDENTIFIER_TO_TVG.get(identifier)
+            if tvg_id and item_id:
+                resolved[tvg_id] = item_id
+
+        stale = {
+            tvg_id: (self._TVG_TO_LINEAR[tvg_id], resolved[tvg_id])
+            for tvg_id in resolved
+            if resolved[tvg_id] != self._TVG_TO_LINEAR.get(tvg_id)
+        }
+        if stale:
+            logger.warning("[%s] linear_id changed upstream, update _CHANNELS: %s", self.source_name, stale)
+
+        missing = set(self._IDENTIFIER_TO_TVG.values()) - set(resolved)
+        if missing:
+            logger.warning("[%s] catalog lookup missing channel_identifier for: %s", self.source_name, missing)
+
+        return resolved
 
     def _fetch_schedule(self, linear_id: str, start: datetime, end: datetime) -> list[dict]:
         params = urlencode({
