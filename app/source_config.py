@@ -78,6 +78,17 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
     if source_name == 'philo':
         return bool(saved.get('session_cookies'))
 
+    # Pluto works fully anonymously — only "incomplete" if the user opted
+    # into login mode but hasn't supplied both credentials yet. Installs
+    # from before 'auth_mode' existed (username/password used to be
+    # mandatory) infer 'login' when both are already saved.
+    if source_name == 'pluto':
+        has_creds = bool((saved.get('username') or '').strip() and (saved.get('password') or '').strip())
+        default_auth_mode = 'login' if has_creds else 'anonymous'
+        if (saved.get('auth_mode') or default_auth_mode).strip().lower() != 'login':
+            return True
+        return has_creds
+
     return has_meaningful_source_config(scraper_cls, saved)
 
 

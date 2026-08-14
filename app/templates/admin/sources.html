@@ -2705,19 +2705,34 @@
         return `<option value="${escapeHtml(String(opt.value))}" ${checked ? 'selected' : ''}>${escapeHtml(opt.label)}</option>`;
       }).join('');
 
+      const authModeField = schema.find(f => f.key === 'auth_mode');
       const usernameField = schema.find(f => f.key === 'username');
       const passwordField = schema.find(f => f.key === 'password');
+      const authMode = String(values.auth_mode || authModeField?.default || 'anonymous').toLowerCase();
+      const isLogin = authMode === 'login';
+
+      const authModeHtml = authModeField ? `
+        <div class="field field-full">
+          <label for="cfg-${sourceId}-auth_mode">${escapeHtml(authModeField.label)}</label>
+          <select id="cfg-${sourceId}-auth_mode" data-key="auth_mode" onchange="togglePlutoAuthMode(${sourceId}, this.value)">
+            ${(authModeField.options || []).map(o =>
+              `<option value="${escapeHtml(String(o.value))}" ${String(o.value) === authMode ? 'selected' : ''}>${escapeHtml(o.label)}</option>`
+            ).join('')}
+          </select>
+          <div class="help">${escapeHtml(authModeField.help_text || '')}</div>
+        </div>` : '';
+
       const credentialsHtml = (usernameField && passwordField) ? `
-        <div class="fields-grid">
+        <div class="fields-grid" id="pluto-creds-${sourceId}" style="${isLogin ? '' : 'display:none;'}">
           <div class="field">
-            <label for="cfg-${sourceId}-username">${escapeHtml(usernameField.label)}<span class="req">*</span></label>
+            <label for="cfg-${sourceId}-username">${escapeHtml(usernameField.label)}</label>
             <input type="text" id="cfg-${sourceId}-username" data-key="username"
                    data-secret="false" value="${escapeHtml(String(values.username || ''))}"
                    placeholder="${escapeHtml(usernameField.placeholder || '')}" autocomplete="off">
             <div class="help">${escapeHtml(usernameField.help_text || '')}</div>
           </div>
           <div class="field">
-            <label for="cfg-${sourceId}-password">${escapeHtml(passwordField.label)}<span class="req">*</span></label>
+            <label for="cfg-${sourceId}-password">${escapeHtml(passwordField.label)}</label>
             <input type="password" id="cfg-${sourceId}-password" data-key="password"
                    data-secret="true" value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
             <div class="help">${escapeHtml(passwordField.help_text || '')}</div>
@@ -2737,6 +2752,7 @@
       return `
         <div class="config-title">Source Settings</div>
         <div class="config-note">Choose one or more Pluto regions. The selector is limited to the live regions we verified.</div>
+        ${authModeHtml}
         ${credentialsHtml}
         <div class="field field-full">
           <label for="cfg-${sourceId}-country_codes">${escapeHtml(regionField.label)}</label>
@@ -2751,6 +2767,11 @@
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
+    }
+
+    function togglePlutoAuthMode(sourceId, mode) {
+      const creds = document.getElementById(`pluto-creds-${sourceId}`);
+      if (creds) creds.style.display = mode === 'login' ? '' : 'none';
     }
 
     function debounceCitySearch(sourceId, query) {

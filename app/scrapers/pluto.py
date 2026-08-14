@@ -1,7 +1,8 @@
 """
 Pluto TV scraper for FastChannels.
 Config (set via admin UI):
-  - username / password  (optional — anonymous works fine)
+  - auth_mode            ('anonymous' default, or 'login')
+  - username / password  (only used when auth_mode='login' — anonymous works fine)
   - country_codes        (comma-separated, default: us_east)
 """
 from __future__ import annotations
@@ -195,19 +196,28 @@ class PlutoScraper(BaseScraper):
     display_name    = "Pluto TV"
     stream_audit_enabled = True
     scrape_interval = 360
-    config_required = True
 
     config_schema = [
         ConfigField(
+            key='auth_mode', label='Sign-in Method',
+            field_type='select', default='anonymous',
+            help_text='Anonymous works out of the box — no Pluto account needed. '
+                       'Log in only if you want channels tied to your account.',
+            options=[
+                {'value': 'anonymous', 'label': 'Anonymous (recommended)'},
+                {'value': 'login', 'label': 'Log in with Pluto account'},
+            ],
+        ),
+        ConfigField(
             key='username', label='Pluto TV Username',
-            field_type='text', required=True, secret=False,
+            field_type='text', required=False, secret=False,
             placeholder='email@example.com',
-            help_text='Required. Enter your Pluto TV login email.',
+            help_text='Only used when Sign-in Method is "Log in with Pluto account".',
         ),
         ConfigField(
             key='password', label='Pluto TV Password',
-            field_type='password', required=True, secret=True,
-            help_text='Required. Enter your Pluto TV password.',
+            field_type='password', required=False, secret=True,
+            help_text='Only used when Sign-in Method is "Log in with Pluto account".',
         ),
         ConfigField(
             key='country_codes', label='Country/Region Feeds',
@@ -233,8 +243,15 @@ class PlutoScraper(BaseScraper):
 
     def __init__(self, config: dict = None):
         super().__init__(config)
-        username = self.config.get('username') or None
-        password = self.config.get('password') or None
+        raw_username = self.config.get('username') or None
+        raw_password = self.config.get('password') or None
+        # 'auth_mode' didn't exist before this field was added — installs that
+        # already saved real credentials (username/password used to be mandatory)
+        # should keep logging in rather than silently reverting to anonymous.
+        default_auth_mode = 'login' if (raw_username and raw_password) else 'anonymous'
+        auth_mode = (self.config.get('auth_mode') or default_auth_mode).strip().lower()
+        username = raw_username if auth_mode == 'login' else None
+        password = raw_password if auth_mode == 'login' else None
 
         raw_codes = self.config.get('country_codes', 'us_east')
         country_codes: list[str] = []

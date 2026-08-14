@@ -1686,6 +1686,11 @@ def get_source_config(source_id):
             values[key] = '••••••••'
         else:
             values[key] = saved.get(key, f['default'] or '')
+    if source.name == 'pluto' and 'auth_mode' not in saved:
+        # Installs saved before 'auth_mode' existed already have real
+        # credentials stored (it used to be mandatory) — reflect the mode
+        # that's actually in effect rather than the field's schema default.
+        values['auth_mode'] = 'login' if (saved.get('username') and saved.get('password')) else 'anonymous'
     config_complete = bool(scraper_cls and is_source_config_complete(source.name, scraper_cls, saved))
     config_status = (
         'configured'
