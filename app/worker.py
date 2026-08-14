@@ -46,7 +46,7 @@ from app.scrapers.base import (
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
-from app.tve.adobe_pass import AdobePassCoxClient, TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
+from app.tve.adobe_pass import AdobePassCoxClient, TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError, save_xfinity_cookie_jar
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
 from app.routes.images import delete_cached_logo
 
@@ -2174,6 +2174,146 @@ def _try_autofill_credentials(
         return False
 
 
+_XFINITY_USER_SELECTOR = "prism-input-text[name='user'] input:visible, input[autocomplete='username']:visible"
+_XFINITY_PASSWORD_SELECTOR = "prism-input-text[name='passwd'] input:visible, input[type='password']:visible"
+_XFINITY_SUBMIT_SELECTOR = "prism-button[prism-id='sign_in'], button[type='submit']"
+
+
+def _autofill_xfinity_credentials(
+    page, username: str, password: str, wait_seconds: float = 20.0, r=None,
+    stop_key: str | None = None, input_key: str | None = None,
+    shot_key: str | None = None, hint_key: str | None = None,
+) -> bool:
+    """Xfinity-specific sibling of _try_autofill_credentials for
+    run_mvpd_browser_login's Comcast_SSO path.
+
+    The generic single-step autofill above waits for a password field to be
+    visible before touching anything, then fills both fields at once. That
+    never fires here: Xfinity's login is identifier-first (submit username
+    alone; a password step only renders afterward) and built on Comcast's
+    own Prism UI web components (<prism-input-text>, <prism-button> — not
+    plain <input>/<button>). Confirmed live 2026-08-14 that Playwright's
+    shadow-DOM piercing reaches the real underlying <input> fine via
+    `prism-input-text[name='user'] input` / `[name='passwd'] input`, and
+    both steps submit via `prism-button[prism-id='sign_in']`.
+
+    Also best-effort dismisses the post-login "Add your email address"
+    account-hygiene screen via its "Ask me later" skip — confirmed live
+    2026-08-14 this is a skippable nag, not a real second factor, at least
+    for the account tested. A genuine OTP/2FA prompt still falls through to
+    the caller's normal poll-and-give-up path untouched.
+
+    Never raises — returns False if no matching form shows up in time.
+    """
+    def _wait_for_any(selector: str, deadline: float) -> bool:
+        while time.monotonic() < deadline:
+            try:
+                if page.locator(selector).count() > 0:
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                logger.info('[mvpd-login] xfinity autofill: locator query failed: %s', exc)
+                return False
+            if r is not None:
+                nonlocal last_relay
+                now = time.monotonic()
+                if now - last_relay >= 1.0:
+                    last_relay = now
+                    if _relay_input_and_screenshot(
+                        page, r, waiting_since=wait_started,
+                        stop_key=stop_key, input_key=input_key, shot_key=shot_key, hint_key=hint_key,
+                    ):
+                        logger.info('[mvpd-login] xfinity autofill: cancelled mid-wait')
+                        raise _XfinityAutofillCancelled()
+            page.wait_for_timeout(300)
+        return False
+
+    class _XfinityAutofillCancelled(Exception):
+        pass
+
+    wait_started = time.monotonic()
+    last_relay = wait_started
+
+    try:
+        if not _wait_for_any(_XFINITY_USER_SELECTOR, time.monotonic() + wait_seconds):
+            # The page can look fully rendered (real login form visible in a
+            # screenshot) while the underlying React app failed to hydrate —
+            # confirmed live 2026-08-14 via a "Minified React error #418"
+            # (hydration mismatch) in the page's console right before this
+            # exact timeout, most likely from stale cookies/localStorage in
+            # the persistent browser profile (shared across every network's
+            # different client_id) conflicting with THIS page's server-
+            # rendered assumptions. A reload forces a fresh hydration attempt
+            # instead of staring at a permanently-dead shell for the rest of
+            # the job's budget.
+            logger.info('[mvpd-login] xfinity autofill: no visible username field after %.1fs — reloading once and retrying url=%s', wait_seconds, _safe_page_url(page))
+            try:
+                page.reload(wait_until='domcontentloaded', timeout=30000)
+            except Exception as exc:  # noqa: BLE001
+                logger.info('[mvpd-login] xfinity autofill: reload failed: %s', exc)
+                return False
+            if not _wait_for_any(_XFINITY_USER_SELECTOR, time.monotonic() + wait_seconds):
+                logger.info('[mvpd-login] xfinity autofill: still no visible username field after reload (SSO already past login, or an unrecognized form) url=%s', _safe_page_url(page))
+                return False
+
+        user_field = page.locator(_XFINITY_USER_SELECTOR).first
+        user_field.click(force=True, timeout=8000)
+        try:
+            if user_field.input_value(timeout=1000):
+                user_field.fill('', timeout=2000)
+        except Exception:  # noqa: BLE001
+            pass
+        user_field.fill(username)
+
+        submit = page.locator(_XFINITY_SUBMIT_SELECTOR).first
+        try:
+            submit.click(force=True, timeout=5000)
+        except Exception:  # noqa: BLE001
+            page.keyboard.press('Enter')
+        logger.info('[mvpd-login] xfinity autofill: submitted username for %s', username)
+
+        if not _wait_for_any(_XFINITY_PASSWORD_SELECTOR, time.monotonic() + wait_seconds):
+            # Unlike the username step, reloading here is NOT safe to retry:
+            # confirmed live 2026-08-14 that reloading after the username has
+            # already been submitted lands on a bare, unbranded login page
+            # (the client_id/step context is lost, not resumed) — worse than
+            # just giving up. Fall through to the caller's normal poll loop,
+            # where a human can complete it via the (now screenshot-relayed)
+            # modal if this was a genuine one-off render hiccup.
+            logger.info('[mvpd-login] xfinity autofill: no visible password field after username submit url=%s', _safe_page_url(page))
+            return False
+
+        pw_field = page.locator(_XFINITY_PASSWORD_SELECTOR).first
+        pw_field.click(force=True, timeout=8000)
+        pw_field.fill(password)
+
+        submit = page.locator(_XFINITY_SUBMIT_SELECTOR).first
+        try:
+            submit.click(force=True, timeout=5000)
+        except Exception:  # noqa: BLE001
+            page.keyboard.press('Enter')
+        logger.info('[mvpd-login] xfinity autofill: filled and submitted password for %s', username)
+    except _XfinityAutofillCancelled:
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.info('[mvpd-login] xfinity autofill: exception mid-fill: %s', exc)
+        return False
+
+    for _ in range(8):
+        page.wait_for_timeout(1500)
+        url = _safe_page_url(page) or ''
+        if 'login.xfinity.com' not in url and 'idm.xfinity.com' not in url:
+            break
+        for sel in ("text=/ask me later/i", "button:has-text('Skip')"):
+            loc = page.locator(sel).first
+            try:
+                loc.wait_for(state='visible', timeout=500)
+                loc.click(force=True, timeout=3000)
+                logger.info('[mvpd-login] xfinity autofill: dismissed post-login nag via %s', sel)
+            except Exception:  # noqa: BLE001
+                continue
+    return True
+
+
 def _autofill_sling_credentials(page, username: str, password: str) -> None:
     """Fill and submit the saved username/password so the human only has to
     solve the captcha, not retype credentials under a live challenge. Not
@@ -2493,6 +2633,42 @@ def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
     cfg['mvpd_authn'] = mvpd_authn
     account.config = cfg
     db.session.commit()
+
+
+def _harvest_and_save_xfinity_cookies(context) -> None:
+    """Grabs the real, JS-matured Akamai Bot Manager + Xfinity SESSION
+    cookies out of a Camoufox context right after a successful Comcast_SSO
+    pairing, and persists them so authorize_mvpd() can do every SUBSEQUENT
+    Comcast_SSO sign-in (any network, not just this one — the cookies are
+    account/browser-session-scoped, not per-client_id) over plain HTTP
+    without a browser at all. Confirmed live 2026-08-14: login.xfinity.com's
+    credential POST is blocked by Akamai Bot Manager for any bare HTTP
+    client's own freshly-issued cookies — only cookies matured by a real
+    browser session pass. See app/tve/adobe_pass.py's
+    authenticate_with_xfinity_cookies() and
+    dev/comcast/XFINITY_ADOBE_PASS_DIRECT_HTTP_RESEARCH.md. Best-effort,
+    never raises — a failed harvest just means the next Comcast_SSO login
+    falls back to needing another browser-assisted pairing, same as today.
+    """
+    try:
+        raw_cookies = context.cookies()
+    except Exception as exc:  # noqa: BLE001
+        logger.info('[mvpd-login] xfinity cookie harvest failed: %s', exc)
+        return
+    jar = {}
+    for c in raw_cookies:
+        domain = (c.get('domain') or '').lstrip('.')
+        if 'xfinity.com' not in domain:
+            continue
+        jar[c['name']] = {'value': c['value'], 'domain': domain, 'path': c.get('path') or '/'}
+    if not jar:
+        logger.info('[mvpd-login] xfinity cookie harvest found no xfinity.com cookies')
+        return
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    if not account:
+        return
+    save_xfinity_cookie_jar(account, jar)
+    logger.info('[mvpd-login] harvested and saved %d xfinity.com cookies for future pure-HTTP sign-ins', len(jar))
 
 
 def _record_tve_login_error(key: str, message: str) -> None:
@@ -3024,6 +3200,46 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
             logger.info('[mvpd-login] paired requestor_id=%s mso_id=Cox (scripted, no browser)', requestor_id)
             return
 
+        if mso_id == 'Comcast_SSO':
+            # Try a saved cookie jar (harvested from a previous successful
+            # Comcast_SSO browser pairing — see _harvest_and_save_xfinity_
+            # cookies below, and app/tve/adobe_pass.py's authorize_mvpd())
+            # BEFORE ever opening a browser. Without this check, every
+            # single network in a "Sign in to all" batch opened its own
+            # fresh Camoufox window even though the FIRST one's success
+            # already saved a jar good for every other network too —
+            # confirmed live 2026-08-14 (HISTORY/AETV/LIFETIME each did a
+            # full browser login back to back despite each one saving a
+            # cookie jar right after). Only falls through to the browser
+            # below when there's no jar yet, or the saved one has gone
+            # stale (Akamai cookies expire in ~2-4h — see
+            # dev/comcast/XFINITY_ADOBE_PASS_DIRECT_HTTP_RESEARCH.md).
+            cookie_jar = (account_row.config or {}).get('xfinity_cookie_jar') if account_row else None
+            if cookie_jar:
+                set_status('running', 'Trying saved sign-in (no browser needed)…')
+                try:
+                    token = client.authorize_with_xfinity_cookies(mvpd_username, mvpd_password, cookie_jar)
+                except TVENotAuthorizedError as exc:
+                    _step(requestor_id, 'failed', 'not entitled')
+                    _record_tve_login_error(requestor_id, str(exc))
+                    set_status('error', f'{requestor_id}: not entitled ({exc})')
+                    return
+                except TVEAuthError as exc:
+                    logger.info(
+                        '[mvpd-login] saved xfinity cookie jar did not work for %s, falling back to browser: %s',
+                        requestor_id, exc,
+                    )
+                else:
+                    _save_mvpd_authn_token(requestor_id, client.ctx.authn_token)
+                    _step(requestor_id, 'done', 'authorized')
+                    set_status('success', f'Signed in — {requestor_id} authorized (no browser needed).')
+                    logger.info(
+                        '[mvpd-login] paired requestor_id=%s mso_id=Comcast_SSO via saved cookie jar (no browser)',
+                        requestor_id,
+                    )
+                    return
+            set_status('running', 'No usable saved sign-in — opening a browser…')
+
         try:
             client.setup_client()
             client.register_device()
@@ -3055,6 +3271,8 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     set_status('error', f'Adobe Pass error: {exc}')
                     return True  # definitive answer — nothing to relaunch for
                 _save_mvpd_authn_token(requestor_id, client.ctx.authn_token)
+                if mso_id == 'Comcast_SSO':
+                    _harvest_and_save_xfinity_cookies(context)
                 results: dict[str, tuple[bool, str]] = {}
                 try:
                     client.authorize()
@@ -3104,7 +3322,47 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 page.on('close', lambda p: logger.warning('[mvpd-login] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[mvpd-login] page JS error: %s', str(exc)[:500]))
                 try:
-                    page.goto(auth_url, wait_until='domcontentloaded', timeout=30000)
+                    if mso_id == 'Comcast_SSO':
+                        # Xfinity's WAF (Akamai) flatly denies a cold top-level
+                        # navigation to the Adobe Pass authenticate/saml URL —
+                        # no Referer, sec-fetch-site: none — with an HTTP 403
+                        # "Access Denied" page (server: AkamaiGHost). Confirmed
+                        # live 2026-08-14 via both a scripted curl_cffi request
+                        # and a real headful browser pasting the URL directly;
+                        # neither is a bot-fingerprint issue (the plain-paste
+                        # block hit even with a fully genuine browser). Landing
+                        # on any real page first and redirecting via in-page JS
+                        # (so the request carries a real Referer/Sec-Fetch-Site
+                        # chain) sails through to the actual login form instead
+                        # — verified end-to-end: real login + Adobe authorize +
+                        # shortAuthorize + a live /play redirect to a real CDN
+                        # URL. redirect_url's own origin is used as the landing
+                        # page since it's guaranteed reachable for any
+                        # requestor_id without needing extra per-network config.
+                        origin = f'{_urlsplit(redirect_url).scheme}://{_urlsplit(redirect_url).netloc}'
+                        page.goto(origin, wait_until='domcontentloaded', timeout=30000)
+                        set_status('running', 'Loading sign-in page…', page.url)
+                        # This whole navigation (landing page + fixed settle +
+                        # in-page redirect + load-state wait) used to be one
+                        # long blocking stretch with zero relay calls in it —
+                        # the modal sat completely blank for up to ~30s
+                        # (reported live 2026-08-14: "I don't see any
+                        # screenshots"). Relay every ~1s throughout instead.
+                        _settle_deadline = time.monotonic() + 3.0
+                        while time.monotonic() < _settle_deadline:
+                            _relay_input_and_screenshot(page, r)
+                            page.wait_for_timeout(500)
+                        page.evaluate('(u) => { window.location.href = u; }', auth_url)
+                        _load_deadline = time.monotonic() + 30.0
+                        while time.monotonic() < _load_deadline:
+                            try:
+                                page.wait_for_load_state('domcontentloaded', timeout=1000)
+                                break
+                            except Exception:  # noqa: BLE001
+                                pass
+                            _relay_input_and_screenshot(page, r)
+                    else:
+                        page.goto(auth_url, wait_until='domcontentloaded', timeout=30000)
                 except Exception as exc:  # noqa: BLE001
                     if _is_browser_death(exc):
                         raise
@@ -3141,7 +3399,10 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     set_status('error', f'{requestor_id}: {mso_id} does not appear to be a participating provider for this network.')
                     return
                 if mvpd_username and mvpd_password:
-                    _try_autofill_credentials(page, mvpd_username, mvpd_password, r=r)
+                    if mso_id == 'Comcast_SSO':
+                        _autofill_xfinity_credentials(page, mvpd_username, mvpd_password, r=r)
+                    else:
+                        _try_autofill_credentials(page, mvpd_username, mvpd_password, r=r)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
@@ -3209,6 +3470,8 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                             # requestor_id under the same MSO account (see authorize_mvpd()
                             # in app/tve/adobe_pass.py).
                             _save_mvpd_authn_token(requestor_id, client.ctx.authn_token)
+                            if mso_id == 'Comcast_SSO':
+                                _harvest_and_save_xfinity_cookies(context)
                         except TVEPendingAuthError:
                             continue  # human hasn't finished the MSO login yet
                         except TVEAuthError as exc:
@@ -3397,6 +3660,52 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             logger.info('[nbc-mvpd-login] paired mso_id=Cox (scripted, no browser)')
             return
 
+        if mso_id == 'Comcast_SSO':
+            # Same idea as the Cox branch above, but via a saved cookie jar
+            # (harvested from a previous successful Comcast_SSO browser
+            # pairing — see _harvest_and_save_xfinity_cookies and
+            # app/tve/adobe_pass.py's xfinity_cookie_jar_login()) instead of
+            # a scripted credential POST — Xfinity's own login page blocks
+            # scripted credential submission outright (Akamai Bot Manager),
+            # confirmed live 2026-08-14, but a jar matured by a real browser
+            # gets straight through over plain HTTP. Falls through to the
+            # browser-assisted flow below only when there's no jar yet, or
+            # the saved one has gone stale (TVEAuthError) — a definitive
+            # TVENotAuthorizedError is NOT retried via browser, same as
+            # every other MSO fast-path in this file, since a browser login
+            # can't change Adobe's actual entitlement decision.
+            cookie_jar_account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            cookie_jar = (cookie_jar_account.config or {}).get('xfinity_cookie_jar') if cookie_jar_account else None
+            if cookie_jar:
+                set_status('running', 'Trying saved sign-in (no browser needed)…')
+                source = Source.query.filter_by(name='nbc_tve').first()
+                if source:
+                    scraper = NbcTveScraper(config=dict(source.config or {}))
+                    try:
+                        guide = scraper._fetch_guide()
+                        if not guide:
+                            raise TVEAuthError('could not load channel guide')
+                        resource_id = next(iter(guide.values())).resource_id
+                        scraper._update_cache('nbc_entitlements', {})
+                        scraper._ensure_entitled(resource_id)
+                    except TVENotAuthorizedError as exc:
+                        persist_source_config_updates(source.id, scraper._pending_config_updates)
+                        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                        _record_tve_login_error('nbc', str(exc))
+                        set_status('error', f'NBC TVE: {exc}')
+                        return
+                    except TVEAuthError as exc:
+                        persist_source_config_updates(source.id, scraper._pending_config_updates)
+                        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                        logger.info('[nbc-mvpd-login] saved xfinity cookie jar did not work, falling back to browser: %s', exc)
+                    else:
+                        persist_source_config_updates(source.id, scraper._pending_config_updates)
+                        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                        set_status('success', 'Signed in — NBC TVE authorized (no browser needed).')
+                        logger.info('[nbc-mvpd-login] paired mso_id=Comcast_SSO via saved cookie jar (no browser)')
+                        return
+            set_status('running', 'No usable saved sign-in — opening a browser…')
+
         set_status('starting', 'Registering with Adobe Pass…')
 
         # One deadline shared across browser-crash retries (RQ job_timeout is
@@ -3475,6 +3784,8 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     profile = None
                 if profile:
                     _save_nbc_mvpd_auth(mso_id, client.access_token, device_fingerprint)
+                    if mso_id == 'Comcast_SSO':
+                        _harvest_and_save_xfinity_cookies(context)
                     set_status('success', f'Signed in — NBC TVE authorized via {mso_id}.')
                     logger.info('[nbc-mvpd-login] paired mso_id=%s (completed after the page closed itself)', mso_id)
                     return True
@@ -3507,7 +3818,34 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 page.on('close', lambda p: logger.warning('[nbc-mvpd-login] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[nbc-mvpd-login] page JS error: %s', str(exc)[:500]))
                 try:
-                    page.goto(mso_login_url, wait_until='domcontentloaded', timeout=30000)
+                    if mso_id == 'Comcast_SSO':
+                        # Same Akamai cold-navigation wall as the legacy
+                        # family's Comcast_SSO path — see
+                        # run_mvpd_browser_login's comment on this exact
+                        # pattern for the full explanation.
+                        origin = f'{_urlsplit(client.redirect_url).scheme}://{_urlsplit(client.redirect_url).netloc}'
+                        page.goto(origin, wait_until='domcontentloaded', timeout=30000)
+                        _settle_deadline = time.monotonic() + 3.0
+                        while time.monotonic() < _settle_deadline:
+                            _relay_input_and_screenshot(
+                                page, r, stop_key=NBC_BROWSER_LOGIN_STOP_KEY, input_key=NBC_BROWSER_LOGIN_INPUT_KEY,
+                                shot_key=NBC_BROWSER_LOGIN_SHOT_KEY, hint_key=NBC_BROWSER_LOGIN_HINT_KEY,
+                            )
+                            page.wait_for_timeout(500)
+                        page.evaluate('(u) => { window.location.href = u; }', mso_login_url)
+                        _load_deadline = time.monotonic() + 30.0
+                        while time.monotonic() < _load_deadline:
+                            try:
+                                page.wait_for_load_state('domcontentloaded', timeout=1000)
+                                break
+                            except Exception:  # noqa: BLE001
+                                pass
+                            _relay_input_and_screenshot(
+                                page, r, stop_key=NBC_BROWSER_LOGIN_STOP_KEY, input_key=NBC_BROWSER_LOGIN_INPUT_KEY,
+                                shot_key=NBC_BROWSER_LOGIN_SHOT_KEY, hint_key=NBC_BROWSER_LOGIN_HINT_KEY,
+                            )
+                    else:
+                        page.goto(mso_login_url, wait_until='domcontentloaded', timeout=30000)
                 except Exception as exc:  # noqa: BLE001
                     if _is_browser_death(exc):
                         raise
@@ -3517,11 +3855,18 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     set_status('error', f'{mso_id} does not appear to be a participating provider for NBC TVE.')
                     return
                 if mvpd_username and mvpd_password:
-                    _try_autofill_credentials(
-                        page, mvpd_username, mvpd_password, r=r,
-                        stop_key=NBC_BROWSER_LOGIN_STOP_KEY, input_key=NBC_BROWSER_LOGIN_INPUT_KEY,
-                        shot_key=NBC_BROWSER_LOGIN_SHOT_KEY, hint_key=NBC_BROWSER_LOGIN_HINT_KEY,
-                    )
+                    if mso_id == 'Comcast_SSO':
+                        _autofill_xfinity_credentials(
+                            page, mvpd_username, mvpd_password, r=r,
+                            stop_key=NBC_BROWSER_LOGIN_STOP_KEY, input_key=NBC_BROWSER_LOGIN_INPUT_KEY,
+                            shot_key=NBC_BROWSER_LOGIN_SHOT_KEY, hint_key=NBC_BROWSER_LOGIN_HINT_KEY,
+                        )
+                    else:
+                        _try_autofill_credentials(
+                            page, mvpd_username, mvpd_password, r=r,
+                            stop_key=NBC_BROWSER_LOGIN_STOP_KEY, input_key=NBC_BROWSER_LOGIN_INPUT_KEY,
+                            shot_key=NBC_BROWSER_LOGIN_SHOT_KEY, hint_key=NBC_BROWSER_LOGIN_HINT_KEY,
+                        )
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
@@ -3594,6 +3939,8 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                         if not profile:
                             continue  # human hasn't finished the MSO login yet
                         _save_nbc_mvpd_auth(mso_id, client.access_token, device_fingerprint)
+                        if mso_id == 'Comcast_SSO':
+                            _harvest_and_save_xfinity_cookies(context)
                         set_status('success', f'Signed in — NBC TVE authorized via {mso_id}.')
                         logger.info('[nbc-mvpd-login] paired mso_id=%s', mso_id)
                         return
@@ -3738,6 +4085,44 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             logger.info('[fox-mvpd-login] paired mso_id=Cox (scripted, no browser)')
             return
 
+        if mso_id == 'Comcast_SSO':
+            # Same idea as the Cox branch above, but via a saved cookie jar
+            # instead of a scripted credential POST — see
+            # run_nbc_browser_login's identical block for the full
+            # reasoning. Falls through to the browser-assisted flow below
+            # only when there's no jar yet or the saved one has gone stale.
+            cookie_jar_account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            cookie_jar = (cookie_jar_account.config or {}).get('xfinity_cookie_jar') if cookie_jar_account else None
+            if cookie_jar and cookie_jar_account and cookie_jar_account.is_enabled and cookie_jar_account.has_credentials():
+                set_status('running', 'Trying saved sign-in (no browser needed)…')
+                import uuid as _uuid
+                from app.scrapers.fox_tve import _fox_sports_mvpd_token
+                fox_session = requests.Session()
+                try:
+                    token = _fox_sports_mvpd_token(
+                        fox_session, str(_uuid.uuid4()), mso_id,
+                        cookie_jar_account.username or '', cookie_jar_account.password or '',
+                        cookie_jar=cookie_jar,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.info('[fox-mvpd-login] saved xfinity cookie jar did not work, falling back to browser: %s', exc)
+                else:
+                    now = int(time.time())
+                    cfg = dict(cookie_jar_account.config or {})
+                    cfg['fox_sports_access_token'] = token
+                    cfg['fox_sports_access_token_exp'] = _jwt_exp(token) or (now + 3600)
+                    cfg['fox_sports_access_token_mso'] = mso_id
+                    cfg['fox_sports_access_token_captured_at'] = now
+                    cookie_jar_account.config = cfg
+                    cookie_jar_account.last_auth_status = 'ok'
+                    cookie_jar_account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (no browser needed).'
+                    cookie_jar_account.last_auth_at = datetime.now(timezone.utc)
+                    db.session.commit()
+                    set_status('success', 'Signed in — FOX TVE authorized (no browser needed).')
+                    logger.info('[fox-mvpd-login] paired mso_id=Comcast_SSO via saved cookie jar (no browser)')
+                    return
+            set_status('running', 'No usable saved sign-in — opening a browser…')
+
         set_status('starting', 'Registering with FOX…')
 
         # One deadline shared across browser-crash retries (RQ job_timeout is
@@ -3823,6 +4208,8 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                         account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (browser-assisted).'
                         account.last_auth_at = datetime.now(timezone.utc)
                         db.session.commit()
+                    if mso_id == 'Comcast_SSO':
+                        _harvest_and_save_xfinity_cookies(context)
                     set_status('success', f'Signed in — FOX Sports authorized via {mso_id}.')
                     logger.info('[fox-mvpd-login] paired mso_id=%s (completed after the page closed itself)', mso_id)
                     return True
@@ -3855,7 +4242,34 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 page.on('close', lambda p: logger.warning('[fox-mvpd-login] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[fox-mvpd-login] page JS error: %s', str(exc)[:500]))
                 try:
-                    page.goto(mso_login_url, wait_until='domcontentloaded', timeout=30000)
+                    if mso_id == 'Comcast_SSO':
+                        # Same Akamai cold-navigation wall as the legacy/NBC
+                        # Comcast_SSO paths — see run_mvpd_browser_login's
+                        # comment on this exact pattern for the full
+                        # explanation.
+                        origin = f'{_urlsplit(fox_redirect_url).scheme}://{_urlsplit(fox_redirect_url).netloc}'
+                        page.goto(origin, wait_until='domcontentloaded', timeout=30000)
+                        _settle_deadline = time.monotonic() + 3.0
+                        while time.monotonic() < _settle_deadline:
+                            _relay_input_and_screenshot(
+                                page, r, stop_key=FOX_BROWSER_LOGIN_STOP_KEY, input_key=FOX_BROWSER_LOGIN_INPUT_KEY,
+                                shot_key=FOX_BROWSER_LOGIN_SHOT_KEY, hint_key=FOX_BROWSER_LOGIN_HINT_KEY,
+                            )
+                            page.wait_for_timeout(500)
+                        page.evaluate('(u) => { window.location.href = u; }', mso_login_url)
+                        _load_deadline = time.monotonic() + 30.0
+                        while time.monotonic() < _load_deadline:
+                            try:
+                                page.wait_for_load_state('domcontentloaded', timeout=1000)
+                                break
+                            except Exception:  # noqa: BLE001
+                                pass
+                            _relay_input_and_screenshot(
+                                page, r, stop_key=FOX_BROWSER_LOGIN_STOP_KEY, input_key=FOX_BROWSER_LOGIN_INPUT_KEY,
+                                shot_key=FOX_BROWSER_LOGIN_SHOT_KEY, hint_key=FOX_BROWSER_LOGIN_HINT_KEY,
+                            )
+                    else:
+                        page.goto(mso_login_url, wait_until='domcontentloaded', timeout=30000)
                 except Exception as exc:  # noqa: BLE001
                     if _is_browser_death(exc):
                         raise
@@ -3865,11 +4279,18 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     set_status('error', f'{mso_id} does not appear to be a participating provider for FOX TVE.')
                     return
                 if mvpd_username and mvpd_password:
-                    _try_autofill_credentials(
-                        page, mvpd_username, mvpd_password, r=r,
-                        stop_key=FOX_BROWSER_LOGIN_STOP_KEY, input_key=FOX_BROWSER_LOGIN_INPUT_KEY,
-                        shot_key=FOX_BROWSER_LOGIN_SHOT_KEY, hint_key=FOX_BROWSER_LOGIN_HINT_KEY,
-                    )
+                    if mso_id == 'Comcast_SSO':
+                        _autofill_xfinity_credentials(
+                            page, mvpd_username, mvpd_password, r=r,
+                            stop_key=FOX_BROWSER_LOGIN_STOP_KEY, input_key=FOX_BROWSER_LOGIN_INPUT_KEY,
+                            shot_key=FOX_BROWSER_LOGIN_SHOT_KEY, hint_key=FOX_BROWSER_LOGIN_HINT_KEY,
+                        )
+                    else:
+                        _try_autofill_credentials(
+                            page, mvpd_username, mvpd_password, r=r,
+                            stop_key=FOX_BROWSER_LOGIN_STOP_KEY, input_key=FOX_BROWSER_LOGIN_INPUT_KEY,
+                            shot_key=FOX_BROWSER_LOGIN_SHOT_KEY, hint_key=FOX_BROWSER_LOGIN_HINT_KEY,
+                        )
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
@@ -3960,6 +4381,8 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (browser-assisted).'
                             account.last_auth_at = datetime.now(timezone.utc)
                             db.session.commit()
+                        if mso_id == 'Comcast_SSO':
+                            _harvest_and_save_xfinity_cookies(context)
                         set_status('success', f'Signed in — FOX Sports authorized via {mso_id}.')
                         logger.info('[fox-mvpd-login] paired mso_id=%s', mso_id)
                         return

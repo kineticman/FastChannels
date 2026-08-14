@@ -301,7 +301,7 @@ class AdobePassV2Client:
             raise TVEAuthError('Adobe Pass v2: client token exchange did not return an access_token.')
         self.access_token = access_token
 
-    def authorize(self, mso_id: str, username: str, password: str) -> dict:
+    def authorize(self, mso_id: str, username: str, password: str, cookie_jar: dict | None = None) -> dict:
         self._register_client()
 
         r = self._post(
@@ -340,10 +340,34 @@ class AdobePassV2Client:
                 raise TVENotAuthorizedError(str(exc)) from exc
             except requests.RequestException as exc:
                 raise TVEAuthError(str(exc)) from exc
+        elif mso_id == 'Comcast_SSO':
+            # Unlike Cox (which redirects straight to login.cox.com in one
+            # hop), Xfinity's chain goes through oauth.xfinity.com first,
+            # THEN login.xfinity.com — confirmed live 2026-08-14, mso_login_url
+            # here is the oauth.xfinity.com hop, not login.xfinity.com yet.
+            # xfinity_cookie_jar_login() follows the full redirect chain
+            # itself and validates the final landing page, so just check the
+            # broader domain here rather than the specific login subdomain.
+            if 'xfinity.com' not in mso_login_url:
+                raise TVEAuthError(f'Adobe Pass v2: unexpected authenticate redirect host {urlsplit(mso_login_url).netloc!r}.')
+            if not cookie_jar:
+                raise TVEAuthError(
+                    'Adobe Pass v2: Comcast_SSO needs a saved Xfinity cookie jar — '
+                    'needs a browser-assisted sign-in to harvest one first.'
+                )
+            # Uses its own dedicated curl_cffi session internally, entirely
+            # separate from self.session — Adobe binds the completed login
+            # server-side to THIS session's access_token/device fingerprint
+            # (embedded in mso_login_url via the /sessions call above)
+            # rather than to any particular HTTP session, same as the
+            # existing browser-assisted pairing's cross-session polling
+            # already relies on. See xfinity_cookie_jar_login()'s docstring.
+            from ..tve.adobe_pass import xfinity_cookie_jar_login
+            xfinity_cookie_jar_login(mso_login_url, username, password, cookie_jar)
         else:
             raise TVEAuthError(
                 f'Adobe Pass v2: browser-assisted sign-in for NBC TVE is not built yet for MVPD {mso_id} '
-                f'(only native Cox login is wired up here).'
+                f'(only native Cox login and Comcast_SSO cookie-jar login are wired up here).'
             )
 
         r = self._get(f'{ADOBE_BASE}/api/v2/{self.requestor_id}/profiles/{mso_id}', headers=self._bearer_headers())
@@ -711,7 +735,7 @@ class NbcTveScraper(BaseScraper):
             self._ensure_device_fingerprint(),
         )
         try:
-            client.authorize(mso_id, account.username or '', account.password or '')
+            client.authorize(mso_id, account.username or '', account.password or '', cfg.get('xfinity_cookie_jar'))
             resource_ids = sorted({e.resource_id for e in self._fetch_guide().values()} | {resource_id})
             decisions = client.preauthorize(mso_id, resource_ids)
             account.last_auth_status = 'ok'

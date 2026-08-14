@@ -312,6 +312,11 @@ async function saveTveMvpdSettings() {
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
     document.getElementById('tve-password').value = '';
     document.getElementById('tve-password').placeholder = data.password_configured ? 'Password saved - leave blank to keep' : 'TV provider password';
+    if (window.FC_SETTINGS_BOOTSTRAP) {
+      window.FC_SETTINGS_BOOTSTRAP.tveSelectedMsoId = data.selected_mso_id;
+      window.FC_SETTINGS_BOOTSTRAP.tveXfinityCookieJarCapturedAt = data.xfinity_cookie_jar_captured_at;
+    }
+    _renderTveXfinityCacheStatus();
     status.className = 'save-status ok';
     status.textContent = '✓ Saved';
     setTimeout(() => { status.textContent = ''; }, 2500);
@@ -395,6 +400,10 @@ async function resetTveState() {
     document.getElementById('tve-password').placeholder = 'TV provider password';
     document.getElementById('tve-enabled').checked = false;
     _updateTveDisabledWarning();
+    if (window.FC_SETTINGS_BOOTSTRAP) {
+      window.FC_SETTINGS_BOOTSTRAP.tveXfinityCookieJarCapturedAt = null;
+    }
+    _renderTveXfinityCacheStatus();
     loadTveNetworkStatus();
   } catch (e) {
     status.className = 'save-status error';
@@ -471,6 +480,34 @@ function _tveRelativeTime(unixSeconds) {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+// Xfinity/Comcast_SSO's browser-assisted sign-in harvests a cookie jar
+// (Akamai Bot Manager + the Xfinity SESSION cookie) that every network's
+// sign-in can then reuse over plain HTTP with no browser at all — see
+// app/tve/adobe_pass.py's authorize_mvpd() and app/worker.py's
+// _harvest_and_save_xfinity_cookies. Those cookies expire on their own
+// timeline (observed ~2-4h for the short-lived ones), silently, with no
+// user-visible signal otherwise — this just surfaces the last-refreshed
+// age so "why did signing in just open a browser again" is answerable at
+// a glance instead of a mystery. Only shown for Comcast_SSO; meaningless
+// for Cox (which never needs a browser at all) or other MSOs (which don't
+// have this mechanism yet).
+function _renderTveXfinityCacheStatus() {
+  const el = document.getElementById('tve-xfinity-cache-status');
+  if (!el) return;
+  const bootstrap = window.FC_SETTINGS_BOOTSTRAP || {};
+  if (bootstrap.tveSelectedMsoId !== 'Comcast_SSO') {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  const capturedAt = bootstrap.tveXfinityCookieJarCapturedAt;
+  if (!capturedAt) {
+    el.textContent = 'Xfinity sign-in cache: none saved yet — the next sign-in will open a browser.';
+    return;
+  }
+  el.textContent = `Xfinity sign-in cache: last refreshed ${_tveRelativeTime(capturedAt)} — networks reuse this over plain HTTP until it goes stale, then automatically fall back to opening a browser.`;
 }
 
 function _escapeHtml(value) {
@@ -1849,6 +1886,7 @@ initSettingsSectionNav();
 loadSystemStats();
 updateTveProviderFields();
 loadTveNetworkStatus();
+_renderTveXfinityCacheStatus();
 
 // ── Community Gracenote map remote status ───────────────────────────────────
 async function loadRemoteGracenoteStatus() {

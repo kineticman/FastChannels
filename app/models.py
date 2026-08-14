@@ -166,6 +166,7 @@ class TVEAccount(db.Model):
             'last_auth_message': self.last_auth_message,
             'last_auth_at': self.last_auth_at.isoformat() if self.last_auth_at else None,
             'configured': bool(self.is_enabled and self.has_credentials()),
+            'xfinity_cookie_jar_captured_at': cfg.get('xfinity_cookie_jar_captured_at'),
         }
 
     def __repr__(self):

@@ -116,6 +116,8 @@ window.FC_SETTINGS_BOOTSTRAP = {
   },
   tveProviders: {{ tve_provider_choices | tojson }},
   tvePasswordPlaceholder: {{ ('Password saved - leave blank to keep' if tve_account.password_configured else 'TV provider password') | tojson }},
+  tveSelectedMsoId: {{ tve_account.selected_mso_id | tojson }},
+  tveXfinityCookieJarCapturedAt: {{ tve_account.xfinity_cookie_jar_captured_at | tojson }},
   timezoneChoices: {{ timezone_choices | tojson }},
   channelsDvrUrlFromEnv: {{ 'true' if channels_dvr_url_from_env else 'false' }},
 };

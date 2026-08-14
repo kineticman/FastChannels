@@ -265,6 +265,124 @@ def invalidate_aenetworks_software_statement(brand: str) -> None:
     _STATEMENT_CACHE.pop(brand.lower(), None)
 
 
+def xfinity_cookie_jar_login(auth_url: str, username: str, password: str, cookie_jar: dict) -> None:
+    """Login to Comcast_SSO (login.xfinity.com) using a transplanted cookie
+    jar harvested from a real authenticated browser session, instead of a
+    browser. MSO-protocol-agnostic — takes any MSO-login URL that ultimately
+    lands on login.xfinity.com, regardless of which Adobe Pass "family"
+    generated it (the legacy XML protocol's authenticate/saml URL, NBC's own
+    v2 REST /sessions redirect, FOX's own REST flow, etc.) — the actual
+    xfinity.com login form/wall is the same one every family redirects to.
+
+    Confirmed live 2026-08-14: login.xfinity.com is protected by Akamai Bot
+    Manager on the credential-submission POST specifically (the page-load
+    GET is unprotected for any client — a bare curl_cffi request sails
+    through). A bare HTTP client's own freshly-issued _abck/ak_bmsc/bm_sz
+    cookies are NOT sufficient on their own — confirmed live, a fresh
+    curl_cffi session carrying its own server-issued cookies into the same
+    session's next POST still gets 403. Akamai only trusts a cookie's value
+    once it's been "matured" through real JS sensor execution in a real
+    browser. Transplanting a jar already matured by a real session
+    (harvested in app/worker.py's run_mvpd_browser_login/run_nbc_browser_login/
+    run_fox_browser_login after a successful Camoufox pairing) gets straight
+    through.
+
+    Often the jar's own Xfinity SESSION cookie is ALSO still a valid
+    already-authenticated identity, in which case Xfinity skips straight to
+    a "You're automatically signed in" interstitial with an embedded
+    continue URL and no password is ever needed — that path is tried at
+    every step (it can appear on the very first GET, before any login form
+    ever renders, or only after a username POST — confirmed live both ways
+    with the SAME cookie jar against different requestor_ids/client_ids). If
+    a real password field appears instead (SESSION expired but the Akamai
+    cookies are still matured), falls through to a normal identifier-first
+    username+password submission.
+
+    Uses its own dedicated curl_cffi session (impersonation matters here —
+    plain `requests` doesn't produce a convincing TLS fingerprint) — does
+    NOT touch or require anything from whatever session/client called this,
+    since Adobe binds the completed login server-side to auth_url's own
+    embedded state (reg_code, or NBC/FOX's own session identifier) rather
+    than to any particular local HTTP session — the caller can safely poll/
+    continue with a completely different session afterward, same as the
+    existing browser-assisted pairing's cross-session polling already
+    relies on.
+    """
+    from curl_cffi import requests as curl_requests
+
+    def _follow_interstitial_if_present(session, html_text: str) -> bool:
+        m = re.search(r'continue:\s*"([^"]+)"', html_text)
+        if not m:
+            return False
+        continue_url = m.group(1).encode().decode('unicode_escape')
+        try:
+            r3 = session.get(continue_url, timeout=30, allow_redirects=True)
+        except Exception as exc:  # noqa: BLE001
+            raise TVEAuthError(str(exc)) from exc
+        if r3.status_code >= 400:
+            raise TVEAuthError(f'Xfinity cookie-jar auto-signin continue failed: HTTP {r3.status_code}.')
+        return True
+
+    xfinity_session = curl_requests.Session(impersonate='chrome')
+    for name, meta in cookie_jar.items():
+        xfinity_session.cookies.set(
+            name, meta.get('value', ''),
+            domain=meta.get('domain') or 'login.xfinity.com',
+            path=meta.get('path') or '/',
+        )
+
+    try:
+        r = xfinity_session.get(auth_url, timeout=30, allow_redirects=True)
+    except Exception as exc:  # noqa: BLE001
+        raise TVEAuthError(str(exc)) from exc
+    if r.status_code >= 400 or 'login.xfinity.com' not in str(r.url):
+        raise TVEAuthError(f'Xfinity cookie-jar sign-in did not reach the login page: HTTP {r.status_code}.')
+
+    if _follow_interstitial_if_present(xfinity_session, r.text):
+        return
+
+    login_url = str(r.url)
+    action, fields = _hidden_form(r.text, login_url)
+    fields['user'] = username
+    fields['flowStep'] = 'username'
+    try:
+        r2 = xfinity_session.post(
+            action, data=fields,
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=30, allow_redirects=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise TVEAuthError(str(exc)) from exc
+    if r2.status_code >= 400:
+        raise TVEAuthError(
+            f'Xfinity cookie-jar sign-in blocked at username step: HTTP {r2.status_code} '
+            '(cookie jar likely stale — needs a fresh browser pairing).'
+        )
+
+    if _follow_interstitial_if_present(xfinity_session, r2.text):
+        return
+
+    if 'passwd' not in r2.text.lower() and 'type="password"' not in r2.text.lower():
+        raise TVEAuthError(
+            'Xfinity cookie-jar sign-in: neither an auto-signin interstitial nor '
+            'a password field appeared.'
+        )
+
+    action2, fields2 = _hidden_form(r2.text, str(r2.url))
+    fields2['passwd'] = password
+    fields2['flowStep'] = 'password'
+    try:
+        r3 = xfinity_session.post(
+            action2, data=fields2,
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=30, allow_redirects=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise TVEAuthError(str(exc)) from exc
+    if r3.status_code >= 400:
+        raise TVEAuthError(f'Xfinity cookie-jar sign-in blocked at password step: HTTP {r3.status_code}.')
+
+
 class AdobePassCoxClient:
     def __init__(
         self, *, requestor_id: str, resource: str, software_statement: str,
@@ -554,6 +672,26 @@ class AdobePassCoxClient:
         self.fetch_session_token()
         return self.authorize()
 
+    def authenticate_with_xfinity_cookies(self, username: str, password: str, cookie_jar: dict) -> None:
+        """Login via Comcast_SSO using a transplanted cookie jar harvested
+        from a real authenticated browser session, instead of a browser.
+        Thin wrapper around the MSO-protocol-agnostic xfinity_cookie_jar_login()
+        — see its docstring for the actual mechanics/why. This client's own
+        authenticate_redirect_url() builds the legacy XML protocol's specific
+        authenticate/saml URL; NBC's/FOX's own v2 REST clients generate their
+        own equivalent MSO-login URL and call xfinity_cookie_jar_login()
+        directly instead of going through this class at all.
+        """
+        xfinity_cookie_jar_login(self.authenticate_redirect_url('Comcast_SSO'), username, password, cookie_jar)
+
+    def authorize_with_xfinity_cookies(self, username: str, password: str, cookie_jar: dict) -> str:
+        self.setup_client()
+        self.register_device()
+        self.create_regcode()
+        self.authenticate_with_xfinity_cookies(username, password, cookie_jar)
+        self.fetch_session_token()
+        return self.authorize()
+
 
 def _ensure_cox_device_fingerprint(account) -> str:
     """Get-or-create a stable device fingerprint for this TVEAccount, reused
@@ -582,6 +720,26 @@ def _save_mvpd_authn_token(account, requestor_id: str, authn_token: str) -> None
     mvpd_authn = dict(cfg.get('mvpd_authn') or {})
     mvpd_authn[requestor_id] = {'authn_token': authn_token, 'captured_at': int(_wall_time())}
     cfg['mvpd_authn'] = mvpd_authn
+    account.config = cfg
+    db.session.commit()
+
+
+def save_xfinity_cookie_jar(account, cookie_jar: dict) -> None:
+    """Persists a cookie jar harvested from a real, already-authenticated
+    Xfinity browser session (see app/worker.py's run_mvpd_browser_login,
+    which harvests this via Playwright's context.cookies() right after a
+    successful Comcast_SSO pairing). Account-wide, not per-requestor_id —
+    the Akamai Bot Manager cookies and the Xfinity SESSION cookie are both
+    scoped to the account/browser session, not to any one network's
+    client_id.
+    """
+    if not cookie_jar:
+        return
+    from time import time as _wall_time
+    from ..extensions import db
+    cfg = dict(account.config or {})
+    cfg['xfinity_cookie_jar'] = cookie_jar
+    cfg['xfinity_cookie_jar_captured_at'] = int(_wall_time())
     account.config = cfg
     db.session.commit()
 
@@ -694,6 +852,38 @@ def authorize_mvpd(
         token = client.authorize_with_cox(username, password)
         _save_mvpd_authn_token(account, requestor_id, client.ctx.authn_token)
         return token, client.session
+
+    if selected_mso_id == 'Comcast_SSO':
+        # login.xfinity.com's credential POST is blocked by Akamai Bot
+        # Manager for any bare HTTP client, confirmed live 2026-08-14 (see
+        # dev/comcast/XFINITY_ADOBE_PASS_DIRECT_HTTP_RESEARCH.md) — yt-dlp's
+        # generic path below would just 403 the same way, so don't bother
+        # trying it for this MSO. A cookie jar harvested from a real browser
+        # session (run_mvpd_browser_login) gets straight through instead.
+        cookie_jar = cfg.get('xfinity_cookie_jar')
+        if cookie_jar:
+            client = AdobePassCoxClient(
+                requestor_id=requestor_id,
+                resource=resource,
+                software_statement=software_statement,
+                redirect_url=redirect_url,
+                device_fingerprint=device_fingerprint,
+            )
+            try:
+                token = client.authorize_with_xfinity_cookies(username, password, cookie_jar)
+                _save_mvpd_authn_token(account, requestor_id, client.ctx.authn_token)
+                return token, client.session
+            except TVENotAuthorizedError:
+                raise  # definitive answer from Adobe — retrying won't change it
+            except TVEAuthError as exc:
+                logger.info(
+                    '[adobe-pass] Xfinity cookie-jar sign-in for %s failed, jar likely stale: %s',
+                    requestor_id, exc,
+                )
+        raise TVEAuthError(
+            f'{requestor_id}: no usable Xfinity cookie jar (missing or stale) — '
+            'needs a fresh browser-assisted sign-in to re-harvest one.'
+        )
 
     yt_dlp_mso_id = (cfg.get('yt_dlp_mso_id') or selected_mso_id).strip()
 

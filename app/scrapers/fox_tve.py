@@ -740,7 +740,10 @@ def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str,
     r.raise_for_status()
 
 
-def _fox_sports_mvpd_token(session: requests.Session, device_id: str, mso_id: str, username: str, password: str) -> str:
+def _fox_sports_mvpd_token(
+    session: requests.Session, device_id: str, mso_id: str, username: str, password: str,
+    cookie_jar: dict | None = None,
+) -> str:
     anon = session.post(
         'https://api3.fox.com/v2.0/login',
         headers=_fox_json_headers(),
@@ -784,10 +787,23 @@ def _fox_sports_mvpd_token(session: requests.Session, device_id: str, mso_id: st
         if 'login.cox.com' not in mso_login_url:
             raise ValueError(f'Unexpected FOX Adobe redirect host: {urlsplit(mso_login_url).netloc}')
         _cox_saml_login(session, mso_login_url, username, password)
+    elif mso_id == 'Comcast_SSO':
+        if 'xfinity.com' not in mso_login_url:
+            raise ValueError(f'Unexpected FOX Adobe redirect host: {urlsplit(mso_login_url).netloc}')
+        if not cookie_jar:
+            raise ValueError(
+                'FOX Adobe: Comcast_SSO needs a saved Xfinity cookie jar — '
+                'needs a browser-assisted sign-in to harvest one first.'
+            )
+        from ..tve.adobe_pass import xfinity_cookie_jar_login, TVEAuthError as _TVEAuthError
+        try:
+            xfinity_cookie_jar_login(mso_login_url, username, password, cookie_jar)
+        except _TVEAuthError as exc:
+            raise ValueError(str(exc)) from exc
     else:
         raise ValueError(
             f'Browser-assisted sign-in for FOX TVE is not built yet for MVPD {mso_id} '
-            f'(only native Cox login is wired up here).'
+            f'(only native Cox login and Comcast_SSO cookie-jar login are wired up here).'
         )
 
     check = session.get(
@@ -822,7 +838,10 @@ def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
         if cached_token and cached_exp > now + 300 and cached_mso == mso_id:
             return cached_token
         try:
-            token = _fox_sports_mvpd_token(session, device_id, mso_id, account.username or '', account.password or '')
+            token = _fox_sports_mvpd_token(
+                session, device_id, mso_id, account.username or '', account.password or '',
+                cookie_jar=cfg.get('xfinity_cookie_jar'),
+            )
             exp = _jwt_exp(token) or (now + 3600)
             cfg['fox_sports_access_token'] = token
             cfg['fox_sports_access_token_exp'] = exp
