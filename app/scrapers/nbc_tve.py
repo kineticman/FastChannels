@@ -753,7 +753,7 @@ class NbcTveScraper(BaseScraper):
             'decisions': decisions, 'checked': sorted(resource_ids), 'cached_at': time.time(),
         })
         if not decisions.get(resource_id, True):
-            raise TVENotAuthorizedError(f'NBC TVE: Cox account is not entitled to {resource_id}.')
+            raise TVENotAuthorizedError(f'NBC TVE: {mso_id} account is not entitled to {resource_id}.')
 
     # ── playback resolve ──────────────────────────────────────────────────────
 
