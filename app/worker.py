@@ -5511,6 +5511,40 @@ def purge_orphaned_sources():
             )
 
 
+def purge_disabled_source_leftovers():
+    """Sweep up channels/programs left behind by a disable whose purge job never
+    ran — e.g. the container restarted between run_source_disable committing
+    is_enabled=False and its queued run_source_channel_purge executing. The
+    queue lives in the embedded Redis (no persistence, see docker-compose), so
+    that job is gone for good once that happens; nothing else re-triggers it.
+
+    'custom' is exempt, same as run_source_disable — its channels are meant to
+    survive a disable.
+    """
+    with flask_app.app_context():
+        leftover_sources = (
+            Source.query
+            .filter(Source.is_enabled == False, Source.name != 'custom')
+            .join(Channel, Channel.source_id == Source.id)
+            .distinct()
+            .all()
+        )
+        if not leftover_sources:
+            return
+        any_purged = False
+        for source in leftover_sources:
+            deleted_channels, deleted_programs = _purge_source_channels_and_programs(source)
+            db.session.commit()
+            any_purged = True
+            logger.warning(
+                '[disabled-source-sweep] source=%s was disabled but still had channels '
+                '(purge job likely lost to a restart) — deleted %d channels and %d programs',
+                source.name, deleted_channels, deleted_programs,
+            )
+        if any_purged:
+            _invalidate_and_refresh_xml()
+
+
 def _rq_prune():
     """RQ job target: prune expired EPG entries. Runs inside the RQ worker process."""
     with flask_app.app_context():
@@ -5602,6 +5636,10 @@ def _rq_integrity_cleanup(include_orphan_purge: bool = True):
             purge_orphaned_sources()
         except Exception as exc:
             logger.warning('[integrity] orphaned-source purge check failed: %s', exc)
+        try:
+            purge_disabled_source_leftovers()
+        except Exception as exc:
+            logger.warning('[integrity] disabled-source leftover sweep failed: %s', exc)
 
 
 # Number of nightly DB backups to retain in /data/backups.

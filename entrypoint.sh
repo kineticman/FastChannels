@@ -47,6 +47,12 @@ echo "✅ Sources seeded"
 python -c "from app.worker import purge_orphaned_sources; purge_orphaned_sources()" || true
 echo "✅ Orphaned sources checked"
 
+# Sweep up channels/programs left behind by a disable whose purge job never
+# ran (e.g. the container restarted before the queued job executed — see
+# purge_disabled_source_leftovers).
+python -c "from app.worker import purge_disabled_source_leftovers; purge_disabled_source_leftovers()" || true
+echo "✅ Disabled-source leftovers checked"
+
 wait_for_network() {
     echo "⏳ Waiting for outbound network and DNS..."
     for i in $(seq 1 30); do
