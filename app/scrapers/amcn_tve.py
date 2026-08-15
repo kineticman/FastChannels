@@ -230,17 +230,21 @@ def _amcn_headers(
     return headers
 
 
-def _adobe_headers(client: AdobePassCoxClient, channel: AMCNChannel, device_id: str) -> dict[str, str]:
+def _adobe_bearer_headers(bearer: str, channel: AMCNChannel, device_id: str) -> dict[str, str]:
     return {
         'User-Agent': UA,
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Authorization': f'Bearer {client.ctx.access_token}',
+        'Authorization': f'Bearer {bearer}',
         'Origin': channel.page_origin,
         'Referer': channel.page_origin + '/',
         'ap-device-identifier': 'fingerprint ' + _b64(device_id),
         'x-device-info': X_DEVICE_INFO,
     }
+
+
+def _adobe_headers(client: AdobePassCoxClient, channel: AMCNChannel, device_id: str) -> dict[str, str]:
+    return _adobe_bearer_headers(client.ctx.access_token, channel, device_id)
 
 
 def _clean(text: str | None) -> str | None:
@@ -655,11 +659,13 @@ class AMCNetworksTVEScraper(BaseScraper):
         return client, code, mso_login_url, auth_headers
 
     def _adobe_decision_finish(
-        self, client: AdobePassCoxClient, channel: AMCNChannel, code: str, mso_id: str, auth_headers: dict[str, str],
-    ) -> tuple[str, str]:
-        """The poll-by-code + entitlement-decision tail, called once the
-        synchronous Cox login has completed."""
-        profile = client.session.get(
+        self, session: requests.Session, channel: AMCNChannel, code: str, mso_id: str, auth_headers: dict[str, str],
+    ) -> tuple[str, str, int | None]:
+        """The poll-by-code + entitlement-decision tail. Cheap (two small JSON
+        calls, no MSO round trip) — safe to call repeatedly against the same
+        `code`/bearer once the MSO login itself has completed (see
+        _adobe_decision_token's cheap-redecision path)."""
+        profile = session.get(
             f'{ADOBE_BASE}/api/v2/{channel.requestor_id}/profiles/code/{code}',
             headers={**auth_headers, 'Content-Type': 'application/json'},
             timeout=30,
@@ -671,7 +677,7 @@ class AMCNetworksTVEScraper(BaseScraper):
         if not adobe_id:
             raise TVEAuthError(f'{channel.name}: Adobe profile did not include a {mso_id} userID.')
 
-        decision = client.session.post(
+        decision = session.post(
             f'{ADOBE_BASE}/api/v2/{channel.requestor_id}/decisions/authorize/{mso_id}',
             json={'resources': [channel.requestor_id]},
             headers={**auth_headers, 'Content-Type': 'application/json'},
@@ -680,10 +686,11 @@ class AMCNetworksTVEScraper(BaseScraper):
         decision.raise_for_status()
         decisions = decision.json().get('decisions') or []
         authorized = next((item for item in decisions if item.get('authorized') is True), None)
-        serialized = ((authorized or {}).get('token') or {}).get('serializedToken')
+        token_obj = (authorized or {}).get('token') or {}
+        serialized = token_obj.get('serializedToken')
         if not serialized:
             raise TVENotAuthorizedError(f'{channel.name}: Adobe did not authorize {channel.requestor_id} for {mso_id}.')
-        return serialized, adobe_id
+        return serialized, adobe_id, token_obj.get('notAfter')
 
     def _adobe_auth_cache_key(self, channel: AMCNChannel) -> str:
         return f'adobe_auth:{channel.requestor_id}'
@@ -698,17 +705,58 @@ class AMCNetworksTVEScraper(BaseScraper):
             return None
         return cached['adobe_token'], cached['adobe_id']
 
-    def _save_adobe_auth_cache(self, channel: AMCNChannel, mso_id: str, adobe_token: str, adobe_id: str) -> None:
-        # serializedToken is a JWT in practice (Adobe issues these as
-        # long-lived MVPD auth tokens, same as the legacy protocol's
-        # authn_token) — decode its real exp when present instead of
-        # guessing a TTL. Falls back to a conservative 24h if it isn't a
-        # JWT, relying on resolve()'s retry-on-401 to recover either way.
+    def _save_adobe_auth_cache(
+        self, channel: AMCNChannel, mso_id: str, adobe_token: str, adobe_id: str, notafter_ms: int | None = None,
+    ) -> None:
+        # The "adobeShortMediaToken" is genuinely short-lived — Adobe's own
+        # decision response embeds a real notAfter (confirmed live 2026-08-14:
+        # exactly 300s after issuance, "<ttl>300000</ttl>" inside the token's
+        # own serialized XML). It is NOT a JWT, so _jwt_exp() always returned
+        # None for it and this used to silently fall back to a guessed 24h
+        # TTL — meaning every resolve() more than ~5 minutes after the last
+        # would pass this bogus-still-valid cached token to AMCN's playback
+        # API, get a fast HTTP 400 "TOKEN_EXPIRED", and only THEN fall
+        # through to a full MVPD re-login inside the request (~13-19s for
+        # Xfinity's cookie-jar login / Cox SAML) — long enough that real
+        # players gave up before the 302 ever arrived, even though resolve()
+        # itself eventually succeeded. Pass the decision response's own
+        # notAfter (ms) so the cache reflects the token's real ~5min life;
+        # _adobe_decision_token's cheap-redecision path (below) is what
+        # actually keeps resolve() fast despite that short life.
         now = int(time.time())
-        expires_at = _jwt_exp(adobe_token) or (now + 86400)
+        if notafter_ms:
+            expires_at = int(notafter_ms) // 1000
+        else:
+            expires_at = _jwt_exp(adobe_token) or (now + 86400)
         self._update_cache(self._adobe_auth_cache_key(channel), {
             'mso_id': mso_id, 'adobe_token': adobe_token, 'adobe_id': adobe_id,
             'cached_at': now, 'expires_at': expires_at,
+        })
+
+    def _adobe_session_cache_key(self, channel: AMCNChannel) -> str:
+        return f'adobe_session:{channel.requestor_id}'
+
+    def _cached_adobe_session(self, channel: AMCNChannel, mso_id: str) -> dict | None:
+        cached = self.cache.get(self._adobe_session_cache_key(channel))
+        if not isinstance(cached, dict):
+            return None
+        if cached.get('mso_id') != mso_id or not cached.get('code') or not cached.get('client_bearer'):
+            return None
+        if int(cached.get('expires_at') or 0) <= int(time.time()) + TOKEN_SKEW_SECONDS:
+            return None
+        return cached
+
+    def _save_adobe_session_cache(self, channel: AMCNChannel, mso_id: str, code: str, client_bearer: str) -> None:
+        # client_bearer (the Adobe "api:client:v2" client token minted by
+        # setup_client(), distinct from the short-lived playback token above)
+        # is a real JWT good for ~6h (confirmed live 2026-08-14). Reusing it
+        # with the same `code` re-runs just the two-call profile+decision
+        # tail (~0.1-1.2s, confirmed live) instead of repeating the MSO login,
+        # so resolve() stays fast for the life of this cached session instead
+        # of paying a full re-login on every play request more than ~5min apart.
+        self._update_cache(self._adobe_session_cache_key(channel), {
+            'mso_id': mso_id, 'code': code, 'client_bearer': client_bearer,
+            'expires_at': _jwt_exp(client_bearer) or (int(time.time()) + 3600),
         })
 
     def _adobe_decision_token(
@@ -736,6 +784,27 @@ class AMCNetworksTVEScraper(BaseScraper):
             cached = self._cached_adobe_auth(channel, mso_id)
             if cached:
                 return cached
+
+            # Cheap path: reuse an already-logged-in Adobe client session
+            # (code + client bearer, ~6h life) to mint a fresh Short Media
+            # Token via just the two-call profile+decision tail — confirmed
+            # live 2026-08-14 this works with a brand-new plain session and
+            # no MSO cookies at all, in ~0.1-1.2s. Falls through to the full
+            # MSO login below only if the cached session itself has actually
+            # gone stale/been revoked.
+            session_cached = self._cached_adobe_session(channel, mso_id)
+            if session_cached:
+                try:
+                    redo_session = requests.Session()
+                    self._configure_session(redo_session)
+                    headers = _adobe_bearer_headers(session_cached['client_bearer'], channel, device_id)
+                    adobe_token, adobe_id, notafter_ms = self._adobe_decision_finish(
+                        redo_session, channel, session_cached['code'], mso_id, headers,
+                    )
+                    self._save_adobe_auth_cache(channel, mso_id, adobe_token, adobe_id, notafter_ms)
+                    return adobe_token, adobe_id
+                except Exception:
+                    self._update_cache(self._adobe_session_cache_key(channel), {})
 
         statement = self._amcn_software_statement(channel, account)
         client, code, mso_login_url, auth_headers = self._adobe_session_redirect(channel, statement, device_id, mso_id)
@@ -767,8 +836,9 @@ class AMCNetworksTVEScraper(BaseScraper):
                 f'{mso_id} (only native Cox login and Comcast_SSO cookie-jar login are wired up here).'
             )
 
-        adobe_token, adobe_id = self._adobe_decision_finish(client, channel, code, mso_id, auth_headers)
-        self._save_adobe_auth_cache(channel, mso_id, adobe_token, adobe_id)
+        adobe_token, adobe_id, notafter_ms = self._adobe_decision_finish(client.session, channel, code, mso_id, auth_headers)
+        self._save_adobe_session_cache(channel, mso_id, code, client.ctx.access_token)
+        self._save_adobe_auth_cache(channel, mso_id, adobe_token, adobe_id, notafter_ms)
         return adobe_token, adobe_id
 
     def _mvpd_access_token(
