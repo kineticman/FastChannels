@@ -23,13 +23,20 @@ _DROP_WORDS = {
     "live",
 }
 _TRAILING_CALL_SIGN_RE = re.compile(r"\(([A-Za-z0-9-]{2,10})\)\s*$")
+# Feed-variant suffixes TVE scrapers append in the same trailing-parens spot
+# as a real call sign (NBC/Warner TVE east/west feeds, generic quality tags)
+# — must not be treated as a call sign or they poison the exact-match scoring.
+_NON_CALL_SIGN_SUFFIXES = {"EAST", "WEST", "HD", "SD", "UHD", "4K"}
 
 
 def _extract_call_sign(name: str | None) -> str | None:
     """Pull a trailing '(CALLSIGN)' out of a channel name, e.g. TVE scrapers like
     Cox format channels as 'A&E (AENHD)'. Returns the call sign uppercased."""
     match = _TRAILING_CALL_SIGN_RE.search((name or "").strip())
-    return match.group(1).upper() if match else None
+    if not match:
+        return None
+    call_sign = match.group(1).upper()
+    return None if call_sign in _NON_CALL_SIGN_SUFFIXES else call_sign
 
 
 def _normalize_name(value: str | None, *, strip_generic_words: bool = False) -> str:
@@ -99,10 +106,19 @@ def fetch_tms_station_candidates(dvr_url: str, query: str, *, timeout: float = 8
     if not term:
         return []
 
+    # Try every search variant and merge results (deduped by stationId) rather
+    # than stopping at the first one that doesn't raise. Confirmed live: a raw
+    # name containing '&' (e.g. Cox's "A&E") trips a Gracenote-side error that
+    # comes back as HTTP 200 with an {"error": ...} body — which silently
+    # decodes to an empty list, not an exception — so without this, the first
+    # (worst) variant "succeeding" with zero results would end the search
+    # before the cleaned-up variants that actually return matches ever run.
+    combined: dict[str, dict[str, Any]] = {}
     last_error: Exception | None = None
+    got_any_response = False
     for variant in _search_variants(term):
         try:
-            return _fetch_station_candidates_once(base, variant, timeout=timeout)
+            results = _fetch_station_candidates_once(base, variant, timeout=timeout)
         except requests.HTTPError as exc:
             last_error = exc
             status = exc.response.status_code if exc.response is not None else "error"
@@ -115,6 +131,14 @@ def fetch_tms_station_candidates(dvr_url: str, query: str, *, timeout: float = 8
         except (ValueError, json.JSONDecodeError) as exc:
             last_error = exc
             continue
+        got_any_response = True
+        for candidate in results:
+            station_id = candidate.get("stationId")
+            key = str(station_id) if station_id else f"{candidate.get('callSign')}|{candidate.get('name')}"
+            combined.setdefault(key, candidate)
+
+    if got_any_response or combined:
+        return list(combined.values())
 
     if isinstance(last_error, requests.HTTPError):
         status = last_error.response.status_code if last_error.response is not None else "error"
@@ -165,6 +189,21 @@ def _score_candidate(channel: SuggestionChannel, candidate: dict[str, Any]) -> t
         score += 8
         reasons.append("streaming type")
 
+    # Prefer HD over SD when candidates are otherwise a name-match tie —
+    # confirmed live that Gracenote/TMS commonly lists an SDTV entry ahead of
+    # the matching HDTV one for the same network (e.g. "TNT" SD vs "TNTHDB"
+    # HD both matching a "TNT (East)" query equally on name), and the stable
+    # sort was letting the SD entry win by API-order alone.
+    video_type = str((candidate.get("videoQuality") or {}).get("videoType") or "").strip().upper()
+    if video_type == "HDTV":
+        score += 6
+        reasons.append("HD")
+    elif video_type == "UHDTV":
+        score += 4
+        reasons.append("4K")
+    elif video_type == "SDTV":
+        score -= 2
+
     channel_lang = (channel.language or "").strip().casefold()
     if channel_lang and cand_langs:
         for lang in cand_langs:
@@ -181,9 +220,21 @@ def _score_candidate(channel: SuggestionChannel, candidate: dict[str, Any]) -> t
     if cand_call_sign:
         score += 1
         query_call_sign = _extract_call_sign(query_name)
-        if query_call_sign and query_call_sign == cand_call_sign:
-            score += 150
-            reasons.append(f"call sign match ({cand_call_sign})")
+        if query_call_sign:
+            if cand_call_sign == f"{query_call_sign}DT":
+                # Local broadcast affiliates: TVE scrapers report the bare
+                # over-the-air call sign (e.g. "WCMH"), but that bare call
+                # sign is Gracenote's legacy/analog placeholder record — the
+                # actual HD digital station is registered under the same
+                # call sign plus a "DT" suffix ("WCMHDT"). Confirmed live via
+                # /tms/stations/WCMH: WCMH itself has no videoType (Analog),
+                # while WCMHDT is the HDTV entry. Prefer it over an exact
+                # bare match.
+                score += 210
+                reasons.append(f"call sign match, HD affiliate ({cand_call_sign})")
+            elif query_call_sign == cand_call_sign:
+                score += 130
+                reasons.append(f"call sign match ({cand_call_sign})")
 
     return score, reasons
 
