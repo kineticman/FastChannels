@@ -190,10 +190,15 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                 if prog.season >= 1 and prog.episode >= 1:
                     episode_nums.append(('onscreen', f'S{prog.season:02d}E{prog.episode:02d}'))
 
+            # Channels DVR displays these ids as "<system>/<id>" — use the
+            # channel's own source slug (e.g. "pluto") instead of the generic
+            # "fastchannels" so users can tell providers apart at a glance.
+            provider_system = ch_src_name_map.get(prog.channel_id) or 'fastchannels'
+
             series_id  = getattr(prog, 'series_id',  None)
             episode_id = getattr(prog, 'episode_id', None)
             if episode_id:
-                system = 'dd_progid' if _is_tms_id(episode_id) else 'fastchannels'
+                system = 'dd_progid' if _is_tms_id(episode_id) else provider_system
                 episode_nums.append((system, episode_id))
 
             el = Element('programme', attrib={
@@ -243,7 +248,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             # entry, which Channels DVR doesn't read for series grouping, so
             # bring it back even though it fails strict --dtdvalid checks.
             if series_id:
-                SubElement(el, 'series-id', system='fastchannels').text = series_id
+                SubElement(el, 'series-id', system=provider_system).text = series_id
             for system, value in episode_nums:
                 SubElement(el, 'episode-num', system=system).text = value
             if prog.rating:
