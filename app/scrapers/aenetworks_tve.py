@@ -11,6 +11,7 @@ from urllib.parse import quote, urlparse
 import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
+from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
 from ..tve.adobe_pass import (
     TVEAuthError,
@@ -407,6 +408,7 @@ class AENetworksTVEScraper(BaseScraper):
                 country='US',
                 guide_key=network.requestor_id,
                 description=None,
+                gracenote_id=resolve_gracenote('aenetworks_tve', lookup_key=network.channel_id),
             )
             for network in _NETWORKS.values()
         ]

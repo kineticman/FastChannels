@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlsplit
 import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
+from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, throttle_cox_login
 
@@ -523,6 +524,7 @@ class DiscoveryTVEScraper(BaseScraper):
                 country='US',
                 guide_key=channel.code,
                 description=None,
+                gracenote_id=resolve_gracenote('discovery_tve', lookup_key=channel.channel_id),
             )
             for channel in CHANNELS.values()
         ]

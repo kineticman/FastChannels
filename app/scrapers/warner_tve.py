@@ -58,6 +58,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from .base import BaseScraper, ChannelData, ProgramData, null_placeholder_season_episode
+from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, authorize_mvpd
 
@@ -246,6 +247,7 @@ class WarnerTVEScraper(BaseScraper):
                 country='US',
                 guide_key=channel.brand_key.upper(),
                 description=None,
+                gracenote_id=resolve_gracenote('warner_tve', lookup_key=channel.channel_id),
             )
             for channel in CHANNELS.values()
         ]

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS, _cox_saml_login, _jwt_exp
+from ..gracenote_map import resolve_gracenote
 
 _SCHEME = 'fox-one://'
 _API_BASE = 'https://api.fox.com/dtc'
@@ -330,7 +331,12 @@ class FoxOneScraper(BaseScraper):
             # bogus gracenote_id that breaks Channels DVR guide matching once
             # routed through the Gracenote-variant output.
             raw_station_id = str(gracenote.get('station_id') or '').strip()
-            gracenote_id = raw_station_id if raw_station_id and raw_station_id.upper() != 'TBD' else None
+            upstream_gracenote_id = raw_station_id if raw_station_id and raw_station_id.upper() != 'TBD' else None
+            # FOX's own API supplies a real ID for most national channels, but
+            # not always (TBD placeholder, or missing entirely) — fall back to
+            # the community call-sign map (local-affiliate rows are market-
+            # specific and simply won't have an entry there).
+            gracenote_id = resolve_gracenote('fox_one', upstream_id=upstream_gracenote_id, lookup_key=call_sign.lower())
             channels.append(FoxOneChannel(
                 source_channel_id=call_sign.lower(),
                 name=name,

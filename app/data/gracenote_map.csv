@@ -894,3 +894,54 @@ fubo,1238520015,125465,,fubo Sports Network 5
 fubo,1238520018,125453,,fubo Sports Network 6
 fubo,1238520019,125450,,fubo Sports Network 7
 fubo,1238520112,158971,,fubo Sports Network 9
+aenetworks_tve,aetv,51529,,A&E
+aenetworks_tve,history,14771,,History
+aenetworks_tve,lifetime,10918,,Lifetime
+amcn_tve,amc,10021,,AMC
+amcn_tve,bbca,99699,,BBC America
+amcn_tve,ifc,14873,,IFC
+amcn_tve,wetv,16409,,WE tv
+discovery_tve,161,11158,,TLC
+discovery_tve,162,12574,,Food Network
+discovery_tve,163,56905,,Discovery
+discovery_tve,164,120450,,Discovery Life
+discovery_tve,165,62496,,Investigation Discovery
+discovery_tve,166,16616,,Science
+discovery_tve,167,57394,,Animal Planet
+discovery_tve,168,70387,,OWN
+discovery_tve,169,64132,,Destination America
+discovery_tve,170,92052,,Discovery Turbo
+discovery_tve,171,18284,,AHC
+discovery_tve,172,14902,,HGTV
+discovery_tve,174,30156,,Cooking Channel
+discovery_tve,222,18544,,Magnolia Network
+fox_one,btn,56783,,Big Ten Network
+fox_one,fbn,58649,,FOX Business
+fox_one,fnc,16374,,FOX News
+fox_one,foxd,15377,,FOX Deportes
+fox_one,fs1,82541,,FS1
+fox_one,fs2,33178,,FS2
+fox_one,fwx,121307,,FOX Weather
+fox_one,livenow,119219,,LiveNOW from FOX
+fox_one,soul,119212,,FOX Soul
+fox_one,tmzfo,149408,,TMZ
+nbc_tve,bravo_east,10057,,Bravo East
+nbc_tve,nbc-news,114174,,NBC News NOW
+nbc_tve,nbc-sports-now,114140,,NBC Sports Now
+warner_tve,tbs-east,165167,,TBS East
+warner_tve,tbs-west,165099,,TBS West
+warner_tve,tnt-east,165267,,TNT East
+warner_tve,tnt-west,165200,,TNT West
+warner_tve,tru-east,10153,,truTV East
+warner_tve,tru-west,10153,,truTV West
+aenetworks_tve,fyi,20049,,FYI
+discovery_tve,175,17453,,Travel Channel
+fox_one,tmz,149408,,TMZ
+nbc_tve,bravo_west,10057,,Bravo West (no distinct Gracenote feed found; reuses East)
+nbc_tve,bravo-vault,138400,,Bravo Vault
+nbc_tve,real-housewives-vault,138455,,Real Housewives Vault
+nbc_tve,telemundo-al-dia,138526,,Telemundo Al Dia
+nbc_tve,telemundo-deportes-ahora,185904,,Telemundo Deportes Ahora
+nbc_tve,noticias-telemundo-ahora,138525,,Noticias Telemundo Ahora
+nbc_tve,nbc-universo_east,108130,,Universo Net East
+nbc_tve,nbc-universo_west,108132,,Universo Net West

@@ -115,6 +115,7 @@ import requests
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from .fox_tve import _cox_saml_login
+from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
 
@@ -576,8 +577,16 @@ class NbcTveScraper(BaseScraper):
         channels = []
         for entry in guide.values():
             suffix = ''
+            # entry.stream_access_name is an opaque, per-install value straight
+            # from NBC's live API — not stable/predictable enough to key a
+            # shared Gracenote map by. entry.brand is the fixed machine name
+            # from _INCLUDED_BRANDS, so key the lookup off that (plus the same
+            # east/west split used for the display name) instead.
+            gracenote_key = entry.brand
             if entry.brand in east_west:
-                suffix = ' (East)' if entry.stream_access_name.endswith('_east') else ' (West)'
+                is_east = entry.stream_access_name.endswith('_east')
+                suffix = ' (East)' if is_east else ' (West)'
+                gracenote_key = f"{entry.brand}_{'east' if is_east else 'west'}"
             channels.append(ChannelData(
                 source_channel_id=entry.stream_access_name,
                 name=f'{entry.name}{suffix}',
@@ -590,6 +599,7 @@ class NbcTveScraper(BaseScraper):
                 country='US',
                 guide_key=f'NBCTVE:{entry.stream_access_name.upper()}',
                 description=None,
+                gracenote_id=resolve_gracenote('nbc_tve', lookup_key=gracenote_key),
             ))
         return channels
 
