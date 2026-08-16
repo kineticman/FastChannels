@@ -33,6 +33,18 @@ _NATIONAL_SECONDARY_PROFILES = frozenset({
     "ga-world",
 })
 
+# A local subchannel (ga-local-subchannel-1/2) sometimes just simulcasts one of
+# the national secondary networks under station branding — e.g. "BTPM Create",
+# "WNPT2 WORLD", "NE-World" — rather than carrying unique local programming
+# (compare "WEDQ" or "The Wisconsin Channel", which are genuinely distinct).
+# Matched against the PBS-published full_name via word-boundary regex.
+_NATIONAL_SIMULCAST_MARKERS = {
+    "create": "Create",
+    "world": "World",
+    "nhk": "NHK World",
+    "fnx": "FNX",
+}
+
 _DEFAULT_STATIONS = {
     # Curated from official PBS stations-list metadata: these stations expose
     # clear non_drm_url local subchannels. National secondary profiles are
@@ -153,14 +165,16 @@ class PBSScraper(BaseScraper):
             call_sign = (attrs.get("call_sign") or "").strip()
             logo_url = self._logo(attrs)
             feeds = attrs.get("livestream_feeds") or []
-            subchannel_labels = self._local_subchannel_labels(station_id, call_sign, attrs, feeds)
+            subchannel_labels, simulcast_profiles = self._local_subchannel_labels(
+                station_id, call_sign, attrs, feeds,
+            )
 
             for feed in feeds:
                 # Bulk auto-discovery stays clear-only (allow_drm=False) — DRM feeds
                 # are opt-in only, via manual_feeds below.
                 ch = self._build_channel(
                     station_id, call_sign, logo_url, feed, seen, allow_drm=False,
-                    subchannel_labels=subchannel_labels,
+                    subchannel_labels=subchannel_labels, skip_profiles=simulcast_profiles,
                 )
                 if ch:
                     channels.append(ch)
@@ -198,7 +212,11 @@ class PBSScraper(BaseScraper):
             call_sign = (attrs.get("call_sign") or "").strip()
             logo_url = self._logo(attrs)
             feeds = attrs.get("livestream_feeds") or []
-            subchannel_labels = self._local_subchannel_labels(station_id, call_sign, attrs, feeds)
+            # Manual picks are explicit user selections via the Station & Feed
+            # Finder — don't second-guess them with the simulcast skip below.
+            subchannel_labels, _simulcast_profiles = self._local_subchannel_labels(
+                station_id, call_sign, attrs, feeds,
+            )
 
             for feed in feeds:
                 if (feed.get("profile") or "").strip() not in profiles:
@@ -216,14 +234,19 @@ class PBSScraper(BaseScraper):
         self, station_id: str, call_sign: str, logo_url: str | None,
         feed: dict, seen: set[str], *, allow_drm: bool,
         subchannel_labels: dict[str, str] | None = None,
+        skip_profiles: set[str] | None = None,
     ) -> ChannelData | None:
         """Builds a ChannelData for a single feed dict, preferring its clear
         (non_drm_url) stream; falls back to the DRM (drm_dash_url) one only when
         allow_drm=True. Returns None if the feed has no usable URL under those
-        rules, or if it's a duplicate per `seen` (mutated in place, shared across
-        both the bulk clear-feed loop and _add_manual_feeds)."""
+        rules, if its profile is in `skip_profiles` (a local subchannel that's a
+        verbatim simulcast of a national secondary network — see
+        _local_subchannel_labels), or if it's a duplicate per `seen` (mutated in
+        place, shared across both the bulk clear-feed loop and _add_manual_feeds)."""
         profile = (feed.get("profile") or "").strip()
         if not profile:
+            return None
+        if skip_profiles and profile in skip_profiles:
             return None
         feed_cid = (feed.get("associated_tvss_feed") or feed.get("cid") or profile).strip()
         if not feed_cid:
@@ -451,7 +474,7 @@ class PBSScraper(BaseScraper):
 
     def _local_subchannel_labels(
         self, station_id: str, call_sign: str, attrs: dict, feeds: list[dict],
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], set[str]]:
         """Looks up PBS's own human-friendly names for a station's local
         subchannel feeds (e.g. "KERA Create", "BTPM Create", "The West
         Virginia Channel") — these vary station to station since many local
@@ -461,10 +484,21 @@ class PBSScraper(BaseScraper):
         expose this name; only the per-day schedule API does, via each
         channel entry's `full_name` field. Best-effort: falls back to the
         generic "Local Subchannel N" label (in _build_channel) if this lookup
-        fails or a profile isn't present in today's schedule."""
+        fails or a profile isn't present in today's schedule.
+
+        Also flags, in the second return value, which subchannel profiles are
+        verbatim simulcasts of a national secondary network (Create, World,
+        NHK World, FNX) per _NATIONAL_SIMULCAST_MARKERS — e.g. "BTPM Create",
+        "NE-World" — so the caller can skip them as duplicates of that
+        national feed. Some OTA affiliates cut in their own programming over
+        these, but that isn't reflected on the web stream, so on the web
+        they're identical to the national feed. Local subchannels that don't
+        match (e.g. "WEDQ", "The Wisconsin Channel") are genuinely unique and
+        are left alone."""
         if not any((f.get("profile") or "").startswith("ga-local-subchannel") for f in feeds):
-            return {}
+            return {}, set()
         labels: dict[str, str] = {}
+        simulcast_profiles: set[str] = set()
         try:
             timezone_name = attrs.get("timezone") or "America/New_York"
             today = self._local_date(datetime.now(timezone.utc), timezone_name).isoformat()
@@ -473,9 +507,11 @@ class PBSScraper(BaseScraper):
                 full_name = (channel.get("full_name") or "").strip()
                 if profile.startswith("ga-local-subchannel") and full_name:
                     labels[profile] = self._derive_subchannel_label(full_name, call_sign)
+                    if self._national_simulcast_label(full_name):
+                        simulcast_profiles.add(profile)
         except Exception as exc:
             logger.warning("[%s] subchannel label lookup failed for %s: %s", self.source_name, station_id, exc)
-        return labels
+        return labels, simulcast_profiles
 
     @staticmethod
     def _derive_subchannel_label(full_name: str, call_sign: str) -> str:
@@ -485,6 +521,14 @@ class PBSScraper(BaseScraper):
         elif label.upper().startswith("PBS "):
             label = label[4:].strip()
         return label or full_name.strip()
+
+    @staticmethod
+    def _national_simulcast_label(full_name: str) -> str | None:
+        name = full_name.lower()
+        for marker, label in _NATIONAL_SIMULCAST_MARKERS.items():
+            if re.search(rf"\b{marker}\b", name):
+                return label
+        return None
 
     def _configured_station_ids(self) -> list[str]:
         seen: set[str] = set()
