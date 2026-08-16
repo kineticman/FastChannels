@@ -1571,10 +1571,14 @@ def _refresh_xml_artifacts() -> None:
 
     for attempt in range(2):
         _settings = AppSettings.get()
-        base_url = (
-            (_settings.effective_public_base_url() or '').strip().rstrip('/')
-            or 'http://localhost:5523'
-        )
+        _configured_base_url = (_settings.effective_public_base_url() or '').strip().rstrip('/')
+        if not _configured_base_url:
+            logger.warning(
+                'Public Base URL is not configured — generated M3U/XMLTV artifacts will use '
+                'http://localhost:5523, which is not reachable from other devices. '
+                'Set it in Settings > FastChannels Server URL.'
+            )
+        base_url = _configured_base_url or 'http://localhost:5523'
         xml_artifacts: list[tuple[str, Callable]] = [
             ('master', lambda fp: write_xmltv(fp, {}, base_url=base_url)),
         ]
