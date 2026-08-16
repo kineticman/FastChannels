@@ -84,7 +84,17 @@
 
   function seekNearLiveEdge(player, video, opts) {
     try {
-      if (!player || !video || !player.isLive || !player.isLive()) return;
+      if (!player || !video) return;
+      // isLive() is false for DASH "in-progress" content — type="dynamic" with a
+      // bounded mediaPresentationDuration, used for a scheduled event recorded
+      // into a known-length asset while it airs (confirmed live on Sling's beIN
+      // manifests: growing seekRange, but isLive() false). Shaka has a distinct
+      // isInProgress() for exactly this case; without it this function no-ops
+      // entirely and playback is left wherever Shaka's default load put it
+      // (the start), never catching up to live.
+      const live = (player.isLive && player.isLive())
+        || (player.isInProgress && player.isInProgress());
+      if (!live) return;
       const range = player.seekRange && player.seekRange();
       if (!range || !Number.isFinite(range.end) || range.end <= 0) return;
       const liveDelay = Number((opts && opts.liveDelay) || 3);
