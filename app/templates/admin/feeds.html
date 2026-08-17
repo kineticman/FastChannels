@@ -1960,9 +1960,18 @@ function beginNumEdit(id, chip) {
   });
 })();
 
-// Close on backdrop click
-document.getElementById('modal-overlay').addEventListener('click', e => {
-  if (e.target === e.currentTarget) closeModal();
+// Close on backdrop click — but only if the mousedown that started this click
+// also landed on the backdrop. Otherwise dragging (text selection, channel
+// reorder) that releases over the backdrop padding closes the modal and
+// discards unsaved edits.
+let _modalMousedownOnOverlay = false;
+const _modalOverlayEl = document.getElementById('modal-overlay');
+_modalOverlayEl.addEventListener('mousedown', e => {
+  _modalMousedownOnOverlay = e.target === e.currentTarget;
+});
+_modalOverlayEl.addEventListener('click', e => {
+  if (e.target === e.currentTarget && _modalMousedownOnOverlay) closeModal();
+  _modalMousedownOnOverlay = false;
 });
 
 // ── Channel number map (summary) ──────────────────────────────────────────
