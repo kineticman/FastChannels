@@ -7,10 +7,11 @@ stores it in the tvtv_program_cache table.
 
 Called by the background worker on a cron schedule (default: 03:00 UTC).
 
-Typical cost: ~70-170 batched API calls when tvtv's JSON grid endpoint is
-available. If that endpoint 404s, falls back to tvtv's htmx fragments with
-bounded per-station concurrency. Uses curl_cffi for a browser-like HTTP session
-without a headless browser bootstrap.
+tvtv retired their JSON grid API (/api/v1/lineup/.../grid/...) in a site
+redesign — it 404s unconditionally now, for every lineup — so this fetches
+per-station via tvtv's htmx fragment endpoint instead, with bounded
+concurrency (see _fetch_batch_via_fragments). Uses curl_cffi for a
+browser-like HTTP session without a headless browser bootstrap.
 
 Standalone dry run (prints stats, writes nothing):
     docker exec fastchannels python -m app.tvtv_cache --dry-run
@@ -29,21 +30,20 @@ from sqlalchemy.exc import OperationalError
 
 log = logging.getLogger(__name__)
 
-_BATCH_SIZE  = 20    # station IDs per grid request — Cloudflare blocks >20
-_BATCH_DELAY = 1.0   # seconds between batches within a lineup-day
-_FRAGMENT_WORKERS = 8  # concurrent per-station htmx fallback fetches per batch
-_FRAGMENT_DELAY = 0.0  # optional pace between fallback per-station fragment calls
-_DAY_DELAY   = 1.0   # seconds between lineup-day pairs
+_BATCH_SIZE  = 20    # station IDs fetched (threaded) per pacing chunk
+_BATCH_DELAY = 1.0   # seconds between pacing chunks within a day
+_FRAGMENT_WORKERS = 8  # concurrent per-station htmx fetches per chunk
+_FRAGMENT_DELAY = 0.0  # optional pace between per-station fragment calls
+_DAY_DELAY   = 1.0   # seconds between days
 _DAYS        = 2     # days of guide data to cache (today + 1)
+_PROGRESS_LOG_EVERY = 10  # log a progress line every N batches within a day
 
 _TVTV_BASE = "https://tvtv.us"
-_FRAGMENT_FALLBACK_LOGGED = False
 _FRAGMENT_THREAD_STATE = threading.local()
 
-# Synthetic lineup bucket for station IDs not present in the bundled
-# station_index.json. tvtv's htmx fragment endpoint is keyed by station_id
-# alone (no lineup needed), so these still get fetched — just via the
-# fragment path directly instead of a lineup-scoped JSON grid batch.
+# Lineup label stored on cache rows for stations not present in the bundled
+# station_index.json (display/record-keeping only — the fragment fetch
+# itself is keyed by station_id alone and needs no lineup).
 _UNINDEXED_LINEUP = "UNINDEXED"
 
 
@@ -239,14 +239,12 @@ def _fetch_fragment_station_threaded(station_id: str, start: datetime, end: date
 
 def _fetch_batch_via_fragments(session, station_ids: list[str],
                                start: datetime, end: datetime) -> tuple[dict[str, list[dict]], str | None]:
-    global _FRAGMENT_FALLBACK_LOGGED
-    if not _FRAGMENT_FALLBACK_LOGGED:
-        log.warning(
-            "[tvtv-cache] JSON grid endpoint returned 404; using per-station fragment fallback (%d workers)",
-            _FRAGMENT_WORKERS,
-        )
-        _FRAGMENT_FALLBACK_LOGGED = True
-
+    """
+    Fetch a chunk of station IDs via tvtv's htmx fragment endpoint (their
+    JSON grid API was retired in a site redesign and now 404s
+    unconditionally), with bounded per-station concurrency.
+    Returns ({station_id: [airing, ...]}, failure_reason).
+    """
     result: dict[str, list[dict]] = {}
     failures = 0
     max_workers = max(1, min(_FRAGMENT_WORKERS, len(station_ids)))
@@ -278,37 +276,7 @@ def _fetch_batch_via_fragments(session, station_ids: list[str],
 
     if result:
         return result, None
-    return {}, "fragment fallback failed" if failures else "empty fragment response"
-
-
-def _fetch_batch(session, lineup: str, station_ids: list[str],
-                 start: datetime, end: datetime) -> tuple[dict[str, list[dict]], str | None]:
-    """
-    Fetch one batch of station IDs for a lineup-day window.
-    Returns ({station_id: [airing, ...]}, failure_reason).
-    """
-    url = (
-        f"{_TVTV_BASE}/api/v1/lineup/{lineup}/grid/"
-        f"{_iso_z(start)}/{_iso_z(end)}/{','.join(station_ids)}"
-    )
-    try:
-        r = session.get(url, timeout=25)
-        r.raise_for_status()
-        grid = r.json()
-    except Exception as exc:
-        response = getattr(exc, "response", None)
-        status = getattr(response, "status_code", None)
-        reason = f"HTTP {status}" if status else type(exc).__name__
-        log.debug("[tvtv-cache] batch failed %s %s...: %s", lineup, station_ids[:3], exc)
-        if status == 404 or "404" in str(exc):
-            return _fetch_batch_via_fragments(session, station_ids, start, end)
-        return {}, reason
-
-    result: dict[str, list[dict]] = {}
-    for i, sid in enumerate(station_ids):
-        if i < len(grid) and isinstance(grid[i], list):
-            result[sid] = grid[i]
-    return result, None
+    return {}, "fragment fetch failed" if failures else "empty fragment response"
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +318,7 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
     the results in tvtv_program_cache.
 
     Returns a summary dict:
-        {lineups_fetched, days, batches, rows_inserted, rows_deleted, errors, elapsed_s}
+        {stations_fetched, days, batches, rows_inserted, rows_deleted, errors, elapsed_s}
     """
     from .tvtv_lookup import _load_index
     from .extensions import db
@@ -374,22 +342,15 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
         log.info("[tvtv-cache] fetching %d mapped gracenote station IDs", len(station_ids))
 
     station_set = set(station_ids)
+    all_station_ids = sorted(station_set)
 
-    # Group stations by their primary lineup (first entry in lineups list).
-    lineup_stations: dict[str, list[str]] = {}
-    for sid, entry in index.items():
-        if sid not in station_set:
-            continue
-        lineup = (entry.get("lineups") or [None])[0]
-        if lineup:
-            lineup_stations.setdefault(lineup, []).append(sid)
-
-    # Station IDs not in the bundled index (or with no lineup listed) still
-    # get fetched, via the fragment fallback below — see _UNINDEXED_LINEUP.
-    indexed_ids = {sid for ids in lineup_stations.values() for sid in ids}
-    unindexed_ids = sorted(station_set - indexed_ids)
-    if unindexed_ids:
-        lineup_stations[_UNINDEXED_LINEUP] = unindexed_ids
+    # Lineup label per station, for the DB row only (display/record-keeping —
+    # the fragment fetch itself doesn't need it). Falls back to
+    # _UNINDEXED_LINEUP for stations outside the bundled index.
+    lineup_by_station = {
+        sid: ((index.get(sid, {}).get("lineups") or [None])[0] or _UNINDEXED_LINEUP)
+        for sid in all_station_ids
+    }
 
     total_batches = 0
     total_rows    = 0
@@ -398,87 +359,94 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
     # Reuse one warmed session for the entire refresh run.
     session = _get_session() if not dry_run else None
 
-    for lineup, station_ids in lineup_stations.items():
-        for day_offset in range(days):
-            start, end = _grid_window(day_offset, now_utc)
-            batches = [
-                station_ids[i: i + _BATCH_SIZE]
-                for i in range(0, len(station_ids), _BATCH_SIZE)
-            ]
+    for day_offset in range(days):
+        start, end = _grid_window(day_offset, now_utc)
+        batches = [
+            all_station_ids[i: i + _BATCH_SIZE]
+            for i in range(0, len(all_station_ids), _BATCH_SIZE)
+        ]
 
-            log.info("[tvtv-cache] %s day+%d: %d stations in %d batches",
-                     lineup if lineup != _UNINDEXED_LINEUP else "unindexed (fragment-only)",
-                     day_offset, len(station_ids), len(batches))
+        log.info("[tvtv-cache] day+%d: %d stations in %d batches",
+                 day_offset, len(all_station_ids), len(batches))
 
-            day_errors = 0
-            day_error_reasons: dict[str, int] = {}
-            for batch in batches:
-                if dry_run:
-                    total_batches += 1
-                    continue
+        day_errors = 0
+        day_rows   = 0
+        day_error_reasons: dict[str, int] = {}
 
-                if lineup == _UNINDEXED_LINEUP:
-                    results, failure_reason = _fetch_batch_via_fragments(session, batch, start, end)
-                else:
-                    results, failure_reason = _fetch_batch(session, lineup, batch, start, end)
-                if not results:
-                    total_errors += 1
-                    day_errors   += 1
-                    reason = failure_reason or "empty response"
-                    day_error_reasons[reason] = day_error_reasons.get(reason, 0) + 1
-                    time.sleep(_BATCH_DELAY)
-                    continue
+        def _log_progress(batch_num: int) -> None:
+            if batch_num % _PROGRESS_LOG_EVERY == 0 or batch_num == len(batches):
+                log.info("[tvtv-cache] day+%d: %d/%d batches (%d rows, %d errors so far)",
+                          day_offset, batch_num, len(batches), day_rows, day_errors)
 
-                rows = []
-                for sid, airings in results.items():
-                    for item in airings:
-                        item_start = _parse_start(item)
-                        if not item_start:
-                            continue
-                        duration = int(item.get("duration") or 0)
-                        item_end = item_start + timedelta(minutes=duration)
-                        rows.append({
-                            "station_id": sid,
-                            "lineup":     lineup,
-                            "program_id": item.get("programId"),
-                            "title":      (item.get("title") or item.get("programTitle") or "Unknown").strip(),
-                            "subtitle":   (item.get("subtitle") or "").strip() or None,
-                            "start_time": item_start,
-                            "end_time":   item_end,
-                            "fetched_at": fetched_at,
-                        })
-
-                try:
-                    total_rows += _upsert_rows(rows)
-                    db.session.commit()
-                except OperationalError as exc:
-                    db.session.rollback()
-                    if "locked" not in str(exc).lower():
-                        raise
-                    # A concurrent scrape (separate worker process, separate
-                    # connection) can hold SQLite's single writer lock past
-                    # our busy_timeout. Treat it like any other batch failure
-                    # — skip this batch and keep going — rather than letting
-                    # it abort the whole run and lose every remaining lineup.
-                    log.warning("[tvtv-cache] %s day+%d: batch write hit 'database is locked', skipping batch",
-                                lineup, day_offset)
-                    total_errors += 1
-                    day_errors   += 1
-                    day_error_reasons["database is locked"] = day_error_reasons.get("database is locked", 0) + 1
-                    time.sleep(_BATCH_DELAY)
-                    continue
+        for batch_num, batch in enumerate(batches, start=1):
+            if dry_run:
                 total_batches += 1
+                continue
+
+            results, failure_reason = _fetch_batch_via_fragments(session, batch, start, end)
+            if not results:
+                total_errors += 1
+                day_errors   += 1
+                reason = failure_reason or "empty response"
+                day_error_reasons[reason] = day_error_reasons.get(reason, 0) + 1
+                _log_progress(batch_num)
                 time.sleep(_BATCH_DELAY)
+                continue
 
-            if day_errors:
-                reason_summary = ", ".join(
-                    f"{reason}={count}"
-                    for reason, count in sorted(day_error_reasons.items())
-                ) or "unknown"
-                log.warning("[tvtv-cache] %s day+%d: %d/%d batches failed (%s)",
-                            lineup, day_offset, day_errors, len(batches), reason_summary)
+            rows = []
+            for sid, airings in results.items():
+                for item in airings:
+                    item_start = _parse_start(item)
+                    if not item_start:
+                        continue
+                    duration = int(item.get("duration") or 0)
+                    item_end = item_start + timedelta(minutes=duration)
+                    rows.append({
+                        "station_id": sid,
+                        "lineup":     lineup_by_station[sid],
+                        "program_id": item.get("programId"),
+                        "title":      (item.get("title") or item.get("programTitle") or "Unknown").strip(),
+                        "subtitle":   (item.get("subtitle") or "").strip() or None,
+                        "start_time": item_start,
+                        "end_time":   item_end,
+                        "fetched_at": fetched_at,
+                    })
 
-            time.sleep(_DAY_DELAY)
+            try:
+                inserted = _upsert_rows(rows)
+                total_rows += inserted
+                day_rows   += inserted
+                db.session.commit()
+            except OperationalError as exc:
+                db.session.rollback()
+                if "locked" not in str(exc).lower():
+                    raise
+                # A concurrent scrape (separate worker process, separate
+                # connection) can hold SQLite's single writer lock past
+                # our busy_timeout. Treat it like any other batch failure
+                # — skip this batch and keep going — rather than letting
+                # it abort the whole run and lose every remaining batch.
+                log.warning("[tvtv-cache] day+%d: batch write hit 'database is locked', skipping batch",
+                            day_offset)
+                total_errors += 1
+                day_errors   += 1
+                day_error_reasons["database is locked"] = day_error_reasons.get("database is locked", 0) + 1
+                _log_progress(batch_num)
+                time.sleep(_BATCH_DELAY)
+                continue
+            total_batches += 1
+            _log_progress(batch_num)
+            time.sleep(_BATCH_DELAY)
+
+        if day_errors:
+            reason_summary = ", ".join(
+                f"{reason}={count}"
+                for reason, count in sorted(day_error_reasons.items())
+            ) or "unknown"
+            log.warning("[tvtv-cache] day+%d: %d/%d batches failed (%s)",
+                        day_offset, day_errors, len(batches), reason_summary)
+
+        time.sleep(_DAY_DELAY)
 
     if not dry_run:
         deleted = _delete_expired(now_utc)
@@ -488,7 +456,7 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
 
     elapsed = round(time.monotonic() - t0, 1)
     summary = {
-        "lineups_fetched": len(lineup_stations),
+        "stations_fetched": len(all_station_ids),
         "days":            days,
         "batches":         total_batches,
         "rows_inserted":   total_rows,

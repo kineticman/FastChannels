@@ -8,9 +8,13 @@ return what is currently airing so a user can compare it against their own
 channel's program to verify a Gracenote mapping is correct.
 
 Features:
-- Loads the bundled station_index.json (stationId → lineup mapping)
-- Caches the full grid response per lineup for 5 minutes — so looking up 5
-  suggestions from the same lineup costs 1 API call, not 5
+- Loads the bundled station_index.json (stationId → lineup mapping), used
+  for call_sign/lineup display metadata only — tvtv's real fetch is per-
+  station, so no lineup grouping is needed for the fetch itself
+- Fetches per-station via tvtv's htmx fragment endpoint (their old JSON
+  grid API, /api/v1/lineup/.../grid/..., was retired in a site redesign
+  and now 404s unconditionally — see tvtv_cache.py's fragment fallback)
+- Caches each station's result for 5 minutes
 - Uses curl_cffi (Chrome TLS impersonation) if installed, falls back to requests
 """
 
@@ -28,8 +32,8 @@ log = logging.getLogger(__name__)
 _INDEX_PATH = Path(__file__).resolve().parent / "data" / "station_index.json"
 _TVTV_BASE = "https://tvtv.us"
 
-# Grid cache: (lineup_slug, station_id) → (fetched_at_epoch, items_list)
-_grid_cache: dict[tuple[str, str], tuple[float, list]] = {}
+# Grid cache: station_id → (fetched_at_epoch, items_list)
+_grid_cache: dict[str, tuple[float, list]] = {}
 _GRID_CACHE_TTL = 300  # 5 minutes
 
 
@@ -96,56 +100,16 @@ def _iso_z(dt: datetime) -> str:
 # Grid fetch with cache
 # ---------------------------------------------------------------------------
 
-def _fetch_items_cached(lineup: str, station_id: str, session) -> list:
+def _fetch_items_cached(station_id: str, session) -> list | None:
     """
-    Return the airing list for one station in a lineup, with 5-minute caching.
+    Return the airing list for one station, with 5-minute caching.
+
+    tvtv retired their JSON grid API (/api/v1/lineup/.../grid/...) in a site
+    redesign — it now 404s unconditionally, for every lineup. Go straight to
+    the htmx fragment endpoint, which is keyed by station_id alone (no
+    lineup needed) and is what the live site itself uses.
     """
-    cache_key = (lineup, station_id)
-    cached = _grid_cache.get(cache_key)
-    now_ts = time.monotonic()
-
-    if cached and (now_ts - cached[0]) < _GRID_CACHE_TTL:
-        return cached[1]
-
-    now_utc = datetime.now(timezone.utc)
-    start, end = _grid_window(now_utc)
-    url = (
-        f"{_TVTV_BASE}/api/v1/lineup/{lineup}/grid/"
-        f"{_iso_z(start)}/{_iso_z(end)}/{station_id}"
-    )
-    try:
-        r = session.get(url, timeout=20)
-        r.raise_for_status()
-        grid = r.json()
-        items = grid[0] if isinstance(grid, list) and grid and isinstance(grid[0], list) else []
-    except Exception as exc:
-        log.warning("[tvtv] grid fetch failed for %s/%s: %s", lineup, station_id, exc)
-        # curl_cffi HTTPError inherits from OSError (no .response attr), so check the message.
-        if "429" in str(exc) or getattr(getattr(exc, 'response', None), 'status_code', None) == 429:
-            return None  # Distinguish rate-limit from empty schedule
-        if "404" not in str(exc) and getattr(getattr(exc, 'response', None), 'status_code', None) != 404:
-            return []
-        try:
-            from .tvtv_cache import _fetch_fragment_station
-            items = _fetch_fragment_station(session, station_id, start, end)
-        except Exception as fallback_exc:
-            log.warning("[tvtv] fragment fallback failed for %s/%s: %s", lineup, station_id, fallback_exc)
-            return []
-        if items is None:
-            return None  # transient fragment-fetch failure; don't cache as a confirmed-empty schedule
-
-    _grid_cache[cache_key] = (now_ts, items)
-    return items
-
-
-def _fetch_items_cached_unindexed(station_id: str, session) -> list | None:
-    """
-    Same as _fetch_items_cached, but for stations not in the bundled index
-    (or with no lineup listed) — skips straight to tvtv's htmx fragment
-    endpoint, which is keyed by station_id alone and needs no lineup.
-    """
-    cache_key = ("_UNINDEXED_", station_id)
-    cached = _grid_cache.get(cache_key)
+    cached = _grid_cache.get(station_id)
     now_ts = time.monotonic()
 
     if cached and (now_ts - cached[0]) < _GRID_CACHE_TTL:
@@ -157,13 +121,13 @@ def _fetch_items_cached_unindexed(station_id: str, session) -> list | None:
         from .tvtv_cache import _fetch_fragment_station
         items = _fetch_fragment_station(session, station_id, start, end)
     except Exception as exc:
-        log.warning("[tvtv] unindexed fragment fetch failed for %s: %s", station_id, exc)
+        log.warning("[tvtv] fragment fetch failed for %s: %s", station_id, exc)
         items = None
 
     # Cache a failure too (timeout, 5xx, or a station ID that just doesn't
     # exist), same TTL as success — otherwise a bad/typo'd ID pays the full
-    # live-fetch cost (up to two ~20s HTTP round-trips) on every page load.
-    _grid_cache[cache_key] = (now_ts, items)
+    # live-fetch cost on every page load.
+    _grid_cache[station_id] = (now_ts, items)
     return items
 
 
@@ -287,22 +251,10 @@ def lookup_now_playing(station_id: str) -> dict[str, Any]:
     result["lineup"] = lineup
 
     session = _make_session()
-    if lineup:
-        items = _fetch_items_cached(lineup, station_id, session)
-        if items is None:
-            result["error"] = "rate_limited"
-            return result
-    else:
-        # Not in the bundled index (or no lineup listed) — tvtv's fragment
-        # endpoint doesn't need one, so try it directly rather than giving up.
-        items = _fetch_items_cached_unindexed(station_id, session)
-        if items is None:
-            # _fetch_items_cached_unindexed collapses every failure cause
-            # (timeout, 5xx, or a station ID that just doesn't exist) into
-            # None — unlike the indexed path above, it can't distinguish a
-            # real tvtv rate limit from those, so don't claim one.
-            result["error"] = "unavailable"
-            return result
+    items = _fetch_items_cached(station_id, session)
+    if items is None:
+        result["error"] = "unavailable"
+        return result
 
     now_utc = datetime.now(timezone.utc)
     now_entry, next_entry = _pick_now_next(items, now_utc)
