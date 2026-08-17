@@ -3289,6 +3289,27 @@ def preview_channel(channel_id):
     })
 
 
+def _community_gracenote_match(ch) -> dict | None:
+    """Look up ch's community CSV mapping.
+
+    Most scrapers key the CSV by source_channel_id, but some (Cox, PBS, NBC TVE,
+    part of DirecTV) key it by a call sign, brand, or slugified name instead —
+    see BaseScraper.community_map_keys(). Ask the scraper class for the right
+    candidate key(s) rather than assuming source_channel_id everywhere."""
+    source_name = ch.source.name if ch.source else ''
+    if not source_name:
+        return None
+    scraper_cls = registry.get(source_name)
+    keys = scraper_cls.community_map_keys(ch) if scraper_cls else (
+        [ch.source_channel_id] if ch.source_channel_id else []
+    )
+    for key in keys:
+        match = lookup_gracenote(source_name, key)
+        if match:
+            return match
+    return None
+
+
 def _gracenote_source_for(ch) -> str | None:
     """Return the provenance of ch.gracenote_id: 'manual', 'csv', 'native', or None."""
     if not ch.gracenote_id:
@@ -3297,8 +3318,7 @@ def _gracenote_source_for(ch) -> str | None:
     locked = getattr(ch, 'gracenote_locked', False)
     if mode == 'manual' or locked:
         return 'manual'
-    source_name = ch.source.name if ch.source else ''
-    csv_match = lookup_gracenote(source_name, ch.source_channel_id)
+    csv_match = _community_gracenote_match(ch)
     if csv_match and csv_match.get('tmsid') == ch.gracenote_id:
         return 'csv'
     return 'native'
@@ -3306,8 +3326,7 @@ def _gracenote_source_for(ch) -> str | None:
 
 def _csv_suggestion_for(ch) -> dict | None:
     """Return the CSV mapping entry for this channel, if one exists."""
-    source_name = ch.source.name if ch.source else ''
-    match = lookup_gracenote(source_name, ch.source_channel_id)
+    match = _community_gracenote_match(ch)
     if not match:
         return None
     return {
@@ -3418,8 +3437,7 @@ def gracenote_community_summary():
     )
     total = applied = available = 0
     for ch in rows:
-        source_name = ch.source.name if ch.source else ''
-        match = lookup_gracenote(source_name, ch.source_channel_id)
+        match = _community_gracenote_match(ch)
         if not match or not match.get('tmsid'):
             continue
         total += 1
@@ -3444,10 +3462,10 @@ def gracenote_community_map():
     )
     results = []
     for ch in rows:
-        source_name = ch.source.name if ch.source else ''
-        match = lookup_gracenote(source_name, ch.source_channel_id)
+        match = _community_gracenote_match(ch)
         if not match or not match.get('tmsid'):
             continue
+        source_name = ch.source.name if ch.source else ''
         community_tmsid = match['tmsid']
         current_id = ch.gracenote_id or ''
         mode = ch.gracenote_mode or 'auto'
@@ -3492,10 +3510,10 @@ def gracenote_community_apply_all():
     already_done = 0
 
     for ch in rows:
-        source_name = ch.source.name if ch.source else ''
-        match = lookup_gracenote(source_name, ch.source_channel_id)
+        match = _community_gracenote_match(ch)
         if not match or not match.get('tmsid'):
             continue
+        source_name = ch.source.name if ch.source else ''
         community_tmsid = match['tmsid']
         current_id = ch.gracenote_id or ''
         mode = ch.gracenote_mode or 'auto'
@@ -3553,10 +3571,10 @@ def gracenote_community_clear_all():
     already_clear = 0
 
     for ch in rows:
-        source_name = ch.source.name if ch.source else ''
-        match = lookup_gracenote(source_name, ch.source_channel_id)
+        match = _community_gracenote_match(ch)
         if not match or not match.get('tmsid'):
             continue
+        source_name = ch.source.name if ch.source else ''
 
         has_id = bool(ch.gracenote_id)
         not_auto = (ch.gracenote_mode or 'auto') != 'auto'
@@ -3605,7 +3623,7 @@ def gracenote_my_contributions():
     results = []
     for ch in rows:
         source_name = ch.source.name if ch.source else ''
-        match = lookup_gracenote(source_name, ch.source_channel_id)
+        match = _community_gracenote_match(ch)
         community_tmsid = match.get('tmsid') if match else None
         if community_tmsid == ch.gracenote_id:
             continue  # already in community map with exact same tmsid

@@ -1436,6 +1436,18 @@ class DirectvScraper(BaseScraper):
         return cls.activation_url
 
     @classmethod
+    def community_map_keys(cls, channel) -> list[str]:
+        # Mirrors the ccid-then-name fallback in fetch_channels(): most of the
+        # community CSV is keyed by ccid (== source_channel_id), but the manually
+        # merged rows are keyed by name: (see comment above _directv_gracenote_key).
+        keys = []
+        if channel.source_channel_id:
+            keys.append(channel.source_channel_id)
+        if channel.name:
+            keys.append(f'name:{_directv_gracenote_key(channel.name)}')
+        return keys
+
+    @classmethod
     def license_request_headers(cls, config: dict) -> dict:
         return {
             'Origin': 'https://stream.directv.com',

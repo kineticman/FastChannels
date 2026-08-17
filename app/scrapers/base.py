@@ -718,6 +718,19 @@ class BaseScraper(ABC):
         return None
 
     @classmethod
+    def community_map_keys(cls, channel) -> list[str]:
+        """Candidate community gracenote_map.csv lookup keys for an existing DB Channel row,
+        in the same priority order the scraper's own resolve_gracenote() call uses at scrape
+        time. Defaults to [source_channel_id], which is correct for most scrapers.
+
+        Override when the scraper looks the CSV up by something else (a call sign, brand, or
+        slugified name derived from live scrape data) — otherwise admin UI features that browse
+        or bulk-apply the community map (app/routes/api.py) will silently find no match for
+        this source even though scrape-time auto-assignment works fine."""
+        key = getattr(channel, 'source_channel_id', None)
+        return [key] if key else []
+
+    @classmethod
     def prepare_license_request(
         cls, challenge: bytes, config: dict, channel_id: str | None = None, **kwargs
     ) -> tuple[bytes, dict]:

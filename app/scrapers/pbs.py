@@ -298,6 +298,29 @@ class PBSScraper(BaseScraper):
             return f"PBS_{call_sign}"
         return f"PBS_{call_sign}_{profile.replace('-', '_')}"
 
+    # Call sign isn't stored verbatim anywhere on the DB row (source_channel_id is
+    # "station_id:profile:feed_cid" — PBS's own opaque station UUID, not the call
+    # sign) — it only comes from PBS's live station API at scrape time. Recover it
+    # from the channel name instead, which _make_feed_channel() built as either
+    # "PBS {call_sign} (...)"/"PBS {call_sign} {label}" for local-subchannel
+    # profiles, or "PBS {label} ({call_sign})" for every other profile.
+    _LOCAL_SUBCHANNEL_NAME_RE = re.compile(r"^PBS (\S+)[ (]")
+    _TRAILING_CALLSIGN_RE = re.compile(r"\(([^()]+)\)\s*$")
+
+    @classmethod
+    def community_map_keys(cls, channel) -> list[str]:
+        parts = (channel.source_channel_id or "").split(":")
+        if len(parts) != 3:
+            return []
+        _station_id, profile, _feed_cid = parts
+        name = channel.name or ""
+        pattern = cls._LOCAL_SUBCHANNEL_NAME_RE if profile.startswith("ga-local-subchannel") else cls._TRAILING_CALLSIGN_RE
+        match = pattern.search(name)
+        if not match:
+            return []
+        key = cls._gracenote_key(match.group(1).strip(), profile)
+        return [key] if key else []
+
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         by_station: dict[str, set[str]] = {}
         channel_id_by_feed: dict[tuple[str, str], str] = {}

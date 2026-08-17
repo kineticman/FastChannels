@@ -158,6 +158,13 @@ _INCLUDED_BRANDS: dict[str, tuple[str, str]] = {  # machineName -> (display name
     'necn': ('NECN', 'News'),
 }
 
+# Reverse of _INCLUDED_BRANDS' display names, for recovering the machine brand
+# name from a DB Channel row (source_channel_id is stream_access_name, an
+# opaque per-install value — see the comment in fetch_channels() — so the
+# community CSV key has to be rebuilt from the display name instead).
+_DISPLAY_NAME_TO_BRAND = {display: brand for brand, (display, _category) in _INCLUDED_BRANDS.items()}
+_EAST_WEST_BRANDS = {'bravo', 'nbc-universo'}
+
 # Page config (software statement / drm proxy secret) is baked into a versioned,
 # deploy-tied JS bundle — cache well past a single scrape/play cycle.
 _PAGE_CONFIG_TTL = 12 * 3600
@@ -876,3 +883,16 @@ class NbcTveScraper(BaseScraper):
         cls, challenge: bytes, config: dict, channel_id: str | None = None, **kwargs,
     ) -> tuple[bytes, dict]:
         return challenge, cls.license_request_headers(config)
+
+    @classmethod
+    def community_map_keys(cls, channel) -> list[str]:
+        name = channel.name or ''
+        is_east = name.endswith(' (East)')
+        is_west = name.endswith(' (West)')
+        base_name = name[:-len(' (East)')] if (is_east or is_west) else name
+        brand = _DISPLAY_NAME_TO_BRAND.get(base_name)
+        if not brand:
+            return []
+        if brand in _EAST_WEST_BRANDS and (is_east or is_west):
+            return [f"{brand}_{'east' if is_east else 'west'}"]
+        return [brand]

@@ -1034,6 +1034,17 @@ class CoxScraper(BaseScraper):
         return cls.license_url
 
     @classmethod
+    def community_map_keys(cls, channel) -> list[str]:
+        # source_channel_id is Cox's account/session-flavored numeric channelId; the
+        # community CSV keys Cox rows by call sign instead (see fetch_channels()),
+        # which is embedded in the opaque stream_url payload, not source_channel_id.
+        try:
+            call_sign = _decode_opaque(channel.stream_url or '').get('call_sign')
+        except ValueError:
+            call_sign = None
+        return [f'callsign:{call_sign.upper()}'] if call_sign else []
+
+    @classmethod
     def get_kodi_props(cls, base_url: str, config: dict | None = None) -> dict[str, str]:
         return {
             'inputstream': 'inputstream.adaptive',
