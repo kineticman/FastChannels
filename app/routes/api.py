@@ -5541,6 +5541,28 @@ api_bp.add_url_rule('/settings/tve/discovery/browser-login/input', 'discovery_br
 api_bp.add_url_rule('/settings/tve/discovery/browser-login/stop', 'discovery_browser_login_stop', mvpd_browser_login_stop, methods=['POST'])
 
 
+# FOX One's "Sign in" button uses the plain synchronous /foxone/signin route
+# above for Cox (unchanged — fast, no browser needed); this streamed-modal
+# flow is only reached for other MSOs (YouTubeTV, Sling), which can't
+# complete without a human — see app.worker.run_foxone_browser_login.
+@api_bp.route('/settings/tve/foxone/browser-login/start', methods=['POST'])
+def foxone_browser_login_start():
+    from .tasks import trigger_foxone_browser_login
+
+    account = _get_tve_account('mvpd', 'TV Provider')
+    if not account.is_enabled:
+        return jsonify({'error': 'Enable and save the TVE account first.'}), 400
+    cfg = account.config or {}
+    mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
+    started = trigger_foxone_browser_login(mso_id)
+    return jsonify({'status': 'started' if started else 'already_running'})
+
+
+api_bp.add_url_rule('/settings/tve/foxone/browser-login/state', 'foxone_browser_login_state', mvpd_browser_login_state)
+api_bp.add_url_rule('/settings/tve/foxone/browser-login/input', 'foxone_browser_login_input', mvpd_browser_login_input, methods=['POST'])
+api_bp.add_url_rule('/settings/tve/foxone/browser-login/stop', 'foxone_browser_login_stop', mvpd_browser_login_stop, methods=['POST'])
+
+
 # ── NBC TVE browser sign-in (Adobe Pass v2 "second screen" pairing) ────────
 # NBC TVE uses a different Adobe Pass generation (v2 JSON REST) than Warner/
 # A+E's legacy XML protocol — see app.worker.run_nbc_browser_login and

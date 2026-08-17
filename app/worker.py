@@ -3386,6 +3386,202 @@ def run_discovery_browser_login(mso_id: str):
         logger.info('[discovery-mvpd-login] paired mso_id=%s (scripted, no browser)', mso_id)
 
 
+def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, mso_id: str) -> None:
+    """Browser-assisted counterpart to FOX One's scripted Cox fast path
+    (api.foxone_signin / _authenticate_via_mvpd's Cox branch), for any MSO
+    whose login page blocks scripted clients outright (YouTubeTV/Google,
+    Sling, etc.) — same "second screen" idea as _run_amcn_browser_assisted_login
+    and _run_discovery_browser_assisted_login, adapted to FOX One's own
+    adobeauthn/regcode API (_foxone_mvpd_register/_foxone_mvpd_finish).
+
+    Completion has no independent poll signal the way NBC/AMCN's
+    /profiles/code/{code} does, and no browser-landed-URL signal the way
+    Discovery's does either — FOX One's own frontend just POSTs
+    requests/complete claiming "status: authenticated" and then asks
+    checkauthn for a token, trusting Adobe's own server-side binding to
+    reject that claim if the human hasn't actually finished yet. So this
+    polls _foxone_mvpd_finish() itself (repeating the POST+GET) rather than
+    a separate read-only check — unconfirmed until tested live whether FOX's
+    backend tolerates repeated "authenticated" claims before the real login
+    completes; logged verbosely so a live run makes that obvious immediately
+    if not.
+
+    Reuses the shared legacy 'mvpd:browser-login:*' redis keys (via
+    set_status and _relay_input_and_screenshot's defaults), same as AMCN/
+    Discovery.
+    """
+    try:
+        from camoufox.sync_api import Camoufox
+    except ImportError:
+        set_status('error', 'Camoufox is not installed on this container')
+        return
+
+    import os as _os_login
+    profile_dir = '/data/browser_profiles/mvpd_tve'
+    try:
+        _os_login.makedirs(profile_dir, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[foxone-mvpd-login] could not create profile dir %s: %s', profile_dir, exc)
+
+    try:
+        session, request_id, device_id, mso_login_url, page_response = scraper._foxone_mvpd_register(mso_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception('[foxone-mvpd-login] unexpected failure registering session')
+        _record_tve_login_error('foxone', str(exc))
+        set_status('error', f'FOX One: {exc}')
+        return
+
+    nav_url = mso_login_url or str(page_response.url)
+
+    _PER_LOGIN_TIMEOUT_SECONDS = 150
+    _POLL_SECONDS = 3.0
+    access_token = ''
+    expires_at = 0.0
+
+    try:
+        with Camoufox(
+            headless='virtual', os='windows', persistent_context=True,
+            user_data_dir=profile_dir, window=(1280, 800),
+        ) as context:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.on('crash', lambda p: logger.warning('[foxone-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
+            page.on('close', lambda p: logger.warning('[foxone-mvpd-login] page CLOSE event fired'))
+            page.on('pageerror', lambda exc: logger.warning('[foxone-mvpd-login] page JS error: %s', str(exc)[:500]))
+
+            set_status('running', 'Signing in to FOX One…')
+            try:
+                page.goto(nav_url, wait_until='domcontentloaded', timeout=30000)
+            except Exception as exc:  # noqa: BLE001
+                if _is_browser_death(exc):
+                    raise
+                set_status('error', f'FOX One: failed to load sign-in page ({exc})')
+                return
+
+            wait_started = time.monotonic()
+            deadline = wait_started + _PER_LOGIN_TIMEOUT_SECONDS
+            last_shot = 0.0
+            last_poll = 0.0
+            cancelled = False
+            while time.monotonic() < deadline:
+                if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                    cancelled = True
+                    break
+                now = time.monotonic()
+                if now - last_shot > 0.25:
+                    last_shot = now
+                    if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
+                        cancelled = True
+                        break
+                if now - last_poll > _POLL_SECONDS:
+                    last_poll = now
+                    try:
+                        access_token, expires_at = scraper._foxone_mvpd_finish(session, request_id, device_id, mso_id)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.info('[foxone-mvpd-login] poll not-yet/error: %s', exc)
+                        continue
+                    break
+                page.wait_for_timeout(80)
+
+            if cancelled:
+                set_status('stopped', 'Cancelled')
+                return
+            if not access_token:
+                set_status('error', 'FOX One: timed out waiting for sign-in to complete.')
+                return
+    except BaseException as exc:  # noqa: BLE001
+        if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+            set_status('stopped', 'Cancelled')
+            return
+        logger.exception('[foxone-mvpd-login] browser-assisted session failed')
+        set_status('error', f'Browser session failed: {exc}')
+        return
+
+    scraper._update_config('access_token', access_token)
+    scraper._update_config('access_expires_at', expires_at)
+    scraper._update_config('access_token_captured_at', int(time.time()))
+    persist_source_config_updates(source.id, scraper._pending_config_updates)
+    account.last_auth_status = 'ok'
+    account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD (browser-assisted).'
+    account.last_auth_at = datetime.now(timezone.utc)
+    db.session.commit()
+    set_status('success', f'Signed in — FOX One authorized via {mso_id}.')
+    logger.info('[foxone-mvpd-login] paired mso_id=%s (browser-assisted)', mso_id)
+
+
+def run_foxone_browser_login(mso_id: str):
+    """Standalone "Sign in" for FOX One.
+
+    Mirrors run_amcn_browser_login/run_discovery_browser_login: Cox keeps
+    its existing fast scripted path (mirroring api.foxone_signin exactly,
+    since that route is what "Sign in" called before this function existed
+    for FOX One at all — this is the FIRST browser-assisted entry point FOX
+    One has ever had); any other MSO goes through the real browser-assisted
+    flow below instead of erroring out with "no scripted sign-in wired up".
+    """
+    with flask_app.app_context():
+        import json as _json_login
+
+        try:
+            r = redis.from_url(flask_app.config['REDIS_URL'])
+            r.ping()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[foxone-mvpd-login] Redis unavailable, aborting: %s', exc)
+            return
+
+        def set_status(state: str, message: str = ''):
+            try:
+                r.setex(
+                    MVPD_BROWSER_LOGIN_STATUS_KEY, 120,
+                    _json_login.dumps({'state': state, 'message': message, 'url': '', 'requestor_id': 'FOX One', 'steps': []}),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        r.delete(MVPD_BROWSER_LOGIN_STOP_KEY)
+        r.delete(MVPD_BROWSER_LOGIN_INPUT_KEY)
+        set_status('running', 'Signing in to FOX One…')
+
+        from app.scrapers.fox_one import FoxOneScraper
+
+        source = Source.query.filter_by(name='fox_one').first()
+        if not source:
+            set_status('error', 'FOX One source not found.')
+            return
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        if not account or not account.is_enabled or not account.has_credentials():
+            set_status('error', 'TVE credentials are not configured in Settings.')
+            return
+        scraper = FoxOneScraper(config=dict(source.config or {}))
+
+        if mso_id != 'Cox':
+            _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, mso_id)
+            return
+
+        try:
+            access_token, expires_at = scraper._authenticate_via_mvpd(
+                mso_id, account.username or '', account.password or '', (account.config or {}).get('xfinity_cookie_jar'),
+            )
+        except Exception as exc:  # noqa: BLE001
+            account.last_auth_status = 'error'
+            account.last_auth_message = f'FOX One {mso_id} MVPD auth failed: {exc}'[:500]
+            account.last_auth_at = datetime.now(timezone.utc)
+            _record_tve_login_error('foxone', str(exc))
+            db.session.commit()
+            persist_source_config_updates(source.id, scraper._pending_config_updates)
+            set_status('error', f'FOX One: {exc}')
+            return
+        scraper._update_config('access_token', access_token)
+        scraper._update_config('access_expires_at', expires_at)
+        scraper._update_config('access_token_captured_at', int(time.time()))
+        persist_source_config_updates(source.id, scraper._pending_config_updates)
+        account.last_auth_status = 'ok'
+        account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD.'
+        account.last_auth_at = datetime.now(timezone.utc)
+        db.session.commit()
+        set_status('success', 'Signed in — FOX One authorized.')
+        logger.info('[foxone-mvpd-login] paired mso_id=%s (scripted, no browser)', mso_id)
+
+
 def _summarize_pairing_results(results: dict[str, tuple[bool, str]]) -> str:
     authorized = [k for k, (ok, _) in results.items() if ok]
     other = [(k, msg) for k, (ok, msg) in results.items() if not ok]

@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS, _cox_saml_login, _jwt_exp
 from ..gracenote_map import resolve_gracenote
-from ..tve.adobe_pass import MvpdCooldownMixin
+from ..tve.adobe_pass import MvpdCooldownMixin, TVENotAuthorizedError
 
 _SCHEME = 'fox-one://'
 _API_BASE = 'https://api.fox.com/dtc'
@@ -495,27 +495,27 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         account.config = cfg
         db.session.commit()
 
-    def _authenticate_via_mvpd(
-        self, mso_id: str, username: str, password: str, cookie_jar: dict | None = None,
-    ) -> tuple[str, float]:
-        """Link this device to FOX One's entitlement system through an MVPD
-        (TV-provider) sign-in, mirroring the same Adobe Pass SAML dance
-        fox_tve.py already automates — just via FOX One's own adobeauthn/
-        regcode endpoints instead of fox_tve's legacy api3.fox.com ones.
-        Tokens from the two are not interchangeable (different OAuth
-        client_id), so FOX One needs its own pass at this.
+    @staticmethod
+    def _foxone_auth_headers() -> dict[str, str]:
+        return {
+            'Accept': 'application/json',
+            'x-api-key': _PLATFORM_API_KEY,
+            'x-ori-client-api-key': _API_KEY,
+            'Referer': 'https://auth.fox.com/',
+            'Origin': 'https://auth.fox.com',
+        }
 
-        adoberegcode/adobeauthn are already MVPD-agnostic — mso_id flows
-        straight through to Adobe Pass, which redirects to whichever MVPD's
-        real login page. Only the final login step is currently wired up:
-        Cox gets a fast scripted native login (_cox_saml_login, same Okta
-        API fox_tve.py's legacy path uses). Any other MVPD raises a clear
-        error below rather than silently POSTing its credentials into Cox's
-        login form — a scripted login for it hasn't been built yet, same
-        gap as fox_tve.py's _fox_sports_mvpd_token. Wiring one up (or
-        falling back to the shared browser-assisted pairing flow) is
-        future work, gated on having real credentials for that MVPD to
-        verify against.
+    def _foxone_mvpd_register(self, mso_id: str):
+        """Registers a FOX One adobeauthn/regcode request and returns
+        (session, request_id, device_id, mso_login_url, page_response)
+        without completing any login — this is the scripted part that's
+        never blocked by an MSO's bot defense. Split out of
+        _authenticate_via_mvpd() (2026-08-17) so a browser-assisted pairing
+        (app.worker.run_foxone_browser_login) can drive this registration
+        scripted, then hand a real browser just the mso_login_url/
+        page_response instead of the whole method needing a synchronous,
+        blocking login_to_mvpd() call it can't make for MSOs that require a
+        human (YouTubeTV, Sling).
 
         A device_id can get stuck replaying an old, never-completed MVPD-link
         request — adoberegcode just echoes our own redirect_url back as a no-op
@@ -540,13 +540,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
                 raise RuntimeError('FOX One adobeauthn did not return a request_id')
             request_id = match.group(1)
 
-            headers = {
-                'Accept': 'application/json',
-                'x-api-key': _PLATFORM_API_KEY,
-                'x-ori-client-api-key': _API_KEY,
-                'Referer': 'https://auth.fox.com/',
-                'Origin': 'https://auth.fox.com',
-            }
+            headers = self._foxone_auth_headers()
             # The redirect_url must be the SPA's own /callback route with polling_mvpd
             # and a flat apikey param appended, matching what the real fox.com frontend
             # sends — not the bare landing-page URL adobeauthn redirected to (r.url).
@@ -576,27 +570,19 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
 
         r3 = session.get(auth_url, allow_redirects=False, timeout=20)
         mso_login_url = r3.headers.get('location') or ''
+        return session, request_id, device_id, mso_login_url, r3
 
-        if mso_id == 'Cox':
-            if 'login.cox.com' not in mso_login_url:
-                raise RuntimeError(f'Unexpected FOX One Adobe redirect host: {urlparse(mso_login_url).netloc}')
-            _cox_saml_login(session, mso_login_url, username, password)
-        else:
-            # Every other MVPD's actual sign-in mechanics live in
-            # app/tve/mvpd/ — add one there (not here) to support a new
-            # provider everywhere at once. `session` isn't threaded through
-            # (unlike Cox above): FOX binds the completed login server-side
-            # to `request_id`, checked by the completion call below,
-            # regardless of which HTTP session did the MVPD login — same
-            # pattern already proven for NBC/AMCN's own Xfinity/DIRECTV use.
-            from ..tve.mvpd import login_to_mvpd
-            from ..tve.adobe_pass import TVEAuthError as _TVEAuthError
-            page_html, page_url = (r3.text, str(r3.url)) if not mso_login_url else ('', mso_login_url)
-            try:
-                login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
-            except _TVEAuthError as exc:
-                raise ValueError(str(exc)) from exc
-
+    def _foxone_mvpd_finish(self, session, request_id: str, device_id: str, mso_id: str) -> tuple[str, float]:
+        """The requests/complete + checkauthn tail — split out of
+        _authenticate_via_mvpd() (2026-08-17) so a browser-assisted pairing
+        (app.worker.run_foxone_browser_login) can call it once a human has
+        completed the MVPD's own login, same as the Cox branch below calls
+        it right after _cox_saml_login() completes synchronously. `session`
+        must be the SAME one _foxone_mvpd_register() returned (FOX binds the
+        completed login server-side to `request_id`/`device_id`, not to a
+        particular session, but this endpoint still expects the session that
+        carries the earlier adobeauthn/regcode cookies)."""
+        headers = self._foxone_auth_headers()
         rc = session.post(
             f'{_ID_BASE}/adobeauthn/v1/requests/complete',
             json={'request_id': request_id, 'mvpd_id': mso_id, 'status': 'authenticated'},
@@ -620,6 +606,43 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
 
         expires_at = _jwt_exp(access_token) or (time.time() + 3600)
         return access_token, expires_at
+
+    def _authenticate_via_mvpd(
+        self, mso_id: str, username: str, password: str, cookie_jar: dict | None = None,
+    ) -> tuple[str, float]:
+        """Link this device to FOX One's entitlement system through an MVPD
+        (TV-provider) sign-in, mirroring the same Adobe Pass SAML dance
+        fox_tve.py already automates — just via FOX One's own adobeauthn/
+        regcode endpoints instead of fox_tve's legacy api3.fox.com ones.
+        Tokens from the two are not interchangeable (different OAuth
+        client_id), so FOX One needs its own pass at this.
+
+        Cox gets a fast scripted native login (_cox_saml_login, same Okta
+        API fox_tve.py's legacy path uses) — every other MVPD's actual
+        sign-in mechanics live in app/tve/mvpd/ via login_to_mvpd(), which
+        raises a clear error for any MSO with no scripted backend wired up
+        (Google/YouTubeTV, Sling) rather than silently posting credentials
+        into Cox's login form. Those MSOs can only complete via the
+        browser-assisted pairing flow (app.worker.run_foxone_browser_login),
+        which calls _foxone_mvpd_register()/_foxone_mvpd_finish() directly
+        instead of this synchronous wrapper.
+        """
+        session, request_id, device_id, mso_login_url, r3 = self._foxone_mvpd_register(mso_id)
+
+        if mso_id == 'Cox':
+            if 'login.cox.com' not in mso_login_url:
+                raise RuntimeError(f'Unexpected FOX One Adobe redirect host: {urlparse(mso_login_url).netloc}')
+            _cox_saml_login(session, mso_login_url, username, password)
+        else:
+            from ..tve.mvpd import login_to_mvpd
+            from ..tve.adobe_pass import TVEAuthError as _TVEAuthError
+            page_html, page_url = (r3.text, str(r3.url)) if not mso_login_url else ('', mso_login_url)
+            try:
+                login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+            except _TVEAuthError as exc:
+                raise ValueError(str(exc)) from exc
+
+        return self._foxone_mvpd_finish(session, request_id, device_id, mso_id)
 
     def _ensure_access_token(self) -> str:
         from .. import db
@@ -860,6 +883,21 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             'privacy': {'us': '1YNN', 'lat': False},
         }
         r = self.session.post(_PLAYBACK_API, headers=self._dtc_headers(), json=payload, timeout=30)
+        if r.status_code in (401, 403):
+            # A clean, definitive denial from FOX's own CanIPlay entitlement
+            # service (confirmed live 2026-08-17: "user not entitled:
+            # Resource is not supported by MVPD" — the exact same message
+            # fox_tve.py's own MVPD gate uses for its sports channels) —
+            # not a transient failure, so it needs to be classified the same
+            # way Discovery/AMCN's own entitlement denials are, or it falls
+            # through to a bare requests.HTTPError that audit/play-time
+            # treat as a generic transient error instead of auto-disabling
+            # the channel (code review, 2026-08-17).
+            try:
+                detail = r.json().get('entitlementIssues') or r.text[:300]
+            except ValueError:
+                detail = r.text[:300]
+            raise TVENotAuthorizedError(f'FOX One: not entitled for asset {asset_id}: {detail}')
         r.raise_for_status()
         data = r.json()
         playback_url = ((data.get('stream') or {}).get('playbackUrl') or '').strip()

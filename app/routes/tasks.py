@@ -729,6 +729,29 @@ def trigger_discovery_browser_login(mso_id: str):
         return True
 
 
+def trigger_foxone_browser_login(mso_id: str):
+    """Returns True if a job was enqueued, False if one is already running."""
+    try:
+        q = get_fast_queue()
+        job_id = 'mvpd-browser-login'
+        if _mvpd_tve_profile_busy(q):
+            logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
+            return False
+        q.enqueue('app.worker.run_foxone_browser_login', mso_id, job_timeout=1830, job_id=job_id)
+        logger.info('Enqueued FOX One browser login for mso_id=%s', mso_id)
+        return True
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for FOX One browser login')
+        import threading
+        from app.worker import run_foxone_browser_login
+        thread_name = 'mvpd-browser-login-fallback'
+        if _mvpd_tve_profile_busy_fallback():
+            logger.info('MVPD browser login fallback thread already running')
+            return False
+        threading.Thread(target=run_foxone_browser_login, args=(mso_id,), daemon=True, name=thread_name).start()
+        return True
+
+
 def trigger_tvtv_cache_refresh() -> str:
     """Returns 'queued', 'deferred' (scraper work active), or 'active'
     (refresh already queued/running)."""

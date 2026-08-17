@@ -452,20 +452,22 @@ async function resetTveState() {
 // see app/worker.py's run_mvpd_browser_login docstring for why this exists
 // (some MSO login pages block scripted clients outright, browser TLS
 // impersonation included).
-// Five networks share this one streamed-browser modal, each with its own
+// Six networks share this one streamed-browser modal, each with its own
 // backend flow and endpoint prefix (see app/tve/status.py's 'family' field):
 // 'legacy' (A+E/Warner, needs a requestor_id) and 'nbc'/'fox'/'amcn'/
-// 'discovery' (each a single fixed target, no requestor_id). amcn/discovery
-// sign in with a fully scripted Cox login now (app.worker.run_amcn_browser_login/
-// run_discovery_browser_login — no browser involved), but still report
-// through the same status/redis keys as the legacy family's modal, so this
-// same polling code works unchanged for them.
+// 'discovery'/'foxone' (each a single fixed target, no requestor_id).
+// amcn/discovery/foxone sign in with a fast scripted Cox login when that's
+// the selected MVPD (foxone's own quick native button still handles that
+// case directly, see loadTveNetworkStatus — this modal is only reached for
+// other MSOs), but report through the same status/redis keys as the legacy
+// family's modal either way, so this same polling code works unchanged.
 const MVPD_LOGIN_FAMILIES = {
   legacy:    { base: '/api/settings/tve/browser-login', needsRequestor: true },
   nbc:       { base: '/api/settings/tve/nbc/browser-login', needsRequestor: false },
   fox:       { base: '/api/settings/tve/fox/browser-login', needsRequestor: false },
   amcn:      { base: '/api/settings/tve/amcn/browser-login', needsRequestor: false },
   discovery: { base: '/api/settings/tve/discovery/browser-login', needsRequestor: false },
+  foxone:    { base: '/api/settings/tve/foxone/browser-login', needsRequestor: false },
 };
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
@@ -571,8 +573,9 @@ async function loadTveNetworkStatus() {
         note = `<div style="color:var(--danger);font-size:0.72rem;margin:0.05rem 0 0.35rem">Last attempt failed ${errAge}: ${_escapeHtml(n.last_error_message)}</div>`;
       }
       const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
+      const bootstrap = window.FC_SETTINGS_BOOTSTRAP || {};
       let button = '';
-      if (n.family === 'foxone') {
+      if (n.family === 'foxone' && bootstrap.tveSelectedMsoId === 'Cox') {
         button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Quick, no-browser native login — also doubles as a fast check that your saved TV provider credentials are still valid" onclick="foxOneSignIn(this)">Sign in</button>`;
       } else if (n.family) {
         button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`;
