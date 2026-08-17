@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover - deployment dependency guard
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, dedupe_dominant_episode_id
 from .category_utils import category_for_channel, infer_category_from_name
+from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
 
@@ -852,6 +853,10 @@ class CoxScraper(BaseScraper):
             guide_key=station_id,
             tags=tags,
             description=affiliate or call_sign,
+            # channelId/stationId are long numeric IDs that look account/session-
+            # specific, so the community gracenote_map CSV keys Cox rows by call
+            # sign instead — the stable, human-portable identifier across accounts.
+            gracenote_id=resolve_gracenote('cox', lookup_key=f'callsign:{call_sign.upper()}') if call_sign else None,
         )
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
