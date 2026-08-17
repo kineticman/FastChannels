@@ -23,9 +23,11 @@ except ImportError:  # pragma: no cover - optional until Docker deps are rebuilt
 try:
     from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata, null_placeholder_season_episode
     from .category_utils import infer_category_from_name, normalize_category
+    from ..gracenote_map import resolve_gracenote
 except ImportError:  # pragma: no cover - local staging outside FastChannels package
     from app.scrapers.base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, format_http_reason, infer_language_from_metadata, null_placeholder_season_episode
     from app.scrapers.category_utils import infer_category_from_name, normalize_category
+    from app.gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
 
@@ -581,7 +583,7 @@ class SlingScraper(BaseScraper):
             country='US',
             stream_type='dash',
             number=self._to_int(item.get('channel_number')),
-            gracenote_id=str(item.get('gracenote_channel_id') or '').strip() or None,
+            gracenote_id=resolve_gracenote('sling', upstream_id=item.get('gracenote_channel_id'), lookup_key=channel_guid),
             guide_key=(item.get('qvt_url') or item.get('qvt') or '').strip() or None,
             tags=['Sling Subscription'],
         )
@@ -668,7 +670,7 @@ class SlingScraper(BaseScraper):
             country="US",
             stream_type="dash",
             number=self._to_int(item.get("channel_number")),
-            gracenote_id=str(item.get("gracenote_channel_id") or "").strip() or None,
+            gracenote_id=resolve_gracenote('sling', upstream_id=item.get('gracenote_channel_id'), lookup_key=channel_guid),
             guide_key=qvt_url,
             tags=['Sling Freestream'] if require_free else ['Sling Subscription'],
         )

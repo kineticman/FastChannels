@@ -13,6 +13,7 @@ from typing import Any
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
 from .category_utils import infer_category_from_name
+from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
 
@@ -991,6 +992,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
             category=category,
             language=infer_language_from_metadata(name, category),
             stream_type='dash',
+            gracenote_id=resolve_gracenote('amazon_prime_free', lookup_key=station_id),
         )
 
     def _program_from_schedule(self, source_channel_id: str, airing: dict[str, Any]) -> ProgramData | None:

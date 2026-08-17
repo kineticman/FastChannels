@@ -15,6 +15,7 @@ from urllib.parse import urlencode, urlparse, urlsplit
 import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
+from ..gracenote_map import resolve_gracenote
 from ..tve.adobe_pass import TVENotAuthorizedError
 
 logger = logging.getLogger(__name__)
@@ -959,6 +960,7 @@ class FoxTVEScraper(BaseScraper):
                 country='US',
                 guide_key=channel.channel_id.upper(),
                 description=channel.description,
+                gracenote_id=resolve_gracenote('fox_tve', lookup_key=channel.channel_id),
             )
             for channel in CHANNELS.values()
             # fox_weather is deliberately excluded from the fox_tve lineup: find_live_hls()

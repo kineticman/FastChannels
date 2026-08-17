@@ -14,6 +14,7 @@ from .base import (
     infer_language_from_metadata,
 )
 from .category_utils import category_for_channel, infer_category_from_name
+from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +255,7 @@ class VidaaScraper(BaseScraper):
             language          = language,
             country           = "US",
             stream_type       = "dash" if drm else "hls",
+            gracenote_id      = resolve_gracenote('vidaa', lookup_key=str(cid)),
         )
 
     def fetch_channels(self) -> list[ChannelData]:

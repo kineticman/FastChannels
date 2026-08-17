@@ -14,6 +14,7 @@ from urllib3.util.retry import Retry
 
 from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, infer_language_from_metadata, dedupe_dominant_episode_id
 from .category_utils import infer_category_from_name
+from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,7 @@ class XumoScraper(BaseScraper):
                     category=category,
                     language=infer_language_from_metadata(name, category),
                     description=description,
+                    gracenote_id=resolve_gracenote('xumo', lookup_key=channel_id),
                 )
             )
 
