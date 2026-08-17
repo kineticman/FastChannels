@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, infer_language_from_metadata, dedupe_dominant_episode_id
 from .category_utils import infer_category_from_name
@@ -31,6 +36,11 @@ class XumoScraper(BaseScraper):
     scrape_interval = 720
     stream_audit_enabled  = True
     audit_ignore_4xx      = True  # CDN URLs expire per program window; 4xx = between programs, not dead
+    # Bounds the per-channel resolve() call during scheduled stream audits.
+    # Without this the indirection probe in _unwrap_playlist_indirection()
+    # (a synchronous network call) can stall the whole sequential audit loop
+    # on one hung channel — see app/worker.py's _run_with_signal_timeout.
+    audit_channel_timeout_seconds = 15
     config_schema = []
 
     BASE_URL = "https://valencia-app-mds.xumo.com"
@@ -87,6 +97,18 @@ class XumoScraper(BaseScraper):
         self._device_id = str(uuid.uuid4())
         self._ifa_id = str(uuid.uuid4())
         self._asset_cache: dict[str, dict[str, Any]] = {}
+
+        # Dedicated no-retry session for the playlist-indirection probe (see
+        # _unwrap_playlist_indirection). It runs synchronously on the
+        # play-time hot path, so it must fail fast on a slow/flaky provider
+        # instead of inheriting self.session's retry adapter (total=3,
+        # backoff_factor=1.0), which can otherwise stack ~30-55s of retries
+        # onto a single tune before falling back.
+        self._indirection_session = requests.Session()
+        self._indirection_session.headers.update(self.session.headers)
+        _no_retry_adapter = HTTPAdapter(max_retries=Retry(total=0))
+        self._indirection_session.mount("https://", _no_retry_adapter)
+        self._indirection_session.mount("http://", _no_retry_adapter)
 
     # ---------------------------------------------------------------------
     # Required FastChannels methods
@@ -364,7 +386,7 @@ class XumoScraper(BaseScraper):
         if not source_url:
             return raw_url
 
-        return self._process_stream_uri(source_url)
+        return self._unwrap_playlist_indirection(self._process_stream_uri(source_url))
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -495,6 +517,101 @@ class XumoScraper(BaseScraper):
         query_pairs = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=False) if v != ""]
         cleaned_query = urlencode(query_pairs, doseq=True)
         return urlunparse(parsed._replace(query=cleaned_query))
+
+    # Suffixes that mark a URL as already being a playable manifest.
+    _MANIFEST_SUFFIXES = (".m3u8", ".mpd")
+    # (connect, read) timeout for the indirection probe — short and
+    # non-retried since it runs on the play-time hot path (see
+    # _indirection_session in __init__).
+    _INDIRECTION_PROBE_TIMEOUT = (3, 5)
+    # Provider is expected to return a short JSON string; refuse to buffer
+    # anything larger rather than fully downloading an unbounded body.
+    _INDIRECTION_MAX_BYTES = 8192
+
+    def _unwrap_playlist_indirection(self, url: str) -> str:
+        """Follow one hop when a channel resolves to a JSON pointer, not a manifest.
+
+        A few Xumo channels are delivered through a provider API that returns
+        the real playlist URL as a bare JSON string instead of serving the
+        manifest itself — Local Now via ottcms.weathergroup.com is the one in
+        the current lineup:
+
+            GET /api/v1/scte35stream/XumoV3  ->  200 application/json
+            "https://…mediatailor….amazonaws.com/…/playlist.m3u8?…"
+
+        Lenient players (VLC) sniff that and follow it; strict ones do not.
+        Shaka requires a leading #EXTM3U and reports the JSON body as
+        HLS_PLAYLIST_HEADER_MISSING (error 4015), so the channel is unplayable
+        in the browser and through the PrismCast bridge.
+
+        Only probed when the resolved URL has no manifest suffix — true for
+        exactly one of 72 channels here — so the common path costs no extra
+        request. Deliberately narrow: a non-JSON content type, a non-string
+        payload, or anything that isn't an http(s) URL is left untouched, so a
+        provider returning JSON for some other reason cannot break playback.
+        The probe itself uses a dedicated no-retry session with a tight
+        timeout (see _indirection_session in __init__) so a flaky provider
+        can't turn into a multi-attempt stall or a 429 retry storm on this
+        synchronous play-time path — same non-caching behavior as the rest of
+        resolve() (broadcast/asset lookups also re-fetch on every call).
+        """
+        if urlparse(url).path.lower().endswith(self._MANIFEST_SUFFIXES):
+            return url
+
+        try:
+            with self._indirection_session.get(
+                url, timeout=self._INDIRECTION_PROBE_TIMEOUT, stream=True,
+            ) as response:
+                response.raise_for_status()
+
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > self._INDIRECTION_MAX_BYTES:
+                    logger.warning(
+                        "[xumo] indirection probe response too large for %s (%s bytes)",
+                        url[:80], content_length,
+                    )
+                    return url
+
+                body = response.raw.read(self._INDIRECTION_MAX_BYTES + 1, decode_content=True)
+                content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        except Exception as exc:  # noqa: BLE001 - never let a probe break playback
+            logger.warning("[xumo] indirection probe failed for %s: %s", url[:80], exc)
+            return url
+
+        if len(body) > self._INDIRECTION_MAX_BYTES:
+            logger.warning("[xumo] indirection probe response exceeded size cap for %s", url[:80])
+            return url
+
+        if "json" not in content_type:
+            logger.warning(
+                "[xumo] indirection probe returned non-JSON content-type %r for %s",
+                content_type, url[:80],
+            )
+            return url
+
+        try:
+            payload = json.loads(body)
+        except ValueError as exc:
+            logger.warning("[xumo] indirection probe returned invalid JSON for %s: %s", url[:80], exc)
+            return url
+
+        if not isinstance(payload, str):
+            logger.warning("[xumo] indirection probe returned a non-string JSON payload for %s", url[:80])
+            return url
+
+        candidate = payload.strip()
+        parsed_candidate = urlparse(candidate)
+        if parsed_candidate.scheme not in ("http", "https") or not parsed_candidate.netloc:
+            logger.warning("[xumo] indirection probe returned a non-URL payload for %s", url[:80])
+            return url
+
+        # debug, not info: with no caching this fires on every resolve() for
+        # the affected channel, so INFO would scale with viewer traffic.
+        logger.debug(
+            "[xumo] unwrapped playlist indirection: %s -> %s",
+            urlparse(url).netloc, parsed_candidate.netloc,
+        )
+        return candidate
 
     @staticmethod
     def _parse_xumo_dt(value: Any) -> datetime | None:
