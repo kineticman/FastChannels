@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import re
 import unicodedata
+from urllib.parse import urlsplit
 from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case
 from sqlalchemy.orm import load_only, defer
@@ -1372,6 +1373,9 @@ def settings():
                            prismcast_inner_url=app_settings.prismcast_inner_url or '',
                            prismcast_max_height=int(app_settings.prismcast_max_height or 0),
                            drm_bridge_enabled=bool(app_settings.drm_bridge_enabled),
+                           kodi_bridge_enabled=bool(app_settings.kodi_bridge_enabled),
+                           kodi_bridge_keepalive_enabled=app_settings.kodi_bridge_keepalive_enabled if app_settings.kodi_bridge_keepalive_enabled is not None else True,
+                           kodi_bridge_ip=(urlsplit(app_settings.effective_kodi_bridge_device_url()).hostname if app_settings.effective_kodi_bridge_device_url() else '') or '',
                            tve_provider_choices=tve_provider_choices,
                            tve_account=tve_account.to_safe_dict() if tve_account else {
                                'provider_id': 'mvpd',

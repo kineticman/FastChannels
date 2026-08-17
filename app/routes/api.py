@@ -746,6 +746,18 @@ def _normalize_server_url(value: str | None, default_port: int | None = None) ->
     return f'{scheme}://{host}'.rstrip('/')
 
 
+def _kodi_bridge_host_from_input(value: str | None) -> str | None:
+    """Extract a bare host from a Kodi/Firestick IP field — strips any scheme/port
+    the user typed, since the admin form only takes one IP and derives both the
+    JSON-RPC URL (:8080) and adb address (:5555) from it."""
+    raw = (value or '').strip()
+    if not raw:
+        return None
+    if '://' not in raw:
+        raw = f'http://{raw}'
+    return urlsplit(raw).hostname or None
+
+
 
 
 @api_bp.route('/sources')
@@ -5687,6 +5699,16 @@ def app_settings():
             row.image_proxy_enabled = bool(data['image_proxy_enabled'])
         if 'm3u_rewrite_timestamps' in data:
             row.m3u_rewrite_timestamps = bool(data['m3u_rewrite_timestamps'])
+        if 'kodi_bridge_enabled' in data:
+            row.kodi_bridge_enabled = bool(data['kodi_bridge_enabled'])
+        if 'kodi_bridge_keepalive_enabled' in data:
+            row.kodi_bridge_keepalive_enabled = bool(data['kodi_bridge_keepalive_enabled'])
+        if 'kodi_bridge_ip' in data:
+            _kodi_host = _kodi_bridge_host_from_input(data['kodi_bridge_ip'])
+            if data.get('kodi_bridge_ip') and not _kodi_host:
+                return jsonify({'error': 'Invalid Kodi/Firestick IP address.'}), 422
+            row.kodi_bridge_device_url = f'http://{_kodi_host}:8080' if _kodi_host else None
+            row.kodi_bridge_adb_address = f'{_kodi_host}:5555' if _kodi_host else None
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:
@@ -5710,10 +5732,24 @@ def app_settings():
         'prismcast_inner_url': row.prismcast_inner_url or '',
         'prismcast_max_height': int(row.prismcast_max_height or 0),
         'drm_bridge_enabled': bool(row.drm_bridge_enabled),
+        'kodi_bridge_enabled': bool(row.kodi_bridge_enabled),
+        'kodi_bridge_keepalive_enabled': row.kodi_bridge_keepalive_enabled if row.kodi_bridge_keepalive_enabled is not None else True,
+        'kodi_bridge_ip': _kodi_bridge_host_from_input(row.effective_kodi_bridge_device_url()) or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
     })
+
+
+@api_bp.route('/settings/kodi-bridge/test', methods=['POST'])
+def test_kodi_bridge():
+    """Quick JSON-RPC ping against the configured Kodi/Firestick device."""
+    from .. import kodi_bridge
+    if not kodi_bridge.is_configured():
+        return jsonify({'ok': False, 'message': 'Enable the bridge and set a device IP first.'}), 400
+    if kodi_bridge.is_alive(timeout=4):
+        return jsonify({'ok': True, 'message': 'Kodi responded — device is reachable.'})
+    return jsonify({'ok': False, 'message': "Couldn't reach Kodi's JSON-RPC — check the IP, that Kodi is running, and that its webserver control is enabled."})
 
 
 @api_bp.route('/settings/gracenote-auto-clear', methods=['POST'])

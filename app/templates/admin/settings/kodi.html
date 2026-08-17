@@ -1,0 +1,54 @@
+  <!-- Kodi/Fire TV (HDMI-encoder DRM bridge) card -->
+  <div class="source-card" id="settings-card-kodi-bridge">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">📺</div>
+        <div>
+          <div class="source-name">Kodi HDMI Bridge <span class="badge badge-beta">Experimental Beta</span></div>
+          <div class="source-meta">Remote-trigger a Kodi/Fire TV device to play DRM channels, captured back in by an HDMI encoder</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="help" style="color:var(--warning-soft)">This feature is early and hands-on: it expects a Kodi install already sideloaded on the device with JSON-RPC and the FastChannels resolver addon set up. Nothing here does that setup for you yet.</div>
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Enable Kodi bridge</div>
+          <div class="toggle-row-help">Turns the feature on. Needed before the device IP below does anything.</div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="kodi-bridge-enabled" {% if kodi_bridge_enabled %}checked{% endif %}
+                   onchange="saveKodiBridgeToggles()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Keep alive</div>
+          <div class="toggle-row-help">A background check pings the device every 45s and relaunches Kodi automatically if it's unresponsive (crashed, backgrounded, or just rebooted). Turn off to stop that polling, e.g. while testing manually.</div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="kodi-bridge-keepalive" {% if kodi_bridge_keepalive_enabled %}checked{% endif %}
+                   onchange="saveKodiBridgeToggles()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="fields-grid" style="max-width:480px">
+        <div class="field field-full">
+          <label for="kodi-bridge-ip">Kodi / Firestick IP address</label>
+          <input type="text" id="kodi-bridge-ip"
+                 placeholder="192.168.1.50" value="{{ kodi_bridge_ip }}">
+          <div class="help">Just the IP — JSON-RPC (<code>:8080</code>) and adb (<code>:5555</code>) addresses are derived from it automatically.</div>
+        </div>
+      </div>
+      <div class="field-actions">
+        <span class="save-status" id="kodi-bridge-status"></span>
+        <button class="btn btn-secondary" onclick="testKodiBridge()">Test connection</button>
+        <button class="btn btn-primary" onclick="saveKodiBridgeSettings()">Save</button>
+      </div>
+    </div>
+  </div>

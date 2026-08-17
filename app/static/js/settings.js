@@ -213,6 +213,41 @@ async function savePrismcastSettings() {
   }, 'prismcast-status');
 }
 
+async function saveKodiBridgeToggles() {
+  const enabled = document.getElementById('kodi-bridge-enabled').checked;
+  const keepalive = document.getElementById('kodi-bridge-keepalive').checked;
+  await saveSettings({
+    kodi_bridge_enabled: enabled,
+    kodi_bridge_keepalive_enabled: keepalive,
+  }, 'kodi-bridge-status');
+}
+
+async function saveKodiBridgeSettings() {
+  const ip = document.getElementById('kodi-bridge-ip').value.trim();
+  const enabled = document.getElementById('kodi-bridge-enabled').checked;
+  const keepalive = document.getElementById('kodi-bridge-keepalive').checked;
+  await saveSettings({
+    kodi_bridge_ip: ip || null,
+    kodi_bridge_enabled: enabled,
+    kodi_bridge_keepalive_enabled: keepalive,
+  }, 'kodi-bridge-status');
+}
+
+async function testKodiBridge() {
+  const statusEl = document.getElementById('kodi-bridge-status');
+  statusEl.textContent = 'Testing…';
+  statusEl.className = 'save-status';
+  try {
+    const resp = await fetch('/api/settings/kodi-bridge/test', {method: 'POST'});
+    const data = await resp.json();
+    statusEl.textContent = data.message || (data.ok ? 'Connected' : 'Connection failed.');
+    statusEl.className = 'save-status ' + (data.ok ? 'ok' : 'error');
+  } catch (e) {
+    statusEl.textContent = 'Connection failed.';
+    statusEl.className = 'save-status error';
+  }
+}
+
 
 const tveProviders = settingsBootstrap.tveProviders || [];
 const tveProviderMap = Object.fromEntries(tveProviders.map((p) => [p.id, p]));

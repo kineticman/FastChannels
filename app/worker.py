@@ -5961,6 +5961,31 @@ if __name__ == '__main__':
         scheduler.add_job(_scheduled_logo_cache_cleanup, 'interval', hours=6, id='logo_cache_cleanup',
                           max_instances=1, coalesce=True, misfire_grace_time=3600)
 
+        def _scheduled_kodi_bridge_watchdog():
+            # Fire TV/Kodi has no launcher role of its own (anything that returns to
+            # the Fire TV home screen strands it) and its BOOT_COMPLETED receiver
+            # doesn't actually relaunch the app after a reboot — both confirmed real
+            # gaps, see dev/kodi/README.md. This is the recovery loop for both.
+            from app import kodi_bridge
+            try:
+                with flask_app.app_context():
+                    if not kodi_bridge.keepalive_enabled():
+                        return
+                    if kodi_bridge.is_alive(timeout=3):
+                        return
+                    logger.warning('[kodi-bridge] watchdog: device unresponsive, attempting wake/relaunch')
+                    recovered = kodi_bridge.wake_and_relaunch()
+                if recovered:
+                    logger.info('[kodi-bridge] watchdog: recovered')
+                else:
+                    logger.error('[kodi-bridge] watchdog: wake/relaunch failed after max wait')
+            except Exception as e:
+                logger.warning('[kodi-bridge] watchdog check failed: %s', e)
+
+        scheduler.add_job(_scheduled_kodi_bridge_watchdog, 'interval', seconds=45,
+                          id='kodi_bridge_watchdog', max_instances=1, coalesce=True,
+                          misfire_grace_time=60)
+
         def _scheduled_remote_gracenote_refresh():
             from app.gracenote_map import fetch_remote_gracenote_map
             with flask_app.app_context():

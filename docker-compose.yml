@@ -12,6 +12,8 @@ services:
       - "5523:5523"
     volumes:
       - db_data:/data
+      - adb_keys:/root/.android
 
 volumes:
   db_data:
+  adb_keys:
