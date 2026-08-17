@@ -46,10 +46,14 @@ RUN printf '%s\n' \
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 # Keep yt-dlp at GitHub master — YouTube extraction breaks on stale PyPI releases.
-# This layer is cached, so a plain rebuild reuses whatever master was at first build.
-# Bump YTDLP_REFRESH (e.g. --build-arg YTDLP_REFRESH=$(date +%s)) to force a fresh pull.
+# This layer is cached by Docker's build cache, keyed on the RUN command's literal text.
+# YTDLP_REFRESH must actually appear in that text (the `echo` below) or changing it does
+# nothing — an ARG that's merely declared but never referenced in the RUN instruction does
+# NOT bust its cache. Bump YTDLP_REFRESH (e.g. --build-arg YTDLP_REFRESH=$(date +%s)) to
+# force a fresh pull; CI passes the commit SHA so every push gets current master.
 ARG YTDLP_REFRESH=unset
-RUN pip install --force-reinstall "yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
+RUN echo "yt-dlp refresh token: ${YTDLP_REFRESH}" \
+    && pip install --force-reinstall "yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
 
 RUN playwright install-deps chromium && playwright install chromium
 # Camoufox (anti-detect Firefox) for the interactive Sling sign-in - fetches its
