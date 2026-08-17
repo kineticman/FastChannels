@@ -16,7 +16,7 @@ import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
-from ..tve.adobe_pass import TVENotAuthorizedError
+from ..tve.adobe_pass import MvpdCooldownMixin, TVENotAuthorizedError
 
 logger = logging.getLogger(__name__)
 
@@ -781,31 +781,28 @@ def _fox_sports_mvpd_token(
     )
     r.raise_for_status()
     mso_login_url = r.headers.get('location') or ''
-    if not mso_login_url:
+    # DIRECTV doesn't redirect here at all (see app/tve/mvpd/directv.py's
+    # directv_login() docstring) — login_to_mvpd() below works from this
+    # response's body directly, so it's exempt from the "no redirect" check
+    # every other MSO needs.
+    if not mso_login_url and mso_id != 'DTV':
         raise ValueError('FOX Adobe authenticate call did not return an MVPD login redirect.')
 
     if mso_id == 'Cox':
         if 'login.cox.com' not in mso_login_url:
             raise ValueError(f'Unexpected FOX Adobe redirect host: {urlsplit(mso_login_url).netloc}')
         _cox_saml_login(session, mso_login_url, username, password)
-    elif mso_id == 'Comcast_SSO':
-        if 'xfinity.com' not in mso_login_url:
-            raise ValueError(f'Unexpected FOX Adobe redirect host: {urlsplit(mso_login_url).netloc}')
-        if not cookie_jar:
-            raise ValueError(
-                'FOX Adobe: Comcast_SSO needs a saved Xfinity cookie jar — '
-                'needs a browser-assisted sign-in to harvest one first.'
-            )
-        from ..tve.adobe_pass import xfinity_cookie_jar_login, TVEAuthError as _TVEAuthError
+    else:
+        # Every other MVPD's actual sign-in mechanics live in app/tve/mvpd/
+        # — add one there (not here) to support a new provider everywhere
+        # at once.
+        from ..tve.mvpd import login_to_mvpd
+        from ..tve.adobe_pass import TVEAuthError as _TVEAuthError
+        page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
         try:
-            xfinity_cookie_jar_login(mso_login_url, username, password, cookie_jar)
+            login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
         except _TVEAuthError as exc:
             raise ValueError(str(exc)) from exc
-    else:
-        raise ValueError(
-            f'Browser-assisted sign-in for FOX TVE is not built yet for MVPD {mso_id} '
-            f'(only native Cox login and Comcast_SSO cookie-jar login are wired up here).'
-        )
 
     check = session.get(
         'https://api3.fox.com/v2.0/checkadobeauthn/v2',
@@ -921,7 +918,7 @@ def resolve_fox_sports_hls(channel: FoxTVEChannel) -> str:
     return playback_url
 
 
-class FoxTVEScraper(BaseScraper):
+class FoxTVEScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'fox_tve'
     display_name = 'FOX TVE'
     source_category = 'tve'

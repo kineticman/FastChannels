@@ -14,6 +14,7 @@ from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
 from ..tve.adobe_pass import (
+    MvpdCooldownMixin,
     TVEAuthError,
     TVENotAuthorizedError,
     authorize_mvpd,
@@ -386,7 +387,7 @@ def _placeholder_epg(network: AENetwork) -> list[ProgramData]:
     ]
 
 
-class AENetworksTVEScraper(BaseScraper):
+class AENetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'aenetworks_tve'
     display_name = 'A+E Networks TVE'
     source_category = 'tve'

@@ -60,7 +60,7 @@ import requests
 from .base import BaseScraper, ChannelData, ProgramData, null_placeholder_season_episode
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
-from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, authorize_mvpd
+from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError, authorize_mvpd
 
 SCHEME = 'warner-tve://'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
@@ -215,7 +215,7 @@ def _parse_widget_time(value: str | None, tz) -> datetime | None:
     return naive.replace(tzinfo=tz).astimezone(timezone.utc)
 
 
-class WarnerTVEScraper(BaseScraper):
+class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
     """Warner Bros Discovery cable networks — TBS, TNT, truTV — resolved via
     Adobe Pass Cox + Turner's NGTV/Widevine-CENC playback stack."""
 

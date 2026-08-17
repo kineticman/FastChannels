@@ -922,10 +922,25 @@ def run_stream_audit(source_name: str):
                         continue
                     # If the scraper entered a rate-limit cooldown, wait it out rather
                     # than burning through the consecutive-error budget on channels that
-                    # will all fail until the cooldown expires.
+                    # will all fail until the cooldown expires. Opt-out via
+                    # _cooldown_wait_in_audit = False (see MvpdCooldownMixin): built for
+                    # Roku's cooldown, which is short and reliably clears on its own —
+                    # actively sleeping through it and retrying is the right move there.
+                    # DIRECTV's MVPD cooldown (2026-08-17) isn't reliably clearing within
+                    # any one audit's patience, and since a retry that fails re-arms a
+                    # fresh cooldown, this loop was sleeping through and retrying EVERY
+                    # remaining channel — one 4-channel audit took ~9 minutes of pure
+                    # waiting for zero benefit. Scrapers that opt out still show cooldown
+                    # state in the modal (that's _audit_progress's own independent check
+                    # above, not this loop) — they just fail each channel immediately
+                    # instead of blocking the whole audit on a cooldown that isn't
+                    # expected to clear soon.
                     _cooldown_active = getattr(scraper, '_cooldown_active', None)
                     _cooldown_remaining = getattr(scraper, '_cooldown_remaining', None)
                     if callable(_cooldown_active) and _cooldown_active():
+                        if not getattr(scraper, '_cooldown_wait_in_audit', True):
+                            errors += 1
+                            continue
                         wait = int((_cooldown_remaining() if callable(_cooldown_remaining) else 60) + 2)
                         logger.warning('[audit] %s: rate-limit cooldown active — waiting %ds',
                                        source_name, wait)
@@ -3365,6 +3380,45 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                             except Exception:  # noqa: BLE001
                                 pass
                             _relay_input_and_screenshot(page, r)
+                    elif mso_id == 'DTV':
+                        # Mirrors app/scrapers/directv.py's capture_directv_auth_cffi(),
+                        # which primes both stream.directv.com and
+                        # identity.directv.com before ever touching an auth
+                        # endpoint — that scripted (non-browser) client has no
+                        # prior browsing history to lean on, unlike a real
+                        # user's browser. This Camoufox profile is in the same
+                        # position on its first-ever visit to either origin
+                        # (fresh persistent profile, arriving cold via Adobe's
+                        # authenticate/saml redirect chain rather than a normal
+                        # user journey that would have already touched these
+                        # pages), so give it the same head start rather than
+                        # assuming real-browser JS execution alone is
+                        # sufficient — unconfirmed either way, but cheap to do
+                        # and directly mirrors the one DIRECTV flow already
+                        # proven reliable in this codebase.
+                        set_status('running', 'Priming DIRECTV session…', page.url)
+                        # Best-effort — priming is a head start, not the real
+                        # navigation, so a hiccup here (e.g. Firefox's
+                        # NS_BINDING_ABORTED when a page redirects fast enough
+                        # to race Playwright's own navigation tracking,
+                        # confirmed live 2026-08-17 on the bare
+                        # identity.directv.com/ root) shouldn't abort the
+                        # whole pairing attempt the way a failure in the real
+                        # auth_url navigation below should.
+                        for _prime_url in ('https://stream.directv.com/guide', 'https://identity.directv.com/'):
+                            try:
+                                page.goto(_prime_url, wait_until='domcontentloaded', timeout=30000)
+                            except Exception as _prime_exc:  # noqa: BLE001
+                                if _is_browser_death(_prime_exc):
+                                    raise
+                                logger.info('[mvpd-login] DIRECTV priming nav to %s did not settle cleanly: %s', _prime_url, _prime_exc)
+                            _relay_input_and_screenshot(page, r)
+                        _settle_deadline = time.monotonic() + 2.0
+                        while time.monotonic() < _settle_deadline:
+                            _relay_input_and_screenshot(page, r)
+                            page.wait_for_timeout(500)
+                        set_status('running', 'Loading sign-in page…', page.url)
+                        page.goto(auth_url, wait_until='domcontentloaded', timeout=30000)
                     else:
                         page.goto(auth_url, wait_until='domcontentloaded', timeout=30000)
                 except Exception as exc:  # noqa: BLE001
@@ -3752,14 +3806,20 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             if not auth_path:
                 set_status('error', 'Adobe Pass v2: sessions call did not return an authenticate url.')
                 return
-            r_redirect = client.session.get(
-                f'{ADOBE_BASE_NBC}{auth_path}', headers=client._bearer_headers(),
-                allow_redirects=False, timeout=20,
-            )
-            mso_login_url = r_redirect.headers.get('location') or ''
-            if not mso_login_url:
-                set_status('error', 'Adobe Pass v2: sessions authenticate call did not return an MVPD login redirect.')
-                return
+            # Not every MVPD's authenticate endpoint answers with an HTTP
+            # redirect here — confirmed live 2026-08-17 for YouTubeTV: it
+            # returns a 200 HTML auto-submit SAMLRequest form instead (same
+            # shape as DIRECTV's idp.dtvce.com, see
+            # app/tve/mvpd/directv.py's directv_login() docstring). A real
+            # browser handles either shape identically via a normal
+            # navigation (follows a 3xx itself, executes the form's onload
+            # auto-submit JS if there isn't one) — so just hand the browser
+            # this URL directly rather than pre-resolving it scripted here
+            # and erroring out whenever there's no Location header to find.
+            # Confirmed live: this exact URL, fetched scripted, comes back
+            # as the auto-submit form (not an error page), so it's a genuine
+            # landing page, not a dead end.
+            mso_login_url = f'{ADOBE_BASE_NBC}{auth_path}'
         except TVEAuthError as exc:
             set_status('error', f'Adobe Pass registration failed: {exc}')
             return
@@ -4164,11 +4224,17 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             mvpd.raise_for_status()
             auth_url = mvpd.json()['authenticateUrl']
 
+            # See run_nbc_browser_login's identical fallback for the full
+            # explanation — not every MVPD's authenticate endpoint answers
+            # with an HTTP redirect (confirmed live 2026-08-17 for
+            # YouTubeTV via NBC's own v2 REST family; api3.fox.com's own
+            # flow is the same shape of Adobe Pass v2 API, so treat it the
+            # same way rather than assuming a Location header always
+            # exists). A real browser handles a bare 200 auto-submit
+            # SAMLRequest form (DIRECTV/YouTubeTV shape) exactly like a 3xx
+            # redirect (Cox/Xfinity shape) via a normal navigation.
             r_redirect = session.get(auth_url, headers={'Accept': 'text/html,application/json'}, allow_redirects=False, timeout=30)
-            mso_login_url = r_redirect.headers.get('location') or ''
-            if not mso_login_url:
-                set_status('error', 'FOX Adobe authenticate call did not return an MVPD login redirect.')
-                return
+            mso_login_url = r_redirect.headers.get('location') or auth_url
         except requests.RequestException as exc:
             set_status('error', f'FOX registration failed: {exc}')
             return

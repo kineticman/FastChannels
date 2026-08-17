@@ -117,7 +117,7 @@ from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from .fox_tve import _cox_saml_login
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
-from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
+from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
 
 try:
     from Cryptodome.Cipher import AES as _AES
@@ -336,7 +336,11 @@ class AdobePassV2Client:
         except requests.RequestException as exc:
             raise TVEAuthError(str(exc)) from exc
         mso_login_url = r.headers.get('location') or ''
-        if not mso_login_url:
+        # DIRECTV doesn't redirect here at all (see app/tve/mvpd/directv.py's
+        # directv_login() docstring) — login_to_mvpd() below works from this
+        # response's body directly, so it's exempt from the "no redirect"
+        # check every other MSO needs.
+        if not mso_login_url and mso_id != 'DTV':
             raise TVEAuthError('Adobe Pass v2: sessions authenticate call did not return an MVPD login redirect.')
 
         if mso_id == 'Cox':
@@ -348,35 +352,19 @@ class AdobePassV2Client:
                 raise TVENotAuthorizedError(str(exc)) from exc
             except requests.RequestException as exc:
                 raise TVEAuthError(str(exc)) from exc
-        elif mso_id == 'Comcast_SSO':
-            # Unlike Cox (which redirects straight to login.cox.com in one
-            # hop), Xfinity's chain goes through oauth.xfinity.com first,
-            # THEN login.xfinity.com — confirmed live 2026-08-14, mso_login_url
-            # here is the oauth.xfinity.com hop, not login.xfinity.com yet.
-            # xfinity_cookie_jar_login() follows the full redirect chain
-            # itself and validates the final landing page, so just check the
-            # broader domain here rather than the specific login subdomain.
-            if 'xfinity.com' not in mso_login_url:
-                raise TVEAuthError(f'Adobe Pass v2: unexpected authenticate redirect host {urlsplit(mso_login_url).netloc!r}.')
-            if not cookie_jar:
-                raise TVEAuthError(
-                    'Adobe Pass v2: Comcast_SSO needs a saved Xfinity cookie jar — '
-                    'needs a browser-assisted sign-in to harvest one first.'
-                )
-            # Uses its own dedicated curl_cffi session internally, entirely
-            # separate from self.session — Adobe binds the completed login
-            # server-side to THIS session's access_token/device fingerprint
-            # (embedded in mso_login_url via the /sessions call above)
-            # rather than to any particular HTTP session, same as the
-            # existing browser-assisted pairing's cross-session polling
-            # already relies on. See xfinity_cookie_jar_login()'s docstring.
-            from ..tve.adobe_pass import xfinity_cookie_jar_login
-            xfinity_cookie_jar_login(mso_login_url, username, password, cookie_jar)
         else:
-            raise TVEAuthError(
-                f'Adobe Pass v2: browser-assisted sign-in for NBC TVE is not built yet for MVPD {mso_id} '
-                f'(only native Cox login and Comcast_SSO cookie-jar login are wired up here).'
-            )
+            # Every other MVPD's actual sign-in mechanics live in
+            # app/tve/mvpd/ — add one there (not here) to support a new
+            # provider everywhere at once. Uses its own dedicated session
+            # internally, entirely separate from self.session — Adobe binds
+            # the completed login server-side to THIS session's
+            # access_token/device fingerprint (embedded in mso_login_url via
+            # the /sessions call above) rather than to any particular HTTP
+            # session, same as the existing browser-assisted pairing's
+            # cross-session polling already relies on.
+            from ..tve.mvpd import login_to_mvpd
+            page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
+            login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
 
         r = self._get(f'{ADOBE_BASE}/api/v2/{self.requestor_id}/profiles/{mso_id}', headers=self._bearer_headers())
         profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)
@@ -423,7 +411,7 @@ class NbcGuideEntry:
         return f'{SCHEME}{self.stream_access_name}'
 
 
-class NbcTveScraper(BaseScraper):
+class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
     """NBCUniversal cable networks resolved via Adobe Pass Cox + NBCUniversal's
     own lemonade/drm-proxy playback stack. See module docstring."""
 

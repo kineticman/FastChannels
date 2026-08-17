@@ -15,7 +15,7 @@ import requests
 from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
-from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, throttle_cox_login
+from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError, throttle_cox_login
 
 
 SCHEME = 'discovery-tve://'
@@ -255,7 +255,7 @@ def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str,
     return r.headers.get('location') or str(r.url)
 
 
-class DiscoveryTVEScraper(BaseScraper):
+class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'discovery_tve'
     display_name = 'Discovery TVE'
     source_category = 'tve'
@@ -404,7 +404,11 @@ class DiscoveryTVEScraper(BaseScraper):
         if r.status_code in {301, 302, 303, 307, 308}:
             r = session.get(r.headers.get('location') or target_url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*'}, allow_redirects=False, timeout=30)
         mso_login_url = r.headers.get('location') or ''
-        if not mso_login_url:
+        # DIRECTV doesn't redirect here at all (see app/tve/mvpd/directv.py's
+        # directv_login() docstring) — login_to_mvpd() below works from this
+        # response's body directly, so it's exempt from the "no redirect"
+        # check every other MSO needs.
+        if not mso_login_url and mso_id != 'DTV':
             raise TVEAuthError('Adobe authenticate call did not return an MVPD login redirect.')
 
         if mso_id == 'Cox':
@@ -417,30 +421,24 @@ class DiscoveryTVEScraper(BaseScraper):
             if r.status_code not in {301, 302, 303, 307, 308}:
                 raise TVEAuthError(f'Discovery callback returned HTTP {r.status_code}.')
             code_url = r.headers.get('location') or ''
-        elif mso_id == 'Comcast_SSO':
-            if 'xfinity.com' not in mso_login_url:
-                raise TVEAuthError(f'Unexpected Adobe authenticate redirect host: {urlsplit(mso_login_url).netloc}.')
-            cookie_jar = cfg.get('xfinity_cookie_jar')
-            if not cookie_jar:
-                raise TVEAuthError(
-                    'Discovery TVE: Comcast_SSO needs a saved Xfinity cookie jar — '
-                    'needs a browser-assisted sign-in to harvest one first.'
-                )
-            from ..tve.adobe_pass import xfinity_cookie_jar_login
-            # Unlike _cox_saml_login (which deliberately stops at the FIRST
-            # post-login redirect with allow_redirects=False, so the caller
-            # above does one more explicit hop to reach code_url),
-            # xfinity_cookie_jar_login follows redirects all the way through
-            # — its return value IS already the equivalent of that second
-            # hop (confirmed live 2026-08-14: lands directly on
-            # auth.watch.hgtv.com/gauth-sync?code=... , the same URL Cox's
-            # extra hop above extracts `code` from), so use it as code_url
-            # directly instead of repeating the CALLBACK_BASE/extra-hop dance.
-            code_url = xfinity_cookie_jar_login(mso_login_url, account.username or '', account.password or '', cookie_jar)
         else:
-            raise TVEAuthError(
-                f'Browser-assisted sign-in for Discovery TVE is not built yet for MVPD {mso_id} '
-                f'(only native Cox login and Comcast_SSO cookie-jar login are wired up here).'
+            # Every other MVPD's actual sign-in mechanics live in
+            # app/tve/mvpd/ — add one there (not here) to support a new
+            # provider everywhere at once. Unlike _cox_saml_login (which
+            # deliberately stops at the FIRST post-login redirect, so the
+            # Cox branch above does one more explicit hop to reach
+            # code_url), every login_to_mvpd() backend follows redirects
+            # all the way through and returns that landed URL directly —
+            # confirmed live 2026-08-14 for Xfinity (lands on
+            # auth.watch.hgtv.com/gauth-sync?code=..., the same URL Cox's
+            # extra hop above extracts `code` from) — so it's used as
+            # code_url directly here, no extra hop needed.
+            from ..tve.mvpd import login_to_mvpd
+            cookie_jar = cfg.get('xfinity_cookie_jar')
+            page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
+            code_url = login_to_mvpd(
+                mso_id, page_html, page_url, account.username or '', account.password or '',
+                cookie_jar=cookie_jar,
             )
 
         code = (parse_qs(urlsplit(code_url).query).get('code') or [''])[0]

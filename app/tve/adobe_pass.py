@@ -19,6 +19,16 @@ logger = logging.getLogger(__name__)
 _COX_LOGIN_THROTTLE_KEY = 'tve:cox-login:last-at'
 _COX_LOGIN_THROTTLE_SECONDS = 8.0
 
+# Separate key/interval from Cox's — a different MVPD's rate limiting is a
+# different budget, so a Cox login shouldn't delay a DIRECTV one or vice
+# versa. Interval is longer than Cox's: confirmed live 2026-08-17 that
+# Akamai Bot Manager on identity.directv.com starts 403ing DIRECTV login
+# attempts fired within ~15s of each other even with proper curl_cffi
+# impersonation (see directv.py's directv_login docstring) — an 8s gap
+# (Cox's own interval) was not enough headroom when observed back-to-back.
+_DIRECTV_LOGIN_THROTTLE_KEY = 'tve:directv-login:last-at'
+_DIRECTV_LOGIN_THROTTLE_SECONDS = 20.0
+
 # Atomically reserves the next login slot at least THROTTLE_SECONDS after the
 # previous one and returns it, so concurrent callers each get a distinct slot
 # instead of racing a separate GET (read) and SET (write).
@@ -30,6 +40,28 @@ local slot = math.max(now, last + interval)
 redis.call('SET', KEYS[1], tostring(slot), 'EX', 60)
 return tostring(slot)
 """
+
+
+def _throttle_login(key: str, interval_seconds: float, label: str) -> None:
+    """Shared slot-reservation mechanics behind throttle_cox_login() and
+    throttle_directv_login() — see throttle_cox_login()'s docstring for the
+    full reasoning (Redis-backed so it works across processes/routes,
+    sleep-based so callers don't need special handling, fails open if Redis
+    is unavailable, and uses a single atomic Lua script so concurrent
+    callers get distinct monotonically-spaced slots instead of racing a
+    plain GET-then-SET).
+    """
+    try:
+        import redis
+        from ..config import Config
+        r = redis.from_url(Config.REDIS_URL)
+        next_slot = r.eval(_RESERVE_SLOT_SCRIPT, 1, key, interval_seconds, time.time())
+    except Exception:  # noqa: BLE001
+        return
+    remaining = float(next_slot) - time.time()
+    if remaining > 0:
+        logger.info('[adobe-pass] throttling %s login by %.1fs (another network signed in recently)', label, remaining)
+        time.sleep(remaining)
 
 
 def throttle_cox_login() -> None:
@@ -47,31 +79,114 @@ def throttle_cox_login() -> None:
     (not app.worker's job-id locks, which don't cover FOX One's route at
     all — that one isn't an RQ job) so it works the same regardless of
     which process or route the login came through.
+    """
+    _throttle_login(_COX_LOGIN_THROTTLE_KEY, _COX_LOGIN_THROTTLE_SECONDS, 'Cox')
 
-    Sleep-based rather than reject-based so callers don't need special
-    handling — a login attempted too soon just waits out the remainder
-    instead of failing outright. Redis being unavailable fails open (skips
-    throttling) rather than blocking a real sign-in attempt over it.
 
-    Slot reservation (read-next-slot + advance-it) runs as a single Lua
-    script so concurrent callers (e.g. run_amcn_browser_login's 4-way
-    ThreadPoolExecutor, code review 2026-08-12) each get a distinct,
-    monotonically-spaced slot instead of racing a plain GET-then-SET: two
-    threads reading the same last-login timestamp before either writes back
-    would otherwise both compute zero remaining wait and fire on Cox at the
-    same instant, exactly what this throttle exists to prevent.
+def throttle_directv_login() -> None:
+    """Enforces a minimum gap between real DIRECTV credential POSTs across
+    every TVE network and entry point — see throttle_cox_login()'s docstring
+    for the shared reasoning; this exists because DIRECTV needed its own
+    (confirmed live 2026-08-17 — see _DIRECTV_LOGIN_THROTTLE_SECONDS)."""
+    _throttle_login(_DIRECTV_LOGIN_THROTTLE_KEY, _DIRECTV_LOGIN_THROTTLE_SECONDS, 'DIRECTV')
+
+
+_DIRECTV_LOGIN_FAILURE_COOLDOWN_KEY = 'tve:directv-login:recent-failure'
+# Confirmed live 2026-08-17: unlike the ~20s spacing throttle_directv_login()
+# enforces between individual attempts, Akamai's block on identity.directv.com
+# outlasted a 90s gap during testing — a single audit pass across a
+# multi-brand TVE scraper (e.g. Warner's TNT/TBS/truTV, A+E's four networks)
+# calls authorize_mvpd() once per brand/requestor_id, each a fresh live
+# DIRECTV login attempt with no memory of the others. Once one fails, every
+# other channel in that same audit pass is essentially guaranteed to hit the
+# same block — worse, it keeps re-triggering (and likely extending) exactly
+# the cooldown being waited out. This short-circuits the rest of that pass
+# (and any other TVE scraper's channels checked shortly after) instead of
+# burning more live attempts against a currently-blocked identity provider.
+_DIRECTV_LOGIN_FAILURE_COOLDOWN_SECONDS = 180.0
+
+
+def _mark_directv_login_failed(reason: str = '') -> None:
+    try:
+        import redis
+        from ..config import Config
+        r = redis.from_url(Config.REDIS_URL)
+        r.set(
+            _DIRECTV_LOGIN_FAILURE_COOLDOWN_KEY, (reason or 'DIRECTV sign-in failed')[:300],
+            ex=int(_DIRECTV_LOGIN_FAILURE_COOLDOWN_SECONDS),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def directv_login_cooldown() -> dict | None:
+    """Returns {'remaining': int seconds, 'reason': str} if DIRECTV sign-in
+    is currently cooling down after a recent failure, else None.
+
+    Reads Redis's own TTL on the failure key rather than a separately
+    tracked "cooldown until" timestamp, so "remaining" is always exact —
+    no separate expiry bookkeeping to keep in sync.
+
+    Exposed for MvpdCooldownMixin's duck-typed _cooldown_active/
+    _cooldown_remaining/_cooldown_reason trio, the same protocol
+    app.worker's audit progress reporter already looks for on any scraper
+    (see roku.py's own per-source 403 cooldown for the established
+    pattern) so the admin audit modal shows "paused, rate-limited" instead
+    of every TVE channel just erroring out with no visible explanation.
+    Unlike Roku's cooldown (tracked per-source, in that source's own
+    config), this one is account-wide — the shared TVE MVPD login, not any
+    one scraper — so it lives in Redis, keyed globally, and every TVE
+    scraper's mixin reads the same shared state instead of tracking its
+    own.
     """
     try:
         import redis
         from ..config import Config
         r = redis.from_url(Config.REDIS_URL)
-        next_slot = r.eval(_RESERVE_SLOT_SCRIPT, 1, _COX_LOGIN_THROTTLE_KEY, _COX_LOGIN_THROTTLE_SECONDS, time.time())
+        ttl = r.ttl(_DIRECTV_LOGIN_FAILURE_COOLDOWN_KEY)
+        if ttl is None or ttl <= 0:
+            return None
+        reason = r.get(_DIRECTV_LOGIN_FAILURE_COOLDOWN_KEY)
+        return {
+            'remaining': int(ttl),
+            'reason': (reason.decode() if isinstance(reason, bytes) else reason) or 'DIRECTV sign-in failed',
+        }
     except Exception:  # noqa: BLE001
-        return
-    remaining = float(next_slot) - time.time()
-    if remaining > 0:
-        logger.info('[adobe-pass] throttling Cox login by %.1fs (another network signed in recently)', remaining)
-        time.sleep(remaining)
+        return None
+
+
+class MvpdCooldownMixin:
+    """Duck-typed _cooldown_active/_cooldown_remaining/_cooldown_reason —
+    see directv_login_cooldown()'s docstring for why/how. Every TVE scraper
+    class mixes this in (ahead of BaseScraper) so app.worker's audit
+    progress reporter picks it up automatically, same as roku.py's own
+    implementation of the same protocol.
+
+    _cooldown_wait_in_audit = False opts these scrapers out of app.worker's
+    audit loop actively sleeping through an active cooldown and retrying —
+    that behavior (Roku's default) assumes the cooldown reliably clears
+    within the audit's patience, which held for Roku but not for DIRECTV's
+    MVPD login as of 2026-08-17 (see worker.py's comment at the call site):
+    a retry that fails just re-arms a fresh cooldown, so the wait-and-retry
+    loop was burning ~2-3 minutes per channel for zero benefit. Cooldown
+    state still surfaces in the audit modal either way — that's driven by
+    _audit_progress()'s own independent check, not this loop.
+    """
+
+    _cooldown_wait_in_audit = False
+
+    def _cooldown_active(self) -> bool:
+        return directv_login_cooldown() is not None
+
+    def _cooldown_remaining(self) -> int:
+        cooldown = directv_login_cooldown()
+        return cooldown['remaining'] if cooldown else 0
+
+    @property
+    def _cooldown_reason(self) -> str | None:
+        cooldown = directv_login_cooldown()
+        return cooldown['reason'] if cooldown else None
+
 
 ADOBE_BASE = 'https://sp.auth.adobe.com'
 AUTHENTICATE_URL = f'{ADOBE_BASE}/adobe-services/authenticate/saml'
@@ -263,145 +378,6 @@ def invalidate_aenetworks_software_statement(brand: str) -> None:
     are ever checked.
     """
     _STATEMENT_CACHE.pop(brand.lower(), None)
-
-
-def xfinity_cookie_jar_login(auth_url: str, username: str, password: str, cookie_jar: dict) -> str:
-    """Login to Comcast_SSO (login.xfinity.com) using a transplanted cookie
-    jar harvested from a real authenticated browser session, instead of a
-    browser. MSO-protocol-agnostic — takes any MSO-login URL that ultimately
-    lands on login.xfinity.com, regardless of which Adobe Pass "family"
-    generated it (the legacy XML protocol's authenticate/saml URL, NBC's own
-    v2 REST /sessions redirect, FOX's own REST flow, etc.) — the actual
-    xfinity.com login form/wall is the same one every family redirects to.
-
-    Confirmed live 2026-08-14: login.xfinity.com is protected by Akamai Bot
-    Manager on the credential-submission POST specifically (the page-load
-    GET is unprotected for any client — a bare curl_cffi request sails
-    through). A bare HTTP client's own freshly-issued _abck/ak_bmsc/bm_sz
-    cookies are NOT sufficient on their own — confirmed live, a fresh
-    curl_cffi session carrying its own server-issued cookies into the same
-    session's next POST still gets 403. Akamai only trusts a cookie's value
-    once it's been "matured" through real JS sensor execution in a real
-    browser. Transplanting a jar already matured by a real session
-    (harvested in app/worker.py's run_mvpd_browser_login/run_nbc_browser_login/
-    run_fox_browser_login after a successful Camoufox pairing) gets straight
-    through.
-
-    Often the jar's own Xfinity SESSION cookie is ALSO still a valid
-    already-authenticated identity, in which case Xfinity skips straight to
-    a "You're automatically signed in" interstitial with an embedded
-    continue URL and no password is ever needed — that path is tried at
-    every step (it can appear on the very first GET, before any login form
-    ever renders, or only after a username POST — confirmed live both ways
-    with the SAME cookie jar against different requestor_ids/client_ids). If
-    a real password field appears instead (SESSION expired but the Akamai
-    cookies are still matured), falls through to a normal identifier-first
-    username+password submission.
-
-    Uses its own dedicated curl_cffi session (impersonation matters here —
-    plain `requests` doesn't produce a convincing TLS fingerprint) — does
-    NOT touch or require anything from whatever session/client called this,
-    since Adobe binds the completed login server-side to auth_url's own
-    embedded state (reg_code, or NBC/FOX's own session identifier) rather
-    than to any particular local HTTP session — the caller can safely poll/
-    continue with a completely different session afterward, same as the
-    existing browser-assisted pairing's cross-session polling already
-    relies on.
-
-    Returns the final landed URL (as a string) once login completes —
-    needed by callers like Discovery TVE whose own completion mechanism
-    extracts a `code` query param from wherever the login flow's own
-    redirect_url lands, rather than polling independently server-side like
-    the legacy/NBC/FOX families do. Those callers can just ignore the
-    return value.
-    """
-    from curl_cffi import requests as curl_requests
-
-    def _follow_interstitial_if_present(session, html_text: str) -> str | None:
-        m = re.search(r'continue:\s*"([^"]+)"', html_text)
-        if not m:
-            return None
-        continue_url = m.group(1).encode().decode('unicode_escape')
-        try:
-            r3 = session.get(continue_url, timeout=30, allow_redirects=True)
-        except Exception as exc:  # noqa: BLE001
-            raise TVEAuthError(str(exc)) from exc
-        # Deliberately NOT raising on a non-2xx/3xx status here — this hop
-        # lands on the CALLER's own redirect_url (e.g. a TVE network's own
-        # /live page), which is irrelevant to whether Adobe's own
-        # server-side login binding succeeded. Confirmed live 2026-08-14:
-        # AMC Networks' configured live_url (www.amc.com/live) is itself a
-        # genuine 404 on AMC's own site — nothing to do with Xfinity or
-        # auth — yet the login had already completed successfully by this
-        # point (the caller's subsequent /profiles/code/{code} poll
-        # confirmed real entitlement). Callers that need this URL to
-        # actually resolve (e.g. Discovery TVE, extracting a `code` query
-        # param) check its content themselves; callers that don't (legacy/
-        # NBC/AMCN, which verify completion via an independent poll) can
-        # safely ignore the status entirely.
-        return str(r3.url)
-
-    xfinity_session = curl_requests.Session(impersonate='chrome')
-    for name, meta in cookie_jar.items():
-        xfinity_session.cookies.set(
-            name, meta.get('value', ''),
-            domain=meta.get('domain') or 'login.xfinity.com',
-            path=meta.get('path') or '/',
-        )
-
-    try:
-        r = xfinity_session.get(auth_url, timeout=30, allow_redirects=True)
-    except Exception as exc:  # noqa: BLE001
-        raise TVEAuthError(str(exc)) from exc
-    if r.status_code >= 400 or 'login.xfinity.com' not in str(r.url):
-        raise TVEAuthError(f'Xfinity cookie-jar sign-in did not reach the login page: HTTP {r.status_code}.')
-
-    landed = _follow_interstitial_if_present(xfinity_session, r.text)
-    if landed:
-        return landed
-
-    login_url = str(r.url)
-    action, fields = _hidden_form(r.text, login_url)
-    fields['user'] = username
-    fields['flowStep'] = 'username'
-    try:
-        r2 = xfinity_session.post(
-            action, data=fields,
-            headers={'Content-Type': 'application/x-www-form-urlencoded'},
-            timeout=30, allow_redirects=True,
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise TVEAuthError(str(exc)) from exc
-    if r2.status_code >= 400:
-        raise TVEAuthError(
-            f'Xfinity cookie-jar sign-in blocked at username step: HTTP {r2.status_code} '
-            '(cookie jar likely stale — needs a fresh browser pairing).'
-        )
-
-    landed = _follow_interstitial_if_present(xfinity_session, r2.text)
-    if landed:
-        return landed
-
-    if 'passwd' not in r2.text.lower() and 'type="password"' not in r2.text.lower():
-        raise TVEAuthError(
-            'Xfinity cookie-jar sign-in: neither an auto-signin interstitial nor '
-            'a password field appeared.'
-        )
-
-    action2, fields2 = _hidden_form(r2.text, str(r2.url))
-    fields2['passwd'] = password
-    fields2['flowStep'] = 'password'
-    try:
-        r3 = xfinity_session.post(
-            action2, data=fields2,
-            headers={'Content-Type': 'application/x-www-form-urlencoded'},
-            timeout=30, allow_redirects=True,
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise TVEAuthError(str(exc)) from exc
-    if r3.status_code >= 400:
-        raise TVEAuthError(f'Xfinity cookie-jar sign-in blocked at password step: HTTP {r3.status_code}.')
-    return str(r3.url)
 
 
 class AdobePassCoxClient:
@@ -696,20 +672,53 @@ class AdobePassCoxClient:
     def authenticate_with_xfinity_cookies(self, username: str, password: str, cookie_jar: dict) -> None:
         """Login via Comcast_SSO using a transplanted cookie jar harvested
         from a real authenticated browser session, instead of a browser.
-        Thin wrapper around the MSO-protocol-agnostic xfinity_cookie_jar_login()
-        — see its docstring for the actual mechanics/why. This client's own
-        authenticate_redirect_url() builds the legacy XML protocol's specific
-        authenticate/saml URL; NBC's/FOX's own v2 REST clients generate their
-        own equivalent MSO-login URL and call xfinity_cookie_jar_login()
-        directly instead of going through this class at all.
+        Thin wrapper around app.tve.mvpd's MSO-protocol-agnostic
+        login_to_mvpd() — see xfinity.py's xfinity_cookie_jar_login() for the
+        actual mechanics/why. This client's own authenticate_redirect_url()
+        builds the legacy XML protocol's specific authenticate/saml URL;
+        NBC's/FOX's own v2 REST clients generate their own equivalent
+        MSO-login URL and call login_to_mvpd() directly instead of going
+        through this class at all.
+
+        Deferred import: app.tve.mvpd imports TVEAuthError from this module
+        at its own module level, so importing it back here has to happen
+        inside a function, not at this module's top level, to avoid a
+        circular import.
         """
-        xfinity_cookie_jar_login(self.authenticate_redirect_url('Comcast_SSO'), username, password, cookie_jar)
+        from .mvpd import login_to_mvpd
+        login_to_mvpd(
+            'Comcast_SSO', '', self.authenticate_redirect_url('Comcast_SSO'), username, password,
+            cookie_jar=cookie_jar,
+        )
 
     def authorize_with_xfinity_cookies(self, username: str, password: str, cookie_jar: dict) -> str:
         self.setup_client()
         self.register_device()
         self.create_regcode()
         self.authenticate_with_xfinity_cookies(username, password, cookie_jar)
+        self.fetch_session_token()
+        return self.authorize()
+
+    def authenticate_with_directv(self, username: str, password: str) -> None:
+        """Login via DIRECTV (mso_id='DTV'). Unlike Cox/Xfinity, DIRECTV's
+        Adobe Pass authenticate call never redirects (see
+        app/tve/mvpd/directv.py's directv_login() docstring for the full
+        mechanics) — it returns the actual login page's content directly, so
+        this fetches it once here before handing off, rather than just
+        building a URL like authenticate_with_xfinity_cookies() does.
+        """
+        try:
+            r = self.session.get(self.authenticate_redirect_url('DTV'), allow_redirects=True, timeout=30)
+        except requests.RequestException as exc:
+            raise TVEAuthError(str(exc)) from exc
+        from .mvpd import login_to_mvpd
+        login_to_mvpd('DTV', r.text, str(r.url), username, password)
+
+    def authorize_with_directv(self, username: str, password: str) -> str:
+        self.setup_client()
+        self.register_device()
+        self.create_regcode()
+        self.authenticate_with_directv(username, password)
         self.fetch_session_token()
         return self.authorize()
 
@@ -905,6 +914,26 @@ def authorize_mvpd(
             f'{requestor_id}: no usable Xfinity cookie jar (missing or stale) — '
             'needs a fresh browser-assisted sign-in to re-harvest one.'
         )
+
+    if selected_mso_id == 'DTV':
+        # DIRECTV's Adobe Pass login page is a JavaScript SPA — yt-dlp's
+        # generic form-scraping fallback below can't drive it at all
+        # (confirmed live 2026-08-17: zero <form> tags in the response).
+        # app.tve.mvpd.directv drives its real ForgeRock/OpenAM backend
+        # directly instead. (Its login-failure circuit breaker lives in
+        # login_to_mvpd() itself, not here, so every caller — this legacy
+        # client and the 5 v2 REST scrapers that call login_to_mvpd()
+        # directly — shares the same cooldown state.)
+        client = AdobePassCoxClient(
+            requestor_id=requestor_id,
+            resource=resource,
+            software_statement=software_statement,
+            redirect_url=redirect_url,
+            device_fingerprint=device_fingerprint,
+        )
+        token = client.authorize_with_directv(username, password)
+        _save_mvpd_authn_token(account, requestor_id, client.ctx.authn_token)
+        return token, client.session
 
     yt_dlp_mso_id = (cfg.get('yt_dlp_mso_id') or selected_mso_id).strip()
 

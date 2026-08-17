@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS, _cox_saml_login, _jwt_exp
 from ..gracenote_map import resolve_gracenote
+from ..tve.adobe_pass import MvpdCooldownMixin
 
 _SCHEME = 'fox-one://'
 _API_BASE = 'https://api.fox.com/dtc'
@@ -168,7 +169,7 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class FoxOneScraper(BaseScraper):
+class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'fox_one'
     display_name = 'FOX One'
     source_category = 'tve'
@@ -580,27 +581,21 @@ class FoxOneScraper(BaseScraper):
             if 'login.cox.com' not in mso_login_url:
                 raise RuntimeError(f'Unexpected FOX One Adobe redirect host: {urlparse(mso_login_url).netloc}')
             _cox_saml_login(session, mso_login_url, username, password)
-        elif mso_id == 'Comcast_SSO':
-            if 'xfinity.com' not in mso_login_url:
-                raise RuntimeError(f'Unexpected FOX One Adobe redirect host: {urlparse(mso_login_url).netloc}')
-            if not cookie_jar:
-                raise ValueError(
-                    'FOX One: Comcast_SSO needs a saved Xfinity cookie jar — '
-                    'needs a browser-assisted sign-in to harvest one first.'
-                )
-            # Uses its own dedicated session internally, not `session` (which
-            # carries FOX's own request_id-linked state used by the
-            # completion call below) — FOX binds the completed login
-            # server-side to `request_id` regardless of which HTTP session
-            # did the MSO login, same pattern already proven for NBC/AMCN.
-            from ..tve.adobe_pass import xfinity_cookie_jar_login
-            xfinity_cookie_jar_login(mso_login_url, username, password, cookie_jar)
         else:
-            raise ValueError(
-                f'FOX One native sign-in is not built yet for MVPD {mso_id} '
-                f'(only scripted Cox login and Comcast_SSO cookie-jar login are wired up here) — '
-                f'same gap as FOX TVE\'s _fox_sports_mvpd_token.'
-            )
+            # Every other MVPD's actual sign-in mechanics live in
+            # app/tve/mvpd/ — add one there (not here) to support a new
+            # provider everywhere at once. `session` isn't threaded through
+            # (unlike Cox above): FOX binds the completed login server-side
+            # to `request_id`, checked by the completion call below,
+            # regardless of which HTTP session did the MVPD login — same
+            # pattern already proven for NBC/AMCN's own Xfinity/DIRECTV use.
+            from ..tve.mvpd import login_to_mvpd
+            from ..tve.adobe_pass import TVEAuthError as _TVEAuthError
+            page_html, page_url = (r3.text, str(r3.url)) if not mso_login_url else ('', mso_login_url)
+            try:
+                login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+            except _TVEAuthError as exc:
+                raise ValueError(str(exc)) from exc
 
         rc = session.post(
             f'{_ID_BASE}/adobeauthn/v1/requests/complete',

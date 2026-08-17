@@ -19,6 +19,7 @@ from ..models import TVEAccount
 from ..tve.adobe_pass import (
     ADOBE_BASE,
     AdobePassCoxClient,
+    MvpdCooldownMixin,
     TVEAuthError,
     TVENotAuthorizedError,
     _hidden_form,
@@ -445,7 +446,7 @@ def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str,
     return r.headers.get('location') or str(r.url)
 
 
-class AMCNetworksTVEScraper(BaseScraper):
+class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'amcn_tve'
     source_aliases = ('amc_tve', 'amcnetworks_tve')
     display_name = 'AMC Networks TVE'
@@ -598,13 +599,16 @@ class AMCNetworksTVEScraper(BaseScraper):
 
     def _adobe_session_redirect(
         self, channel: AMCNChannel, software_statement: str, device_id: str, mso_id: str,
-    ) -> tuple[AdobePassCoxClient, str, str, dict[str, str]]:
+    ) -> tuple[AdobePassCoxClient, str, str, dict[str, str], requests.Response]:
         """Registers an Adobe Pass v2 client and starts a session for `mso_id`.
 
-        Returns (client, code, mso_login_url, auth_headers) without completing
-        any login — this is the scripted part that's never blocked by an MSO's
-        bot defense. Only the Cox login itself is wired up below; other MSOs
-        raise (see _adobe_decision_token).
+        Returns (client, code, mso_login_url, auth_headers, page_response)
+        without completing any login — this is the scripted part that's
+        never blocked by an MSO's bot defense. `page_response` is the same
+        response `mso_login_url` was derived from — for MSOs that get a real
+        redirect it's just the raw 3xx response (unused), but DIRECTV's own
+        backend needs its body directly since DIRECTV never redirects here
+        at all (see app/tve/mvpd/directv.py's directv_login() docstring).
         """
         client = AdobePassCoxClient(
             requestor_id=channel.requestor_id,
@@ -658,7 +662,7 @@ class AMCNetworksTVEScraper(BaseScraper):
             mso_login_url = r.url
         if not mso_login_url:
             raise TVEAuthError(f'{channel.name}: Adobe did not return an MVPD login redirect.')
-        return client, code, mso_login_url, auth_headers
+        return client, code, mso_login_url, auth_headers, r
 
     def _adobe_decision_finish(
         self, session: requests.Session, channel: AMCNChannel, code: str, mso_id: str, auth_headers: dict[str, str],
@@ -768,9 +772,8 @@ class AMCNetworksTVEScraper(BaseScraper):
         # AMCN's own v2 REST API, not the legacy XML protocol yt-dlp's generic
         # MVPD login flows speak — so unlike warner_tve.py/aenetworks_tve.py,
         # non-Cox MSOs here can't fall back to authorize_mvpd()/yt-dlp. Native
-        # scripted login only exists for Cox (below); no non-Cox path is wired
-        # up at all right now (same gap as discovery_tve.py/fox_one.py) — a
-        # non-Cox mso_id raises below instead of silently misfiring.
+        # scripted login exists for Cox, Comcast_SSO, and DIRECTV (below); any
+        # other mso_id raises below instead of silently misfiring.
         mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
 
         # force=True skips a still-valid cached token — used by the admin
@@ -809,34 +812,36 @@ class AMCNetworksTVEScraper(BaseScraper):
                     self._update_cache(self._adobe_session_cache_key(channel), {})
 
         statement = self._amcn_software_statement(channel, account)
-        client, code, mso_login_url, auth_headers = self._adobe_session_redirect(channel, statement, device_id, mso_id)
+        client, code, mso_login_url, auth_headers, mso_login_response = self._adobe_session_redirect(
+            channel, statement, device_id, mso_id,
+        )
 
         if mso_id == 'Cox':
             if 'login.cox.com' not in mso_login_url:
                 raise TVEAuthError(f'{channel.name}: unexpected Adobe redirect host {urlsplit(mso_login_url).netloc}.')
             _cox_saml_login(client.session, mso_login_url, account.username or '', account.password or '')
-        elif mso_id == 'Comcast_SSO':
-            if 'xfinity.com' not in mso_login_url:
-                raise TVEAuthError(f'{channel.name}: unexpected Adobe redirect host {urlsplit(mso_login_url).netloc}.')
-            cookie_jar = cfg.get('xfinity_cookie_jar')
-            if not cookie_jar:
-                raise TVEAuthError(
-                    f'{channel.name}: Comcast_SSO needs a saved Xfinity cookie jar — '
-                    'needs a browser-assisted sign-in to harvest one first.'
-                )
-            # Uses its own dedicated session internally (not client.session,
-            # which carries the Bearer/auth_headers needed by
-            # _adobe_decision_finish's /profiles/code/{code} poll below) —
-            # Adobe binds the completed login server-side to `code`
-            # regardless of which HTTP session did the MSO login, same
-            # pattern already proven for NBC TVE.
-            from ..tve.adobe_pass import xfinity_cookie_jar_login
-            xfinity_cookie_jar_login(mso_login_url, account.username or '', account.password or '', cookie_jar)
         else:
-            raise TVEAuthError(
-                f'{channel.name}: browser-assisted sign-in for AMC Networks TVE is not built yet for MVPD '
-                f'{mso_id} (only native Cox login and Comcast_SSO cookie-jar login are wired up here).'
+            # Every other MVPD's actual sign-in mechanics live in
+            # app/tve/mvpd/ — add one there (not here) to support a new
+            # provider everywhere at once. Uses its own dedicated session
+            # internally (not client.session, which carries the
+            # Bearer/auth_headers needed by _adobe_decision_finish's
+            # /profiles/code/{code} poll below) — Adobe binds the completed
+            # login server-side to `code` regardless of which HTTP session
+            # did the MVPD login, same pattern already proven for NBC TVE.
+            from ..tve.mvpd import login_to_mvpd
+            cookie_jar = cfg.get('xfinity_cookie_jar')
+            page_html, page_url = (
+                (mso_login_response.text, str(mso_login_response.url))
+                if not mso_login_url else ('', mso_login_url)
             )
+            try:
+                login_to_mvpd(
+                    mso_id, page_html, page_url, account.username or '', account.password or '',
+                    cookie_jar=cookie_jar,
+                )
+            except TVEAuthError as exc:
+                raise TVEAuthError(f'{channel.name}: {exc}') from exc
 
         adobe_token, adobe_id, notafter_ms = self._adobe_decision_finish(client.session, channel, code, mso_id, auth_headers)
         self._save_adobe_session_cache(channel, mso_id, code, client.ctx.access_token)
