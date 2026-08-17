@@ -2869,6 +2869,167 @@ def _sling_f5_recover(
     return True
 
 
+def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id: str, mso_id: str, channels: dict) -> None:
+    """Browser-assisted counterpart to run_amcn_browser_login's scripted Cox
+    fast path, for any MSO whose login page blocks scripted clients outright
+    (YouTubeTV/Google, Sling, etc.) — same "second screen" idea as
+    run_nbc_browser_login, adapted to AMCNetworksTVEScraper's own v2 REST
+    API (_adobe_session_redirect/_adobe_decision_finish, already MSO-generic
+    since today's DIRECTV wiring routed non-Cox logins through the shared
+    login_to_mvpd() dispatcher — this function is what was still missing: a
+    real browser to drive that dispatcher's browser-only MSOs through).
+
+    Unlike the Cox path, the 4 channels are done ONE AT A TIME through a
+    single shared page/profile — each needs its own live MSO login
+    (independent requestor_id/session), so there's no equivalent of Cox's
+    "parallelize since nothing shares state" shortcut. In practice this is
+    fast after the first channel: the persistent profile
+    (/data/browser_profiles/mvpd_tve, same one NBC/FOX/legacy use) keeps
+    Google/Adobe's SSO session warm, so channels 2-4 usually just need an
+    account-picker/consent click apiece — confirmed live 2026-08-17 for
+    Warner's TNT/TBS/truTV under the exact same profile.
+
+    Reuses the shared legacy 'mvpd:browser-login:*' redis keys (via
+    set_status and _relay_input_and_screenshot's defaults) since AMCN's
+    "Sign in" button already rides the same modal/polling infra as
+    History/Warner — see _relay_input_and_screenshot's docstring.
+    """
+    try:
+        from camoufox.sync_api import Camoufox
+    except ImportError:
+        set_status('error', 'Camoufox is not installed on this container')
+        return
+
+    import os as _os_login
+    profile_dir = '/data/browser_profiles/mvpd_tve'
+    try:
+        _os_login.makedirs(profile_dir, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[amcn-mvpd-login] could not create profile dir %s: %s', profile_dir, exc)
+
+    _PER_CHANNEL_TIMEOUT_SECONDS = 120
+    _POLL_SECONDS = 2.0
+    authorized: list[str] = []
+    failed: list[str] = []
+
+    try:
+        with Camoufox(
+            headless='virtual', os='windows', persistent_context=True,
+            user_data_dir=profile_dir, window=(1280, 800),
+        ) as context:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.on('crash', lambda p: logger.warning('[amcn-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
+            page.on('close', lambda p: logger.warning('[amcn-mvpd-login] page CLOSE event fired'))
+            page.on('pageerror', lambda exc: logger.warning('[amcn-mvpd-login] page JS error: %s', str(exc)[:500]))
+
+            for channel in channels.values():
+                if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                    failed.append(f'{channel.name}: cancelled')
+                    break
+                set_status('running', f'Signing in to {channel.name}…')
+                try:
+                    statement = scraper._amcn_software_statement(channel, account)
+                    client, code, mso_login_url, auth_headers, _resp = scraper._adobe_session_redirect(
+                        channel, statement, device_id, mso_id,
+                    )
+                except TVENotAuthorizedError:
+                    failed.append(f'{channel.name}: not a participating provider')
+                    continue
+                except TVEAuthError as exc:
+                    failed.append(f'{channel.name}: {str(exc)[:120]}')
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception('[amcn-mvpd-login] unexpected failure registering %s', channel.name)
+                    failed.append(f'{channel.name}: {str(exc)[:120]}')
+                    continue
+
+                try:
+                    page.goto(mso_login_url, wait_until='domcontentloaded', timeout=30000)
+                except Exception as exc:  # noqa: BLE001
+                    if _is_browser_death(exc):
+                        raise
+                    failed.append(f'{channel.name}: failed to load sign-in page ({exc})')
+                    continue
+
+                wait_started = time.monotonic()
+                deadline = wait_started + _PER_CHANNEL_TIMEOUT_SECONDS
+                last_shot = 0.0
+                last_poll = 0.0
+                paired = False
+                cancelled = False
+                denied_message: str | None = None
+                while time.monotonic() < deadline:
+                    if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                        cancelled = True
+                        break
+                    now = time.monotonic()
+                    if now - last_shot > 0.25:
+                        last_shot = now
+                        if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
+                            cancelled = True
+                            break
+                    if now - last_poll > _POLL_SECONDS:
+                        last_poll = now
+                        try:
+                            adobe_token, adobe_id, notafter_ms = scraper._adobe_decision_finish(
+                                client.session, channel, code, mso_id, auth_headers,
+                            )
+                        except TVENotAuthorizedError as exc:
+                            # A DEFINITIVE answer from Adobe (the MSO login
+                            # itself succeeded — the profile has a real
+                            # userID — but the entitlement decision was a
+                            # clean "Deny"), as opposed to the merely-pending
+                            # case below (profile still empty because the
+                            # human hasn't finished the MSO login yet). No
+                            # point burning the rest of this channel's
+                            # timeout re-polling the same denial.
+                            denied_message = str(exc)
+                            break
+                        except Exception as exc:  # noqa: BLE001
+                            # Ambiguous pending state — AMCN's
+                            # /profiles/code/{code} answers the same way
+                            # (200, empty profile) whether the human just
+                            # hasn't finished yet or something else is wrong,
+                            # so this keeps polling until the deadline.
+                            logger.info('[amcn-mvpd-login] %s poll not-yet/error: %s', channel.name, exc)
+                            continue
+                        scraper._save_adobe_session_cache(channel, mso_id, code, client.ctx.access_token)
+                        scraper._save_adobe_auth_cache(channel, mso_id, adobe_token, adobe_id, notafter_ms)
+                        authorized.append(channel.name)
+                        paired = True
+                        break
+                    page.wait_for_timeout(80)
+                if cancelled:
+                    failed.append(f'{channel.name}: cancelled')
+                    break
+                if denied_message is not None:
+                    failed.append(denied_message)
+                elif not paired:
+                    failed.append(f'{channel.name}: not entitled or timed out')
+    except BaseException as exc:  # noqa: BLE001
+        persist_source_config_updates(source.id, scraper._pending_config_updates)
+        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+        if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+            set_status('stopped', f'Cancelled — authorized: {", ".join(authorized)}.' if authorized else 'Cancelled.')
+            return
+        logger.exception('[amcn-mvpd-login] browser-assisted session failed')
+        set_status('error', f'Browser session failed: {exc}')
+        return
+
+    persist_source_config_updates(source.id, scraper._pending_config_updates)
+    persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+    if authorized:
+        message = f'Signed in — authorized: {", ".join(authorized)}.'
+        if failed:
+            message += ' Not authorized: ' + '; '.join(failed) + '.'
+        set_status('success', message)
+        logger.info('[amcn-mvpd-login] paired mso_id=%s authorized=%s failed=%s (browser-assisted)', mso_id, authorized, failed)
+    else:
+        message = '; '.join(failed) or 'No AMC Networks channels authorized.'
+        _record_tve_login_error('amcn', message)
+        set_status('error', message)
+
+
 def run_amcn_browser_login(mso_id: str):
     """Standalone "Sign in" for AMC Networks TVE.
 
@@ -2926,6 +3087,13 @@ def run_amcn_browser_login(mso_id: str):
         # threads touch scraper.cache below — otherwise two threads racing
         # the "is it loaded yet" check could both trigger it concurrently.
         scraper.cache  # noqa: B018
+
+        cfg = account.config or {}
+        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+
+        if mso_id != 'Cox':
+            _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id, mso_id, CHANNELS)
+            return
 
         # The 4 channels' logins are fully independent (each its own
         # requestor_id, own adobe_auth:<requestor_id> cache entry, own
@@ -2991,6 +3159,149 @@ def run_amcn_browser_login(mso_id: str):
             set_status('error', message)
 
 
+def _run_discovery_browser_assisted_login(r, set_status, source, account, scraper, mso_id: str, mso_name: str) -> None:
+    """Browser-assisted counterpart to run_discovery_browser_login's scripted
+    Cox fast path, for any MSO whose login page blocks scripted clients
+    outright (YouTubeTV/Google, Sling, etc.) — same "second screen" idea as
+    _run_amcn_browser_assisted_login, adapted to Discovery's single shared
+    session (all 14 channels ride ONE gauth session/cookie jar, unlike
+    AMCN's 4 independent per-channel logins — see SESSION_CACHE_KEY), and to
+    Discovery's own completion shape: rather than an independent
+    /profiles/code/{code} poll API (NBC/AMCN), a Discovery login completes
+    when the BROWSER's own redirect chain lands on a URL carrying a `code`
+    query param (see DiscoveryTVEScraper._authenticate()'s Cox/Xfinity
+    branches — the code is extracted from wherever redirect_url's own chain
+    lands, not fetched independently), so this watches page.url directly
+    instead of polling a separate endpoint.
+
+    Reuses the shared legacy 'mvpd:browser-login:*' redis keys (via
+    set_status and _relay_input_and_screenshot's defaults), same as AMCN.
+    """
+    import uuid as _uuid_login
+    from urllib.parse import parse_qs as _parse_qs_login, urlsplit as _urlsplit_login
+    from app.scrapers.discovery_tve import AUTH_HOST, CALLBACK_BASE
+
+    try:
+        from camoufox.sync_api import Camoufox
+    except ImportError:
+        set_status('error', 'Camoufox is not installed on this container')
+        return
+
+    import os as _os_login
+    profile_dir = '/data/browser_profiles/mvpd_tve'
+    try:
+        _os_login.makedirs(profile_dir, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[discovery-mvpd-login] could not create profile dir %s: %s', profile_dir, exc)
+
+    session = scraper._session()
+    device_id = scraper.config.get('device_id') or str(_uuid_login.uuid4())
+    if not scraper.config.get('device_id'):
+        scraper._update_config('device_id', device_id)
+
+    try:
+        mso_login_url, page_response = scraper._discovery_session_redirect(session, device_id, mso_id, mso_name)
+    except TVENotAuthorizedError as exc:
+        _record_tve_login_error('discovery', f'not entitled — {exc}')
+        set_status('error', f'Discovery TVE: not entitled — {exc}')
+        return
+    except TVEAuthError as exc:
+        _record_tve_login_error('discovery', str(exc))
+        set_status('error', f'Discovery TVE: {exc}')
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.exception('[discovery-mvpd-login] unexpected failure registering session')
+        _record_tve_login_error('discovery', str(exc))
+        set_status('error', f'Discovery TVE: {exc}')
+        return
+
+    nav_url = mso_login_url or str(page_response.url)
+
+    def _extract_code(url: str) -> str:
+        if not (url.startswith(AUTH_HOST) or url.startswith(CALLBACK_BASE)):
+            return ''
+        return (_parse_qs_login(_urlsplit_login(url).query).get('code') or [''])[0]
+
+    _PER_LOGIN_TIMEOUT_SECONDS = 150
+    _POLL_SECONDS = 1.0
+
+    try:
+        with Camoufox(
+            headless='virtual', os='windows', persistent_context=True,
+            user_data_dir=profile_dir, window=(1280, 800),
+        ) as context:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.on('crash', lambda p: logger.warning('[discovery-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
+            page.on('close', lambda p: logger.warning('[discovery-mvpd-login] page CLOSE event fired'))
+            page.on('pageerror', lambda exc: logger.warning('[discovery-mvpd-login] page JS error: %s', str(exc)[:500]))
+
+            set_status('running', 'Signing in to Discovery TVE…')
+            try:
+                page.goto(nav_url, wait_until='domcontentloaded', timeout=30000)
+            except Exception as exc:  # noqa: BLE001
+                if _is_browser_death(exc):
+                    raise
+                set_status('error', f'Discovery TVE: failed to load sign-in page ({exc})')
+                return
+
+            wait_started = time.monotonic()
+            deadline = wait_started + _PER_LOGIN_TIMEOUT_SECONDS
+            last_shot = 0.0
+            last_poll = 0.0
+            code = ''
+            cancelled = False
+            while time.monotonic() < deadline:
+                if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+                    cancelled = True
+                    break
+                now = time.monotonic()
+                if now - last_shot > 0.25:
+                    last_shot = now
+                    if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
+                        cancelled = True
+                        break
+                if now - last_poll > _POLL_SECONDS:
+                    last_poll = now
+                    code = _extract_code(_safe_page_url(page))
+                    if code:
+                        break
+                page.wait_for_timeout(80)
+
+            if cancelled:
+                set_status('stopped', 'Cancelled')
+                return
+            if not code:
+                set_status('error', 'Discovery TVE: timed out waiting for sign-in to complete.')
+                return
+    except BaseException as exc:  # noqa: BLE001
+        if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
+            set_status('stopped', 'Cancelled')
+            return
+        logger.exception('[discovery-mvpd-login] browser-assisted session failed')
+        set_status('error', f'Browser session failed: {exc}')
+        return
+
+    try:
+        scraper._discovery_finish_login(session, device_id, code)
+    except TVENotAuthorizedError as exc:
+        _record_tve_login_error('discovery', f'not entitled — {exc}')
+        set_status('error', f'Discovery TVE: not entitled — {exc}')
+        return
+    except TVEAuthError as exc:
+        _record_tve_login_error('discovery', str(exc))
+        set_status('error', f'Discovery TVE: {exc}')
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.exception('[discovery-mvpd-login] unexpected failure finishing login')
+        _record_tve_login_error('discovery', str(exc))
+        set_status('error', f'Discovery TVE: {exc}')
+        return
+
+    persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+    set_status('success', f'Signed in — Discovery TVE authorized via {mso_id}.')
+    logger.info('[discovery-mvpd-login] paired mso_id=%s (browser-assisted)', mso_id)
+
+
 def run_discovery_browser_login(mso_id: str):
     """Standalone "Sign in" for Discovery TVE.
 
@@ -3045,6 +3356,16 @@ def run_discovery_browser_login(mso_id: str):
             set_status('error', 'Discovery TVE source not found.')
             return
         scraper = DiscoveryTVEScraper(config=dict(source.config or {}))
+
+        if mso_id != 'Cox':
+            account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            if not account or not account.is_enabled or not account.has_credentials():
+                set_status('error', 'TVE credentials are not configured in Settings.')
+                return
+            mso_name = ((account.config or {}).get('selected_mso_name') or mso_id).strip()
+            _run_discovery_browser_assisted_login(r, set_status, source, account, scraper, mso_id, mso_name)
+            return
+
         try:
             scraper._authenticate()
         except TVENotAuthorizedError as exc:

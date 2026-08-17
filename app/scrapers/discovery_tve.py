@@ -347,19 +347,27 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
                     return p.get('id')
         return None
 
-    def _authenticate(self) -> requests.Session:
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-        if not account or not account.is_enabled or not account.has_credentials():
-            raise TVEAuthError('TVE credentials are not configured in Settings.')
-        cfg = account.config or {}
-        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
-        mso_name = (cfg.get('selected_mso_name') or mso_id).strip()
+    def _discovery_session_redirect(
+        self, session: requests.Session, device_id: str, mso_id: str, mso_name: str,
+    ) -> tuple[str, requests.Response]:
+        """Registers a Discovery gauth session and returns (mso_login_url,
+        page_response) without completing any login — this is the scripted
+        part that's never blocked by an MSO's bot defense (confirmed live
+        2026-08-17 for YouTubeTV: reaches a real auto-submit SAML form with
+        zero credentials sent). `page_response` is the same response
+        `mso_login_url` was derived from — for MSOs that get a real redirect
+        it's unused, but DIRECTV's own backend (and, confirmed live
+        2026-08-17, YouTubeTV's) needs its body directly since neither
+        redirects here at all — see app/tve/mvpd/directv.py's
+        directv_login() docstring.
 
-        session = self._session()
-        device_id = self.config.get('device_id') or str(uuid.uuid4())
-        if not self.config.get('device_id'):
-            self._update_config('device_id', device_id)
-
+        Split out of _authenticate() (2026-08-17) so a browser-assisted
+        pairing (app.worker.run_discovery_browser_login) can drive the same
+        registration scripted, then hand a real browser just the
+        mso_login_url/page_response instead of the whole method needing a
+        synchronous, blocking login_to_mvpd() call it can't make for MSOs
+        that require a human (YouTubeTV, Sling).
+        """
         # This anonymous token must be minted with x-device-info. Without it,
         # /login succeeds but the upgraded st later fails live playback with
         # access.denied.by.partner / "error missing device info".
@@ -407,44 +415,21 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         # DIRECTV doesn't redirect here at all (see app/tve/mvpd/directv.py's
         # directv_login() docstring) — login_to_mvpd() below works from this
         # response's body directly, so it's exempt from the "no redirect"
-        # check every other MSO needs.
-        if not mso_login_url and mso_id != 'DTV':
+        # check every other MSO needs. Confirmed live 2026-08-17: YouTubeTV
+        # is the same shape (a 200 auto-submit SAML form, not a redirect).
+        if not mso_login_url and mso_id not in ('DTV', 'YouTubeTV'):
             raise TVEAuthError('Adobe authenticate call did not return an MVPD login redirect.')
+        return mso_login_url, r
 
-        if mso_id == 'Cox':
-            if 'login.cox.com' not in mso_login_url:
-                raise TVEAuthError(f'Unexpected Adobe authenticate redirect host: {urlsplit(mso_login_url).netloc}.')
-            callback_url = _cox_saml_login(session, mso_login_url, account.username or '', account.password or '')
-            if CALLBACK_BASE not in callback_url:
-                raise TVEAuthError(f'Unexpected Discovery callback host: {urlsplit(callback_url).netloc}.')
-            r = session.get(callback_url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*'}, allow_redirects=False, timeout=30)
-            if r.status_code not in {301, 302, 303, 307, 308}:
-                raise TVEAuthError(f'Discovery callback returned HTTP {r.status_code}.')
-            code_url = r.headers.get('location') or ''
-        else:
-            # Every other MVPD's actual sign-in mechanics live in
-            # app/tve/mvpd/ — add one there (not here) to support a new
-            # provider everywhere at once. Unlike _cox_saml_login (which
-            # deliberately stops at the FIRST post-login redirect, so the
-            # Cox branch above does one more explicit hop to reach
-            # code_url), every login_to_mvpd() backend follows redirects
-            # all the way through and returns that landed URL directly —
-            # confirmed live 2026-08-14 for Xfinity (lands on
-            # auth.watch.hgtv.com/gauth-sync?code=..., the same URL Cox's
-            # extra hop above extracts `code` from) — so it's used as
-            # code_url directly here, no extra hop needed.
-            from ..tve.mvpd import login_to_mvpd
-            cookie_jar = cfg.get('xfinity_cookie_jar')
-            page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
-            code_url = login_to_mvpd(
-                mso_id, page_html, page_url, account.username or '', account.password or '',
-                cookie_jar=cookie_jar,
-            )
-
-        code = (parse_qs(urlsplit(code_url).query).get('code') or [''])[0]
-        if not code:
-            raise TVEAuthError('Discovery callback did not return a gauth code.')
-
+    def _discovery_finish_login(self, session: requests.Session, device_id: str, code: str) -> None:
+        """The code-for-token exchange, login, and entitlement-check tail —
+        split out of _authenticate() (2026-08-17) so a browser-assisted
+        pairing can call it once `code` has been extracted from wherever the
+        browser's own redirect chain landed, same as the Cox/Xfinity paths
+        below call it after their own completion mechanics. Caches the
+        resulting session cookies on success (side effect); raises on
+        failure. Does not return the session — callers already hold it.
+        """
         r = session.get(
             f'{API_BASE}/v1/gauth/token',
             params={'code': code},
@@ -480,6 +465,57 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             'expires_at': min(expires_at, int(time.time()) + SESSION_TTL_SECONDS),
             'cached_at': int(time.time()),
         })
+
+    def _authenticate(self) -> requests.Session:
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        if not account or not account.is_enabled or not account.has_credentials():
+            raise TVEAuthError('TVE credentials are not configured in Settings.')
+        cfg = account.config or {}
+        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+        mso_name = (cfg.get('selected_mso_name') or mso_id).strip()
+
+        session = self._session()
+        device_id = self.config.get('device_id') or str(uuid.uuid4())
+        if not self.config.get('device_id'):
+            self._update_config('device_id', device_id)
+
+        mso_login_url, r = self._discovery_session_redirect(session, device_id, mso_id, mso_name)
+
+        if mso_id == 'Cox':
+            if 'login.cox.com' not in mso_login_url:
+                raise TVEAuthError(f'Unexpected Adobe authenticate redirect host: {urlsplit(mso_login_url).netloc}.')
+            callback_url = _cox_saml_login(session, mso_login_url, account.username or '', account.password or '')
+            if CALLBACK_BASE not in callback_url:
+                raise TVEAuthError(f'Unexpected Discovery callback host: {urlsplit(callback_url).netloc}.')
+            r = session.get(callback_url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*'}, allow_redirects=False, timeout=30)
+            if r.status_code not in {301, 302, 303, 307, 308}:
+                raise TVEAuthError(f'Discovery callback returned HTTP {r.status_code}.')
+            code_url = r.headers.get('location') or ''
+        else:
+            # Every other MVPD's actual sign-in mechanics live in
+            # app/tve/mvpd/ — add one there (not here) to support a new
+            # provider everywhere at once. Unlike _cox_saml_login (which
+            # deliberately stops at the FIRST post-login redirect, so the
+            # Cox branch above does one more explicit hop to reach
+            # code_url), every login_to_mvpd() backend follows redirects
+            # all the way through and returns that landed URL directly —
+            # confirmed live 2026-08-14 for Xfinity (lands on
+            # auth.watch.hgtv.com/gauth-sync?code=..., the same URL Cox's
+            # extra hop above extracts `code` from) — so it's used as
+            # code_url directly here, no extra hop needed.
+            from ..tve.mvpd import login_to_mvpd
+            cookie_jar = cfg.get('xfinity_cookie_jar')
+            page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
+            code_url = login_to_mvpd(
+                mso_id, page_html, page_url, account.username or '', account.password or '',
+                cookie_jar=cookie_jar,
+            )
+
+        code = (parse_qs(urlsplit(code_url).query).get('code') or [''])[0]
+        if not code:
+            raise TVEAuthError('Discovery callback did not return a gauth code.')
+
+        self._discovery_finish_login(session, device_id, code)
         return session
 
     def _authorized_session(self) -> requests.Session:

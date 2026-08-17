@@ -370,6 +370,7 @@ _CSPAN_PROXY_SESSION.headers.update(_CSPAN_CDN_HEADERS)
 
 
 from ..scrapers.base import StreamDeadError
+from ..tve.adobe_pass import TVENotAuthorizedError
 from .tasks import trigger_channel_auto_disable
 
 logger = logging.getLogger(__name__)
@@ -4344,6 +4345,23 @@ def play(source_name: str, channel_id: str):
                 client_ip, source_name, channel_id, channel.name, e,
             )
             trigger_channel_auto_disable(channel.id, 'Dead')
+            resolved_url = None
+            resolve_dead = True
+        except TVENotAuthorizedError as e:
+            # A definitive "no" from Adobe Pass (the TV-provider account
+            # simply isn't entitled to this network) — same certainty class
+            # as StreamDeadError, not a transient resolve failure, so it
+            # gets the same immediate-disable treatment instead of silently
+            # retrying this exact doomed resolve() on every future play
+            # request. Audit already special-cases this identically (see
+            # run_stream_audit's own TVENotAuthorizedError branch); this was
+            # the one place it fell through to the generic branch below
+            # instead (confirmed live 2026-08-17: Discovery TVE's TLC).
+            logger.error(
+                '[play] channel not authorized ip=%s source=%s channel_id=%s channel_name=%s: %s',
+                client_ip, source_name, channel_id, channel.name, e,
+            )
+            trigger_channel_auto_disable(channel.id, 'NotAuthorized')
             resolved_url = None
             resolve_dead = True
         except Exception as e:
