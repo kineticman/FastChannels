@@ -4619,6 +4619,86 @@ def play(source_name: str, channel_id: str):
     return redirect(resolved_url, 302)
 
 
+# Sources confirmed (dev/kodi/README.md, real Fire TV Stick 4K hardware, 2026-08-16) to
+# actually decrypt through Kodi/inputstream.adaptive. Cox and Warner TVE hit a confirmed,
+# non-fixable inputstream.adaptive same-KID session-splitting wall and stay excluded;
+# Roku is pending re-verification (rate-limited mid-check) and Philo is untested (no
+# creds) — both excluded until actually confirmed. See IMPLEMENTATION_PLAN.md section 5.
+_KODI_BRIDGE_TRUSTED_SOURCES = frozenset({
+    'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa',
+})
+
+
+@play_bp.route('/play/kodi-bridge/<source_name>/<channel_id>.m3u8')
+def play_kodi_bridge(source_name: str, channel_id: str):
+    """
+    Single play URL for the Kodi/HDMI-encoder bridge feed (dev/kodi/IMPLEMENTATION_PLAN.md
+    section 2). Every channel in the feed hits this route, DRM or not — the branch is
+    invisible to the caller:
+      - normal channel -> identical to /play/<source>/<id>.m3u8 (resolve + 302 to CDN)
+      - bridge channel -> trigger_channel() on Kodi, then redirect to the encoder's fixed
+        stream URL immediately. Does NOT wait for confirm_playback() — that's the
+        watchdog's job, never inline with this request (speed-first design, agreed
+        2026-08-16: the JSON-RPC call itself returns in well under 100ms).
+    """
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
+        .first()
+    )
+    if not channel and source_name == 'distro' and ':' not in channel_id:
+        channel = (
+            Channel.query
+            .join(Source)
+            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
+            .first()
+        )
+    if not channel:
+        abort(404)
+
+    needs_bridge = bool(channel.requires_drm_bridge) and source_name in _KODI_BRIDGE_TRUSTED_SOURCES
+    if not needs_bridge:
+        return play(source_name, channel_id)
+
+    from .. import kodi_bridge
+    from ..models import AppSettings
+    from .api import _get_playback_info
+
+    settings = AppSettings.get()
+    encoder_url = settings.effective_kodi_bridge_encoder_url()
+    if not encoder_url:
+        logger.error(
+            '[kodi-bridge] play request for %s/%s but kodi_bridge_encoder_url is not configured',
+            source_name, channel_id,
+        )
+        return Response('Kodi HDMI bridge encoder URL is not configured.\n', status=503, mimetype='text/plain')
+
+    if not kodi_bridge.is_configured():
+        logger.error(
+            '[kodi-bridge] play request for %s/%s but the bridge is not enabled/configured',
+            source_name, channel_id,
+        )
+        return Response('Kodi HDMI bridge is not enabled or configured.\n', status=503, mimetype='text/plain')
+
+    info = _get_playback_info(channel, fast_mode=False)
+    manifest_url = info.get('preview_url') or info.get('play_url') or ''
+    if manifest_url.startswith('/'):
+        manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
+    license_url = info.get('license_url') or None
+
+    if not manifest_url:
+        logger.error('[kodi-bridge] no manifest URL resolved for %s/%s', source_name, channel_id)
+        return _unavailable_response()
+
+    triggered = kodi_bridge.trigger_channel(manifest_url, license_url, name=channel.name or 'FastChannels')
+    logger.info(
+        '[kodi-bridge] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s triggered=%s -> encoder',
+        getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name, triggered,
+    )
+    return redirect(encoder_url, 302)
+
+
 _PRISMCAST_HLS_SESSION_RE = re.compile(r'^(.*)/hls/([^/]+)/stream\.m3u8(?:\?.*)?$')
 
 
