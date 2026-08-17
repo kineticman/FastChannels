@@ -928,6 +928,22 @@ class CoxScraper(BaseScraper):
             episode_id=_first_text(item.get('entityId'), item.get('listingId')),
         )
 
+    def expire_cached_dash(self, cid: str) -> None:
+        """Force a cached playback session to be ignored by the next resolve().
+
+        Cox's MDS license server appears to accept only one license grant per
+        content_metadata/xsct session — inputstream.adaptive-based clients (Kodi)
+        commonly open a second CDM session even when every track shares the same
+        default_KID, and that second license request gets a bare 403. The license
+        proxy calls this + resolve() again on a 403 to mint a fresh session and
+        retry once, mirroring the same pattern already used for Philo above.
+        """
+        if not cid:
+            return
+        playback_cache = dict(self.cache.get('cox_playback') or {})
+        playback_cache[cid] = {'mpd_url': '', 'cached_at': 0}
+        self._update_cache('cox_playback', playback_cache)
+
     def resolve(self, raw_url: str) -> str:
         data = _decode_opaque(raw_url)
         channel_id = _first_text(data.get('channel_id'))

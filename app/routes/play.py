@@ -3856,6 +3856,35 @@ def license_proxy(source_name: str, channel_id: str | None = None):
             r = _send_license()
         except Exception as e:
             logger.warning('[philo-license] channel refresh after HTTP 403 failed: %s', e)
+
+    # Cox's MDS license server appears to grant only one license per
+    # content_metadata/xsct session; Kodi's inputstream.adaptive routinely opens a
+    # second CDM session (even though every track shares the same default_KID) and
+    # that second request gets a bare 403. Mint a fresh session and retry once.
+    if r.status_code == 403 and source_name == 'cox' and channel_id:
+        try:
+            fresh_cfg = {**(source.config or {}), **load_source_cache(source.id)}
+            fresh_scraper = scraper_cls(config=fresh_cfg)
+            fresh_scraper.expire_cached_dash(channel_id)
+            channel = (
+                Channel.query.join(Source)
+                .filter(Source.name == 'cox', Channel.source_channel_id == channel_id)
+                .first()
+            )
+            if channel and channel.stream_url:
+                fresh_scraper.resolve(channel.stream_url)
+            if getattr(fresh_scraper, '_pending_cache_updates', None):
+                persist_source_cache_updates(source.id, fresh_scraper._pending_cache_updates)
+            if getattr(fresh_scraper, '_pending_config_updates', None):
+                persist_source_config_updates(source.id, fresh_scraper._pending_config_updates)
+            cfg = {**(source.config or {}), **load_source_cache(source.id)}
+            body, headers = scraper_cls.prepare_license_request(
+                challenge, cfg, channel_id=channel_id, sht=sht)
+            headers.setdefault('Content-Type', 'application/octet-stream')
+            logger.info('[cox-license] refreshed playback session after HTTP 403 channel=%s', channel_id)
+            r = _send_license()
+        except Exception as e:
+            logger.warning('[cox-license] channel refresh after HTTP 403 failed: %s', e)
     logger.debug('[license-proxy] %s channel=%s -> HTTP %s (%d bytes)',
                  source_name, channel_id or '-', r.status_code, len(r.content))
     if r.status_code >= 400:
