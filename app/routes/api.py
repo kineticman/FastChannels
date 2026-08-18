@@ -4378,7 +4378,6 @@ def push_feed_kodi_bridge_to_dvr(feed_id):
       given channel actually needs the Kodi/Firestick trigger.
     """
     import re as _re
-    from ..generators.m3u import _build_channel_query, _parse_gracenote_id, feed_to_query_filters
 
     feed = Feed.query.get_or_404(feed_id)
     settings = AppSettings.get()
@@ -4396,8 +4395,14 @@ def push_feed_kodi_bridge_to_dvr(feed_id):
 
     base = public_base_url()
 
-    feed_query = _build_channel_query(feed_to_query_filters(feed.filters or {}))
-    dvr_type = _dvr_stream_format(feed_query)
+    # Always MPEG-TS, unlike the plain/PrismCast pushes (_dvr_stream_format): every
+    # trusted-source DRM channel in this feed redirects to the same fixed
+    # kodi_bridge_encoder_url, which is Channels DVR's own capture-card re-serve —
+    # confirmed MPEG-TS only (dev/kodi/README.md), never HLS. Non-bridged channels in
+    # the same feed still point at their real (often HLS) CDN URL underneath, so this
+    # is a deliberate tradeoff for feeds that mix bridged and non-bridged channels,
+    # not a correctness guarantee for every entry — accepted call, not a bug.
+    dvr_type = 'MPEG-TS'
 
     # Kodi-bridge partitions the same way as the standard feed; use the same counts.
     split = _feed_split_counts(feed)
