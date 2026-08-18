@@ -3815,12 +3815,14 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     results[requestor_id] = (True, 'authorized')
                     _step(requestor_id, 'done', 'authorized')
                     logger.info('[mvpd-login] paired requestor_id=%s (completed after the page closed itself)', requestor_id)
-                except TVENotAuthorizedError:
+                except TVENotAuthorizedError as exc:
                     results[requestor_id] = (False, 'not entitled')
                     _step(requestor_id, 'failed', 'not entitled')
+                    logger.info('[mvpd-login] %s: not entitled (completed after the page closed itself) — %s', requestor_id, exc)
                 except TVEAuthError as exc:
                     results[requestor_id] = (False, str(exc)[:120])
                     _step(requestor_id, 'failed', str(exc)[:120])
+                    logger.warning('[mvpd-login] %s authorize failed (completed after the page closed itself): %s', requestor_id, exc)
                 set_status('success', _summarize_pairing_results(results))
                 return True
             return False
@@ -4017,6 +4019,21 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                             current_job.heartbeat(datetime.now(timezone.utc), 180)
                         except Exception as exc:  # noqa: BLE001
                             logger.debug('[mvpd-login] self-heartbeat failed: %s', exc)
+                        # This loop otherwise goes completely log-silent while
+                        # waiting on a human (e.g. a Google account-chooser
+                        # click) — the browser is alive and the screenshot is
+                        # updating the whole time, but that's invisible to
+                        # anyone tailing logs instead of the admin UI modal,
+                        # which reads exactly like a hang (confirmed live
+                        # 2026-08-17: TNT sat on a Google "Choose an account"
+                        # screen for minutes with zero log output after the
+                        # autofill warning). One line per heartbeat interval
+                        # makes "alive and waiting" distinguishable from
+                        # "actually stuck" without opening the modal.
+                        logger.info(
+                            '[mvpd-login] %s: still waiting on sign-in — current page: %s',
+                            requestor_id, _safe_page_url(page),
+                        )
                         last_heartbeat = now
 
                     if now - last_shot > 0.25:
@@ -4062,9 +4079,10 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                             results[requestor_id] = (True, 'authorized')
                             _step(requestor_id, 'done', 'authorized')
                             logger.info('[mvpd-login] paired requestor_id=%s (token len=%d)', requestor_id, len(token or ''))
-                        except TVENotAuthorizedError:
+                        except TVENotAuthorizedError as exc:
                             results[requestor_id] = (False, 'not entitled')
                             _step(requestor_id, 'failed', 'not entitled')
+                            logger.info('[mvpd-login] %s: not entitled — %s', requestor_id, exc)
                         except TVEAuthError as exc:
                             results[requestor_id] = (False, str(exc)[:120])
                             _step(requestor_id, 'failed', str(exc)[:120])

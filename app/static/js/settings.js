@@ -880,7 +880,7 @@ async function signInToAllTve() {
     steps[i].state = 'running';
     _renderMvpdLoginSteps(steps);
     const result = n.family === 'foxone'
-      ? await _mvpdLoginRunFoxOneForBatch(n.label, status)
+      ? await _mvpdLoginRunFoxOneForBatch(n.label, status, hintEl)
       : await _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES[n.family], n.requestor_id, n.label, status, hintEl);
     if (!_mvpdLoginActive) return;
     steps[i].state = result.ok ? 'done' : 'failed';
@@ -902,7 +902,22 @@ async function signInToAllTve() {
 // throttle_cox_login(), shared with fox_tve's _cox_saml_login which FOX One
 // also uses), so this just fires and waits for the response — no
 // client-side pacing needed.
-function _mvpdLoginRunFoxOneForBatch(label, status) {
+//
+// Only valid for mso_id === 'Cox' — foxOneSignIn's route always attempts
+// Cox's own scripted login no matter which MVPD is selected, so for any
+// other MSO (e.g. YouTubeTV) it just fails instantly with "no scripted
+// sign-in is wired up for this provider yet." Left uncaught, "Sign in to
+// all" silently skipped FOX One entirely for every non-Cox MVPD (confirmed
+// live 2026-08-17: a full YouTubeTV batch ran History through Discovery but
+// never even attempted FOX One's own real browser-assisted pairing, built
+// the same day this file gained a 'foxone' entry in MVPD_LOGIN_FAMILIES —
+// this call site was never updated to use it). The row-render logic above
+// already branches on bootstrap.tveSelectedMsoId the same way; mirror it
+// here instead of hardcoding the Cox-only path.
+function _mvpdLoginRunFoxOneForBatch(label, status, hintEl) {
+  if (settingsBootstrap.tveSelectedMsoId !== 'Cox') {
+    return _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES.foxone, null, label, status, hintEl);
+  }
   status.textContent = `Signing in to ${label}…`;
   return fetch('/api/settings/tve/foxone/signin', { method: 'POST' })
     .then(r => r.json().then(data => ({ ok: r.ok && !!data.ok, message: data.error })))
@@ -1019,6 +1034,20 @@ function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
           ) {
             _mvpdLoginPollTimer = setTimeout(poll, 400);
             return;
+          }
+          // Unlike _pollMvpdLoginModal (the single-network "Sign in" button),
+          // this batch loop never wired the screenshot into the modal frame —
+          // it only ever updated status text. Harmless for Cox (fully
+          // scripted, nothing to look at), but for any MSO that needs a real
+          // human click (YouTubeTV's Google account-chooser, a captcha, etc.)
+          // the modal just sat there with an empty/hidden frame the whole
+          // batch, indistinguishable from a hang (reported live 2026-08-17
+          // during a YouTubeTV "Sign in to all" run). Mirror
+          // _pollMvpdLoginModal's frame update here too.
+          const frame = document.getElementById('mvpd-login-frame');
+          if (d.screenshot && frame) {
+            frame.src = `data:image/jpeg;base64,${d.screenshot}`;
+            frame.style.visibility = 'visible';
           }
           if (d.hint) {
             hintEl.textContent = '⚠ ' + d.hint;

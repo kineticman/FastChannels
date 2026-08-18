@@ -27,7 +27,20 @@ BRAND_ID = '5af07ab86b66d16f0e095063'
 PARTNER_ID = '55e9d01a6b66d1244474bbe5'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
 SESSION_CACHE_KEY = 'discovery_tve_session'
-SESSION_TTL_SECONDS = 6 * 60 * 60
+# The `st` cookie minted by /token is genuinely short-lived (it's requested
+# with shortlived=true and its own JWT carries no `exp` claim at all — this
+# used to be treated as "assume it's long-lived, default to 6h" instead,
+# which was wrong). Live-measured 2026-08-17: still valid at 113s old, dead
+# ("invalid.token") by 214s — and there's no refresh path around it either;
+# re-minting via /token using the same (still-fresh, <4min-old) session
+# cookies came back anonymous instead of re-authenticating, so once `st`
+# dies the ONLY way back is a brand new MSO login from scratch, full stop.
+# 90s keeps this comfortably under the observed ~113-214s floor. This mostly
+# matters for MSOs with no scripted re-login (YouTubeTV, Sling) — Cox/
+# Xfinity's own _authenticate() re-logs in from scratch in a couple seconds
+# regardless of whether the cache was ever going to hit, so a short real TTL
+# doesn't cost them anything they weren't already paying.
+SESSION_TTL_SECONDS = 90
 
 
 @dataclass(frozen=True)
@@ -273,7 +286,16 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         cached = self.cache.get(SESSION_CACHE_KEY) or {}
         if not isinstance(cached, dict):
             return None
-        if int(cached.get('expires_at') or 0) <= int(time.time()) + 300:
+        # This buffer used to be 300s, sized against the old (wrong) 6h TTL
+        # assumption — with SESSION_TTL_SECONDS now a realistic ~90s (see its
+        # definition), a 300s buffer would always exceed the entire real
+        # lifetime and make this cache permanently a no-op miss, forcing a
+        # full re-login (Cox's own throttle_cox_login() included) on every
+        # single resolve() instead of ever reusing a session that's still
+        # genuinely good. 15s leaves a real safety margin against an
+        # expiry-edge race while still allowing reuse within the actual
+        # short window.
+        if int(cached.get('expires_at') or 0) <= int(time.time()) + 15:
             return None
         cookies = cached.get('cookies') or {}
         if not isinstance(cookies, dict) or not cookies.get('st'):
@@ -711,7 +733,20 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             timeout=30,
         )
         if r.status_code in {401, 403}:
-            self._update_cache(SESSION_CACHE_KEY, {})
+            # 401 (unauthenticated — the session itself is bad) and 403
+            # (authenticated, but forbidden for THIS resource) were treated
+            # identically here, both wiping the shared session cache. That's
+            # wrong for 403: confirmed live 2026-08-17 that Discovery returns
+            # 403 access.denied.missingpackage for a channel simply not in
+            # this MVPD's package — a genuine, per-channel entitlement
+            # answer, not a session problem. The session (good for every
+            # OTHER channel too) was getting destroyed by the very first
+            # denied channel in any multi-channel run (audit, or this sweep),
+            # forcing every channel checked after it to fall through to a
+            # full re-authenticate — for YouTubeTV, an instant failure with
+            # no scripted fallback at all. Only wipe on 401.
+            if r.status_code == 401:
+                self._update_cache(SESSION_CACHE_KEY, {})
             raise TVENotAuthorizedError(f'{channel.name}: Discovery denied playback entitlement HTTP {r.status_code}: {r.text[:300]}')
         r.raise_for_status()
         data = r.json()
