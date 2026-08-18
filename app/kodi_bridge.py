@@ -29,12 +29,13 @@ _DEFAULT_LICENSE_TYPE = 'com.widevine.alpha'
 # Sources confirmed (dev/kodi/README.md, real Fire TV Stick 4K hardware, 2026-08-16) to
 # actually decrypt through Kodi/inputstream.adaptive. Cox and Warner TVE hit a confirmed,
 # non-fixable inputstream.adaptive same-KID session-splitting wall and stay excluded;
-# Roku is pending re-verification (rate-limited mid-check) and Philo is untested (no
-# creds) — both excluded until actually confirmed. See IMPLEMENTATION_PLAN.md section 5.
+# Roku is pending re-verification (rate-limited mid-check) — excluded until actually
+# confirmed. Philo confirmed 2026-08-18 (real Widevine key exchange + sustained
+# fluctuating decode bitrate on-device via BBC News). See IMPLEMENTATION_PLAN.md section 5.
 # Shared by app/routes/play.py (play_kodi_bridge) and app/generators/m3u.py
 # (generate_kodi_bridge_m3u) — keep both in sync via this single source of truth.
 KODI_BRIDGE_TRUSTED_SOURCES = frozenset({
-    'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa',
+    'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa', 'philo',
 })
 
 
