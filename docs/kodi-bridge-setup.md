@@ -136,6 +136,13 @@ curl -X POST -H "Content-Type: application/json" \
 # → {"id":1,"jsonrpc":"2.0","result":"pong"}
 ```
 
+**If that comes back empty, hangs, or returns garbage (e.g. raw bytes instead of
+JSON) instead of `pong`**: some Fire OS builds run their own internal system service
+("Turnstile") permanently bound to port 8080, which Kodi can never win a race against.
+Change the port under **Services → Control → Port** to something else (e.g. `8081`),
+re-verify against that port instead, and use the same `IP:8081` form in step 9's
+FastChannels IP field.
+
 ## 6. Install InputStream Adaptive
 
 This is Kodi's DRM/adaptive-streaming plugin — required for the Widevine sources
@@ -173,6 +180,19 @@ adb -s <firestick-ip>:5555 push fc_bridge.zip /sdcard/Download/fc_bridge.zip
 1. **Add-ons** → install-from-zip icon → **Install from zip file**.
 2. **External storage → Download → fc_bridge.zip.**
 3. Wait for "Add-on installed."
+
+**If the Download folder shows 0 items even though you just pushed the zip there**
+(common right after a fresh Kodi install or reinstall): Kodi lost its "all files
+access" permission and can't see anything outside its own app folder yet. Fix it once
+per install:
+
+```bash
+adb -s <firestick-ip>:5555 shell appops set org.xbmc.kodi MANAGE_EXTERNAL_STORAGE allow
+adb -s <firestick-ip>:5555 shell am force-stop org.xbmc.kodi
+adb -s <firestick-ip>:5555 shell monkey -p org.xbmc.kodi -c android.intent.category.LAUNCHER 1
+```
+
+Give Kodi a few seconds to relaunch, then retry the zip install.
 
 **Enable it** — sideloaded addons default to disabled, and there's no on-screen
 indicator that it's off (it'll just fail with "Unable to find plugin..." until you do
@@ -241,7 +261,9 @@ In FastChannels: **Settings → Kodi HDMI Bridge** card.
 1. Turn on **Enable Kodi bridge**.
 2. Turn on **Keep alive** (the watchdog from step 8).
 3. **Kodi / Firestick IP address** — just the IP; FastChannels derives the JSON-RPC
-   (`:8080`) and adb (`:5555`) addresses from it automatically.
+   (`:8080`) and adb (`:5555`) addresses from it automatically. If you had to move
+   Kodi's webserver off the default port (see step 5's Turnstile note), append it
+   instead — e.g. `192.168.1.50:8081`.
 4. Click **Save**, then **Test connection** — it should confirm Kodi is reachable.
    It'll also warn you that the encoder/capture stream URL isn't set yet — that's
    expected until step 10.
@@ -330,6 +352,17 @@ expected on Android 11+ Firestick models (scoped storage blocks even `adb shell`
 reaching other apps' private storage) — that's exactly why steps 7 and above push to
 the public `/sdcard/Download/` folder and use Kodi's own zip installer instead of
 pushing files directly into `.kodi/addons/`.
+
+**JSON-RPC ping fails, hangs, or returns non-JSON garbage even though the webserver
+settings look right**: some Fire OS builds run an internal system service ("Turnstile")
+permanently bound to port 8080 — Kodi's own webserver can never claim it. Move Kodi's
+webserver to a different port under **Services → Control → Port** (`8081` is a safe
+choice), and put `IP:8081` in FastChannels' Kodi IP field. See step 5.
+
+**"Install from zip file" shows the Download folder as empty right after a fresh Kodi
+install/reinstall, even though the addon zip is definitely there**: Kodi lost its
+all-files-access permission on the (re)install. See the `appops set ... allow` +
+force-stop/relaunch fix in step 7 — one-time per install.
 
 **A channel plays garbled/black, or license requests fail**: not every DRM source
 works through this bridge — see `dev/kodi/README.md`'s results table if you have
