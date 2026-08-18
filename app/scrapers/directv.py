@@ -61,11 +61,14 @@ for the schedule/EPG API, so it's embedded in the opaque stream_url instead:
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import logging
 import os
+import random
 import re
+import subprocess
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -101,6 +104,7 @@ _LICENSE_URL = "https://api.cld.dtvce.com/rights/management/mdrm/vgemultidrm/v1/
 _IDENTITY_AUTH_URL = "https://identity.directv.com/am/IdPwdAuth"
 _IDENTITY_AUTHORIZE_URL = "https://identity.directv.com/authorize"
 _AUTHN_TOKEN_URL = "https://api.cld.dtvce.com/authn-tokengo/v3/tokens"
+_LOGIN_REDIRECT_URL = "https://api.cld.dtvce.com/authn-tokengo/v3/loginRedirect"
 
 _FORGEROCK_CLIENT_ID = "fr_web_02"
 _WEB_CLIENT_ID = "UNIFIED_DTV_WEB"
@@ -316,6 +320,9 @@ _STEALTH_SCRIPT = """
 """
 
 _GUIDE_URL = "https://stream.directv.com/guide"
+# Persistent so DirecTV/Akamai's device-trust cookies accumulate across runs
+# instead of every login looking like a brand-new, never-before-seen browser.
+_DIRECTV_PROFILE_DIR = "/data/browser_profiles/directv"
 _ALLCHANNELS_MARKER = "/discovery/metadata/channel/v5/service/allchannels"
 _ACTIVATE_MARKER = "/rights/management/mdrm/vgemultidrm/v1/widevine/activate"
 _EMAIL_SELECTOR = (
@@ -335,6 +342,49 @@ _LOGIN_TIMEOUT = 90.0
 # DRM activation is best-effort (see capture_directv_auth) — shorter budget
 # since a bearer-token-only capture is still useful without it.
 _ACTIVATE_TIMEOUT = 20.0
+
+
+@contextlib.contextmanager
+def _virtual_display():
+    """Spawn a throwaway Xvfb display so Chrome can launch non-headless.
+
+    DirecTV's Akamai bot protection resets the connection outright for
+    headless Chrome — confirmed true even for the real Chrome binary (not
+    just open-source Chromium), Aug 2026 live testing. Headed Chrome under a
+    virtual display clears it, so headed is not optional here.
+    """
+    proc: subprocess.Popen | None = None
+    display_num: int | None = None
+    for _ in range(5):
+        candidate = random.randint(90, 989)
+        if os.path.exists(f'/tmp/.X{candidate}-lock'):
+            continue
+        candidate_proc = subprocess.Popen(
+            ['Xvfb', f':{candidate}', '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(1)
+        if candidate_proc.poll() is None:
+            proc, display_num = candidate_proc, candidate
+            break
+        candidate_proc.wait()
+    if proc is None or display_num is None:
+        raise DirectvAuthError('Could not start a virtual X display for headed Chrome')
+
+    old_display = os.environ.get('DISPLAY')
+    os.environ['DISPLAY'] = f':{display_num}'
+    try:
+        yield
+    finally:
+        if old_display is not None:
+            os.environ['DISPLAY'] = old_display
+        else:
+            os.environ.pop('DISPLAY', None)
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def _find_json_value(node: Any, key: str) -> str:
@@ -416,11 +466,99 @@ def _is_captcha_or_botcheck(page) -> bool:
     ))
 
 
-def _is_identity_page(page) -> bool:
-    return 'identity.directv.com' in page.url
+def _is_akamai_error_page(page) -> bool:
+    """DirecTV's own generic app error ("(8003)") — a downstream symptom of
+    Akamai 403'ing a request the page depends on (confirmed live, Aug 2026:
+    /am/IdPwdAuth returning 403 with no user action taken yet). Checking for
+    this explicitly lets a blocked run fail in seconds instead of silently
+    waiting out the full frame-search + bearer-token timeouts with a vague
+    "login may have failed" error."""
+    try:
+        body = (page.inner_text('body') or '').lower()
+    except Exception:
+        return False
+    return 'ran into an issue' in body or '(8003)' in body
 
 
-def _click_primary_button(page) -> bool:
+def _find_frame_with_selector(page, selector: str, timeout_ms: int):
+    """Poll every frame on the page for one containing `selector`.
+
+    The login form doesn't always arrive via a top-level redirect to
+    identity.directv.com — confirmed live (Aug 2026) that it can instead
+    render inside an iframe embedded in stream.directv.com/guide, with the
+    top-level URL never changing. Checking page.url alone (the old
+    _is_identity_page-gated approach) silently misses that case entirely.
+    """
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        for f in page.frames:
+            try:
+                if f.query_selector(selector):
+                    return f
+            except Exception:
+                continue
+        page.wait_for_timeout(250)
+    return None
+
+
+# Live testing (Aug 2026) found Akamai's _abck sensor cookie can stay at its
+# unvalidated "~-1~" state indefinitely across purely-synthetic .click()/.fill()
+# automation (confirmed by decrypting the local cookie store) — none of that
+# interaction carries the mouse-movement or per-keystroke timing entropy a
+# real user's session naturally produces. These helpers replace instant
+# synthetic actions with actual moved-mouse-then-clicked and typed-not-filled
+# interaction. Whether this alone flips sensor validation is unconfirmed
+# (a successful login was observed with _abck still unvalidated), but it's
+# a strict improvement in realism at negligible cost, so it stays on by
+# default rather than gated behind a flag.
+_mouse_pos = [random.randint(200, 600), random.randint(200, 400)]
+
+
+def _human_move(page, x: float, y: float) -> None:
+    start_x, start_y = _mouse_pos
+    waypoints = []
+    for _ in range(random.randint(1, 2)):
+        wx = start_x + (x - start_x) * random.uniform(0.3, 0.7) + random.randint(-40, 40)
+        wy = start_y + (y - start_y) * random.uniform(0.3, 0.7) + random.randint(-40, 40)
+        waypoints.append((wx, wy))
+    waypoints.append((x, y))
+    for wx, wy in waypoints:
+        page.mouse.move(wx, wy, steps=random.randint(8, 18))
+        page.wait_for_timeout(random.randint(20, 90))
+    _mouse_pos[0], _mouse_pos[1] = x, y
+
+
+def _human_idle_wander(page, moves: int = 3) -> None:
+    for _ in range(moves):
+        _human_move(page, random.randint(150, 1400), random.randint(150, 800))
+        page.wait_for_timeout(random.randint(150, 500))
+
+
+def _human_click_locator(page, locator) -> bool:
+    try:
+        box = locator.bounding_box()
+    except Exception:
+        box = None
+    if not box:
+        return False
+    tx = box['x'] + box['width'] * random.uniform(0.3, 0.7)
+    ty = box['y'] + box['height'] * random.uniform(0.3, 0.7)
+    _human_move(page, tx, ty)
+    page.wait_for_timeout(random.randint(80, 220))
+    page.mouse.down()
+    page.wait_for_timeout(random.randint(40, 130))
+    page.mouse.up()
+    return True
+
+
+def _human_fill(page, frame, selector: str, text: str) -> None:
+    loc = frame.locator(selector).first
+    _human_click_locator(page, loc)
+    page.wait_for_timeout(random.randint(100, 250))
+    loc.press_sequentially(text, delay=random.randint(60, 160))
+
+
+def _click_primary_button(page, frame, candidates=('Next', 'Continue', 'Sign In', 'Log In', 'Submit')) -> bool:
     """Click the primary action button on a DirecTV login step.
 
     These are plain <button> elements with no id and no type="submit" —
@@ -429,18 +567,26 @@ def _click_primary_button(page) -> bool:
     clicking "the first button" clicks Back. Match on the known label text
     instead, trying each step's known label before ever falling back to "any
     visible button".
+
+    `candidates` should be ordered for the step actually being submitted —
+    confirmed live that a stale "Next" button can still exist (and match)
+    in the DOM after the SPA has already transitioned to the password step,
+    intercepting the click meant for "Sign In". Passing the password step's
+    own labels first avoids ever matching that leftover element.
+
+    `page` is the top-level page (mouse coordinates are page-relative even
+    when the button lives in an iframe); `frame` is where the button is
+    searched for.
     """
-    for text in ('Next', 'Continue', 'Sign In', 'Log In', 'Submit'):
+    for text in candidates:
         try:
-            btn = page.get_by_role('button', name=text, exact=False)
-            if btn.count() > 0:
-                btn.first.click(timeout=3000)
+            btn = frame.get_by_role('button', name=text, exact=False)
+            if btn.count() > 0 and _human_click_locator(page, btn.first):
                 return True
         except Exception:
             continue
     try:
-        page.locator('button:visible').first.click(timeout=3000)
-        return True
+        return _human_click_locator(page, frame.locator('button:visible').first)
     except Exception:
         return False
 
@@ -510,6 +656,17 @@ def capture_directv_auth_cffi(
     The web app uses ForgeRock callbacks plus a PKCE auth-code exchange. AuthN
     returns activationToken as hex; the DRM activate endpoint expects the same
     bytes base64-encoded, so normalize it before persisting.
+
+    As of Aug 2026, identity.directv.com started rejecting a POST straight to
+    /am/IdPwdAuth with a WAF "Access Denied" 403 (custom `x-dtvtokn: bad`
+    header) — confirmed via a real-browser HAR capture that the missing piece
+    is the OAUTH_REQUEST_ATTRIBUTES cookie, which only gets set by actually
+    walking the same loginRedirect -> weblogin/authorize -> /authorize ->
+    weblogin/authenticate chain stream.directv.com's own SPA runs before ever
+    calling /am/IdPwdAuth. The PKCE verifier/challenge generated here is the
+    same one threaded through that entire chain (loginRedirect's codeChallenge
+    param through to the final /authorize call) — matching the real flow,
+    where it is not regenerated after login.
     """
     if _cffi_requests is None:
         raise DirectvAuthError('curl_cffi unavailable')
@@ -529,12 +686,48 @@ def capture_directv_auth_cffi(
         'Accept-Language': 'en-US,en;q=0.9',
     })
 
-    # Prime Akamai cookies on both origins. The actual login remains API-only.
+    verifier = _pkce_verifier()
+    challenge = _pkce_challenge(verifier)
+    login_session_id = uuid.uuid4().hex[:16]
+    state_param = json.dumps({'loginSessionId': login_session_id, 'nextUrl': 'guide'})
+
+    # Walk the same OAuth kickoff chain the SPA runs on page load. This is
+    # what mints the OAUTH_REQUEST_ATTRIBUTES cookie /am/IdPwdAuth now
+    # requires — skipping straight to /am/IdPwdAuth is what started 403'ing.
     try:
         session.get(_GUIDE_URL, timeout=20)
-        session.get('https://identity.directv.com/', timeout=20, allow_redirects=True)
+        redirect_resp = session.post(
+            _LOGIN_REDIRECT_URL,
+            params={'clientID': _WEB_CLIENT_ID, 'state': state_param},
+            data={
+                'clientID': _WEB_CLIENT_ID,
+                'returnURL': _AUTH_RETURN_URL,
+                'codeChallenge': challenge,
+                'codeChallengeMethod': 'S256',
+            },
+            headers={
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Origin': 'https://stream.directv.com',
+                'Referer': 'https://stream.directv.com/',
+            },
+            timeout=20, allow_redirects=True,
+        )
+        authenticate_resp = session.get(
+            _IDENTITY_AUTHORIZE_URL,
+            params={
+                'scope': 'read',
+                'response_type': 'code',
+                'client_id': _FORGEROCK_CLIENT_ID,
+                'redirect_uri': _AUTH_RETURN_URL,
+                'state': state_param,
+                'code_challenge': challenge,
+                'code_challenge_method': 'S256',
+            },
+            headers={'Referer': redirect_resp.url},
+            timeout=20, allow_redirects=True,
+        )
     except Exception as exc:
-        raise DirectvAuthError(f'DirecTV auth cookie priming failed: {exc}') from exc
+        raise DirectvAuthError(f'DirecTV auth session priming failed: {exc}') from exc
 
     auth_headers = {
         'Content-Type': 'application/json',
@@ -542,8 +735,8 @@ def capture_directv_auth_cffi(
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache',
         'client_id': _FORGEROCK_CLIENT_ID,
-        'Origin': 'https://stream.directv.com',
-        'Referer': 'https://stream.directv.com/',
+        'Origin': 'https://identity.directv.com',
+        'Referer': authenticate_resp.url,
         'Accept': 'application/json, text/plain, */*',
     }
 
@@ -574,7 +767,6 @@ def capture_directv_auth_cffi(
         raise DirectvAuthError(f'DirecTV login failed: {msg}')
 
     _status('running', 'Exchanging auth code…')
-    verifier = _pkce_verifier()
     authz = session.get(
         _IDENTITY_AUTHORIZE_URL,
         params={
@@ -582,10 +774,11 @@ def capture_directv_auth_cffi(
             'response_type': 'code',
             'client_id': _FORGEROCK_CLIENT_ID,
             'redirect_uri': _AUTH_RETURN_URL,
-            'code_challenge': _pkce_challenge(verifier),
+            'state': state_param,
+            'code_challenge': challenge,
             'code_challenge_method': 'S256',
         },
-        headers={'Referer': 'https://stream.directv.com/'},
+        headers={'Referer': authenticate_resp.url},
         timeout=30,
         allow_redirects=False,
     )
@@ -675,11 +868,11 @@ def capture_directv_auth(
     username: str,
     password: str,
     *,
-    headless: bool = True,
+    headless: bool = False,
     on_status: Callable[[str, str], None] | None = None,
 ) -> dict:
     """
-    Drive a Playwright browser through DirecTV's sign-in flow and capture the
+    Drive a real Chrome browser (via patchright) through DirecTV's sign-in flow and capture the
     Authorization bearer token + clientContext + session cookies that plain
     `requests` calls need against api.cld.dtvce.com, plus (best-effort) the
     identityCookie DirecTV's Widevine license flow needs — see this module's
@@ -702,28 +895,55 @@ def capture_directv_auth(
                 pass
 
     try:
-        from playwright.sync_api import sync_playwright, TimeoutError as _PWTimeout
+        from patchright.sync_api import sync_playwright, TimeoutError as _PWTimeout
     except ImportError as exc:
-        raise DirectvAuthError(f'Playwright unavailable: {exc}') from exc
+        raise DirectvAuthError(f'Patchright unavailable: {exc}') from exc
 
     captured: dict[str, Any] = {}
 
-    with sync_playwright() as p:
+    try:
+        os.makedirs(_DIRECTV_PROFILE_DIR, exist_ok=True)
+    except Exception as exc:
+        raise DirectvAuthError(f'Could not create browser profile dir: {exc}') from exc
+
+    with contextlib.ExitStack() as stack:
+        if not headless:
+            stack.enter_context(_virtual_display())
+        p = stack.enter_context(sync_playwright())
         try:
-            # Fallback only. The normal DirecTV auth path is curl-cffi; bundled
-            # Chromium remains available because other project features use it.
-            browser = p.chromium.launch(headless=headless, args=_STEALTH_ARGS)
-        except Exception as exc:
-            raise DirectvAuthError(f'Playwright Chromium unavailable: {exc}') from exc
-        try:
-            context = browser.new_context(
+            # Stock Playwright Chromium gets its HTTP/2 connection reset by
+            # DirecTV's Akamai bot protection before the page even loads, and
+            # separately lacks a real Widevine CDM (DRM capability check
+            # fails). Even genuine Chrome fails the same way when driven over
+            # bare CDP — Akamai's sensor JS detects Playwright's CDP
+            # automation artifacts regardless of the browser binary
+            # underneath. patchright is a Playwright fork that specifically
+            # patches those CDP artifacts out. channel="chrome" launches an
+            # actual Google Chrome build (installed via `playwright install
+            # chrome`); a persistent profile (not a fresh context every run)
+            # lets DirecTV/Akamai's device-trust cookies accumulate across
+            # runs instead of presenting as a never-before-seen browser each
+            # time — confirmed live: a from-scratch profile needs the full
+            # email/password flow, but a profile with a prior session often
+            # skips the login form entirely on the next run.
+            #
+            # No user_agent override — real Chrome's own UA must stay
+            # internally consistent with its genuine TLS/JS fingerprint,
+            # which is the whole point of using it over impersonation.
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=_DIRECTV_PROFILE_DIR,
+                headless=headless,
+                channel='chrome',
+                args=_STEALTH_ARGS,
                 viewport={'width': 1920, 'height': 1080},
-                user_agent=_UA,
                 locale='en-US',
                 timezone_id='America/New_York',
             )
+        except Exception as exc:
+            raise DirectvAuthError(f'Patchright Chrome unavailable: {exc}') from exc
+        try:
             context.add_init_script(_STEALTH_SCRIPT)
-            page = context.new_page()
+            page = context.pages[0] if context.pages else context.new_page()
 
             def _on_request(request):
                 if _ACTIVATE_MARKER in request.url:
@@ -793,36 +1013,51 @@ def capture_directv_auth(
             # Checking page.url immediately after domcontentloaded is too
             # early and misreads "hasn't redirected yet" as "already
             # authenticated", skipping login entirely.
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(2000)
+            _human_idle_wander(page, moves=4)
+            page.wait_for_timeout(1500)
 
             if _is_captcha_or_botcheck(page):
                 raise DirectvAuthError('DirecTV served a bot-check/CAPTCHA page')
+            if _is_akamai_error_page(page):
+                raise DirectvAuthError(
+                    'DirecTV/Akamai returned a transient error page (8003) before login even '
+                    'started — this is a known intermittent block, not a credentials problem; '
+                    'will retry on the next scheduled attempt'
+                )
 
-            if _is_identity_page(page):
+            # The login form isn't reliably a top-level navigation to
+            # identity.directv.com — it can render inside an iframe embedded
+            # in stream.directv.com/guide with the top-level URL never
+            # changing, so search every frame rather than gating on page.url.
+            # A persistent profile with a still-valid session skips this
+            # entirely (no email frame appears) — confirmed live.
+            email_frame = _find_frame_with_selector(page, _EMAIL_SELECTOR, timeout_ms=15000)
+            if email_frame:
                 _status('running', 'Entering email…')
-                try:
-                    page.wait_for_selector(_EMAIL_SELECTOR, timeout=15000)
-                    page.fill(_EMAIL_SELECTOR, username)
-                    if not _click_primary_button(page):
-                        raise DirectvAuthError('Could not find a submit button on the email step')
-                except _PWTimeout:
-                    raise DirectvAuthError('Email field not found on DirecTV sign-in page')
+                _human_fill(page, email_frame, _EMAIL_SELECTOR, username)
+                page.wait_for_timeout(random.randint(300, 700))
+                if not _click_primary_button(page, email_frame, candidates=('Next', 'Continue')):
+                    raise DirectvAuthError('Could not find a submit button on the email step')
+                page.wait_for_timeout(2000)
+                if _is_akamai_error_page(page):
+                    raise DirectvAuthError(
+                        'DirecTV/Akamai returned a transient error page (8003) after email '
+                        'submit — known intermittent block, not a credentials problem'
+                    )
 
                 _status('running', 'Entering password…')
-                try:
-                    page.wait_for_selector(_PASSWORD_SELECTOR, timeout=15000)
-                    page.fill(_PASSWORD_SELECTOR, password)
-                    if not _click_primary_button(page):
-                        raise DirectvAuthError('Could not find a submit button on the password step')
-                except _PWTimeout:
+                password_frame = _find_frame_with_selector(page, _PASSWORD_SELECTOR, timeout_ms=15000)
+                if not password_frame:
                     raise DirectvAuthError('Password field not found on DirecTV sign-in page')
+                _human_fill(page, password_frame, _PASSWORD_SELECTOR, password)
+                page.wait_for_timeout(random.randint(300, 700))
+                if not _click_primary_button(page, password_frame, candidates=('Sign In', 'Log In', 'Submit', 'Next', 'Continue')):
+                    raise DirectvAuthError('Could not find a submit button on the password step')
 
-                try:
-                    page.wait_for_url(lambda u: 'identity.directv.com' not in u, timeout=20000)
-                except _PWTimeout:
-                    if _is_captcha_or_botcheck(page):
-                        raise DirectvAuthError('DirecTV served a bot-check/CAPTCHA page during login')
-                    raise DirectvAuthError(f'Login did not complete (still on: {page.url[:100]})')
+                page.wait_for_timeout(4000)
+                if _is_captcha_or_botcheck(page):
+                    raise DirectvAuthError('DirecTV served a bot-check/CAPTCHA page during login')
 
                 # Post-login redirect doesn't always land back on /guide.
                 try:
@@ -885,7 +1120,7 @@ def capture_directv_auth(
             _status('success', 'Captured DirecTV session.')
             return captured
         finally:
-            browser.close()
+            context.close()
 
 
 # ── Manual admin-UI entry point ─────────────────────────────────────────────

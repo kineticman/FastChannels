@@ -11,6 +11,7 @@ pytz==2026.2
 beautifulsoup4==4.15.0
 apscheduler==3.10.4
 playwright
+patchright
 camoufox
 Pillow==12.2.0
 # Ceiling matches yt-dlp's supported curl_cffi range for --impersonate (browser TLS fingerprinting).
