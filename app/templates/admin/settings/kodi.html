@@ -10,7 +10,7 @@
       </div>
     </div>
     <div class="source-body open">
-      <div class="help" style="color:var(--warning-soft)">Requires Kodi already set up on the device (JSON-RPC + the FastChannels resolver addon) — see <code>docs/kodi-bridge-setup.md</code> for the full walkthrough. Addon download: <a href="{{ request_base_url }}/kodi/fc_bridge.zip">{{ request_base_url }}/kodi/fc_bridge.zip</a>.</div>
+      <div class="help" style="color:var(--warning-soft)">Requires Kodi already set up on the device (JSON-RPC + the FastChannels resolver addon) — see <a href="https://github.com/kineticman/FastChannels/blob/main/docs/kodi-bridge-setup.md" target="_blank" rel="noopener noreferrer">the setup guide</a> for the full walkthrough. Addon download: <a href="{{ request_base_url }}/kodi/fc_bridge.zip">{{ request_base_url }}/kodi/fc_bridge.zip</a>.</div>
       <div class="toggle-row">
         <div class="toggle-row-text">
           <div class="toggle-row-label">Enable Kodi bridge</div>
@@ -58,7 +58,7 @@
         <button class="btn btn-primary" onclick="saveKodiBridgeSettings()">Save</button>
       </div>
       {% if kodi_bridge_configured %}
-      <div class="help" style="margin-top:12px">Add <code>{{ request_base_url }}/m3u/kodi-bridge</code> to Channels DVR as a Custom Channels M3U source (pair with <code>{{ request_base_url }}/epg.xml</code>; Gracenote channels use <code>{{ request_base_url }}/m3u/kodi-bridge/gracenote</code> instead). Set max simultaneous streams to your physical Firestick+capture count (1 today).</div>
+      <div class="help" style="margin-top:12px">Add this feed to Channels DVR from the <a href="/admin/feeds">Feeds</a> page, or see <a href="https://github.com/kineticman/FastChannels/blob/main/docs/kodi-bridge-setup.md" target="_blank" rel="noopener noreferrer">the setup guide</a> for the manual M3U/EPG URLs.</div>
       {% else %}
       <div class="help" style="color:var(--warning-soft);margin-top:12px">Configure the fields above (and enable the bridge) to get this feed's M3U/EPG URLs.</div>
       {% endif %}
