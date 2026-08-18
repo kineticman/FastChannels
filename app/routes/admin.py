@@ -32,6 +32,22 @@ from ..tve.providers import ytdlp_adobe_mso_providers
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
 
+def _kodi_bridge_ip_display(device_url: str | None) -> str:
+    """Render a Kodi/Firestick device URL back to "IP" or "IP:port" for the admin
+    field — bare IP when using the default JSON-RPC port (8080), IP:port otherwise.
+    Mirrors app/routes/api.py's _kodi_bridge_host_from_input/_kodi_bridge_port_from_input
+    (not imported directly — that module imports from this one, so importing back
+    would be circular)."""
+    if not device_url:
+        return ''
+    parsed = urlsplit(device_url)
+    host = parsed.hostname or ''
+    if not host:
+        return ''
+    port = parsed.port or 8080
+    return f'{host}:{port}' if port != 8080 else host
+
+
 def _base_duplicate_name(name: str) -> str:
     s = unicodedata.normalize('NFKD', name or '')
     s = ''.join(ch for ch in s if not unicodedata.combining(ch))
@@ -1400,7 +1416,7 @@ def settings():
                            drm_bridge_enabled=bool(app_settings.drm_bridge_enabled),
                            kodi_bridge_enabled=bool(app_settings.kodi_bridge_enabled),
                            kodi_bridge_keepalive_enabled=app_settings.kodi_bridge_keepalive_enabled if app_settings.kodi_bridge_keepalive_enabled is not None else True,
-                           kodi_bridge_ip=(urlsplit(app_settings.effective_kodi_bridge_device_url()).hostname if app_settings.effective_kodi_bridge_device_url() else '') or '',
+                           kodi_bridge_ip=_kodi_bridge_ip_display(app_settings.effective_kodi_bridge_device_url()),
                            kodi_bridge_encoder_url=app_settings.effective_kodi_bridge_encoder_url() or '',
                            kodi_bridge_configured=bool(
                                app_settings.kodi_bridge_enabled

@@ -9,9 +9,18 @@ Example invocation (what FastChannels' backend calls via JSON-RPC Player.Open):
     plugin://plugin.video.fc_bridge/?url=<urlencoded manifest url>&license=<urlencoded license url>
 
 Optional params:
-    license_type  - defaults to com.widevine.alpha
-    name          - display name shown in Kodi's UI while playing
+    license_type    - defaults to com.widevine.alpha
+    name            - display name shown in Kodi's UI while playing
+    single_session  - "1" to use the new Kodi v22+ inputstream.adaptive.drm JSON
+                      property with force_single_session=true instead of the legacy
+                      license_type/license_key properties. Opt-in and experimental —
+                      being tried against sources (Cox) whose backend only grants one
+                      license per playback attempt, where inputstream.adaptive's
+                      default one-CDM-session-per-track behavior fails. Every other
+                      source keeps using the legacy properties, proven working across
+                      the Kodi 21->22 upgrade (dev/kodi/README.md).
 """
+import json
 import sys
 from urllib.parse import parse_qsl, urlparse
 
@@ -34,6 +43,7 @@ def main() -> None:
     license_url = params.get('license')
     license_type = params.get('license_type', DEFAULT_LICENSE_TYPE)
     name = params.get('name', 'FastChannels')
+    single_session = params.get('single_session') == '1'
 
     if not manifest_url:
         xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
@@ -49,11 +59,26 @@ def main() -> None:
 
     if license_url:
         item.setProperty('inputstream', 'inputstream.adaptive')
-        item.setProperty('inputstream.adaptive.license_type', license_type)
-        item.setProperty(
-            'inputstream.adaptive.license_key',
-            f'{license_url}|Content-Type=application%2Foctet-stream|R{{SSM}}|',
-        )
+        if single_session:
+            item.setProperty(
+                'inputstream.adaptive.manifest_type',
+                'hls' if manifest_url.endswith('.m3u8') else 'mpd',
+            )
+            item.setProperty('inputstream.adaptive.drm', json.dumps({
+                license_type: {
+                    'license': {
+                        'server_url': license_url,
+                        'req_headers': 'Content-Type=application%2Foctet-stream',
+                    },
+                    'force_single_session': True,
+                },
+            }))
+        else:
+            item.setProperty('inputstream.adaptive.license_type', license_type)
+            item.setProperty(
+                'inputstream.adaptive.license_key',
+                f'{license_url}|Content-Type=application%2Foctet-stream|R{{SSM}}|',
+            )
 
     xbmcplugin.setResolvedUrl(handle, True, listitem=item)
 

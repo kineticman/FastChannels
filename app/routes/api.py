@@ -771,16 +771,32 @@ def _normalize_server_url(value: str | None, default_port: int | None = None) ->
     return f'{scheme}://{host}'.rstrip('/')
 
 
+_KODI_BRIDGE_DEFAULT_PORT = 8080
+
+
 def _kodi_bridge_host_from_input(value: str | None) -> str | None:
     """Extract a bare host from a Kodi/Firestick IP field — strips any scheme/port
-    the user typed, since the admin form only takes one IP and derives both the
-    JSON-RPC URL (:8080) and adb address (:5555) from it."""
+    the user typed. The admin form takes one "IP[:port]" field and derives the
+    JSON-RPC URL (default :8080, overridable — see _kodi_bridge_port_from_input;
+    some Fire OS builds run a system service that squats on 8080) and adb address
+    (:5555, not currently overridable) from it."""
     raw = (value or '').strip()
     if not raw:
         return None
     if '://' not in raw:
         raw = f'http://{raw}'
     return urlsplit(raw).hostname or None
+
+
+def _kodi_bridge_port_from_input(value: str | None) -> int:
+    """Extract the JSON-RPC port from a Kodi/Firestick IP[:port] field, defaulting
+    to 8080 when no port is given."""
+    raw = (value or '').strip()
+    if not raw:
+        return _KODI_BRIDGE_DEFAULT_PORT
+    if '://' not in raw:
+        raw = f'http://{raw}'
+    return urlsplit(raw).port or _KODI_BRIDGE_DEFAULT_PORT
 
 
 
@@ -5877,7 +5893,8 @@ def app_settings():
             _kodi_host = _kodi_bridge_host_from_input(data['kodi_bridge_ip'])
             if data.get('kodi_bridge_ip') and not _kodi_host:
                 return jsonify({'error': 'Invalid Kodi/Firestick IP address.'}), 422
-            row.kodi_bridge_device_url = f'http://{_kodi_host}:8080' if _kodi_host else None
+            _kodi_port = _kodi_bridge_port_from_input(data['kodi_bridge_ip'])
+            row.kodi_bridge_device_url = f'http://{_kodi_host}:{_kodi_port}' if _kodi_host else None
             row.kodi_bridge_adb_address = f'{_kodi_host}:5555' if _kodi_host else None
         if 'kodi_bridge_encoder_url' in data:
             row.kodi_bridge_encoder_url = _normalize_server_url(data['kodi_bridge_encoder_url'], default_port=None)
@@ -5889,6 +5906,11 @@ def app_settings():
         write_timezone_cache(row.timezone_name)
         _invalidate_and_refresh_xml()
         row = AppSettings.get()
+    _kodi_bridge_ip_display = _kodi_bridge_host_from_input(row.effective_kodi_bridge_device_url()) or ''
+    if _kodi_bridge_ip_display:
+        _kodi_bridge_port_display = _kodi_bridge_port_from_input(row.effective_kodi_bridge_device_url())
+        if _kodi_bridge_port_display != _KODI_BRIDGE_DEFAULT_PORT:
+            _kodi_bridge_ip_display = f'{_kodi_bridge_ip_display}:{_kodi_bridge_port_display}'
     return jsonify({
         'channels_dvr_url':  row.effective_channels_dvr_url(),
         'public_base_url':   row.effective_public_base_url(),
@@ -5906,7 +5928,7 @@ def app_settings():
         'drm_bridge_enabled': bool(row.drm_bridge_enabled),
         'kodi_bridge_enabled': bool(row.kodi_bridge_enabled),
         'kodi_bridge_keepalive_enabled': row.kodi_bridge_keepalive_enabled if row.kodi_bridge_keepalive_enabled is not None else True,
-        'kodi_bridge_ip': _kodi_bridge_host_from_input(row.effective_kodi_bridge_device_url()) or '',
+        'kodi_bridge_ip': _kodi_bridge_ip_display,
         'kodi_bridge_encoder_url': row.effective_kodi_bridge_encoder_url() or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),

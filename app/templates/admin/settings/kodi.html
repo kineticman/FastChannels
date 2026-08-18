@@ -41,8 +41,8 @@
         <div class="field field-full">
           <label for="kodi-bridge-ip">Kodi / Firestick IP address</label>
           <input type="text" id="kodi-bridge-ip"
-                 placeholder="192.168.1.50" value="{{ kodi_bridge_ip }}">
-          <div class="help">JSON-RPC (<code>:8080</code>) and adb (<code>:5555</code>) ports are derived automatically.</div>
+                 placeholder="192.168.1.50 or 192.168.1.50:8081" value="{{ kodi_bridge_ip }}">
+          <div class="help">adb (<code>:5555</code>) is derived automatically. JSON-RPC defaults to <code>:8080</code> — add <code>:port</code> if that's taken on the device (some Fire OS builds run a system service on 8080).</div>
         </div>
         <div class="field field-full">
           <label for="kodi-bridge-encoder-url">Capture/encoder stream URL</label>
