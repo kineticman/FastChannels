@@ -18,6 +18,7 @@ from ..generators.m3u import (
     feed_to_query_filters,
 )
 from ..scrapers import registry as _scraper_registry
+from ..kodi_bridge import KODI_BRIDGE_TRUSTED_SOURCES
 from ..source_config import (
     build_setup_checklist,
     has_meaningful_source_config,
@@ -284,6 +285,22 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
         .one()
     )
     bridged_count, bridged_gn = bridged_row.total, bridged_row.gn_count
+
+    # Kodi-bridge is narrower than PrismCast — only sources confirmed to actually
+    # decrypt through Kodi/inputstream.adaptive (dev/kodi/README.md), not every
+    # DRM-capable source. Re-run the bridged query restricted to that set.
+    kodi_bridged_row = (
+        _build_channel_query(filters, activity='drm_bridge')
+        .filter(Source.name.in_(KODI_BRIDGE_TRUSTED_SOURCES))
+        .order_by(None)
+        .with_entities(
+            func.count().label('total'),
+            func.count(case((has_gracenote, Channel.id))).label('gn_count'),
+        )
+        .one()
+    )
+    kodi_bridged_count, kodi_bridged_gn = kodi_bridged_row.total, kodi_bridged_row.gn_count
+
     std_count = max(total - gn_count, 0)
     return {
         'standard_count': std_count,
@@ -292,6 +309,8 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
         'bridged_count': bridged_count,
         'prismcast_count': std_count + (bridged_count - bridged_gn),
         'prismcast_gracenote_count': gn_count + bridged_gn,
+        'kodi_bridge_count': std_count + (kodi_bridged_count - kodi_bridged_gn),
+        'kodi_bridge_gracenote_count': gn_count + kodi_bridged_gn,
     }
 
 
@@ -1292,6 +1311,12 @@ def feeds():
                            categories=categories, languages=languages, countries=countries,
                            base_url=base_url,
                            prismcast_enabled=bool((app_settings.effective_prismcast_url() or '').strip()),
+                           kodi_bridge_enabled=bool(
+                               app_settings.kodi_bridge_enabled
+                               and app_settings.effective_kodi_bridge_device_url()
+                               and app_settings.effective_kodi_bridge_adb_address()
+                               and app_settings.effective_kodi_bridge_encoder_url()
+                           ),
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
@@ -1376,6 +1401,13 @@ def settings():
                            kodi_bridge_enabled=bool(app_settings.kodi_bridge_enabled),
                            kodi_bridge_keepalive_enabled=app_settings.kodi_bridge_keepalive_enabled if app_settings.kodi_bridge_keepalive_enabled is not None else True,
                            kodi_bridge_ip=(urlsplit(app_settings.effective_kodi_bridge_device_url()).hostname if app_settings.effective_kodi_bridge_device_url() else '') or '',
+                           kodi_bridge_encoder_url=app_settings.effective_kodi_bridge_encoder_url() or '',
+                           kodi_bridge_configured=bool(
+                               app_settings.kodi_bridge_enabled
+                               and app_settings.effective_kodi_bridge_device_url()
+                               and app_settings.effective_kodi_bridge_adb_address()
+                               and app_settings.effective_kodi_bridge_encoder_url()
+                           ),
                            tve_provider_choices=tve_provider_choices,
                            tve_account=tve_account.to_safe_dict() if tve_account else {
                                'provider_id': 'mvpd',

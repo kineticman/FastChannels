@@ -10,7 +10,7 @@
       </div>
     </div>
     <div class="source-body open">
-      <div class="help" style="color:var(--warning-soft)">This feature is early and hands-on: it expects a Kodi install already sideloaded on the device with JSON-RPC and the FastChannels resolver addon set up. Nothing here does that setup for you yet.</div>
+      <div class="help" style="color:var(--warning-soft)">This feature is early and hands-on: it expects a Kodi install already sideloaded on the device with JSON-RPC and the FastChannels resolver addon set up. Nothing here does that setup for you yet — see <code>docs/kodi-bridge-setup.md</code> for the full walkthrough. Grab the resolver addon itself at <a href="{{ request_base_url }}/kodi/fc_bridge.zip">{{ request_base_url }}/kodi/fc_bridge.zip</a> — download it, then install it on the device via Kodi's Add-ons &gt; Install from zip file.</div>
       <div class="toggle-row">
         <div class="toggle-row-text">
           <div class="toggle-row-label">Enable Kodi bridge</div>
@@ -44,11 +44,23 @@
                  placeholder="192.168.1.50" value="{{ kodi_bridge_ip }}">
           <div class="help">Just the IP — JSON-RPC (<code>:8080</code>) and adb (<code>:5555</code>) addresses are derived from it automatically.</div>
         </div>
+        <div class="field field-full">
+          <label for="kodi-bridge-encoder-url">Capture/encoder stream URL</label>
+          <input type="text" id="kodi-bridge-encoder-url"
+                 placeholder="http://192.168.1.50:8089/devices/ANY/channels/70092/stream.mpg"
+                 value="{{ kodi_bridge_encoder_url }}">
+          <div class="help">Where a bridged channel actually plays from once Kodi's been triggered. If you're capturing the Firestick's HDMI output with a USB capture card through Channels DVR's own native <code>capture://</code> support, this is that capture channel's own stream URL — Channels DVR re-serves any of its channels at <code>http://&lt;host&gt;:8089/devices/ANY/channels/&lt;guide number&gt;/stream.mpg</code>. No standalone hardware encoder needed for that path.</div>
+        </div>
       </div>
       <div class="field-actions">
         <span class="save-status" id="kodi-bridge-status"></span>
         <button class="btn btn-secondary" onclick="testKodiBridge()">Test connection</button>
         <button class="btn btn-primary" onclick="saveKodiBridgeSettings()">Save</button>
       </div>
+      {% if kodi_bridge_configured %}
+      <div class="help" style="margin-top:12px">Add <code>{{ request_base_url }}/m3u/kodi-bridge</code> as a Custom Channels M3U source in Channels DVR (pair with <code>{{ request_base_url }}/epg.xml</code>) — Gracenote-mapped channels split into <code>{{ request_base_url }}/m3u/kodi-bridge/gracenote</code> instead, same as any other feed. Set that source's max simultaneous streams to however many physical Firestick+capture pairs you actually have (1 today) — there's only one device behind every bridged channel.</div>
+      {% else %}
+      <div class="help" style="color:var(--warning-soft);margin-top:12px">Configure the fields above (and enable the bridge) to get this feed's M3U/EPG URLs.</div>
+      {% endif %}
     </div>
   </div>

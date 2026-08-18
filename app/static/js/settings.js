@@ -216,21 +216,26 @@ async function savePrismcastSettings() {
 async function saveKodiBridgeToggles() {
   const enabled = document.getElementById('kodi-bridge-enabled').checked;
   const keepalive = document.getElementById('kodi-bridge-keepalive').checked;
-  await saveSettings({
+  const ok = await saveSettings({
     kodi_bridge_enabled: enabled,
     kodi_bridge_keepalive_enabled: keepalive,
   }, 'kodi-bridge-status');
+  // "Enable" affects whether the feed-URL guidance block (server-rendered) shows.
+  if (ok) setTimeout(() => location.reload(), 700);
 }
 
 async function saveKodiBridgeSettings() {
   const ip = document.getElementById('kodi-bridge-ip').value.trim();
+  const encoderUrl = document.getElementById('kodi-bridge-encoder-url').value.trim();
   const enabled = document.getElementById('kodi-bridge-enabled').checked;
   const keepalive = document.getElementById('kodi-bridge-keepalive').checked;
-  await saveSettings({
+  const ok = await saveSettings({
     kodi_bridge_ip: ip || null,
+    kodi_bridge_encoder_url: encoderUrl || null,
     kodi_bridge_enabled: enabled,
     kodi_bridge_keepalive_enabled: keepalive,
   }, 'kodi-bridge-status');
+  if (ok) setTimeout(() => location.reload(), 700);
 }
 
 async function testKodiBridge() {

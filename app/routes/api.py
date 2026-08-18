@@ -406,6 +406,7 @@ def _isoformat_utc(dt):
 
 def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool,
                                prismcast: bool = False,
+                               kodi_bridge: bool = False,
                                force_refresh: bool = False) -> None:
     """Ensure feed artifacts exist before handing URLs to Channels DVR.
 
@@ -414,15 +415,22 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
     force_refresh rebuilds this feed synchronously to reflect recent channel
     enable/disable edits before Channels DVR fetches the URL.
     """
-    std_key = f'feed-{feed.slug}-prismcast-m3u' if prismcast else f'feed-{feed.slug}-m3u'
-    gn_key  = (f'feed-{feed.slug}-prismcast-gracenote-m3u' if prismcast
-               else f'feed-{feed.slug}-gracenote-m3u')
+    if kodi_bridge:
+        std_key = f'feed-{feed.slug}-kodi-bridge-m3u'
+        gn_key  = f'feed-{feed.slug}-kodi-bridge-gracenote-m3u'
+    elif prismcast:
+        std_key = f'feed-{feed.slug}-prismcast-m3u'
+        gn_key  = f'feed-{feed.slug}-prismcast-gracenote-m3u'
+    else:
+        std_key = f'feed-{feed.slug}-m3u'
+        gn_key  = f'feed-{feed.slug}-gracenote-m3u'
 
     if force_refresh:
         from ..generators.m3u import (
             generate_gracenote_m3u,
             generate_m3u,
             generate_prismcast_m3u,
+            generate_kodi_bridge_m3u,
             feed_gracenote_start,
             feed_namespace_start,
             feed_to_query_filters,
@@ -443,7 +451,24 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
             lambda fp: write_xmltv(fp, filters, base_url=base_url, feed_name=feed.name),
         )
 
-        if prismcast:
+        if kodi_bridge:
+            write_artifact(
+                std_key,
+                lambda fp: fp.write(generate_kodi_bridge_m3u(filters, base_url=base_url, **std_kw)),
+                ext='m3u',
+            )
+            if has_gracenote:
+                write_artifact(
+                    gn_key,
+                    lambda fp: fp.write(generate_kodi_bridge_m3u(
+                        filters,
+                        base_url=base_url,
+                        gracenote=True,
+                        **gn_kw,
+                    )),
+                    ext='m3u',
+                )
+        elif prismcast:
             settings = AppSettings.get()
             prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
             prismcast_inner = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
@@ -4338,6 +4363,106 @@ def push_feed_prismcast_to_dvr(feed_id):
     return jsonify({'ok': True, 'sources_added': sources_added})
 
 
+@api_bp.route('/feeds/<int:feed_id>/push-kodi-bridge-to-dvr', methods=['POST'])
+def push_feed_kodi_bridge_to_dvr(feed_id):
+    """Register this feed's Kodi/HDMI-bridge output as custom M3U source(s) in
+    Channels DVR.
+
+    Registers up to two sources, named distinctly from the standard push so they
+    sit alongside it rather than overwriting it (Channels DVR keys a source by its
+    alphanumeric-stripped name):
+    - "… Kodi Bridge Gracenote" (no EPG URL): only if the feed has Gracenote channels
+      in the trusted-source DRM set — DVR fetches guide data via tvc-guide-stationid.
+    - "… Kodi Bridge" (with our EPG XML): the standard-guide playlist. Every channel
+      here uses the same play URL; play_kodi_bridge decides per-request whether a
+      given channel actually needs the Kodi/Firestick trigger.
+    """
+    import re as _re
+    from ..generators.m3u import _build_channel_query, _parse_gracenote_id, feed_to_query_filters
+
+    feed = Feed.query.get_or_404(feed_id)
+    settings = AppSettings.get()
+
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
+    if not (
+        settings.kodi_bridge_enabled
+        and settings.effective_kodi_bridge_device_url()
+        and settings.effective_kodi_bridge_adb_address()
+        and settings.effective_kodi_bridge_encoder_url()
+    ):
+        return jsonify({'error': 'Kodi HDMI Bridge is not fully configured. Set the device IP and encoder/capture stream URL in Settings.'}), 400
+
+    base = public_base_url()
+
+    feed_query = _build_channel_query(feed_to_query_filters(feed.filters or {}))
+    dvr_type = _dvr_stream_format(feed_query)
+
+    # Kodi-bridge partitions the same way as the standard feed; use the same counts.
+    split = _feed_split_counts(feed)
+    std_count = split.get('kodi_bridge_count', 0)
+    gn_count  = split.get('kodi_bridge_gracenote_count', 0)
+    has_gracenote = gn_count > 0
+    if std_count == 0 and gn_count == 0:
+        return jsonify({'error': 'This feed has no eligible Kodi-bridge channels to add to Channels DVR.'}), 400
+
+    # Each partition registers as its own DVR source, so gate the recommended-max
+    # warning on the larger of the two.
+    largest = max(std_count, gn_count)
+    force = bool((request.get_json(silent=True) or {}).get('force'))
+    if largest > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
+        return jsonify({
+            'error': f'This Kodi Bridge feed has {largest} channels in one source. Channels DVR usually works best at 750 or fewer.',
+            'requires_confirm': True,
+            'channel_count': largest,
+            'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
+        }), 409
+
+    try:
+        _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote, kodi_bridge=True, force_refresh=True)
+    except TimeoutError:
+        return jsonify({'error': 'Timed out waiting for Kodi Bridge feed artifacts to build. Try again in a moment.'}), 503
+
+    def _put(name, url, xmltv_url=''):
+        safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
+        payload = {
+            'name':    name,
+            'type':    dvr_type,
+            'source':  'URL',
+            'url':     url,
+            'refresh': '24',
+        }
+        if xmltv_url:
+            payload['xmltv_url']     = xmltv_url
+            payload['xmltv_refresh'] = '3600'
+        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=30, verify=False)
+
+    gn_name  = f"FastChannels {feed.name} Kodi Bridge Gracenote"
+    std_name = f"FastChannels {feed.name} Kodi Bridge"
+    sources_added = []
+
+    try:
+        if has_gracenote:
+            r1 = _put(gn_name, f"{base}/feeds/{feed.slug}/m3u/kodi-bridge/gracenote")
+            r1.raise_for_status()
+            sources_added.append(gn_name)
+
+        if std_count > 0:
+            r2 = _put(std_name, f"{base}/feeds/{feed.slug}/m3u/kodi-bridge", f"{base}/feeds/{feed.slug}/epg.xml")
+            r2.raise_for_status()
+            sources_added.append(std_name)
+    except _req.exceptions.ConnectionError:
+        return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
+    except _req.exceptions.Timeout:
+        return jsonify({'error': 'Channels DVR timed out.'}), 504
+    except _req.exceptions.HTTPError as exc:
+        resp = exc.response
+        return jsonify({'error': f'DVR {resp.status_code}: {resp.text[:300]}'}), 502
+
+    return jsonify({'ok': True, 'sources_added': sources_added})
+
+
 @api_bp.route('/sources/<int:source_id>/push-to-dvr', methods=['POST'])
 def push_source_to_dvr(source_id):
     """Register a source-filtered raw output as custom M3U source(s) in Channels DVR."""
@@ -5749,6 +5874,8 @@ def app_settings():
                 return jsonify({'error': 'Invalid Kodi/Firestick IP address.'}), 422
             row.kodi_bridge_device_url = f'http://{_kodi_host}:8080' if _kodi_host else None
             row.kodi_bridge_adb_address = f'{_kodi_host}:5555' if _kodi_host else None
+        if 'kodi_bridge_encoder_url' in data:
+            row.kodi_bridge_encoder_url = _normalize_server_url(data['kodi_bridge_encoder_url'], default_port=None)
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:
@@ -5775,6 +5902,7 @@ def app_settings():
         'kodi_bridge_enabled': bool(row.kodi_bridge_enabled),
         'kodi_bridge_keepalive_enabled': row.kodi_bridge_keepalive_enabled if row.kodi_bridge_keepalive_enabled is not None else True,
         'kodi_bridge_ip': _kodi_bridge_host_from_input(row.effective_kodi_bridge_device_url()) or '',
+        'kodi_bridge_encoder_url': row.effective_kodi_bridge_encoder_url() or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
@@ -5783,13 +5911,39 @@ def app_settings():
 
 @api_bp.route('/settings/kodi-bridge/test', methods=['POST'])
 def test_kodi_bridge():
-    """Quick JSON-RPC ping against the configured Kodi/Firestick device."""
+    """JSON-RPC ping against the configured Kodi/Firestick device, plus a check that
+    the encoder/capture stream URL is set and actually reachable — a green result here
+    should mean a bridged channel would really work end-to-end, not just that Kodi is
+    online."""
     from .. import kodi_bridge
     if not kodi_bridge.is_configured():
         return jsonify({'ok': False, 'message': 'Enable the bridge and set a device IP first.'}), 400
-    if kodi_bridge.is_alive(timeout=4):
-        return jsonify({'ok': True, 'message': 'Kodi responded — device is reachable.'})
-    return jsonify({'ok': False, 'message': "Couldn't reach Kodi's JSON-RPC — check the IP, that Kodi is running, and that its webserver control is enabled."})
+    if not kodi_bridge.is_alive(timeout=4):
+        return jsonify({'ok': False, 'message': "Couldn't reach Kodi's JSON-RPC — check the IP, that Kodi is running, and that its webserver control is enabled."})
+
+    encoder_url = AppSettings.get().effective_kodi_bridge_encoder_url()
+    if not encoder_url:
+        return jsonify({
+            'ok': True,
+            'warning': True,
+            'message': 'Kodi responded, but no encoder/capture stream URL is set — bridged channels will fail with a 503 until you add one.',
+        })
+
+    try:
+        with _req.get(encoder_url, stream=True, timeout=3) as r:
+            if r.ok:
+                return jsonify({'ok': True, 'message': 'Kodi responded and the encoder/capture stream URL is reachable.'})
+            return jsonify({
+                'ok': True,
+                'warning': True,
+                'message': f'Kodi responded, but the encoder/capture stream URL returned HTTP {r.status_code} — bridged channels may fail.',
+            })
+    except _req.RequestException:
+        return jsonify({
+            'ok': True,
+            'warning': True,
+            'message': 'Kodi responded, but the encoder/capture stream URL is not reachable — bridged channels will fail until that stream is up.',
+        })
 
 
 @api_bp.route('/settings/gracenote-auto-clear', methods=['POST'])
