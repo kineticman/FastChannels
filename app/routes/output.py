@@ -1,5 +1,8 @@
+import io
 import logging
 import os
+import zipfile
+from pathlib import Path
 
 from flask import Blueprint, Response, redirect, request, send_file, stream_with_context
 from ..generators.m3u import (
@@ -575,4 +578,31 @@ def feed_m3u_kodi_bridge_gracenote(slug):
         path,
         mimetype='application/x-mpegurl',
         download_name=f'{slug}-kodi-bridge-gracenote.m3u',
+    )
+
+
+_KODI_ADDON_DIR = Path(__file__).resolve().parent.parent / 'kodi_addon' / 'plugin.video.fc_bridge'
+
+
+@output_bp.route('/kodi/fc_bridge.zip')
+def kodi_fc_bridge_zip():
+    """The thin Kodi resolver addon (dev/kodi/README.md) that turns a manifest +
+    license URL into a Player.Open call — zipped on the fly from the bundled source
+    so users can grab a ready-to-install addon straight from this server instead of
+    building the zip themselves. Install in Kodi via Add-ons -> install-from-zip icon
+    -> Install from zip file."""
+    if not _KODI_ADDON_DIR.is_dir():
+        return Response('Kodi addon source not found on this server.\n', status=404, mimetype='text/plain')
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(_KODI_ADDON_DIR.rglob('*')):
+            if path.is_file():
+                zf.write(path, arcname=str(Path('plugin.video.fc_bridge') / path.relative_to(_KODI_ADDON_DIR)))
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name='plugin.video.fc_bridge.zip',
     )
