@@ -735,6 +735,21 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
                     raise TVENotAuthorizedError(f'NBC TVE: {mso_id} account is not entitled to {resource_id}.')
                 return
 
+        if mso_id == 'YouTubeTV':
+            # Only reachable when the cached_auth check above didn't already
+            # return (no token saved yet, or it stopped being recognized) --
+            # client.authorize() below would fall into login_to_mvpd()'s
+            # generic "no scripted sign-in is wired up for this provider
+            # yet" TVEAuthError, which reads as a maybe-someday-supported
+            # gap and — being a plain TVEAuthError — play.py treats as
+            # possibly transient (503 forever, never disables). Confirmed
+            # definitively 2026-08-17 via a real browser-assisted login:
+            # Adobe's own decision service denies this account for
+            # nbcentertainment on YouTube TV, a clean permanent answer, not
+            # a missing implementation. Skip the doomed scripted attempt
+            # entirely and raise that directly.
+            raise TVENotAuthorizedError(f'NBC TVE: {mso_id} is not entitled for {resource_id} (confirmed via Adobe Pass).')
+
         client = AdobePassV2Client(
             REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL,
             self._ensure_device_fingerprint(),

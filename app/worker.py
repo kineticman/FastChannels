@@ -2742,6 +2742,59 @@ def _cox_login_error_detail(exc: Exception, label: str) -> str:
     return str(exc)
 
 
+def _autofill_google_account_chooser(page) -> bool:
+    """Click through Google's "Choose an account" step automatically instead
+    of waiting on a human.
+
+    Confirmed live 2026-08-17: this screen is forced on every single fresh
+    Adobe/YouTubeTV authorization request (prompt=select_account in the
+    auth URL) regardless of how warm the persistent profile's Google
+    session already is — even signing into the SAME network twice in a row,
+    minutes apart, showed it again. But it's not actually a real
+    credentials/2FA step; it's just a fixed tile for whichever Google
+    account this profile is already logged into, exposed via the standard
+    `[data-identifier]` attribute Google's account-chooser always renders
+    (matched exactly 1 element live; its value was the real signed-in
+    email). Clicking that element — not a hardcoded pixel coordinate — is
+    what makes this generic across accounts: it reads whichever email the
+    profile actually holds rather than assuming any specific user's name.
+    Verified this actually advances the flow (landed on
+    youtube.auth-gateway.net's linkback, not just "something happened").
+
+    Cheap and safe to call on every poll iteration regardless of which page
+    is currently showing — the URL check makes it a no-op everywhere else.
+
+    Confirmed live 2026-08-17 (AMCN's WE tv): the first version of this
+    returned immediately after click(), so the caller's very next poll
+    iteration (~0.25-1s later, before the page had actually navigated away)
+    still saw an `accountchooser` URL and clicked the SAME tile a second
+    time — a duplicate submission of Google's one-shot auth step, which
+    Google/Adobe's SAML bridge answered with its own "Error: Infinite
+    Browser Redirects" loop-breaker page instead of a normal denial. Fixed
+    with two layers: wait here for the URL to actually leave the chooser
+    before returning (closes the race for the common case), plus a
+    window-level marker so even a call that lands mid-transition (the wait
+    below timed out, or two calls raced each other) can't click twice for
+    the same chooser instance.
+    """
+    try:
+        if 'accountchooser' not in page.url:
+            return False
+        already = page.evaluate("() => { const v = window.__fcAcctChooserClicked; window.__fcAcctChooserClicked = true; return v; }")
+        if already:
+            return False
+        tile = page.locator('[data-identifier]').first
+        if tile.count() == 0:
+            return False
+        tile.click(timeout=2000)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and 'accountchooser' in page.url:
+            page.wait_for_timeout(150)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _relay_input_and_screenshot(
     page, r, waiting_since: float | None = None,
     stop_key: str | None = None, input_key: str | None = None,
@@ -2801,6 +2854,7 @@ def _relay_input_and_screenshot(
     input_key = input_key or MVPD_BROWSER_LOGIN_INPUT_KEY
     shot_key = shot_key or MVPD_BROWSER_LOGIN_SHOT_KEY
     hint_key = hint_key or MVPD_BROWSER_LOGIN_HINT_KEY
+    _autofill_google_account_chooser(page)
     stopped = False
     try:
         stopped = bool(r.exists(stop_key))
@@ -4003,6 +4057,14 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                             set_status('stopped', 'Cancelled')
                             return
                         raise _BrowserSessionDied('browser page closed and sign-in did not complete')
+
+                    # Unlike AMCN/Discovery/FOX One/NBC/FOX (all routed
+                    # through _relay_input_and_screenshot, which already does
+                    # this), this loop has its own separate inline
+                    # implementation and never got the same auto-click —
+                    # this family (History/A&E/Warner) is exactly the one
+                    # that hits Google's account-chooser most often tonight.
+                    _autofill_google_account_chooser(page)
 
                     for _ in range(20):
                         raw = r.lpop(MVPD_BROWSER_LOGIN_INPUT_KEY)

@@ -820,6 +820,20 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             if 'login.cox.com' not in mso_login_url:
                 raise TVEAuthError(f'{channel.name}: unexpected Adobe redirect host {urlsplit(mso_login_url).netloc}.')
             _cox_saml_login(client.session, mso_login_url, account.username or '', account.password or '')
+        elif mso_id == 'YouTubeTV':
+            # Not login_to_mvpd()'s generic "no scripted sign-in is wired up
+            # for this provider yet" (which wrongly implies this could just
+            # be built later, and — being a plain TVEAuthError — gets
+            # treated as possibly transient, so play.py kept 503ing forever
+            # instead of disabling the channel; reported live 2026-08-17).
+            # Confirmed definitively 2026-08-17 via real browser-assisted
+            # logins for all 4 AMCN channels: Adobe's own decision service
+            # denies every one of them for YouTubeTV ("Adobe did not
+            # authorize AMC/BBCA/IFC/WETV for YouTubeTV") — a clean,
+            # reproducible, permanent entitlement answer, not a missing
+            # scripted-login implementation. Skip straight to that instead
+            # of a generic, misleading, retry-forever message.
+            raise TVENotAuthorizedError(f'{channel.name}: not entitled for YouTube TV (confirmed via Adobe Pass).')
         else:
             # Every other MVPD's actual sign-in mechanics live in
             # app/tve/mvpd/ — add one there (not here) to support a new

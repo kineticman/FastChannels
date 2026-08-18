@@ -525,6 +525,26 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             # auth.watch.hgtv.com/gauth-sync?code=..., the same URL Cox's
             # extra hop above extracts `code` from) — so it's used as
             # code_url directly here, no extra hop needed.
+            if mso_id == 'YouTubeTV':
+                # Not "not wired up yet" (login_to_mvpd()'s generic message
+                # for any unimplemented MSO, which wrongly implies this
+                # could just be built later) -- live-confirmed 2026-08-17
+                # this is permanently unworkable for Discovery specifically:
+                # its session token dies in ~90-200s with no refresh path at
+                # all (not even via a fresh Google OAuth token), so every
+                # resolve()/audit call would need a real browser + human-
+                # equivalent Google click every couple minutes. Separately,
+                # and independently, this account isn't entitled to any of
+                # Discovery's 15 channels via YouTube TV anyway (confirmed
+                # per-channel, all access.denied.missingpackage). A
+                # definitive answer either way, so TVENotAuthorizedError
+                # (disables the channel) rather than the generic TVEAuthError
+                # login_to_mvpd() would raise (treated as possibly transient).
+                raise TVENotAuthorizedError(
+                    'Discovery TVE is not usable with YouTube TV: its session expires in '
+                    '~90-200s with no refresh, and this account is not entitled to any '
+                    'Discovery channel through it.'
+                )
             from ..tve.mvpd import login_to_mvpd
             cookie_jar = cfg.get('xfinity_cookie_jar')
             page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)

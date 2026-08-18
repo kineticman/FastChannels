@@ -560,7 +560,13 @@ async function loadTveNetworkStatus() {
     const r = await fetch('/api/settings/tve/status');
     const d = await r.json();
     const rows = (d.networks || []).map(n => {
-      const age = _tveRelativeTime(n.last_signed_in_at);
+      // Prefixed so this can't be misread as reflecting the most recent
+      // attempt (that's the separate "Last attempt failed ..." note below)
+      // — a network can genuinely show "Signed in 1d ago" right next to
+      // "Last attempt failed just now" when it last worked under a
+      // different MVPD than whatever's selected now (reported live
+      // 2026-08-17: read as "looks finished but still says 1d ago?").
+      const age = n.last_signed_in_at ? `Signed in ${_tveRelativeTime(n.last_signed_in_at)}` : 'Never signed in';
       const ageColor = n.last_signed_in_at ? 'var(--text-soft)' : 'var(--text-dim)';
       let note = n.note ? `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${n.note}</div>` : '';
       // Otherwise a network that's never signed in successfully just shows
@@ -811,6 +817,16 @@ async function _pollMvpdLoginModal() {
       status.style.color = d.state === 'error' ? 'var(--danger)' : '';
       const prefix = d.state === 'error' ? '✗ ' : '';
       status.textContent = prefix + (d.message || 'Sign-in stopped.');
+      // The modal is left open below (user closes manually) so they can
+      // read the result, but the screenshot frame was never cleared here —
+      // it just froze on whatever page happened to be showing the instant
+      // the run ended (e.g. a network's own "Sign In" gate page), which
+      // reads as a live, stuck browser session even though the status text
+      // right above it already shows the real, final, already-complete
+      // result (reported live 2026-08-17). Clear it so a finished run
+      // doesn't look like an active one.
+      frame.removeAttribute('src');
+      frame.style.visibility = 'hidden';
       loadTveNetworkStatus();  // even a cancelled/failed run may have paired some networks first
       return;  // leave the modal open showing the message; user closes manually
     }
