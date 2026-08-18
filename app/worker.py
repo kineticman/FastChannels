@@ -1581,7 +1581,8 @@ def _prewarm_logos(source_name: str, logo_urls: list[str], progress_cb=None) -> 
 
 def _refresh_xml_artifacts() -> None:
     """Refresh master/feed XML and M3U artifacts after scrape commits land."""
-    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_prismcast_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_prismcast_m3u, generate_kodi_bridge_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
+    from app import kodi_bridge as _kodi_bridge
     from app.generators.xmltv import write_xmltv
 
     for attempt in range(2):
@@ -1601,6 +1602,7 @@ def _refresh_xml_artifacts() -> None:
         # configured (most installs won't run one).
         prismcast_url = (_settings.effective_prismcast_url() or '').strip().rstrip('/')
         prismcast_inner = (_settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
+        kodi_bridge_ready = _kodi_bridge.is_configured()
         m3u_artifacts: list[tuple[str, Callable]] = [
             ('master-m3u', lambda fp: fp.write(generate_m3u({}, base_url=base_url))),
         ]
@@ -1609,6 +1611,11 @@ def _refresh_xml_artifacts() -> None:
                 'master-prismcast-m3u',
                 lambda fp: fp.write(generate_prismcast_m3u(
                     {}, base_url=base_url, prismcast_url=prismcast_url, inner_base_url=prismcast_inner)),
+            ))
+        if kodi_bridge_ready:
+            m3u_artifacts.append((
+                'master-kodi-bridge-m3u',
+                lambda fp: fp.write(generate_kodi_bridge_m3u({}, base_url=base_url)),
             ))
         default_feed = Feed.query.filter_by(slug='default').first()
         default_gn_start = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
@@ -1622,6 +1629,12 @@ def _refresh_xml_artifacts() -> None:
                 lambda fp: fp.write(generate_prismcast_m3u(
                     {}, base_url=base_url, prismcast_url=prismcast_url, inner_base_url=prismcast_inner,
                     namespace_start=default_gn_start, gracenote=True)),
+            ))
+        if kodi_bridge_ready:
+            m3u_artifacts.append((
+                'master-kodi-bridge-gracenote-m3u',
+                lambda fp: fp.write(generate_kodi_bridge_m3u(
+                    {}, base_url=base_url, namespace_start=default_gn_start, gracenote=True)),
             ))
         for feed in Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all():
             filters = feed_to_query_filters(feed.filters or {})
@@ -1675,6 +1688,13 @@ def _refresh_xml_artifacts() -> None:
                             inner_base_url=prismcast_inner, **std_kw)
                     ),
                 ))
+            if kodi_bridge_ready:
+                m3u_artifacts.append((
+                    f'feed-{feed.slug}-kodi-bridge-m3u',
+                    lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                        generate_kodi_bridge_m3u(filters, base_url=base_url, **std_kw)
+                    ),
+                ))
             if feed.chnum_start is not None:
                 gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
             else:
@@ -1692,6 +1712,13 @@ def _refresh_xml_artifacts() -> None:
                         generate_prismcast_m3u(
                             filters, base_url=base_url, prismcast_url=prismcast_url,
                             inner_base_url=prismcast_inner, gracenote=True, **gn_kw)
+                    ),
+                ))
+            if kodi_bridge_ready:
+                m3u_artifacts.append((
+                    f'feed-{feed.slug}-kodi-bridge-gracenote-m3u',
+                    lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
+                        generate_kodi_bridge_m3u(filters, base_url=base_url, gracenote=True, **gn_kw)
                     ),
                 ))
 

@@ -8,6 +8,7 @@ from ..extensions import db
 from ..models import Channel, Source, Feed, AppSettings
 from ..url import proxy_logo_url
 from ..scrapers import registry as _scraper_registry
+from ..kodi_bridge import KODI_BRIDGE_TRUSTED_SOURCES
 
 log = logging.getLogger(__name__)
 
@@ -921,6 +922,15 @@ def _channel_play_url(ch, base_url: str) -> str:
         return f'{base_url}/play/cspan/{channel_id}/proxy.m3u8'
     return f'{base_url}/play/{source_name}/{channel_id}.m3u8'
 
+
+def _kodi_bridge_play_url(ch, base_url: str) -> str:
+    # Every channel, bridge-eligible or not, uses this one URL shape — the branch
+    # (Kodi/HDMI-encoder trigger vs. normal resolve+302) happens entirely inside
+    # play_kodi_bridge (app/routes/play.py), invisible to whatever requests it.
+    source_name = ch.source.name
+    channel_id = _url_quote(ch.source_channel_id, safe="")
+    return f'{base_url}/play/kodi-bridge/{source_name}/{channel_id}.m3u8'
+
 def generate_m3u(filters: dict = None, base_url: str = None,
                  feed_chnum_start: int = None, namespace_start: int = None,
                  feed_id: int = None) -> str:
@@ -1005,6 +1015,104 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         _append_experimental_stream_attrs(attrs, _s)
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         lines.append(_channel_play_url(ch, base_url))
+
+    return '\n'.join(lines)
+
+
+def generate_kodi_bridge_m3u(filters: dict = None, base_url: str = None,
+                             feed_chnum_start: int = None, namespace_start: int = None,
+                             feed_id: int = None, gracenote: bool = False) -> str:
+    """
+    Kodi/HDMI-encoder DRM-bridge playlist (dev/kodi/IMPLEMENTATION_PLAN.md §3).
+
+    Every channel — DRM-bridge-eligible or not — uses the same
+    /play/kodi-bridge/<source>/<id>.m3u8 URL shape; play_kodi_bridge (app/routes/play.py)
+    decides per-request, server-side, whether a given channel actually needs to trigger
+    the Kodi/Firestick bridge or just resolves+302s directly like any other channel.
+
+    Non-DRM channels come from generate_m3u's normal selection. DRM channels are
+    bridge-only by construction (_build_channel_query's default 'active' selection
+    excludes anything requires_drm_bridge — see its docstring) so they're unioned back
+    in explicitly, same pattern as generate_prismcast_m3u, but restricted to
+    KODI_BRIDGE_TRUSTED_SOURCES only — sources confirmed to actually decrypt through
+    Kodi/inputstream.adaptive (dev/kodi/README.md). Cox/Warner/etc. stay out of this
+    feed's channel list entirely rather than falling through play_kodi_bridge's
+    non-bridge branch, so this feed never advertises a channel known not to work.
+
+    No #KODIPROP lines — those are for Kodi clients consuming the M3U directly;
+    Channels DVR doesn't need them and never sees the raw manifest/license URLs.
+
+    gracenote=False — excludes channels with a Gracenote ID; emits tvg-id so the guide
+                       pairs with our XMLTV /epg.xml.
+    gracenote=True  — only channels with a Gracenote ID; emits tvc-guide-stationid so
+                       Channels DVR routes guide data through Gracenote.
+    """
+    filters  = filters or {}
+    base_url = (base_url or '').rstrip('/')
+
+    _s = AppSettings.get()
+    _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
+
+    channels = _selected_channels(filters, gracenote=gracenote)
+
+    # Union in the trusted-source DRM channels the base selection excludes — see
+    # docstring. Deduped, honoring the Gracenote partition, same as prismcast's union.
+    _seen = {ch.id for ch in channels}
+    for ch in _build_channel_query(filters, activity='drm_bridge').all():
+        if ch.id in _seen or (ch.source.name if ch.source else None) not in KODI_BRIDGE_TRUSTED_SOURCES:
+            continue
+        if gracenote and not _parse_gracenote_id(ch):
+            continue
+        if not gracenote and _has_gracenote_claim(ch):
+            continue
+        channels.append(ch)
+        _seen.add(ch.id)
+
+    chnum_map, warnings = _resolve_chnum_map(
+        channels,
+        feed_chnum_start=feed_chnum_start,
+        namespace_start=namespace_start,
+        feed_id=feed_id if feed_chnum_start is not None else None,
+    )
+    if feed_chnum_start is None and namespace_start is None:
+        for w in warnings:
+            log.warning('chnum overlap (kodi-bridge): %s', w)
+    else:
+        _sort_by_assigned_chnum(channels, chnum_map)
+
+    multi_country_map = _source_multi_country_map(channels)
+    lines = ['#EXTM3U']
+    for ch in channels:
+        tvg_id = _tvg_id(ch)
+        display_name = _channel_display_name(ch, multi_country_map)
+        guide_attr = (f'tvc-guide-stationid="{_parse_gracenote_id(ch)}"'
+                      if gracenote else f'tvg-id="{tvg_id}"')
+        attrs = [
+            f'channel-id="{tvg_id}"',
+            guide_attr,
+            f'tvg-name="{_esc(display_name)}"',
+            f'group-title="{_esc(ch.category or ch.source.display_name)}"',
+        ]
+        if ch.logo_url:
+            attrs.append(f'tvg-logo="{proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url}"')
+        chnum = chnum_map.get(ch.id)
+        if chnum:
+            attrs.append(f'tvg-chno="{chnum}"')
+        if ch.description:
+            attrs.append(f'tvg-description="{_esc(ch.description)}"')
+            attrs.append(f'tvc-guide-description="{_esc(ch.description)}"')
+        if ch.stream_info:
+            vcodec, acodec = _tvc_stream_codecs(ch.stream_info)
+            if vcodec:
+                attrs.append(f'tvc-stream-vcodec="{vcodec}"')
+            if acodec:
+                attrs.append(f'tvc-stream-acodec="{acodec}"')
+        guide_cat = _tvc_guide_category(ch)
+        if guide_cat:
+            attrs.append(f'tvc-guide-categories="{guide_cat}"')
+        _append_experimental_stream_attrs(attrs, _s)
+        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
+        lines.append(_kodi_bridge_play_url(ch, base_url))
 
     return '\n'.join(lines)
 

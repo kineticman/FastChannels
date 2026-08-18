@@ -4637,14 +4637,7 @@ def play(source_name: str, channel_id: str):
     return redirect(resolved_url, 302)
 
 
-# Sources confirmed (dev/kodi/README.md, real Fire TV Stick 4K hardware, 2026-08-16) to
-# actually decrypt through Kodi/inputstream.adaptive. Cox and Warner TVE hit a confirmed,
-# non-fixable inputstream.adaptive same-KID session-splitting wall and stay excluded;
-# Roku is pending re-verification (rate-limited mid-check) and Philo is untested (no
-# creds) — both excluded until actually confirmed. See IMPLEMENTATION_PLAN.md section 5.
-_KODI_BRIDGE_TRUSTED_SOURCES = frozenset({
-    'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa',
-})
+from ..kodi_bridge import KODI_BRIDGE_TRUSTED_SOURCES as _KODI_BRIDGE_TRUSTED_SOURCES
 
 
 @play_bp.route('/play/kodi-bridge/<source_name>/<channel_id>.m3u8')
