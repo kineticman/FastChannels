@@ -10,11 +10,11 @@
       </div>
     </div>
     <div class="source-body open">
-      <div class="help" style="color:var(--warning-soft)">This feature is early and hands-on: it expects a Kodi install already sideloaded on the device with JSON-RPC and the FastChannels resolver addon set up. Nothing here does that setup for you yet — see <code>docs/kodi-bridge-setup.md</code> for the full walkthrough. Grab the resolver addon itself at <a href="{{ request_base_url }}/kodi/fc_bridge.zip">{{ request_base_url }}/kodi/fc_bridge.zip</a> — download it, then install it on the device via Kodi's Add-ons &gt; Install from zip file.</div>
+      <div class="help" style="color:var(--warning-soft)">Requires Kodi already set up on the device (JSON-RPC + the FastChannels resolver addon) — see <code>docs/kodi-bridge-setup.md</code> for the full walkthrough. Addon download: <a href="{{ request_base_url }}/kodi/fc_bridge.zip">{{ request_base_url }}/kodi/fc_bridge.zip</a>.</div>
       <div class="toggle-row">
         <div class="toggle-row-text">
           <div class="toggle-row-label">Enable Kodi bridge</div>
-          <div class="toggle-row-help">Turns the feature on. Needed before the device IP below does anything.</div>
+          <div class="toggle-row-help">Required before the settings below take effect.</div>
         </div>
         <div class="toggle-row-control">
           <label class="toggle-switch">
@@ -27,7 +27,7 @@
       <div class="toggle-row">
         <div class="toggle-row-text">
           <div class="toggle-row-label">Keep alive</div>
-          <div class="toggle-row-help">A background check pings the device every 45s and relaunches Kodi automatically if it's unresponsive (crashed, backgrounded, or just rebooted). Turn off to stop that polling, e.g. while testing manually.</div>
+          <div class="toggle-row-help">Pings the device every 45s and relaunches Kodi if it's unresponsive. Turn off while testing manually.</div>
         </div>
         <div class="toggle-row-control">
           <label class="toggle-switch">
@@ -42,14 +42,14 @@
           <label for="kodi-bridge-ip">Kodi / Firestick IP address</label>
           <input type="text" id="kodi-bridge-ip"
                  placeholder="192.168.1.50" value="{{ kodi_bridge_ip }}">
-          <div class="help">Just the IP — JSON-RPC (<code>:8080</code>) and adb (<code>:5555</code>) addresses are derived from it automatically.</div>
+          <div class="help">JSON-RPC (<code>:8080</code>) and adb (<code>:5555</code>) ports are derived automatically.</div>
         </div>
         <div class="field field-full">
           <label for="kodi-bridge-encoder-url">Capture/encoder stream URL</label>
           <input type="text" id="kodi-bridge-encoder-url"
                  placeholder="http://192.168.1.50:8089/devices/ANY/channels/70092/stream.mpg"
                  value="{{ kodi_bridge_encoder_url }}">
-          <div class="help">Where a bridged channel actually plays from once Kodi's been triggered. If you're capturing the Firestick's HDMI output with a USB capture card through Channels DVR's own native <code>capture://</code> support, this is that capture channel's own stream URL — Channels DVR re-serves any of its channels at <code>http://&lt;host&gt;:8089/devices/ANY/channels/&lt;guide number&gt;/stream.mpg</code>. No standalone hardware encoder needed for that path.</div>
+          <div class="help">Where a bridged channel plays from once Kodi's triggered. With Channels DVR's native <code>capture://</code> source, this is that channel's own stream URL: <code>http://&lt;host&gt;:8089/devices/ANY/channels/&lt;guide number&gt;/stream.mpg</code>.</div>
         </div>
       </div>
       <div class="field-actions">
@@ -58,7 +58,7 @@
         <button class="btn btn-primary" onclick="saveKodiBridgeSettings()">Save</button>
       </div>
       {% if kodi_bridge_configured %}
-      <div class="help" style="margin-top:12px">Add <code>{{ request_base_url }}/m3u/kodi-bridge</code> as a Custom Channels M3U source in Channels DVR (pair with <code>{{ request_base_url }}/epg.xml</code>) — Gracenote-mapped channels split into <code>{{ request_base_url }}/m3u/kodi-bridge/gracenote</code> instead, same as any other feed. Set that source's max simultaneous streams to however many physical Firestick+capture pairs you actually have (1 today) — there's only one device behind every bridged channel.</div>
+      <div class="help" style="margin-top:12px">Add <code>{{ request_base_url }}/m3u/kodi-bridge</code> to Channels DVR as a Custom Channels M3U source (pair with <code>{{ request_base_url }}/epg.xml</code>; Gracenote channels use <code>{{ request_base_url }}/m3u/kodi-bridge/gracenote</code> instead). Set max simultaneous streams to your physical Firestick+capture count (1 today).</div>
       {% else %}
       <div class="help" style="color:var(--warning-soft);margin-top:12px">Configure the fields above (and enable the bridge) to get this feed's M3U/EPG URLs.</div>
       {% endif %}
