@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -14,6 +15,14 @@ PBS_SCHEME = "pbs://"
 LOCALIZE_ZIP_URL = "https://localization.services.pbs.org/localize/zipcode/{zip}/"
 STATION_URL = "https://www.pbs.org/api/station/{station_id}/stations-list/"
 SCHEDULE_URL = "https://player.pbs.org/api/livestream-schedule/{station_id}/"
+
+# resolve() (and the /play/pbs/.../dash.mpd proxy that calls it) is polled every
+# ~90s for the lifetime of a live DASH playback session — an unattended overnight
+# watch means thousands of calls. Without this, every single poll re-fetched the
+# full STATION_URL payload just to read a feed's static drm_dash_url/non_drm_url,
+# which doesn't change within a session. Cache it (persisted to source_cache, same
+# pattern as Philo's dash_cache) so only the live manifest fetch happens per poll.
+_STATION_TTL = 30 * 60
 
 _PROFILE_LABELS = {
     "ga-create": "Create",
@@ -145,6 +154,23 @@ class PBSScraper(BaseScraper):
             "Referer": "https://www.pbs.org/",
             "User-Agent": "Mozilla/5.0 (compatible; FastChannels PBS scraper)",
         })
+        self._station_cache: dict[str, dict] = {}
+        self._load_station_cache()
+
+    def _load_station_cache(self) -> None:
+        raw = self.cache.get("station_cache") or {}
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        for station_id, entry in raw.items():
+            if not isinstance(entry, dict):
+                continue
+            cached_at = entry.get("cached_at")
+            if not entry.get("station") or not isinstance(cached_at, (int, float)):
+                continue
+            if (now - float(cached_at)) >= _STATION_TTL:
+                continue
+            self._station_cache[station_id] = entry
 
     def fetch_channels(self) -> list[ChannelData]:
         station_ids = self._configured_station_ids()
@@ -584,8 +610,19 @@ class PBSScraper(BaseScraper):
         return station_ids
 
     def _station(self, station_id: str) -> dict:
+        entry = self._station_cache.get(station_id)
+        if entry:
+            cached_at = entry.get("cached_at")
+            if isinstance(cached_at, (int, float)) and (time.time() - float(cached_at)) < _STATION_TTL:
+                return entry["station"]
+            self._station_cache.pop(station_id, None)
+
         payload = self._get_json(STATION_URL.format(station_id=station_id))
-        return payload.get("stationData") or {}
+        station = payload.get("stationData") or {}
+
+        self._station_cache[station_id] = {"station": station, "cached_at": time.time()}
+        self._update_cache("station_cache", self._station_cache)
+        return station
 
     def _station_timezone(self, station_id: str) -> str:
         try:
