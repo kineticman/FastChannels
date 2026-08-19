@@ -18,7 +18,9 @@ import subprocess
 import time
 from urllib.parse import urlencode
 
+import redis
 import requests
+from flask import current_app
 
 from .models import AppSettings
 
@@ -36,6 +38,44 @@ _DEFAULT_LICENSE_TYPE = 'com.widevine.alpha'
 # event" gap.
 _ENCODER_IDLE_GRACE_S = 5 * 60
 _encoder_idle_since: float | None = None
+
+# Set by trigger_channel() (something asked Kodi to play), cleared once
+# check_idle_and_stop() actually stops it. Gates the whole idle check so it
+# doesn't poll the DVR and log "stopping Kodi playback" every ~5min forever
+# whenever the device just sits idle between uses (reported live 2026-08-19:
+# the 45s watchdog ticked all night with nothing ever triggered, each idle
+# window re-firing the same stop + log line since dvr_encoder_active() just
+# keeps reporting not-active with nothing to distinguish "was playing, now
+# isn't" from "was never asked to play anything").
+#
+# Lives in Redis, not a module global: trigger_channel() runs in a gunicorn
+# web worker (app/routes/play.py) but check_idle_and_stop() runs in the
+# separate scheduler process (app/worker.py's BackgroundScheduler) — a plain
+# global set in one process is invisible in the other. The 24h TTL is just a
+# safety net against a stuck-active flag surviving forever if some future
+# code path fails to clear it; it plays no role in the normal fire/clear
+# cycle above (that's every ~5min, always long before this would expire).
+_BELIEVED_ACTIVE_KEY = 'fc:kodi-bridge:believed-active'
+_BELIEVED_ACTIVE_TTL_S = 24 * 60 * 60
+
+
+def _set_believed_active(active: bool) -> None:
+    try:
+        r = redis.from_url(current_app.config['REDIS_URL'])
+        if active:
+            r.setex(_BELIEVED_ACTIVE_KEY, _BELIEVED_ACTIVE_TTL_S, '1')
+        else:
+            r.delete(_BELIEVED_ACTIVE_KEY)
+    except Exception as e:
+        logger.warning('[kodi-bridge] _set_believed_active(%s) failed: %s', active, e)
+
+
+def _is_believed_active() -> bool:
+    try:
+        return bool(redis.from_url(current_app.config['REDIS_URL']).exists(_BELIEVED_ACTIVE_KEY))
+    except Exception as e:
+        logger.warning('[kodi-bridge] _is_believed_active check failed: %s', e)
+        return True  # fail open to the pre-existing always-check behavior
 
 # Sources confirmed (dev/kodi/README.md, real Fire TV Stick 4K hardware, 2026-08-16) to
 # actually decrypt through Kodi/inputstream.adaptive. Cox and Warner TVE hit a confirmed,
@@ -214,8 +254,15 @@ def check_idle_and_stop() -> None:
     playing — nobody's on the other end of the encoder stream, no reason to keep
     decrypting/streaming. No-ops when dvr_encoder_active() returns None (can't
     determine activity) so this never fires on a guess.
+
+    Also no-ops entirely, without even polling the DVR, when nothing has asked
+    Kodi to play a channel since the last time this already stopped one — see
+    _BELIEVED_ACTIVE_KEY's docstring.
     """
     global _encoder_idle_since
+    if not _is_believed_active():
+        _encoder_idle_since = None
+        return
     active = dvr_encoder_active()
     if active is None or active:
         _encoder_idle_since = None
@@ -229,6 +276,7 @@ def check_idle_and_stop() -> None:
                      _ENCODER_IDLE_GRACE_S)
         stop_playback()
         _encoder_idle_since = None
+        _set_believed_active(False)
 
 
 def trigger_channel(
@@ -254,7 +302,10 @@ def trigger_channel(
     except Exception as e:
         logger.warning('[kodi-bridge] trigger_channel failed: %s', e)
         return False
-    return result.get('result') == 'OK'
+    ok = result.get('result') == 'OK'
+    if ok:
+        _set_believed_active(True)
+    return ok
 
 
 def confirm_playback(timeout_s: int = 5) -> dict:

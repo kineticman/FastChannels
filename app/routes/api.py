@@ -5709,6 +5709,72 @@ api_bp.add_url_rule('/settings/tve/foxone/browser-login/input', 'foxone_browser_
 api_bp.add_url_rule('/settings/tve/foxone/browser-login/stop', 'foxone_browser_login_stop', mvpd_browser_login_stop, methods=['POST'])
 
 
+# Standalone "Sign in with Google" — captures a Google master_token directly
+# against Google's own embedded Android device-setup page, independent of
+# any specific TVE network's Adobe Pass SAML flow. See
+# app.worker.run_google_signin's docstring for why this exists as its own
+# dedicated flow. Its own redis-key namespace (google-signin:browser-login:*)
+# rather than reusing the shared legacy one, so it can run/be watched
+# independent of any specific network's own sign-in attempt.
+@api_bp.route('/settings/tve/google/browser-login/start', methods=['POST'])
+def google_signin_start():
+    from .tasks import trigger_google_signin
+
+    account = _get_tve_account('mvpd', 'TV Provider')
+    if not account.is_enabled:
+        return jsonify({'error': 'Enable and save the TVE account first.'}), 400
+    started = trigger_google_signin()
+    return jsonify({'status': 'started' if started else 'already_running'})
+
+
+@api_bp.route('/settings/tve/google/browser-login/state')
+def google_signin_state():
+    import base64
+    import redis as _redis
+
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw_status = r.get('google-signin:browser-login:status')
+    result = json.loads(raw_status) if raw_status else {'state': 'idle'}
+    shot = r.get('google-signin:browser-login:screenshot')
+    if shot:
+        result['screenshot'] = base64.b64encode(shot).decode('ascii')
+    hint = r.get('google-signin:browser-login:hint')
+    if hint:
+        result['hint'] = hint.decode('utf-8', 'replace') if isinstance(hint, bytes) else hint
+    return jsonify(result)
+
+
+@api_bp.route('/settings/tve/google/browser-login/input', methods=['POST'])
+def google_signin_input():
+    import redis as _redis
+
+    data = request.get_json() or {}
+    kind = data.get('type')
+    if kind in ('click', 'mousemove', 'mousedown', 'mouseup'):
+        try:
+            payload = {'type': kind, 'x': float(data['x']), 'y': float(data['y'])}
+        except (KeyError, TypeError, ValueError):
+            return jsonify({'error': f'{kind} requires numeric x/y'}), 400
+    elif kind == 'key':
+        key = str(data.get('key') or '')
+        if not key:
+            return jsonify({'error': 'key requires a non-empty key'}), 400
+        payload = {'type': 'key', 'key': key}
+    else:
+        return jsonify({'error': 'invalid input type'}), 400
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    r.rpush('google-signin:browser-login:input', json.dumps(payload))
+    r.expire('google-signin:browser-login:input', 60)
+    return jsonify({'status': 'ok'})
+
+
+@api_bp.route('/settings/tve/google/browser-login/stop', methods=['POST'])
+def google_signin_stop():
+    from .tasks import stop_google_signin
+    stop_google_signin()
+    return jsonify({'status': 'stopping'})
+
+
 # ── NBC TVE browser sign-in (Adobe Pass v2 "second screen" pairing) ────────
 # NBC TVE uses a different Adobe Pass generation (v2 JSON REST) than Warner/
 # A+E's legacy XML protocol — see app.worker.run_nbc_browser_login and

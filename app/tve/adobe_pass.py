@@ -204,6 +204,18 @@ AENETWORKS_LIVE_PAGES = {
 _STATEMENT_CACHE: dict[str, tuple[float, str]] = {}
 _STATEMENT_TTL_SECONDS = 6 * 60 * 60
 
+# Adobe's own authz_token (from /adobe-services/authorize) is good for
+# roughly 24h — confirmed against dev/tve2/README.md's reverse-engineering of
+# a comparable Adobe Pass client, which caches it by resource and refreshes
+# within 5 minutes of expiry. We previously re-minted it (plus a fresh
+# shortAuthorize) on every single resolve() even when authn_token was
+# already cached, costing two extra Adobe round trips per play/audit for no
+# benefit — see authorize_mvpd()'s cached-authz fast path. shortAuthorize
+# itself is NOT cached this way: Adobe gives it only ~7 minutes, so it's
+# deliberately re-minted fresh every time regardless of authz freshness.
+_AUTHZ_TOKEN_TTL_SECONDS = 24 * 60 * 60
+_AUTHZ_REFRESH_MARGIN_SECONDS = 5 * 60
+
 
 class TVEAuthError(RuntimeError):
     pass
@@ -384,11 +396,13 @@ class AdobePassCoxClient:
     def __init__(
         self, *, requestor_id: str, resource: str, software_statement: str,
         redirect_url: str = DEFAULT_HISTORY_REDIRECT_URL, device_fingerprint: str | None = None,
+        client_creds: dict | None = None,
     ) -> None:
         self.requestor_id = requestor_id
         self.resource = resource
         self.redirect_url = redirect_url
         self._device_fingerprint = device_fingerprint
+        self._client_creds = client_creds
         self.ctx = AdobeContext(software_statement=software_statement)
         self.session = requests.Session()
         self.session.headers.update({
@@ -420,6 +434,22 @@ class AdobePassCoxClient:
             raise TVEAuthError(str(exc)) from exc
 
     def setup_client(self) -> None:
+        # A fresh client_creds means a caller looked up a still-fresh
+        # (client_id, client_secret, access_token) this account already
+        # registered with Adobe for this requestor_id — reuse it instead of
+        # minting a brand-new OAuth client on every single attempt. See
+        # load_cached_adobe_client_creds()'s docstring: registering a new
+        # client every attempt is its own form of the identity churn that
+        # register_device()'s docstring already documents mattering for
+        # device fingerprints.
+        cached = self._client_creds
+        if cached and cached.get('client_id') and cached.get('access_token'):
+            self.ctx.client_id = cached['client_id']
+            self.ctx.client_secret = cached.get('client_secret', '')
+            self.ctx.access_token = cached['access_token']
+            self.session.headers.update({'Authorization': f'Bearer {self.ctx.access_token}'})
+            return
+
         r = self._post(
             f'{ADOBE_BASE}/o/client/register',
             json={'software_statement': self.ctx.software_statement},
@@ -605,6 +635,37 @@ class AdobePassCoxClient:
             raise TVEPendingAuthError('Adobe session is not authenticated yet.')
         self.ctx.authn_token = html.unescape(_text_between(r.text, 'authnToken'))
 
+    def _short_authorize(self, session_guid: str) -> str:
+        """POST /adobe-services/shortAuthorize using whatever authz_token is
+        already on self.ctx.authz_token — either just minted by authorize()
+        or a cached ~24h authz_token reused via authorize_with_cached_authz().
+        Always hit fresh regardless: Adobe gives this response only ~7
+        minutes, so caching it the way authz_token is cached would just mean
+        handing back an already-expired token most of the time.
+        """
+        r = self._post_lenient(
+            f'{ADOBE_BASE}/adobe-services/shortAuthorize',
+            data={
+                'authz_token': self.ctx.authz_token,
+                'requestor_id': self.requestor_id,
+                'generic_data': '{}',
+                'session_guid': session_guid,
+                'hashed_guid': 'false',
+            },
+            headers={'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+        )
+        if '<pendingLogout' in r.text:
+            raise TVEAuthError('Adobe shortAuthorize returned pendingLogout.')
+        if '<error' in r.text:
+            message = _adobe_error_message(r.text)
+            if _adobe_error_code(r.text) == 'notAuthorized':
+                raise TVENotAuthorizedError(message)
+            raise TVEAuthError(message)
+        if r.status_code >= 400:
+            raise TVEAuthError(f'Adobe shortAuthorize returned HTTP {r.status_code}: {r.text[:300]}')
+        self.ctx.short_token = r.text
+        return self.ctx.short_token
+
     def authorize(self) -> str:
         mso = _text_between(self.ctx.authn_token, 'simpleTokenMsoID')
         guid = _text_between(self.ctx.authn_token, 'simpleSamlNameID')
@@ -638,28 +699,23 @@ class AdobePassCoxClient:
             raise TVEAuthError(f'Adobe authorize returned HTTP {r.status_code}: {r.text[:300]}')
         self.ctx.authz_token = html.unescape(_text_between(r.text, 'authzToken'))
 
-        r = self._post_lenient(
-            f'{ADOBE_BASE}/adobe-services/shortAuthorize',
-            data={
-                'authz_token': self.ctx.authz_token,
-                'requestor_id': self.requestor_id,
-                'generic_data': '{}',
-                'session_guid': session_guid,
-                'hashed_guid': 'false',
-            },
-            headers={'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
-        )
-        if '<pendingLogout' in r.text:
-            raise TVEAuthError('Adobe shortAuthorize returned pendingLogout.')
-        if '<error' in r.text:
-            message = _adobe_error_message(r.text)
-            if _adobe_error_code(r.text) == 'notAuthorized':
-                raise TVENotAuthorizedError(message)
-            raise TVEAuthError(message)
-        if r.status_code >= 400:
-            raise TVEAuthError(f'Adobe shortAuthorize returned HTTP {r.status_code}: {r.text[:300]}')
-        self.ctx.short_token = r.text
-        return self.ctx.short_token
+        return self._short_authorize(session_guid)
+
+    def authorize_with_cached_authz(self, authz_token: str) -> str:
+        """Skip the /adobe-services/authorize round trip using a still-fresh
+        authz_token authorize_mvpd() already had cached for this
+        (account, requestor_id) — see _AUTHZ_TOKEN_TTL_SECONDS. Goes straight
+        to /shortAuthorize, which still always runs fresh (see
+        _short_authorize's docstring). Caller must set self.ctx.authn_token
+        first, same as authorize() — session_guid/ap_19/ap_23 still derive
+        from it, only the /authorize call itself is skipped.
+        """
+        guid = _text_between(self.ctx.authn_token, 'simpleSamlNameID')
+        session_index = _text_between(self.ctx.authn_token, 'simpleSamlSessionIndex')
+        session_guid = _text_between(self.ctx.authn_token, 'simpleTokenAuthenticationGuid')
+        self.session.headers.update({'ap_19': guid, 'ap_23': session_index})
+        self.ctx.authz_token = authz_token
+        return self._short_authorize(session_guid)
 
     def authorize_with_cox(self, username: str, password: str) -> str:
         self.setup_client()
@@ -741,6 +797,47 @@ def _ensure_cox_device_fingerprint(account) -> str:
     return fingerprint
 
 
+_ADOBE_CLIENT_CREDS_TTL_SECONDS = 6 * 60 * 60
+
+
+def load_cached_adobe_client_creds(account, requestor_id: str) -> dict | None:
+    """Get-or-None a still-fresh (client_id, client_secret, access_token)
+    this account already registered with Adobe for `requestor_id`.
+
+    setup_client()/_register_client() POST /o/client/register, which mints a
+    brand-new OAuth client with Adobe every time it's called — not a token
+    refresh, a new client identity. Every caller used to do this on every
+    single login/resolve attempt, on top of the (already-fixed, see
+    register_device()'s docstring) device-fingerprint churn — the same class
+    of attempt-volume/identity churn a rate limiter would plausibly key off
+    of. A comparable reverse-engineered implementation caches this for ~6h;
+    matched here.
+    """
+    creds = ((account.config or {}).get('adobe_client_creds') or {}).get(requestor_id)
+    if not creds or not creds.get('client_id') or not creds.get('access_token'):
+        return None
+    if time.time() - creds.get('captured_at', 0) >= _ADOBE_CLIENT_CREDS_TTL_SECONDS:
+        return None
+    return creds
+
+
+def save_adobe_client_creds(account, requestor_id: str, client_id: str, client_secret: str, access_token: str) -> None:
+    if not client_id or not access_token:
+        return
+    from ..extensions import db
+    cfg = dict(account.config or {})
+    all_creds = dict(cfg.get('adobe_client_creds') or {})
+    all_creds[requestor_id] = {
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'access_token': access_token,
+        'captured_at': int(time.time()),
+    }
+    cfg['adobe_client_creds'] = all_creds
+    account.config = cfg
+    db.session.commit()
+
+
 def _save_mvpd_authn_token(account, requestor_id: str, authn_token: str) -> None:
     if not authn_token:
         return
@@ -750,6 +847,24 @@ def _save_mvpd_authn_token(account, requestor_id: str, authn_token: str) -> None
     mvpd_authn = dict(cfg.get('mvpd_authn') or {})
     mvpd_authn[requestor_id] = {'authn_token': authn_token, 'captured_at': int(_wall_time())}
     cfg['mvpd_authn'] = mvpd_authn
+    account.config = cfg
+    db.session.commit()
+
+
+def _save_mvpd_authz_token(account, requestor_id: str, authz_token: str) -> None:
+    """Persists the ~24h resource authz_token a full authorize() call just
+    minted, so the next resolve() for this (account, requestor_id) can reuse
+    it via authorize_with_cached_authz() instead of hitting
+    /adobe-services/authorize again — see _AUTHZ_TOKEN_TTL_SECONDS.
+    """
+    if not authz_token:
+        return
+    from time import time as _wall_time
+    from ..extensions import db
+    cfg = dict(account.config or {})
+    mvpd_authz = dict(cfg.get('mvpd_authz') or {})
+    mvpd_authz[requestor_id] = {'authz_token': authz_token, 'captured_at': int(_wall_time())}
+    cfg['mvpd_authz'] = mvpd_authz
     account.config = cfg
     db.session.commit()
 
@@ -772,6 +887,88 @@ def save_xfinity_cookie_jar(account, cookie_jar: dict) -> None:
     cfg['xfinity_cookie_jar_captured_at'] = int(_wall_time())
     account.config = cfg
     db.session.commit()
+
+
+def save_google_master_token(account, data: dict) -> None:
+    """Persists a Google master_token captured via app.tve.google_master_token
+    (see its module docstring for the full technique). Account-wide, not
+    per-requestor_id — it's tied to the Google account itself, and every
+    YouTubeTV-MSO'd requestor_id's browser-login can reuse it to mint a fresh
+    signed-in session with zero interactive login, the same way
+    save_xfinity_cookie_jar's cookie jar is shared across every Comcast_SSO
+    requestor_id.
+    """
+    if not data or not data.get('master_token'):
+        return
+    from ..extensions import db
+    cfg = dict(account.config or {})
+    cfg['google_master_token'] = data
+    account.config = cfg
+    db.session.commit()
+
+
+def load_google_master_token(account) -> dict | None:
+    return (account.config or {}).get('google_master_token') or None
+
+
+# How long a detected soft-block on Adobe/YouTubeTV's SAML bounce chain
+# (youtube.auth-gateway.net/saml/module.php/authbypass/firstbookend.php)
+# keeps every browser-login flow from even attempting another live request.
+# Confirmed live 2026-08-19 via extensive multi-signal testing (network/
+# console event logging, session-affinity cookie transfer, filled-in
+# window.history values — all ruled out as fixes) that this looks like
+# accumulated rate-limiting on Adobe's side: the exact same Camoufox setup
+# completed this chain successfully earlier the same day, then began
+# returning an inert empty <body></body> only after a very high volume of
+# attempts. 3h is a guess, not a documented SLA — Adobe doesn't publish one
+# — chosen to comfortably outlast a single bad testing session without
+# requiring a human to remember to stop clicking "Sign in".
+ADOBE_YOUTUBETV_SOFT_BLOCK_SECONDS = 3 * 60 * 60
+
+
+def save_adobe_youtubetv_soft_block(account, reason: str = '', details: dict | None = None) -> None:
+    """Records that Adobe's YouTubeTV SAML bounce chain just showed the
+    known soft-block signature (see ADOBE_YOUTUBETV_SOFT_BLOCK_SECONDS'
+    docstring) — an empty <body></body> response on the authbypass/
+    firstbookend.php hop instead of the real interstitial. Every browser-
+    login flow checks load_adobe_youtubetv_soft_block() before spending any
+    more time waiting on that hop, so one detection protects every network
+    from repeating the same wasted attempt.
+
+    `details` is an optional non-secret response fingerprint (cookie names
+    present, ppp/bbp values, last URL, etc.) captured at the moment of
+    detection — not used by load_adobe_youtubetv_soft_block()'s gating logic
+    at all, just kept alongside `reason` so a later controlled retest can
+    compare a fresh detection against this one (e.g. did ppp start at 1 again
+    after cooldown, or pick up where it left off) instead of that evidence
+    being discarded once the block record itself expires or gets overwritten.
+    """
+    from time import time as _wall_time
+    from ..extensions import db
+    cfg = dict(account.config or {})
+    entry = {
+        'detected_at': int(_wall_time()),
+        'retry_after': int(_wall_time()) + ADOBE_YOUTUBETV_SOFT_BLOCK_SECONDS,
+        'reason': reason[:200],
+    }
+    if details:
+        entry['details'] = details
+    cfg['adobe_youtubetv_soft_block'] = entry
+    account.config = cfg
+    db.session.commit()
+
+
+def load_adobe_youtubetv_soft_block(account) -> dict | None:
+    """Returns the active block record ({'detected_at', 'retry_after',
+    'reason'}) if still within its window, else None (including once
+    retry_after has passed — expired blocks are just ignored, not cleared,
+    so there's nothing to clean up and a later real success naturally makes
+    the stale record irrelevant)."""
+    import time
+    block = (account.config or {}).get('adobe_youtubetv_soft_block')
+    if not block or block.get('retry_after', 0) <= time.time():
+        return None
+    return block
 
 
 def _same_redirect_target(actual: str, expected: str) -> bool:
@@ -845,6 +1042,7 @@ def authorize_mvpd(
     # risk already fixed once for fubo, just not previously caught here since
     # Cox itself never errors, it just silently re-authenticates every time.
     device_fingerprint = _ensure_cox_device_fingerprint(account)
+    client_creds = load_cached_adobe_client_creds(account, requestor_id)
     cached_authn = ((cfg.get('mvpd_authn') or {}).get(requestor_id) or {}).get('authn_token')
     if cached_authn:
         try:
@@ -854,8 +1052,11 @@ def authorize_mvpd(
                 software_statement=software_statement,
                 redirect_url=redirect_url,
                 device_fingerprint=device_fingerprint,
+                client_creds=client_creds,
             )
             client.setup_client()
+            if not client_creds:
+                save_adobe_client_creds(account, requestor_id, client.ctx.client_id, client.ctx.client_secret, client.ctx.access_token)
             # authorize() sends the ap_42/ap_11/ap_z/Ap_21/pass_sfp headers
             # register_device() sets on self.session — Adobe 400s without them.
             # Must reuse the SAME persisted device_fingerprint as whatever
@@ -864,7 +1065,32 @@ def authorize_mvpd(
             # docstring) and cached_authn always comes back rejected.
             client.register_device()
             client.ctx.authn_token = cached_authn
+
+            # A prior call may also have left a still-fresh authz_token for
+            # this requestor_id (~24h lifetime) — reuse it to skip
+            # /adobe-services/authorize entirely and go straight to
+            # shortAuthorize (see _AUTHZ_TOKEN_TTL_SECONDS). Falls through to
+            # a full authorize() below on any staleness/rejection.
+            cached_authz_entry = (cfg.get('mvpd_authz') or {}).get(requestor_id) or {}
+            cached_authz = cached_authz_entry.get('authz_token')
+            authz_captured_at = cached_authz_entry.get('captured_at') or 0
+            authz_is_fresh = bool(cached_authz) and (
+                time.time() - authz_captured_at < _AUTHZ_TOKEN_TTL_SECONDS - _AUTHZ_REFRESH_MARGIN_SECONDS
+            )
+            if authz_is_fresh:
+                try:
+                    token = client.authorize_with_cached_authz(cached_authz)
+                    return token, client.session
+                except TVENotAuthorizedError:
+                    raise  # definitive answer from Adobe — retrying won't change it
+                except TVEAuthError as exc:
+                    logger.info(
+                        '[adobe-pass] cached authz_token for %s rejected, falling back to full authorize: %s',
+                        requestor_id, exc,
+                    )
+
             token = client.authorize()
+            _save_mvpd_authz_token(account, requestor_id, client.ctx.authz_token)
             return token, client.session
         except TVENotAuthorizedError:
             raise  # definitive answer from Adobe — retrying won't change it
@@ -878,9 +1104,13 @@ def authorize_mvpd(
             software_statement=software_statement,
             redirect_url=redirect_url,
             device_fingerprint=device_fingerprint,
+            client_creds=client_creds,
         )
         token = client.authorize_with_cox(username, password)
+        if not client_creds:
+            save_adobe_client_creds(account, requestor_id, client.ctx.client_id, client.ctx.client_secret, client.ctx.access_token)
         _save_mvpd_authn_token(account, requestor_id, client.ctx.authn_token)
+        _save_mvpd_authz_token(account, requestor_id, client.ctx.authz_token)
         return token, client.session
 
     if selected_mso_id == 'Comcast_SSO':
@@ -898,10 +1128,14 @@ def authorize_mvpd(
                 software_statement=software_statement,
                 redirect_url=redirect_url,
                 device_fingerprint=device_fingerprint,
+                client_creds=client_creds,
             )
             try:
                 token = client.authorize_with_xfinity_cookies(username, password, cookie_jar)
+                if not client_creds:
+                    save_adobe_client_creds(account, requestor_id, client.ctx.client_id, client.ctx.client_secret, client.ctx.access_token)
                 _save_mvpd_authn_token(account, requestor_id, client.ctx.authn_token)
+                _save_mvpd_authz_token(account, requestor_id, client.ctx.authz_token)
                 return token, client.session
             except TVENotAuthorizedError:
                 raise  # definitive answer from Adobe — retrying won't change it
@@ -930,9 +1164,13 @@ def authorize_mvpd(
             software_statement=software_statement,
             redirect_url=redirect_url,
             device_fingerprint=device_fingerprint,
+            client_creds=client_creds,
         )
         token = client.authorize_with_directv(username, password)
+        if not client_creds:
+            save_adobe_client_creds(account, requestor_id, client.ctx.client_id, client.ctx.client_secret, client.ctx.access_token)
         _save_mvpd_authn_token(account, requestor_id, client.ctx.authn_token)
+        _save_mvpd_authz_token(account, requestor_id, client.ctx.authz_token)
         return token, client.session
 
     yt_dlp_mso_id = (cfg.get('yt_dlp_mso_id') or selected_mso_id).strip()

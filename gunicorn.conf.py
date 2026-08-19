@@ -21,6 +21,10 @@ _SUPPRESS_PATTERNS = (
     'tve/amcn/browser-login/input',
     'tve/discovery/browser-login/state',
     'tve/discovery/browser-login/input',
+    'tve/foxone/browser-login/state',   # gap: 'foxone/' breaks the generic 'tve/browser-login/' substring match above
+    'tve/foxone/browser-login/input',
+    'tve/google/browser-login/state',   # admin UI polls every ~250ms during the standalone Google sign-in
+    'tve/google/browser-login/input',   # mousemove/click/key forwarding — up to ~16/s while dragging
     '/api/custom-channels/detect/', # stream detection status polling
     '/images/proxy',           # per-image cache hits — too noisy
     '/logos/',                 # cached logo file hits — too noisy

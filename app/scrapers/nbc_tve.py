@@ -117,7 +117,13 @@ from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from .fox_tve import _cox_saml_login
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
-from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
+from ..tve.adobe_pass import (
+    MvpdCooldownMixin,
+    TVEAuthError,
+    TVENotAuthorizedError,
+    load_cached_adobe_client_creds,
+    save_adobe_client_creds,
+)
 
 try:
     from Cryptodome.Cipher import AES as _AES
@@ -263,10 +269,14 @@ class AdobePassV2Client:
     as used by nbc.com — distinct from the XML-based flow in
     app/tve/adobe_pass.py's AdobePassCoxClient. See module docstring."""
 
-    def __init__(self, requestor_id: str, software_statement: str, redirect_url: str, device_fingerprint: str) -> None:
+    def __init__(
+        self, requestor_id: str, software_statement: str, redirect_url: str, device_fingerprint: str,
+        client_creds: dict | None = None,
+    ) -> None:
         self.requestor_id = requestor_id
         self.software_statement = software_statement
         self.redirect_url = redirect_url
+        self._client_creds = client_creds
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': UA,
@@ -276,6 +286,8 @@ class AdobePassV2Client:
             # from a full (unfiltered) HAR header dump: "fingerprint " + base64(uuid).
             'ap-device-identifier': 'fingerprint ' + base64.b64encode(device_fingerprint.encode()).decode(),
         })
+        self.client_id: str | None = None
+        self.client_secret: str | None = None
         self.access_token: str | None = None
 
     def _post(self, url: str, **kwargs) -> requests.Response:
@@ -290,6 +302,18 @@ class AdobePassV2Client:
         return {'Authorization': f'Bearer {self.access_token}'}
 
     def _register_client(self) -> None:
+        # A fresh client_creds means a caller already has a still-fresh
+        # (client_id, client_secret, access_token) from a previous
+        # registration for this requestor_id — reuse it instead of minting a
+        # brand-new OAuth client with Adobe on every single attempt. See
+        # app.tve.adobe_pass.load_cached_adobe_client_creds()'s docstring.
+        cached = self._client_creds
+        if cached and cached.get('client_id') and cached.get('access_token'):
+            self.client_id = cached['client_id']
+            self.client_secret = cached.get('client_secret')
+            self.access_token = cached['access_token']
+            return
+
         r = self._post(
             f'{ADOBE_BASE}/o/client/register',
             json={'software_statement': self.software_statement},
@@ -298,6 +322,7 @@ class AdobePassV2Client:
         client_id, client_secret = data.get('client_id'), data.get('client_secret')
         if not client_id or not client_secret:
             raise TVEAuthError('Adobe Pass v2: client registration did not return credentials.')
+        self.client_id, self.client_secret = client_id, client_secret
 
         r = self._post(
             f'{ADOBE_BASE}/o/client/token',
@@ -750,12 +775,16 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             # entirely and raise that directly.
             raise TVENotAuthorizedError(f'NBC TVE: {mso_id} is not entitled for {resource_id} (confirmed via Adobe Pass).')
 
+        client_creds = load_cached_adobe_client_creds(account, REQUESTOR_ID)
         client = AdobePassV2Client(
             REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL,
             self._ensure_device_fingerprint(),
+            client_creds=client_creds,
         )
         try:
             client.authorize(mso_id, account.username or '', account.password or '', cfg.get('xfinity_cookie_jar'))
+            if not client_creds:
+                save_adobe_client_creds(account, REQUESTOR_ID, client.client_id, client.client_secret, client.access_token)
             resource_ids = sorted({e.resource_id for e in self._fetch_guide().values()} | {resource_id})
             decisions = client.preauthorize(mso_id, resource_ids)
             account.last_auth_status = 'ok'

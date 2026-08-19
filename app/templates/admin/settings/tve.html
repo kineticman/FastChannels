@@ -38,6 +38,10 @@
           </label>
           <div style="margin-top:0.3rem;color:var(--text-muted);font-size:0.78rem">Optional. Shared by any TVE source that needs a home market — currently just FOX One, where it drives both regional entitlement/blackout scoping and which local FOX affiliate shows up as a channel. Enter it once here rather than per source.</div>
           <div id="tve-provider-hint" style="margin-top:0.45rem;color:var(--text-muted);font-size:0.82rem">Used by TVE sources such as A+E Networks TVE.</div>
+          <div id="tve-google-signin-row" style="display:none;margin-top:0.5rem">
+            <button class="btn btn-audit" type="button" onclick="openMvpdLoginModal('google', null)">Sign in with Google</button>
+            <div style="margin-top:0.3rem;color:var(--text-muted);font-size:0.78rem">One-time sign-in directly with Google — independent of any single network. Once signed in, every YouTube TV network below can authorize silently without opening a browser again.</div>
+          </div>
           <div id="tve-last-status" style="margin-top:0.55rem;color:var(--text-muted);font-size:0.82rem">
             {% if tve_account.last_auth_status %}
               Last test: {{ tve_account.last_auth_status }}{% if tve_account.last_auth_at %} at {{ tve_account.last_auth_at }}{% endif %}{% if tve_account.last_auth_message %} — {{ tve_account.last_auth_message }}{% endif %}

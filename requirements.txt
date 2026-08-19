@@ -13,6 +13,7 @@ apscheduler==3.10.4
 playwright
 patchright
 camoufox
+gpsoauth
 Pillow==12.2.0
 # Ceiling matches yt-dlp's supported curl_cffi range for --impersonate (browser TLS fingerprinting).
 curl_cffi>=0.10,<0.16
