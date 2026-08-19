@@ -1418,6 +1418,7 @@ def settings():
                            kodi_bridge_keepalive_enabled=app_settings.kodi_bridge_keepalive_enabled if app_settings.kodi_bridge_keepalive_enabled is not None else True,
                            kodi_bridge_ip=_kodi_bridge_ip_display(app_settings.effective_kodi_bridge_device_url()),
                            kodi_bridge_encoder_url=app_settings.effective_kodi_bridge_encoder_url() or '',
+                           kodi_bridge_captions_enabled=bool(app_settings.kodi_bridge_captions_enabled),
                            kodi_bridge_configured=bool(
                                app_settings.kodi_bridge_enabled
                                and app_settings.effective_kodi_bridge_device_url()

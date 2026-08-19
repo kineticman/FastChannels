@@ -37,6 +37,19 @@
           </label>
         </div>
       </div>
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Closed captions</div>
+          <div class="toggle-row-help">Burns CEA-608/708 captions into the picture (a Kodi device-wide setting — off by default in Kodi). No effect on channels that don't carry embedded captions.</div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="kodi-bridge-captions" {% if kodi_bridge_captions_enabled %}checked{% endif %}
+                   onchange="saveKodiBridgeToggles()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
       <div class="fields-grid" style="max-width:480px">
         <div class="field field-full">
           <label for="kodi-bridge-ip">Kodi / Firestick IP address</label>

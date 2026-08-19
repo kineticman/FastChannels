@@ -237,6 +237,8 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN kodi_bridge_adb_address TEXT"))
             if "kodi_bridge_encoder_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN kodi_bridge_encoder_url TEXT"))
+            if "kodi_bridge_captions_enabled" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN kodi_bridge_captions_enabled BOOLEAN NOT NULL DEFAULT 0"))
 
         if "sources" in tables:
             src_cols = {

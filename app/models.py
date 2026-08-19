@@ -415,6 +415,7 @@ class AppSettings(db.Model):
     kodi_bridge_device_url   = db.Column(db.Text, nullable=True)  # Kodi JSON-RPC base URL, e.g. http://192.168.86.27:8080
     kodi_bridge_adb_address  = db.Column(db.Text, nullable=True)  # adb address for the watchdog's wake/relaunch path, e.g. 192.168.86.27:5555
     kodi_bridge_encoder_url  = db.Column(db.Text, nullable=True)  # HDMI encoder's fixed output stream URL
+    kodi_bridge_captions_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # pushes Kodi's subtitles.parsecaptions (CEA-608/708 burn-in) on toggle
 
     @staticmethod
     def _env_int(name: str) -> int | None:

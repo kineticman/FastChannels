@@ -5898,6 +5898,11 @@ def app_settings():
             row.kodi_bridge_adb_address = f'{_kodi_host}:5555' if _kodi_host else None
         if 'kodi_bridge_encoder_url' in data:
             row.kodi_bridge_encoder_url = _normalize_server_url(data['kodi_bridge_encoder_url'], default_port=None)
+        if 'kodi_bridge_captions_enabled' in data:
+            row.kodi_bridge_captions_enabled = bool(data['kodi_bridge_captions_enabled'])
+            _push_captions = row.kodi_bridge_captions_enabled
+        else:
+            _push_captions = None
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:
@@ -5906,6 +5911,10 @@ def app_settings():
         write_timezone_cache(row.timezone_name)
         _invalidate_and_refresh_xml()
         row = AppSettings.get()
+        if _push_captions is not None:
+            from .. import kodi_bridge as _kodi_bridge
+            if not _kodi_bridge.set_captions_enabled(_push_captions):
+                logger.warning('[kodi-bridge] captions toggle saved but could not be pushed to the device (unreachable?)')
     _kodi_bridge_ip_display = _kodi_bridge_host_from_input(row.effective_kodi_bridge_device_url()) or ''
     if _kodi_bridge_ip_display:
         _kodi_bridge_port_display = _kodi_bridge_port_from_input(row.effective_kodi_bridge_device_url())
@@ -5930,6 +5939,7 @@ def app_settings():
         'kodi_bridge_keepalive_enabled': row.kodi_bridge_keepalive_enabled if row.kodi_bridge_keepalive_enabled is not None else True,
         'kodi_bridge_ip': _kodi_bridge_ip_display,
         'kodi_bridge_encoder_url': row.effective_kodi_bridge_encoder_url() or '',
+        'kodi_bridge_captions_enabled': bool(row.kodi_bridge_captions_enabled),
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',

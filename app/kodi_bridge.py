@@ -124,6 +124,32 @@ def wake_and_relaunch(max_wait_s: int = 30) -> bool:
     return False
 
 
+def set_captions_enabled(enabled: bool) -> bool:
+    """Push Kodi's "Enable parsing for closed captions" setting (subtitles.parsecaptions).
+
+    Off by default in Kodi, and required for CEA-608/708 captions embedded in a DRM
+    source's video track to be extracted and rendered at all — confirmed 2026-08-18
+    (CBS News Texas / Sling, CBS News 24/7 / Philo): with it off, Player.GetProperties
+    reports zero subtitle tracks despite the manifest's <Accessibility> signaling; with
+    it on, Kodi surfaces a "cc" track and auto-selects it. Since this bridge captures
+    Kodi's raw HDMI output, whatever it renders (including this overlay) is what the
+    capture card sees — there's no separate/per-viewer caption toggle downstream, this
+    is the only switch. Takes effect on already-playing content, no relaunch needed.
+
+    Returns True on a confirmed write, False on any failure (device unreachable, etc.)
+    — best-effort, never raises, mirrors stop_playback()'s tolerance.
+    """
+    try:
+        result = _jsonrpc('Settings.SetSettingValue', {
+            'setting': 'subtitles.parsecaptions',
+            'value': bool(enabled),
+        })
+    except Exception as e:
+        logger.warning('[kodi-bridge] set_captions_enabled(%s) failed: %s', enabled, e)
+        return False
+    return bool(result.get('result'))
+
+
 def stop_playback() -> None:
     """Best-effort stop of whatever's currently playing. Not required before
     trigger_channel() — Player.Open on a new item replaces the current one on its
