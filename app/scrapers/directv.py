@@ -300,24 +300,105 @@ _STEALTH_ARGS = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
+    # Confirmed via deobfuscating a sibling project's DirecTV-specific stealth
+    # launcher (dev/dvrtuner/chrome-matched-stealth.js — decoded with a
+    # sandboxed vm harness, not guessed) — its full launch-arg list.
+    '--disable-infobars',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
 ]
+# Chrome adds these two flags itself for any CDP-driven session; the sibling
+# project explicitly drops them via ignoreDefaultArgs, removing a signal
+# sensor JS can read straight off the command line.
+_IGNORE_DEFAULT_ARGS = ['--enable-automation', '--enable-blink-features=IdleDetection']
 
 _STEALTH_SCRIPT = """
 (function () {
-    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    // Hide the overrides below from Function.prototype.toString introspection
+    // — some bot-detection scripts toString() a property's getter to check
+    // whether it looks like native code vs. a JS-defined override. Applied
+    // via context.add_init_script(), so (unlike the sibling project's
+    // one-shot page.waitForFunction() version) this also covers iframes —
+    // DirecTV's login form can render inside one (see _find_frame_with_selector).
+    const _nativeToString = Function.prototype.toString;
+    const _patchedFns = new Set();
+    Function.prototype.toString = function () {
+        if (_patchedFns.has(this)) return 'function () { [native code] }';
+        return _nativeToString.call(this);
+    };
+    _patchedFns.add(Function.prototype.toString);
+    function definePatched(obj, prop, getter) {
+        Object.defineProperty(obj, prop, {get: getter, configurable: true});
+        const desc = Object.getOwnPropertyDescriptor(obj, prop);
+        if (desc && desc.get) _patchedFns.add(desc.get);
+    }
+
+    definePatched(navigator, 'webdriver', () => false);
+
+    // Remove CDP automation globals stock Playwright's driver leaves behind
+    // (patchright strips these natively; plain playwright does not).
+    const cdcKeys = Object.keys(window).filter(k => k.startsWith('cdc_') || k.startsWith('$cdc'));
+    cdcKeys.forEach(key => { try { delete window[key]; } catch (e) {} });
+
+    if (!window.chrome) window.chrome = {};
+    window.chrome.runtime = {
+        connect: function () {},
+        sendMessage: function () {},
+        onMessage: {addListener: function () {}},
+        id: undefined,
+    };
+    window.chrome.loadTimes = function () {};
+    window.chrome.csi = function () {};
+
     try {
         if (!navigator.plugins || !navigator.plugins.length) {
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => { const a=[1,2,3,4,5]; a.__proto__=navigator.plugins.__proto__; return a; }
+            definePatched(navigator, 'plugins', () => {
+                const a = [1, 2, 3, 4, 5];
+                a.__proto__ = navigator.plugins.__proto__;
+                return a;
             });
         }
-    } catch(e) {}
-    try { Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']}); } catch(e) {}
-    if (!window.chrome) {
-        window.chrome = {runtime:{}, loadTimes:function(){}, csi:function(){}, app:{}};
-    }
+    } catch (e) {}
+    try { definePatched(navigator, 'languages', () => ['en-US', 'en']); } catch (e) {}
+
+    try {
+        const originalQuery = navigator.permissions && navigator.permissions.query;
+        if (originalQuery) {
+            navigator.permissions.query = (params) => {
+                if (params && params.name === 'notifications') {
+                    return Promise.resolve({state: 'default', onchange: null});
+                }
+                return originalQuery.call(navigator.permissions, params);
+            };
+            _patchedFns.add(navigator.permissions.query);
+        }
+    } catch (e) {}
+
+    try {
+        if (typeof Notification !== 'undefined') {
+            definePatched(Notification, 'permission', () => 'default');
+        }
+    } catch (e) {}
+
+    try {
+        const style = document.createElement('style');
+        style.textContent = '.automation-indicator { display: none !important; }';
+        document.head && document.head.appendChild(style);
+    } catch (e) {}
 })();
 """
+# NOT ported from the sibling project, deliberately: it also overrides
+# navigator.platform/hardwareConcurrency/deviceMemory and the WebGL
+# vendor/renderer strings to match one specific real Mac (its whole browser
+# runs on that Mac). This container's real Chrome runs on Linux — spoofing a
+# Mac platform/GPU in JS while Chrome's own Client-Hints headers
+# (Sec-CH-UA-Platform) and actual TLS/HTTP2 fingerprint still say Linux would
+# be a mismatch a sophisticated check could flag, which is worse than no
+# override (same reasoning as the "no user_agent override" comment below).
+# If this test run doesn't clear Akamai, that's the next thing to try —
+# either match Linux's own real values, or accept the OS-mismatch risk.
 
 _GUIDE_URL = "https://stream.directv.com/guide"
 # Persistent so DirecTV/Akamai's device-trust cookies accumulate across runs
@@ -872,7 +953,7 @@ def capture_directv_auth(
     on_status: Callable[[str, str], None] | None = None,
 ) -> dict:
     """
-    Drive a real Chrome browser (via patchright) through DirecTV's sign-in flow and capture the
+    Drive a real Chrome browser (via Playwright) through DirecTV's sign-in flow and capture the
     Authorization bearer token + clientContext + session cookies that plain
     `requests` calls need against api.cld.dtvce.com, plus (best-effort) the
     identityCookie DirecTV's Widevine license flow needs — see this module's
@@ -895,9 +976,9 @@ def capture_directv_auth(
                 pass
 
     try:
-        from patchright.sync_api import sync_playwright, TimeoutError as _PWTimeout
+        from playwright.sync_api import sync_playwright, TimeoutError as _PWTimeout
     except ImportError as exc:
-        raise DirectvAuthError(f'Patchright unavailable: {exc}') from exc
+        raise DirectvAuthError(f'Playwright unavailable: {exc}') from exc
 
     captured: dict[str, Any] = {}
 
@@ -911,36 +992,48 @@ def capture_directv_auth(
             stack.enter_context(_virtual_display())
         p = stack.enter_context(sync_playwright())
         try:
-            # Stock Playwright Chromium gets its HTTP/2 connection reset by
-            # DirecTV's Akamai bot protection before the page even loads, and
-            # separately lacks a real Widevine CDM (DRM capability check
-            # fails). Even genuine Chrome fails the same way when driven over
-            # bare CDP — Akamai's sensor JS detects Playwright's CDP
-            # automation artifacts regardless of the browser binary
-            # underneath. patchright is a Playwright fork that specifically
-            # patches those CDP artifacts out. channel="chrome" launches an
-            # actual Google Chrome build (installed via `playwright install
-            # chrome`); a persistent profile (not a fresh context every run)
-            # lets DirecTV/Akamai's device-trust cookies accumulate across
-            # runs instead of presenting as a never-before-seen browser each
-            # time — confirmed live: a from-scratch profile needs the full
+            # EXPERIMENT (see dev/dvrtuner/EXTRACTED-chrome-matched-stealth.js):
+            # previously this used patchright specifically because stock
+            # Playwright Chromium gets its HTTP/2 connection reset by
+            # DirecTV's Akamai bot protection, and even genuine Chrome driven
+            # over bare CDP was assumed to fail the same way (Akamai's sensor
+            # JS detecting Playwright's CDP automation artifacts regardless
+            # of the browser binary underneath). A sibling project
+            # (dev/dvrtuner) does drive DirecTV successfully with stock
+            # `playwright` + channel="chrome" + a manual JS fingerprint patch
+            # instead of a patched automation fork — this swaps to that
+            # combination to test whether the manual patch (_STEALTH_SCRIPT)
+            # is sufficient on its own, given our current patchright-based
+            # flow has been unreliable in practice. If this regresses,
+            # reverting to `from patchright.sync_api import sync_playwright`
+            # is the fix.
+            #
+            # channel="chrome" launches an actual Google Chrome build
+            # (installed via `playwright install chrome`); a persistent
+            # profile (not a fresh context every run) lets DirecTV/Akamai's
+            # device-trust cookies accumulate across runs instead of
+            # presenting as a never-before-seen browser each time —
+            # confirmed live: a from-scratch profile needs the full
             # email/password flow, but a profile with a prior session often
             # skips the login form entirely on the next run.
             #
             # No user_agent override — real Chrome's own UA must stay
             # internally consistent with its genuine TLS/JS fingerprint,
-            # which is the whole point of using it over impersonation.
+            # which is the whole point of using it over impersonation. (The
+            # sibling project does override UA/platform, but it's matching
+            # its own real Mac; see the note above _STEALTH_SCRIPT.)
             context = p.chromium.launch_persistent_context(
                 user_data_dir=_DIRECTV_PROFILE_DIR,
                 headless=headless,
                 channel='chrome',
                 args=_STEALTH_ARGS,
+                ignore_default_args=_IGNORE_DEFAULT_ARGS,
                 viewport={'width': 1920, 'height': 1080},
                 locale='en-US',
                 timezone_id='America/New_York',
             )
         except Exception as exc:
-            raise DirectvAuthError(f'Patchright Chrome unavailable: {exc}') from exc
+            raise DirectvAuthError(f'Chrome unavailable: {exc}') from exc
         try:
             context.add_init_script(_STEALTH_SCRIPT)
             page = context.pages[0] if context.pages else context.new_page()
