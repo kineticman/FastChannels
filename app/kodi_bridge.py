@@ -13,6 +13,7 @@ Full validated groundwork (sleep/wake fix, confirmed-working sources, Cox/Warner
 cause) lives in dev/kodi/README.md.
 """
 import logging
+import re
 import subprocess
 import time
 from urllib.parse import urlencode
@@ -25,6 +26,16 @@ logger = logging.getLogger(__name__)
 
 _JSONRPC_TIMEOUT = 3
 _DEFAULT_LICENSE_TYPE = 'com.widevine.alpha'
+
+# How long the DVR-side encoder stream (kodi_bridge_encoder_url) must show no active
+# puller before we tell Kodi to stop — confirmed live 2026-08-19: a PBS Kids session
+# kept decrypting/streaming for 10+ hours after the actual downstream viewer (whatever
+# was consuming the Channels DVR capture-engine stream) had stopped, since Kodi has no
+# way to know the DVR side ended. 5 minutes mirrors the stale-session grace a mature
+# third-party Channels DVR monitor (ChannelWatch) uses for the same "no explicit stop
+# event" gap.
+_ENCODER_IDLE_GRACE_S = 5 * 60
+_encoder_idle_since: float | None = None
 
 # Sources confirmed (dev/kodi/README.md, real Fire TV Stick 4K hardware, 2026-08-16) to
 # actually decrypt through Kodi/inputstream.adaptive. Cox and Warner TVE hit a confirmed,
@@ -160,6 +171,64 @@ def stop_playback() -> None:
             _jsonrpc('Player.Stop', {'playerid': player['playerid']})
     except Exception as e:
         logger.warning('[kodi-bridge] stop_playback failed (continuing): %s', e)
+
+
+def dvr_encoder_active(timeout: int = 5) -> bool | None:
+    """Whether Channels DVR currently has an active puller on kodi_bridge_encoder_url
+    — i.e. whether anyone downstream is actually watching, confirmed via the DVR
+    server's own (undocumented but stable — relied on by third-party monitors like
+    ChannelWatch) /dvr status endpoint, which reports live-viewing activity as
+    {"session-id": "Watching ch<N> <name> from <ip>: ..."}.
+
+    Returns None — never treated as "stop it" by the caller — when this can't be
+    determined: channels_dvr_url isn't configured, kodi_bridge_encoder_url isn't a
+    Channels-DVR-capture-engine style URL with a /channels/<id>/ segment (e.g. a
+    standalone hardware encoder we have no DVR-side visibility into), or the DVR
+    didn't respond.
+    """
+    settings = AppSettings.get()
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip().rstrip('/')
+    encoder_url = settings.effective_kodi_bridge_encoder_url() or ''
+    if not dvr_url or not encoder_url:
+        return None
+    match = re.search(r'/channels/([^/]+)/', encoder_url)
+    if not match:
+        return None
+    channel = match.group(1)
+    try:
+        resp = requests.get(f'{dvr_url}/dvr', timeout=timeout)
+        resp.raise_for_status()
+        activity = resp.json().get('activity') or {}
+    except Exception as e:
+        logger.warning('[kodi-bridge] dvr_encoder_active check failed: %s', e)
+        return None
+    needle = f'Watching ch{channel} '
+    return any(str(v).startswith(needle) for v in activity.values())
+
+
+def check_idle_and_stop() -> None:
+    """Called by the watchdog on each tick (dev/kodi — see _ENCODER_IDLE_GRACE_S).
+
+    If the DVR is actively pulling the encoder stream, resets the idle timer. If not,
+    and it's stayed that way for _ENCODER_IDLE_GRACE_S, stops whatever Kodi is
+    playing — nobody's on the other end of the encoder stream, no reason to keep
+    decrypting/streaming. No-ops when dvr_encoder_active() returns None (can't
+    determine activity) so this never fires on a guess.
+    """
+    global _encoder_idle_since
+    active = dvr_encoder_active()
+    if active is None or active:
+        _encoder_idle_since = None
+        return
+    now = time.time()
+    if _encoder_idle_since is None:
+        _encoder_idle_since = now
+        return
+    if now - _encoder_idle_since >= _ENCODER_IDLE_GRACE_S:
+        logger.info('[kodi-bridge] watchdog: encoder stream idle >= %ss, stopping Kodi playback',
+                     _ENCODER_IDLE_GRACE_S)
+        stop_playback()
+        _encoder_idle_since = None
 
 
 def trigger_channel(
