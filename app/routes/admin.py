@@ -1052,13 +1052,7 @@ def guide():
         (db.func.lower(Channel.name).like('a %'),   db.func.lower(db.func.substr(Channel.name, 3))),
         else_=db.func.lower(Channel.name),
     )
-    if source_id:
-        channels = q.order_by(
-            db.func.coalesce(Channel.number, 99999).asc(),
-            Channel.name,
-        ).all()
-    else:
-        channels = q.order_by(guide_sort_name).all()
+    channels = q.order_by(guide_sort_name).all()
 
     channel_ids = [c.id for c in channels]
 
