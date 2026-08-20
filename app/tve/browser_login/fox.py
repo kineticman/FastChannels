@@ -23,6 +23,13 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _sling_f5_recover,
+    _url_for_log,
+    _gateway_url_for_log,
+    _youtube_tv_gateway_failure_message,
+    _maybe_retry_youtubetv_from_scratch,
+    _log_youtubetv_gateway_diagnostics,
+    _YOUTUBETV_ISOLATED_PROFILE_DIR,
+    _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS,
     _BROWSER_LOGIN_MAX_ATTEMPTS,
     _BrowserSessionDied,
     _is_browser_death,
@@ -37,7 +44,12 @@ FOX_BROWSER_LOGIN_INPUT_KEY = 'fox-mvpd:browser-login:input'
 FOX_BROWSER_LOGIN_STOP_KEY = 'fox-mvpd:browser-login:stop'
 FOX_BROWSER_LOGIN_HINT_KEY = 'fox-mvpd:browser-login:hint'
 _FOX_BROWSER_LOGIN_TIMEOUT_SECONDS = 1800
+# See mvpd.py's identical constants' docstring — same growing-backoff poll,
+# ported here 2026-08-20 after FOX hit the identical youtube.auth-gateway.net
+# empty-bookend stall mvpd.py/nbc.py already had fixes for.
 _FOX_SESSION_POLL_SECONDS = 2.0
+_FOX_SESSION_POLL_MAX_SECONDS = 20.0
+_FOX_SESSION_POLL_BACKOFF = 1.5
 
 
 def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | None = None):
@@ -298,7 +310,14 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             set_status('error', 'Camoufox is not installed on this container')
             return
 
-        profile_dir = '/data/browser_profiles/mvpd_tve'
+        # Isolated, cookie-permissive profile for YouTubeTV — shared with
+        # run_nbc_browser_login/run_mvpd_browser_login (see
+        # _YOUTUBETV_ISOLATED_PROFILE_DIR's docstring in common.py).
+        profile_dir = (
+            _YOUTUBETV_ISOLATED_PROFILE_DIR
+            if mso_id == 'YouTubeTV'
+            else '/data/browser_profiles/mvpd_tve'
+        )
         try:
             import os as _os_login
             _os_login.makedirs(profile_dir, exist_ok=True)
@@ -307,19 +326,49 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
         _ctx.pop()
         _ctx_popped['v'] = True
+        camoufox_options = {
+            'headless': 'virtual',
+            'os': 'windows',
+            'persistent_context': True,
+            'user_data_dir': profile_dir,
+            'window': (1280, 800),
+        }
+        if mso_id == 'YouTubeTV':
+            # See _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS's docstring in common.py.
+            camoufox_options['firefox_user_prefs'] = _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS
+            logger.info('[fox-mvpd-login] using isolated YouTubeTV profile with cross-site cookies enabled')
         try:
-            with Camoufox(
-                headless='virtual',
-                os='windows',
-                persistent_context=True,
-                user_data_dir=profile_dir,
-                window=(1280, 800),
-            ) as context:
+            with Camoufox(**camoufox_options) as context:
                 page = context.pages[0] if context.pages else context.new_page()
                 _prime_google_session(context, mso_id)
                 page.on('crash', lambda p: logger.warning('[fox-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
                 page.on('close', lambda p: logger.warning('[fox-mvpd-login] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[fox-mvpd-login] page JS error: %s', str(exc)[:500]))
+
+                youtube_gateway_responses = []
+
+                def _log_navigation_response(response):
+                    try:
+                        if not response.request.is_navigation_request():
+                            return
+                        response_url = response.url
+                        response_parts = _urlsplit(response_url)
+                        is_gateway_bookend = (
+                            mso_id == 'YouTubeTV'
+                            and response_parts.netloc == 'youtube.auth-gateway.net'
+                            and response_parts.path.endswith('/authbypass/firstbookend.php')
+                        )
+                        if is_gateway_bookend:
+                            youtube_gateway_responses.append(response)
+                        logger.info(
+                            '[fox-mvpd-login] navigation response HTTP %s %s',
+                            response.status,
+                            _gateway_url_for_log(response_url) if is_gateway_bookend else _url_for_log(response_url),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                page.on('response', _log_navigation_response)
                 try:
                     if mso_id == 'Comcast_SSO':
                         # Same Akamai cold-navigation wall as the legacy/NBC
@@ -354,14 +403,58 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                         raise
                     set_status('error', f'Failed to load provider sign-in page: {exc}')
                     return
+                if mso_id == 'YouTubeTV':
+                    try:
+                        _maybe_retry_youtubetv_from_scratch(page, youtube_gateway_responses, mso_login_url)
+                    except Exception as exc:  # noqa: BLE001
+                        if _is_browser_death(exc):
+                            raise
+                        logger.warning(
+                            '[fox-mvpd-login] YouTubeTV retry-from-scratch recovery failed; '
+                            'continuing to normal stall detection: %s', exc,
+                        )
                 # See _settle_after_mvpd_navigation's docstring: a
                 # page.screenshot() call during Adobe/YouTubeTV's still-in-
                 # flight SAML bounce chain silently cancels it. Unconditional
                 # (not just inside _try_autofill_credentials below) so the
                 # no-saved-credentials path doesn't leave the main poll
                 # loop's first screenshot unprotected.
-                _settle_after_mvpd_navigation(page, set_status=set_status)
-                if _same_page_url(_safe_page_url(page), fox_redirect_url):
+                settled = _settle_after_mvpd_navigation(
+                    page, set_status=set_status,
+                    respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
+                )
+                landing_url = _safe_page_url(page)
+                if not settled:
+                    if mso_id == 'YouTubeTV':
+                        _log_youtubetv_gateway_diagnostics(context, youtube_gateway_responses)
+                        message = _youtube_tv_gateway_failure_message()
+                    else:
+                        message = (
+                            'The provider sign-in redirect did not finish within 15 seconds. '
+                            'Sign-in stopped before displaying an incomplete or blank login page; try again later.'
+                        )
+                    logger.warning(
+                        '[fox-mvpd-login] aborting stalled provider redirect before autofill/screenshot polling '
+                        '(mso_id=%s landing=%s gateway_responses=%d)',
+                        mso_id, _url_for_log(landing_url), len(youtube_gateway_responses),
+                    )
+                    set_status('error', message)
+                    return
+                if (
+                    mso_id == 'YouTubeTV'
+                    and _urlsplit(landing_url).netloc == 'support.google.com'
+                    and _urlsplit(landing_url).path.startswith('/accounts/answer/32050')
+                ):
+                    logger.warning(
+                        '[fox-mvpd-login] Google rejected the primed browser session and redirected to its '
+                        'cookie-recovery page (%s)', _url_for_log(landing_url),
+                    )
+                    set_status(
+                        'error',
+                        'Google rejected the saved browser session. Use “Sign in with Google” again, then retry.',
+                    )
+                    return
+                if _same_page_url(landing_url, fox_redirect_url):
                     set_status('error', f'{mso_id} does not appear to be a participating provider for FOX TVE.')
                     return
                 if mvpd_username and mvpd_password:
@@ -376,14 +469,18 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             page, mvpd_username, mvpd_password, r=r,
                             stop_key=FOX_BROWSER_LOGIN_STOP_KEY, input_key=FOX_BROWSER_LOGIN_INPUT_KEY,
                             shot_key=FOX_BROWSER_LOGIN_SHOT_KEY, hint_key=FOX_BROWSER_LOGIN_HINT_KEY,
+                            navigation_already_settled=True,
                         )
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
                 last_heartbeat = 0.0
                 last_poll = 0.0
+                last_progress_log = 0.0
                 consecutive_failures = 0
                 f5_retried = False
+                session_poll_interval = _FOX_SESSION_POLL_SECONDS
+                last_seen_page_url = _safe_page_url(page)
                 current_job = get_current_job()
                 _MAX_CONSECUTIVE_FAILURES = 15
                 while time.monotonic() < deadline:
@@ -428,7 +525,12 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                                 raise _BrowserSessionDied(f'page stopped answering screenshots: {exc}')
                         last_shot = now
 
-                    if now - last_poll > _FOX_SESSION_POLL_SECONDS:
+                    current_page_url = _safe_page_url(page)
+                    if current_page_url != last_seen_page_url:
+                        last_seen_page_url = current_page_url
+                        session_poll_interval = _FOX_SESSION_POLL_SECONDS
+
+                    if now - last_poll > session_poll_interval:
                         last_poll = now
                         if not f5_retried and _sling_f5_recover(
                             page, mso_login_url, mvpd_username, mvpd_password, r=r,
@@ -446,13 +548,29 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                         except requests.RequestException as exc:
                             set_status('error', f'FOX checkadobeauthn request failed: {exc}')
                             return
+
+                        def _back_off_and_log(http_status):
+                            nonlocal session_poll_interval, last_progress_log
+                            session_poll_interval = min(
+                                session_poll_interval * _FOX_SESSION_POLL_BACKOFF,
+                                _FOX_SESSION_POLL_MAX_SECONDS,
+                            )
+                            if now - last_progress_log >= 60:
+                                logger.info(
+                                    '[fox-mvpd-login] authorization still pending (checkadobeauthn_http=%s next_poll=%.1fs)',
+                                    http_status, session_poll_interval,
+                                )
+                                last_progress_log = now
+
                         if check.status_code == 404:
+                            _back_off_and_log(404)
                             continue  # human hasn't finished the MSO login yet
                         if not check.ok:
                             set_status('error', f'FOX checkadobeauthn returned HTTP {check.status_code}: {check.text[:300]}')
                             return
                         token = (check.json() or {}).get('accessToken')
                         if not token:
+                            _back_off_and_log(check.status_code)
                             continue
                         exp = _jwt_exp(token) or int(time.time()) + 3600
                         with flask_app.app_context():

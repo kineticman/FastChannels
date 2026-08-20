@@ -82,6 +82,14 @@ class AMCNChannel:
     logo_url: str
     category: str = 'Entertainment'
     enabled: bool = True
+    # Adobe's redirect_url/redirectUrl is only a landing spot after SAML
+    # completes — never scraped or interacted with for a browser-assisted
+    # (Google/YouTubeTV) login, so it doesn't need to be the real live-stream
+    # page. Defaults to live_url; AMC overrides it below since its /live page
+    # 404s (confirmed live 2026-08-20 — AMC's own site nav no longer links a
+    # live page at all, just /schedule, /shows, and this /tve sign-in route;
+    # BBCA/IFC/WETV still have working /live pages, unaffected).
+    adobe_redirect_path: str = '/live'
 
     @property
     def stream_url(self) -> str:
@@ -94,6 +102,10 @@ class AMCNChannel:
     @property
     def live_url(self) -> str:
         return f'{self.page_origin}/live'
+
+    @property
+    def adobe_redirect_url(self) -> str:
+        return f'{self.page_origin}{self.adobe_redirect_path}'
 
     @property
     def schedule_url(self) -> str:
@@ -110,6 +122,7 @@ CHANNELS: dict[str, AMCNChannel] = {
         service_group_id='1',
         livestream_id='6398764467112',
         logo_url='https://cdn.amcnetworks.com/amc/theme/web/amc_logo_bk_bg.png',
+        adobe_redirect_path='/tve',
     ),
     'bbca': AMCNChannel(
         channel_id='bbca',
@@ -614,7 +627,7 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             requestor_id=channel.requestor_id,
             resource=channel.requestor_id,
             software_statement=software_statement,
-            redirect_url=channel.live_url,
+            redirect_url=channel.adobe_redirect_url,
         )
         client.setup_client()
         auth_headers = _adobe_headers(client, channel, device_id)
@@ -624,7 +637,7 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             data={
                 'mvpd': mso_id,
                 'domainName': f'https://{channel.domain}',
-                'redirectUrl': channel.live_url,
+                'redirectUrl': channel.adobe_redirect_url,
             },
             headers={**auth_headers, 'Content-Type': 'application/x-www-form-urlencoded'},
             timeout=30,

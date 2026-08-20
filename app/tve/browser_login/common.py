@@ -1,7 +1,9 @@
 """Shared browser-automation helpers for TVE MVPD login flows (settle/autofill/relay/google-priming/error-recording). Used by 2+ providers in this package."""
+import hashlib
 import logging
+import re as _re
 import time
-from urllib.parse import urlsplit as _urlsplit
+from urllib.parse import parse_qs as _parse_qs, urlsplit as _urlsplit
 
 from app.worker import flask_app
 from app.extensions import db
@@ -240,6 +242,246 @@ def _settle_after_mvpd_navigation(
             except Exception:  # noqa: BLE001
                 pass
     return not still_stuck
+
+
+# ── Shared YouTubeTV-as-MVPD gateway helpers ────────────────────────────────
+# Everything below was originally written for run_nbc_browser_login, then
+# extracted here (2026-08-19/20) once run_mvpd_browser_login needed the same
+# recovery: TNT/Warner hit the identical stall — an empty second SAML bookend
+# on youtube.auth-gateway.net — via the completely separate mvpd.py code
+# path, confirming this is a property of the shared YouTubeTV/Adobe gateway,
+# not anything NBC-specific. Pure functions, no coupling to either caller's
+# Redis keys or local state.
+
+# Give the YouTubeTV sign-in its own persistent Camoufox profile, isolated
+# from the shared /data/browser_profiles/mvpd_tve profile every other MSO
+# (Cox/Xfinity/DirecTV/Sling) in this package uses. Both run_nbc_browser_login
+# and run_mvpd_browser_login use this same profile for mso_id == 'YouTubeTV'
+# — the two callers are mutually exclusive at any given time (see
+# _MVPD_TVE_PROFILE_JOB_IDS in app/routes/tasks.py, one shared busy-lock
+# across every browser-login flow in this package), so sharing it is safe
+# and lets a Google session warmed by one caller's successful pairing carry
+# over to the other's next attempt instead of every caller cold-priming its
+# own copy.
+_YOUTUBETV_ISOLATED_PROFILE_DIR = '/data/browser_profiles/youtubetv'
+# Firefox enables Total Cookie Protection by default, which was blocking
+# Synacor's authbypass bookend during its short-lived ppp cross-site cookie
+# probe (confirmed live 2026-08-19/20) — allow cross-site cookies for this
+# controlled, isolated profile rather than disabling protection everywhere.
+_YOUTUBETV_CAMOUFOX_FIREFOX_PREFS = {
+    'network.cookie.cookieBehavior': 0,
+    'network.cookie.cookieBehavior.pbmode': 0,
+    'privacy.trackingprotection.enabled': False,
+    'privacy.trackingprotection.pbmode.enabled': False,
+}
+
+
+def _url_for_log(url: str) -> str:
+    """Return a useful URL location without auth/query tokens."""
+    try:
+        parts = _urlsplit(url)
+        return f'{parts.scheme}://{parts.netloc}{parts.path}'
+    except Exception:  # noqa: BLE001
+        return '<unavailable>'
+
+
+def _youtube_tv_gateway_failure_message() -> str:
+    return (
+        'YouTube TV’s sign-in gateway did not hand off to Google and returned a blank relay page. '
+        'The attempt stopped before displaying that unusable page; the server log now contains sanitized diagnostics.'
+    )
+
+
+def _cookie_names(raw_cookie_header: str) -> str:
+    """Return cookie names only; auth cookie values must never reach logs."""
+    names = []
+    for item in (raw_cookie_header or '').split(';'):
+        name = item.strip().split('=', 1)[0]
+        if name:
+            names.append(name)
+    return ','.join(sorted(set(names))) or '-'
+
+
+def _set_cookie_names(raw_set_cookie: str) -> str:
+    """Extract Set-Cookie names without logging values or attributes."""
+    names = _re.findall(r'(?:^|[,\n])\s*([^=;,\s]+)=', raw_set_cookie or '')
+    return ','.join(sorted(set(names))) or '-'
+
+
+def _gateway_url_for_log(url: str) -> str:
+    """Keep only non-secret relay counters from a YouTube TV gateway URL."""
+    safe = _url_for_log(url)
+    try:
+        query = _parse_qs(_urlsplit(url).query)
+        counters = []
+        for key in ('history', 'coeff'):
+            value = (query.get(key) or [''])[0]
+            if value.lstrip('-').isdigit():
+                counters.append(f'{key}={value[:12]}')
+        return f"{safe} ({' '.join(counters)})" if counters else safe
+    except Exception:  # noqa: BLE001
+        return safe
+
+
+def _maybe_retry_youtubetv_from_scratch(page, responses: list, original_url: str) -> bool:
+    """Recover from a zero-byte second SAML bookend by re-navigating to the
+    original SSO entry point, NOT the gateway's own ppp/restart.php hop.
+
+    First version of this function (2026-08-19) tried resuming via
+    ppp/restart.php, on the theory that a healthy trace's two bookends are
+    followed by a request there. Confirmed live 2026-08-19/20 across FOX, FOX
+    One, and 3 separate AMC Networks channels — 5/5 failures, always the
+    identical `HTTP 400 "Bad request received"` (a Synacor SimpleSAMLphp
+    error page). The `ppp` cookie present at that point always has Max-Age=0
+    (already dead by design) — restart.php has no live state left to resume
+    from, so trying it is a guaranteed-failed extra round trip, not a
+    recovery.
+
+    This version just starts over: a completely fresh navigation to the same
+    mso_login_url the caller originally used, which mints a brand-new `ppp`
+    cookie instead of trying to reuse a dead one. Justified by the same live
+    evidence: IFC's second bookend came back healthy with zero intervention
+    on the very next fresh attempt in the same browser session as 3 failures
+    — the stall looks like it's per-transaction gateway flakiness, not
+    anything sticky about the session/account, so retrying from scratch is a
+    fresh roll of the same dice that already lands clean a good fraction of
+    the time.
+
+    Returns True when a retry navigation was started.
+    """
+    page.wait_for_timeout(500)
+    current_url = _safe_page_url(page)
+    current = _urlsplit(current_url)
+    if (
+        current.netloc != 'youtube.auth-gateway.net'
+        or not current.path.endswith('/authbypass/firstbookend.php')
+    ):
+        return False
+
+    bookends = []
+    for response in responses:
+        try:
+            parts = _urlsplit(response.url)
+            if (
+                parts.netloc == 'youtube.auth-gateway.net'
+                and parts.path.endswith('/authbypass/firstbookend.php')
+            ):
+                bookends.append(response)
+        except Exception:  # noqa: BLE001
+            continue
+    if len(bookends) < 2:
+        return False
+
+    last_headers = getattr(bookends[-1], 'headers', {}) or {}
+    if last_headers.get('content-length') != '0' or last_headers.get('location'):
+        return False
+
+    logger.warning(
+        '[mvpd-login] second YouTubeTV bookend was zero-byte with no redirect; '
+        'retrying from the original sign-in URL instead of the gateway restart endpoint'
+    )
+    page.evaluate('(url) => { window.location.replace(url); }', original_url)
+    return True
+
+
+def _log_youtubetv_gateway_diagnostics(context, responses: list) -> None:
+    """Inspect retained relay responses only after navigation has stalled.
+
+    Reading full headers or bodies during the live relay can affect timing. The
+    response callback retains objects only; heavier reads happen after the
+    15-second settle has failed. SAML/OAuth and cookie values are reduced to
+    URL paths, cookie names, lengths, and hashes — EXCEPT on a 4xx/5xx
+    response, where a short body snippet is logged verbatim too (added
+    2026-08-20 after ppp/restart.php came back HTTP 400 with no visible
+    reason). An MVPD gateway's own error page is expected to be a generic
+    "bad request" message, not a page that echoes back session secrets —
+    unlike the 200 SAML/OAuth hops this function also inspects, which do
+    carry real assertions/tokens and stay hash-only.
+    """
+    for sequence, response in enumerate(responses, start=1):
+        request = getattr(response, 'request', None)
+        try:
+            request_headers = request.all_headers() if request else {}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                '[mvpd-login] gateway diagnostic #%d request headers unavailable: %s',
+                sequence, exc,
+            )
+            request_headers = {}
+        try:
+            response_headers = response.all_headers()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                '[mvpd-login] gateway diagnostic #%d response headers unavailable: %s',
+                sequence, exc,
+            )
+            response_headers = getattr(response, 'headers', {}) or {}
+        try:
+            body = response.body()
+            lowered = body.lower()
+            body_summary = (
+                'bytes=%d sha256=%s form=%s meta_refresh=%s js_location=%s'
+                % (
+                    len(body), hashlib.sha256(body).hexdigest()[:12],
+                    b'<form' in lowered,
+                    b'http-equiv="refresh"' in lowered or b"http-equiv='refresh'" in lowered,
+                    b'location' in lowered,
+                )
+            )
+            status = getattr(response, 'status', 0)
+            if isinstance(status, int) and status >= 400:
+                snippet = body[:300].decode('utf-8', errors='replace').replace('\n', ' ').replace('\r', ' ')
+                body_summary += f' error_text={snippet!r}'
+        except Exception as exc:  # noqa: BLE001
+            body_summary = f'unavailable={type(exc).__name__}'
+
+        try:
+            redirected_from = request.redirected_from if request else None
+        except Exception:  # noqa: BLE001
+            redirected_from = None
+        location = response_headers.get('location', '')
+        refresh = response_headers.get('refresh', '')
+        if location:
+            location = _url_for_log(location)
+        if refresh:
+            refresh = refresh.split(';', 1)[0][:40]
+        logger.warning(
+            '[mvpd-login] YouTubeTV gateway diagnostic #%d: HTTP %s method=%s url=%s '
+            'redirected_from=%s request_cookie_names=%s sec_fetch=(site=%s mode=%s dest=%s) '
+            'response=(type=%s length=%s location=%s refresh=%s set_cookie_names=%s) body=(%s)',
+            sequence, getattr(response, 'status', '?'), getattr(request, 'method', '?'),
+            _gateway_url_for_log(getattr(response, 'url', '')),
+            _url_for_log(redirected_from.url) if redirected_from else '-',
+            _cookie_names(request_headers.get('cookie', '')),
+            request_headers.get('sec-fetch-site', '-'), request_headers.get('sec-fetch-mode', '-'),
+            request_headers.get('sec-fetch-dest', '-'), response_headers.get('content-type', '-'),
+            response_headers.get('content-length', '-'), location or '-', refresh or '-',
+            _set_cookie_names(response_headers.get('set-cookie', '')), body_summary,
+        )
+
+    try:
+        gateway_cookies = context.cookies('https://youtube.auth-gateway.net/')
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[mvpd-login] YouTubeTV gateway cookie diagnostic unavailable: %s', exc)
+        return
+    cookie_summary = []
+    now = time.time()
+    for cookie in sorted(gateway_cookies, key=lambda item: item.get('name', '')):
+        expires = cookie.get('expires', -1)
+        ttl = (
+            'session'
+            if not isinstance(expires, (int, float)) or expires <= 0
+            else f'{int(expires - now)}s'
+        )
+        cookie_summary.append(
+            f"{cookie.get('name', '?')}[domain={cookie.get('domain', '?')},"
+            f"path={cookie.get('path', '?')},secure={cookie.get('secure', False)},"
+            f"sameSite={cookie.get('sameSite', '-')},ttl={ttl}]"
+        )
+    logger.warning(
+        '[mvpd-login] YouTubeTV gateway cookies after stall: %s',
+        '; '.join(cookie_summary) if cookie_summary else '<none>',
+    )
 
 
 def _try_autofill_credentials(

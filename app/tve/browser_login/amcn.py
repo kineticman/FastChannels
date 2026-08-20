@@ -2,6 +2,7 @@
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlsplit as _urlsplit
 import redis
 
 from app.worker import flask_app
@@ -19,6 +20,13 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _is_browser_death,
+    _url_for_log,
+    _gateway_url_for_log,
+    _youtube_tv_gateway_failure_message,
+    _maybe_retry_youtubetv_from_scratch,
+    _log_youtubetv_gateway_diagnostics,
+    _YOUTUBETV_ISOLATED_PROFILE_DIR,
+    _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,7 +64,14 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
         return
 
     import os as _os_login
-    profile_dir = '/data/browser_profiles/mvpd_tve'
+    # Isolated, cookie-permissive profile for YouTubeTV — shared with the
+    # other browser-login flows (see _YOUTUBETV_ISOLATED_PROFILE_DIR's
+    # docstring in common.py).
+    profile_dir = (
+        _YOUTUBETV_ISOLATED_PROFILE_DIR
+        if mso_id == 'YouTubeTV'
+        else '/data/browser_profiles/mvpd_tve'
+    )
     try:
         _os_login.makedirs(profile_dir, exist_ok=True)
     except Exception as exc:  # noqa: BLE001
@@ -64,19 +79,55 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
 
     _PER_CHANNEL_TIMEOUT_SECONDS = 120
     _POLL_SECONDS = 2.0
+    _POLL_MAX_SECONDS = 20.0
+    _POLL_BACKOFF = 1.5
     authorized: list[str] = []
     failed: list[str] = []
 
+    camoufox_options = {
+        'headless': 'virtual', 'os': 'windows', 'persistent_context': True,
+        'user_data_dir': profile_dir, 'window': (1280, 800),
+    }
+    if mso_id == 'YouTubeTV':
+        # See _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS's docstring in common.py.
+        camoufox_options['firefox_user_prefs'] = _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS
+        logger.info('[amcn-mvpd-login] using isolated YouTubeTV profile with cross-site cookies enabled')
     try:
-        with Camoufox(
-            headless='virtual', os='windows', persistent_context=True,
-            user_data_dir=profile_dir, window=(1280, 800),
-        ) as context:
+        with Camoufox(**camoufox_options) as context:
             page = context.pages[0] if context.pages else context.new_page()
             _prime_google_session(context, mso_id)
             page.on('crash', lambda p: logger.warning('[amcn-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
             page.on('close', lambda p: logger.warning('[amcn-mvpd-login] page CLOSE event fired'))
             page.on('pageerror', lambda exc: logger.warning('[amcn-mvpd-login] page JS error: %s', str(exc)[:500]))
+
+            # Single listener for the whole (multi-channel) browser session —
+            # reset gateway_state['responses'] at the start of each channel's
+            # navigation below rather than re-attaching a new listener per
+            # channel, which would stack listeners on the same long-lived page.
+            gateway_state = {'responses': []}
+
+            def _log_navigation_response(response):
+                try:
+                    if not response.request.is_navigation_request():
+                        return
+                    response_url = response.url
+                    response_parts = _urlsplit(response_url)
+                    is_gateway_bookend = (
+                        mso_id == 'YouTubeTV'
+                        and response_parts.netloc == 'youtube.auth-gateway.net'
+                        and response_parts.path.endswith('/authbypass/firstbookend.php')
+                    )
+                    if is_gateway_bookend:
+                        gateway_state['responses'].append(response)
+                    logger.info(
+                        '[amcn-mvpd-login] navigation response HTTP %s %s',
+                        response.status,
+                        _gateway_url_for_log(response_url) if is_gateway_bookend else _url_for_log(response_url),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+            page.on('response', _log_navigation_response)
 
             for channel in channels.values():
                 if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
@@ -99,6 +150,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                     failed.append(f'{channel.name}: {str(exc)[:120]}')
                     continue
 
+                gateway_state['responses'] = []
                 try:
                     page.goto(mso_login_url, wait_until='domcontentloaded', timeout=30000)
                 except Exception as exc:  # noqa: BLE001
@@ -106,22 +158,62 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                         raise
                     failed.append(f'{channel.name}: failed to load sign-in page ({exc})')
                     continue
+                if mso_id == 'YouTubeTV':
+                    try:
+                        _maybe_retry_youtubetv_from_scratch(page, gateway_state['responses'], mso_login_url)
+                    except Exception as exc:  # noqa: BLE001
+                        if _is_browser_death(exc):
+                            raise
+                        logger.warning(
+                            '[amcn-mvpd-login] YouTubeTV retry-from-scratch recovery failed for %s; '
+                            'continuing to normal stall detection: %s', channel.name, exc,
+                        )
                 # See _settle_after_mvpd_navigation's docstring: a
                 # page.screenshot() call during Adobe/YouTubeTV's still-in-
                 # flight SAML bounce chain silently cancels it. AMCN never
                 # calls _try_autofill_credentials (no autofill here at
                 # all — human/Google-session driven), so this is the only
                 # place that can protect its first screenshot.
-                _settle_after_mvpd_navigation(page, set_status=set_status)
-                set_status('running', f'Signing in to {channel.name}…', _safe_page_url(page))
+                settled = _settle_after_mvpd_navigation(
+                    page, set_status=set_status,
+                    respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
+                )
+                landing_url = _safe_page_url(page)
+                if not settled:
+                    if mso_id == 'YouTubeTV':
+                        _log_youtubetv_gateway_diagnostics(context, gateway_state['responses'])
+                        failed.append(f'{channel.name}: {_youtube_tv_gateway_failure_message()}')
+                    else:
+                        failed.append(f'{channel.name}: sign-in redirect did not finish within 15 seconds')
+                    logger.warning(
+                        '[amcn-mvpd-login] aborting stalled provider redirect for %s before polling '
+                        '(mso_id=%s landing=%s gateway_responses=%d)',
+                        channel.name, mso_id, _url_for_log(landing_url), len(gateway_state['responses']),
+                    )
+                    continue
+                if (
+                    mso_id == 'YouTubeTV'
+                    and _urlsplit(landing_url).netloc == 'support.google.com'
+                    and _urlsplit(landing_url).path.startswith('/accounts/answer/32050')
+                ):
+                    logger.warning(
+                        '[amcn-mvpd-login] Google rejected the primed browser session for %s and redirected to '
+                        'its cookie-recovery page (%s)', channel.name, _url_for_log(landing_url),
+                    )
+                    failed.append(f'{channel.name}: Google rejected the saved browser session')
+                    continue
+                set_status('running', f'Signing in to {channel.name}…', landing_url)
 
                 wait_started = time.monotonic()
                 deadline = wait_started + _PER_CHANNEL_TIMEOUT_SECONDS
                 last_shot = 0.0
                 last_poll = 0.0
+                last_progress_log = 0.0
                 paired = False
                 cancelled = False
                 denied_message: str | None = None
+                session_poll_interval = _POLL_SECONDS
+                last_seen_page_url = landing_url
                 while time.monotonic() < deadline:
                     if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
                         cancelled = True
@@ -132,7 +224,13 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                         if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
                             cancelled = True
                             break
-                    if now - last_poll > _POLL_SECONDS:
+
+                    current_page_url = _safe_page_url(page)
+                    if current_page_url != last_seen_page_url:
+                        last_seen_page_url = current_page_url
+                        session_poll_interval = _POLL_SECONDS
+
+                    if now - last_poll > session_poll_interval:
                         last_poll = now
                         try:
                             adobe_token, adobe_id, notafter_ms = scraper._adobe_decision_finish(
@@ -147,6 +245,16 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                             # human hasn't finished the MSO login yet). No
                             # point burning the rest of this channel's
                             # timeout re-polling the same denial.
+                            #
+                            # This branch previously had no log line at all —
+                            # a clean denial looked identical to a channel
+                            # that just silently moved on, with no evidence
+                            # in the logs of what actually happened (confirmed
+                            # live 2026-08-20: IFC/WE tv's Adobe session cache
+                            # stayed untouched after full SAML+Google
+                            # completion, with nothing explaining why until
+                            # this was traced to this exact silent branch).
+                            logger.info('[amcn-mvpd-login] %s denied: %s', channel.name, exc)
                             denied_message = str(exc)
                             break
                         except Exception as exc:  # noqa: BLE001
@@ -155,7 +263,13 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                             # (200, empty profile) whether the human just
                             # hasn't finished yet or something else is wrong,
                             # so this keeps polling until the deadline.
-                            logger.info('[amcn-mvpd-login] %s poll not-yet/error: %s', channel.name, exc)
+                            session_poll_interval = min(session_poll_interval * _POLL_BACKOFF, _POLL_MAX_SECONDS)
+                            if now - last_progress_log >= 60:
+                                logger.info(
+                                    '[amcn-mvpd-login] %s poll not-yet/error: %s (next_poll=%.1fs)',
+                                    channel.name, exc, session_poll_interval,
+                                )
+                                last_progress_log = now
                             continue
                         scraper._save_adobe_session_cache(channel, mso_id, code, client.ctx.access_token)
                         scraper._save_adobe_auth_cache(channel, mso_id, adobe_token, adobe_id, notafter_ms)

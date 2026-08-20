@@ -29,6 +29,13 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _sling_f5_recover,
+    _url_for_log,
+    _gateway_url_for_log,
+    _youtube_tv_gateway_failure_message,
+    _maybe_retry_youtubetv_from_scratch,
+    _log_youtubetv_gateway_diagnostics,
+    _YOUTUBETV_ISOLATED_PROFILE_DIR,
+    _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS,
     _BROWSER_LOGIN_MAX_ATTEMPTS,
     _BrowserSessionDied,
     _is_browser_death,
@@ -38,9 +45,16 @@ logger = logging.getLogger(__name__)
 
 
 _MVPD_BROWSER_LOGIN_TIMEOUT_SECONDS = 1800
-# Adobe's own session polling — short and frequent, since this is a plain
-# GET/POST exchange, not something that needs to be rate-limited.
+# A flat 2s poll for up to 30 minutes is up to ~900 requests to
+# /adobe-services/session in one human-operated attempt. Grows the interval
+# while nothing changes and resets it after a real page navigation, same
+# pattern as run_nbc_browser_login's _NBC_SESSION_POLL_SECONDS (live-
+# validated there 2026-08-19; ported here 2026-08-20 once mvpd.py's own
+# YouTubeTV path — TNT/Warner — was confirmed hitting the identical
+# youtube.auth-gateway.net stall).
 _MVPD_SESSION_POLL_SECONDS = 2.0
+_MVPD_SESSION_POLL_MAX_SECONDS = 20.0
+_MVPD_SESSION_POLL_BACKOFF = 1.5
 
 
 def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
@@ -303,7 +317,16 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
             set_status('error', 'Camoufox is not installed on this container')
             return
 
-        profile_dir = '/data/browser_profiles/mvpd_tve'
+        # Isolated, cookie-permissive profile for YouTubeTV — same profile
+        # run_nbc_browser_login uses (see _YOUTUBETV_ISOLATED_PROFILE_DIR's
+        # docstring in common.py for why sharing it is safe: the two callers
+        # are mutually exclusive under the same busy-lock). Every other MSO
+        # keeps the shared mvpd_tve profile.
+        profile_dir = (
+            _YOUTUBETV_ISOLATED_PROFILE_DIR
+            if mso_id == 'YouTubeTV'
+            else '/data/browser_profiles/mvpd_tve'
+        )
         try:
             import os as _os_login
             _os_login.makedirs(profile_dir, exist_ok=True)
@@ -312,6 +335,17 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
 
         _ctx.pop()
         _ctx_popped['v'] = True
+        camoufox_options = {
+            'headless': 'virtual',
+            'os': 'windows',
+            'persistent_context': True,
+            'user_data_dir': profile_dir,
+            'window': (1280, 800),
+        }
+        if mso_id == 'YouTubeTV':
+            # See _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS's docstring in common.py.
+            camoufox_options['firefox_user_prefs'] = _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS
+            logger.info('[mvpd-login] using isolated YouTubeTV profile with cross-site cookies enabled')
         try:
             # Same persistent-profile Camoufox setup as run_sling_browser_login
             # (see its comments for why: real, non-headless Firefox behind a
@@ -319,18 +353,39 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
             # persistent profile so the MSO's session cookies survive across
             # runs — which is what lets sibling requestor_ids pair silently
             # afterward without a human involved again).
-            with Camoufox(
-                headless='virtual',
-                os='windows',
-                persistent_context=True,
-                user_data_dir=profile_dir,
-                window=(1280, 800),
-            ) as context:
+            with Camoufox(**camoufox_options) as context:
                 page = context.pages[0] if context.pages else context.new_page()
                 _prime_google_session(context, mso_id)
                 page.on('crash', lambda p: logger.warning('[mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
                 page.on('close', lambda p: logger.warning('[mvpd-login] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[mvpd-login] page JS error: %s', str(exc)[:500]))
+
+                youtube_gateway_responses = []
+
+                def _log_navigation_response(response):
+                    try:
+                        if not response.request.is_navigation_request():
+                            return
+                        response_url = response.url
+                        response_parts = _urlsplit(response_url)
+                        is_gateway_bookend = (
+                            mso_id == 'YouTubeTV'
+                            and response_parts.netloc == 'youtube.auth-gateway.net'
+                            and response_parts.path.endswith('/authbypass/firstbookend.php')
+                        )
+                        if is_gateway_bookend:
+                            # Retain the object only. Full headers/body are read
+                            # after a stall so diagnostics cannot delay the relay.
+                            youtube_gateway_responses.append(response)
+                        logger.info(
+                            '[mvpd-login] navigation response HTTP %s %s',
+                            response.status,
+                            _gateway_url_for_log(response_url) if is_gateway_bookend else _url_for_log(response_url),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                page.on('response', _log_navigation_response)
                 try:
                     if mso_id == 'Comcast_SSO':
                         # Xfinity's WAF (Akamai) flatly denies a cold top-level
@@ -418,6 +473,16 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     _step(requestor_id, 'failed', 'failed to load sign-in page')
                     set_status('error', f'Failed to load provider sign-in page: {exc}')
                     return
+                if mso_id == 'YouTubeTV':
+                    try:
+                        _maybe_retry_youtubetv_from_scratch(page, youtube_gateway_responses, auth_url)
+                    except Exception as exc:  # noqa: BLE001
+                        if _is_browser_death(exc):
+                            raise
+                        logger.warning(
+                            '[mvpd-login] YouTubeTV retry-from-scratch recovery failed; '
+                            'continuing to normal stall detection: %s', exc,
+                        )
                 # See _settle_after_mvpd_navigation's docstring: a
                 # page.screenshot() call during Adobe/YouTubeTV's still-in-
                 # flight SAML bounce chain silently cancels it. Unconditional
@@ -425,7 +490,47 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 # no-saved-credentials path — which skips that call entirely
                 # — doesn't leave the main poll loop's first screenshot
                 # unprotected.
-                _settle_after_mvpd_navigation(page, set_status=set_status)
+                settled = _settle_after_mvpd_navigation(
+                    page, set_status=set_status,
+                    respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
+                )
+                landing_url = _safe_page_url(page)
+                if not settled:
+                    # A page stuck on a known-transitional SAML URL for the
+                    # full settle window used to fall through to autofill/
+                    # screenshot polling on a blank, still-bouncing page —
+                    # same bug fixed in run_nbc_browser_login (2026-08-19/20).
+                    if mso_id == 'YouTubeTV':
+                        _log_youtubetv_gateway_diagnostics(context, youtube_gateway_responses)
+                        message = _youtube_tv_gateway_failure_message()
+                    else:
+                        message = (
+                            'The provider sign-in redirect did not finish within 15 seconds. '
+                            'Sign-in stopped before displaying an incomplete or blank login page; try again later.'
+                        )
+                    logger.warning(
+                        '[mvpd-login] aborting stalled provider redirect before autofill/screenshot polling '
+                        '(requestor_id=%s mso_id=%s landing=%s gateway_responses=%d)',
+                        requestor_id, mso_id, _url_for_log(landing_url), len(youtube_gateway_responses),
+                    )
+                    _step(requestor_id, 'failed', 'stalled sign-in redirect')
+                    set_status('error', message)
+                    return
+                if (
+                    mso_id == 'YouTubeTV'
+                    and _urlsplit(landing_url).netloc == 'support.google.com'
+                    and _urlsplit(landing_url).path.startswith('/accounts/answer/32050')
+                ):
+                    logger.warning(
+                        '[mvpd-login] Google rejected the primed browser session and redirected to its '
+                        'cookie-recovery page (%s)', _url_for_log(landing_url),
+                    )
+                    _step(requestor_id, 'failed', 'Google session rejected')
+                    set_status(
+                        'error',
+                        'Google rejected the saved browser session. Use “Sign in with Google” again, then retry.',
+                    )
+                    return
                 # If Adobe doesn't have this MVPD registered for this content
                 # owner at all (confirmed live for Turner/TNT+Sling: a single
                 # 302 straight back, never even touching Sling's login), the
@@ -459,14 +564,17 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     if mso_id == 'Comcast_SSO':
                         _autofill_xfinity_credentials(page, mvpd_username, mvpd_password, r=r)
                     else:
-                        _try_autofill_credentials(page, mvpd_username, mvpd_password, r=r)
+                        _try_autofill_credentials(page, mvpd_username, mvpd_password, r=r, navigation_already_settled=True)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
                 last_heartbeat = 0.0
                 last_poll = 0.0
+                last_progress_log = 0.0
                 consecutive_failures = 0
                 f5_retried = False
+                session_poll_interval = _MVPD_SESSION_POLL_SECONDS
+                last_seen_page_url = _safe_page_url(page)
                 current_job = get_current_job()
                 _MAX_CONSECUTIVE_FAILURES = 15
                 while time.monotonic() < deadline:
@@ -537,7 +645,12 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                                 raise _BrowserSessionDied(f'page stopped answering screenshots: {exc}')
                         last_shot = now
 
-                    if now - last_poll > _MVPD_SESSION_POLL_SECONDS:
+                    current_page_url = _safe_page_url(page)
+                    if current_page_url != last_seen_page_url:
+                        last_seen_page_url = current_page_url
+                        session_poll_interval = _MVPD_SESSION_POLL_SECONDS
+
+                    if now - last_poll > session_poll_interval:
                         last_poll = now
                         if not f5_retried and _sling_f5_recover(page, auth_url, mvpd_username, mvpd_password, r=r):
                             f5_retried = True
@@ -555,6 +668,16 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                             elif mso_id == 'YouTubeTV':
                                 _maybe_capture_google_master_token(context, mso_id)
                         except TVEPendingAuthError:
+                            session_poll_interval = min(
+                                session_poll_interval * _MVPD_SESSION_POLL_BACKOFF,
+                                _MVPD_SESSION_POLL_MAX_SECONDS,
+                            )
+                            if now - last_progress_log >= 60:
+                                logger.info(
+                                    '[mvpd-login] %s: authorization still pending (next_poll=%.1fs)',
+                                    requestor_id, session_poll_interval,
+                                )
+                                last_progress_log = now
                             continue  # human hasn't finished the MSO login yet
                         except TVEAuthError as exc:
                             _step(requestor_id, 'failed', str(exc)[:120])

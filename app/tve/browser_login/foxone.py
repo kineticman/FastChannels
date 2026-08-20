@@ -2,6 +2,7 @@
 import logging
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlsplit as _urlsplit
 import redis
 
 from app.worker import flask_app
@@ -19,6 +20,13 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _is_browser_death,
+    _url_for_log,
+    _gateway_url_for_log,
+    _youtube_tv_gateway_failure_message,
+    _maybe_retry_youtubetv_from_scratch,
+    _log_youtubetv_gateway_diagnostics,
+    _YOUTUBETV_ISOLATED_PROFILE_DIR,
+    _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,7 +63,14 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
         return
 
     import os as _os_login
-    profile_dir = '/data/browser_profiles/mvpd_tve'
+    # Isolated, cookie-permissive profile for YouTubeTV — shared with the
+    # other browser-login flows (see _YOUTUBETV_ISOLATED_PROFILE_DIR's
+    # docstring in common.py).
+    profile_dir = (
+        _YOUTUBETV_ISOLATED_PROFILE_DIR
+        if mso_id == 'YouTubeTV'
+        else '/data/browser_profiles/mvpd_tve'
+    )
     try:
         _os_login.makedirs(profile_dir, exist_ok=True)
     except Exception as exc:  # noqa: BLE001
@@ -76,16 +91,46 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
     access_token = ''
     expires_at = 0.0
 
+    camoufox_options = {
+        'headless': 'virtual', 'os': 'windows', 'persistent_context': True,
+        'user_data_dir': profile_dir, 'window': (1280, 800),
+    }
+    if mso_id == 'YouTubeTV':
+        # See _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS's docstring in common.py.
+        camoufox_options['firefox_user_prefs'] = _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS
+        logger.info('[foxone-mvpd-login] using isolated YouTubeTV profile with cross-site cookies enabled')
     try:
-        with Camoufox(
-            headless='virtual', os='windows', persistent_context=True,
-            user_data_dir=profile_dir, window=(1280, 800),
-        ) as context:
+        with Camoufox(**camoufox_options) as context:
             page = context.pages[0] if context.pages else context.new_page()
             _prime_google_session(context, mso_id)
             page.on('crash', lambda p: logger.warning('[foxone-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
             page.on('close', lambda p: logger.warning('[foxone-mvpd-login] page CLOSE event fired'))
             page.on('pageerror', lambda exc: logger.warning('[foxone-mvpd-login] page JS error: %s', str(exc)[:500]))
+
+            youtube_gateway_responses = []
+
+            def _log_navigation_response(response):
+                try:
+                    if not response.request.is_navigation_request():
+                        return
+                    response_url = response.url
+                    response_parts = _urlsplit(response_url)
+                    is_gateway_bookend = (
+                        mso_id == 'YouTubeTV'
+                        and response_parts.netloc == 'youtube.auth-gateway.net'
+                        and response_parts.path.endswith('/authbypass/firstbookend.php')
+                    )
+                    if is_gateway_bookend:
+                        youtube_gateway_responses.append(response)
+                    logger.info(
+                        '[foxone-mvpd-login] navigation response HTTP %s %s',
+                        response.status,
+                        _gateway_url_for_log(response_url) if is_gateway_bookend else _url_for_log(response_url),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+            page.on('response', _log_navigation_response)
 
             set_status('running', 'Signing in to FOX One…')
             try:
@@ -95,14 +140,58 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
                     raise
                 set_status('error', f'FOX One: failed to load sign-in page ({exc})')
                 return
+            if mso_id == 'YouTubeTV':
+                try:
+                    _maybe_retry_youtubetv_from_scratch(page, youtube_gateway_responses, nav_url)
+                except Exception as exc:  # noqa: BLE001
+                    if _is_browser_death(exc):
+                        raise
+                    logger.warning(
+                        '[foxone-mvpd-login] YouTubeTV retry-from-scratch recovery failed; '
+                        'continuing to normal stall detection: %s', exc,
+                    )
             # See _settle_after_mvpd_navigation's docstring: a
             # page.screenshot() call during Adobe/YouTubeTV's still-in-
             # flight SAML bounce chain silently cancels it. FOX One never
             # calls _try_autofill_credentials (polls
             # scraper._foxone_mvpd_finish() instead), so this is the only
             # place that can protect its first screenshot.
-            _settle_after_mvpd_navigation(page, set_status=set_status)
-            set_status('running', 'Signing in to FOX One…', _safe_page_url(page))
+            settled = _settle_after_mvpd_navigation(
+                page, set_status=set_status,
+                respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
+            )
+            landing_url = _safe_page_url(page)
+            if not settled:
+                if mso_id == 'YouTubeTV':
+                    _log_youtubetv_gateway_diagnostics(context, youtube_gateway_responses)
+                    message = _youtube_tv_gateway_failure_message()
+                else:
+                    message = (
+                        'The provider sign-in redirect did not finish within 15 seconds. '
+                        'FOX One stopped before displaying an incomplete or blank login page; try again later.'
+                    )
+                logger.warning(
+                    '[foxone-mvpd-login] aborting stalled provider redirect before polling for completion '
+                    '(mso_id=%s landing=%s gateway_responses=%d)',
+                    mso_id, _url_for_log(landing_url), len(youtube_gateway_responses),
+                )
+                set_status('error', message)
+                return
+            if (
+                mso_id == 'YouTubeTV'
+                and _urlsplit(landing_url).netloc == 'support.google.com'
+                and _urlsplit(landing_url).path.startswith('/accounts/answer/32050')
+            ):
+                logger.warning(
+                    '[foxone-mvpd-login] Google rejected the primed browser session and redirected to its '
+                    'cookie-recovery page (%s)', _url_for_log(landing_url),
+                )
+                set_status(
+                    'error',
+                    'Google rejected the saved browser session. Use “Sign in with Google” again, then retry.',
+                )
+                return
+            set_status('running', 'Signing in to FOX One…', landing_url)
 
             wait_started = time.monotonic()
             deadline = wait_started + _PER_LOGIN_TIMEOUT_SECONDS
