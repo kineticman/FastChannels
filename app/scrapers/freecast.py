@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -41,6 +42,15 @@ _PACKAGE = 'free'
 _EPG_CHUNK = 40         # channel slugs per EPG request
 _EPG_WORKERS = 4        # concurrent EPG chunk fetches
 _TOKEN_MARGIN = 600     # refresh access token this many seconds before expiry
+
+# Some FreeCast channels (observed on SWAAGTVonPOYNT) source their EPG from a
+# feed whose title/description embed a genre tag and the full synopsis
+# instead of using separate fields, e.g. description "DRAMA-ROMANCE - Some
+# synopsis..." and title "SHOW NAME (DRAMA-ROMANCE - Some synopsis...)" (the
+# title's copy is sometimes missing its closing paren). Split them back into
+# a clean title/category/description rather than passing the mess through.
+_GENRE_SYNOPSIS_RE = re.compile(r'^\(?(?P<genre>[A-Z][A-Z\- ]*?) - (?P<synopsis>.+?)\)?$', re.DOTALL)
+_TITLE_EMBED_SUFFIX_RE = re.compile(r'\s*\([A-Z][A-Z\- ]*? - .+?\)?\s*$', re.DOTALL)
 
 # FreeCast's channel `category_slug` values don't match the categories endpoint
 # slugs, so map them to readable raw categories that category_utils understands.
@@ -356,13 +366,24 @@ class FreecastScraper(BaseScraper):
             return None
         subtitle = (prog.get('subtitle') or '').strip() or None
         rating = ((prog.get('metadata') or {}).get('rating') or '').strip() or None
+        description = (prog.get('description') or '').strip() or None
+
+        category = None
+        m = _GENRE_SYNOPSIS_RE.match(description) if description else None
+        if m:
+            category = '; '.join(w.strip().title()
+                                  for w in m.group('genre').split('-') if w.strip())
+            description = m.group('synopsis').strip()
+            title = _TITLE_EMBED_SUFFIX_RE.sub('', title).strip() or title
+
         return ProgramData(
             source_channel_id=ch_slug,
             title=title,
             start_time=start,
             end_time=end,
-            description=(prog.get('description') or '').strip() or None,
+            description=description,
             poster_url=prog.get('thumbnail') or None,
+            category=category,
             rating=rating,
             episode_title=subtitle,
             episode_id=prog.get('uuid') or None,
