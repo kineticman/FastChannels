@@ -1,6 +1,5 @@
 import logging
 import re
-import time
 
 
 # Suppress high-frequency / low-signal endpoints from the access log.
@@ -65,31 +64,32 @@ _SUPPRESS_FEED_RE = re.compile(r'"GET /feeds/|"GET /m3u/|"GET /output/')
 # still logged by the app.routes.play logger, so these access lines add no signal.
 _SUPPRESS_WATCH_RE = re.compile(r'"(?:GET|HEAD) /watch/\d+')
 
-# Match DRM DASH manifest polls: (GET|HEAD) /play/<source>/<channel_id>/dash.mpd
+# DRM DASH manifest polls and license fetches — the channel-was-called-to-play event
+# is already logged once by app.routes.play (or the /play/.../m3u8 entry point);
+# these are just the player re-polling during an ongoing session, so they're fully
+# suppressed on success rather than throttled. Errors (4xx/5xx) still get through.
 _SUCCESS_ACCESS_RE = re.compile(r'HTTP/\d(?:\.\d)?" [23]\d\d ')
 _SUCCESS_SUPPRESS_PATTERNS = (
     '/play/philo/license',     # Philo DRM license — noisy during startup/key rotation
 )
-_SUCCESS_SUPPRESS_RE = re.compile(r'(?:GET|HEAD) (?:/play/philo/[^/]+/dash\.mpd|/play/directv/browser-asset\?url=)')
-_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa)/([^/]+)/dash\.mpd')
+_SUCCESS_SUPPRESS_RE = re.compile(r'(?:GET|HEAD) /play/directv/browser-asset\?url=')
+_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa)/[^/]+/dash\.mpd')
 # cox uses path-form license URLs (/license/<id>), vidaa uses query-form
 # (/license?channel_id=<id>) — matched via the alternated separator below.
-_LICENSE_RE = re.compile(r'POST /play/(cox|vidaa)/license(?:/|\?channel_id=)([^ &]+)')
-_DASH_COOLDOWN = 120  # seconds — log first request, suppress repeats within this window
+_LICENSE_RE = re.compile(r'POST /play/(cox|vidaa)/license(?:/|\?channel_id=)')
 
 
 class _AccessFilter(logging.Filter):
-    def __init__(self):
-        super().__init__()
-        self._dash_last: dict[str, float] = {}
-        self._license_last: dict[str, float] = {}
-
     def filter(self, record):
         msg = record.getMessage()
         is_success = bool(_SUCCESS_ACCESS_RE.search(msg))
         if is_success and any(p in msg for p in _SUCCESS_SUPPRESS_PATTERNS):
             return False
         if is_success and _SUCCESS_SUPPRESS_RE.search(msg):
+            return False
+        if is_success and _DASH_RE.search(msg):
+            return False
+        if is_success and _LICENSE_RE.search(msg):
             return False
         if any(p in msg for p in _SUPPRESS_PATTERNS):
             return False
@@ -99,20 +99,6 @@ class _AccessFilter(logging.Filter):
             return False
         if _SUPPRESS_WATCH_RE.search(msg):
             return False
-        m = _DASH_RE.search(msg)
-        if m and is_success:
-            channel_id = f'{m.group(1)}:{m.group(2)}'
-            now = time.monotonic()
-            if now - self._dash_last.get(channel_id, 0) < _DASH_COOLDOWN:
-                return False
-            self._dash_last[channel_id] = now
-        m = _LICENSE_RE.search(msg)
-        if m and is_success:
-            channel_id = f'{m.group(1)}:{m.group(2)}'
-            now = time.monotonic()
-            if now - self._license_last.get(channel_id, 0) < _DASH_COOLDOWN:
-                return False
-            self._license_last[channel_id] = now
         return True
 
 
