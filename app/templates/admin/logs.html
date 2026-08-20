@@ -47,6 +47,15 @@
     .filter-input:focus { outline: none; border-color: var(--accent); }
     .status { font-size: 0.78rem; color: var(--text-muted); margin-left: auto; }
 
+    .level-group { display: flex; gap: 0.35rem; }
+    .level-btn {
+      padding: 0.3rem 0.7rem; border-radius: 6px; font-size: 0.78rem; cursor: pointer;
+      border: 1px solid var(--border); font-weight: 500; background: transparent; color: var(--text-soft);
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .level-btn:hover { color: var(--text); }
+    .level-btn.active { background: var(--accent-strong); border-color: var(--accent-strong); color: white; }
+
     #log-container {
       overflow: auto; padding: 0.75rem 1.5rem;
       font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', monospace; font-size: 0.78rem; line-height: 1.55;
@@ -90,6 +99,13 @@
       .toolbar .btn {
         width: 100%;
       }
+      .level-group {
+        width: 100%;
+      }
+      .level-btn {
+        flex: 1;
+        min-height: 2.25rem;
+      }
       .filter-input { width: 100%; }
       .status { margin-left: 0; width: 100%; }
       #log-container {
@@ -120,6 +136,14 @@
     <button class="btn" onclick="refresh()">↺ Refresh</button>
     <label><input type="checkbox" id="auto-refresh" onchange="toggleAuto()"> Auto (5s)</label>
     <label><input type="checkbox" id="tail-mode" checked onchange="applyFilter()"> Tail</label>
+    <div class="level-group" id="level-group">
+      <button class="level-btn active" data-level="ALL" onclick="setLevel('ALL')">All</button>
+      <button class="level-btn" data-level="DEBUG" onclick="setLevel('DEBUG')">Debug</button>
+      <button class="level-btn" data-level="INFO" onclick="setLevel('INFO')">Info</button>
+      <button class="level-btn" data-level="WARNING" onclick="setLevel('WARNING')">Warning</button>
+      <button class="level-btn" data-level="ERROR" onclick="setLevel('ERROR')">Error</button>
+      <button class="level-btn" data-level="CRITICAL" onclick="setLevel('CRITICAL')">Critical</button>
+    </div>
     <input class="filter-input" id="filter" type="text" placeholder="Filter…" oninput="applyFilter()">
     <span class="status" id="status"></span>
   </div>
@@ -130,13 +154,26 @@
     const APP_TIME_ZONE = {{ app_timezone_name|tojson }};
     let _timer = null;
     let _lines = [];
+    let _level = 'ALL';
 
     const LEVEL_RE = /\s+(INFO|WARNING|ERROR|CRITICAL|DEBUG)\s+/;
 
-    function levelClass(line) {
+    function lineLevel(line) {
       const m = line.match(LEVEL_RE);
-      if (!m) return 'line-other';
-      return 'line-' + m[1];
+      return m ? m[1] : null;
+    }
+
+    function levelClass(line) {
+      const lvl = lineLevel(line);
+      return lvl ? 'line-' + lvl : 'line-other';
+    }
+
+    function setLevel(level) {
+      _level = level;
+      document.querySelectorAll('#level-group .level-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.level === level);
+      });
+      applyFilter();
     }
 
     async function refresh() {
@@ -165,6 +202,7 @@
         div.className = 'line ' + levelClass(line);
         div.textContent = line.trimEnd();
         if (query && !line.toLowerCase().includes(query)) div.classList.add('hidden');
+        if (_level !== 'ALL' && lineLevel(line) !== _level) div.classList.add('hidden');
         frag.appendChild(div);
       }
       container.appendChild(frag);
