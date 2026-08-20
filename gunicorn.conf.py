@@ -42,6 +42,7 @@ _SUPPRESS_PATTERNS = (
     'GET /api/system-stats',               # polled frequently, low signal
     'GET /api/channels/inactive-count',    # dashboard badge polling
     'GET /api/settings/local-backups',     # settings-page backup snapshot lookup
+    'GET /api/settings/tve/status',        # settings-page TVE network status — fires on every page load, can take several seconds
     '/api/sources/chnum',      # overlap-banner polling
     '/api/feeds/chnum-ranges', # feed page chnum conflict checker
     '/play/amazon_prime_free/license', # Amazon DRM license — fires per key rotation
