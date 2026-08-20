@@ -105,10 +105,25 @@ class _AccessFilter(logging.Filter):
 # Suppress TLS handshake warnings — Chrome's HTTPS-First mode sends a TLS
 # Client Hello to our plain-HTTP port on every navigation, gets rejected, then
 # falls back to HTTP automatically.  The warning is harmless but noisy.
+#
+# Also suppress routine worker-recycling lines from the arbiter (--max-requests
+# forces each worker to restart every ~250 requests; "Autorestarting worker",
+# "Worker exiting", "Booting worker" fire constantly and add no signal at INFO).
+_WORKER_RECYCLE_PATTERNS = (
+    'Autorestarting worker after current request',
+    'Worker exiting',
+    'Booting worker with pid',
+)
+
+
 class _TLSHandshakeFilter(logging.Filter):
     def filter(self, record):
         msg = record.getMessage()
-        return 'Invalid HTTP method' not in msg and 'Invalid HTTP request line' not in msg
+        if 'Invalid HTTP method' in msg or 'Invalid HTTP request line' in msg:
+            return False
+        if any(p in msg for p in _WORKER_RECYCLE_PATTERNS):
+            return False
+        return True
 
 
 def on_starting(server):
