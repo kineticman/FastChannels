@@ -90,6 +90,19 @@ KODI_BRIDGE_TRUSTED_SOURCES = frozenset({
 })
 
 
+def drm_bridge_mode_for(source_name: str) -> bool:
+    """Whether a DRM channel on this source should be kept active + bridged rather than
+    disabled — true if EITHER bridge can plausibly serve it: the PrismCast browser/EME
+    bridge (global drm_bridge_enabled toggle, any license_url-capable source) or this
+    Kodi/HDMI-encoder bridge (global kodi_bridge_enabled toggle, restricted to
+    KODI_BRIDGE_TRUSTED_SOURCES). Callers still separately gate on the scraper actually
+    having license_url handling."""
+    settings = AppSettings.get()
+    if bool(settings.drm_bridge_enabled):
+        return True
+    return bool(settings.kodi_bridge_enabled) and source_name in KODI_BRIDGE_TRUSTED_SOURCES
+
+
 class KodiBridgeNotConfigured(RuntimeError):
     """Raised when required kodi_bridge settings aren't configured."""
 

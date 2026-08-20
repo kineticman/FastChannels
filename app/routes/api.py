@@ -5268,55 +5268,68 @@ def _drm_bridge_capable_sources() -> list[str]:
     return drm_capable_source_names()
 
 
-def _reconcile_drm_bridge_mode(enabled: bool) -> None:
-    """Apply a DRM-bridge mode change to existing channels so it takes effect at once.
+def _reconcile_drm_bridge_mode() -> None:
+    """Apply a DRM-bridge toggle change (PrismCast's drm_bridge_enabled or Kodi's
+    kodi_bridge_enabled) to existing channels so it takes effect at once, without
+    waiting for the next stream audit.
 
-    bridge ON : disabled-DRM channels on bridge-capable sources are recovered — kept
-                active and marked requires_drm_bridge (excluded from standard, bridged in
-                PrismCast).
-    bridge OFF: bridged channels are dropped back to the legacy disabled state.
+    Per bridge-capable source, recomputes eligibility via kodi_bridge.drm_bridge_mode_for
+    (true if EITHER bridge can serve it) and reconciles accordingly:
+      now eligible     : disabled-DRM channels are recovered — kept active and marked
+                         requires_drm_bridge; intrinsically bridge-only rows are flagged too.
+      no longer eligible: bridged channels drop back to the legacy disabled state.
+
+    Important: reconciliation is per-source, not global — a source still eligible via
+    one bridge (e.g. Kodi) must not be disabled just because the other bridge (PrismCast)
+    was toggled off.
     """
-    if enabled:
-        capable = _drm_bridge_capable_sources()
-        if not capable:
-            return
-        rows = (Channel.query.join(Source)
-                .filter(Source.name.in_(capable),
-                        Channel.disable_reason.like('DRM%'),
-                        Channel.is_active == False)
-                .all())
-        for ch in rows:
-            ch.requires_drm_bridge = True
-            ch.is_active = True
-            ch.is_enabled = True
-            ch.disable_reason = None
-        # Also flag intrinsically bridge-only rows without waiting for audit.
-        # Most DRM-capable sources only need DASH rows; all-DRM HLS sources such
-        # as DirecTV Stream opt in with all_channels_require_drm_bridge.
-        intrinsic = []
-        for _sname in capable:
-            _cls = registry.get(_sname)
-            if not _cls:
-                continue
-            q = (Channel.query.join(Source)
-                 .filter(Source.name == _sname,
-                         Channel.is_active == True,
-                         Channel.requires_drm_bridge == False))
-            if not getattr(_cls, 'all_channels_require_drm_bridge', False):
-                q = q.filter(Channel.stream_type == 'dash')
-            intrinsic.extend(q.all())
-        for ch in intrinsic:
-            ch.requires_drm_bridge = True
-        logger.info('[drm-bridge] mode ON — recovered %d disabled-DRM + flagged %d intrinsic bridge channels',
-                    len(rows), len(intrinsic))
-    else:
-        rows = Channel.query.filter(Channel.requires_drm_bridge == True).all()
-        for ch in rows:
-            ch.requires_drm_bridge = False
-            ch.is_active = False
-            ch.is_enabled = False
-            ch.disable_reason = ch.disable_reason or 'DRM'
-        logger.info('[drm-bridge] mode OFF — disabled %d bridged channels', len(rows))
+    from ..kodi_bridge import drm_bridge_mode_for
+    capable = _drm_bridge_capable_sources()
+    recovered = 0
+    intrinsic_flagged = 0
+    disabled = 0
+    for source_name in capable:
+        if drm_bridge_mode_for(source_name):
+            rows = (Channel.query.join(Source)
+                    .filter(Source.name == source_name,
+                            Channel.disable_reason.like('DRM%'),
+                            Channel.is_active == False)
+                    .all())
+            for ch in rows:
+                ch.requires_drm_bridge = True
+                ch.is_active = True
+                ch.is_enabled = True
+                ch.disable_reason = None
+            recovered += len(rows)
+
+            # Also flag intrinsically bridge-only rows without waiting for audit.
+            # Most DRM-capable sources only need DASH rows; all-DRM HLS sources such
+            # as DirecTV Stream opt in with all_channels_require_drm_bridge.
+            _cls = registry.get(source_name)
+            if _cls:
+                q = (Channel.query.join(Source)
+                     .filter(Source.name == source_name,
+                             Channel.is_active == True,
+                             Channel.requires_drm_bridge == False))
+                if not getattr(_cls, 'all_channels_require_drm_bridge', False):
+                    q = q.filter(Channel.stream_type == 'dash')
+                intrinsic = q.all()
+                for ch in intrinsic:
+                    ch.requires_drm_bridge = True
+                intrinsic_flagged += len(intrinsic)
+        else:
+            rows = (Channel.query.join(Source)
+                    .filter(Source.name == source_name,
+                            Channel.requires_drm_bridge == True)
+                    .all())
+            for ch in rows:
+                ch.requires_drm_bridge = False
+                ch.is_active = False
+                ch.is_enabled = False
+                ch.disable_reason = ch.disable_reason or 'DRM'
+            disabled += len(rows)
+    logger.info('[drm-bridge] mode reconciled — recovered %d disabled-DRM + flagged %d intrinsic, '
+                'disabled %d no-longer-bridged channel(s)', recovered, intrinsic_flagged, disabled)
     db.session.flush()
 
 
@@ -5935,7 +5948,7 @@ def app_settings():
                 row.drm_bridge_enabled = _new_drm_bridge
                 # Reconcile existing DRM channels immediately so the toggle takes effect
                 # without waiting for the next stream audit.
-                _reconcile_drm_bridge_mode(_new_drm_bridge)
+                _reconcile_drm_bridge_mode()
         if 'timezone_name' in data:
             tz_name = normalize_timezone_name(data.get('timezone_name'))
             if data.get('timezone_name') and tz_name is None:
@@ -5952,7 +5965,12 @@ def app_settings():
         if 'm3u_rewrite_timestamps' in data:
             row.m3u_rewrite_timestamps = bool(data['m3u_rewrite_timestamps'])
         if 'kodi_bridge_enabled' in data:
-            row.kodi_bridge_enabled = bool(data['kodi_bridge_enabled'])
+            _new_kodi_bridge = bool(data['kodi_bridge_enabled'])
+            if _new_kodi_bridge != bool(row.kodi_bridge_enabled):
+                row.kodi_bridge_enabled = _new_kodi_bridge
+                # Reconcile existing DRM channels immediately so the toggle takes effect
+                # without waiting for the next stream audit.
+                _reconcile_drm_bridge_mode()
         if 'kodi_bridge_keepalive_enabled' in data:
             row.kodi_bridge_keepalive_enabled = bool(data['kodi_bridge_keepalive_enabled'])
         if 'kodi_bridge_ip' in data:

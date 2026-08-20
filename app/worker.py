@@ -713,6 +713,14 @@ def _active_network_outage() -> str | None:
     return None
 
 
+def _drm_bridge_mode_for(source_name: str) -> bool:
+    """Whether a DRM channel on this source should be kept active + bridged rather
+    than disabled — true if EITHER the PrismCast bridge or the Kodi bridge can
+    plausibly serve it. Caller still gates on _bridge_capable (scraper has
+    license_url) separately. See kodi_bridge.drm_bridge_mode_for for details."""
+    from app.kodi_bridge import drm_bridge_mode_for
+    return drm_bridge_mode_for(source_name)
+
 
 def run_stream_audit(source_name: str):
     """
@@ -789,11 +797,12 @@ def run_stream_audit(source_name: str):
         errors   = 0
         skipped_403 = 0
         # A DRM (FairPlay) channel is bridged — kept active + marked requires_drm_bridge so
-        # it flows into the PrismCast feed — only when BOTH the global DRM-bridge mode is on
-        # AND the source has license handling. Otherwise it keeps the legacy disable
-        # behavior (is_active=False). Default-off means non-PrismCast users are unaffected.
+        # it flows into a bridge feed — only when BOTH some bridge mode is on (PrismCast
+        # globally, or Kodi for its trusted sources) AND the source has license handling.
+        # Otherwise it keeps the legacy disable behavior (is_active=False). Default-off
+        # means users with neither bridge configured are unaffected.
         _bridge_capable = bool(getattr(scraper_cls, 'license_url', None))
-        _drm_bridge_mode = bool(AppSettings.get().drm_bridge_enabled)
+        _drm_bridge_mode = _drm_bridge_mode_for(source_name)
         consecutive_errors = 0
         consecutive_skipped_403 = 0  # geo-block detector
         consecutive_transient_errors = 0  # resolve-timeout detector
@@ -1999,10 +2008,11 @@ def run_channel_auto_disable(channel_id: int, reason: str):
                         raise
                     time.sleep(3 * (_attempt + 1))
 
-        # DRM caught at play time: if bridge mode is on and the source can be bridged, keep
-        # the channel active and route it to the PrismCast feed (same as the audit) instead
-        # of disabling it. Otherwise fall through to the legacy disable.
-        if reason.startswith('DRM') and bool(AppSettings.get().drm_bridge_enabled):
+        # DRM caught at play time: if some bridge mode is on (PrismCast or Kodi) and the
+        # source can be bridged, keep the channel active and route it to a bridge feed
+        # (same as the audit) instead of disabling it. Otherwise fall through to the
+        # legacy disable.
+        if reason.startswith('DRM') and _drm_bridge_mode_for(ch_source_name):
             scraper_cls = registry.get(ch_source_name)
             if scraper_cls and getattr(scraper_cls, 'license_url', None):
                 if ch.requires_drm_bridge and ch.is_active:
@@ -2013,7 +2023,7 @@ def run_channel_auto_disable(channel_id: int, reason: str):
                 _commit_with_retry()
                 _invalidate_and_refresh_xml()
                 logger.info(
-                    '[play] %s detected — bridged channel %s (%s/%s) via PrismCast',
+                    '[play] %s detected — bridged channel %s (%s/%s)',
                     reason, ch_name, ch_source_name, ch_source_channel_id,
                 )
                 return
@@ -2318,13 +2328,13 @@ def _sync_intrinsic_drm_bridge(source) -> None:
 
     Most DRM-capable sources only need this for DASH rows. Some premium sources,
     such as DirecTV Stream, are all-DRM even when their manifests are HLS; those
-    scrapers advertise all_channels_require_drm_bridge. The flag is gated on the
-    global bridge mode and only flips requires_drm_bridge; audit still owns
-    disable/dead state."""
+    scrapers advertise all_channels_require_drm_bridge. The flag is gated on
+    whether some bridge mode (PrismCast or Kodi) is on for this source and only
+    flips requires_drm_bridge; audit still owns disable/dead state."""
     scraper_cls = registry.get(source.name)
     if not (scraper_cls and getattr(scraper_cls, 'license_url', None)):
         return
-    want = bool(AppSettings.get().drm_bridge_enabled)
+    want = _drm_bridge_mode_for(source.name)
     q = source.channels
     label = 'all'
     if not getattr(scraper_cls, 'all_channels_require_drm_bridge', False):
