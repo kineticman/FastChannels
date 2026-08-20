@@ -116,8 +116,10 @@ _UA = (
 )
 
 # Refresh well before DirecTV's own session naturally expires. Observed
-# channel/v1 playback auth has rejected 18h-old tokens as expired.
-_TOKEN_TTL = 12 * 3600
+# channel/v1 playback auth reject as early as ~11h40m, and scrape_interval
+# is also 12h, so a 12h TTL left no real margin for the proactive check to
+# beat a real expiry — dropped to 10h to give it headroom.
+_TOKEN_TTL = 10 * 3600
 _REAUTH_LOCK_TTL = 20 * 60  # avoid spawning overlapping background logins
 
 # Live-captured channel/v1 responses reported duration ~3874s — cache with
