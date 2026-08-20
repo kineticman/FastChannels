@@ -1,8 +1,10 @@
 """NBC (Adobe Pass v2) TVE browser-assisted login."""
+import hashlib
 import logging
+import re as _re
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlsplit as _urlsplit
+from urllib.parse import parse_qs as _parse_qs, urlsplit as _urlsplit
 from rq import get_current_job
 import redis
 
@@ -10,7 +12,10 @@ from app.worker import flask_app
 from app.extensions import db
 from app.models import Source, TVEAccount
 from app.config_store import persist_source_cache_updates, persist_source_config_updates
-from app.tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
+from app.tve.adobe_pass import (
+    TVEAuthError,
+    TVENotAuthorizedError,
+)
 from app.tve.browser_login.common import (
     _safe_page_url,
     _same_page_url,
@@ -38,7 +43,200 @@ NBC_BROWSER_LOGIN_INPUT_KEY = 'nbc-mvpd:browser-login:input'
 NBC_BROWSER_LOGIN_STOP_KEY = 'nbc-mvpd:browser-login:stop'
 NBC_BROWSER_LOGIN_HINT_KEY = 'nbc-mvpd:browser-login:hint'
 _NBC_BROWSER_LOGIN_TIMEOUT_SECONDS = 1800
+_YOUTUBE_TV_PPP_RESTART_URL = 'https://youtube.auth-gateway.net/saml/module.php/ppp/restart.php'
+# A flat 2s poll for up to 30 minutes is up to ~900 requests to
+# /api/v2/<requestor_id>/profiles/<mso_id> in one human-operated attempt.
+# NBC grows the interval while nothing changes and resets it after a real page
+# navigation, keeping completion responsive without unnecessary Adobe traffic.
+# Live-validated 2026-08-19 (a full YouTubeTV sign-in completed cleanly);
+# deliberately NBC-only for now, not yet rolled to the other providers.
 _NBC_SESSION_POLL_SECONDS = 2.0
+_NBC_SESSION_POLL_MAX_SECONDS = 20.0
+_NBC_SESSION_POLL_BACKOFF = 1.5
+
+
+def _url_for_log(url: str) -> str:
+    """Return a useful URL location without auth/query tokens."""
+    try:
+        parts = _urlsplit(url)
+        return f'{parts.scheme}://{parts.netloc}{parts.path}'
+    except Exception:  # noqa: BLE001
+        return '<unavailable>'
+
+
+def _youtube_tv_gateway_failure_message() -> str:
+    return (
+        'YouTube TV’s sign-in gateway did not hand off to Google and returned a blank relay page. '
+        'NBC stopped before displaying that unusable page; the server log now contains sanitized diagnostics.'
+    )
+
+
+def _cookie_names(raw_cookie_header: str) -> str:
+    """Return cookie names only; auth cookie values must never reach logs."""
+    names = []
+    for item in (raw_cookie_header or '').split(';'):
+        name = item.strip().split('=', 1)[0]
+        if name:
+            names.append(name)
+    return ','.join(sorted(set(names))) or '-'
+
+
+def _set_cookie_names(raw_set_cookie: str) -> str:
+    """Extract Set-Cookie names without logging values or attributes."""
+    names = _re.findall(r'(?:^|[,\n])\s*([^=;,\s]+)=', raw_set_cookie or '')
+    return ','.join(sorted(set(names))) or '-'
+
+
+def _gateway_url_for_log(url: str) -> str:
+    """Keep only non-secret relay counters from a YouTube TV gateway URL."""
+    safe = _url_for_log(url)
+    try:
+        query = _parse_qs(_urlsplit(url).query)
+        counters = []
+        for key in ('history', 'coeff'):
+            value = (query.get(key) or [''])[0]
+            if value.lstrip('-').isdigit():
+                counters.append(f'{key}={value[:12]}')
+        return f"{safe} ({' '.join(counters)})" if counters else safe
+    except Exception:  # noqa: BLE001
+        return safe
+
+
+def _maybe_restart_youtubetv_ppp(page, responses: list) -> bool:
+    """Resume Synacor's cookie probe when its second bookend is empty.
+
+    Healthy gateway traces include a request to ppp/restart.php after the two
+    bookends. The failing response observed here sets ppp=2 but has no Location
+    header and a zero-byte body, leaving the browser no instruction it could
+    follow. Wait briefly for a late navigation, then reproduce only that
+    missing same-origin gateway hop. Returns True when recovery started.
+    """
+    page.wait_for_timeout(500)
+    current_url = _safe_page_url(page)
+    current = _urlsplit(current_url)
+    if (
+        current.netloc != 'youtube.auth-gateway.net'
+        or not current.path.endswith('/authbypass/firstbookend.php')
+    ):
+        return False
+
+    bookends = []
+    for response in responses:
+        try:
+            parts = _urlsplit(response.url)
+            if (
+                parts.netloc == 'youtube.auth-gateway.net'
+                and parts.path.endswith('/authbypass/firstbookend.php')
+            ):
+                bookends.append(response)
+        except Exception:  # noqa: BLE001
+            continue
+    if len(bookends) < 2:
+        return False
+
+    last_headers = getattr(bookends[-1], 'headers', {}) or {}
+    if last_headers.get('content-length') != '0' or last_headers.get('location'):
+        return False
+
+    logger.warning(
+        '[nbc-mvpd-login] second YouTubeTV bookend was zero-byte with no redirect; '
+        'continuing via the gateway PPP restart endpoint'
+    )
+    page.evaluate(
+        '(url) => { window.location.replace(url); }',
+        _YOUTUBE_TV_PPP_RESTART_URL,
+    )
+    return True
+
+
+def _log_youtubetv_gateway_diagnostics(context, responses: list) -> None:
+    """Inspect retained relay responses only after navigation has stalled.
+
+    Reading full headers or bodies during the live relay can affect timing. The
+    response callback retains objects only; heavier reads happen after the
+    15-second settle has failed. SAML/OAuth and cookie values are reduced to
+    URL paths, cookie names, lengths, and hashes.
+    """
+    for sequence, response in enumerate(responses, start=1):
+        request = getattr(response, 'request', None)
+        try:
+            request_headers = request.all_headers() if request else {}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                '[nbc-mvpd-login] gateway diagnostic #%d request headers unavailable: %s',
+                sequence, exc,
+            )
+            request_headers = {}
+        try:
+            response_headers = response.all_headers()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                '[nbc-mvpd-login] gateway diagnostic #%d response headers unavailable: %s',
+                sequence, exc,
+            )
+            response_headers = getattr(response, 'headers', {}) or {}
+        try:
+            body = response.body()
+            lowered = body.lower()
+            body_summary = (
+                'bytes=%d sha256=%s form=%s meta_refresh=%s js_location=%s'
+                % (
+                    len(body), hashlib.sha256(body).hexdigest()[:12],
+                    b'<form' in lowered,
+                    b'http-equiv="refresh"' in lowered or b"http-equiv='refresh'" in lowered,
+                    b'location' in lowered,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            body_summary = f'unavailable={type(exc).__name__}'
+
+        try:
+            redirected_from = request.redirected_from if request else None
+        except Exception:  # noqa: BLE001
+            redirected_from = None
+        location = response_headers.get('location', '')
+        refresh = response_headers.get('refresh', '')
+        if location:
+            location = _url_for_log(location)
+        if refresh:
+            refresh = refresh.split(';', 1)[0][:40]
+        logger.warning(
+            '[nbc-mvpd-login] YouTubeTV gateway diagnostic #%d: HTTP %s method=%s url=%s '
+            'redirected_from=%s request_cookie_names=%s sec_fetch=(site=%s mode=%s dest=%s) '
+            'response=(type=%s length=%s location=%s refresh=%s set_cookie_names=%s) body=(%s)',
+            sequence, getattr(response, 'status', '?'), getattr(request, 'method', '?'),
+            _gateway_url_for_log(getattr(response, 'url', '')),
+            _url_for_log(redirected_from.url) if redirected_from else '-',
+            _cookie_names(request_headers.get('cookie', '')),
+            request_headers.get('sec-fetch-site', '-'), request_headers.get('sec-fetch-mode', '-'),
+            request_headers.get('sec-fetch-dest', '-'), response_headers.get('content-type', '-'),
+            response_headers.get('content-length', '-'), location or '-', refresh or '-',
+            _set_cookie_names(response_headers.get('set-cookie', '')), body_summary,
+        )
+
+    try:
+        gateway_cookies = context.cookies('https://youtube.auth-gateway.net/')
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[nbc-mvpd-login] YouTubeTV gateway cookie diagnostic unavailable: %s', exc)
+        return
+    cookie_summary = []
+    now = time.time()
+    for cookie in sorted(gateway_cookies, key=lambda item: item.get('name', '')):
+        expires = cookie.get('expires', -1)
+        ttl = (
+            'session'
+            if not isinstance(expires, (int, float)) or expires <= 0
+            else f'{int(expires - now)}s'
+        )
+        cookie_summary.append(
+            f"{cookie.get('name', '?')}[domain={cookie.get('domain', '?')},"
+            f"path={cookie.get('path', '?')},secure={cookie.get('secure', False)},"
+            f"sameSite={cookie.get('sameSite', '-')},ttl={ttl}]"
+        )
+    logger.warning(
+        '[nbc-mvpd-login] YouTubeTV gateway cookies after stall: %s',
+        '; '.join(cookie_summary) if cookie_summary else '<none>',
+    )
 
 
 def _save_nbc_mvpd_auth(mso_id: str, access_token: str, device_fingerprint: str) -> None:
@@ -123,8 +321,14 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             except Exception:  # noqa: BLE001
                 pass
 
-        r.delete(NBC_BROWSER_LOGIN_STOP_KEY)
-        r.delete(NBC_BROWSER_LOGIN_INPUT_KEY)
+        r.delete(
+            NBC_BROWSER_LOGIN_STATUS_KEY,
+            NBC_BROWSER_LOGIN_SHOT_KEY,
+            NBC_BROWSER_LOGIN_INPUT_KEY,
+            NBC_BROWSER_LOGIN_STOP_KEY,
+            NBC_BROWSER_LOGIN_HINT_KEY,
+        )
+        logger.info('[nbc-mvpd-login] starting attempt=%d mso_id=%s; cleared prior modal state', _attempt, mso_id)
 
         if mso_id == 'Cox':
             # Cox's login step is already fully scripted: NbcTveScraper.
@@ -284,6 +488,10 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             # as the auto-submit form (not an error page), so it's a genuine
             # landing page, not a dead end.
             mso_login_url = f'{ADOBE_BASE_NBC}{auth_path}'
+            logger.info(
+                '[nbc-mvpd-login] Adobe session ready requestor_id=%s HTTP %s cached_client=%s authenticate=%s',
+                client.requestor_id, r_sessions.status_code, bool(nbc_client_creds), _url_for_log(mso_login_url),
+            )
         except TVEAuthError as exc:
             set_status('error', f'Adobe Pass registration failed: {exc}')
             return
@@ -328,7 +536,15 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             set_status('error', 'Camoufox is not installed on this container')
             return
 
-        profile_dir = '/data/browser_profiles/mvpd_tve'
+        # Keep the YouTube TV sign-in isolated from the browser profile used
+        # by every other TVE scraper. Google is still primed from the
+        # saved master_token below, so NBC does not depend on cross-scraper
+        # cookies in the shared profile.
+        profile_dir = (
+            '/data/browser_profiles/nbc_youtubetv'
+            if mso_id == 'YouTubeTV'
+            else '/data/browser_profiles/mvpd_tve'
+        )
         try:
             import os as _os_login
             _os_login.makedirs(profile_dir, exist_ok=True)
@@ -337,19 +553,70 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
         _ctx.pop()
         _ctx_popped['v'] = True
+        camoufox_options = {
+            'headless': 'virtual',
+            'os': 'windows',
+            'persistent_context': True,
+            'user_data_dir': profile_dir,
+            'window': (1280, 800),
+        }
+        if mso_id == 'YouTubeTV':
+            # Firefox enables Total Cookie Protection by default. Synacor's
+            # authbypass bookend is failing during its short-lived ppp cookie
+            # probe, so allow cross-site cookies for this controlled NBC-only
+            # path while retaining detailed diagnostics if that is not causal.
+            camoufox_options['firefox_user_prefs'] = {
+                'network.cookie.cookieBehavior': 0,
+                'network.cookie.cookieBehavior.pbmode': 0,
+                'privacy.trackingprotection.enabled': False,
+                'privacy.trackingprotection.pbmode.enabled': False,
+            }
+            logger.info(
+                '[nbc-mvpd-login] using isolated YouTubeTV profile with cross-site cookies enabled'
+            )
         try:
-            with Camoufox(
-                headless='virtual',
-                os='windows',
-                persistent_context=True,
-                user_data_dir=profile_dir,
-                window=(1280, 800),
-            ) as context:
+            with Camoufox(**camoufox_options) as context:
                 page = context.pages[0] if context.pages else context.new_page()
-                _prime_google_session(context, mso_id)
+                google_session_primed = _prime_google_session(context, mso_id)
+                if mso_id == 'YouTubeTV':
+                    logger.info('[nbc-mvpd-login] Google session priming result=%s', 'primed' if google_session_primed else 'not-available')
                 page.on('crash', lambda p: logger.warning('[nbc-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
                 page.on('close', lambda p: logger.warning('[nbc-mvpd-login] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[nbc-mvpd-login] page JS error: %s', str(exc)[:500]))
+
+                youtube_gateway_responses = []
+
+                def _log_navigation_response(response):
+                    try:
+                        if not response.request.is_navigation_request():
+                            return
+                        response_url = response.url
+                        response_parts = _urlsplit(response_url)
+                        is_gateway_bookend = (
+                            mso_id == 'YouTubeTV'
+                            and response_parts.netloc == 'youtube.auth-gateway.net'
+                            and response_parts.path.endswith('/authbypass/firstbookend.php')
+                        )
+                        is_gateway_restart = (
+                            mso_id == 'YouTubeTV'
+                            and response_parts.netloc == 'youtube.auth-gateway.net'
+                            and response_parts.path.endswith('/ppp/restart.php')
+                        )
+                        if is_gateway_bookend or is_gateway_restart:
+                            # Retain the object only. Full headers/body are read
+                            # after a stall so diagnostics cannot delay the relay.
+                            youtube_gateway_responses.append(response)
+                        logger.info(
+                            '[nbc-mvpd-login] navigation response HTTP %s %s',
+                            response.status,
+                            _gateway_url_for_log(response_url)
+                            if is_gateway_bookend
+                            else _url_for_log(response_url),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                page.on('response', _log_navigation_response)
                 try:
                     if mso_id == 'Comcast_SSO':
                         # Same Akamai cold-navigation wall as the legacy
@@ -384,13 +651,64 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                         raise
                     set_status('error', f'Failed to load provider sign-in page: {exc}')
                     return
+                if mso_id == 'YouTubeTV':
+                    try:
+                        _maybe_restart_youtubetv_ppp(page, youtube_gateway_responses)
+                    except Exception as exc:  # noqa: BLE001
+                        if _is_browser_death(exc):
+                            raise
+                        logger.warning(
+                            '[nbc-mvpd-login] YouTubeTV PPP restart recovery failed; '
+                            'continuing to normal stall detection: %s',
+                            exc,
+                        )
                 # See _settle_after_mvpd_navigation's docstring: a
                 # page.screenshot() call during Adobe/YouTubeTV's still-in-
                 # flight SAML bounce chain silently cancels it. Unconditional
                 # (not just inside _try_autofill_credentials below) so the
                 # no-saved-credentials path doesn't leave the main poll
                 # loop's first screenshot unprotected.
-                _settle_after_mvpd_navigation(page, set_status=set_status)
+                settled = _settle_after_mvpd_navigation(
+                    page, set_status=set_status,
+                    respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
+                )
+                landing_url = _safe_page_url(page)
+                logger.info(
+                    '[nbc-mvpd-login] provider redirect settle result=%s landing=%s',
+                    'settled' if settled else 'stalled', _url_for_log(landing_url),
+                )
+                if not settled:
+                    if mso_id == 'YouTubeTV':
+                        _log_youtubetv_gateway_diagnostics(context, youtube_gateway_responses)
+                        message = _youtube_tv_gateway_failure_message()
+                    else:
+                        message = (
+                            'The provider sign-in redirect did not finish within 15 seconds. '
+                            'NBC stopped before displaying an incomplete or blank login page; try again later.'
+                        )
+                    logger.warning(
+                        '[nbc-mvpd-login] aborting stalled provider redirect before autofill/screenshot polling '
+                        '(mso_id=%s landing=%s gateway_responses=%d)',
+                        mso_id, _url_for_log(landing_url), len(youtube_gateway_responses),
+                    )
+                    set_status('error', message)
+                    return
+
+                landing_parts = _urlsplit(landing_url)
+                if (
+                    mso_id == 'YouTubeTV'
+                    and landing_parts.netloc == 'support.google.com'
+                    and landing_parts.path.startswith('/accounts/answer/32050')
+                ):
+                    logger.warning(
+                        '[nbc-mvpd-login] Google rejected the primed browser session and redirected to its '
+                        'cookie-recovery page (%s)', _url_for_log(landing_url),
+                    )
+                    set_status(
+                        'error',
+                        'Google rejected the saved browser session. Use “Sign in with Google” again, then retry NBC.',
+                    )
+                    return
                 if _same_page_url(_safe_page_url(page), client.redirect_url):
                     set_status('error', f'{mso_id} does not appear to be a participating provider for NBC TVE.')
                     return
@@ -406,14 +724,18 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             page, mvpd_username, mvpd_password, r=r,
                             stop_key=NBC_BROWSER_LOGIN_STOP_KEY, input_key=NBC_BROWSER_LOGIN_INPUT_KEY,
                             shot_key=NBC_BROWSER_LOGIN_SHOT_KEY, hint_key=NBC_BROWSER_LOGIN_HINT_KEY,
+                            navigation_already_settled=True,
                         )
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
                 last_heartbeat = 0.0
                 last_poll = 0.0
+                last_progress_log = 0.0
                 consecutive_failures = 0
                 f5_retried = False
+                session_poll_interval = _NBC_SESSION_POLL_SECONDS
+                last_seen_page_url = _safe_page_url(page)
                 current_job = get_current_job()
                 _MAX_CONSECUTIVE_FAILURES = 15
                 while time.monotonic() < deadline:
@@ -458,7 +780,12 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                                 raise _BrowserSessionDied(f'page stopped answering screenshots: {exc}')
                         last_shot = now
 
-                    if now - last_poll > _NBC_SESSION_POLL_SECONDS:
+                    current_page_url = _safe_page_url(page)
+                    if current_page_url != last_seen_page_url:
+                        last_seen_page_url = current_page_url
+                        session_poll_interval = _NBC_SESSION_POLL_SECONDS
+
+                    if now - last_poll > session_poll_interval:
                         last_poll = now
                         if not f5_retried and _sling_f5_recover(
                             page, mso_login_url, mvpd_username, mvpd_password, r=r,
@@ -470,13 +797,29 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                         try:
                             r_profile = client._get(
                                 f'{ADOBE_BASE_NBC}/api/v2/{client.requestor_id}/profiles/{mso_id}',
-                                headers=client._bearer_headers(),
+                                headers={
+                                    **client._bearer_headers(),
+                                    'Sec-Fetch-Site': 'cross-site',
+                                    'Sec-Fetch-Mode': 'cors',
+                                    'Sec-Fetch-Dest': 'empty',
+                                },
                             )
                             profile = ((r_profile.json() or {}).get('profiles') or {}).get(mso_id)
                         except TVEAuthError as exc:
                             set_status('error', f'Adobe Pass error: {exc}')
                             return
                         if not profile:
+                            session_poll_interval = min(
+                                session_poll_interval * _NBC_SESSION_POLL_BACKOFF,
+                                _NBC_SESSION_POLL_MAX_SECONDS,
+                            )
+                            if now - last_progress_log >= 60:
+                                logger.info(
+                                    '[nbc-mvpd-login] authorization still pending '
+                                    '(profile_http=%s landing=%s next_poll=%.1fs)',
+                                    r_profile.status_code, _url_for_log(current_page_url), session_poll_interval,
+                                )
+                                last_progress_log = now
                             continue  # human hasn't finished the MSO login yet
                         _save_nbc_mvpd_auth(mso_id, client.access_token, device_fingerprint)
                         if mso_id == 'Comcast_SSO':

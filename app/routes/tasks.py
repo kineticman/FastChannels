@@ -632,6 +632,24 @@ def stop_mvpd_browser_login():
     _force_kill_mvpd_browser()
 
 
+def _clear_nbc_browser_login_state() -> None:
+    """Drop stale modal data only after the shared browser-profile lock is free."""
+    try:
+        r = redis.from_url(current_app.config['REDIS_URL'])
+        deleted = r.delete(
+            'nbc-mvpd:browser-login:status',
+            'nbc-mvpd:browser-login:screenshot',
+            'nbc-mvpd:browser-login:input',
+            'nbc-mvpd:browser-login:stop',
+            'nbc-mvpd:browser-login:hint',
+        )
+        logger.debug('Cleared %d stale NBC browser-login Redis key(s)', deleted)
+    except Exception as exc:  # noqa: BLE001
+        # The worker repeats this cleanup after it connects to Redis, so a
+        # transient failure here should not prevent the login from starting.
+        logger.warning('Failed to clear stale NBC browser-login state: %s', exc)
+
+
 def trigger_nbc_browser_login(mso_id: str):
     """Returns True if a job was enqueued, False if one is already running."""
     try:
@@ -640,6 +658,7 @@ def trigger_nbc_browser_login(mso_id: str):
         if _mvpd_tve_profile_busy(q):
             logger.debug('NBC MVPD browser login already running')  # see trigger_mvpd_browser_login
             return False
+        _clear_nbc_browser_login_state()
         q.enqueue('app.tve.browser_login.nbc.run_nbc_browser_login', mso_id, job_timeout=1830, job_id=job_id)
         logger.info('Enqueued NBC MVPD browser login for mso_id=%s', mso_id)
         return True
@@ -651,6 +670,7 @@ def trigger_nbc_browser_login(mso_id: str):
         if _mvpd_tve_profile_busy_fallback():
             logger.info('NBC MVPD browser login fallback thread already running')
             return False
+        _clear_nbc_browser_login_state()
         threading.Thread(target=run_nbc_browser_login, args=(mso_id,), daemon=True, name=thread_name).start()
         return True
 

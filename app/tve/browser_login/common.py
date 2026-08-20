@@ -58,7 +58,10 @@ def _same_page_url(actual: str, expected: str) -> bool:
 _MVPD_TRANSITIONAL_URL_MARKERS = ('/saml/module.php/', '/api/v2/authenticate/')
 
 
-def _settle_after_mvpd_navigation(page, max_seconds: float = 15.0, set_status=None) -> bool:
+def _settle_after_mvpd_navigation(
+    page, max_seconds: float = 15.0, set_status=None,
+    respect_youtubetv_soft_block: bool = True,
+) -> bool:
     """Pure wait — zero page.screenshot() calls, zero locator queries,
     nothing but page.wait_for_timeout() and reading page.url (a cheap local
     property, not an IPC round-trip — safe to poll freely) — right after
@@ -143,7 +146,7 @@ def _settle_after_mvpd_navigation(page, max_seconds: float = 15.0, set_status=No
             )
     except Exception:  # noqa: BLE001
         existing_block = None
-    if existing_block:
+    if existing_block and respect_youtubetv_soft_block:
         retry_at = time.strftime('%H:%M', time.localtime(existing_block['retry_after']))
         if set_status is not None:
             try:
@@ -243,6 +246,7 @@ def _try_autofill_credentials(
     page, username: str, password: str, wait_seconds: float = 12.0, r=None,
     stop_key: str | None = None, input_key: str | None = None,
     shot_key: str | None = None, hint_key: str | None = None,
+    navigation_already_settled: bool = False,
 ) -> bool:
     """Best-effort, short-timeout sibling of _autofill_sling_credentials for
     run_mvpd_browser_login's single-network browser-assisted flow.
@@ -279,12 +283,13 @@ def _try_autofill_credentials(
     """
     deadline = time.monotonic() + wait_seconds
     wait_started = time.monotonic()
-    # Belt-and-suspenders: callers now also settle unconditionally right
-    # after navigation (see _settle_after_mvpd_navigation's docstring for
-    # the full story), but this function is sometimes called on its own
-    # (e.g. F5-recovery retries) without that having just run, so it still
-    # settles here too — cheap no-op overlap when the caller already did.
-    _settle_after_mvpd_navigation(page, max_seconds=min(8.0, wait_seconds))
+    # This function is also called on its own after an F5-recovery reload, so
+    # settling remains the safe default. NBC explicitly passes True after its
+    # immediately preceding settle succeeds; repeating the settle there adds
+    # delay and, on a known-dead YouTubeTV relay, used to start the 12-second
+    # autofill wait that ultimately published a white screenshot.
+    if not navigation_already_settled:
+        _settle_after_mvpd_navigation(page, max_seconds=min(8.0, wait_seconds))
     last_relay = time.monotonic()
     while time.monotonic() < deadline:
         try:

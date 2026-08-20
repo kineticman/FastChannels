@@ -280,6 +280,7 @@ class AdobePassV2Client:
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': UA,
+            'Origin': 'https://www.nbc.com',
             'Referer': 'https://www.nbc.com/',
             # Required by /sessions et al ("invalid_header_device_identifier" otherwise) —
             # confirmed via a live 400 against the real API; format reverse-engineered
