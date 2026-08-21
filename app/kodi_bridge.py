@@ -29,6 +29,18 @@ logger = logging.getLogger(__name__)
 _JSONRPC_TIMEOUT = 3
 _DEFAULT_LICENSE_TYPE = 'com.widevine.alpha'
 
+# How long to wait after stopping the current player before opening the next one, on
+# a genuine channel change. Confirmed live 2026-08-21: Player.Open alone does not wait
+# for the previous secure MediaCodec instance to release before the new one tries to
+# open, and racing it hits CDVDVideoCodecAndroidMediaCodec::Open - InstanceGuard locked
+# (this MediaTek SoC allows only one secure decoder instance at a time) — Kodi then
+# silently falls back to a non-DRM-capable codec and playback freezes with no visible
+# error (switching Ax Men -> Duck Dynasty reproduced this). Kept as short as possible
+# since this runs inline with the user-facing redirect (dev/kodi/IMPLEMENTATION_PLAN.md
+# speed-first design) — 400ms is comfortably above the ~85ms Kodi's own internal retry
+# took to self-recover on the one case observed where it didn't just get stuck.
+_CODEC_RELEASE_GRACE_S = 0.4
+
 # How long the DVR-side encoder stream (kodi_bridge_encoder_url) must show no active
 # puller before we tell Kodi to stop — confirmed live 2026-08-19: a PBS Kids session
 # kept decrypting/streaming for 10+ hours after the actual downstream viewer (whatever
@@ -57,6 +69,40 @@ _encoder_idle_since: float | None = None
 # cycle above (that's every ~5min, always long before this would expire).
 _BELIEVED_ACTIVE_KEY = 'fc:kodi-bridge:believed-active'
 _BELIEVED_ACTIVE_TTL_S = 24 * 60 * 60
+
+# Which channel (f'{source_name}:{channel_id}') trigger_channel() last successfully
+# opened. Confirmed live 2026-08-21: some downstream consumer of the bridge's fixed
+# encoder URL re-hits /play/kodi-bridge/<source>/<id>.m3u8 for the SAME channel every
+# ~90-150s (channel_id and source unchanged across retriggers, confirmed via distinct
+# request_ids in the access log — not a caching/polling artifact and not us testing).
+# Every one of those redundant retriggers calls Player.Open again, which on this
+# device's MediaTek secure decoder races the still-releasing instance from the PRIOR
+# open and hits the same InstanceGuard wall documented above — freezing playback that
+# was otherwise fine. There's no legitimate reason to reopen a channel that's already
+# the active one, so trigger_channel() short-circuits to a no-op (still returns True)
+# when channel_key matches. A real channel change (different key) always retriggers
+# normally. Same TTL/Redis rationale as _BELIEVED_ACTIVE_KEY above.
+_ACTIVE_CHANNEL_KEY = 'fc:kodi-bridge:active-channel'
+
+
+def _get_active_channel() -> str | None:
+    try:
+        val = redis.from_url(current_app.config['REDIS_URL']).get(_ACTIVE_CHANNEL_KEY)
+        return val.decode() if val else None
+    except Exception as e:
+        logger.warning('[kodi-bridge] _get_active_channel failed: %s', e)
+        return None
+
+
+def _set_active_channel(channel_key: str | None) -> None:
+    try:
+        r = redis.from_url(current_app.config['REDIS_URL'])
+        if channel_key:
+            r.setex(_ACTIVE_CHANNEL_KEY, _BELIEVED_ACTIVE_TTL_S, channel_key)
+        else:
+            r.delete(_ACTIVE_CHANNEL_KEY)
+    except Exception as e:
+        logger.warning('[kodi-bridge] _set_active_channel(%s) failed: %s', channel_key, e)
 
 
 def _set_believed_active(active: bool) -> None:
@@ -292,6 +338,7 @@ def check_idle_and_stop() -> None:
         stop_playback()
         _encoder_idle_since = None
         _set_believed_active(False)
+        _set_active_channel(None)
 
 
 def trigger_channel(
@@ -300,13 +347,32 @@ def trigger_channel(
     *,
     name: str = 'FastChannels',
     license_type: str = _DEFAULT_LICENSE_TYPE,
+    channel_key: str | None = None,
 ) -> bool:
     """Tell Kodi to play this manifest via the fc_bridge resolver addon.
 
     Returns True if Kodi *acknowledged* the request — not proof playback actually
     started. Pair with confirm_playback(), called asynchronously, never inline with
     the redirect (dev/kodi/IMPLEMENTATION_PLAN.md section 2).
+
+    channel_key (typically f'{source_name}:{channel_id}') lets repeated requests for
+    the SAME already-active channel short-circuit instead of reopening — see
+    _ACTIVE_CHANNEL_KEY's docstring for why that reopen is actively harmful on this
+    device. Pass None to always trigger unconditionally (e.g. from a manual/debug path).
     """
+    if channel_key and channel_key == _get_active_channel():
+        logger.info('[kodi-bridge] trigger_channel: %s already active, skipping reopen', channel_key)
+        return True
+
+    try:
+        players = (_jsonrpc('Player.GetActivePlayers', timeout=2).get('result')) or []
+        if players:
+            for player in players:
+                _jsonrpc('Player.Stop', {'playerid': player['playerid']}, timeout=2)
+            time.sleep(_CODEC_RELEASE_GRACE_S)
+    except Exception as e:
+        logger.warning('[kodi-bridge] trigger_channel pre-stop failed (continuing): %s', e)
+
     params = {'url': manifest_url, 'name': name}
     if license_url:
         params['license'] = license_url
@@ -320,6 +386,7 @@ def trigger_channel(
     ok = result.get('result') == 'OK'
     if ok:
         _set_believed_active(True)
+        _set_active_channel(channel_key)
     return ok
 
 

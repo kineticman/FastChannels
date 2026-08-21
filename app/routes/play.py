@@ -3017,7 +3017,64 @@ def roku_dash_proxy(channel_id: str):
     if not mpd_url or not mpd_url.startswith('http'):
         logger.warning('[roku-dash] no DASH URL for %s', raw_id[:40])
         return _unavailable_response()
+
+    if request.args.get('kodi_bridge'):
+        try:
+            r = _requests.get(mpd_url, timeout=10)
+            r.raise_for_status()
+        except Exception as e:
+            logger.warning('[roku-dash] kodi-bridge manifest fetch failed for %s: %s', raw_id[:40], e)
+            return redirect(mpd_url, code=302)
+        mpd = _mpd_keep_highest_bitrate_video(r.text, raw_id)
+        return Response(mpd, mimetype='application/dash+xml')
+
     return redirect(mpd_url, code=302)
+
+
+def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
+    """Strip every video Representation except the highest-bandwidth one.
+
+    Confirmed live 2026-08-21 on the Kodi HDMI-bridge Fire TV Stick: its MediaTek
+    secure decoder only permits one secure MediaCodec instance at a time
+    (CDVDVideoCodecAndroidMediaCodec::Open - InstanceGuard locked), so
+    inputstream.adaptive's normal mid-stream ABR bump to a better representation
+    fails and playback is stuck at whichever representation the codec opened
+    first — usually the lowest, since that's what inputstream.adaptive starts
+    conservatively. Advertising only the top rendition means the codec opens
+    once at full quality and this device never attempts (or needs) a switch.
+    """
+    try:
+        root = ET.fromstring(mpd.encode('utf-8'))
+    except ET.ParseError:
+        logger.debug('[dash] MPD parse failed for %s; returning original manifest', channel_id[:40])
+        return mpd
+
+    namespace = ''
+    if root.tag.startswith('{'):
+        namespace = root.tag[1:].split('}', 1)[0]
+        ET.register_namespace('', namespace)
+
+    adaptation_tag = f'{{{namespace}}}AdaptationSet' if namespace else 'AdaptationSet'
+    representation_tag = f'{{{namespace}}}Representation' if namespace else 'Representation'
+
+    changed = False
+    for adaptation_set in root.iter(adaptation_tag):
+        if not adaptation_set.get('mimeType', '').startswith('video/'):
+            continue
+        reps = list(adaptation_set.findall(representation_tag))
+        if len(reps) <= 1:
+            continue
+        best = max(reps, key=lambda rep: int(rep.get('bandwidth') or 0))
+        for rep in reps:
+            if rep is not best:
+                adaptation_set.remove(rep)
+                changed = True
+
+    if not changed:
+        return mpd
+
+    logger.info('[dash] kodi-bridge: stripped to highest-bitrate video representation for %s', channel_id[:40])
+    return ET.tostring(root, encoding='unicode', xml_declaration=True)
 
 
 
@@ -4696,13 +4753,19 @@ def play_kodi_bridge(source_name: str, channel_id: str):
     manifest_url = info.get('preview_url') or info.get('play_url') or ''
     if manifest_url.startswith('/'):
         manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
+    if manifest_url.endswith('/dash.mpd') or '/dash.mpd?' in manifest_url:
+        sep = '&' if '?' in manifest_url else '?'
+        manifest_url = f'{manifest_url}{sep}kodi_bridge=1'
     license_url = info.get('license_url') or None
 
     if not manifest_url:
         logger.error('[kodi-bridge] no manifest URL resolved for %s/%s', source_name, channel_id)
         return _unavailable_response()
 
-    triggered = kodi_bridge.trigger_channel(manifest_url, license_url, name=channel.name or 'FastChannels')
+    triggered = kodi_bridge.trigger_channel(
+        manifest_url, license_url, name=channel.name or 'FastChannels',
+        channel_key=f'{source_name}:{channel_id}',
+    )
     logger.info(
         '[kodi-bridge] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s triggered=%s -> encoder',
         getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name, triggered,
