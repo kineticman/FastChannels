@@ -2958,6 +2958,9 @@ def amazon_dash_proxy(channel_id: str):
         cdn_base = _urljoin(dash_url, '.')  # CDN directory containing the .mpd
         mpd = mpd.replace('<Period ', f'<BaseURL>{cdn_base}</BaseURL>\n  <Period ', 1)
 
+    if request.args.get('kodi_bridge'):
+        mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)
+
     return Response(
         mpd,
         mimetype='application/dash+xml',
@@ -3032,7 +3035,7 @@ def roku_dash_proxy(channel_id: str):
 
 
 def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
-    """Strip every video Representation except the highest-bandwidth one.
+    """Strip every video Representation except the single highest-bandwidth one.
 
     Confirmed live 2026-08-21 on the Kodi HDMI-bridge Fire TV Stick: its MediaTek
     secure decoder only permits one secure MediaCodec instance at a time
@@ -3042,6 +3045,12 @@ def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
     first — usually the lowest, since that's what inputstream.adaptive starts
     conservatively. Advertising only the top rendition means the codec opens
     once at full quality and this device never attempts (or needs) a switch.
+
+    Handles both ABR layouts seen across trusted sources: multiple Representations
+    inside one video AdaptationSet (Roku, Amazon, Sling), and — confirmed on Philo —
+    the ladder split across multiple sibling video AdaptationSets (same `group`,
+    fewer/one Representation each) instead. Either way, exactly one Representation
+    in exactly one video AdaptationSet per Period survives.
     """
     try:
         root = ET.fromstring(mpd.encode('utf-8'))
@@ -3054,20 +3063,30 @@ def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
         namespace = root.tag[1:].split('}', 1)[0]
         ET.register_namespace('', namespace)
 
+    period_tag = f'{{{namespace}}}Period' if namespace else 'Period'
     adaptation_tag = f'{{{namespace}}}AdaptationSet' if namespace else 'AdaptationSet'
     representation_tag = f'{{{namespace}}}Representation' if namespace else 'Representation'
 
     changed = False
-    for adaptation_set in root.iter(adaptation_tag):
-        if not adaptation_set.get('mimeType', '').startswith('video/'):
+    for period in root.iter(period_tag):
+        video_sets = [a for a in period.findall(adaptation_tag) if a.get('mimeType', '').startswith('video/')]
+        best = None  # (bandwidth, adaptation_set, representation)
+        for adaptation_set in video_sets:
+            for rep in adaptation_set.findall(representation_tag):
+                bandwidth = int(rep.get('bandwidth') or 0)
+                if best is None or bandwidth > best[0]:
+                    best = (bandwidth, adaptation_set, rep)
+        if best is None:
             continue
-        reps = list(adaptation_set.findall(representation_tag))
-        if len(reps) <= 1:
-            continue
-        best = max(reps, key=lambda rep: int(rep.get('bandwidth') or 0))
-        for rep in reps:
-            if rep is not best:
-                adaptation_set.remove(rep)
+        _, best_set, best_rep = best
+        for adaptation_set in video_sets:
+            if adaptation_set is best_set:
+                for rep in list(adaptation_set.findall(representation_tag)):
+                    if rep is not best_rep:
+                        adaptation_set.remove(rep)
+                        changed = True
+            else:
+                period.remove(adaptation_set)
                 changed = True
 
     if not changed:
@@ -3474,6 +3493,9 @@ def philo_dash_proxy(channel_id: str):
     # continue against the same same-origin /play/philo/.../dash.mpd URL.
     manifest_text = re.sub(r'<Location>.*?</Location>\s*', '', r.text, flags=re.DOTALL)
 
+    if request.args.get('kodi_bridge'):
+        manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
+
     return Response(
         manifest_text,
         mimetype='application/dash+xml',
@@ -3540,8 +3562,12 @@ def sling_dash_proxy(channel_id: str):
         logger.warning('[sling-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
         return _unavailable_response()
 
+    mpd = r.text
+    if request.args.get('kodi_bridge'):
+        mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)
+
     return Response(
-        r.text,
+        mpd,
         mimetype='application/dash+xml',
         headers={
             'Cache-Control': 'no-cache',
@@ -3572,8 +3598,12 @@ def vidaa_dash_proxy(channel_id: str):
         logger.warning('[vidaa-dash] manifest fetch failed for %s: %s', channel_id, e)
         return _unavailable_response()
 
+    mpd = r.text
+    if request.args.get('kodi_bridge'):
+        mpd = _mpd_keep_highest_bitrate_video(mpd, channel_id)
+
     return Response(
-        r.text,
+        mpd,
         mimetype='application/dash+xml',
         headers={
             'Cache-Control': 'no-cache',
@@ -3661,6 +3691,9 @@ def pbs_dash_proxy(channel_id: str):
             lambda m: f'{m.group(1)}<BaseURL>{upstream_dir}</BaseURL>',
             manifest_text, count=1,
         )
+
+    if request.args.get('kodi_bridge'):
+        manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
 
     return Response(
         manifest_text,
@@ -3770,6 +3803,9 @@ def nbc_tve_dash_proxy(channel_id: str):
             lambda m: f'{m.group(1)}<BaseURL>{upstream_dir}</BaseURL>',
             manifest_text, count=1,
         )
+
+    if request.args.get('kodi_bridge'):
+        manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
 
     return Response(
         manifest_text,
