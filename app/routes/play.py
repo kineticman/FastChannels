@@ -3066,6 +3066,8 @@ def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
     period_tag = f'{{{namespace}}}Period' if namespace else 'Period'
     adaptation_tag = f'{{{namespace}}}AdaptationSet' if namespace else 'AdaptationSet'
     representation_tag = f'{{{namespace}}}Representation' if namespace else 'Representation'
+    supplemental_tag = f'{{{namespace}}}SupplementalProperty' if namespace else 'SupplementalProperty'
+    _SWITCHING_SCHEME = 'urn:mpeg:dash:adaptation-set-switching:2016'
 
     changed = False
     for period in root.iter(period_tag):
@@ -3079,6 +3081,7 @@ def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
         if best is None:
             continue
         _, best_set, best_rep = best
+        removed_sibling = False
         for adaptation_set in video_sets:
             if adaptation_set is best_set:
                 for rep in list(adaptation_set.findall(representation_tag)):
@@ -3088,6 +3091,19 @@ def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
             else:
                 period.remove(adaptation_set)
                 changed = True
+                removed_sibling = True
+        if removed_sibling:
+            # The surviving set's own switching-group cross-reference (confirmed on
+            # Philo: <SupplementalProperty schemeIdUri="...adaptation-set-switching:2016"
+            # value="<sibling id>"/>) now dangles, pointing at an AdaptationSet id that
+            # no longer exists — leaving it in place is what made inputstream.adaptive
+            # silently skip requesting the secure decoder for this set (confirmed live
+            # 2026-08-21: Philo BBC News opened OMX.MTK.VIDEO.DECODER.AVC, not .secure,
+            # and froze — the unfiltered manifest opens .secure correctly).
+            for prop in list(best_set.findall(supplemental_tag)):
+                if prop.get('schemeIdUri') == _SWITCHING_SCHEME:
+                    best_set.remove(prop)
+                    changed = True
 
     if not changed:
         return mpd
