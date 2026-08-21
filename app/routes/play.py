@@ -3092,7 +3092,7 @@ def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
     if not changed:
         return mpd
 
-    logger.info('[dash] kodi-bridge: stripped to highest-bitrate video representation for %s', channel_id[:40])
+    logger.debug('[dash] kodi-bridge: stripped to highest-bitrate video representation for %s', channel_id[:40])
     return ET.tostring(root, encoding='unicode', xml_declaration=True)
 
 
