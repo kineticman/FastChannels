@@ -8,6 +8,7 @@ from flask import Blueprint, Response, redirect, request, send_file, stream_with
 from ..generators.m3u import (
     generate_m3u,
     generate_gracenote_m3u,
+    generate_mixed_m3u,
     feed_namespace_start,
     feed_gracenote_start,
     feed_to_query_filters,
@@ -166,6 +167,35 @@ def m3u_gracenote():
     )
 
 
+@output_bp.route('/m3u/mixed')
+def m3u_mixed():
+    """
+    EXPERIMENTAL: single playlist mixing Gracenote and XMLTV guide mappings
+    per channel, for Channels DVR servers running the beta "mixed mappings"
+    Custom Source support (community.getchannels.com/t/46907). Pairs with
+    the standard /epg.xml. See generate_mixed_m3u for details.
+    """
+    base_url = public_base_url()
+    filters  = _filters()
+    if filters:
+        content = generate_mixed_m3u(filters, base_url=base_url)
+        return Response(content, mimetype='application/x-mpegurl',
+                        headers={'Content-Disposition': 'attachment; filename="fastchannels-mixed.m3u"'})
+    path = get_artifact('master-mixed-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            'Mixed M3U artifact is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name='fastchannels-mixed.m3u',
+    )
+
+
 @output_bp.route('/epg.xml')
 def epg_xml():
     base_url = public_base_url()
@@ -282,6 +312,24 @@ def feed_native_epg(slug):
         path,
         mimetype='application/xml',
         download_name=f'{slug}-native.xml',
+    )
+
+
+@output_bp.route('/feeds/<slug>/m3u/mixed')
+def feed_m3u_mixed(slug):
+    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    path = get_artifact(f'feed-{slug}-mixed-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            f'Feed mixed M3U artifact for {feed.slug} is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name=f'{slug}-mixed.m3u',
     )
 
 

@@ -1284,6 +1284,84 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
     return '\n'.join(lines)
 
 
+def generate_mixed_m3u(filters: dict = None, base_url: str = None,
+                       feed_chnum_start: int = None, namespace_start: int = None,
+                       feed_id: int = None) -> str:
+    """
+    EXPERIMENTAL: single-source playlist mixing Gracenote and XMLTV guide
+    mappings, per Channels DVR's beta "mixed mappings" Custom Source support
+    (community.getchannels.com/t/46907). Older Channels DVR builds treat a
+    Custom Source's guide data as all-Gracenote or all-XMLTV, which is why
+    generate_m3u / generate_gracenote_m3u exist as a hard split; on a server
+    with the beta enabled, this single playlist can replace both.
+
+    Includes every feed channel, same selection as generate_native_m3u.
+    Per channel: tvc-guide-stationid when a Gracenote ID is present (mode !=
+    'off'), else tvg-id — so it pairs with the same /epg.xml the standard
+    M3U uses; that XMLTV output already omits program data for Gracenote-
+    claimed channels, which is exactly what a mixed source needs.
+
+    Channel numbering is a single pool (no std/gracenote namespace split) —
+    there's only one playlist now, so there's nothing to keep separate.
+    """
+    filters  = filters or {}
+    base_url = (base_url or '').rstrip('/')
+
+    _s = AppSettings.get()
+    _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
+
+    channels = _selected_channels(filters, gracenote=None)
+
+    chnum_map, warnings = _resolve_chnum_map(
+        channels,
+        feed_chnum_start=feed_chnum_start,
+        namespace_start=namespace_start,
+        feed_id=feed_id if feed_chnum_start is not None else None,
+    )
+    if feed_chnum_start is None and namespace_start is None:
+        for w in warnings:
+            log.warning('chnum overlap (mixed): %s', w)
+    else:
+        _sort_by_assigned_chnum(channels, chnum_map)
+
+    multi_country_map = _source_multi_country_map(channels)
+    lines = ['#EXTM3U']
+    for ch in channels:
+        tvg_id = _tvg_id(ch)
+        gracenote_id = _parse_gracenote_id(ch)
+        display_name = _channel_display_name(ch, multi_country_map)
+        guide_attr = (f'tvc-guide-stationid="{gracenote_id}"'
+                      if gracenote_id else f'tvg-id="{tvg_id}"')
+        attrs = [
+            f'channel-id="{tvg_id}"',
+            guide_attr,
+            f'tvg-name="{_esc(display_name)}"',
+            f'group-title="{_esc(ch.category or ch.source.display_name)}"',
+        ]
+        if ch.logo_url:
+            attrs.append(f'tvg-logo="{proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url}"')
+        chnum = chnum_map.get(ch.id)
+        if chnum:
+            attrs.append(f'tvg-chno="{chnum}"')
+        if ch.description:
+            attrs.append(f'tvg-description="{_esc(ch.description)}"')
+            attrs.append(f'tvc-guide-description="{_esc(ch.description)}"')
+        if ch.stream_info:
+            vcodec, acodec = _tvc_stream_codecs(ch.stream_info)
+            if vcodec:
+                attrs.append(f'tvc-stream-vcodec="{vcodec}"')
+            if acodec:
+                attrs.append(f'tvc-stream-acodec="{acodec}"')
+        guide_cat = _tvc_guide_category(ch)
+        if guide_cat:
+            attrs.append(f'tvc-guide-categories="{guide_cat}"')
+        _append_experimental_stream_attrs(attrs, _s)
+        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
+        lines.append(_channel_play_url(ch, base_url))
+
+    return '\n'.join(lines)
+
+
 # Sources FastChannels forces to native-HLS playback (AES-128; see
 # api.py _get_playback_info ~ "playback_mode = 'native'"). Chrome has no native
 # HLS, so PrismCast's headless Chrome can't play them — exclude from the bridge.

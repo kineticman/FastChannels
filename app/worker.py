@@ -1603,7 +1603,7 @@ def _prewarm_logos(source_name: str, logo_urls: list[str], progress_cb=None) -> 
 
 def _refresh_xml_artifacts() -> None:
     """Refresh master/feed XML and M3U artifacts after scrape commits land."""
-    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_prismcast_m3u, generate_kodi_bridge_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_prismcast_m3u, generate_kodi_bridge_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app import kodi_bridge as _kodi_bridge
     from app.generators.xmltv import write_xmltv
 
@@ -1627,6 +1627,9 @@ def _refresh_xml_artifacts() -> None:
         kodi_bridge_ready = _kodi_bridge.is_configured()
         m3u_artifacts: list[tuple[str, Callable]] = [
             ('master-m3u', lambda fp: fp.write(generate_m3u({}, base_url=base_url))),
+            # EXPERIMENTAL: mixed Gracenote/XMLTV single-source playlist — see
+            # generate_mixed_m3u docstring.
+            ('master-mixed-m3u', lambda fp: fp.write(generate_mixed_m3u({}, base_url=base_url))),
         ]
         if prismcast_url:
             m3u_artifacts.append((
@@ -1699,6 +1702,14 @@ def _refresh_xml_artifacts() -> None:
                 f'feed-{feed.slug}-native-m3u',
                 lambda fp, filters=filters, std_kw=std_kw: fp.write(
                     generate_native_m3u(filters, base_url=base_url, include_description=False, **std_kw)
+                ),
+            ))
+            # EXPERIMENTAL: mixed Gracenote/XMLTV single-source playlist, pairs with
+            # this feed's regular /epg.xml — see generate_mixed_m3u docstring.
+            m3u_artifacts.append((
+                f'feed-{feed.slug}-mixed-m3u',
+                lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                    generate_mixed_m3u(filters, base_url=base_url, **std_kw)
                 ),
             ))
             if prismcast_url:
