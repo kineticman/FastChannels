@@ -3215,6 +3215,24 @@ def _get_playback_info(ch, fast_mode=True):
         playback_mode = 'dash'
         stream_type = 'dash'
 
+    # DRM-bridge-flagged channels (see worker._sync_intrinsic_drm_bridge) have no
+    # playable direct .m3u8 — resolve() returns a raw encrypted manifest with no
+    # CDM/license negotiation for a plain player. Route play_url through whichever
+    # bridge is actually configured so "Open in VLC"/"Open in New Tab" hand back
+    # something playable instead of a black screen.
+    if getattr(ch, 'requires_drm_bridge', False) and ch.source and ch.source.name and ch.source_channel_id:
+        from ..kodi_bridge import KODI_BRIDGE_TRUSTED_SOURCES as _KODI_TRUSTED, is_configured as _kodi_bridge_configured
+        from urllib.parse import quote as _quote
+        _settings = AppSettings.get()
+        if (
+            ch.source.name in _KODI_TRUSTED
+            and _settings.kodi_bridge_enabled
+            and _kodi_bridge_configured()
+        ):
+            play_url = f'/play/kodi-bridge/{ch.source.name}/{_quote(ch.source_channel_id, safe="")}.m3u8'
+        elif _settings.drm_bridge_enabled and (_settings.effective_prismcast_url() or '').strip():
+            play_url = f'/play/prismcast/{ch.id}.ts'
+
     return {
         'stream_type': stream_type,
         'preview_url': preview_url,

@@ -4710,6 +4710,36 @@ def play_kodi_bridge(source_name: str, channel_id: str):
     return redirect(encoder_url, 302)
 
 
+@play_bp.route('/play/kodi-bridge/<source_name>/<channel_id>.m3u')
+def play_kodi_bridge_vlc(source_name: str, channel_id: str):
+    """.m3u sibling of play_kodi_bridge, same purpose as play_vlc: hand VLC (or any
+    media player) a downloadable playlist instead of a bare .m3u8 URL the browser
+    would otherwise try to render inline."""
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
+        .first()
+    )
+    if not channel and source_name == 'distro' and ':' not in channel_id:
+        channel = (
+            Channel.query
+            .join(Source)
+            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
+            .first()
+        )
+    if not channel:
+        abort(404)
+    base_url = request.host_url.rstrip('/')
+    stream_url = f'{base_url}/play/kodi-bridge/{source_name}/{channel_id}.m3u8'
+    playlist = f'#EXTM3U\n#EXTINF:-1,{channel.name}\n{stream_url}\n'
+    return Response(
+        playlist,
+        mimetype='audio/x-mpegurl',
+        headers={'Content-Disposition': f'attachment; filename="{channel_id}.m3u"'},
+    )
+
+
 _PRISMCAST_HLS_SESSION_RE = re.compile(r'^(.*)/hls/([^/]+)/stream\.m3u8(?:\?.*)?$')
 
 
