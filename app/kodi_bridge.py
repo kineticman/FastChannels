@@ -79,14 +79,16 @@ def _is_believed_active() -> bool:
 
 # Sources confirmed (dev/kodi/README.md, real Fire TV Stick 4K hardware, 2026-08-16) to
 # actually decrypt through Kodi/inputstream.adaptive. Cox and Warner TVE hit a confirmed,
-# non-fixable inputstream.adaptive same-KID session-splitting wall and stay excluded;
-# Roku is pending re-verification (rate-limited mid-check) — excluded until actually
-# confirmed. Philo confirmed 2026-08-18 (real Widevine key exchange + sustained
-# fluctuating decode bitrate on-device via BBC News). See IMPLEMENTATION_PLAN.md section 5.
+# non-fixable inputstream.adaptive same-KID session-splitting wall and stay excluded.
+# Philo confirmed 2026-08-18 (real Widevine key exchange + sustained fluctuating decode
+# bitrate on-device via BBC News). Roku confirmed 2026-08-20 (AFTMA08C15/Android 11, CNN
+# Headlines: 2 license POSTs both 200, sustained speed=1 real-time decode over an 18s
+# poll) — the earlier 403 rate-limit hit mid-check was transient upstream throttling, not
+# reproduced on retest. See IMPLEMENTATION_PLAN.md section 5.
 # Shared by app/routes/play.py (play_kodi_bridge) and app/generators/m3u.py
 # (generate_kodi_bridge_m3u) — keep both in sync via this single source of truth.
 KODI_BRIDGE_TRUSTED_SOURCES = frozenset({
-    'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa', 'philo',
+    'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa', 'philo', 'roku',
 })
 
 

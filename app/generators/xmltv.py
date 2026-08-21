@@ -20,7 +20,7 @@ from ..extensions import db
 from ..models import Program, AppSettings
 from ..url import proxy_logo_url
 from .m3u import (_selected_channels, _tvg_id, _channel_display_name, _source_multi_country_map,
-                  _sanitize, _build_channel_query, _prismcast_capturable)
+                  _sanitize, _build_channel_query, _prismcast_capturable, _drm_bridge_query_filters)
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     # they share this XMLTV, so emit their guide too (a superset is harmless for the
     # standard feed, which simply doesn't reference them).
     _seen = {ch.id for ch in channels}
-    for ch in _build_channel_query(filters, activity='drm_bridge').all():
+    for ch in _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all():
         if ch.id not in _seen and _prismcast_capturable(ch):
             channels.append(ch)
             _seen.add(ch.id)

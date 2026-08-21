@@ -190,6 +190,27 @@ def _channel_display_name(ch, multi_country_map: dict[str, set[str]] | None = No
     return name
 
 
+def _drm_bridge_query_filters(filters: dict) -> dict:
+    """Widen a feed's `channel_ids` whitelist to also cover any `pinned_channel_ids`
+    before running an `activity='drm_bridge'` query.
+
+    `_build_channel_query`'s `channel_ids` whitelist branch (used by feeds built from
+    an explicit channel selection) bypasses the pin-vs-filter union that the 'active'
+    branch does — a bridge-only channel pinned into such a feed but absent from that
+    whitelist would otherwise never surface in the bridge union (confirmed live
+    2026-08-21: two pinned Roku channels missing from a channel_ids-based feed's
+    kodi-bridge M3U). Every 'drm_bridge' call site needs this same widening, so it's
+    shared here rather than duplicated. Returns filters unchanged when there's no
+    whitelist or no pins to widen it with."""
+    channel_ids = filters.get('channel_ids')
+    pinned_ids = filters.get('pinned_channel_ids')
+    if channel_ids and pinned_ids:
+        merged = dict(filters)
+        merged['channel_ids'] = list(set(channel_ids) | set(pinned_ids))
+        return merged
+    return filters
+
+
 def _build_channel_query(filters: dict, *, activity: str = 'active'):
     """Shared filtered query for channels.
 
@@ -456,6 +477,13 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
         f['channel_ids'] = channel_ids
         if max_ch := feed_filters.get('max_channels'):
             f['max_channels'] = max_ch
+        # Still need to survive here — otherwise a channel pinned into a channel_ids-
+        # whitelist feed but absent from that list silently vanishes from every output
+        # (M3U, EPG, admin bridged-count) instead of joining the feed the way a pin
+        # is supposed to. Confirmed live 2026-08-21: two pinned Roku channels missing
+        # from this feed's kodi-bridge M3U traced back to this early return.
+        if pinned_ids := feed_filters.get('pinned_channel_ids'):
+            f['pinned_channel_ids'] = pinned_ids
         return f
     if sources := feed_filters.get('sources'):
         f['source'] = sources
@@ -1058,7 +1086,7 @@ def generate_kodi_bridge_m3u(filters: dict = None, base_url: str = None,
     # Union in the trusted-source DRM channels the base selection excludes — see
     # docstring. Deduped, honoring the Gracenote partition, same as prismcast's union.
     _seen = {ch.id for ch in channels}
-    for ch in _build_channel_query(filters, activity='drm_bridge').all():
+    for ch in _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all():
         if ch.id in _seen or (ch.source.name if ch.source else None) not in KODI_BRIDGE_TRUSTED_SOURCES:
             continue
         if gracenote and not _parse_gracenote_id(ch):
@@ -1389,7 +1417,7 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
     # client can't play them) but the PrismCast feed bridges them via /watch. Append
     # after the active set, deduped, capturable-only, honoring the Gracenote partition.
     _seen = {ch.id for ch in channels}
-    for ch in _build_channel_query(filters, activity='drm_bridge').all():
+    for ch in _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all():
         if ch.id in _seen or not _prismcast_capturable(ch):
             continue
         if gracenote and not _parse_gracenote_id(ch):

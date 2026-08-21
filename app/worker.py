@@ -785,6 +785,13 @@ def run_stream_audit(source_name: str):
                 Channel.is_active == True,
                 Channel.disable_reason.in_(['Dead', 'VOD', 'NotAuthorized']),
                 Channel.disable_reason.like('AuditError:%'),
+                # DRM-disabled channels need re-checking too, not just a one-time flag:
+                # a source can become bridge-trusted (KODI_BRIDGE_TRUSTED_SOURCES or the
+                # PrismCast toggle) after these were legacy-disabled, and without this
+                # they'd sit excluded from every future audit forever, never picking up
+                # the bridge branch below.
+                Channel.disable_reason == 'DRM',
+                Channel.disable_reason.like('DRM:%'),
             )
         ).all()
         total    = len(channels)
@@ -1195,6 +1202,12 @@ def run_stream_audit(source_name: str):
                             ch.requires_drm_bridge = True
                             if not ch.is_active:
                                 ch.is_active = True
+                            # Re-enable a channel a prior (pre-bridge-eligible) pass legacy-
+                            # disabled for this same DRM reason — e.g. Roku channels disabled
+                            # before 'roku' joined KODI_BRIDGE_TRUSTED_SOURCES. Never touches
+                            # a channel the user disabled for an unrelated reason.
+                            if not ch.is_enabled and (ch.disable_reason or '').startswith('DRM'):
+                                ch.is_enabled = True
                             ch.disable_reason = None
                             bridged += 1
                             report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm_bridge', 'reason': _dash_drm_type})
@@ -1274,6 +1287,8 @@ def run_stream_audit(source_name: str):
                         ch.requires_drm_bridge = True
                         if not ch.is_active:
                             ch.is_active = True
+                        if not ch.is_enabled and (ch.disable_reason or '').startswith('DRM'):
+                            ch.is_enabled = True
                         ch.disable_reason = None
                         bridged += 1
                         report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm_bridge', 'reason': _drm_type})
@@ -2019,6 +2034,8 @@ def run_channel_auto_disable(channel_id: int, reason: str):
                     return  # already bridged
                 ch.requires_drm_bridge = True
                 ch.is_active = True
+                if not ch.is_enabled and (ch.disable_reason or '').startswith('DRM'):
+                    ch.is_enabled = True
                 ch.disable_reason = None
                 _commit_with_retry()
                 _invalidate_and_refresh_xml()

@@ -13,6 +13,7 @@ from ..generators.m3u import (
     _build_feed_chnum_map,
     _build_source_chnum_map,
     _build_sticky_gn_chnum_map,
+    _drm_bridge_query_filters,
     _selected_channel_stubs,
     feed_namespace_start,
     feed_to_query_filters,
@@ -247,6 +248,12 @@ def _apply_admin_feed_membership_filters(query, feed: Feed):
     """Apply a feed's membership rules without forcing enabled/active output constraints."""
     filters = feed_to_query_filters(feed.filters or {})
     if channel_ids := filters.get('channel_ids'):
+        # A channel pinned into the feed but absent from its explicit whitelist should
+        # still count as a member here — same gap as the M3U/EPG generators had (see
+        # _drm_bridge_query_filters), just for plain membership instead of drm_bridge
+        # activity specifically. Confirmed live 2026-08-21.
+        if pinned_ids := filters.get('pinned_channel_ids'):
+            channel_ids = list(set(channel_ids) | set(pinned_ids))
         query = query.filter(Channel.id.in_(channel_ids))
         return query
     if sources := filters.get('source'):
@@ -278,7 +285,7 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
         )
     )
     row = (
-        _build_channel_query(filters)
+        _build_channel_query(_drm_bridge_query_filters(filters))
         .order_by(None)
         .with_entities(
             func.count().label('total'),
@@ -292,7 +299,7 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
     # channel_count(). Partition the bridged set the same way for accurate per-feed
     # counts, since PrismCast now splits into standard + gracenote like the regular feed.
     bridged_row = (
-        _build_channel_query(filters, activity='drm_bridge')
+        _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge')
         .order_by(None)
         .with_entities(
             func.count().label('total'),
@@ -306,7 +313,7 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
     # decrypt through Kodi/inputstream.adaptive (dev/kodi/README.md), not every
     # DRM-capable source. Re-run the bridged query restricted to that set.
     kodi_bridged_row = (
-        _build_channel_query(filters, activity='drm_bridge')
+        _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge')
         .filter(Source.name.in_(KODI_BRIDGE_TRUSTED_SOURCES))
         .order_by(None)
         .with_entities(
