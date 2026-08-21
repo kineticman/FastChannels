@@ -28,6 +28,7 @@ from datetime import datetime
 from urllib.parse import urlencode, urlsplit
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
+from ..gracenote_map import normalize_gracenote_id
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +334,7 @@ class HDHomeRunScraper(BaseScraper):
                 None,
             )
             m = _XMLTV_CHANNEL_ID_RE.match(ch_id)
-            gracenote_id = m.group(1) if m else None
+            gracenote_id = normalize_gracenote_id(m.group(1)) if m else None
             xmltv_channels[ch_id] = {
                 "lcn": lcn,
                 "logo_url": logo_url,

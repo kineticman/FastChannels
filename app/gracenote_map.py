@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -22,6 +23,16 @@ _remote_fetched_at: float = 0.0
 _map_cache: dict[tuple[str, str], dict[str, str]] | None = None
 _map_cache_mtimes: tuple[float, ...] = ()
 
+# Same shape as app/routes/api.py's _GRACENOTE_RE and app/generators/m3u.py's
+# _GRACENOTE_PREFIX_RE — kept in sync by hand since a station ID that doesn't
+# match all three doesn't get consistently treated as Gracenote-mapped
+# end-to-end (a channel could be excluded from the XMLTV output as "claimed"
+# while never actually receiving tvc-guide-stationid in the Gracenote M3U —
+# left with no guide data anywhere). Validating here, at CSV/scraper ingestion,
+# stops a malformed ID from ever reaching Channel.gracenote_id in the first
+# place, rather than relying on every consumer to agree on how to handle one.
+_STATION_ID_RE = re.compile(r'^(EP|SH|MV|SP|TR)\d+$', re.IGNORECASE)
+
 
 def _normalize_station_id(value) -> str | None:
     raw = str(value or "").strip()
@@ -29,7 +40,13 @@ def _normalize_station_id(value) -> str | None:
         return None
     if raw.isdigit():
         return raw if len(raw) >= 5 else None
-    return raw
+    m = _STATION_ID_RE.match(raw)
+    if not m:
+        return None
+    # Canonicalize prefix case so it matches the case-sensitive read side
+    # (m3u.py's _GRACENOTE_PREFIX_RE) regardless of how the source cased it.
+    prefix = m.group(1).upper()
+    return prefix + raw[len(prefix):]
 
 
 def normalize_gracenote_id(value) -> str | None:

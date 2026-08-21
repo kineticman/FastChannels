@@ -166,6 +166,13 @@ def _apply_gracenote_update(channel: Channel, raw_value, raw_mode=None) -> str |
     raw = (raw_value or '').strip()
     if raw and not _GRACENOTE_RE.match(raw):
         raise ValueError('Invalid Gracenote ID — must be numeric (e.g. 122912) or start with EP/SH/MV/SP/TR (e.g. EP012345678)')
+    if raw and not raw.isdigit():
+        # _GRACENOTE_RE validates the prefix case-insensitively, but m3u.py's
+        # _parse_gracenote_id / _has_gracenote_claim match it case-sensitively —
+        # canonicalize here so a lowercase "ep..." entry doesn't silently end up
+        # excluded from the standard/XMLTV output yet never picked up by the
+        # Gracenote one either (a channel with guide data nowhere).
+        raw = raw[:2].upper() + raw[2:]
 
     # Any explicit user action counts as reviewing an upstream content change,
     # so dismiss the review marker (the 🔁 flag in the channels list).
