@@ -81,8 +81,19 @@ _BELIEVED_ACTIVE_TTL_S = 24 * 60 * 60
 # was otherwise fine. There's no legitimate reason to reopen a channel that's already
 # the active one, so trigger_channel() short-circuits to a no-op (still returns True)
 # when channel_key matches. A real channel change (different key) always retriggers
-# normally. Same TTL/Redis rationale as _BELIEVED_ACTIVE_KEY above.
+# normally.
+#
+# Deliberately a MUCH shorter TTL than _BELIEVED_ACTIVE_KEY's 24h safety net, not the
+# same one: this key gets set as soon as Kodi's Player.Open *acknowledges* the request,
+# which happens before the fc_bridge addon actually fetches/resolves the underlying
+# manifest — so a channel whose resolution fails afterward (confirmed live 2026-08-21,
+# DirecTV BBC News mid-token-expiry) gets stuck permanently marked "active" with
+# nothing actually playing, silently deduping every real retry attempt until it's
+# cleared. A short TTL bounds that to a self-healing few minutes instead of requiring
+# a manual `redis-cli DEL`, while still comfortably covering the ~90-150s external
+# re-poll interval this key exists to dedupe against.
 _ACTIVE_CHANNEL_KEY = 'fc:kodi-bridge:active-channel'
+_ACTIVE_CHANNEL_TTL_S = 5 * 60
 
 
 def _get_active_channel() -> str | None:
@@ -98,7 +109,7 @@ def _set_active_channel(channel_key: str | None) -> None:
     try:
         r = redis.from_url(current_app.config['REDIS_URL'])
         if channel_key:
-            r.setex(_ACTIVE_CHANNEL_KEY, _BELIEVED_ACTIVE_TTL_S, channel_key)
+            r.setex(_ACTIVE_CHANNEL_KEY, _ACTIVE_CHANNEL_TTL_S, channel_key)
         else:
             r.delete(_ACTIVE_CHANNEL_KEY)
     except Exception as e:
