@@ -755,7 +755,8 @@ def capture_directv_auth_cffi(
         raise DirectvAuthError('curl_cffi unavailable')
 
     def _status(state: str, detail: str = '') -> None:
-        logger.info('[directv-auth] %s %s', state, detail)
+        level = logger.info if state != 'running' else logger.debug
+        level('[directv-auth] %s %s', state, detail)
         if on_status:
             try:
                 on_status(state, detail)
@@ -970,7 +971,8 @@ def capture_directv_auth(
     is best-effort (metadata/EPG scraping doesn't need it, only playback does).
     """
     def _status(state: str, detail: str = '') -> None:
-        logger.info('[directv-auth] %s %s', state, detail)
+        level = logger.info if state != 'running' else logger.debug
+        level('[directv-auth] %s %s', state, detail)
         if on_status:
             try:
                 on_status(state, detail)
