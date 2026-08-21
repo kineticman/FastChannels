@@ -780,9 +780,13 @@ def ensure_runtime_schema() -> None:
             from .scrapers.category_utils import category_for_channel
             # LEFT JOIN so channels with a NULL or dangling source_id still get
             # category corrections backfilled (INNER JOIN would silently skip them).
+            # Channels with a user-set category_override are excluded — this
+            # backfill re-derives the auto category, which would otherwise
+            # clobber the override until the next scrape reapplies it.
             rows = conn.execute(text(
                 "SELECT c.id, c.name, c.category, s.name "
-                "FROM channels c LEFT JOIN sources s ON c.source_id = s.id"
+                "FROM channels c LEFT JOIN sources s ON c.source_id = s.id "
+                "WHERE c.category_override IS NULL"
             )).fetchall()
             updates = []
             for row_id, name, cat, source_name in rows:
