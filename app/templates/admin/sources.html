@@ -820,7 +820,7 @@
                 {% endif %}
                 {% set _sd = source.to_dict() %}
                 <span class="config-badge auto"><span id="ch-count-{{ source.id }}">{{ _sd.channel_count }}</span> channels</span>
-                {% if _sd.drm_bridge_count %}<a class="config-badge auto" href="/admin/channels?source={{ source.name }}&drm=bridge" title="DRM channels bridged via PrismCast — click to view"><span id="bridge-count-{{ source.id }}">🌉 {{ _sd.drm_bridge_count }}</span> bridged</a>{% endif %}
+                {% if _sd.drm_bridge_count %}<a class="config-badge auto" href="/admin/channels?source={{ source.name }}&drm=bridge" title="DRM channels bridged via PrismCast or Kodi bridge — click to view"><span id="bridge-count-{{ source.id }}">🌉 {{ _sd.drm_bridge_count }}</span> bridged</a>{% endif %}
               </div>
               <div class="source-meta" id="source-meta-{{ source.id }}">
                 {% if not is_custom %}
@@ -2430,7 +2430,7 @@
 
       return `
         <div class="config-title">PBS Settings</div>
-        <div class="config-note">The scraper automatically imports clear (non-DRM) HLS feeds from the curated station list and any ZIP codes below. Individual feeds — clear or DRM — can also be hand-picked below; DRM feeds (main/PBS KIDS) are opt-in only and play through the PrismCast bridge.</div>
+        <div class="config-note">The scraper automatically imports clear (non-DRM) HLS feeds from the curated station list and any ZIP codes below. Individual feeds — clear or DRM — can also be hand-picked below; DRM feeds (main/PBS KIDS) are opt-in only and play through the PrismCast or Kodi DRM bridge.</div>
         <div class="fields-grid">
           <div class="field field-full">
             <div class="config-toggle-field">
@@ -2459,7 +2459,7 @@
 
         <details class="pbs-drm-details" open>
           <summary>Station &amp; Feed Finder</summary>
-          <div class="config-note">Search by ZIP code, then add individual feeds — mix and match clear and DRM per station (e.g. a clear secondary feed plus just the Main DRM feed, skipping PBS KIDS). DRM feeds play only through the PrismCast bridge — turn on PrismCast bridging in Settings to use them.</div>
+          <div class="config-note">Search by ZIP code, then add individual feeds — mix and match clear and DRM per station (e.g. a clear secondary feed plus just the Main DRM feed, skipping PBS KIDS). DRM feeds only play through a DRM bridge — turn on PrismCast or Kodi bridging in Settings to use them.</div>
           <div style="display:flex;align-items:flex-end;gap:8px;margin:0.5rem 0;">
             <div class="field" style="margin:0;flex:0 0 auto;max-width:160px;">
               <label for="pbs-drm-zip-${sourceId}">ZIP code</label>
@@ -3081,8 +3081,8 @@
       return `
         <div class="config-title">DirecTV Stream Settings</div>
         <div class="config-note">
-          DirecTV Stream channels are DRM-protected and play only through the PrismCast bridge
-          (Settings &rarr; PrismCast). ${hasSession
+          DirecTV Stream channels are DRM-protected and only play through a DRM bridge
+          (Settings &rarr; PrismCast or Kodi HDMI Bridge). ${hasSession
             ? 'FastChannels has an active DirecTV session.'
             : 'Connect your DirecTV Stream account below, then click Authenticate.'}
         </div>

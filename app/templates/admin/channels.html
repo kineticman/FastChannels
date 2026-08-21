@@ -1476,7 +1476,7 @@
             <select id="drm-filter" name="drm">
               <option value="">All stream states</option>
               <option value="1" {% if drm_filter == '1' %}selected{% endif %}>🔒 DRM only</option>
-              <option value="bridge" {% if drm_filter == 'bridge' %}selected{% endif %}>🌉 DRM — bridged (PrismCast)</option>
+              <option value="bridge" {% if drm_filter == 'bridge' %}selected{% endif %}>🌉 DRM — bridged</option>
               <option value="dead" {% if drm_filter == 'dead' %}selected{% endif %}>💀 Dead only</option>
               <option value="vod" {% if drm_filter == 'vod' %}selected{% endif %}>📼 VOD only</option>
               <option value="0" {% if drm_filter == '0' %}selected{% endif %}>No DRM / Dead / VOD flag</option>
@@ -1851,7 +1851,7 @@
               <div class="channel-actions">
                 <div id="flags-cell-{{ ch.id }}" class="flag-group">
                   {% if ch.requires_drm_bridge %}
-                  <span class="flag-icon" title="DRM (e.g. FairPlay) — excluded from the standard feed (won't play on a normal client) but bridged into the PrismCast feed, which decrypts it in a browser.">🔒🌉</span>
+                  <span class="flag-icon" title="DRM (e.g. FairPlay) — excluded from the standard feed (won't play on a normal client) but bridged via PrismCast or the Kodi HDMI bridge, whichever is active for this channel.">🔒🌉</span>
                   {% elif ch.disable_reason and ch.disable_reason.startswith('DRM') %}
                   <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'DRM')" title="{{ ch.disable_reason }} — stream is protected, not playable in generic IPTV clients. Click to re-enable.">🔒</span>
                   {% elif ch.disable_reason == 'Dead' %}
@@ -1921,7 +1921,7 @@
             <div class="mcard-badges">
               {% if ch.identity_changed_at %}<span class="mcard-flag" title="Content changed upstream — slot now carries a different channel. Review its Gracenote ID.">🔁</span>{% endif %}
               {% if _is_rotator %}<span class="mcard-flag" title="Rotating / featured slot — content may change over time. Enable with caution.">♻️</span>{% endif %}
-              {% if ch.requires_drm_bridge %}<span class="mcard-flag" title="DRM — bridged via PrismCast (excluded from standard feed)">🔒🌉</span>{% endif %}
+              {% if ch.requires_drm_bridge %}<span class="mcard-flag" title="DRM — bridged via PrismCast or Kodi bridge (excluded from standard feed)">🔒🌉</span>{% endif %}
               {% if ch.disable_reason and ch.disable_reason.startswith('DRM') %}<span class="mcard-flag" title="{{ ch.disable_reason }}">🔒</span>{% endif %}
               {% if ch.disable_reason == 'Dead' %}<span class="mcard-flag" title="Stream dead">💀</span>{% endif %}
               {% if ch.disable_reason == 'VOD' %}<span class="mcard-flag" title="VOD only">📼</span>{% endif %}
