@@ -3628,6 +3628,36 @@ if __name__ == '__main__':
                           id='kodi_bridge_watchdog', max_instances=1, coalesce=True,
                           misfire_grace_time=60)
 
+        def _scheduled_directv_token_watchdog():
+            # pre_run_setup() is DirecTV's proactive-refresh check, but its only
+            # other caller is the scheduled scrape job — which fires on a fixed
+            # 12h cadence (scrape_interval) counted from the last scrape, not from
+            # when the token was actually captured. That left gaps where the real
+            # DirecTV session (observed dying as early as ~11h40m) went stale hours
+            # before the next scheduled scrape could catch it, so play requests hit
+            # a reactive 401 instead. Check independently on a tighter interval so
+            # background reauth actually fires with margin before real expiry.
+            from app.scrapers.directv import DirectvScraper
+            try:
+                with flask_app.app_context():
+                    source = Source.query.filter_by(name='directv', is_enabled=True).first()
+                    if not source:
+                        return
+                    _cfg = source.config or {}
+                    if not (_cfg.get('username') or '').strip() or not (_cfg.get('password') or '').strip():
+                        return
+                    scraper = DirectvScraper(config=_cfg)
+                    try:
+                        scraper.pre_run_setup()
+                    except ScrapeSkipError:
+                        pass
+            except Exception as e:
+                logger.warning('[directv] token watchdog check failed: %s', e)
+
+        scheduler.add_job(_scheduled_directv_token_watchdog, 'interval', minutes=30,
+                          id='directv_token_watchdog', max_instances=1, coalesce=True,
+                          misfire_grace_time=300)
+
         def _scheduled_remote_gracenote_refresh():
             from app.gracenote_map import fetch_remote_gracenote_map
             with flask_app.app_context():
