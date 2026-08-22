@@ -325,6 +325,9 @@ _INSTANCEGUARD_WATCH_MAX_BACKOFF_S = 30
 _INSTANCEGUARD_WATCH_IDLE_POLL_S = 30
 _INSTANCEGUARD_WATCH_SELECT_S = 5
 _INSTANCEGUARD_STREAM_STALE_S = 90
+_INSTANCEGUARD_MAX_REOPENS_PER_WINDOW = 4
+_INSTANCEGUARD_REOPEN_WINDOW_S = 15
+_INSTANCEGUARD_COOLDOWN_S = 60
 
 
 def run_instanceguard_watch(app) -> None:
@@ -392,8 +395,23 @@ def run_instanceguard_watch(app) -> None:
     because this runs in a plain background thread with no request context of
     its own — mirrors the `with flask_app.app_context():` pattern the scheduled
     watchdog jobs in worker.py already use.
+
+    Rate-limited to at most _INSTANCEGUARD_MAX_REOPENS_PER_WINDOW reopens per
+    _INSTANCEGUARD_REOPEN_WINDOW_S, then a _INSTANCEGUARD_COOLDOWN_S pause
+    before trying again. Confirmed live 2026-08-22 (Roku, Ax Men) this is
+    required, not just defensive: unlike InstanceGuard (a pure timing race,
+    where a retry with the same manifest almost always succeeds once the old
+    codec instance has released), the non-secure-codec signature can be
+    durably true — Roku's resolve_dash result was cached and kept re-serving
+    the same non-DRM content on every reopen, so each "recovery" immediately
+    re-triggered the exact same detection, in a tight loop with no natural
+    exit, firing roughly every 1.4s continuously and hammering both the
+    device and this app's own manifest endpoint. Without a cap, a durably-bad
+    underlying state turns this watch into the outage instead of the fix.
     """
     backoff = _INSTANCEGUARD_WATCH_RETRY_S
+    recent_reopens: list[float] = []
+    cooldown_until = 0.0
     while True:
         proc = None
         try:
@@ -447,6 +465,22 @@ def run_instanceguard_watch(app) -> None:
                         reason = 'non-secure codec selected'
                     else:
                         continue
+
+                    now = time.monotonic()
+                    if now < cooldown_until:
+                        continue
+                    recent_reopens = [t for t in recent_reopens if now - t < _INSTANCEGUARD_REOPEN_WINDOW_S]
+                    if len(recent_reopens) >= _INSTANCEGUARD_MAX_REOPENS_PER_WINDOW:
+                        cooldown_until = now + _INSTANCEGUARD_COOLDOWN_S
+                        logger.error(
+                            '[kodi-bridge] instanceguard watch: %d reopens in %ss (latest reason: %s) — '
+                            'giving up for %ss, this needs a look rather than more retries',
+                            len(recent_reopens), _INSTANCEGUARD_REOPEN_WINDOW_S, reason,
+                            _INSTANCEGUARD_COOLDOWN_S,
+                        )
+                        continue
+                    recent_reopens.append(now)
+
                     with app.app_context():
                         if not _is_believed_active():
                             continue
