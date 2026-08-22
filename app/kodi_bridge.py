@@ -379,8 +379,16 @@ def run_instanceguard_watch(app) -> None:
        all — invisible to signature #1 alone. Reacting at the wrong-codec
        moment instead of waiting for that eventual stall cuts this failure's
        freeze time from ~15s down to about the same ~1s as InstanceGuard.
-       Matched by exact line suffix (`endswith`), not substring, so it can't
-       false-positive on the `.secure` variant.
+       Matched on the exact `Using codec: OMX.MTK.VIDEO.DECODER.AVC` line
+       suffix — NOT just `OMX.MTK.VIDEO.DECODER.AVC` — confirmed live
+       2026-08-22 (Sling, ESPN) that the bare codec-name suffix false-positives
+       on the `Testing codec: OMX.MTK.VIDEO.DECODER.AVC` enumeration line
+       every codec open logs while probing candidates, regardless of whether
+       the eventual real choice is secure or not, which was needlessly
+       reopening perfectly healthy secure sessions (and likely explains at
+       least part of why the Roku incident looped as fast/durably as it did —
+       every reopen's own candidate enumeration re-triggered the same
+       false match, independent of the actual resulting codec).
 
     Both signatures are specific to a confirmed-bad state with no legitimate
     self-recovering case (a wrong-codec selection can't fix itself; every
@@ -461,7 +469,7 @@ def run_instanceguard_watch(app) -> None:
                     line = line.rstrip(b'\r')
                     if b'InstanceGuard locked' in line:
                         reason = 'InstanceGuard hit'
-                    elif line.endswith(b'OMX.MTK.VIDEO.DECODER.AVC'):
+                    elif line.endswith(b'Using codec: OMX.MTK.VIDEO.DECODER.AVC'):
                         reason = 'non-secure codec selected'
                     else:
                         continue
