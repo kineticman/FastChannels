@@ -330,33 +330,55 @@ def _instanceguard_hit_and_clear() -> bool:
     this device is dedicated to the HDMI bridge, so that's an acceptable trade-off
     for avoiding a timezone-sensitive `-T <timestamp>` cursor (adb logcat -T takes
     the DEVICE's local clock, which isn't guaranteed to match this container's).
+
+    The clear is unconditional (runs even if the dump above raised) and the dump is
+    decoded leniently rather than with subprocess's text=True — confirmed live
+    2026-08-22: some other app's log line contained a non-UTF-8 byte, text=True's
+    strict decode raised before the clear call ever ran, and that permanently wedged
+    every following tick on the exact same byte (it never ages out because nothing
+    was clearing the buffer that would have removed it).
     """
     try:
         address = _adb_address()
-        # adb connect is idempotent/cheap when already connected ("already connected
-        # to ...") but required first — confirmed live 2026-08-22: without it, this
-        # container's adb server has no device in its list yet (`adb devices` empty)
-        # and `logcat -d` just hangs on "- waiting for device -" until it times out,
-        # rather than erroring immediately. wake_and_relaunch() already does this same
-        # connect before its own adb calls; this path needs it too since it can run
-        # without wake_and_relaunch ever having been triggered (is_alive() succeeds
-        # via JSON-RPC over HTTP, not adb, so adb may never have connected at all).
+    except KodiBridgeNotConfigured as e:
+        logger.warning('[kodi-bridge] instanceguard check: %s', e)
+        return False
+
+    try:
+        # Idempotent/cheap when already connected ("already connected to ...") but
+        # required first — confirmed live 2026-08-22: without it, this container's
+        # adb server has no device in its list yet (`adb devices` empty) and
+        # `logcat -d` just hangs on "- waiting for device -" until it times out,
+        # rather than erroring immediately. wake_and_relaunch() already does this
+        # same connect before its own adb calls; this path needs it too since it can
+        # run without wake_and_relaunch ever having been triggered (is_alive()
+        # succeeds via JSON-RPC over HTTP, not adb, so adb may never have connected).
         subprocess.run(
             ['adb', 'connect', address],
             capture_output=True, timeout=_ADB_LOGCAT_TIMEOUT_S, check=False,
         )
+    except Exception as e:
+        logger.warning('[kodi-bridge] instanceguard adb connect failed: %s', e)
+
+    stdout_bytes = b''
+    try:
         result = subprocess.run(
             ['adb', '-s', address, 'logcat', '-d', '-v', 'time'],
-            capture_output=True, timeout=_ADB_LOGCAT_TIMEOUT_S, text=True, check=False,
-        )
-        subprocess.run(
-            ['adb', '-s', address, 'logcat', '-c'],
             capture_output=True, timeout=_ADB_LOGCAT_TIMEOUT_S, check=False,
         )
+        stdout_bytes = result.stdout or b''
     except Exception as e:
-        logger.warning('[kodi-bridge] instanceguard logcat check failed: %s', e)
-        return False
-    return 'InstanceGuard locked' in (result.stdout or '')
+        logger.warning('[kodi-bridge] instanceguard logcat dump failed: %s', e)
+    finally:
+        try:
+            subprocess.run(
+                ['adb', '-s', address, 'logcat', '-c'],
+                capture_output=True, timeout=_ADB_LOGCAT_TIMEOUT_S, check=False,
+            )
+        except Exception as e:
+            logger.warning('[kodi-bridge] instanceguard logcat clear failed: %s', e)
+
+    return 'InstanceGuard locked' in stdout_bytes.decode('utf-8', errors='replace')
 
 
 def _reopen_current_item() -> bool:
