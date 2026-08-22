@@ -330,8 +330,9 @@ _INSTANCEGUARD_STREAM_STALE_S = 90
 def run_instanceguard_watch(app) -> None:
     """Persistent background loop — started ONCE from worker.py in its own daemon
     thread, not an APScheduler interval job — that tails the device's Android log
-    continuously and reacts to an InstanceGuard hit (see trigger_channel()'s
-    docstring) within about a second of it happening. Runs forever; never returns.
+    continuously and reacts to a known-fatal playback failure (see the two
+    signatures documented below) within about a second of it happening. Runs
+    forever; never returns.
 
     Superseded the previous design (dump the whole logcat buffer + clear it every
     45s watchdog tick, confirmed live 2026-08-22): that worked, but detection
@@ -356,12 +357,36 @@ def run_instanceguard_watch(app) -> None:
     that real silence this long means the stream died, not that the device
     went quiet) is what actually detects that case and reconnects from it.
 
-    Deliberately narrow: only reacts to the literal `InstanceGuard locked`
-    string, the one failure signature confirmed to need this recovery.
-    Broadening to catch other stall signatures (e.g. `stream stalled`) was
-    considered and deferred — those can also fire on a transient blip that
-    would self-resolve on its own, and reacting to every one risks causing a
-    visible interruption for something that didn't need one.
+    Reacts to two confirmed failure signatures, both recovered the same way
+    (replay the current item):
+
+    1. `InstanceGuard locked` — the codec-reopen race documented above.
+    2. `Using codec: OMX.MTK.VIDEO.DECODER.AVC` with NO `.secure` suffix —
+       confirmed live 2026-08-22 (Roku, Ax Men) as a second, independent
+       failure: a reopen can land on a manifest moment where the actual
+       segment bytes are unencrypted (fc_bridge's default.py sets the DRM
+       listitem properties unconditionally whenever `license=` is present, so
+       this isn't the addon skipping DRM — inputstream.adaptive decided the
+       content itself isn't encrypted, almost certainly because it landed on
+       an ad-insertion segment the same way Philo's ad periods are cleartext,
+       see [[project_kodi_bridge_silent_render_freeze]]). Once the non-secure
+       codec is chosen it can never decrypt the real DRM content that follows,
+       and the session dies silently ~15s later (AddPacketsRenderer timeout →
+       OutputPicture timeout → stream stalled) with NO InstanceGuard line at
+       all — invisible to signature #1 alone. Reacting at the wrong-codec
+       moment instead of waiting for that eventual stall cuts this failure's
+       freeze time from ~15s down to about the same ~1s as InstanceGuard.
+       Matched by exact line suffix (`endswith`), not substring, so it can't
+       false-positive on the `.secure` variant.
+
+    Both signatures are specific to a confirmed-bad state with no legitimate
+    self-recovering case (a wrong-codec selection can't fix itself; every
+    kodi-bridge source is DRM-required by definition, see
+    KODI_BRIDGE_TRUSTED_SOURCES), so reacting immediately rather than waiting
+    to confirm a stall follows is the right tradeoff — broader stall
+    signatures with less specific causes (a bare `stream stalled` on its own)
+    are still deliberately NOT matched, since those can also fire on a
+    transient blip that would self-resolve.
 
     `app` is passed in explicitly (rather than relying on Flask's `current_app`)
     because this runs in a plain background thread with no request context of
@@ -415,12 +440,17 @@ def run_instanceguard_watch(app) -> None:
                     line, buf = buf.split(b'\n', 1)
                     # Matching on raw bytes (not decoding) sidesteps the non-UTF-8 byte
                     # that broke the old dump-based check's strict text=True decode.
-                    if b'InstanceGuard locked' not in line:
+                    line = line.rstrip(b'\r')
+                    if b'InstanceGuard locked' in line:
+                        reason = 'InstanceGuard hit'
+                    elif line.endswith(b'OMX.MTK.VIDEO.DECODER.AVC'):
+                        reason = 'non-secure codec selected'
+                    else:
                         continue
                     with app.app_context():
                         if not _is_believed_active():
                             continue
-                        logger.warning('[kodi-bridge] instanceguard watch: hit detected, replaying current item')
+                        logger.warning('[kodi-bridge] instanceguard watch: %s, replaying current item', reason)
                         recovered = _reopen_current_item()
                         logger.info('[kodi-bridge] instanceguard watch: recovery %s',
                                     'succeeded' if recovered else 'failed')
