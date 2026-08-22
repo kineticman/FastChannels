@@ -2959,6 +2959,7 @@ def amazon_dash_proxy(channel_id: str):
         mpd = mpd.replace('<Period ', f'<BaseURL>{cdn_base}</BaseURL>\n  <Period ', 1)
 
     if request.args.get('kodi_bridge'):
+        mpd = _mpd_strip_non_av_tracks(mpd, raw_id)
         mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)
 
     return Response(
@@ -3028,10 +3029,62 @@ def roku_dash_proxy(channel_id: str):
         except Exception as e:
             logger.warning('[roku-dash] kodi-bridge manifest fetch failed for %s: %s', raw_id[:40], e)
             return redirect(mpd_url, code=302)
-        mpd = _mpd_keep_highest_bitrate_video(r.text, raw_id)
+        mpd = _mpd_strip_non_av_tracks(r.text, raw_id)
+        mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)
         return Response(mpd, mimetype='application/dash+xml')
 
     return redirect(mpd_url, code=302)
+
+
+def _mpd_strip_non_av_tracks(mpd: str, channel_id: str) -> str:
+    """Strip every non-video/audio AdaptationSet (timed-metadata, subtitle,
+    thumbnail tracks, etc.) from a kodi-bridge manifest.
+
+    Confirmed live 2026-08-22 (Amazon Prime Free, NBC Sports NOW): a live manifest's
+    Period boundary where an auxiliary track (an 'application/mp4' timed-metadata
+    AdaptationSet, in this case) appears or disappears forces inputstream.adaptive to
+    fully reinitialize ALL codecs at that boundary — including video/audio, which were
+    otherwise unchanged — and that reinitialization races the still-releasing prior
+    MediaCodec instance the same way a real channel change does (InstanceGuard locked,
+    see _mpd_keep_highest_bitrate_video below). Confirmed via adb logcat across 10
+    consecutive same-composition Period transitions afterward: none triggered a
+    reopen, only the composition-changing one did — a stable timeline isn't what
+    matters here, a stable set of tracks is. Kodi's HDMI-bridge use case never uses
+    these auxiliary tracks (captions come from the video stream's own embedded
+    CEA-608/708 data via set_captions_enabled(), not a manifest subtitle track), so
+    removing them outright is safe and sidesteps the whole class of composition-change
+    reopens regardless of which Periods a source's origin decides to add or drop them
+    on. Deliberately narrower than merging Periods (which would need the segment
+    timeline/numbering to stay continuous across the join, unverified here) — this
+    only ever removes non-AV tracks, never touches video/audio.
+    """
+    try:
+        root = ET.fromstring(mpd.encode('utf-8'))
+    except ET.ParseError:
+        logger.debug('[dash] MPD parse failed for %s; returning original manifest', channel_id[:40])
+        return mpd
+
+    namespace = ''
+    if root.tag.startswith('{'):
+        namespace = root.tag[1:].split('}', 1)[0]
+        ET.register_namespace('', namespace)
+
+    period_tag = f'{{{namespace}}}Period' if namespace else 'Period'
+    adaptation_tag = f'{{{namespace}}}AdaptationSet' if namespace else 'AdaptationSet'
+
+    changed = False
+    for period in root.iter(period_tag):
+        for adaptation_set in list(period.findall(adaptation_tag)):
+            content_type = adaptation_set.get('contentType') or adaptation_set.get('mimeType', '')
+            if not (content_type.startswith('video') or content_type.startswith('audio')):
+                period.remove(adaptation_set)
+                changed = True
+
+    if not changed:
+        return mpd
+
+    logger.debug('[dash] kodi-bridge: stripped non-AV tracks for %s', channel_id[:40])
+    return ET.tostring(root, encoding='unicode', xml_declaration=True)
 
 
 def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
@@ -3510,6 +3563,7 @@ def philo_dash_proxy(channel_id: str):
     manifest_text = re.sub(r'<Location>.*?</Location>\s*', '', r.text, flags=re.DOTALL)
 
     if request.args.get('kodi_bridge'):
+        manifest_text = _mpd_strip_non_av_tracks(manifest_text, raw_id)
         manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
 
     return Response(
@@ -3580,6 +3634,7 @@ def sling_dash_proxy(channel_id: str):
 
     mpd = r.text
     if request.args.get('kodi_bridge'):
+        mpd = _mpd_strip_non_av_tracks(mpd, raw_id)
         mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)
 
     return Response(
@@ -3616,6 +3671,7 @@ def vidaa_dash_proxy(channel_id: str):
 
     mpd = r.text
     if request.args.get('kodi_bridge'):
+        mpd = _mpd_strip_non_av_tracks(mpd, channel_id)
         mpd = _mpd_keep_highest_bitrate_video(mpd, channel_id)
 
     return Response(
@@ -3709,6 +3765,7 @@ def pbs_dash_proxy(channel_id: str):
         )
 
     if request.args.get('kodi_bridge'):
+        manifest_text = _mpd_strip_non_av_tracks(manifest_text, raw_id)
         manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
 
     return Response(
@@ -3821,6 +3878,7 @@ def nbc_tve_dash_proxy(channel_id: str):
         )
 
     if request.args.get('kodi_bridge'):
+        manifest_text = _mpd_strip_non_av_tracks(manifest_text, raw_id)
         manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
 
     return Response(

@@ -3625,6 +3625,7 @@ if __name__ == '__main__':
                         return
                     if kodi_bridge.is_alive(timeout=3):
                         kodi_bridge.check_idle_and_stop()
+                        kodi_bridge.check_instanceguard_and_recover()
                         return
                     logger.warning('[kodi-bridge] watchdog: device unresponsive, attempting wake/relaunch')
                     recovered = kodi_bridge.wake_and_relaunch()

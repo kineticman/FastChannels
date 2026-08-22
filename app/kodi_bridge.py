@@ -318,6 +318,91 @@ def dvr_encoder_active(timeout: int = 5) -> bool | None:
     return any(str(v).startswith(needle) for v in activity.values())
 
 
+_ADB_LOGCAT_TIMEOUT_S = 10
+
+
+def _instanceguard_hit_and_clear() -> bool:
+    """Dump Kodi's Android log and clear the buffer so the next watchdog tick only
+    sees what's new since this one. Returns True if the InstanceGuard codec-open
+    race (see trigger_channel()'s docstring) appeared since the last check.
+
+    Clears the WHOLE device logcat buffer every tick (not just Kodi's own lines) —
+    this device is dedicated to the HDMI bridge, so that's an acceptable trade-off
+    for avoiding a timezone-sensitive `-T <timestamp>` cursor (adb logcat -T takes
+    the DEVICE's local clock, which isn't guaranteed to match this container's).
+    """
+    try:
+        address = _adb_address()
+        # adb connect is idempotent/cheap when already connected ("already connected
+        # to ...") but required first — confirmed live 2026-08-22: without it, this
+        # container's adb server has no device in its list yet (`adb devices` empty)
+        # and `logcat -d` just hangs on "- waiting for device -" until it times out,
+        # rather than erroring immediately. wake_and_relaunch() already does this same
+        # connect before its own adb calls; this path needs it too since it can run
+        # without wake_and_relaunch ever having been triggered (is_alive() succeeds
+        # via JSON-RPC over HTTP, not adb, so adb may never have connected at all).
+        subprocess.run(
+            ['adb', 'connect', address],
+            capture_output=True, timeout=_ADB_LOGCAT_TIMEOUT_S, check=False,
+        )
+        result = subprocess.run(
+            ['adb', '-s', address, 'logcat', '-d', '-v', 'time'],
+            capture_output=True, timeout=_ADB_LOGCAT_TIMEOUT_S, text=True, check=False,
+        )
+        subprocess.run(
+            ['adb', '-s', address, 'logcat', '-c'],
+            capture_output=True, timeout=_ADB_LOGCAT_TIMEOUT_S, check=False,
+        )
+    except Exception as e:
+        logger.warning('[kodi-bridge] instanceguard logcat check failed: %s', e)
+        return False
+    return 'InstanceGuard locked' in (result.stdout or '')
+
+
+def _reopen_current_item() -> bool:
+    """Recover from a silent freeze by replaying whatever Kodi currently has
+    loaded — Player.Stop + Player.Open of the SAME item. Confirmed live
+    2026-08-22 as the only known recovery: the freeze is otherwise invisible to
+    Player.GetProperties, which keeps reporting speed=1 throughout."""
+    try:
+        players = (_jsonrpc('Player.GetActivePlayers', timeout=2).get('result')) or []
+        if not players:
+            return False
+        item = _jsonrpc('Player.GetItem', {'playerid': players[0]['playerid'], 'properties': ['file']}, timeout=5)
+        file_url = (item.get('result') or {}).get('item', {}).get('file')
+        if not file_url:
+            return False
+        for player in players:
+            _jsonrpc('Player.Stop', {'playerid': player['playerid']}, timeout=2)
+        time.sleep(_CODEC_RELEASE_GRACE_S)
+        result = _jsonrpc('Player.Open', {'item': {'file': file_url}}, timeout=5)
+    except Exception as e:
+        logger.warning('[kodi-bridge] instanceguard recovery failed: %s', e)
+        return False
+    return result.get('result') == 'OK'
+
+
+def check_instanceguard_and_recover() -> bool:
+    """Watchdog tick (worker.py, every 45s): detect the InstanceGuard codec-open
+    race via Kodi's own Android log — confirmed live 2026-08-22 to be the ONLY
+    place this failure is visible at all; Player.GetProperties, the app's own
+    logs, and the DVR-side encoder-activity check all report healthy throughout
+    (see dev/kodi/README.md and project memory for the investigation). Recovers
+    by replaying the current item. No-ops (without even touching logcat) when
+    nothing's believed active, mirroring check_idle_and_stop()'s gate.
+
+    Returns True if a recovery was performed.
+    """
+    if not _is_believed_active():
+        return False
+    if not _instanceguard_hit_and_clear():
+        return False
+    logger.warning('[kodi-bridge] watchdog: InstanceGuard hit detected, replaying current item')
+    recovered = _reopen_current_item()
+    logger.info('[kodi-bridge] watchdog: InstanceGuard recovery %s', 'succeeded' if recovered else 'failed')
+    return recovered
+
+
 def check_idle_and_stop() -> None:
     """Called by the watchdog on each tick (dev/kodi — see _ENCODER_IDLE_GRACE_S).
 
