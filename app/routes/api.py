@@ -5648,6 +5648,9 @@ def mvpd_browser_login_state():
     hint = r.get('mvpd:browser-login:hint')
     if hint:
         result['hint'] = hint.decode('utf-8', 'replace') if isinstance(hint, bytes) else hint
+    log_lines = r.lrange('tve:browser-login:log', -40, -1)
+    if log_lines:
+        result['activity_log'] = [l.decode('utf-8', 'replace') if isinstance(l, bytes) else l for l in log_lines]
     return jsonify(result)
 
 
@@ -5779,6 +5782,9 @@ def google_signin_state():
     hint = r.get('google-signin:browser-login:hint')
     if hint:
         result['hint'] = hint.decode('utf-8', 'replace') if isinstance(hint, bytes) else hint
+    log_lines = r.lrange('tve:browser-login:log', -40, -1)
+    if log_lines:
+        result['activity_log'] = [l.decode('utf-8', 'replace') if isinstance(l, bytes) else l for l in log_lines]
     return jsonify(result)
 
 
@@ -5846,6 +5852,9 @@ def nbc_browser_login_state():
     hint = r.get('nbc-mvpd:browser-login:hint')
     if hint:
         result['hint'] = hint.decode('utf-8', 'replace') if isinstance(hint, bytes) else hint
+    log_lines = r.lrange('tve:browser-login:log', -40, -1)
+    if log_lines:
+        result['activity_log'] = [l.decode('utf-8', 'replace') if isinstance(l, bytes) else l for l in log_lines]
     return jsonify(result)
 
 
@@ -5912,6 +5921,9 @@ def fox_browser_login_state():
     hint = r.get('fox-mvpd:browser-login:hint')
     if hint:
         result['hint'] = hint.decode('utf-8', 'replace') if isinstance(hint, bytes) else hint
+    log_lines = r.lrange('tve:browser-login:log', -40, -1)
+    if log_lines:
+        result['activity_log'] = [l.decode('utf-8', 'replace') if isinstance(l, bytes) else l for l in log_lines]
     return jsonify(result)
 
 

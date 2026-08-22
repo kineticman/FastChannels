@@ -27,6 +27,69 @@ MVPD_BROWSER_LOGIN_HINT_KEY = 'mvpd:browser-login:hint'
 # sure, take a look" nudge, not a "this IS broken" claim.
 _MVPD_STUCK_HINT_SECONDS = 10.0
 
+# Single shared key across every MVPD/network family (legacy, NBC, FOX,
+# FOX One, Google, AMCN, Discovery) — only one browser-login job can hold
+# the shared Camoufox profile at a time (see MVPD_LOGIN_FAMILIES's comment
+# in settings.js), so there's never more than one run's worth of activity to
+# show and no need to namespace this per family. Feeds the "Sign in to all"
+# modal's activity feed: the per-network status message only ever shows the
+# latest coarse state ("Signing in…"), which during a long silent stretch
+# (e.g. polling Adobe for server-side completion after the page navigates
+# away) reads as stuck even though real work is happening — reported live
+# 2026-08-22. This mirrors the existing logger.info/.warning calls already
+# scattered through every run_*_browser_login() instead of duplicating their
+# messages into set_status() calls by hand.
+TVE_BROWSER_LOGIN_LOG_KEY = 'tve:browser-login:log'
+_TVE_BROWSER_LOGIN_LOG_MAX = 60
+_TVE_BROWSER_LOGIN_LOG_TTL_SECONDS = 900
+
+
+class _BrowserLoginActivityLogHandler(logging.Handler):
+    """Mirrors INFO+ records from the app.tve.browser_login logger tree into
+    a capped Redis list. Installed/removed per-run by install/uninstall_
+    browser_login_activity_log() below — never left attached between runs."""
+
+    def __init__(self, redis_conn):
+        super().__init__(level=logging.INFO)
+        self._redis = redis_conn
+        self.setFormatter(logging.Formatter('%(asctime)s  %(message)s', datefmt='%H:%M:%S'))
+
+    def emit(self, record):
+        try:
+            line = self.format(record)
+            pipe = self._redis.pipeline()
+            pipe.rpush(TVE_BROWSER_LOGIN_LOG_KEY, line)
+            pipe.ltrim(TVE_BROWSER_LOGIN_LOG_KEY, -_TVE_BROWSER_LOGIN_LOG_MAX, -1)
+            pipe.expire(TVE_BROWSER_LOGIN_LOG_KEY, _TVE_BROWSER_LOGIN_LOG_TTL_SECONDS)
+            pipe.execute()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def install_browser_login_activity_log(redis_conn):
+    """Call once near the top of each run_*_browser_login(), right after its
+    own Redis connection is confirmed live. Clears out whatever the previous
+    run left behind (so re-opening the modal later never shows a stale
+    network's log lines) and returns the handler to pass to
+    uninstall_browser_login_activity_log() in that function's outer
+    `finally`."""
+    try:
+        redis_conn.delete(TVE_BROWSER_LOGIN_LOG_KEY)
+    except Exception:  # noqa: BLE001
+        pass
+    handler = _BrowserLoginActivityLogHandler(redis_conn)
+    logging.getLogger('app.tve.browser_login').addHandler(handler)
+    return handler
+
+
+def uninstall_browser_login_activity_log(handler):
+    if handler is None:
+        return
+    try:
+        logging.getLogger('app.tve.browser_login').removeHandler(handler)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 def _safe_page_url(page) -> str:
     try:

@@ -33,6 +33,8 @@ from app.tve.browser_login.common import (
     _BROWSER_LOGIN_MAX_ATTEMPTS,
     _BrowserSessionDied,
     _is_browser_death,
+    install_browser_login_activity_log,
+    uninstall_browser_login_activity_log,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,6 +81,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
+    _activity_handler = None
     try:
         import json as _json_login
         import requests
@@ -90,6 +93,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         except Exception as exc:  # noqa: BLE001
             logger.warning('[fox-mvpd-login] Redis unavailable, aborting: %s', exc)
             return
+        _activity_handler = install_browser_login_activity_log(r)
 
         # Same teardown-clobber guard as run_mvpd_browser_login: a dead
         # browser's `with` teardown can raise while unwinding a successful
@@ -624,5 +628,6 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 pass
             return
     finally:
+        uninstall_browser_login_activity_log(_activity_handler)
         if not _ctx_popped['v']:
             _ctx.pop()

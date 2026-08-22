@@ -631,6 +631,8 @@ function openMvpdLoginModal(family, requestorId) {
   document.getElementById('mvpd-login-hint').style.display = 'none';
   status.textContent = 'Starting…';
   _renderMvpdLoginSteps([]);
+  _mvpdLoginLastLogLine = null;
+  _renderMvpdLoginLog([]);
   modal.classList.add('open');
   _mvpdLoginBeginRequest(cfg, requestorId);
 }
@@ -762,6 +764,28 @@ function _renderMvpdLoginSteps(steps) {
   }).join('');
 }
 
+// Scrolling activity feed — mirrors the underlying run_*_browser_login()'s
+// own logger.info/.warning calls (page navigations, JS errors on the target
+// site, the multi-minute "polling for server-side completion" stretch after
+// the page closes itself) so long silent gaps between status-line changes
+// don't read as a hung modal. See app.tve.browser_login.common's
+// install_browser_login_activity_log — one shared server-side log, since
+// only one sign-in job runs at a time. Backend already caps/trims the list,
+// so this just renders whatever it's given.
+let _mvpdLoginLastLogLine = null;
+function _renderMvpdLoginLog(lines) {
+  const el = document.getElementById('mvpd-login-log');
+  if (!el) return;
+  if (!Array.isArray(lines) || !lines.length) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.style.display = 'block';
+  el.textContent = lines.join('\n');
+  const latest = lines[lines.length - 1];
+  if (latest !== _mvpdLoginLastLogLine) {
+    _mvpdLoginLastLogLine = latest;
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
 async function _pollMvpdLoginModal() {
   if (!_mvpdLoginActive) return;
   try {
@@ -800,6 +824,7 @@ async function _pollMvpdLoginModal() {
       frame.style.visibility = 'visible';
     }
     _renderMvpdLoginSteps(d.steps);
+    _renderMvpdLoginLog(d.activity_log);
 
     // Server only sets this once a silent/automated wait has run long enough
     // that it genuinely can't tell "still working in the background" from
@@ -874,6 +899,8 @@ async function signInToAllTve() {
   _mvpdLoginDone = false;
   if (_mvpdLoginPollTimer) { clearTimeout(_mvpdLoginPollTimer); _mvpdLoginPollTimer = null; }
   _renderMvpdLoginSteps([]);
+  _mvpdLoginLastLogLine = null;
+  _renderMvpdLoginLog([]);
   modal.classList.add('open');
   status.textContent = 'Loading network list…';
 
@@ -1083,6 +1110,7 @@ function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
           } else {
             hintEl.style.display = 'none';
           }
+          _renderMvpdLoginLog(d.activity_log);
           if (d.state === 'success') { resolve({ ok: true, message: d.message || 'Signed in.' }); return; }
           if (d.state === 'error' || d.state === 'stopped') { resolve({ ok: false, message: d.message || d.state }); return; }
           status.textContent = d.message || `Signing in to ${label}…`;

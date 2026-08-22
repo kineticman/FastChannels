@@ -27,6 +27,8 @@ from app.tve.browser_login.common import (
     _log_youtubetv_gateway_diagnostics,
     _YOUTUBETV_ISOLATED_PROFILE_DIR,
     _YOUTUBETV_CAMOUFOX_FIREFOX_PREFS,
+    install_browser_login_activity_log,
+    uninstall_browser_login_activity_log,
 )
 
 logger = logging.getLogger(__name__)
@@ -351,6 +353,7 @@ def run_amcn_browser_login(mso_id: str):
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
+    _activity_handler = None
     try:
         import json as _json_login
         from app.scrapers.amcn_tve import AMCNetworksTVEScraper, CHANNELS
@@ -361,6 +364,7 @@ def run_amcn_browser_login(mso_id: str):
         except Exception as exc:  # noqa: BLE001
             logger.warning('[amcn-mvpd-login] Redis unavailable, aborting: %s', exc)
             return
+        _activity_handler = install_browser_login_activity_log(r)
 
         def set_status(state: str, message: str = '', url: str = ''):
             try:
@@ -462,5 +466,6 @@ def run_amcn_browser_login(mso_id: str):
             _record_tve_login_error('amcn', message)
             set_status('error', message)
     finally:
+        uninstall_browser_login_activity_log(_activity_handler)
         if not _ctx_popped['v']:
             _ctx.pop()

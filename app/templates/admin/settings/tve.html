@@ -82,6 +82,7 @@
       <p id="mvpd-login-status" style="color:var(--text-subtle);margin:0 0 0.75rem;font-size:0.9rem;line-height:1.5">Launching browser…</p>
       <div id="mvpd-login-steps" style="display:flex;flex-wrap:wrap;gap:0.35rem;margin:0 0 0.75rem"></div>
       <p id="mvpd-login-hint" style="display:none;color:var(--warning-soft,#b8860b);background:var(--warning-bg-2,rgba(184,134,11,0.12));border:1px solid var(--warning-border,rgba(184,134,11,0.3));border-radius:4px;padding:0.5rem 0.7rem;margin:0 0 0.75rem;font-size:0.82rem;line-height:1.4"></p>
+      <div id="mvpd-login-log" style="display:none;max-height:120px;overflow-y:auto;background:var(--bg-hover,rgba(0,0,0,0.25));border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.6rem;margin:0 0 0.75rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;line-height:1.55;color:var(--text-subtle);white-space:pre-wrap;word-break:break-word"></div>
       <img id="mvpd-login-frame" alt="Provider sign-in" tabindex="0" draggable="false"
            onmousedown="mvpdLoginFrameMousedown(event)" onkeydown="mvpdLoginFrameKeydown(event)"
            onmousemove="mvpdLoginFrameMousemove(event)" ondragstart="return false;"

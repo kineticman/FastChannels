@@ -39,6 +39,8 @@ from app.tve.browser_login.common import (
     _BROWSER_LOGIN_MAX_ATTEMPTS,
     _BrowserSessionDied,
     _is_browser_death,
+    install_browser_login_activity_log,
+    uninstall_browser_login_activity_log,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,6 +119,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
+    _activity_handler = None
     try:
         import json as _json_login
 
@@ -126,6 +129,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
         except Exception as exc:  # noqa: BLE001
             logger.warning('[mvpd-login] Redis unavailable, aborting: %s', exc)
             return
+        _activity_handler = install_browser_login_activity_log(r)
 
         # Live-updated checklist (single entry — one network per call) so the
         # modal shows real progress instead of one static message.
@@ -741,5 +745,6 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 pass
             return
     finally:
+        uninstall_browser_login_activity_log(_activity_handler)
         if not _ctx_popped['v']:
             _ctx.pop()

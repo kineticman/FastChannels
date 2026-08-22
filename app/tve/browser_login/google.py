@@ -11,6 +11,8 @@ from app.tve.browser_login.common import (
     _exchange_and_save_google_master_token,
     _relay_input_and_screenshot,
     _BrowserSessionDied,
+    install_browser_login_activity_log,
+    uninstall_browser_login_activity_log,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,7 @@ def run_google_signin():
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
+    _activity_handler = None
     try:
         import json as _json_login
 
@@ -64,6 +67,7 @@ def run_google_signin():
         except Exception as exc:  # noqa: BLE001
             logger.warning('[google-signin] Redis unavailable, aborting: %s', exc)
             return
+        _activity_handler = install_browser_login_activity_log(r)
 
         _terminal_status_set = {'v': False}
 
@@ -170,5 +174,6 @@ def run_google_signin():
             return
         set_status('success', f"Signed in as {data.get('email', '?')}. Every YouTubeTV network can now sign in silently.")
     finally:
+        uninstall_browser_login_activity_log(_activity_handler)
         if not _ctx_popped['v']:
             _ctx.pop()
