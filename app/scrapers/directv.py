@@ -115,11 +115,16 @@ _UA = (
     "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
 )
 
-# Refresh well before DirecTV's own session naturally expires. Observed
-# channel/v1 playback auth reject as early as ~11h40m, and scrape_interval
-# is also 12h, so a 12h TTL left no real margin for the proactive check to
-# beat a real expiry — dropped to 10h to give it headroom.
-_TOKEN_TTL = 10 * 3600
+# Refresh well before DirecTV's own session naturally expires. channel/v1
+# playback tolerates the bearer token far longer (observed rejects as late
+# as ~11h40m), but that's a red herring for staleness purposes: resolve()
+# serves cached playback URLs for up to _PLAYBACK_CACHE_TTL without ever
+# re-validating the token, and the widevine activate/license calls — which
+# actually enforce the token's real JWT `exp` server-side — were observed
+# rejecting it at exactly 2h00m from capture (2026-08-22 incident: captured
+# 09:35:27Z, "JWT expired at 11:35:27Z"). Size the TTL off that harder DRM
+# limit, not the looser channel/v1 one.
+_TOKEN_TTL = 75 * 60
 _REAUTH_LOCK_TTL = 20 * 60  # avoid spawning overlapping background logins
 
 # Live-captured channel/v1 responses reported duration ~3874s — cache with

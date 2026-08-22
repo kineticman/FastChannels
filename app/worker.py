@@ -3644,10 +3644,12 @@ if __name__ == '__main__':
             # other caller is the scheduled scrape job — which fires on a fixed
             # 12h cadence (scrape_interval) counted from the last scrape, not from
             # when the token was actually captured. That left gaps where the real
-            # DirecTV session (observed dying as early as ~11h40m) went stale hours
-            # before the next scheduled scrape could catch it, so play requests hit
-            # a reactive 401 instead. Check independently on a tighter interval so
-            # background reauth actually fires with margin before real expiry.
+            # DirecTV session went stale before the next scheduled scrape could
+            # catch it, so play requests hit a reactive 401/403 instead. Check
+            # independently on a tighter interval so background reauth actually
+            # fires with margin before real expiry — _TOKEN_TTL is sized off the
+            # widevine activate/license JWT, observed dying at exactly 2h from
+            # capture (2026-08-22), so this interval has to be well under that.
             from app.scrapers.directv import DirectvScraper
             try:
                 with flask_app.app_context():
@@ -3665,7 +3667,7 @@ if __name__ == '__main__':
             except Exception as e:
                 logger.warning('[directv] token watchdog check failed: %s', e)
 
-        scheduler.add_job(_scheduled_directv_token_watchdog, 'interval', minutes=30,
+        scheduler.add_job(_scheduled_directv_token_watchdog, 'interval', minutes=15,
                           id='directv_token_watchdog', max_instances=1, coalesce=True,
                           misfire_grace_time=300)
 
