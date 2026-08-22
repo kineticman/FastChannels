@@ -2961,6 +2961,7 @@ def amazon_dash_proxy(channel_id: str):
     if request.args.get('kodi_bridge'):
         mpd = _mpd_strip_non_av_tracks(mpd, raw_id)
         mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)
+        mpd = _mpd_keep_highest_bitrate_audio(mpd, raw_id)
 
     return Response(
         mpd,
@@ -3031,6 +3032,7 @@ def roku_dash_proxy(channel_id: str):
             return redirect(mpd_url, code=302)
         mpd = _mpd_strip_non_av_tracks(r.text, raw_id)
         mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)
+        mpd = _mpd_keep_highest_bitrate_audio(mpd, raw_id)
         return Response(mpd, mimetype='application/dash+xml')
 
     return redirect(mpd_url, code=302)
@@ -3087,11 +3089,13 @@ def _mpd_strip_non_av_tracks(mpd: str, channel_id: str) -> str:
     return ET.tostring(root, encoding='unicode', xml_declaration=True)
 
 
-def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
-    """Strip every video Representation except the single highest-bandwidth one.
+def _mpd_keep_highest_bitrate(mpd: str, channel_id: str, mime_prefix: str, label: str) -> str:
+    """Strip every Representation of the given content type (mime_prefix) except
+    the single highest-bandwidth one, collapsing sibling AdaptationSets of that
+    type down to one.
 
-    Confirmed live 2026-08-21 on the Kodi HDMI-bridge Fire TV Stick: its MediaTek
-    secure decoder only permits one secure MediaCodec instance at a time
+    Confirmed live 2026-08-21 (video) on the Kodi HDMI-bridge Fire TV Stick: its
+    MediaTek secure decoder only permits one secure MediaCodec instance at a time
     (CDVDVideoCodecAndroidMediaCodec::Open - InstanceGuard locked), so
     inputstream.adaptive's normal mid-stream ABR bump to a better representation
     fails and playback is stuck at whichever representation the codec opened
@@ -3099,11 +3103,23 @@ def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
     conservatively. Advertising only the top rendition means the codec opens
     once at full quality and this device never attempts (or needs) a switch.
 
+    Confirmed live 2026-08-22 (audio, PBS Kids): the SAME race also fires across
+    a live-manifest Period boundary when a source keeps multiple audio
+    AdaptationSets (e.g. a main AAC-LC track plus a separate HE-AAC "descriptive
+    audio" group) and one Period's origin drops/reshuffles which Representations
+    belong to which group — a composition change _mpd_strip_non_av_tracks doesn't
+    catch, since both groups are legitimately audio/*. Collapsing to a single
+    audio Representation per Period, picked the same deterministic way (highest
+    bandwidth) in every Period, keeps that pick's Representation `id` stable
+    across Period boundaries in every case observed so far, avoiding the reopen
+    regardless of what alternate audio tracks a source's origin adds or drops.
+
     Handles both ABR layouts seen across trusted sources: multiple Representations
-    inside one video AdaptationSet (Roku, Amazon, Sling), and — confirmed on Philo —
-    the ladder split across multiple sibling video AdaptationSets (same `group`,
-    fewer/one Representation each) instead. Either way, exactly one Representation
-    in exactly one video AdaptationSet per Period survives.
+    inside one AdaptationSet of this type (Roku, Amazon, Sling video), and —
+    confirmed on Philo (video) and PBS (audio) — the ladder/alternates split
+    across multiple sibling AdaptationSets of the same type instead. Either way,
+    exactly one Representation in exactly one AdaptationSet of this type per
+    Period survives.
     """
     try:
         root = ET.fromstring(mpd.encode('utf-8'))
@@ -3124,9 +3140,9 @@ def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
 
     changed = False
     for period in root.iter(period_tag):
-        video_sets = [a for a in period.findall(adaptation_tag) if a.get('mimeType', '').startswith('video/')]
+        matching_sets = [a for a in period.findall(adaptation_tag) if a.get('mimeType', '').startswith(mime_prefix)]
         best = None  # (bandwidth, adaptation_set, representation)
-        for adaptation_set in video_sets:
+        for adaptation_set in matching_sets:
             for rep in adaptation_set.findall(representation_tag):
                 bandwidth = int(rep.get('bandwidth') or 0)
                 if best is None or bandwidth > best[0]:
@@ -3135,7 +3151,7 @@ def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
             continue
         _, best_set, best_rep = best
         removed_sibling = False
-        for adaptation_set in video_sets:
+        for adaptation_set in matching_sets:
             if adaptation_set is best_set:
                 for rep in list(adaptation_set.findall(representation_tag)):
                     if rep is not best_rep:
@@ -3161,8 +3177,16 @@ def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
     if not changed:
         return mpd
 
-    logger.debug('[dash] kodi-bridge: stripped to highest-bitrate video representation for %s', channel_id[:40])
+    logger.debug('[dash] kodi-bridge: stripped to highest-bitrate %s representation for %s', label, channel_id[:40])
     return ET.tostring(root, encoding='unicode', xml_declaration=True)
+
+
+def _mpd_keep_highest_bitrate_video(mpd: str, channel_id: str) -> str:
+    return _mpd_keep_highest_bitrate(mpd, channel_id, 'video/', 'video')
+
+
+def _mpd_keep_highest_bitrate_audio(mpd: str, channel_id: str) -> str:
+    return _mpd_keep_highest_bitrate(mpd, channel_id, 'audio/', 'audio')
 
 
 
@@ -3565,6 +3589,7 @@ def philo_dash_proxy(channel_id: str):
     if request.args.get('kodi_bridge'):
         manifest_text = _mpd_strip_non_av_tracks(manifest_text, raw_id)
         manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
+        manifest_text = _mpd_keep_highest_bitrate_audio(manifest_text, raw_id)
 
     return Response(
         manifest_text,
@@ -3636,6 +3661,7 @@ def sling_dash_proxy(channel_id: str):
     if request.args.get('kodi_bridge'):
         mpd = _mpd_strip_non_av_tracks(mpd, raw_id)
         mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)
+        mpd = _mpd_keep_highest_bitrate_audio(mpd, raw_id)
 
     return Response(
         mpd,
@@ -3673,6 +3699,7 @@ def vidaa_dash_proxy(channel_id: str):
     if request.args.get('kodi_bridge'):
         mpd = _mpd_strip_non_av_tracks(mpd, channel_id)
         mpd = _mpd_keep_highest_bitrate_video(mpd, channel_id)
+        mpd = _mpd_keep_highest_bitrate_audio(mpd, channel_id)
 
     return Response(
         mpd,
@@ -3767,6 +3794,7 @@ def pbs_dash_proxy(channel_id: str):
     if request.args.get('kodi_bridge'):
         manifest_text = _mpd_strip_non_av_tracks(manifest_text, raw_id)
         manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
+        manifest_text = _mpd_keep_highest_bitrate_audio(manifest_text, raw_id)
 
     return Response(
         manifest_text,
@@ -3880,6 +3908,7 @@ def nbc_tve_dash_proxy(channel_id: str):
     if request.args.get('kodi_bridge'):
         manifest_text = _mpd_strip_non_av_tracks(manifest_text, raw_id)
         manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
+        manifest_text = _mpd_keep_highest_bitrate_audio(manifest_text, raw_id)
 
     return Response(
         manifest_text,
