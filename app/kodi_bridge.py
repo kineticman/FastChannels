@@ -14,6 +14,7 @@ cause) lives in dev/kodi/README.md.
 """
 import logging
 import re
+import select
 import subprocess
 import time
 from urllib.parse import urlencode
@@ -319,66 +320,122 @@ def dvr_encoder_active(timeout: int = 5) -> bool | None:
 
 
 _ADB_LOGCAT_TIMEOUT_S = 10
+_INSTANCEGUARD_WATCH_RETRY_S = 5
+_INSTANCEGUARD_WATCH_MAX_BACKOFF_S = 30
+_INSTANCEGUARD_WATCH_IDLE_POLL_S = 30
+_INSTANCEGUARD_WATCH_SELECT_S = 5
+_INSTANCEGUARD_STREAM_STALE_S = 90
 
 
-def _instanceguard_hit_and_clear() -> bool:
-    """Dump Kodi's Android log and clear the buffer so the next watchdog tick only
-    sees what's new since this one. Returns True if the InstanceGuard codec-open
-    race (see trigger_channel()'s docstring) appeared since the last check.
+def run_instanceguard_watch(app) -> None:
+    """Persistent background loop — started ONCE from worker.py in its own daemon
+    thread, not an APScheduler interval job — that tails the device's Android log
+    continuously and reacts to an InstanceGuard hit (see trigger_channel()'s
+    docstring) within about a second of it happening. Runs forever; never returns.
 
-    Clears the WHOLE device logcat buffer every tick (not just Kodi's own lines) —
-    this device is dedicated to the HDMI bridge, so that's an acceptable trade-off
-    for avoiding a timezone-sensitive `-T <timestamp>` cursor (adb logcat -T takes
-    the DEVICE's local clock, which isn't guaranteed to match this container's).
+    Superseded the previous design (dump the whole logcat buffer + clear it every
+    45s watchdog tick, confirmed live 2026-08-22): that worked, but detection
+    latency was up to 45s on top of recovery time. Keeping one `adb logcat`
+    process attached continuously and reacting to each new line as it's written
+    cuts worst-case freeze duration down to roughly just the recovery time
+    (~1s), since the log line appears at the moment Kodi hits the race, not at
+    the next scheduled poll.
 
-    The clear is unconditional (runs even if the dump above raised) and the dump is
-    decoded leniently rather than with subprocess's text=True — confirmed live
-    2026-08-22: some other app's log line contained a non-UTF-8 byte, text=True's
-    strict decode raised before the clear call ever ran, and that permanently wedged
-    every following tick on the exact same byte (it never ages out because nothing
-    was clearing the buffer that would have removed it).
+    Uses select() on the subprocess's stdout fd, polled every
+    _INSTANCEGUARD_WATCH_SELECT_S, rather than a plain blocking
+    `for line in proc.stdout` iterator — confirmed live 2026-08-22 that a first
+    version using the plain blocking iterator went silently deaf for 30+ minutes
+    with zero reaction: `adb devices` still showed the device authorized, a
+    fresh one-off `logcat -d` showed current data, and the watch's own `adb
+    logcat` process was still running (not crashed, no EOF) — the long-lived
+    adb-over-WiFi TCP stream had just stopped delivering to that ONE reader
+    with no error and no close, so the blocking iterator had no way to ever
+    notice. Tracking time since the last line received and force-killing the
+    subprocess once it exceeds _INSTANCEGUARD_STREAM_STALE_S (Kodi produces
+    background chatter — wlan_stats, session/reporter lines — often enough
+    that real silence this long means the stream died, not that the device
+    went quiet) is what actually detects that case and reconnects from it.
+
+    Deliberately narrow: only reacts to the literal `InstanceGuard locked`
+    string, the one failure signature confirmed to need this recovery.
+    Broadening to catch other stall signatures (e.g. `stream stalled`) was
+    considered and deferred — those can also fire on a transient blip that
+    would self-resolve on its own, and reacting to every one risks causing a
+    visible interruption for something that didn't need one.
+
+    `app` is passed in explicitly (rather than relying on Flask's `current_app`)
+    because this runs in a plain background thread with no request context of
+    its own — mirrors the `with flask_app.app_context():` pattern the scheduled
+    watchdog jobs in worker.py already use.
     """
-    try:
-        address = _adb_address()
-    except KodiBridgeNotConfigured as e:
-        logger.warning('[kodi-bridge] instanceguard check: %s', e)
-        return False
-
-    try:
-        # Idempotent/cheap when already connected ("already connected to ...") but
-        # required first — confirmed live 2026-08-22: without it, this container's
-        # adb server has no device in its list yet (`adb devices` empty) and
-        # `logcat -d` just hangs on "- waiting for device -" until it times out,
-        # rather than erroring immediately. wake_and_relaunch() already does this
-        # same connect before its own adb calls; this path needs it too since it can
-        # run without wake_and_relaunch ever having been triggered (is_alive()
-        # succeeds via JSON-RPC over HTTP, not adb, so adb may never have connected).
-        subprocess.run(
-            ['adb', 'connect', address],
-            capture_output=True, timeout=_ADB_LOGCAT_TIMEOUT_S, check=False,
-        )
-    except Exception as e:
-        logger.warning('[kodi-bridge] instanceguard adb connect failed: %s', e)
-
-    stdout_bytes = b''
-    try:
-        result = subprocess.run(
-            ['adb', '-s', address, 'logcat', '-d', '-v', 'time'],
-            capture_output=True, timeout=_ADB_LOGCAT_TIMEOUT_S, check=False,
-        )
-        stdout_bytes = result.stdout or b''
-    except Exception as e:
-        logger.warning('[kodi-bridge] instanceguard logcat dump failed: %s', e)
-    finally:
+    backoff = _INSTANCEGUARD_WATCH_RETRY_S
+    while True:
+        proc = None
         try:
+            with app.app_context():
+                ready = keepalive_enabled()
+                address = _adb_address() if ready else None
+            if not ready:
+                time.sleep(_INSTANCEGUARD_WATCH_IDLE_POLL_S)
+                continue
+
+            # Idempotent/cheap when already connected ("already connected to ...")
+            # but required first — confirmed live 2026-08-22: without it, this
+            # container's adb server has no device in its list yet (`adb devices`
+            # empty) and any adb command targeting it just hangs on "- waiting for
+            # device -" rather than erroring immediately.
             subprocess.run(
-                ['adb', '-s', address, 'logcat', '-c'],
+                ['adb', 'connect', address],
                 capture_output=True, timeout=_ADB_LOGCAT_TIMEOUT_S, check=False,
             )
-        except Exception as e:
-            logger.warning('[kodi-bridge] instanceguard logcat clear failed: %s', e)
+            proc = subprocess.Popen(
+                ['adb', '-s', address, 'logcat', '-v', 'time'],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            logger.info('[kodi-bridge] instanceguard watch: attached to device log stream')
+            backoff = _INSTANCEGUARD_WATCH_RETRY_S
 
-    return 'InstanceGuard locked' in stdout_bytes.decode('utf-8', errors='replace')
+            buf = b''
+            last_line_at = time.monotonic()
+            while True:
+                if time.monotonic() - last_line_at > _INSTANCEGUARD_STREAM_STALE_S:
+                    logger.warning('[kodi-bridge] instanceguard watch: log stream went stale '
+                                    '(no data for %ss), forcing reconnect', _INSTANCEGUARD_STREAM_STALE_S)
+                    break
+                ready_fds, _, _ = select.select([proc.stdout], [], [], _INSTANCEGUARD_WATCH_SELECT_S)
+                if not ready_fds:
+                    continue
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    logger.warning('[kodi-bridge] instanceguard watch: log stream closed, reconnecting')
+                    break
+                last_line_at = time.monotonic()
+                buf += chunk
+                while b'\n' in buf:
+                    line, buf = buf.split(b'\n', 1)
+                    # Matching on raw bytes (not decoding) sidesteps the non-UTF-8 byte
+                    # that broke the old dump-based check's strict text=True decode.
+                    if b'InstanceGuard locked' not in line:
+                        continue
+                    with app.app_context():
+                        if not _is_believed_active():
+                            continue
+                        logger.warning('[kodi-bridge] instanceguard watch: hit detected, replaying current item')
+                        recovered = _reopen_current_item()
+                        logger.info('[kodi-bridge] instanceguard watch: recovery %s',
+                                    'succeeded' if recovered else 'failed')
+        except Exception as e:
+            logger.warning('[kodi-bridge] instanceguard watch loop error: %s', e)
+        finally:
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
+
+        time.sleep(backoff)
+        backoff = min(backoff * 2, _INSTANCEGUARD_WATCH_MAX_BACKOFF_S)
 
 
 def _reopen_current_item() -> bool:
@@ -402,27 +459,6 @@ def _reopen_current_item() -> bool:
         logger.warning('[kodi-bridge] instanceguard recovery failed: %s', e)
         return False
     return result.get('result') == 'OK'
-
-
-def check_instanceguard_and_recover() -> bool:
-    """Watchdog tick (worker.py, every 45s): detect the InstanceGuard codec-open
-    race via Kodi's own Android log — confirmed live 2026-08-22 to be the ONLY
-    place this failure is visible at all; Player.GetProperties, the app's own
-    logs, and the DVR-side encoder-activity check all report healthy throughout
-    (see dev/kodi/README.md and project memory for the investigation). Recovers
-    by replaying the current item. No-ops (without even touching logcat) when
-    nothing's believed active, mirroring check_idle_and_stop()'s gate.
-
-    Returns True if a recovery was performed.
-    """
-    if not _is_believed_active():
-        return False
-    if not _instanceguard_hit_and_clear():
-        return False
-    logger.warning('[kodi-bridge] watchdog: InstanceGuard hit detected, replaying current item')
-    recovered = _reopen_current_item()
-    logger.info('[kodi-bridge] watchdog: InstanceGuard recovery %s', 'succeeded' if recovered else 'failed')
-    return recovered
 
 
 def check_idle_and_stop() -> None:

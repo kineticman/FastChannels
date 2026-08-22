@@ -3625,7 +3625,6 @@ if __name__ == '__main__':
                         return
                     if kodi_bridge.is_alive(timeout=3):
                         kodi_bridge.check_idle_and_stop()
-                        kodi_bridge.check_instanceguard_and_recover()
                         return
                     logger.warning('[kodi-bridge] watchdog: device unresponsive, attempting wake/relaunch')
                     recovered = kodi_bridge.wake_and_relaunch()
@@ -3639,6 +3638,19 @@ if __name__ == '__main__':
         scheduler.add_job(_scheduled_kodi_bridge_watchdog, 'interval', seconds=45,
                           id='kodi_bridge_watchdog', max_instances=1, coalesce=True,
                           misfire_grace_time=60)
+
+        # Persistent InstanceGuard log watch (app/kodi_bridge.py) — a long-lived
+        # daemon thread, not an APScheduler job, since it needs to hold one
+        # continuous `adb logcat` process open for the life of the worker rather
+        # than run-and-return on an interval. Reacts to a hit within ~1s instead of
+        # the up-to-45s latency the old poll-based check had.
+        from app import kodi_bridge as _kodi_bridge_watch
+        threading.Thread(
+            target=_kodi_bridge_watch.run_instanceguard_watch,
+            args=(flask_app,),
+            daemon=True,
+            name='kodi-bridge-instanceguard-watch',
+        ).start()
 
         def _scheduled_directv_token_watchdog():
             # pre_run_setup() is DirecTV's proactive-refresh check, but its only
