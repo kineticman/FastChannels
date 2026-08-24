@@ -4821,6 +4821,31 @@ def play_kodi_bridge_vlc(source_name: str, channel_id: str):
     )
 
 
+@play_bp.route('/play/kodi-bridge/heartbeat', methods=['POST'])
+def kodi_bridge_heartbeat():
+    """Lightweight signal from the fc_bridge Kodi addon's background service
+    (app/kodi_addon/plugin.video.fc_bridge/service.py) when Kodi's own player
+    engine fires `onPlaybackError` — a definitive, official-API failure signal,
+    complementary to run_instanceguard_watch's logcat string-matching (which
+    can only react to two specific known failure signatures). See
+    kodi_bridge.handle_playback_error_heartbeat for the reaction.
+
+    Best-effort and always 204: a misbehaving or misconfigured addon retrying
+    this endpoint must never see an error worth acting on, and there's nothing
+    useful to return either way.
+    """
+    from .. import kodi_bridge
+    payload = request.get_json(silent=True) or {}
+    event = str(payload.get('event') or 'unknown')
+    logger.info('[kodi-bridge] heartbeat: %s', event)
+    if event == 'playback_error' and kodi_bridge.is_configured():
+        try:
+            kodi_bridge.handle_playback_error_heartbeat()
+        except Exception:
+            logger.warning('[kodi-bridge] heartbeat: handler failed', exc_info=True)
+    return ('', 204)
+
+
 _PRISMCAST_HLS_SESSION_RE = re.compile(r'^(.*)/hls/([^/]+)/stream\.m3u8(?:\?.*)?$')
 
 

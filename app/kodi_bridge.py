@@ -328,6 +328,9 @@ _INSTANCEGUARD_STREAM_STALE_S = 90
 _INSTANCEGUARD_MAX_REOPENS_PER_WINDOW = 4
 _INSTANCEGUARD_REOPEN_WINDOW_S = 15
 _INSTANCEGUARD_COOLDOWN_S = 60
+_INSTANCEGUARD_REOPEN_SETTLE_S = 3
+_INSTANCEGUARD_STALL_POLL_S = 20
+_SHARED_BACKOFF_KEY = 'fc:kodi-bridge:reopen-backoff-until'
 
 
 def run_instanceguard_watch(app) -> None:
@@ -390,11 +393,25 @@ def run_instanceguard_watch(app) -> None:
        every reopen's own candidate enumeration re-triggered the same
        false match, independent of the actual resulting codec).
 
-    Both signatures are specific to a confirmed-bad state with no legitimate
-    self-recovering case (a wrong-codec selection can't fix itself; every
-    kodi-bridge source is DRM-required by definition, see
-    KODI_BRIDGE_TRUSTED_SOURCES), so reacting immediately rather than waiting
-    to confirm a stall follows is the right tradeoff — broader stall
+    Reacted to differently, though. InstanceGuard has no legitimate
+    self-recovering case (a wrong-codec selection from a pure timing race
+    can't fix itself), so it reacts immediately. Signature #2 does have a
+    legitimate case, and it's the COMMON one, not a rare edge: a genuinely
+    clear ad Period doesn't need a secure decoder at all, so non-secure
+    selection there is correct, not broken — confirmed live 2026-08-24
+    (Amazon Prime Free) that treating every occurrence as an immediate-reopen
+    trigger was manufacturing a disruptive Stop+Open on very nearly every
+    single ad in a break (roughly one reopen every 20-30s through a 4-5-ad
+    pod), each one itself a visible glitch, when most of those ads would very
+    likely have just played fine left alone. So signature #2 now goes through
+    _force_reopen_if_stalled — the same "sample position, only act if it's
+    genuinely not moving" check used by the periodic poll and post-cooldown
+    redemption below — instead of reopening on sight. This does cost a few
+    seconds of verification before reacting to a REAL stall following this
+    signature (unlike the original ~1s-reaction design), but that's the right
+    trade now that _force_reopen_if_stalled, the addon's onPlaybackError
+    heartbeat, and its local stall watchdog (service.py) all exist as faster
+    backstops than the 2026-08-22 design had available. Broader stall
     signatures with less specific causes (a bare `stream stalled` on its own)
     are still deliberately NOT matched, since those can also fire on a
     transient blip that would self-resolve.
@@ -422,15 +439,42 @@ def run_instanceguard_watch(app) -> None:
     also give up during the cooldown (no new InstanceGuard/non-secure-codec
     line ever appears again), there's nothing left to react to and playback
     stays frozen indefinitely even once the cooldown expires. Once the
-    cooldown ends, _check_and_redeem_after_cooldown() actively samples
+    cooldown ends, _force_reopen_if_stalled() actively samples
     playback position to check whether it's still genuinely stuck, and forces
     one more reopen if so — turning "wait forever for a stimulus that may
     never come" into a real bounded retry.
+
+    Every reopen (reactive or the post-cooldown redemption one) is followed by
+    a _INSTANCEGUARD_REOPEN_SETTLE_S grace period during which new matching
+    lines are seen but not acted on. Confirmed live 2026-08-24 (Amazon Prime
+    Free, mid ad-break): a reopen's own codec reinit re-logs a fresh `Using
+    codec: ...` line about 1.5-2s later almost every time the manifest is
+    still sitting on cleartext ad content, so without this grace period each
+    reopen was retriggering itself and burning through the whole
+    _INSTANCEGUARD_MAX_REOPENS_PER_WINDOW budget in under 15s — including the
+    redemption reopen, which meant a still-airing ad pod could blow straight
+    back through a second full cooldown just a few seconds after the first
+    one ended, instead of spreading those 4 attempts out across the length of
+    the ad break where they'd actually have a chance to land after it ends.
+
+    Independently of all of the above, _force_reopen_if_stalled() also runs
+    on a plain _INSTANCEGUARD_STALL_POLL_S timer (skipped while cooldown_until
+    is still in the future, so it can't fight an active backoff) rather than
+    only in reaction to a matching log line. Confirmed live 2026-08-24: a
+    session can go silently stuck WITHOUT ever tripping the reopen-rate cap
+    at all — two isolated `InstanceGuard hit` events, each individually
+    "recovered", then playback died with no further InstanceGuard/non-secure-
+    codec line ever appearing, so redeem_pending was never even set and
+    nothing was watching for it. The post-cooldown redemption check only
+    covers the case where the cap WAS hit; this plain timer is what actually
+    catches a stall that the reactive path never sees a symptom for at all.
     """
     backoff = _INSTANCEGUARD_WATCH_RETRY_S
     recent_reopens: list[float] = []
+    last_reopen_at = 0.0
     cooldown_until = 0.0
     redeem_pending = False
+    next_stall_poll_at = time.monotonic() + _INSTANCEGUARD_STALL_POLL_S
     while True:
         proc = None
         try:
@@ -464,11 +508,26 @@ def run_instanceguard_watch(app) -> None:
                     logger.warning('[kodi-bridge] instanceguard watch: log stream went stale '
                                     '(no data for %ss), forcing reconnect', _INSTANCEGUARD_STREAM_STALE_S)
                     break
+                # Checked every pass through this loop, not just when select() finds
+                # the fd idle — confirmed live 2026-08-24 that gating this on an idle
+                # read starves it in practice: `adb logcat -v time` streams the WHOLE
+                # device log unfiltered, and a live Fire TV produces background
+                # chatter (wlan_stats, session/reporter lines) far more often than
+                # every _INSTANCEGUARD_WATCH_SELECT_S, so `ready_fds` is almost never
+                # empty and the redemption check never ran, leaving a genuinely stuck
+                # session frozen indefinitely past the cooldown.
+                poll_now = time.monotonic()
+                if redeem_pending and poll_now >= cooldown_until:
+                    redeem_pending = False
+                    if _force_reopen_if_stalled(app, 'post-cooldown'):
+                        last_reopen_at = time.monotonic()
+                        next_stall_poll_at = last_reopen_at + _INSTANCEGUARD_STALL_POLL_S
+                elif poll_now >= next_stall_poll_at and poll_now >= cooldown_until:
+                    next_stall_poll_at = poll_now + _INSTANCEGUARD_STALL_POLL_S
+                    if _force_reopen_if_stalled(app, 'periodic poll'):
+                        last_reopen_at = time.monotonic()
                 ready_fds, _, _ = select.select([proc.stdout], [], [], _INSTANCEGUARD_WATCH_SELECT_S)
                 if not ready_fds:
-                    if redeem_pending and time.monotonic() >= cooldown_until:
-                        redeem_pending = False
-                        _check_and_redeem_after_cooldown(app)
                     continue
                 chunk = proc.stdout.read(4096)
                 if not chunk:
@@ -491,10 +550,13 @@ def run_instanceguard_watch(app) -> None:
                     now = time.monotonic()
                     if now < cooldown_until:
                         continue
+                    if now - last_reopen_at < _INSTANCEGUARD_REOPEN_SETTLE_S:
+                        continue
                     recent_reopens = [t for t in recent_reopens if now - t < _INSTANCEGUARD_REOPEN_WINDOW_S]
                     if len(recent_reopens) >= _INSTANCEGUARD_MAX_REOPENS_PER_WINDOW:
                         cooldown_until = now + _INSTANCEGUARD_COOLDOWN_S
                         redeem_pending = True
+                        _publish_shared_backoff(app, _INSTANCEGUARD_COOLDOWN_S)
                         logger.error(
                             '[kodi-bridge] instanceguard watch: %d reopens in %ss (latest reason: %s) — '
                             'giving up for %ss, this needs a look rather than more retries',
@@ -502,15 +564,25 @@ def run_instanceguard_watch(app) -> None:
                             _INSTANCEGUARD_COOLDOWN_S,
                         )
                         continue
-                    recent_reopens.append(now)
 
-                    with app.app_context():
-                        if not _is_believed_active():
+                    if reason == 'non-secure codec selected':
+                        # Correct in the common case — a genuinely clear ad Period
+                        # doesn't need a secure decoder at all, so this signature
+                        # firing is expected, not broken. Verify a real stall
+                        # follows before reacting, rather than treating every ad
+                        # transition as a failure (see docstring above).
+                        if not _force_reopen_if_stalled(app, reason):
                             continue
-                        logger.warning('[kodi-bridge] instanceguard watch: %s, replaying current item', reason)
-                        recovered = _reopen_current_item()
-                        logger.info('[kodi-bridge] instanceguard watch: recovery %s',
-                                    'succeeded' if recovered else 'failed')
+                    else:
+                        with app.app_context():
+                            if not _is_believed_active():
+                                continue
+                            logger.warning('[kodi-bridge] instanceguard watch: %s, replaying current item', reason)
+                            recovered = _reopen_current_item()
+                            logger.info('[kodi-bridge] instanceguard watch: recovery %s',
+                                        'succeeded' if recovered else 'failed')
+                    recent_reopens.append(now)
+                    last_reopen_at = time.monotonic()
         except Exception as e:
             logger.warning('[kodi-bridge] instanceguard watch loop error: %s', e)
         finally:
@@ -523,6 +595,23 @@ def run_instanceguard_watch(app) -> None:
 
         time.sleep(backoff)
         backoff = min(backoff * 2, _INSTANCEGUARD_WATCH_MAX_BACKOFF_S)
+
+
+def _publish_shared_backoff(app, ttl_s: int) -> None:
+    """Mirrors this watch's in-process cooldown_until into Redis so the
+    heartbeat path (handle_playback_error_heartbeat, a separate Flask request
+    process with no visibility into this thread's local state) knows to also
+    back off — without this, the addon's onPlaybackError signal could keep
+    reopening straight through a cooldown this watch deliberately entered
+    because reopening was making things worse (see run_instanceguard_watch's
+    docstring on the Roku/Ax Men durably-bad-state case). Best-effort: a
+    failure here just means that coordination is lost, not that recovery
+    itself breaks."""
+    try:
+        with app.app_context():
+            redis.from_url(current_app.config['REDIS_URL']).setex(_SHARED_BACKOFF_KEY, ttl_s, '1')
+    except Exception as e:
+        logger.warning('[kodi-bridge] failed to publish shared backoff: %s', e)
 
 
 def _reopen_current_item() -> bool:
@@ -548,42 +637,96 @@ def _reopen_current_item() -> bool:
     return result.get('result') == 'OK'
 
 
-def _check_and_redeem_after_cooldown(app) -> None:
-    """Called once, right after the rate-limiter's cooldown ends, to check
-    whether playback is still genuinely stuck and force one more reopen if so.
+_HEARTBEAT_REOPEN_COOLDOWN_KEY = 'fc:kodi-bridge:heartbeat-reopen-cooldown'
+_HEARTBEAT_REOPEN_COOLDOWN_S = 3  # matches _INSTANCEGUARD_REOPEN_SETTLE_S
 
-    Confirmed live 2026-08-24: without this, a session that stops generating
-    NEW InstanceGuard/non-secure-codec lines on its own after the rate-limit
-    kicks in (Kodi's own internal retries gave up, not just ours) never gets
-    another automated recovery attempt — the reactive design only responds to
-    a fresh matching line, and none may ever come, leaving it frozen
-    indefinitely even though the cooldown has long since expired.
+
+def handle_playback_error_heartbeat() -> None:
+    """Reacts to a definitive `onPlaybackError` signal pushed by the fc_bridge
+    addon's background service (app/kodi_addon/plugin.video.fc_bridge/service.py)
+    via POST /play/kodi-bridge/heartbeat — a faster, official-Kodi-API complement
+    to run_instanceguard_watch's logcat string-matching, which can only react to
+    two specific known failure signatures. `onPlaybackError` is Kodi's own
+    player engine giving up, so unlike the stall-sampling checks elsewhere in
+    this module, no "is it ACTUALLY stuck" verification is needed here — the
+    signal is already definitive.
+
+    Runs in a Flask request-handling process, not the watch's background
+    thread, so it has no visibility into run_instanceguard_watch's in-process
+    rate-limit state — a real InstanceGuard/non-secure-codec event could be
+    caught by both paths near-simultaneously. Guarded two ways: first checks
+    _SHARED_BACKOFF_KEY, the watch's own deliberate "stop retrying, this is
+    durably bad" cooldown mirrored into Redis by _publish_shared_backoff —
+    without this check, the addon's onPlaybackError signal could keep
+    reopening straight through a backoff the watch entered specifically
+    because reopening was making things worse. Then a short cross-process
+    Redis cooldown of its own (same claim pattern as fubo.py's
+    _claim_forced_relogin) so a burst of heartbeats — or one racing the
+    watch's own reaction outside of an active backoff — results in at most
+    one extra reopen, not a pile-up. Best effort and silent on any failure:
+    called from a request handler, must never surface an error to the addon
+    making the POST.
+    """
+    if not _is_believed_active():
+        return
+    try:
+        rdb = redis.from_url(current_app.config['REDIS_URL'])
+        if rdb.exists(_SHARED_BACKOFF_KEY):
+            logger.info('[kodi-bridge] heartbeat: instanceguard watch is in an active backoff, skipping reopen')
+            return
+        claimed = bool(rdb.set(_HEARTBEAT_REOPEN_COOLDOWN_KEY, '1',
+                                nx=True, ex=_HEARTBEAT_REOPEN_COOLDOWN_S))
+    except Exception as e:
+        logger.warning('[kodi-bridge] heartbeat: cooldown check failed (reacting anyway): %s', e)
+        claimed = True
+    if not claimed:
+        logger.debug('[kodi-bridge] heartbeat: reopen already claimed recently, skipping')
+        return
+    logger.warning('[kodi-bridge] heartbeat: onPlaybackError reported by addon, replaying current item')
+    recovered = _reopen_current_item()
+    logger.info('[kodi-bridge] heartbeat: recovery %s', 'succeeded' if recovered else 'failed')
+
+
+def _force_reopen_if_stalled(app, trigger: str) -> bool:
+    """Samples `time` a few seconds apart and forces one reopen if it hasn't
+    moved. Shared by three call sites in run_instanceguard_watch — right after
+    the rate-limiter's cooldown ends, on a plain periodic timer, and reacting
+    to the non-secure-codec log signature (verify-first there specifically
+    because that signature is often a legitimate clear ad Period, not a real
+    failure) — since all three need the same "is it ACTUALLY still stuck"
+    check, just on different triggers; see that function's docstring for why
+    each exists.
 
     `speed` alone can't tell us whether it's actually stuck (confirmed
     repeatedly: it reports 1 throughout every freeze in this whole
-    investigation), so this samples `time` a few seconds apart instead — if it
-    hasn't moved, this is a real stall, not a self-resolved one.
+    investigation), so this samples `time` instead — if it hasn't moved, this
+    is a real stall, not a self-resolved or merely-idle one.
+
+    Returns True iff a reopen was actually forced — the caller uses this to
+    start this reopen's own _INSTANCEGUARD_REOPEN_SETTLE_S grace period, same
+    as every other reopen (see run_instanceguard_watch's docstring).
     """
     with app.app_context():
         if not _is_believed_active():
-            return
+            return False
         try:
             players = (_jsonrpc('Player.GetActivePlayers', timeout=3).get('result')) or []
             if not players:
-                return
+                return False
             playerid = players[0]['playerid']
             t1 = _jsonrpc('Player.GetProperties', {'playerid': playerid, 'properties': ['time']}, timeout=3)
             time.sleep(3)
             t2 = _jsonrpc('Player.GetProperties', {'playerid': playerid, 'properties': ['time']}, timeout=3)
         except Exception as e:
-            logger.warning('[kodi-bridge] instanceguard watch: post-cooldown check failed: %s', e)
-            return
+            logger.warning('[kodi-bridge] instanceguard watch: %s stall check failed: %s', trigger, e)
+            return False
         if t1.get('result', {}).get('time') != t2.get('result', {}).get('time'):
-            return  # genuinely progressing — nothing to do
-        logger.warning('[kodi-bridge] instanceguard watch: still stuck after cooldown, forcing one more reopen')
+            return False  # genuinely progressing — nothing to do
+        logger.warning('[kodi-bridge] instanceguard watch: still stuck (%s), forcing one more reopen', trigger)
         recovered = _reopen_current_item()
-        logger.info('[kodi-bridge] instanceguard watch: post-cooldown recovery %s',
-                    'succeeded' if recovered else 'failed')
+        logger.info('[kodi-bridge] instanceguard watch: %s recovery %s',
+                    trigger, 'succeeded' if recovered else 'failed')
+        return True
 
 
 def check_idle_and_stop() -> None:
