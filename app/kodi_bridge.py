@@ -416,10 +416,21 @@ def run_instanceguard_watch(app) -> None:
     exit, firing roughly every 1.4s continuously and hammering both the
     device and this app's own manifest endpoint. Without a cap, a durably-bad
     underlying state turns this watch into the outage instead of the fix.
+
+    The cooldown only gates REACTING to a new matching line — confirmed live
+    2026-08-24 that this leaves a real gap: if Kodi's own internal retries
+    also give up during the cooldown (no new InstanceGuard/non-secure-codec
+    line ever appears again), there's nothing left to react to and playback
+    stays frozen indefinitely even once the cooldown expires. Once the
+    cooldown ends, _check_and_redeem_after_cooldown() actively samples
+    playback position to check whether it's still genuinely stuck, and forces
+    one more reopen if so — turning "wait forever for a stimulus that may
+    never come" into a real bounded retry.
     """
     backoff = _INSTANCEGUARD_WATCH_RETRY_S
     recent_reopens: list[float] = []
     cooldown_until = 0.0
+    redeem_pending = False
     while True:
         proc = None
         try:
@@ -455,6 +466,9 @@ def run_instanceguard_watch(app) -> None:
                     break
                 ready_fds, _, _ = select.select([proc.stdout], [], [], _INSTANCEGUARD_WATCH_SELECT_S)
                 if not ready_fds:
+                    if redeem_pending and time.monotonic() >= cooldown_until:
+                        redeem_pending = False
+                        _check_and_redeem_after_cooldown(app)
                     continue
                 chunk = proc.stdout.read(4096)
                 if not chunk:
@@ -480,6 +494,7 @@ def run_instanceguard_watch(app) -> None:
                     recent_reopens = [t for t in recent_reopens if now - t < _INSTANCEGUARD_REOPEN_WINDOW_S]
                     if len(recent_reopens) >= _INSTANCEGUARD_MAX_REOPENS_PER_WINDOW:
                         cooldown_until = now + _INSTANCEGUARD_COOLDOWN_S
+                        redeem_pending = True
                         logger.error(
                             '[kodi-bridge] instanceguard watch: %d reopens in %ss (latest reason: %s) — '
                             'giving up for %ss, this needs a look rather than more retries',
@@ -531,6 +546,44 @@ def _reopen_current_item() -> bool:
         logger.warning('[kodi-bridge] instanceguard recovery failed: %s', e)
         return False
     return result.get('result') == 'OK'
+
+
+def _check_and_redeem_after_cooldown(app) -> None:
+    """Called once, right after the rate-limiter's cooldown ends, to check
+    whether playback is still genuinely stuck and force one more reopen if so.
+
+    Confirmed live 2026-08-24: without this, a session that stops generating
+    NEW InstanceGuard/non-secure-codec lines on its own after the rate-limit
+    kicks in (Kodi's own internal retries gave up, not just ours) never gets
+    another automated recovery attempt — the reactive design only responds to
+    a fresh matching line, and none may ever come, leaving it frozen
+    indefinitely even though the cooldown has long since expired.
+
+    `speed` alone can't tell us whether it's actually stuck (confirmed
+    repeatedly: it reports 1 throughout every freeze in this whole
+    investigation), so this samples `time` a few seconds apart instead — if it
+    hasn't moved, this is a real stall, not a self-resolved one.
+    """
+    with app.app_context():
+        if not _is_believed_active():
+            return
+        try:
+            players = (_jsonrpc('Player.GetActivePlayers', timeout=3).get('result')) or []
+            if not players:
+                return
+            playerid = players[0]['playerid']
+            t1 = _jsonrpc('Player.GetProperties', {'playerid': playerid, 'properties': ['time']}, timeout=3)
+            time.sleep(3)
+            t2 = _jsonrpc('Player.GetProperties', {'playerid': playerid, 'properties': ['time']}, timeout=3)
+        except Exception as e:
+            logger.warning('[kodi-bridge] instanceguard watch: post-cooldown check failed: %s', e)
+            return
+        if t1.get('result', {}).get('time') != t2.get('result', {}).get('time'):
+            return  # genuinely progressing — nothing to do
+        logger.warning('[kodi-bridge] instanceguard watch: still stuck after cooldown, forcing one more reopen')
+        recovered = _reopen_current_item()
+        logger.info('[kodi-bridge] instanceguard watch: post-cooldown recovery %s',
+                    'succeeded' if recovered else 'failed')
 
 
 def check_idle_and_stop() -> None:
