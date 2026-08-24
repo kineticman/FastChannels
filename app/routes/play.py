@@ -2940,7 +2940,33 @@ def amazon_dash_proxy(channel_id: str):
         r.raise_for_status()
     except Exception as e:
         logger.warning('[amazon-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
-        return _unavailable_response()
+        # The cached manifest URL is still within our local TTL but the live
+        # session behind it may have already died server-side (Amazon rotates
+        # live sessions well under our 1.5h cache window). Evict it and
+        # re-resolve once so a dead cache entry doesn't wedge playback for
+        # the rest of the TTL.
+        station_id = channel.stream_url[len('primefree://'):] \
+            if channel.stream_url.startswith('primefree://') else None
+        if station_id and scraper._stream_url_cache.pop(station_id, None):
+            fresh_url = scraper.resolve(channel.stream_url)
+            if getattr(scraper, '_pending_cache_updates', None):
+                try:
+                    persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                except Exception:
+                    pass
+            if fresh_url and fresh_url.startswith('http') and fresh_url != dash_url:
+                try:
+                    r = _requests.get(fresh_url, timeout=10)
+                    r.raise_for_status()
+                    dash_url = fresh_url
+                except Exception as e2:
+                    logger.warning('[amazon-dash] retry after cache evict also failed for %s: %s',
+                                   raw_id[:40], e2)
+                    return _unavailable_response()
+            else:
+                return _unavailable_response()
+        else:
+            return _unavailable_response()
 
     # Rewrite relative <BaseURL> elements to absolute CDN URLs.
     # Amazon's MPD uses relative paths (e.g. ../../../../iad-nitro/...) that
