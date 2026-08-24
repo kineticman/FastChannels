@@ -19,6 +19,18 @@ Optional params:
                       default one-CDM-session-per-track behavior fails. Every other
                       source keeps using the legacy properties, proven working across
                       the Kodi 21->22 upgrade (dev/kodi/README.md).
+    live_delay      - seconds to hold playback behind the absolute live edge, passed
+                      straight through to inputstream.adaptive.live_delay (supported
+                      on the installed Omega/21.x branch — confirmed via
+                      github.com/xbmc/inputstream.adaptive/wiki/Integration). Default
+                      20s. Intended to mitigate problems caused by requesting segments/
+                      Periods that don't exist yet right at the live edge — upstream
+                      docs recommend 2-4x segment duration, floor 16s. Experimental:
+                      added 2026-08-24 to see whether it reduces the freeze/stall rate
+                      around ad-break Period transitions on kodi-bridge sources (see
+                      xbmc/inputstream.adaptive#1507 — ad-break/X-discontinuity
+                      handling is an acknowledged, still-open upstream gap, not
+                      something specific to this bridge).
 """
 import json
 import sys
@@ -28,6 +40,7 @@ import xbmcgui
 import xbmcplugin
 
 DEFAULT_LICENSE_TYPE = 'com.widevine.alpha'
+DEFAULT_LIVE_DELAY_S = '20'
 
 
 def _params() -> dict:
@@ -44,6 +57,7 @@ def main() -> None:
     license_type = params.get('license_type', DEFAULT_LICENSE_TYPE)
     name = params.get('name', 'FastChannels')
     single_session = params.get('single_session') == '1'
+    live_delay = params.get('live_delay', DEFAULT_LIVE_DELAY_S)
 
     if not manifest_url:
         xbmcplugin.setResolvedUrl(handle, False, xbmcgui.ListItem())
@@ -59,6 +73,8 @@ def main() -> None:
 
     if license_url:
         item.setProperty('inputstream', 'inputstream.adaptive')
+        if live_delay:
+            item.setProperty('inputstream.adaptive.live_delay', str(live_delay))
         if single_session:
             item.setProperty(
                 'inputstream.adaptive.manifest_type',
