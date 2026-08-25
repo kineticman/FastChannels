@@ -302,9 +302,11 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
     )
     bridged_count, bridged_gn = bridged_row.total, bridged_row.gn_count
 
-    # The FastChannels Player device bridge is narrower than PrismCast — only sources
-    # confirmed to actually decrypt through it (see app/drm_bridge.py), not every
-    # DRM-capable source. Re-run the bridged query restricted to that set.
+    # The FastChannels Player device bridge is narrower than PrismCast in two ways:
+    # only sources confirmed to actually decrypt through it (see app/drm_bridge.py),
+    # AND — unlike PrismCast, which carries the whole catalog — the fc-player feed
+    # includes ONLY those trusted sources' own channels, not every source's. Re-run
+    # both the bridged and the standard query restricted to that set.
     bridge_trusted_row = (
         _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge')
         .filter(Source.name.in_(DRM_BRIDGE_TRUSTED_SOURCES))
@@ -317,6 +319,19 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
     )
     bridge_trusted_count, bridge_trusted_gn = bridge_trusted_row.total, bridge_trusted_row.gn_count
 
+    trusted_std_row = (
+        _build_channel_query(_drm_bridge_query_filters(filters))
+        .filter(Source.name.in_(DRM_BRIDGE_TRUSTED_SOURCES))
+        .order_by(None)
+        .with_entities(
+            func.count().label('total'),
+            func.count(case((has_gracenote, Channel.id))).label('gn_count'),
+        )
+        .one()
+    )
+    trusted_std_total, trusted_std_gn = trusted_std_row.total, trusted_std_row.gn_count
+    trusted_std_count = max(trusted_std_total - trusted_std_gn, 0)
+
     std_count = max(total - gn_count, 0)
     return {
         'standard_count': std_count,
@@ -325,8 +340,8 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
         'bridged_count': bridged_count,
         'prismcast_count': std_count + (bridged_count - bridged_gn),
         'prismcast_gracenote_count': gn_count + bridged_gn,
-        'drm_bridge_count': std_count + (bridge_trusted_count - bridge_trusted_gn),
-        'drm_bridge_gracenote_count': gn_count + bridge_trusted_gn,
+        'drm_bridge_count': trusted_std_count + (bridge_trusted_count - bridge_trusted_gn),
+        'drm_bridge_gracenote_count': trusted_std_gn + bridge_trusted_gn,
     }
 
 

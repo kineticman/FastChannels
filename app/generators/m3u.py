@@ -1053,20 +1053,17 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
     """
     FastChannels Player (app/fc_player/) DRM-bridge playlist.
 
-    Every channel — DRM-bridge-eligible or not — uses the same
-    /play/fc-player/<source>/<id>.m3u8 URL shape; play_fc_player_bridge
-    (app/routes/play.py) decides per-request, server-side, whether a given channel
-    actually needs to trigger the FastChannels Player device or just resolves+302s
-    directly like any other channel.
+    Deliberately narrow, unlike generate_prismcast_m3u/the old Kodi-bridge feed: only
+    channels from DRM_BRIDGE_TRUSTED_SOURCES appear here at all, not the full channel
+    catalog with a few DRM channels unioned in. This is a scope decision, not a
+    limitation of play_fc_player_bridge itself (it would happily resolve+302 any other
+    channel same as /play/<source>/<id>.m3u8) — may widen to the full catalog later,
+    but for now this keeps the output (and the periodic artifact refresh that builds
+    it) small and cheap.
 
-    Non-DRM channels come from generate_m3u's normal selection. DRM channels are
-    bridge-only by construction (_build_channel_query's default 'active' selection
-    excludes anything requires_drm_bridge — see its docstring) so they're unioned back
-    in explicitly, same pattern as generate_prismcast_m3u, but restricted to
-    DRM_BRIDGE_TRUSTED_SOURCES only — sources confirmed to actually decrypt through the
-    FastChannels Player device bridge. Cox/Warner/etc. stay out of this feed's channel
-    list entirely rather than falling through play_fc_player_bridge's non-bridge
-    branch, so this feed never advertises a channel known not to work.
+    DRM channels are bridge-only by construction (_build_channel_query's default
+    'active' selection excludes anything requires_drm_bridge — see its docstring) so
+    they're unioned back in explicitly, same pattern as generate_prismcast_m3u.
 
     No #KODIPROP lines — that's inputstream.adaptive-specific and irrelevant here;
     Channels DVR doesn't need them and never sees the raw manifest/license URLs.
@@ -1082,11 +1079,15 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
     _s = AppSettings.get()
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
 
-    channels = _selected_channels(filters, gracenote=gracenote)
+    channels = [
+        ch for ch in _selected_channels(filters, gracenote=gracenote)
+        if ch.source and ch.source.name in DRM_BRIDGE_TRUSTED_SOURCES
+    ]
 
+    # Union in the bridge-only DRM channels the base selection excludes — see
+    # docstring. Deduped, honoring the Gracenote partition, same as prismcast's union.
     # Sources confirmed to actually decrypt through the FastChannels Player device
-    # bridge, not every DRM-capable source. Shared rather than duplicated; see
-    # DRM_BRIDGE_TRUSTED_SOURCES's own docstring (app/drm_bridge.py).
+    # bridge; see DRM_BRIDGE_TRUSTED_SOURCES's own docstring (app/drm_bridge.py).
     _seen = {ch.id for ch in channels}
     for ch in _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all():
         if ch.id in _seen or (ch.source.name if ch.source else None) not in DRM_BRIDGE_TRUSTED_SOURCES:
