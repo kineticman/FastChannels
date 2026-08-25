@@ -132,6 +132,39 @@ def test_connection() -> tuple[bool, str]:
     return True, 'Device reachable, but FastChannels Player is not installed yet.'
 
 
+def install_app(apk_path: str, timeout: int = 90) -> tuple[bool, str]:
+    """adb-installs the FastChannels Player APK onto the configured device.
+
+    Works without ever touching the device's "Apps from Unknown Sources" toggle —
+    that setting only gates on-device tap-to-install of a downloaded APK file (the
+    package installer UI flow); `adb install` goes through the privileged shell/
+    package-manager path directly and was never subject to that gate. Live-verified
+    2026-08-25: installed cleanly onto a device with that toggle in its default
+    (never touched) state.
+
+    Passing `-r` (replace existing) means this also works as the update path once
+    something's already installed, as long as it's signed with the same key — see
+    project memory on release signing for why that matters.
+    """
+    address = _adb_address()
+    try:
+        subprocess.run(
+            ['adb', 'connect', address],
+            capture_output=True, timeout=_ADB_TIMEOUT, check=False,
+        )
+        result = subprocess.run(
+            ['adb', '-s', address, 'install', '-r', apk_path],
+            capture_output=True, timeout=timeout, check=False, text=True,
+        )
+    except Exception as e:
+        return False, f'adb error: {e}'
+
+    output = ((result.stdout or '') + (result.stderr or '')).strip()
+    if result.returncode == 0 and 'Success' in output:
+        return True, 'Installed successfully.'
+    return False, output or f'adb install failed (rc={result.returncode})'
+
+
 def _dvr_activity_channel_numbers(timeout: int = _DVR_POLL_TIMEOUT) -> set[str] | None:
     """The set of channel numbers Channels DVR currently reports as being watched
     (its `/dvr` status endpoint's `activity` dict, values shaped like
