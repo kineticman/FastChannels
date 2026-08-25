@@ -9,3 +9,10 @@
 .cxx
 local.properties
 **/build/
+
+# Release signing key must never be committed — it lives outside the repo at
+# ~/.android-keystores/ and is referenced from there by app/build.gradle. These
+# patterns are just a backstop in case one ever ends up inside the project by mistake.
+*.jks
+*.keystore
+keystore.properties

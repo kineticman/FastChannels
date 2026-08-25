@@ -2,6 +2,21 @@ plugins {
     id 'com.android.application'
 }
 
+// Release-signing keystore lives OUTSIDE the repo (never committed — the whole point
+// of a stable signing key is that it stays secret) at a fixed path in the developer's
+// home directory. Every release build must use the SAME key: Android refuses to
+// install an "update" over an existing install unless the signature matches, so a
+// different key per release would force every user to uninstall first. Missing file
+// = release builds fall back to debug signing (still installable via adb, just not
+// something a stranger could publish a trusted-looking update with) rather than
+// failing the whole Gradle sync for anyone who clones this repo without the key.
+def keystorePropertiesFile = new File(System.getProperty('user.home'), '.android-keystores/fastchannels-player-release.keystore.properties')
+def keystoreProperties = new Properties()
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace 'com.fastchannels.player'
     compileSdk 36
@@ -10,6 +25,8 @@ android {
         applicationId 'com.fastchannels.player'
         minSdk 27
         targetSdk 36
+        // Bump both on every release: versionCode strictly increasing (Android's own
+        // update-eligibility check), versionName whatever's human-meaningful.
         versionCode 1
         versionName '1.0.0'
     }
@@ -19,9 +36,21 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            release {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
+            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
         }
     }
 }
