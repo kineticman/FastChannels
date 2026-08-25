@@ -3049,6 +3049,19 @@ def _schedule_due_scrapes():
         from app.scheduler_health import write_heartbeat
         write_heartbeat(flask_app.config['REDIS_URL'])
 
+        # A TVE browser-assisted sign-in (Camoufox) is interactive — a human is
+        # watching a live screenshot modal — and runs on its own 'scraper'-
+        # queue-independent worker, so a scrape sweep can genuinely run
+        # concurrently with one and compete for CPU/DB. Skip this sweep
+        # entirely rather than pile new scraper-queue work on top of a TVE
+        # session; nothing is lost, since this sweep just runs again in 60s
+        # and always re-evaluates every source's actual elapsed interval
+        # rather than tracking "missed" ticks.
+        from app.routes.tasks import _mvpd_tve_profile_busy, get_fast_queue
+        if _mvpd_tve_profile_busy(get_fast_queue()):
+            logger.debug('[scheduler] TVE browser-login in progress — skipping this due-scrape sweep')
+            return
+
         sources = Source.query.filter_by(is_enabled=True).all()
         for source in sources:
             if _scrape_job_already_active(q, source.name):
