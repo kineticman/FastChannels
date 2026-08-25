@@ -49,6 +49,15 @@ def _kodi_bridge_ip_display(device_url: str | None) -> str:
     return f'{host}:{port}' if port != 8080 else host
 
 
+def _fc_player_ip_display(adb_address: str | None) -> str:
+    """Render the stored "host:5555" adb address back to a bare IP for the admin field
+    — the port is always :5555 (not user-overridable, unlike Kodi's JSON-RPC port), so
+    there's never a port suffix to preserve."""
+    if not adb_address:
+        return ''
+    return urlsplit(f'http://{adb_address}').hostname or ''
+
+
 def _base_duplicate_name(name: str) -> str:
     s = unicodedata.normalize('NFKD', name or '')
     s = ''.join(ch for ch in s if not unicodedata.combining(ch))
@@ -1426,6 +1435,8 @@ def settings():
                                and app_settings.effective_kodi_bridge_adb_address()
                                and app_settings.effective_kodi_bridge_encoder_url()
                            ),
+                           fc_player_enabled=bool(app_settings.fc_player_bridge_enabled),
+                           fc_player_ip=_fc_player_ip_display(app_settings.effective_fc_player_bridge_adb_address()),
                            tve_provider_choices=tve_provider_choices,
                            tve_account=tve_account.to_safe_dict() if tve_account else {
                                'provider_id': 'mvpd',

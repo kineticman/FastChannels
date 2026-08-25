@@ -6024,6 +6024,13 @@ def app_settings():
             _push_captions = row.kodi_bridge_captions_enabled
         else:
             _push_captions = None
+        if 'fc_player_enabled' in data:
+            row.fc_player_bridge_enabled = bool(data['fc_player_enabled'])
+        if 'fc_player_ip' in data:
+            _fcp_host = _kodi_bridge_host_from_input(data['fc_player_ip'])
+            if data.get('fc_player_ip') and not _fcp_host:
+                return jsonify({'error': 'Invalid Firestick/Android TV IP address.'}), 422
+            row.fc_player_bridge_adb_address = f'{_fcp_host}:5555' if _fcp_host else None
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:
@@ -6041,6 +6048,9 @@ def app_settings():
         _kodi_bridge_port_display = _kodi_bridge_port_from_input(row.effective_kodi_bridge_device_url())
         if _kodi_bridge_port_display != _KODI_BRIDGE_DEFAULT_PORT:
             _kodi_bridge_ip_display = f'{_kodi_bridge_ip_display}:{_kodi_bridge_port_display}'
+    # Always :5555 (the standard adb port — not user-overridable like Kodi's JSON-RPC port),
+    # so just strip it back off for display.
+    _fc_player_ip_display = _kodi_bridge_host_from_input(row.effective_fc_player_bridge_adb_address()) or ''
     return jsonify({
         'channels_dvr_url':  row.effective_channels_dvr_url(),
         'public_base_url':   row.effective_public_base_url(),
@@ -6061,6 +6071,8 @@ def app_settings():
         'kodi_bridge_ip': _kodi_bridge_ip_display,
         'kodi_bridge_encoder_url': row.effective_kodi_bridge_encoder_url() or '',
         'kodi_bridge_captions_enabled': bool(row.kodi_bridge_captions_enabled),
+        'fc_player_enabled': bool(row.fc_player_bridge_enabled),
+        'fc_player_ip': _fc_player_ip_display,
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
@@ -6102,6 +6114,17 @@ def test_kodi_bridge():
             'warning': True,
             'message': 'Kodi responded, but the encoder/capture stream URL is not reachable — bridged channels will fail until that stream is up.',
         })
+
+
+@api_bp.route('/settings/fc-player/test', methods=['POST'])
+def test_fc_player():
+    """adb-reachability check for the configured FastChannels Player device, plus
+    whether the player app is actually installed there."""
+    from .. import fc_player_bridge
+    if not fc_player_bridge.is_configured():
+        return jsonify({'ok': False, 'message': 'Enable the bridge and set a device IP first.'}), 400
+    ok, message = fc_player_bridge.test_connection()
+    return jsonify({'ok': ok, 'message': message})
 
 
 @api_bp.route('/settings/gracenote-auto-clear', methods=['POST'])

@@ -257,6 +257,35 @@ async function testKodiBridge() {
   }
 }
 
+async function saveFcPlayerToggles() {
+  const enabled = document.getElementById('fc-player-enabled').checked;
+  await saveSettings({fc_player_enabled: enabled}, 'fc-player-status');
+}
+
+async function saveFcPlayerSettings() {
+  const ip = document.getElementById('fc-player-ip').value.trim();
+  const enabled = document.getElementById('fc-player-enabled').checked;
+  await saveSettings({
+    fc_player_ip: ip || null,
+    fc_player_enabled: enabled,
+  }, 'fc-player-status');
+}
+
+async function testFcPlayer() {
+  const statusEl = document.getElementById('fc-player-status');
+  statusEl.textContent = 'Testing…';
+  statusEl.className = 'save-status';
+  try {
+    const resp = await fetch('/api/settings/fc-player/test', {method: 'POST'});
+    const data = await resp.json();
+    statusEl.textContent = data.message || (data.ok ? 'Connected' : 'Connection failed.');
+    statusEl.className = 'save-status ' + (data.ok ? 'ok' : 'error');
+  } catch (e) {
+    statusEl.textContent = 'Connection failed.';
+    statusEl.className = 'save-status error';
+  }
+}
+
 
 const tveProviders = settingsBootstrap.tveProviders || [];
 const tveProviderMap = Object.fromEntries(tveProviders.map((p) => [p.id, p]));

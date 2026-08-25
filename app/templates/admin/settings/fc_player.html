@@ -1,0 +1,40 @@
+  <!-- FastChannels Player (adb remote-play bridge) card -->
+  <div class="source-card" id="settings-card-fc-player">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">📲</div>
+        <div>
+          <div class="source-name">FastChannels Player <span class="badge badge-beta">Experimental Beta</span></div>
+          <div class="source-meta">Remote-trigger a Fire TV / Android TV device to play DRM channels, using a small player app FastChannels controls directly over adb</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Enable FastChannels Player</div>
+          <div class="toggle-row-help">Required before the settings below take effect. The device needs ADB debugging turned on and the FastChannels Player app installed — see Install below.</div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="fc-player-enabled" {% if fc_player_enabled %}checked{% endif %}
+                   onchange="saveFcPlayerToggles()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="fields-grid" style="max-width:480px">
+        <div class="field field-full">
+          <label for="fc-player-ip">Firestick / Android TV IP address</label>
+          <input type="text" id="fc-player-ip"
+                 placeholder="192.168.1.50" value="{{ fc_player_ip }}">
+          <div class="help">adb port (<code>:5555</code>) is derived automatically.</div>
+        </div>
+      </div>
+      <div class="field-actions">
+        <span class="save-status" id="fc-player-status"></span>
+        <button class="btn btn-secondary" onclick="testFcPlayer()">Test connection</button>
+        <button class="btn btn-primary" onclick="saveFcPlayerSettings()">Save</button>
+      </div>
+    </div>
+  </div>

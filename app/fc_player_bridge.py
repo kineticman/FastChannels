@@ -55,6 +55,43 @@ def _adb_address() -> str:
     return address
 
 
+def test_connection() -> tuple[bool, str]:
+    """adb-reachability check for the settings page's Test Connection button.
+
+    Distinguishes "device unreachable" from "reachable but the player app isn't
+    installed yet" — the latter is exactly what the (not yet built) install flow
+    would need to detect too.
+    """
+    address = _adb_address()
+    try:
+        subprocess.run(
+            ['adb', 'connect', address],
+            capture_output=True, timeout=_ADB_TIMEOUT, check=False,
+        )
+        state = subprocess.run(
+            ['adb', '-s', address, 'get-state'],
+            capture_output=True, timeout=_ADB_TIMEOUT, check=False, text=True,
+        )
+    except Exception as e:
+        return False, f'adb error: {e}'
+
+    if state.returncode != 0 or 'device' not in (state.stdout or ''):
+        return False, ("Couldn't reach the device over adb — check the IP and that ADB "
+                        "debugging is enabled (Settings > My Fire TV > Developer options).")
+
+    try:
+        packages = subprocess.run(
+            ['adb', '-s', address, 'shell', 'pm', 'list', 'packages', 'com.fastchannels.player'],
+            capture_output=True, timeout=_ADB_TIMEOUT, check=False, text=True,
+        )
+    except Exception:
+        return True, 'Device reachable over adb.'
+
+    if 'com.fastchannels.player' in (packages.stdout or ''):
+        return True, 'Device reachable — FastChannels Player is installed.'
+    return True, 'Device reachable, but FastChannels Player is not installed yet.'
+
+
 def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: str = 'FastChannels') -> bool:
     """Tell the FastChannels Player app to start playing this stream right now.
 
