@@ -15,6 +15,7 @@ from ..generators.m3u import (
     _MASTER_GRACENOTE_START,
     generate_prismcast_m3u,
     generate_kodi_bridge_m3u,
+    generate_streamvault_m3u,
 )
 from ..generators.xmltv import generate_xmltv_stream
 from ..models import Feed
@@ -126,6 +127,36 @@ def m3u():
         mimetype='application/x-mpegurl',
         download_name='fastchannels.m3u',
     )
+
+
+_STREAMVAULT_M3U_CACHE: dict = {}
+_STREAMVAULT_M3U_CACHE_TTL = 60  # seconds
+
+
+@output_bp.route('/m3u/streamvault')
+def m3u_streamvault():
+    """Feed for the StreamVault plugin's local provider.m3u server (app/streamvault_plugin/).
+
+    Generated through a simple in-process TTL cache rather than the artifact cache
+    (get_artifact) the other M3U routes use — that system is wired to the scrape/invalidation
+    pipeline, more than this dev-only plugin route needs tonight. Without any caching this
+    took ~12s per request (confirmed live 2026-08-24, DRM-bridge union + per-channel Gracenote/
+    chnum/logo-proxy work over 800+ channels), long enough that the StreamVault-side HTTP
+    client fetching it saw the connection die mid-response.
+    """
+    import time as _time_mod
+    base_url = public_base_url()
+    filters = _filters()
+    cache_key = (base_url, tuple(sorted(filters.items())) if filters else None)
+    cached = _STREAMVAULT_M3U_CACHE.get(cache_key)
+    now = _time_mod.monotonic()
+    if cached and now - cached[1] < _STREAMVAULT_M3U_CACHE_TTL:
+        content = cached[0]
+    else:
+        content = generate_streamvault_m3u(filters, base_url=base_url)
+        _STREAMVAULT_M3U_CACHE[cache_key] = (content, now)
+    return Response(content, mimetype='application/x-mpegurl',
+                    headers={'Content-Disposition': 'attachment; filename="fastchannels-streamvault.m3u"'})
 
 
 @output_bp.route('/m3u/gracenote')

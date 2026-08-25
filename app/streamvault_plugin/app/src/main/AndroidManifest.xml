@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <application
+        android:allowBackup="false"
+        android:label="FastChannels StreamVault Bridge"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true">
+
+        <!--
+        Zero-Activity plugin: configurationMode is "host.schema", so StreamVault renders
+        the config UI itself from MSG_GET_CONFIGURATION_SCHEMA — no exported Activity needed.
+        -->
+        <service
+            android:name=".FastChannelsPluginService"
+            android:exported="true"
+            android:foregroundServiceType="dataSync">
+            <intent-filter>
+                <action android:name="com.streamvault.plugin.API" />
+            </intent-filter>
+            <!--
+            Keep this JSON in sync with PluginManifest.json() (FastChannelsPluginService.java) —
+            this static copy is what StreamVault reads at discovery time (before it ever binds
+            the service); MSG_GET_MANIFEST returns the live version once bound.
+            -->
+            <meta-data
+                android:name="com.streamvault.plugin.MANIFEST_JSON"
+                android:value="{&quot;schemaVersion&quot;:1,&quot;id&quot;:&quot;com.fastchannels.streamvault.bridge&quot;,&quot;name&quot;:&quot;FastChannels&quot;,&quot;versionName&quot;:&quot;1.0.0&quot;,&quot;versionCode&quot;:1,&quot;description&quot;:&quot;FastChannels live channels and DRM playback via your FastChannels server.&quot;,&quot;providerName&quot;:&quot;FastChannels&quot;,&quot;playbackUrlSchemes&quot;:[&quot;http&quot;],&quot;playbackUrlHosts&quot;:[&quot;127.0.0.1&quot;],&quot;playbackPriority&quot;:50,&quot;configurationMode&quot;:&quot;host.schema&quot;,&quot;configurationActivityAction&quot;:&quot;&quot;,&quot;capabilities&quot;:[&quot;provider.m3u&quot;,&quot;playback.prepare&quot;,&quot;configuration.schema&quot;]}" />
+        </service>
+    </application>
+</manifest>
