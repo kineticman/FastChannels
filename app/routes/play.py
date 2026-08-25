@@ -22,7 +22,7 @@ import requests as _requests
 from flask import Blueprint, redirect, abort, request, Response, render_template, g, stream_with_context, current_app
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
 from ..hls import inspect_hls_drm, parse_stream_info
-from ..kodi_bridge_dash import (
+from ..dash_mpd_utils import (
     _mpd_strip_non_av_tracks,
     _mpd_keep_highest_bitrate_video,
     _mpd_keep_highest_bitrate_audio,
@@ -4726,131 +4726,25 @@ def play(source_name: str, channel_id: str):
     return redirect(resolved_url, 302)
 
 
-from ..kodi_bridge import KODI_BRIDGE_TRUSTED_SOURCES as _KODI_BRIDGE_TRUSTED_SOURCES
-
-
-@play_bp.route('/play/kodi-bridge/<source_name>/<channel_id>.m3u8')
-def play_kodi_bridge(source_name: str, channel_id: str):
-    """
-    Single play URL for the Kodi/HDMI-encoder bridge feed (dev/kodi/IMPLEMENTATION_PLAN.md
-    section 2). Every channel in the feed hits this route, DRM or not — the branch is
-    invisible to the caller:
-      - normal channel -> identical to /play/<source>/<id>.m3u8 (resolve + 302 to CDN)
-      - bridge channel -> trigger_channel() on Kodi, then redirect to the encoder's fixed
-        stream URL immediately. Does NOT wait for confirm_playback() — that's the
-        watchdog's job, never inline with this request (speed-first design, agreed
-        2026-08-16: the JSON-RPC call itself returns in well under 100ms).
-    """
-    channel = (
-        Channel.query
-        .join(Source)
-        .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
-        .first()
-    )
-    if not channel and source_name == 'distro' and ':' not in channel_id:
-        channel = (
-            Channel.query
-            .join(Source)
-            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
-            .first()
-        )
-    if not channel:
-        abort(404)
-
-    needs_bridge = bool(channel.requires_drm_bridge) and source_name in _KODI_BRIDGE_TRUSTED_SOURCES
-    if not needs_bridge:
-        return play(source_name, channel_id)
-
-    from .. import kodi_bridge
-    from ..models import AppSettings
-    from .api import _get_playback_info
-
-    settings = AppSettings.get()
-    encoder_url = settings.effective_kodi_bridge_encoder_url()
-    if not encoder_url:
-        logger.error(
-            '[kodi-bridge] play request for %s/%s but kodi_bridge_encoder_url is not configured',
-            source_name, channel_id,
-        )
-        return Response('Kodi HDMI bridge encoder URL is not configured.\n', status=503, mimetype='text/plain')
-
-    if not kodi_bridge.is_configured():
-        logger.error(
-            '[kodi-bridge] play request for %s/%s but the bridge is not enabled/configured',
-            source_name, channel_id,
-        )
-        return Response('Kodi HDMI bridge is not enabled or configured.\n', status=503, mimetype='text/plain')
-
-    info = _get_playback_info(channel, fast_mode=False)
-    manifest_url = info.get('preview_url') or info.get('play_url') or ''
-    if manifest_url.startswith('/'):
-        manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
-    if manifest_url.endswith('/dash.mpd') or '/dash.mpd?' in manifest_url:
-        sep = '&' if '?' in manifest_url else '?'
-        manifest_url = f'{manifest_url}{sep}kodi_bridge=1'
-    license_url = info.get('license_url') or None
-
-    if not manifest_url:
-        logger.error('[kodi-bridge] no manifest URL resolved for %s/%s', source_name, channel_id)
-        return _unavailable_response()
-
-    triggered = kodi_bridge.trigger_channel(
-        manifest_url, license_url, name=channel.name or 'FastChannels',
-        channel_key=f'{source_name}:{channel_id}',
-    )
-    logger.info(
-        '[kodi-bridge] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s triggered=%s -> encoder',
-        getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name, triggered,
-    )
-    return redirect(encoder_url, 302)
-
-
-@play_bp.route('/play/kodi-bridge/<source_name>/<channel_id>.m3u')
-def play_kodi_bridge_vlc(source_name: str, channel_id: str):
-    """.m3u sibling of play_kodi_bridge, same purpose as play_vlc: hand VLC (or any
-    media player) a downloadable playlist instead of a bare .m3u8 URL the browser
-    would otherwise try to render inline."""
-    channel = (
-        Channel.query
-        .join(Source)
-        .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
-        .first()
-    )
-    if not channel and source_name == 'distro' and ':' not in channel_id:
-        channel = (
-            Channel.query
-            .join(Source)
-            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
-            .first()
-        )
-    if not channel:
-        abort(404)
-    base_url = request.host_url.rstrip('/')
-    stream_url = f'{base_url}/play/kodi-bridge/{source_name}/{channel_id}.m3u8'
-    playlist = f'#EXTM3U\n#EXTINF:-1,{channel.name}\n{stream_url}\n'
-    return Response(
-        playlist,
-        mimetype='audio/x-mpegurl',
-        headers={'Content-Disposition': f'attachment; filename="{channel_id}.m3u"'},
-    )
+from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES as _DRM_BRIDGE_TRUSTED_SOURCES
 
 
 @play_bp.route('/play/fc-player/<source_name>/<channel_id>.m3u8')
 def play_fc_player_bridge(source_name: str, channel_id: str):
     """
-    Single play URL for the FastChannels Player bridge feed — same shape and purpose
-    as play_kodi_bridge, just triggering the FastChannels Player app (app/fc_player/)
-    over adb instead of Kodi:
+    Single play URL for the FastChannels Player bridge feed, triggering the
+    FastChannels Player app (app/fc_player/) over adb:
       - normal channel -> identical to /play/<source>/<id>.m3u8 (resolve + 302 to CDN)
       - bridge channel -> trigger_channel() on the device, then redirect to the
-        encoder's fixed stream URL immediately, same speed-first design as Kodi bridge.
+        encoder's fixed stream URL immediately (speed-first design — return as soon as
+        the device acknowledges the trigger, don't wait for real decode to start).
 
-    Deliberately does NOT append the kodi_bridge=1 manifest-normalization flag
-    play_kodi_bridge does (single-bitrate-only, stripped non-AV tracks) — that's a
-    workaround for a Kodi/inputstream.adaptive-specific issue. Media3/ExoPlayer (what
-    FastChannels Player actually uses) already played the same un-normalized adaptive
-    manifest cleanly in testing; applying a Kodi-specific workaround here would just
-    remove ABR quality switching for no benefit.
+    Deliberately does not apply the dash_mpd_utils single-bitrate-only manifest
+    normalization some DRM `dash.mpd` routes support via `kodi_bridge=1` — that was a
+    workaround for a Kodi/inputstream.adaptive-specific MediaCodec issue.
+    Media3/ExoPlayer (what FastChannels Player actually uses) already played the same
+    un-normalized adaptive manifest cleanly in testing; applying that workaround here
+    would just remove ABR quality switching for no benefit.
     """
     channel = (
         Channel.query
@@ -4868,7 +4762,7 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
     if not channel:
         abort(404)
 
-    needs_bridge = bool(channel.requires_drm_bridge) and source_name in _KODI_BRIDGE_TRUSTED_SOURCES
+    needs_bridge = bool(channel.requires_drm_bridge) and source_name in _DRM_BRIDGE_TRUSTED_SOURCES
     if not needs_bridge:
         return play(source_name, channel_id)
 
@@ -4940,31 +4834,6 @@ def play_fc_player_bridge_vlc(source_name: str, channel_id: str):
         mimetype='audio/x-mpegurl',
         headers={'Content-Disposition': f'attachment; filename="{channel_id}.m3u"'},
     )
-
-
-@play_bp.route('/play/kodi-bridge/heartbeat', methods=['POST'])
-def kodi_bridge_heartbeat():
-    """Lightweight signal from the fc_bridge Kodi addon's background service
-    (app/kodi_addon/plugin.video.fc_bridge/service.py) when Kodi's own player
-    engine fires `onPlaybackError` — a definitive, official-API failure signal,
-    complementary to run_instanceguard_watch's logcat string-matching (which
-    can only react to two specific known failure signatures). See
-    kodi_bridge.handle_playback_error_heartbeat for the reaction.
-
-    Best-effort and always 204: a misbehaving or misconfigured addon retrying
-    this endpoint must never see an error worth acting on, and there's nothing
-    useful to return either way.
-    """
-    from .. import kodi_bridge
-    payload = request.get_json(silent=True) or {}
-    event = str(payload.get('event') or 'unknown')
-    logger.info('[kodi-bridge] heartbeat: %s', event)
-    if event == 'playback_error' and kodi_bridge.is_configured():
-        try:
-            kodi_bridge.handle_playback_error_heartbeat()
-        except Exception:
-            logger.warning('[kodi-bridge] heartbeat: handler failed', exc_info=True)
-    return ('', 204)
 
 
 _PRISMCAST_HLS_SESSION_RE = re.compile(r'^(.*)/hls/([^/]+)/stream\.m3u8(?:\?.*)?$')

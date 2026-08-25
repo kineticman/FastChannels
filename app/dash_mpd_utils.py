@@ -1,27 +1,20 @@
-"""DASH manifest rewriting for the Kodi/Fire TV HDMI-encoder bridge.
+"""DASH manifest rewriting helpers — pure text-in/text-out manifest transforms
+(strip non-AV tracks, keep only the highest-bitrate video/audio representation)
+called from each source's `/dash.mpd` proxy route (app/routes/play.py) when the
+`kodi_bridge=1` query flag is set. None of them touch Flask, the DB, or any device.
 
-Pure text-in/text-out manifest transforms called from each source's `/dash.mpd`
-proxy route (app/routes/play.py) when `kodi_bridge=1`. Split out from play.py
-(which was growing unwieldy) since these are a self-contained concern: none of
-them touch Flask, the DB, or the device itself — see app/kodi_bridge.py for the
-JSON-RPC/adb side of the bridge (trigger_channel, the InstanceGuard watchdog,
-etc.), which these functions exist to keep out of trouble.
-
-All of this exists because of one MediaTek Fire TV Stick hardware limitation:
-its secure decoder only permits one MediaCodec instance at a time
-(CDVDVideoCodecAndroidMediaCodec::Open - InstanceGuard locked). inputstream.adaptive
-disposes and reinitializes its decrypter on every DASH Period boundary
-unconditionally (confirmed via its own source/logs — "New period, dispose sample
-decrypter and reinitialize" is standard, not an error path), but only tears down
-the underlying secure MediaCodec instance when the codec's negotiated format
-actually changes. A same-format Period transition reinitializes the decrypter and
-moves on cleanly (confirmed live 2026-08-22: 10 consecutive same-composition
-transitions, zero reopens); a format-changing one races the still-releasing prior
-instance and freezes playback with no visible error and no signal in
-Player.GetProperties (see kodi_bridge.py's trigger_channel() docstring and
-project memory for the full investigation). Every function below exists to keep
-what Kodi sees composition-stable across Period boundaries, so that mandatory
-per-Period reinit never needs to touch the actual MediaCodec instance.
+Originally written for the Kodi/Fire TV HDMI-encoder bridge (removed 2026-08-25, see
+dev/kodi/removed-from-app/) to work around one MediaTek Fire TV Stick hardware
+limitation: its secure decoder only permits one MediaCodec instance at a time
+(CDVDVideoCodecAndroidMediaCodec::Open - InstanceGuard locked), and a DASH Period
+transition that changes the negotiated codec format raced the still-releasing prior
+instance and froze playback. Forcing every Period to a single, stable
+video/audio representation kept the format constant across transitions so the
+mandatory per-Period decrypter reinit never needed to touch the actual MediaCodec
+instance. No current caller sets `kodi_bridge=1` (only the now-removed Kodi bridge
+route did), so these are presently dormant — kept as reusable, self-contained
+manifest utilities in case a future single-bitrate-only client needs the same
+normalization.
 """
 import logging
 import xml.etree.ElementTree as ET

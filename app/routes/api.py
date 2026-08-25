@@ -413,7 +413,6 @@ def _isoformat_utc(dt):
 
 def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool,
                                prismcast: bool = False,
-                               kodi_bridge: bool = False,
                                force_refresh: bool = False) -> None:
     """Ensure feed artifacts exist before handing URLs to Channels DVR.
 
@@ -422,10 +421,7 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
     force_refresh rebuilds this feed synchronously to reflect recent channel
     enable/disable edits before Channels DVR fetches the URL.
     """
-    if kodi_bridge:
-        std_key = f'feed-{feed.slug}-kodi-bridge-m3u'
-        gn_key  = f'feed-{feed.slug}-kodi-bridge-gracenote-m3u'
-    elif prismcast:
+    if prismcast:
         std_key = f'feed-{feed.slug}-prismcast-m3u'
         gn_key  = f'feed-{feed.slug}-prismcast-gracenote-m3u'
     else:
@@ -437,7 +433,6 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
             generate_gracenote_m3u,
             generate_m3u,
             generate_prismcast_m3u,
-            generate_kodi_bridge_m3u,
             feed_gracenote_start,
             feed_namespace_start,
             feed_to_query_filters,
@@ -458,24 +453,7 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
             lambda fp: write_xmltv(fp, filters, base_url=base_url, feed_name=feed.name),
         )
 
-        if kodi_bridge:
-            write_artifact(
-                std_key,
-                lambda fp: fp.write(generate_kodi_bridge_m3u(filters, base_url=base_url, **std_kw)),
-                ext='m3u',
-            )
-            if has_gracenote:
-                write_artifact(
-                    gn_key,
-                    lambda fp: fp.write(generate_kodi_bridge_m3u(
-                        filters,
-                        base_url=base_url,
-                        gracenote=True,
-                        **gn_kw,
-                    )),
-                    ext='m3u',
-                )
-        elif prismcast:
+        if prismcast:
             settings = AppSettings.get()
             prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
             prismcast_inner = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
@@ -778,34 +756,16 @@ def _normalize_server_url(value: str | None, default_port: int | None = None) ->
     return f'{scheme}://{host}'.rstrip('/')
 
 
-_KODI_BRIDGE_DEFAULT_PORT = 8080
-
-
-def _kodi_bridge_host_from_input(value: str | None) -> str | None:
-    """Extract a bare host from a Kodi/Firestick IP field — strips any scheme/port
+def _bridge_host_from_input(value: str | None) -> str | None:
+    """Extract a bare host from a device-bridge IP field — strips any scheme/port
     the user typed. The admin form takes one "IP[:port]" field and derives the
-    JSON-RPC URL (default :8080, overridable — see _kodi_bridge_port_from_input;
-    some Fire OS builds run a system service that squats on 8080) and adb address
-    (:5555, not currently overridable) from it."""
+    adb address (:5555, not currently overridable) from it."""
     raw = (value or '').strip()
     if not raw:
         return None
     if '://' not in raw:
         raw = f'http://{raw}'
     return urlsplit(raw).hostname or None
-
-
-def _kodi_bridge_port_from_input(value: str | None) -> int:
-    """Extract the JSON-RPC port from a Kodi/Firestick IP[:port] field, defaulting
-    to 8080 when no port is given."""
-    raw = (value or '').strip()
-    if not raw:
-        return _KODI_BRIDGE_DEFAULT_PORT
-    if '://' not in raw:
-        raw = f'http://{raw}'
-    return urlsplit(raw).port or _KODI_BRIDGE_DEFAULT_PORT
-
-
 
 
 @api_bp.route('/sources')
@@ -3228,15 +3188,16 @@ def _get_playback_info(ch, fast_mode=True):
     # bridge is actually configured so "Open in VLC"/"Open in New Tab" hand back
     # something playable instead of a black screen.
     if getattr(ch, 'requires_drm_bridge', False) and ch.source and ch.source.name and ch.source_channel_id:
-        from ..kodi_bridge import KODI_BRIDGE_TRUSTED_SOURCES as _KODI_TRUSTED, is_configured as _kodi_bridge_configured
+        from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES as _DRM_TRUSTED
+        from .. import fc_player_bridge as _fc_player_bridge
         from urllib.parse import quote as _quote
         _settings = AppSettings.get()
         if (
-            ch.source.name in _KODI_TRUSTED
-            and _settings.kodi_bridge_enabled
-            and _kodi_bridge_configured()
+            ch.source.name in _DRM_TRUSTED
+            and _settings.fc_player_bridge_enabled
+            and _fc_player_bridge.is_configured()
         ):
-            play_url = f'/play/kodi-bridge/{ch.source.name}/{_quote(ch.source_channel_id, safe="")}.m3u8'
+            play_url = f'/play/fc-player/{ch.source.name}/{_quote(ch.source_channel_id, safe="")}.m3u8'
         elif _settings.drm_bridge_enabled and (_settings.effective_prismcast_url() or '').strip():
             play_url = f'/play/prismcast/{ch.id}.ts'
 
@@ -4404,111 +4365,6 @@ def push_feed_prismcast_to_dvr(feed_id):
     return jsonify({'ok': True, 'sources_added': sources_added})
 
 
-@api_bp.route('/feeds/<int:feed_id>/push-kodi-bridge-to-dvr', methods=['POST'])
-def push_feed_kodi_bridge_to_dvr(feed_id):
-    """Register this feed's Kodi/HDMI-bridge output as custom M3U source(s) in
-    Channels DVR.
-
-    Registers up to two sources, named distinctly from the standard push so they
-    sit alongside it rather than overwriting it (Channels DVR keys a source by its
-    alphanumeric-stripped name):
-    - "… Kodi Bridge Gracenote" (no EPG URL): only if the feed has Gracenote channels
-      in the trusted-source DRM set — DVR fetches guide data via tvc-guide-stationid.
-    - "… Kodi Bridge" (with our EPG XML): the standard-guide playlist. Every channel
-      here uses the same play URL; play_kodi_bridge decides per-request whether a
-      given channel actually needs the Kodi/Firestick trigger.
-    """
-    import re as _re
-
-    feed = Feed.query.get_or_404(feed_id)
-    settings = AppSettings.get()
-
-    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
-    if not dvr_url:
-        return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
-    if not (
-        settings.kodi_bridge_enabled
-        and settings.effective_kodi_bridge_device_url()
-        and settings.effective_kodi_bridge_adb_address()
-        and settings.effective_kodi_bridge_encoder_url()
-    ):
-        return jsonify({'error': 'Kodi HDMI Bridge is not fully configured. Set the device IP and encoder/capture stream URL in Settings.'}), 400
-
-    base = public_base_url()
-
-    # Always MPEG-TS, unlike the plain/PrismCast pushes (_dvr_stream_format): every
-    # trusted-source DRM channel in this feed redirects to the same fixed
-    # kodi_bridge_encoder_url, which is Channels DVR's own capture-card re-serve —
-    # confirmed MPEG-TS only (dev/kodi/README.md), never HLS. Non-bridged channels in
-    # the same feed still point at their real (often HLS) CDN URL underneath, so this
-    # is a deliberate tradeoff for feeds that mix bridged and non-bridged channels,
-    # not a correctness guarantee for every entry — accepted call, not a bug.
-    dvr_type = 'MPEG-TS'
-
-    # Kodi-bridge partitions the same way as the standard feed; use the same counts.
-    split = _feed_split_counts(feed)
-    std_count = split.get('kodi_bridge_count', 0)
-    gn_count  = split.get('kodi_bridge_gracenote_count', 0)
-    has_gracenote = gn_count > 0
-    if std_count == 0 and gn_count == 0:
-        return jsonify({'error': 'This feed has no eligible Kodi-bridge channels to add to Channels DVR.'}), 400
-
-    # Each partition registers as its own DVR source, so gate the recommended-max
-    # warning on the larger of the two.
-    largest = max(std_count, gn_count)
-    force = bool((request.get_json(silent=True) or {}).get('force'))
-    if largest > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
-        return jsonify({
-            'error': f'This Kodi Bridge feed has {largest} channels in one source. Channels DVR usually works best at 750 or fewer.',
-            'requires_confirm': True,
-            'channel_count': largest,
-            'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
-        }), 409
-
-    try:
-        _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote, kodi_bridge=True, force_refresh=True)
-    except TimeoutError:
-        return jsonify({'error': 'Timed out waiting for Kodi Bridge feed artifacts to build. Try again in a moment.'}), 503
-
-    def _put(name, url, xmltv_url=''):
-        safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
-        payload = {
-            'name':    name,
-            'type':    dvr_type,
-            'source':  'URL',
-            'url':     url,
-            'refresh': '24',
-        }
-        if xmltv_url:
-            payload['xmltv_url']     = xmltv_url
-            payload['xmltv_refresh'] = '3600'
-        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=30, verify=False)
-
-    gn_name  = f"FastChannels {feed.name} Kodi Bridge Gracenote"
-    std_name = f"FastChannels {feed.name} Kodi Bridge"
-    sources_added = []
-
-    try:
-        if has_gracenote:
-            r1 = _put(gn_name, f"{base}/feeds/{feed.slug}/m3u/kodi-bridge/gracenote")
-            r1.raise_for_status()
-            sources_added.append(gn_name)
-
-        if std_count > 0:
-            r2 = _put(std_name, f"{base}/feeds/{feed.slug}/m3u/kodi-bridge", f"{base}/feeds/{feed.slug}/epg.xml")
-            r2.raise_for_status()
-            sources_added.append(std_name)
-    except _req.exceptions.ConnectionError:
-        return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
-    except _req.exceptions.Timeout:
-        return jsonify({'error': 'Channels DVR timed out.'}), 504
-    except _req.exceptions.HTTPError as exc:
-        resp = exc.response
-        return jsonify({'error': f'DVR {resp.status_code}: {resp.text[:300]}'}), 502
-
-    return jsonify({'ok': True, 'sources_added': sources_added})
-
-
 @api_bp.route('/sources/<int:source_id>/push-to-dvr', methods=['POST'])
 def push_source_to_dvr(source_id):
     """Register a source-filtered raw output as custom M3U source(s) in Channels DVR."""
@@ -5294,21 +5150,21 @@ def _drm_bridge_capable_sources() -> list[str]:
 
 
 def _reconcile_drm_bridge_mode() -> None:
-    """Apply a DRM-bridge toggle change (PrismCast's drm_bridge_enabled or Kodi's
-    kodi_bridge_enabled) to existing channels so it takes effect at once, without
-    waiting for the next stream audit.
+    """Apply a DRM-bridge toggle change (PrismCast's drm_bridge_enabled or
+    FastChannels Player's fc_player_bridge_enabled) to existing channels so it takes
+    effect at once, without waiting for the next stream audit.
 
-    Per bridge-capable source, recomputes eligibility via kodi_bridge.drm_bridge_mode_for
+    Per bridge-capable source, recomputes eligibility via drm_bridge.drm_bridge_mode_for
     (true if EITHER bridge can serve it) and reconciles accordingly:
       now eligible     : disabled-DRM channels are recovered — kept active and marked
                          requires_drm_bridge; intrinsically bridge-only rows are flagged too.
       no longer eligible: bridged channels drop back to the legacy disabled state.
 
     Important: reconciliation is per-source, not global — a source still eligible via
-    one bridge (e.g. Kodi) must not be disabled just because the other bridge (PrismCast)
-    was toggled off.
+    one bridge (e.g. FastChannels Player) must not be disabled just because the other
+    bridge (PrismCast) was toggled off.
     """
-    from ..kodi_bridge import drm_bridge_mode_for
+    from ..drm_bridge import drm_bridge_mode_for
     capable = _drm_bridge_capable_sources()
     recovered = 0
     intrinsic_flagged = 0
@@ -6001,38 +5857,15 @@ def app_settings():
             row.image_proxy_enabled = bool(data['image_proxy_enabled'])
         if 'm3u_rewrite_timestamps' in data:
             row.m3u_rewrite_timestamps = bool(data['m3u_rewrite_timestamps'])
-        if 'kodi_bridge_enabled' in data:
-            _new_kodi_bridge = bool(data['kodi_bridge_enabled'])
-            if _new_kodi_bridge != bool(row.kodi_bridge_enabled):
-                row.kodi_bridge_enabled = _new_kodi_bridge
-                # Reconcile existing DRM channels immediately so the toggle takes effect
-                # without waiting for the next stream audit.
-                _reconcile_drm_bridge_mode()
-        if 'kodi_bridge_keepalive_enabled' in data:
-            row.kodi_bridge_keepalive_enabled = bool(data['kodi_bridge_keepalive_enabled'])
-        if 'kodi_bridge_ip' in data:
-            _kodi_host = _kodi_bridge_host_from_input(data['kodi_bridge_ip'])
-            if data.get('kodi_bridge_ip') and not _kodi_host:
-                return jsonify({'error': 'Invalid Kodi/Firestick IP address.'}), 422
-            _kodi_port = _kodi_bridge_port_from_input(data['kodi_bridge_ip'])
-            row.kodi_bridge_device_url = f'http://{_kodi_host}:{_kodi_port}' if _kodi_host else None
-            row.kodi_bridge_adb_address = f'{_kodi_host}:5555' if _kodi_host else None
-        if 'kodi_bridge_encoder_url' in data:
-            row.kodi_bridge_encoder_url = _normalize_server_url(data['kodi_bridge_encoder_url'], default_port=None)
-        if 'kodi_bridge_captions_enabled' in data:
-            row.kodi_bridge_captions_enabled = bool(data['kodi_bridge_captions_enabled'])
-            _push_captions = row.kodi_bridge_captions_enabled
-        else:
-            _push_captions = None
         if 'fc_player_enabled' in data:
             _new_fc_player = bool(data['fc_player_enabled'])
             if _new_fc_player != bool(row.fc_player_bridge_enabled):
                 row.fc_player_bridge_enabled = _new_fc_player
-                # Reconcile existing DRM channels immediately, same as the kodi_bridge_enabled
-                # toggle — see kodi_bridge.drm_bridge_mode_for.
+                # Reconcile existing DRM channels immediately so the toggle takes effect
+                # without waiting for the next stream audit — see drm_bridge.drm_bridge_mode_for.
                 _reconcile_drm_bridge_mode()
         if 'fc_player_ip' in data:
-            _fcp_host = _kodi_bridge_host_from_input(data['fc_player_ip'])
+            _fcp_host = _bridge_host_from_input(data['fc_player_ip'])
             if data.get('fc_player_ip') and not _fcp_host:
                 return jsonify({'error': 'Invalid Firestick/Android TV IP address.'}), 422
             row.fc_player_bridge_adb_address = f'{_fcp_host}:5555' if _fcp_host else None
@@ -6046,18 +5879,9 @@ def app_settings():
         write_timezone_cache(row.timezone_name)
         _invalidate_and_refresh_xml()
         row = AppSettings.get()
-        if _push_captions is not None:
-            from .. import kodi_bridge as _kodi_bridge
-            if not _kodi_bridge.set_captions_enabled(_push_captions):
-                logger.warning('[kodi-bridge] captions toggle saved but could not be pushed to the device (unreachable?)')
-    _kodi_bridge_ip_display = _kodi_bridge_host_from_input(row.effective_kodi_bridge_device_url()) or ''
-    if _kodi_bridge_ip_display:
-        _kodi_bridge_port_display = _kodi_bridge_port_from_input(row.effective_kodi_bridge_device_url())
-        if _kodi_bridge_port_display != _KODI_BRIDGE_DEFAULT_PORT:
-            _kodi_bridge_ip_display = f'{_kodi_bridge_ip_display}:{_kodi_bridge_port_display}'
-    # Always :5555 (the standard adb port — not user-overridable like Kodi's JSON-RPC port),
-    # so just strip it back off for display.
-    _fc_player_ip_display = _kodi_bridge_host_from_input(row.effective_fc_player_bridge_adb_address()) or ''
+    # Always :5555 (the standard adb port, not user-overridable), so just strip it
+    # back off for display.
+    _fc_player_ip_display = _bridge_host_from_input(row.effective_fc_player_bridge_adb_address()) or ''
     return jsonify({
         'channels_dvr_url':  row.effective_channels_dvr_url(),
         'public_base_url':   row.effective_public_base_url(),
@@ -6073,11 +5897,6 @@ def app_settings():
         'prismcast_inner_url': row.prismcast_inner_url or '',
         'prismcast_max_height': int(row.prismcast_max_height or 0),
         'drm_bridge_enabled': bool(row.drm_bridge_enabled),
-        'kodi_bridge_enabled': bool(row.kodi_bridge_enabled),
-        'kodi_bridge_keepalive_enabled': row.kodi_bridge_keepalive_enabled if row.kodi_bridge_keepalive_enabled is not None else True,
-        'kodi_bridge_ip': _kodi_bridge_ip_display,
-        'kodi_bridge_encoder_url': row.effective_kodi_bridge_encoder_url() or '',
-        'kodi_bridge_captions_enabled': bool(row.kodi_bridge_captions_enabled),
         'fc_player_enabled': bool(row.fc_player_bridge_enabled),
         'fc_player_ip': _fc_player_ip_display,
         'fc_player_encoder_url': row.effective_fc_player_bridge_encoder_url() or '',
@@ -6085,43 +5904,6 @@ def app_settings():
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
     })
-
-
-@api_bp.route('/settings/kodi-bridge/test', methods=['POST'])
-def test_kodi_bridge():
-    """JSON-RPC ping against the configured Kodi/Firestick device, plus a check that
-    the encoder/capture stream URL is set and actually reachable — a green result here
-    should mean a bridged channel would really work end-to-end, not just that Kodi is
-    online."""
-    from .. import kodi_bridge
-    if not kodi_bridge.is_configured():
-        return jsonify({'ok': False, 'message': 'Enable the bridge and set a device IP first.'}), 400
-    if not kodi_bridge.is_alive(timeout=4):
-        return jsonify({'ok': False, 'message': "Couldn't reach Kodi's JSON-RPC — check the IP, that Kodi is running, and that its webserver control is enabled."})
-
-    encoder_url = AppSettings.get().effective_kodi_bridge_encoder_url()
-    if not encoder_url:
-        return jsonify({
-            'ok': True,
-            'warning': True,
-            'message': 'Kodi responded, but no encoder/capture stream URL is set — bridged channels will fail with a 503 until you add one.',
-        })
-
-    try:
-        with _req.get(encoder_url, stream=True, timeout=3) as r:
-            if r.ok:
-                return jsonify({'ok': True, 'message': 'Kodi responded and the encoder/capture stream URL is reachable.'})
-            return jsonify({
-                'ok': True,
-                'warning': True,
-                'message': f'Kodi responded, but the encoder/capture stream URL returned HTTP {r.status_code} — bridged channels may fail.',
-            })
-    except _req.RequestException:
-        return jsonify({
-            'ok': True,
-            'warning': True,
-            'message': 'Kodi responded, but the encoder/capture stream URL is not reachable — bridged channels will fail until that stream is up.',
-        })
 
 
 @api_bp.route('/settings/fc-player/test', methods=['POST'])

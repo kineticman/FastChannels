@@ -1,21 +1,18 @@
 """FastChannels Player remote-play trigger — adb orchestration.
 
-FastChannels' analog of kodi_bridge.trigger_channel(), for the FastChannels-owned
-player app (app/fc_player/) — a single-Activity Media3/ExoPlayer app with no UI of
-its own to speak of; everything is driven from here over adb. There is no
-StreamVault (or any other third-party app) involved: an earlier design routed
-playback through StreamVault-IPTV's own UI, but once it was clear this device needs
-no on-device browsing at all, that whole integration (and the fragility that came
-with it) was dropped in favor of this much smaller app.
+For the FastChannels-owned player app (app/fc_player/) — a single-Activity
+Media3/ExoPlayer app with no UI of its own to speak of; everything is driven from
+here over adb. There is no StreamVault (or any other third-party app) involved: an
+earlier design routed playback through StreamVault-IPTV's own UI, but once it was
+clear this device needs no on-device browsing at all, that whole integration (and
+the fragility that came with it) was dropped in favor of this much smaller app.
 
 Android has no in-process way to launch this: a plain context.startActivity() from
 a background service is blocked by the background-activity-start restriction —
 confirmed live 2026-08-24 — and the standard workaround (a full-screen-intent
 notification) is ALSO blocked on this device by Fire OS's own notification allowlist
 ("AmazonNotificationService: Package ... is not in allow list"). adb-shell-privileged
-launches are exempt from both restrictions — the same reason kodi_bridge.py's
-wake_and_relaunch() uses `adb shell am start -n org.xbmc.kodi/.Splash` rather than any
-in-process API — so this triggers playback the same way: a plain
+launches are exempt from both restrictions, so this triggers playback via a plain
 `adb shell am start -n <package>/.PlaybackActivity` with simple string/boolean extras
 (no Serializable involved — PlaybackActivity reads plain Intent extras).
 
@@ -96,11 +93,10 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
     """Tell the FastChannels Player app to start playing this stream right now.
 
     manifest_url should already be the fully-resolved play URL (same shape
-    _get_playback_info() hands to the watch page / kodi_bridge — the DRM dash.mpd proxy
-    route for DRM channels, the generic play-proxy .m3u8 URL otherwise). Returns True if
-    adb acknowledged the am start call — not proof playback actually started; there is no
-    separate confirm_playback() here since there's no remote-control channel to poll,
-    unlike Kodi's JSON-RPC Player.GetActivePlayers.
+    _get_playback_info() hands to the watch page — the DRM dash.mpd proxy route for DRM
+    channels, the generic play-proxy .m3u8 URL otherwise). Returns True if adb
+    acknowledged the am start call — not proof playback actually started; there is no
+    separate confirm_playback() here since there's no remote-control channel to poll.
     """
     address = _adb_address()
     drm = bool(license_url)

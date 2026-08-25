@@ -19,7 +19,7 @@ from ..generators.m3u import (
     feed_to_query_filters,
 )
 from ..scrapers import registry as _scraper_registry
-from ..kodi_bridge import KODI_BRIDGE_TRUSTED_SOURCES
+from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
 from ..source_config import (
     build_setup_checklist,
     has_meaningful_source_config,
@@ -33,26 +33,10 @@ from ..tve.providers import ytdlp_adobe_mso_providers
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
 
-def _kodi_bridge_ip_display(device_url: str | None) -> str:
-    """Render a Kodi/Firestick device URL back to "IP" or "IP:port" for the admin
-    field — bare IP when using the default JSON-RPC port (8080), IP:port otherwise.
-    Mirrors app/routes/api.py's _kodi_bridge_host_from_input/_kodi_bridge_port_from_input
-    (not imported directly — that module imports from this one, so importing back
-    would be circular)."""
-    if not device_url:
-        return ''
-    parsed = urlsplit(device_url)
-    host = parsed.hostname or ''
-    if not host:
-        return ''
-    port = parsed.port or 8080
-    return f'{host}:{port}' if port != 8080 else host
-
-
 def _fc_player_ip_display(adb_address: str | None) -> str:
     """Render the stored "host:5555" adb address back to a bare IP for the admin field
-    — the port is always :5555 (not user-overridable, unlike Kodi's JSON-RPC port), so
-    there's never a port suffix to preserve."""
+    — the port is always :5555 (not user-overridable), so there's never a port suffix
+    to preserve."""
     if not adb_address:
         return ''
     return urlsplit(f'http://{adb_address}').hostname or ''
@@ -318,12 +302,12 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
     )
     bridged_count, bridged_gn = bridged_row.total, bridged_row.gn_count
 
-    # Kodi-bridge is narrower than PrismCast — only sources confirmed to actually
-    # decrypt through Kodi/inputstream.adaptive (dev/kodi/README.md), not every
+    # The FastChannels Player device bridge is narrower than PrismCast — only sources
+    # confirmed to actually decrypt through it (see app/drm_bridge.py), not every
     # DRM-capable source. Re-run the bridged query restricted to that set.
-    kodi_bridged_row = (
+    bridge_trusted_row = (
         _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge')
-        .filter(Source.name.in_(KODI_BRIDGE_TRUSTED_SOURCES))
+        .filter(Source.name.in_(DRM_BRIDGE_TRUSTED_SOURCES))
         .order_by(None)
         .with_entities(
             func.count().label('total'),
@@ -331,7 +315,7 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
         )
         .one()
     )
-    kodi_bridged_count, kodi_bridged_gn = kodi_bridged_row.total, kodi_bridged_row.gn_count
+    bridge_trusted_count, bridge_trusted_gn = bridge_trusted_row.total, bridge_trusted_row.gn_count
 
     std_count = max(total - gn_count, 0)
     return {
@@ -341,8 +325,8 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
         'bridged_count': bridged_count,
         'prismcast_count': std_count + (bridged_count - bridged_gn),
         'prismcast_gracenote_count': gn_count + bridged_gn,
-        'kodi_bridge_count': std_count + (kodi_bridged_count - kodi_bridged_gn),
-        'kodi_bridge_gracenote_count': gn_count + kodi_bridged_gn,
+        'drm_bridge_count': std_count + (bridge_trusted_count - bridge_trusted_gn),
+        'drm_bridge_gracenote_count': gn_count + bridge_trusted_gn,
     }
 
 
@@ -1337,12 +1321,6 @@ def feeds():
                            categories=categories, languages=languages, countries=countries,
                            base_url=base_url,
                            prismcast_enabled=bool((app_settings.effective_prismcast_url() or '').strip()),
-                           kodi_bridge_enabled=bool(
-                               app_settings.kodi_bridge_enabled
-                               and app_settings.effective_kodi_bridge_device_url()
-                               and app_settings.effective_kodi_bridge_adb_address()
-                               and app_settings.effective_kodi_bridge_encoder_url()
-                           ),
                            fc_player_enabled=bool(
                                app_settings.fc_player_bridge_enabled
                                and app_settings.effective_fc_player_bridge_adb_address()
@@ -1429,17 +1407,6 @@ def settings():
                            prismcast_inner_url=app_settings.prismcast_inner_url or '',
                            prismcast_max_height=int(app_settings.prismcast_max_height or 0),
                            drm_bridge_enabled=bool(app_settings.drm_bridge_enabled),
-                           kodi_bridge_enabled=bool(app_settings.kodi_bridge_enabled),
-                           kodi_bridge_keepalive_enabled=app_settings.kodi_bridge_keepalive_enabled if app_settings.kodi_bridge_keepalive_enabled is not None else True,
-                           kodi_bridge_ip=_kodi_bridge_ip_display(app_settings.effective_kodi_bridge_device_url()),
-                           kodi_bridge_encoder_url=app_settings.effective_kodi_bridge_encoder_url() or '',
-                           kodi_bridge_captions_enabled=bool(app_settings.kodi_bridge_captions_enabled),
-                           kodi_bridge_configured=bool(
-                               app_settings.kodi_bridge_enabled
-                               and app_settings.effective_kodi_bridge_device_url()
-                               and app_settings.effective_kodi_bridge_adb_address()
-                               and app_settings.effective_kodi_bridge_encoder_url()
-                           ),
                            fc_player_enabled=bool(app_settings.fc_player_bridge_enabled),
                            fc_player_ip=_fc_player_ip_display(app_settings.effective_fc_player_bridge_adb_address()),
                            fc_player_encoder_url=app_settings.effective_fc_player_bridge_encoder_url() or '',

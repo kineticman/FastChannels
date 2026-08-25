@@ -410,15 +410,9 @@ class AppSettings(db.Model):
     prismcast_max_height = db.Column(db.Integer, nullable=False, default=0, server_default=db.text('0'))  # max source height for /watch playback through PrismCast; 0 = auto
     drm_bridge_enabled   = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # False=disable DRM channels (audit drops them); True=keep DRM channels active + route via PrismCast bridge
     tvtv_cache_last_attempt_at = db.Column(db.DateTime, nullable=True)  # throttles startup retry loops when tvtv cache refresh fails
-    kodi_bridge_enabled      = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # HDMI-encoder DRM bridge (Kodi/Fire TV) feature toggle
-    kodi_bridge_keepalive_enabled = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # scheduler watchdog: ping + auto-relaunch Kodi if unresponsive
-    kodi_bridge_device_url   = db.Column(db.Text, nullable=True)  # Kodi JSON-RPC base URL, e.g. http://192.168.86.27:8080
-    kodi_bridge_adb_address  = db.Column(db.Text, nullable=True)  # adb address for the watchdog's wake/relaunch path, e.g. 192.168.86.27:5555
-    kodi_bridge_encoder_url  = db.Column(db.Text, nullable=True)  # HDMI encoder's fixed output stream URL
-    kodi_bridge_captions_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # pushes Kodi's subtitles.parsecaptions (CEA-608/708 burn-in) on toggle
     fc_player_bridge_enabled      = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # FastChannels Player remote-play trigger (app/fc_player_bridge.py) feature toggle
     fc_player_bridge_adb_address  = db.Column(db.Text, nullable=True)  # adb address for the device running the FastChannels Player app, e.g. 192.168.86.91:5555
-    fc_player_bridge_encoder_url  = db.Column(db.Text, nullable=True)  # HDMI encoder's fixed output stream URL, same role as kodi_bridge_encoder_url
+    fc_player_bridge_encoder_url  = db.Column(db.Text, nullable=True)  # HDMI encoder's fixed output stream URL
 
     @staticmethod
     def _env_int(name: str) -> int | None:
@@ -490,30 +484,6 @@ class AppSettings(db.Model):
         # Falls back to public_base_url (fine for non-DRM channels).
         value = (self.prismcast_inner_url or '').strip().rstrip('/')
         return value or self.env_prismcast_inner_url() or self.effective_public_base_url()
-
-    @classmethod
-    def env_kodi_bridge_device_url(cls) -> str | None:
-        return cls._env_str('KODI_BRIDGE_DEVICE_URL')
-
-    @classmethod
-    def env_kodi_bridge_adb_address(cls) -> str | None:
-        return cls._env_str('KODI_BRIDGE_ADB_ADDRESS')
-
-    @classmethod
-    def env_kodi_bridge_encoder_url(cls) -> str | None:
-        return cls._env_str('KODI_BRIDGE_ENCODER_URL')
-
-    def effective_kodi_bridge_device_url(self) -> str | None:
-        value = (self.kodi_bridge_device_url or '').strip().rstrip('/')
-        return value or self.env_kodi_bridge_device_url()
-
-    def effective_kodi_bridge_adb_address(self) -> str | None:
-        value = (self.kodi_bridge_adb_address or '').strip()
-        return value or self.env_kodi_bridge_adb_address()
-
-    def effective_kodi_bridge_encoder_url(self) -> str | None:
-        value = (self.kodi_bridge_encoder_url or '').strip().rstrip('/')
-        return value or self.env_kodi_bridge_encoder_url()
 
     @classmethod
     def env_fc_player_bridge_adb_address(cls) -> str | None:

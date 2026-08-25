@@ -213,50 +213,6 @@ async function savePrismcastSettings() {
   }, 'prismcast-status');
 }
 
-async function saveKodiBridgeToggles() {
-  const enabled = document.getElementById('kodi-bridge-enabled').checked;
-  const keepalive = document.getElementById('kodi-bridge-keepalive').checked;
-  const captions = document.getElementById('kodi-bridge-captions').checked;
-  const ok = await saveSettings({
-    kodi_bridge_enabled: enabled,
-    kodi_bridge_keepalive_enabled: keepalive,
-    kodi_bridge_captions_enabled: captions,
-  }, 'kodi-bridge-status');
-  // "Enable" affects whether the feed-URL guidance block (server-rendered) shows.
-  if (ok) setTimeout(() => location.reload(), 700);
-}
-
-async function saveKodiBridgeSettings() {
-  const ip = document.getElementById('kodi-bridge-ip').value.trim();
-  const encoderUrl = document.getElementById('kodi-bridge-encoder-url').value.trim();
-  const enabled = document.getElementById('kodi-bridge-enabled').checked;
-  const keepalive = document.getElementById('kodi-bridge-keepalive').checked;
-  const captions = document.getElementById('kodi-bridge-captions').checked;
-  const ok = await saveSettings({
-    kodi_bridge_ip: ip || null,
-    kodi_bridge_encoder_url: encoderUrl || null,
-    kodi_bridge_enabled: enabled,
-    kodi_bridge_keepalive_enabled: keepalive,
-    kodi_bridge_captions_enabled: captions,
-  }, 'kodi-bridge-status');
-  if (ok) setTimeout(() => location.reload(), 700);
-}
-
-async function testKodiBridge() {
-  const statusEl = document.getElementById('kodi-bridge-status');
-  statusEl.textContent = 'Testing…';
-  statusEl.className = 'save-status';
-  try {
-    const resp = await fetch('/api/settings/kodi-bridge/test', {method: 'POST'});
-    const data = await resp.json();
-    statusEl.textContent = data.message || (data.ok ? 'Connected' : 'Connection failed.');
-    statusEl.className = 'save-status ' + (data.ok ? 'ok' : 'error');
-  } catch (e) {
-    statusEl.textContent = 'Connection failed.';
-    statusEl.className = 'save-status error';
-  }
-}
-
 async function saveFcPlayerToggles() {
   const enabled = document.getElementById('fc-player-enabled').checked;
   const ok = await saveSettings({fc_player_enabled: enabled}, 'fc-player-status');

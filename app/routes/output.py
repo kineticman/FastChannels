@@ -1,8 +1,5 @@
-import io
 import logging
 import os
-import zipfile
-from pathlib import Path
 
 from flask import Blueprint, Response, redirect, request, send_file, stream_with_context
 from ..generators.m3u import (
@@ -14,7 +11,6 @@ from ..generators.m3u import (
     feed_to_query_filters,
     _MASTER_GRACENOTE_START,
     generate_prismcast_m3u,
-    generate_kodi_bridge_m3u,
     generate_fc_player_m3u,
 )
 from ..generators.xmltv import generate_xmltv_stream
@@ -515,121 +511,6 @@ def feed_m3u_prismcast_gracenote(slug):
     )
 
 
-def _kodi_bridge_not_configured():
-    return Response(
-        'Kodi HDMI bridge is not enabled/configured. Set it up in Settings.\n',
-        status=409,
-        mimetype='text/plain',
-    )
-
-
-@output_bp.route('/m3u/kodi-bridge')
-def m3u_kodi_bridge():
-    """Kodi/HDMI-encoder DRM-bridge M3U: every channel uses the same
-    /play/kodi-bridge/<source>/<id>.m3u8 URL shape — play_kodi_bridge decides
-    per-request whether a channel actually needs the Kodi/Firestick trigger or just
-    resolves directly. Pair with /epg.xml."""
-    from .. import kodi_bridge
-    if not kodi_bridge.is_configured():
-        return _kodi_bridge_not_configured()
-    base_url = public_base_url()
-    filters  = _filters()
-    if filters:
-        content = generate_kodi_bridge_m3u(filters, base_url=base_url)
-        return Response(content, mimetype='application/x-mpegurl',
-                        headers={'Content-Disposition': 'attachment; filename="fastchannels-kodi-bridge.m3u"'})
-    path = get_artifact('master-kodi-bridge-m3u', ext='m3u')
-    if path is None:
-        return Response(
-            'Kodi-bridge M3U artifact is warming. Retry shortly.',
-            status=503,
-            mimetype='text/plain',
-            headers={'Retry-After': '15'},
-        )
-    return _send_feed_artifact(
-        path,
-        mimetype='application/x-mpegurl',
-        download_name='fastchannels-kodi-bridge.m3u',
-    )
-
-
-@output_bp.route('/m3u/kodi-bridge/gracenote')
-def m3u_kodi_bridge_gracenote():
-    """Gracenote-guide variant of the Kodi/HDMI-encoder bridge M3U: only channels
-    with a Gracenote ID, emitted with tvc-guide-stationid."""
-    from .. import kodi_bridge
-    from ..models import Feed
-    if not kodi_bridge.is_configured():
-        return _kodi_bridge_not_configured()
-    base_url = public_base_url()
-    filters  = _filters()
-    if filters:
-        default_feed = Feed.query.filter_by(slug='default').first()
-        gn_start     = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
-        content = generate_kodi_bridge_m3u(filters, base_url=base_url,
-                                           namespace_start=gn_start, gracenote=True)
-        return Response(content, mimetype='application/x-mpegurl',
-                        headers={'Content-Disposition': 'attachment; filename="fastchannels-kodi-bridge-gracenote.m3u"'})
-    path = get_artifact('master-kodi-bridge-gracenote-m3u', ext='m3u')
-    if path is None:
-        return Response(
-            'Kodi-bridge Gracenote M3U artifact is warming. Retry shortly.',
-            status=503,
-            mimetype='text/plain',
-            headers={'Retry-After': '15'},
-        )
-    return _send_feed_artifact(
-        path,
-        mimetype='application/x-mpegurl',
-        download_name='fastchannels-kodi-bridge-gracenote.m3u',
-    )
-
-
-@output_bp.route('/feeds/<slug>/m3u/kodi-bridge')
-def feed_m3u_kodi_bridge(slug):
-    """Kodi/HDMI-encoder DRM-bridge M3U for a feed. Pair with /feeds/<slug>/epg.xml."""
-    from .. import kodi_bridge
-    if not kodi_bridge.is_configured():
-        return _kodi_bridge_not_configured()
-    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-kodi-bridge-m3u', ext='m3u')
-    if path is None:
-        return Response(
-            f'Kodi-bridge M3U artifact for {feed.slug} is warming. Retry shortly.',
-            status=503,
-            mimetype='text/plain',
-            headers={'Retry-After': '15'},
-        )
-    return _send_feed_artifact(
-        path,
-        mimetype='application/x-mpegurl',
-        download_name=f'{slug}-kodi-bridge.m3u',
-    )
-
-
-@output_bp.route('/feeds/<slug>/m3u/kodi-bridge/gracenote')
-def feed_m3u_kodi_bridge_gracenote(slug):
-    """Gracenote-guide variant of the Kodi/HDMI-encoder bridge M3U for a feed.
-    Pair with the Gracenote guide, not /feeds/<slug>/epg.xml."""
-    from .. import kodi_bridge
-    if not kodi_bridge.is_configured():
-        return _kodi_bridge_not_configured()
-    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-kodi-bridge-gracenote-m3u', ext='m3u')
-    if path is None:
-        return Response(
-            f'Kodi-bridge Gracenote M3U artifact for {feed.slug} is warming. Retry shortly.',
-            status=503,
-            mimetype='text/plain',
-            headers={'Retry-After': '15'},
-        )
-    return _send_feed_artifact(
-        path,
-        mimetype='application/x-mpegurl',
-        download_name=f'{slug}-kodi-bridge-gracenote.m3u',
-    )
-
-
 def _fc_player_not_configured():
     return Response(
         'FastChannels Player bridge is not enabled/configured. Set it up in Settings.\n',
@@ -640,8 +521,10 @@ def _fc_player_not_configured():
 
 @output_bp.route('/m3u/fc-player')
 def m3u_fc_player():
-    """FastChannels Player DRM-bridge M3U — same shape/purpose as m3u_kodi_bridge,
-    just triggering the FastChannels Player app instead of Kodi. Pair with /epg.xml."""
+    """FastChannels Player DRM-bridge M3U: every channel uses the same
+    /play/fc-player/<source>/<id>.m3u8 URL shape — play_fc_player_bridge decides
+    per-request whether a channel actually needs the device trigger or just resolves
+    directly. Pair with /epg.xml."""
     from .. import fc_player_bridge
     if not fc_player_bridge.is_configured():
         return _fc_player_not_configured()
@@ -743,28 +626,3 @@ def feed_m3u_fc_player_gracenote(slug):
     )
 
 
-_KODI_ADDON_DIR = Path(__file__).resolve().parent.parent / 'kodi_addon' / 'plugin.video.fc_bridge'
-
-
-@output_bp.route('/kodi/fc_bridge.zip')
-def kodi_fc_bridge_zip():
-    """The thin Kodi resolver addon (dev/kodi/README.md) that turns a manifest +
-    license URL into a Player.Open call — zipped on the fly from the bundled source
-    so users can grab a ready-to-install addon straight from this server instead of
-    building the zip themselves. Install in Kodi via Add-ons -> install-from-zip icon
-    -> Install from zip file."""
-    if not _KODI_ADDON_DIR.is_dir():
-        return Response('Kodi addon source not found on this server.\n', status=404, mimetype='text/plain')
-
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(_KODI_ADDON_DIR.rglob('*')):
-            if path.is_file():
-                zf.write(path, arcname=str(Path('plugin.video.fc_bridge') / path.relative_to(_KODI_ADDON_DIR)))
-    buf.seek(0)
-    return send_file(
-        buf,
-        mimetype='application/zip',
-        as_attachment=True,
-        download_name='plugin.video.fc_bridge.zip',
-    )

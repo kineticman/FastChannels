@@ -715,10 +715,10 @@ def _active_network_outage() -> str | None:
 
 def _drm_bridge_mode_for(source_name: str) -> bool:
     """Whether a DRM channel on this source should be kept active + bridged rather
-    than disabled — true if EITHER the PrismCast bridge or the Kodi bridge can
-    plausibly serve it. Caller still gates on _bridge_capable (scraper has
-    license_url) separately. See kodi_bridge.drm_bridge_mode_for for details."""
-    from app.kodi_bridge import drm_bridge_mode_for
+    than disabled — true if EITHER the PrismCast bridge or the FastChannels Player
+    bridge can plausibly serve it. Caller still gates on _bridge_capable (scraper has
+    license_url) separately. See drm_bridge.drm_bridge_mode_for for details."""
+    from app.drm_bridge import drm_bridge_mode_for
     return drm_bridge_mode_for(source_name)
 
 
@@ -786,7 +786,7 @@ def run_stream_audit(source_name: str):
                 Channel.disable_reason.in_(['Dead', 'VOD', 'NotAuthorized']),
                 Channel.disable_reason.like('AuditError:%'),
                 # DRM-disabled channels need re-checking too, not just a one-time flag:
-                # a source can become bridge-trusted (KODI_BRIDGE_TRUSTED_SOURCES or the
+                # a source can become bridge-trusted (DRM_BRIDGE_TRUSTED_SOURCES or the
                 # PrismCast toggle) after these were legacy-disabled, and without this
                 # they'd sit excluded from every future audit forever, never picking up
                 # the bridge branch below.
@@ -805,7 +805,8 @@ def run_stream_audit(source_name: str):
         skipped_403 = 0
         # A DRM (FairPlay) channel is bridged — kept active + marked requires_drm_bridge so
         # it flows into a bridge feed — only when BOTH some bridge mode is on (PrismCast
-        # globally, or Kodi for its trusted sources) AND the source has license handling.
+        # globally, or FastChannels Player for its trusted sources) AND the source has
+        # license handling.
         # Otherwise it keeps the legacy disable behavior (is_active=False). Default-off
         # means users with neither bridge configured are unaffected.
         _bridge_capable = bool(getattr(scraper_cls, 'license_url', None))
@@ -1204,7 +1205,7 @@ def run_stream_audit(source_name: str):
                                 ch.is_active = True
                             # Re-enable a channel a prior (pre-bridge-eligible) pass legacy-
                             # disabled for this same DRM reason — e.g. Roku channels disabled
-                            # before 'roku' joined KODI_BRIDGE_TRUSTED_SOURCES. Never touches
+                            # before 'roku' joined DRM_BRIDGE_TRUSTED_SOURCES. Never touches
                             # a channel the user disabled for an unrelated reason.
                             if not ch.is_enabled and (ch.disable_reason or '').startswith('DRM'):
                                 ch.is_enabled = True
@@ -1603,8 +1604,7 @@ def _prewarm_logos(source_name: str, logo_urls: list[str], progress_cb=None) -> 
 
 def _refresh_xml_artifacts() -> None:
     """Refresh master/feed XML and M3U artifacts after scrape commits land."""
-    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_prismcast_m3u, generate_kodi_bridge_m3u, generate_fc_player_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
-    from app import kodi_bridge as _kodi_bridge
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app import fc_player_bridge as _fc_player_bridge
     from app.generators.xmltv import write_xmltv
 
@@ -1625,7 +1625,6 @@ def _refresh_xml_artifacts() -> None:
         # configured (most installs won't run one).
         prismcast_url = (_settings.effective_prismcast_url() or '').strip().rstrip('/')
         prismcast_inner = (_settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
-        kodi_bridge_ready = _kodi_bridge.is_configured()
         fc_player_ready = _fc_player_bridge.is_configured()
         m3u_artifacts: list[tuple[str, Callable]] = [
             ('master-m3u', lambda fp: fp.write(generate_m3u({}, base_url=base_url))),
@@ -1638,11 +1637,6 @@ def _refresh_xml_artifacts() -> None:
                 'master-prismcast-m3u',
                 lambda fp: fp.write(generate_prismcast_m3u(
                     {}, base_url=base_url, prismcast_url=prismcast_url, inner_base_url=prismcast_inner)),
-            ))
-        if kodi_bridge_ready:
-            m3u_artifacts.append((
-                'master-kodi-bridge-m3u',
-                lambda fp: fp.write(generate_kodi_bridge_m3u({}, base_url=base_url)),
             ))
         if fc_player_ready:
             m3u_artifacts.append((
@@ -1661,12 +1655,6 @@ def _refresh_xml_artifacts() -> None:
                 lambda fp: fp.write(generate_prismcast_m3u(
                     {}, base_url=base_url, prismcast_url=prismcast_url, inner_base_url=prismcast_inner,
                     namespace_start=default_gn_start, gracenote=True)),
-            ))
-        if kodi_bridge_ready:
-            m3u_artifacts.append((
-                'master-kodi-bridge-gracenote-m3u',
-                lambda fp: fp.write(generate_kodi_bridge_m3u(
-                    {}, base_url=base_url, namespace_start=default_gn_start, gracenote=True)),
             ))
         if fc_player_ready:
             m3u_artifacts.append((
@@ -1734,13 +1722,6 @@ def _refresh_xml_artifacts() -> None:
                             inner_base_url=prismcast_inner, **std_kw)
                     ),
                 ))
-            if kodi_bridge_ready:
-                m3u_artifacts.append((
-                    f'feed-{feed.slug}-kodi-bridge-m3u',
-                    lambda fp, filters=filters, std_kw=std_kw: fp.write(
-                        generate_kodi_bridge_m3u(filters, base_url=base_url, **std_kw)
-                    ),
-                ))
             if fc_player_ready:
                 m3u_artifacts.append((
                     f'feed-{feed.slug}-fc-player-m3u',
@@ -1765,13 +1746,6 @@ def _refresh_xml_artifacts() -> None:
                         generate_prismcast_m3u(
                             filters, base_url=base_url, prismcast_url=prismcast_url,
                             inner_base_url=prismcast_inner, gracenote=True, **gn_kw)
-                    ),
-                ))
-            if kodi_bridge_ready:
-                m3u_artifacts.append((
-                    f'feed-{feed.slug}-kodi-bridge-gracenote-m3u',
-                    lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
-                        generate_kodi_bridge_m3u(filters, base_url=base_url, gracenote=True, **gn_kw)
                     ),
                 ))
             if fc_player_ready:
@@ -2061,8 +2035,9 @@ def run_channel_auto_disable(channel_id: int, reason: str):
                         raise
                     time.sleep(3 * (_attempt + 1))
 
-        # DRM caught at play time: if some bridge mode is on (PrismCast or Kodi) and the
-        # source can be bridged, keep the channel active and route it to a bridge feed
+        # DRM caught at play time: if some bridge mode is on (PrismCast or FastChannels
+        # Player) and the source can be bridged, keep the channel active and route it
+        # to a bridge feed
         # (same as the audit) instead of disabling it. Otherwise fall through to the
         # legacy disable.
         if reason.startswith('DRM') and _drm_bridge_mode_for(ch_source_name):
@@ -2384,7 +2359,7 @@ def _sync_intrinsic_drm_bridge(source) -> None:
     Most DRM-capable sources only need this for DASH rows. Some premium sources,
     such as DirecTV Stream, are all-DRM even when their manifests are HLS; those
     scrapers advertise all_channels_require_drm_bridge. The flag is gated on
-    whether some bridge mode (PrismCast or Kodi) is on for this source and only
+    whether some bridge mode (PrismCast or FastChannels Player) is on for this source and only
     flips requires_drm_bridge; audit still owns disable/dead state."""
     scraper_cls = registry.get(source.name)
     if not (scraper_cls and getattr(scraper_cls, 'license_url', None)):
@@ -3639,45 +3614,6 @@ if __name__ == '__main__':
                           max_instances=1, coalesce=True, misfire_grace_time=3600)
         scheduler.add_job(_scheduled_logo_cache_cleanup, 'interval', hours=6, id='logo_cache_cleanup',
                           max_instances=1, coalesce=True, misfire_grace_time=3600)
-
-        def _scheduled_kodi_bridge_watchdog():
-            # Fire TV/Kodi has no launcher role of its own (anything that returns to
-            # the Fire TV home screen strands it) and its BOOT_COMPLETED receiver
-            # doesn't actually relaunch the app after a reboot — both confirmed real
-            # gaps, see dev/kodi/README.md. This is the recovery loop for both.
-            from app import kodi_bridge
-            try:
-                with flask_app.app_context():
-                    if not kodi_bridge.keepalive_enabled():
-                        return
-                    if kodi_bridge.is_alive(timeout=3):
-                        kodi_bridge.check_idle_and_stop()
-                        return
-                    logger.warning('[kodi-bridge] watchdog: device unresponsive, attempting wake/relaunch')
-                    recovered = kodi_bridge.wake_and_relaunch()
-                if recovered:
-                    logger.info('[kodi-bridge] watchdog: recovered')
-                else:
-                    logger.error('[kodi-bridge] watchdog: wake/relaunch failed after max wait')
-            except Exception as e:
-                logger.warning('[kodi-bridge] watchdog check failed: %s', e)
-
-        scheduler.add_job(_scheduled_kodi_bridge_watchdog, 'interval', seconds=45,
-                          id='kodi_bridge_watchdog', max_instances=1, coalesce=True,
-                          misfire_grace_time=60)
-
-        # Persistent InstanceGuard log watch (app/kodi_bridge.py) — a long-lived
-        # daemon thread, not an APScheduler job, since it needs to hold one
-        # continuous `adb logcat` process open for the life of the worker rather
-        # than run-and-return on an interval. Reacts to a hit within ~1s instead of
-        # the up-to-45s latency the old poll-based check had.
-        from app import kodi_bridge as _kodi_bridge_watch
-        threading.Thread(
-            target=_kodi_bridge_watch.run_instanceguard_watch,
-            args=(flask_app,),
-            daemon=True,
-            name='kodi-bridge-instanceguard-watch',
-        ).start()
 
         def _scheduled_directv_token_watchdog():
             # pre_run_setup() is DirecTV's proactive-refresh check, but its only

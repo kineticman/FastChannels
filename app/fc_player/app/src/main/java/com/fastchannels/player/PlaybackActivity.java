@@ -16,7 +16,7 @@ import androidx.media3.ui.PlayerView;
 
 /**
  * The entire app. Full-screen playback for FastChannels' remote-play trigger
- * (app/fc_player_bridge.py, the analog of kodi_bridge.trigger_channel()) — launched via
+ * (app/fc_player_bridge.py) — launched via
  * `adb shell am start` with plain Intent extras (no cross-process Serializable involved; see
  * fc_player_bridge.py's docstring for why adb-shell-privileged launch is the mechanism that
  * actually works here). There is no other UI: FastChannels resolves the stream/DRM info

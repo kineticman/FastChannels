@@ -226,19 +226,6 @@ def ensure_runtime_schema() -> None:
                 # Persistent throttle for startup catch-up. Redis is process-local here,
                 # so failed empty-cache refreshes would otherwise rerun on every restart.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN tvtv_cache_last_attempt_at DATETIME"))
-            if "kodi_bridge_enabled" not in cols:
-                # Default off so installs without a Kodi/HDMI-encoder bridge are unaffected.
-                conn.execute(text("ALTER TABLE app_settings ADD COLUMN kodi_bridge_enabled BOOLEAN NOT NULL DEFAULT 0"))
-            if "kodi_bridge_keepalive_enabled" not in cols:
-                conn.execute(text("ALTER TABLE app_settings ADD COLUMN kodi_bridge_keepalive_enabled BOOLEAN NOT NULL DEFAULT 1"))
-            if "kodi_bridge_device_url" not in cols:
-                conn.execute(text("ALTER TABLE app_settings ADD COLUMN kodi_bridge_device_url TEXT"))
-            if "kodi_bridge_adb_address" not in cols:
-                conn.execute(text("ALTER TABLE app_settings ADD COLUMN kodi_bridge_adb_address TEXT"))
-            if "kodi_bridge_encoder_url" not in cols:
-                conn.execute(text("ALTER TABLE app_settings ADD COLUMN kodi_bridge_encoder_url TEXT"))
-            if "kodi_bridge_captions_enabled" not in cols:
-                conn.execute(text("ALTER TABLE app_settings ADD COLUMN kodi_bridge_captions_enabled BOOLEAN NOT NULL DEFAULT 0"))
             if "fc_player_bridge_enabled" not in cols:
                 # Default off so installs without the FastChannels Player app (app/fc_player/)
                 # are unaffected.

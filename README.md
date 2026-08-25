@@ -154,15 +154,6 @@ is the exception: its Live TV & DVR only ingests from HDHomeRun-style tuners, so
 officially support it** — if you have the choice, use one of the apps above instead. For power users
 who want to make Plex work anyway, **[docs/plex.md](docs/plex.md)** covers both bridge paths.
 
-### Kodi HDMI Bridge (experimental)
-
-DRM channels that need real Widevine playback (Sling, PBS, Amazon Prime Free, Vidaa,
-NBC TVE, DirecTV Stream) can be routed through a Kodi install on a real Fire TV Stick,
-captured back off its HDMI output via a cheap USB capture dongle, and re-published as
-a normal Channels DVR channel — no browser/PrismCast bridge needed for these sources.
-Hands-on hardware setup, not for everyone: **[docs/kodi-bridge-setup.md](docs/kodi-bridge-setup.md)**
-is the full womb-to-tomb walkthrough.
-
 ## Configuration
 
 Source credentials and options are configured on the **Sources** page — click into any source card to expand its settings. Changes take effect on the next scrape.
