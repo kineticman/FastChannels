@@ -70,6 +70,17 @@ COPY . .
 
 RUN chmod +x /app/entrypoint.sh
 
+# Python's requests library defaults to its own bundled certifi CA store instead of the
+# system one, and certifi doesn't always trust the same chains the OS does — confirmed
+# live 2026-08-25: DirecTV's CDN cert (issued by "SSL Corporation / Cloudflare TLS
+# Issuing ECC CA 3", chaining to an older SHA1-signed root) verified fine via curl
+# (system store, ca-certificates package installed above) but failed with
+# SSLCertVerificationError via requests. Pointing requests at the system bundle fixes it
+# without disabling verification. Placed after the expensive install layers (apt/node/
+# pip/playwright/chrome) so bumping this doesn't bust their Docker build cache.
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
 EXPOSE 5523
 
 ENTRYPOINT ["/app/entrypoint.sh"]

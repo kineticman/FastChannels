@@ -3537,6 +3537,20 @@ def sling_dash_proxy(channel_id: str):
         return _unavailable_response()
 
     mpd = r.text
+    # Sling's manifest embeds a raw <laurl licenseUrl="http://p-drmwv.movetv.com/widevine/proxy"/>
+    # inside the Widevine ContentProtection block. Shaka (watch page) and inputstream.adaptive
+    # (Kodi bridge) both ignore it in favor of our explicitly configured license server, but
+    # Media3/ExoPlayer (FastChannels Player) picks it up instead of the MediaItem-level
+    # licenseUri override — confirmed live 2026-08-25 via a 403 straight to movetv.com that never
+    # reached our /play/sling/license proxy (which attaches Sling's required auth headers).
+    # Stripping it has no legitimate use for any consumer, so it's unconditional, not kodi_bridge-gated.
+    # The XML namespace prefix movenetworks uses for these rotates per-fetch (seen: v1:,
+    # ms:, move: — confirmed live 2026-08-25), so match any/no prefix rather than a fixed one.
+    mpd = re.sub(r'<(?:\w+:)?laurl\b[^>]*/>', '', mpd, flags=re.IGNORECASE)
+    mpd = re.sub(r'<(?:\w+:)?laurl\b[^>]*>.*?</(?:\w+:)?laurl>', '', mpd, flags=re.IGNORECASE | re.DOTALL)
+    # movenetworks' own custom namespace attribute carrying the same raw proxy URL,
+    # attached directly to the generic mp4protection ContentProtection element.
+    mpd = re.sub(r'\s+\w+:widevineProxy="[^"]*"', '', mpd, flags=re.IGNORECASE)
     if request.args.get('kodi_bridge'):
         mpd = _mpd_strip_non_av_tracks(mpd, raw_id)
         mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)

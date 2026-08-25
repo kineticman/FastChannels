@@ -449,17 +449,31 @@ def run_instanceguard_watch(app) -> None:
     never come" into a real bounded retry.
 
     Every reopen (reactive or the post-cooldown redemption one) is followed by
-    a _INSTANCEGUARD_REOPEN_SETTLE_S grace period during which new matching
-    lines are seen but not acted on. Confirmed live 2026-08-24 (Amazon Prime
-    Free, mid ad-break): a reopen's own codec reinit re-logs a fresh `Using
-    codec: ...` line about 1.5-2s later almost every time the manifest is
-    still sitting on cleartext ad content, so without this grace period each
-    reopen was retriggering itself and burning through the whole
+    a _INSTANCEGUARD_REOPEN_SETTLE_S grace period during which a fresh
+    non-secure-codec line is seen but not acted on — deliberately NOT applied
+    to InstanceGuard, see below. Confirmed live 2026-08-24 (Amazon Prime Free,
+    mid ad-break): a reopen's own codec reinit re-logs a fresh `Using codec:
+    ...` line about 1.5-2s later almost every time the manifest is still
+    sitting on cleartext ad content, so without this grace period each reopen
+    was retriggering itself and burning through the whole
     _INSTANCEGUARD_MAX_REOPENS_PER_WINDOW budget in under 15s — including the
     redemption reopen, which meant a still-airing ad pod could blow straight
     back through a second full cooldown just a few seconds after the first
     one ended, instead of spreading those 4 attempts out across the length of
     the ad break where they'd actually have a chance to land after it ends.
+
+    InstanceGuard is deliberately exempt from this settle window — confirmed
+    live 2026-08-24 that gating it the same way was actively harmful. Unlike
+    the non-secure-codec case, a reopen's own release-grace (see
+    _reopen_current_item) means our OWN reopens essentially never re-trigger
+    a fresh InstanceGuard hit on themselves, so a genuine InstanceGuard line
+    arriving soon after a reopen is almost always Kodi's own independent
+    automatic Period-transition attempt hitting the lock, not an echo.
+    Suppressing it just silently swallowed a real, actionable event —
+    including not counting it toward the reopen-rate budget at all — leaving
+    nothing to react to until Kodi's own ~15s internal stall declaration won
+    the race instead (visible as the addon's onPlaybackError heartbeat firing
+    for what looked like an ordinary ad-to-ad transition).
 
     Independently of all of the above, _force_reopen_if_stalled() also runs
     on a plain _INSTANCEGUARD_STALL_POLL_S timer (skipped while cooldown_until
@@ -554,7 +568,21 @@ def run_instanceguard_watch(app) -> None:
                     now = time.monotonic()
                     if now < cooldown_until:
                         continue
-                    if now - last_reopen_at < _INSTANCEGUARD_REOPEN_SETTLE_S:
+                    if (reason == 'non-secure codec selected'
+                            and now - last_reopen_at < _INSTANCEGUARD_REOPEN_SETTLE_S):
+                        # Settle window only applies to this signature — confirmed live
+                        # 2026-08-24 that a reopen's own codec reinit can re-log this
+                        # exact line ~1.5-2s later (self-echo). InstanceGuard doesn't
+                        # have that problem: our reopens include a release-grace
+                        # specifically so they don't race the lock themselves, so a
+                        # fresh InstanceGuard hit this soon after a reopen is essentially
+                        # always a genuine, independent lock contention from Kodi's own
+                        # automatic Period-transition attempt, not an echo of ours.
+                        # Gating InstanceGuard behind this same window (as an earlier
+                        # version of this code did) was silently swallowing those
+                        # back-to-back-but-genuine hits — not even counting them toward
+                        # the reopen budget — leaving nothing to react until Kodi's own
+                        # ~15s internal stall declaration won the race instead.
                         continue
                     recent_reopens = [t for t in recent_reopens if now - t < _INSTANCEGUARD_REOPEN_WINDOW_S]
                     if len(recent_reopens) >= _INSTANCEGUARD_MAX_REOPENS_PER_WINDOW:
