@@ -286,7 +286,13 @@
     .field input:focus { border-color: var(--focus-accent); }
     .field input::placeholder { color: var(--text-dim); }
 
-    .field .help { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.35rem; }
+    /* Not scoped to .field on purpose — several cards (fc_player, prismcast,
+       public_base_url, timezone) place a standalone .help note directly in the card
+       body, not tied to a specific input. Scoping this to ".field .help" left those
+       completely unstyled (falling back to default paragraph text — bright and
+       oversized, inconsistent with every field-level help note on the same page).
+       Confirmed live 2026-08-25 via a rendered screenshot comparison. */
+    .help { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.35rem; }
     .field .hint-box {
       margin-top: 0.55rem;
       background: var(--bg);
