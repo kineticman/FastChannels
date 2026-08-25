@@ -22,9 +22,29 @@ already have a working capture URL.
 See the first two posts in the community thread for the walkthrough:
 <https://community.getchannels.com/t/fastchannels-fast-channels-aggregator-manager/45986/2671>
 
-By the end of this step you should have a URL that plays live video when you open it
-directly — something like `http://<host>:8089/devices/<your-device>/channels/<N>/stream.mpg`
-for a Channels DVR capture source. Keep that URL; it's the **Capture/encoder stream
+Once your capture source shows up as a device in Channels DVR, get its direct stream
+URL from the DVR admin UI itself:
+
+1. Go to the capture source's card in Channels DVR and click **Manage → Export →
+   Copy M3U**.
+2. Download that M3U and open it in a text editor. It'll have one entry, shaped like:
+   ```
+   #EXTINF:-1 channel-id="70092" tvg-chno="70092" ... ,Your Capture Channel Name
+   http://<host>:8089/devices/<YourDevice>/channels/<N>/stream.mpg?format=ts&codec=copy
+   ```
+3. That second line — the full URL including the `?format=ts&codec=copy` — is what you
+   want. Confirm it's really live by pasting it into a browser or `curl`ing it directly;
+   it should immediately start returning video, not redirect to another playlist.
+
+**Important — this must be a direct stream URL, not a playlist.** The capture
+source's own device page also exposes a `.../channels.m3u` URL (no `?format=ts`, no
+specific channel number) — that's a *playlist listing* your channels, not a stream, and
+using it here will silently break playback: Channels DVR will time out with "Tuner
+Unreachable" trying to tune through it later. Confirmed live 2026-08-25 — the direct
+`/channels/<N>/stream.mpg?format=ts&codec=copy` URL is correct; the `channels.m3u` one
+is not.
+
+Keep the URL from step 2; it's the **Capture/encoder stream
 URL** setting below.
 
 ## 2. Enable ADB debugging on the Fire TV / Android TV device
@@ -96,6 +116,15 @@ In FastChannels' admin UI, go to **Settings → FastChannels Player**:
 Click **Test connection** — it checks adb reachability, whether the player app is
 installed, and whether the capture/encoder URL is actually reachable. All green means
 a bridged channel should really work end to end, not just that the device is online.
+
+**One more Channels DVR-side check, if playback fails with "Detected MPEG-TS instead
+of HLS playlist" or "Tuner Unreachable":** the capture source's stream **format**
+setting in Channels DVR needs to be MPEG-TS/TS, not HLS — this capture pass-through is
+always raw MPEG-TS. If that source's format is set to HLS in Channels DVR, flip it to
+MPEG-TS/TS on the source's own settings page; once it is, the plain stream URL from
+step 1 works with or without the `?format=ts&codec=copy` query string. Confirmed live
+2026-08-25 — this is a Channels DVR source setting, not anything on the FastChannels
+side.
 
 ## 5. Get the feed into your client
 
