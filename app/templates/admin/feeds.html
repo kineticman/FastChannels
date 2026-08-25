@@ -177,7 +177,10 @@
       font-size: 0.9rem; outline: none; font-family: inherit;
     }
     .field input:focus, .field textarea:focus, .field select:focus { border-color: var(--focus-accent); }
-    .field .help { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.3rem; }
+    /* Unscoped (not .field .help) — several .help elements (e.g. the native-endpoints
+       <details> blocks below) sit outside any .field ancestor and were silently falling
+       back to unstyled browser <p> defaults; same bug fixed in settings.css. */
+    .help { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.3rem; }
 
     /* Checkbox groups */
     .check-group { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.4rem; max-height: 180px; overflow-y: auto; }
