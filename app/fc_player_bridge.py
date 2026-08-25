@@ -45,10 +45,10 @@ _PLAYER_COMPONENT = 'com.fastchannels.player/.PlaybackActivity'
 # Channels DVR monitor's own idle-detection grace period.
 _IDLE_GRACE_S = 5 * 60
 
-# How long to keep retrying to correlate a fresh trigger to a DVR activity session
-# before giving up on idle-tracking that particular trigger. Giving up just means we
-# never learn this trigger is idle — the stream keeps running — not a wrong stop.
-_CORRELATE_GIVEUP_S = 2 * 60
+# How often to retry the (heavier) DVR /devices guide-number lookup for a channel
+# that hasn't resolved to any guide number yet — bounds how often that bigger call
+# happens rather than letting it fire on every single watchdog tick forever.
+_DVR_LOOKUP_RETRY_S = 5 * 60
 
 _DVR_POLL_TIMEOUT = 5
 
@@ -58,9 +58,8 @@ _DVR_POLL_TIMEOUT = 5
 _BELIEVED_ACTIVE_KEY = 'fc:fc-player:believed-active'
 _BELIEVED_ACTIVE_TTL_S = 24 * 60 * 60
 _CHANNEL_KEY_KEY = 'fc:fc-player:channel-key'
-_PRE_TRIGGER_ACTIVITY_KEY = 'fc:fc-player:pre-trigger-activity'
-_PRE_TRIGGER_ACTIVITY_TTL_S = _CORRELATE_GIVEUP_S + 30
-_TRACKED_CHANNEL_KEY = 'fc:fc-player:tracked-channel'
+_TRACKED_CHANNELS_KEY = 'fc:fc-player:tracked-channels'
+_DVR_LOOKUP_COOLDOWN_KEY = 'fc:fc-player:dvr-lookup-cooldown'
 _IDLE_SINCE_KEY = 'fc:fc-player:idle-since'
 _WEB_HEARTBEAT_PREFIX = 'fc:fc-player:web-heartbeat:'
 _WEB_HEARTBEAT_TTL_S = 45
@@ -162,39 +161,65 @@ def _dvr_activity_channel_numbers(timeout: int = _DVR_POLL_TIMEOUT) -> set[str] 
     return numbers
 
 
-def _capture_card_channel_number() -> str | None:
-    """The channel number embedded in fc_player_bridge_encoder_url's
-    /channels/<N>/ segment — the capture card's own internal pass-through channel,
-    not something any client actually tunes to. See its one caller for why this needs
-    excluding from the trigger-correlation diff."""
-    encoder_url = AppSettings.get().effective_fc_player_bridge_encoder_url() or ''
-    m = re.search(r'/channels/([^/]+)/', encoder_url)
-    return m.group(1) if m else None
+def _dvr_guide_numbers_for_channel(channel_key: str, timeout: int = _DVR_POLL_TIMEOUT) -> set[str] | None:
+    """Every DVR guide number, across all of Channels DVR's configured sources, whose
+    channel `ID` matches this channel — found by scanning the `/devices` endpoint for
+    an ID shaped like our own generated M3U `channel-id` attribute
+    (`f'{source_name}.{source_channel_id}'`, from _tvg_id() in app/generators/m3u.py —
+    confirmed live 2026-08-25 that Channels DVR echoes this back verbatim as each
+    channel's `ID` field when it imports a custom M3U source).
+
+    Superseded a before/after DVR-activity diff approach (see git history) that
+    assumed a trigger always precedes DVR marking the channel "watching" — confirmed
+    live 2026-08-25, over a real ~2-hour Channels-DVR-driven viewing session, that
+    this assumption doesn't hold: DVR appears to mark a channel active as soon as the
+    client's tune request comes in, at or before it calls our own play route, so a
+    "what's new since the trigger" diff can permanently see nothing new. Looking up
+    the guide number(s) directly sidesteps this timing question entirely — it doesn't
+    matter when DVR marked the channel active, only whether it's active now.
+
+    Returns an empty set (not None) when DVR was reachable but nothing matched — e.g.
+    the channel was never pushed to any DVR source, or was added some other way that
+    didn't preserve our channel-id format; idle-stop then relies solely on the /watch
+    heartbeat for this channel. Returns None only when DVR itself couldn't be reached.
+    """
+    dvr_url = (AppSettings.get().effective_channels_dvr_url() or '').strip().rstrip('/')
+    if not dvr_url or ':' not in channel_key:
+        return None
+    source_name, source_channel_id = channel_key.split(':', 1)
+    target_id = f'{source_name}.{source_channel_id}'
+    try:
+        resp = requests.get(f'{dvr_url}/devices', timeout=timeout)
+        resp.raise_for_status()
+        devices = resp.json() or []
+    except Exception as e:
+        logger.warning('[fc-player] DVR /devices lookup failed: %s', e)
+        return None
+    numbers = set()
+    for device in devices:
+        for ch in (device.get('Channels') or []):
+            if ch.get('ID') == target_id and ch.get('GuideNumber'):
+                numbers.add(str(ch['GuideNumber']))
+    return numbers
 
 
 def note_trigger(channel_key: str) -> None:
-    """Called at the start of trigger_channel() when idle-stop is enabled: snapshots
-    which DVR channel numbers are already active *before* this trigger, so the
-    watchdog can later diff against a follow-up snapshot to find the one this trigger
-    caused (Channels DVR assigns its own guide number per channel on import — not the
-    fixed number in fc_player_bridge_encoder_url — so there's no fixed number to match
-    against up front; confirmed live 2026-08-25 against a real multi-channel custom
-    M3U source).
+    """Called at the start of trigger_channel() when idle-stop is enabled: just marks
+    that something was triggered and which channel it was. The (heavier) DVR guide-
+    number lookup happens later, off the critical path, on the watchdog's own tick —
+    see check_idle_and_stop() — so this stays fast enough to never delay the actual
+    adb trigger.
 
     Best-effort and non-blocking: any failure here must never delay or break the
     actual adb trigger, which stays the speed-first critical path.
     """
     try:
-        numbers = _dvr_activity_channel_numbers()
         r = _redis()
         r.setex(_BELIEVED_ACTIVE_KEY, _BELIEVED_ACTIVE_TTL_S, '1')
         r.setex(_CHANNEL_KEY_KEY, _BELIEVED_ACTIVE_TTL_S, channel_key)
-        r.delete(_TRACKED_CHANNEL_KEY)
+        r.delete(_TRACKED_CHANNELS_KEY)
+        r.delete(_DVR_LOOKUP_COOLDOWN_KEY)
         r.delete(_IDLE_SINCE_KEY)
-        if numbers is not None:
-            r.setex(_PRE_TRIGGER_ACTIVITY_KEY, _PRE_TRIGGER_ACTIVITY_TTL_S, json.dumps(sorted(numbers)))
-        else:
-            r.delete(_PRE_TRIGGER_ACTIVITY_KEY)
     except Exception as e:
         logger.warning('[fc-player] note_trigger failed (idle-stop tracking skipped): %s', e)
 
@@ -238,10 +263,10 @@ def _stop_playback() -> bool:
 
 
 def check_idle_and_stop() -> None:
-    """Watchdog tick (app.worker's scheduled job). See note_trigger()'s docstring for
-    why this can't just match a fixed channel number up front — it instead correlates
-    a trigger to whichever DVR channel number newly appeared afterward, then tracks
-    that specific number (or a /watch heartbeat for the same channel) going idle.
+    """Watchdog tick (app.worker's scheduled job). Resolves the triggered channel to
+    its DVR guide number(s) via _dvr_guide_numbers_for_channel() (once, then cached),
+    and treats it as "in use" if either that guide number shows up in DVR's live
+    activity, or a recent /watch heartbeat exists for the same channel.
     """
     if not idle_stop_enabled():
         return
@@ -251,50 +276,35 @@ def check_idle_and_stop() -> None:
             return
 
         channel_key = (r.get(_CHANNEL_KEY_KEY) or b'').decode() or None
-        tracked = (r.get(_TRACKED_CHANNEL_KEY) or b'').decode() or None
+        tracked_raw = r.get(_TRACKED_CHANNELS_KEY)
+        tracked = set(json.loads(tracked_raw)) if tracked_raw is not None else None
 
-        if not tracked:
-            pre_raw = r.get(_PRE_TRIGGER_ACTIVITY_KEY)
-            if pre_raw is None:
-                # Either already gave up correlating this trigger, or note_trigger()
-                # couldn't reach the DVR at all — nothing left to do for it.
-                return
-            pre = set(json.loads(pre_raw))
-            now_numbers = _dvr_activity_channel_numbers()
-            if now_numbers is None:
-                return  # DVR unreachable this tick; try again next tick
-            new_numbers = now_numbers - pre
-            # The capture card's own pass-through channel (the number embedded in
-            # fc_player_bridge_encoder_url, when that URL has a parseable
-            # /channels/<N>/ segment) briefly shows as separately "active" alongside
-            # the real client-facing channel right when a tune starts — confirmed live
-            # 2026-08-25 (both ch70108 and ch70092 showed up in the same activity
-            # snapshot for one tick, settling to just ch70108 shortly after). Exclude
-            # it when we can identify it, but don't rely on that alone — the encoder
-            # URL doesn't always have that shape (confirmed live the same day: a
-            # .../channels.m3u playlist URL with no specific channel segment at all).
-            capture_ch = _capture_card_channel_number()
-            if capture_ch:
-                new_numbers.discard(capture_ch)
-            if len(new_numbers) == 1:
-                tracked = next(iter(new_numbers))
-                r.setex(_TRACKED_CHANNEL_KEY, _BELIEVED_ACTIVE_TTL_S, tracked)
-                r.delete(_PRE_TRIGGER_ACTIVITY_KEY)
-                logger.info('[fc-player] idle-stop: correlated trigger to DVR ch%s', tracked)
-            elif len(new_numbers) > 1:
-                # Don't give up immediately — this same transient double-registration
-                # (not just the known capture-card case above) tends to settle to a
-                # single channel within a tick or two. Keep the original pre-trigger
-                # snapshot and retry; _PRE_TRIGGER_ACTIVITY_KEY's own TTL bounds how
-                # long we keep at it before truly giving up.
-                logger.info('[fc-player] idle-stop: ambiguous DVR activity diff (%d new channels), retrying next tick', len(new_numbers))
-            # else: zero new channels so far — same TTL-bounded retry.
-            return
+        if tracked is None and channel_key and not r.exists(_DVR_LOOKUP_COOLDOWN_KEY):
+            numbers = _dvr_guide_numbers_for_channel(channel_key)
+            if numbers is not None:
+                # Only cool down after a real answer (even an empty one) — a transient
+                # DVR outage shouldn't block retrying again on the very next tick.
+                r.setex(_DVR_LOOKUP_COOLDOWN_KEY, _DVR_LOOKUP_RETRY_S, '1')
+                if numbers:
+                    # Cache a real result for the rest of this trigger's lifetime — the
+                    # mapping won't change mid-session.
+                    tracked = numbers
+                    r.setex(_TRACKED_CHANNELS_KEY, _BELIEVED_ACTIVE_TTL_S, json.dumps(sorted(numbers)))
+                    logger.info('[fc-player] idle-stop: resolved DVR guide number(s) %s for %s',
+                                sorted(numbers), channel_key)
+                else:
+                    # Don't cache "nothing found" — leave _TRACKED_CHANNELS_KEY unset so
+                    # this stays retryable (on the cooldown above) rather than a
+                    # permanent dead end, in case the channel gets pushed to a DVR
+                    # source later in the same viewing session.
+                    logger.info('[fc-player] idle-stop: no DVR guide number found for %s '
+                                '(relying on /watch heartbeat only for now)', channel_key)
 
         active = False
-        now_numbers = _dvr_activity_channel_numbers()
-        if now_numbers is not None and tracked in now_numbers:
-            active = True
+        if tracked:
+            now_numbers = _dvr_activity_channel_numbers()
+            if now_numbers is not None and (tracked & now_numbers):
+                active = True
         if not active and channel_key and _recent_web_heartbeat(channel_key):
             active = True
 
@@ -309,11 +319,12 @@ def check_idle_and_stop() -> None:
             return
         idle_since = float(idle_since_raw)
         if now - idle_since >= _IDLE_GRACE_S:
-            logger.info('[fc-player] idle-stop: ch%s idle >= %ss, stopping playback', tracked, _IDLE_GRACE_S)
+            logger.info('[fc-player] idle-stop: %s idle >= %ss, stopping playback', channel_key, _IDLE_GRACE_S)
             _stop_playback()
             r.delete(_BELIEVED_ACTIVE_KEY)
             r.delete(_CHANNEL_KEY_KEY)
-            r.delete(_TRACKED_CHANNEL_KEY)
+            r.delete(_TRACKED_CHANNELS_KEY)
+            r.delete(_DVR_LOOKUP_COOLDOWN_KEY)
             r.delete(_IDLE_SINCE_KEY)
     except Exception as e:
         logger.warning('[fc-player] idle-stop watchdog tick failed: %s', e)
