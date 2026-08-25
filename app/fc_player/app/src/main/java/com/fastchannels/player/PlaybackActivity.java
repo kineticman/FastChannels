@@ -1,4 +1,4 @@
-package com.fastchannels.streamvault.bridge;
+package com.fastchannels.player;
 
 import android.app.Activity;
 import android.os.Bundle;
@@ -12,28 +12,27 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.ui.PlayerView;
 
 /**
- * Full-screen playback for FastChannels' remote-play trigger (app/streamvault_bridge.py,
- * the analog of kodi_bridge.trigger_channel()) — launched via `adb shell am start` with plain
- * Intent extras (no cross-process Serializable involved; see streamvault_bridge.py's docstring
- * for why adb-shell-privileged launch is the mechanism that actually works here).
+ * The entire app. Full-screen playback for FastChannels' remote-play trigger
+ * (app/fc_player_bridge.py, the analog of kodi_bridge.trigger_channel()) — launched via
+ * `adb shell am start` with plain Intent extras (no cross-process Serializable involved; see
+ * fc_player_bridge.py's docstring for why adb-shell-privileged launch is the mechanism that
+ * actually works here). There is no other UI: FastChannels resolves the stream/DRM info
+ * server-side and hands it over as Intent extras; this Activity just plays it.
  *
- * Plays the resolved FastChannels URL directly with our own Media3/ExoPlayer instance rather
- * than routing through StreamVault at all. This exists because the natural approach — resolve
- * StreamVault's own TvContract channel row and fire a standard TV Input Framework tune Intent
- * (content://android.media.tv/channel/<id>, handled on this device by
- * com.amazon.tv.livetv/.TvChannelsPlayerActivityAlias, confirmed live) — requires
- * android.permission.READ_TV_LISTINGS to read that row id back, and Android silently never
- * actually grants that permission to a third-party app on this device (confirmed live
- * 2026-08-24 via dumpsys: declared in the manifest, absent from the granted install
- * permissions list). Playing it ourselves sidesteps that wall entirely, and reuses the exact
- * HLS/DASH/Widevine shape already validated live tonight (real secure decode via
- * StreamVaultTvInputService's own Media3 pipeline) — MediaItem.DrmConfiguration +
- * DefaultMediaSourceFactory's extension-based HLS/DASH auto-detection (our URLs always end in
- * .m3u8 or .mpd) means no manual MediaSource.Factory selection is needed here either.
+ * Plays the resolved FastChannels URL directly via Media3/ExoPlayer. An earlier design routed
+ * playback through the StreamVault-IPTV app instead (a full plugin integration — provider.m3u,
+ * playback.prepare, catalog sync into StreamVault's own Live TV UI); that's gone now. Once it
+ * became clear this device has no on-device UI need at all (everything is adb-driven from
+ * FastChannels), the whole StreamVault dependency — and the fragility that came with it
+ * (bind/unbind churn, stale catalog ids, TIF permission walls) — was unnecessary. This Activity
+ * needs nothing from StreamVault: MediaItem.DrmConfiguration handles Widevine directly via the
+ * device's own CDM, and DefaultMediaSourceFactory's extension-based HLS/DASH auto-detection
+ * (FastChannels' resolved URLs always end in .m3u8 or .mpd) needs no manual MediaSource.Factory
+ * selection either.
  */
 @UnstableApi
 public class PlaybackActivity extends Activity {
-    private static final String TAG = "FCBridge.Playback";
+    private static final String TAG = "FCPlayer.Playback";
 
     static final String EXTRA_STREAM_URL = "stream_url";
     static final String EXTRA_TITLE = "title";

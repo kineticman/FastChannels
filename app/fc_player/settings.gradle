@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = 'FastChannelsStreamVaultBridge'
+rootProject.name = 'FastChannelsPlayer'
 include ':app'

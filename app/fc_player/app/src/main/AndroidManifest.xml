@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:allowBackup="false"
+        android:label="FastChannels Player"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true">
+
+        <!--
+        The entire app. No StreamVault integration, no IPC service, no local HTTP server — just
+        this one Activity, launched remotely via `adb shell am start` from
+        app/fc_player_bridge.py (FastChannels' analog of kodi_bridge.trigger_channel()) with
+        the fully-resolved stream URL/DRM info already baked into the Intent extras. There's no
+        on-device UI to drive; everything is controlled from FastChannels over adb.
+
+        exported="true": adb's shell UID (2000) differs from this app's own UID, and a
+        non-exported Activity rejects cross-UID `am start` even from adb — confirmed live
+        2026-08-24. Also required because a plain in-process startActivity() from a background
+        service context is blocked by Android's background-activity-start restriction, and the
+        standard workaround (a full-screen-intent notification) is separately blocked on this
+        device by Fire OS's own notification allowlist. adb-shell-privileged launch is exempt
+        from both — exactly why kodi_bridge.py's wake_and_relaunch() also uses
+        `adb shell am start -n org.xbmc.kodi/.Splash` rather than any in-process API.
+        -->
+        <activity
+            android:name=".PlaybackActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+    </application>
+</manifest>

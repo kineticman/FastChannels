@@ -416,8 +416,8 @@ class AppSettings(db.Model):
     kodi_bridge_adb_address  = db.Column(db.Text, nullable=True)  # adb address for the watchdog's wake/relaunch path, e.g. 192.168.86.27:5555
     kodi_bridge_encoder_url  = db.Column(db.Text, nullable=True)  # HDMI encoder's fixed output stream URL
     kodi_bridge_captions_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # pushes Kodi's subtitles.parsecaptions (CEA-608/708 burn-in) on toggle
-    streamvault_bridge_enabled      = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # StreamVault remote-play trigger (app/streamvault_bridge.py) feature toggle
-    streamvault_bridge_adb_address  = db.Column(db.Text, nullable=True)  # adb address for the device running the FastChannels StreamVault plugin, e.g. 192.168.86.91:5555
+    fc_player_bridge_enabled      = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # FastChannels Player remote-play trigger (app/fc_player_bridge.py) feature toggle
+    fc_player_bridge_adb_address  = db.Column(db.Text, nullable=True)  # adb address for the device running the FastChannels Player app, e.g. 192.168.86.91:5555
 
     @staticmethod
     def _env_int(name: str) -> int | None:
@@ -515,12 +515,12 @@ class AppSettings(db.Model):
         return value or self.env_kodi_bridge_encoder_url()
 
     @classmethod
-    def env_streamvault_bridge_adb_address(cls) -> str | None:
-        return cls._env_str('STREAMVAULT_BRIDGE_ADB_ADDRESS')
+    def env_fc_player_bridge_adb_address(cls) -> str | None:
+        return cls._env_str('FC_PLAYER_BRIDGE_ADB_ADDRESS')
 
-    def effective_streamvault_bridge_adb_address(self) -> str | None:
-        value = (self.streamvault_bridge_adb_address or '').strip()
-        return value or self.env_streamvault_bridge_adb_address()
+    def effective_fc_player_bridge_adb_address(self) -> str | None:
+        value = (self.fc_player_bridge_adb_address or '').strip()
+        return value or self.env_fc_player_bridge_adb_address()
 
     _DEFAULT_GRACENOTE_MAP_URL = (
         'https://gist.githubusercontent.com/kineticman/'
