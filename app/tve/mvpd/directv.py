@@ -166,17 +166,27 @@ def directv_login(start_html: str, start_url: str, username: str, password: str)
     if not any(c.get('type') == 'NameCallback' for c in data.get('callbacks') or []):
         raise TVEAuthError('DIRECTV username challenge did not return NameCallback')
 
-    data = _json_or_error(
-        session.post(_IDENTITY_AUTH_URL, headers=auth_headers, json=_fill_auth_callback(data, username), timeout=30),
-        'DIRECTV password challenge',
-    )
+    try:
+        data = _json_or_error(
+            session.post(_IDENTITY_AUTH_URL, headers=auth_headers, json=_fill_auth_callback(data, username), timeout=30),
+            'DIRECTV password challenge',
+        )
+    except Exception as exc:  # noqa: BLE001
+        if isinstance(exc, TVEAuthError):
+            raise
+        raise TVEAuthError(str(exc)) from exc
     if not any(c.get('type') == 'PasswordCallback' for c in data.get('callbacks') or []):
         raise TVEAuthError('DIRECTV password challenge did not return PasswordCallback')
 
-    data = _json_or_error(
-        session.post(_IDENTITY_AUTH_URL, headers=auth_headers, json=_fill_auth_callback(data, password), timeout=30),
-        'DIRECTV password submit',
-    )
+    try:
+        data = _json_or_error(
+            session.post(_IDENTITY_AUTH_URL, headers=auth_headers, json=_fill_auth_callback(data, password), timeout=30),
+            'DIRECTV password submit',
+        )
+    except Exception as exc:  # noqa: BLE001
+        if isinstance(exc, TVEAuthError):
+            raise
+        raise TVEAuthError(str(exc)) from exc
     if not data.get('tokenId'):
         msg = data.get('message') or data.get('reason') or 'missing tokenId'
         raise TVEAuthError(f'DIRECTV login failed: {msg}')

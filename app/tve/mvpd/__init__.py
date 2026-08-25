@@ -25,9 +25,15 @@ from ..adobe_pass import TVEAuthError, TVENotAuthorizedError, directv_login_cool
 # silently attempting a provider's login flow against an unrelated host.
 # Providers with no fixed host (DIRECTV never redirects to begin with — see
 # directv.py's directv_login() docstring) simply have no entry here.
-_EXPECTED_HOST_SUBSTRING = {
-    'Comcast_SSO': 'xfinity.com',
-}
+#
+# Comcast_SSO is deliberately absent: xfinity_cookie_jar_login() takes any
+# MSO-login URL that *eventually* lands on login.xfinity.com (its own real
+# GET follows the redirect and validates that itself — see its docstring),
+# but the legacy AdobePassCoxClient.authenticate_with_xfinity_cookies() calls
+# in here with its own un-fetched authenticate/saml URL (sp.auth.adobe.com),
+# which a pre-check against page_url's literal string would always reject.
+# The no-cookie-jar case is separately guarded below regardless of page_url.
+_EXPECTED_HOST_SUBSTRING = {}
 
 
 def login_to_mvpd(

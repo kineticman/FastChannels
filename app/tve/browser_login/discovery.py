@@ -149,7 +149,30 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
 
             set_status('running', 'Signing in to Discovery TVE…')
             try:
-                page.goto(nav_url, wait_until='domcontentloaded', timeout=30000)
+                if mso_id == 'Comcast_SSO':
+                    # Xfinity's WAF (Akamai) flatly denies a cold top-level
+                    # navigation to the Adobe Pass authenticate/saml URL —
+                    # same wall fox.py/mvpd.py hit and work around; see
+                    # run_mvpd_browser_login's comment on this exact pattern
+                    # for the full explanation. Landing on a real Discovery
+                    # page first and redirecting via in-page JS (real
+                    # Referer/Sec-Fetch-Site chain) sails through instead.
+                    page.goto('https://www.discovery.com', wait_until='domcontentloaded', timeout=30000)
+                    _settle_deadline = time.monotonic() + 3.0
+                    while time.monotonic() < _settle_deadline:
+                        _relay_input_and_screenshot(page, r)
+                        page.wait_for_timeout(500)
+                    page.evaluate('(u) => { window.location.href = u; }', nav_url)
+                    _load_deadline = time.monotonic() + 30.0
+                    while time.monotonic() < _load_deadline:
+                        try:
+                            page.wait_for_load_state('domcontentloaded', timeout=1000)
+                            break
+                        except Exception:  # noqa: BLE001
+                            pass
+                        _relay_input_and_screenshot(page, r)
+                else:
+                    page.goto(nav_url, wait_until='domcontentloaded', timeout=30000)
             except Exception as exc:  # noqa: BLE001
                 if _is_browser_death(exc):
                     raise

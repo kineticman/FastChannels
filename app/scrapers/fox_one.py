@@ -635,12 +635,8 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             _cox_saml_login(session, mso_login_url, username, password)
         else:
             from ..tve.mvpd import login_to_mvpd
-            from ..tve.adobe_pass import TVEAuthError as _TVEAuthError
             page_html, page_url = (r3.text, str(r3.url)) if not mso_login_url else ('', mso_login_url)
-            try:
-                login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
-            except _TVEAuthError as exc:
-                raise ValueError(str(exc)) from exc
+            login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
 
         return self._foxone_mvpd_finish(session, request_id, device_id, mso_id)
 

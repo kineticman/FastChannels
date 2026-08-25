@@ -671,9 +671,15 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
         if r.status_code in {301, 302, 303, 307, 308}:
             mso_login_url = r.headers.get('location') or ''
         else:
+            # DIRECTV doesn't redirect here at all (see app/tve/mvpd/
+            # directv.py's directv_login() docstring) — the caller falls
+            # back to this response's own body/url when mso_login_url is
+            # empty, which is what directv_login() actually needs (the
+            # auto-submit SAMLRequest form), so leave it empty rather than
+            # r.url — same exemption fox_tve.py's equivalent call makes.
             r.raise_for_status()
-            mso_login_url = r.url
-        if not mso_login_url:
+            mso_login_url = ''
+        if not mso_login_url and mso_id != 'DTV':
             raise TVEAuthError(f'{channel.name}: Adobe did not return an MVPD login redirect.')
         return client, code, mso_login_url, auth_headers, r
 
@@ -867,6 +873,8 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
                     mso_id, page_html, page_url, account.username or '', account.password or '',
                     cookie_jar=cookie_jar,
                 )
+            except TVENotAuthorizedError as exc:
+                raise TVENotAuthorizedError(f'{channel.name}: {exc}') from exc
             except TVEAuthError as exc:
                 raise TVEAuthError(f'{channel.name}: {exc}') from exc
 

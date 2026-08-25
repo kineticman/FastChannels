@@ -4460,6 +4460,7 @@ def play(source_name: str, channel_id: str):
             )
             resolved_url = None
         finally:
+            from ..extensions import db
             if scraper._pending_config_updates:
                 try:
                     persist_source_config_updates(

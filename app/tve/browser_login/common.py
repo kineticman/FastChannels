@@ -198,7 +198,7 @@ def _settle_after_mvpd_navigation(
         with flask_app.app_context():
             account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
             cfg = (account_row.config or {}) if account_row else {}
-            current_mso_id = (cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or cfg.get('yt_dlp_mso_id') or '').strip()
+            current_mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or '').strip()
             # This block only ever means "YouTubeTV's SAML bounce chain looked
             # rate-limited" — gate on the account's MSO actually being
             # YouTubeTV right now, or a login against some other MVPD (Cox,
