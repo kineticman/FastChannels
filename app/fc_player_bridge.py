@@ -89,6 +89,14 @@ def idle_stop_enabled() -> bool:
     return bool(settings.fc_player_bridge_idle_stop_enabled and is_configured())
 
 
+def captions_enabled() -> bool:
+    """Whether the device should render an English subtitle/CC track when the stream
+    advertises one. Applied per-trigger (an Intent extra passed at am start time), not
+    a live mid-stream toggle — the app has no channel to re-check settings once a
+    stream is already playing."""
+    return bool(AppSettings.get().fc_player_bridge_captions_enabled)
+
+
 class FcPlayerNotConfigured(RuntimeError):
     """Raised when required fc_player_bridge settings aren't configured."""
 
@@ -413,6 +421,7 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
             '--es', 'stream_url', shlex.quote(manifest_url),
             '--es', 'title', shlex.quote(name),
             '--ez', 'drm', 'true' if drm else 'false',
+            '--ez', 'captions', 'true' if captions_enabled() else 'false',
         ])
         if drm:
             remote_cmd += ' --es license_url ' + shlex.quote(license_url)

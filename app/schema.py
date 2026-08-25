@@ -239,6 +239,10 @@ def ensure_runtime_schema() -> None:
                 # FastChannels web player (for the heartbeat signal); neither is guaranteed
                 # to be how a given install's viewers actually watch bridged channels.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_idle_stop_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "fc_player_bridge_captions_enabled" not in cols:
+                # Default on — purely a rendering choice with no operational cost, unlike
+                # the other fc_player_bridge_* toggles above.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_captions_enabled BOOLEAN NOT NULL DEFAULT 1"))
 
         if "sources" in tables:
             src_cols = {

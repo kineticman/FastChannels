@@ -414,6 +414,7 @@ class AppSettings(db.Model):
     fc_player_bridge_adb_address  = db.Column(db.Text, nullable=True)  # adb address for the device running the FastChannels Player app, e.g. 192.168.86.91:5555
     fc_player_bridge_encoder_url  = db.Column(db.Text, nullable=True)  # HDMI encoder's fixed output stream URL
     fc_player_bridge_idle_stop_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # stop the device when Channels DVR activity + the web player's heartbeat both go quiet
+    fc_player_bridge_captions_enabled  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # render an English subtitle/CC track when the stream advertises one
 
     @staticmethod
     def _env_int(name: str) -> int | None:

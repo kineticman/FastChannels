@@ -5885,6 +5885,8 @@ def app_settings():
             row.fc_player_bridge_encoder_url = _normalize_server_url(data['fc_player_encoder_url'], default_port=None)
         if 'fc_player_idle_stop_enabled' in data:
             row.fc_player_bridge_idle_stop_enabled = bool(data['fc_player_idle_stop_enabled'])
+        if 'fc_player_captions_enabled' in data:
+            row.fc_player_bridge_captions_enabled = bool(data['fc_player_captions_enabled'])
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:
@@ -5915,6 +5917,7 @@ def app_settings():
         'fc_player_ip': _fc_player_ip_display,
         'fc_player_encoder_url': row.effective_fc_player_bridge_encoder_url() or '',
         'fc_player_idle_stop_enabled': bool(row.fc_player_bridge_idle_stop_enabled),
+        'fc_player_captions_enabled': bool(row.fc_player_bridge_captions_enabled),
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',

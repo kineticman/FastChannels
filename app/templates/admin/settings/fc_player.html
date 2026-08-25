@@ -69,6 +69,24 @@
           </label>
         </div>
       </div>
+      <div class="toggle-row" style="margin-top:12px">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Show captions when available</div>
+          <div class="toggle-row-help">
+            Renders an English subtitle/CC track when the stream advertises one — both a sidecar
+            subtitle rendition (confirmed working on DirecTV Stream and Vidaa) and captions muxed
+            directly into the video (confirmed working on Roku). Applies the next time a channel
+            is triggered, not to a stream already playing.
+          </div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="fc-player-captions-enabled" {% if fc_player_captions_enabled %}checked{% endif %}
+                   onchange="saveFcPlayerCaptionsToggle()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
       {% if fc_player_configured %}
       <div class="help" style="margin-top:12px">Add this feed to Channels DVR from the <a href="/admin/feeds">Feeds</a> page.</div>
       {% else %}

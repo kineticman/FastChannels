@@ -237,6 +237,11 @@ async function saveFcPlayerIdleStopToggle() {
   await saveSettings({fc_player_idle_stop_enabled: enabled}, 'fc-player-status');
 }
 
+async function saveFcPlayerCaptionsToggle() {
+  const enabled = document.getElementById('fc-player-captions-enabled').checked;
+  await saveSettings({fc_player_captions_enabled: enabled}, 'fc-player-status');
+}
+
 async function installFcPlayer() {
   const statusEl = document.getElementById('fc-player-status');
   statusEl.textContent = 'Installing…';
