@@ -239,6 +239,12 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN kodi_bridge_encoder_url TEXT"))
             if "kodi_bridge_captions_enabled" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN kodi_bridge_captions_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "streamvault_bridge_enabled" not in cols:
+                # Default off so installs without the StreamVault plugin (app/streamvault_plugin/)
+                # are unaffected.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN streamvault_bridge_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "streamvault_bridge_adb_address" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN streamvault_bridge_adb_address TEXT"))
 
         if "sources" in tables:
             src_cols = {

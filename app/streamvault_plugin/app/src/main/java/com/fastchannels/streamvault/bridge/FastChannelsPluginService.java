@@ -223,19 +223,7 @@ public class FastChannelsPluginService extends Service {
             return;
         }
 
-        String outputUrl = entry.playUrl;
-        if (entry.drm && outputUrl.endsWith(".m3u8")) {
-            // FastChannels' generic /play/<source>/<id>.m3u8 route 302-redirects to the real
-            // manifest regardless of DRM status — that's fine for Kodi's inputstream.adaptive,
-            // which is extension-agnostic and just follows the redirect. StreamVault appears to
-            // pick its media source (HLS vs DASH) off the URL extension itself rather than our
-            // stream_type hint: confirmed live 2026-08-24, ExoPlayer kept re-GETting the .m3u8
-            // URL every 1-5s like an HLS live-playlist refresh instead of loading it once as a
-            // DASH manifest. Every DRM source has its own dedicated .../dash.mpd proxy route
-            // (see app/routes/play.py: amazon_prime_free, roku, cox, philo, sling, vidaa, pbs,
-            // nbc_tve all follow this exact shape) — route DRM channels there instead.
-            outputUrl = outputUrl.substring(0, outputUrl.length() - ".m3u8".length()) + "/dash.mpd";
-        }
+        String outputUrl = entry.resolvedPlayUrl();
         Log.i(TAG, "prepare_playback output_url=" + outputUrl + " drm=" + entry.drm);
 
         response.putBoolean(PluginContract.KEY_SUCCESS, true);

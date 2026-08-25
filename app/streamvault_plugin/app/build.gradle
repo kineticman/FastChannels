@@ -25,3 +25,17 @@ android {
         }
     }
 }
+
+dependencies {
+    // Used by PlaybackActivity, the remote-trigger playback surface (app/streamvault_bridge.py
+    // launches it via `adb shell am start`). TvContract's remote-tune path turned out to
+    // require android.permission.READ_TV_LISTINGS, which Android silently never actually
+    // grants a third-party app on this device — confirmed live 2026-08-24, dumpsys showed it
+    // absent from install permissions despite being declared. Playing the resolved stream
+    // directly ourselves sidesteps that wall entirely and reuses the same HLS/DASH/Widevine
+    // resolve shape already validated live through StreamVault tonight.
+    implementation 'androidx.media3:media3-exoplayer:1.5.1'
+    implementation 'androidx.media3:media3-exoplayer-dash:1.5.1'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.5.1'
+    implementation 'androidx.media3:media3-ui:1.5.1'
+}

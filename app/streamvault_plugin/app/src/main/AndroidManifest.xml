@@ -13,9 +13,28 @@
         android:usesCleartextTraffic="true">
 
         <!--
-        Zero-Activity plugin: configurationMode is "host.schema", so StreamVault renders
-        the config UI itself from MSG_GET_CONFIGURATION_SCHEMA — no exported Activity needed.
+        No StreamVault-facing Activity: configurationMode is "host.schema", so StreamVault
+        renders the config UI itself from MSG_GET_CONFIGURATION_SCHEMA. PlaybackActivity below
+        is unrelated to that contract — it's our own remote-trigger playback surface.
+
+        exported="true": launched via `adb shell am start` (uid=shell, not our app's own uid),
+        from app/streamvault_bridge.py — FastChannels' analog of kodi_bridge.trigger_channel().
+        adb-shell-privileged launches are the only mechanism that actually works here: a plain
+        in-process startActivity() from a background service context is blocked by Android's
+        background-activity-start restriction, and the standard workaround for that (a
+        full-screen-intent notification) is ALSO blocked on this device specifically, by Fire
+        OS's own notification allowlist ("AmazonNotificationService: Package
+        com.fastchannels.streamvault.bridge is not in allow list") — both confirmed live
+        2026-08-24. Exactly why kodi_bridge.py's wake_and_relaunch() also uses
+        `adb shell am start -n org.xbmc.kodi/.Splash` rather than any in-process API.
         -->
+        <activity
+            android:name=".PlaybackActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
         <service
             android:name=".FastChannelsPluginService"
             android:exported="true"

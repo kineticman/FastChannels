@@ -416,6 +416,8 @@ class AppSettings(db.Model):
     kodi_bridge_adb_address  = db.Column(db.Text, nullable=True)  # adb address for the watchdog's wake/relaunch path, e.g. 192.168.86.27:5555
     kodi_bridge_encoder_url  = db.Column(db.Text, nullable=True)  # HDMI encoder's fixed output stream URL
     kodi_bridge_captions_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # pushes Kodi's subtitles.parsecaptions (CEA-608/708 burn-in) on toggle
+    streamvault_bridge_enabled      = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # StreamVault remote-play trigger (app/streamvault_bridge.py) feature toggle
+    streamvault_bridge_adb_address  = db.Column(db.Text, nullable=True)  # adb address for the device running the FastChannels StreamVault plugin, e.g. 192.168.86.91:5555
 
     @staticmethod
     def _env_int(name: str) -> int | None:
@@ -511,6 +513,14 @@ class AppSettings(db.Model):
     def effective_kodi_bridge_encoder_url(self) -> str | None:
         value = (self.kodi_bridge_encoder_url or '').strip().rstrip('/')
         return value or self.env_kodi_bridge_encoder_url()
+
+    @classmethod
+    def env_streamvault_bridge_adb_address(cls) -> str | None:
+        return cls._env_str('STREAMVAULT_BRIDGE_ADB_ADDRESS')
+
+    def effective_streamvault_bridge_adb_address(self) -> str | None:
+        value = (self.streamvault_bridge_adb_address or '').strip()
+        return value or self.env_streamvault_bridge_adb_address()
 
     _DEFAULT_GRACENOTE_MAP_URL = (
         'https://gist.githubusercontent.com/kineticman/'

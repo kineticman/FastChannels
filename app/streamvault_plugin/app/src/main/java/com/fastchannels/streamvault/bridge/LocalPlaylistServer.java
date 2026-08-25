@@ -9,7 +9,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -21,19 +20,27 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Plugin-owned local HTTP server, loopback-only.
+ * Plugin-owned local HTTP server, bound to all interfaces (harmless — read-only playlist data,
+ * same no-auth trust model as the rest of FastChannels — and convenient for LAN debugging).
  *
  * Serves the rewritten playlist StreamVault fetches for provider.m3u (GET /playlist.m3u,
- * proxying and translating FastChannels' own /m3u/streamvault), plus a /play endpoint
- * whose URLs exist only so provider.m3u entries carry a scheme+host
- * (http://127.0.0.1:PORT) this plugin declared ownership of via playbackUrlSchemes /
- * playbackUrlHosts in the manifest — that's what makes StreamVault route those channels'
- * MSG_PREPARE_PLAYBACK calls to us at all (see PluginPlaybackRouting.kt in the StreamVault
- * host: it matches strictly on the URL already sitting in the playlist, not on the
- * playback.prepare *response*). The response's output_url is free to point straight at
- * FastChannels — ExoPlayer fetches it directly, so /play is never actually GET-ed by
- * StreamVault in the normal flow; it 302s to the real FastChannels URL defensively in case
- * something does hit it directly.
+ * proxying and translating FastChannels' own /m3u/streamvault), and a /play endpoint whose URLs
+ * exist only so provider.m3u entries carry a scheme+host (http://127.0.0.1:PORT) this plugin
+ * declared ownership of via playbackUrlSchemes/playbackUrlHosts in the manifest — that's what
+ * makes StreamVault route those channels' MSG_PREPARE_PLAYBACK calls to us at all (see
+ * PluginPlaybackRouting.kt in the StreamVault host: it matches strictly on the URL already
+ * sitting in the playlist, not on the playback.prepare *response*). The response's output_url
+ * is free to point straight at FastChannels — ExoPlayer fetches it directly, so /play is never
+ * actually GET-ed by StreamVault in the normal flow; it 302s to the real FastChannels URL
+ * defensively in case something does hit it directly.
+ *
+ * The remote-play trigger (FastChannels' analog of kodi_bridge.trigger_channel()) does NOT go
+ * through this server — see PlaybackActivity's docstring for why (an in-process
+ * context.startActivity() from this server's own thread is blocked by Android's
+ * background-activity-start restriction, and Fire OS additionally blocks the standard
+ * full-screen-intent-notification workaround via its own notification allowlist; both
+ * confirmed live 2026-08-24). FastChannels' backend instead launches PlaybackActivity directly
+ * via `adb shell am start`, exactly like kodi_bridge.py already does for Kodi.
  */
 final class LocalPlaylistServer {
     private static final String TAG = "FCBridge.LocalServer";
@@ -50,6 +57,22 @@ final class LocalPlaylistServer {
             this.playUrl = playUrl;
             this.drm = drm;
             this.licenseUrl = licenseUrl;
+        }
+
+        /**
+         * The URL StreamVault's playback.prepare response should actually hand ExoPlayer.
+         * FastChannels' generic /play/&lt;source&gt;/&lt;id&gt;.m3u8 route 302-redirects to
+         * the real manifest regardless of DRM status — fine for Kodi's inputstream.adaptive
+         * (extension-agnostic, just follows the redirect), but StreamVault picks HLS vs DASH
+         * off the URL extension itself. Every DRM source has its own dedicated .../dash.mpd
+         * proxy route (see app/routes/play.py: amazon_prime_free, roku, cox, philo, sling,
+         * vidaa, pbs, nbc_tve) — route DRM channels there instead.
+         */
+        String resolvedPlayUrl() {
+            if (drm && playUrl.endsWith(".m3u8")) {
+                return playUrl.substring(0, playUrl.length() - ".m3u8".length()) + "/dash.mpd";
+            }
+            return playUrl;
         }
     }
 
@@ -126,7 +149,9 @@ final class LocalPlaylistServer {
         try {
             serverSocket = new ServerSocket();
             serverSocket.setReuseAddress(true);
-            serverSocket.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), PORT));
+            // All interfaces, not just loopback — see the class docstring. StreamVault only
+            // ever needs 127.0.0.1, which this also satisfies.
+            serverSocket.bind(new InetSocketAddress(PORT));
             Log.i(TAG, "bound and listening on " + serverSocket.getLocalSocketAddress());
             while (running) {
                 Socket socket;
