@@ -21,6 +21,7 @@ decoder) via a single adb am start call, ~2s from call to first rendered frame.
 """
 import json
 import logging
+import os
 import re
 import shlex
 import subprocess
@@ -38,6 +39,18 @@ _ADB_TIMEOUT = 10
 # Fixed — this is our own player app's package (app/fc_player/), not a setting; it never
 # varies per install.
 _PLAYER_COMPONENT = 'com.fastchannels.player/.PlaybackActivity'
+
+# Where the Dockerfile bundles the latest release APK, when one exists — see its
+# comment for why this is fetched from GitHub Releases at image-build time rather
+# than committed to git.
+_BUNDLED_APK_PATH = '/app/fc_player_release.apk'
+
+
+def bundled_apk_path() -> str | None:
+    """The bundled release APK's path, or None if this image was built before the
+    first release was published (or the build-time fetch failed) — the settings
+    page's Install button uses this to know whether it has anything to install."""
+    return _BUNDLED_APK_PATH if os.path.isfile(_BUNDLED_APK_PATH) else None
 
 # How long a bridged channel can sit with no confirmed viewer (neither Channels DVR
 # activity nor a /watch heartbeat) before we stop it. Matches the old Kodi bridge's

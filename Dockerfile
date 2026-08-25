@@ -70,6 +70,26 @@ COPY . .
 
 RUN chmod +x /app/entrypoint.sh
 
+# Bundle the latest FastChannels Player release APK (app/fc_player/, a separate
+# Android project — not built here) into the image so the settings-page "Install"
+# flow (app/fc_player_bridge.py's install_app()/bundled_apk_path()) works with zero
+# network dependency at install-button-click time — the only network dependency is
+# here, at image-build time, same as everything else this Dockerfile already fetches.
+# Deliberately NOT committed to git (see project memory on release signing) — this
+# pulls the signed APK from its GitHub Release instead. Fails soft: no release
+# published yet means no APK bundled and the install button reports that clearly,
+# rather than breaking the whole image build. ARG cache-bust mirrors YTDLP_REFRESH
+# above — bump it to force re-pulling whatever the latest release currently is,
+# independent of any FastChannels code change landing in the same build.
+ARG FC_PLAYER_APK_REFRESH=unset
+RUN echo "fc-player APK refresh token: ${FC_PLAYER_APK_REFRESH}" \
+    && (curl -fsSL -o /app/fc_player_release.apk.tmp \
+        "https://github.com/kineticman/FastChannels/releases/latest/download/FastChannelsPlayer.apk" \
+        && mv /app/fc_player_release.apk.tmp /app/fc_player_release.apk \
+        && echo "Bundled FastChannels Player release APK." \
+        || (rm -f /app/fc_player_release.apk.tmp \
+            && echo "No FastChannels Player release available yet — install button will report unavailable."))
+
 # Python's requests library defaults to its own bundled certifi CA store instead of the
 # system one, and certifi doesn't always trust the same chains the OS does — confirmed
 # live 2026-08-25: DirecTV's CDN cert (issued by "SSL Corporation / Cloudflare TLS

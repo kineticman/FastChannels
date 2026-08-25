@@ -5959,6 +5959,27 @@ def test_fc_player():
         })
 
 
+@api_bp.route('/settings/fc-player/install', methods=['POST'])
+def install_fc_player():
+    """adb-installs the bundled FastChannels Player release APK onto the configured
+    device — no manual sideload step. Live-verified 2026-08-25: works on a device
+    that's never had "Apps from Unknown Sources" touched, since adb install goes
+    through the privileged shell/package-manager path, not the tap-to-install UI flow
+    that setting actually gates."""
+    from .. import fc_player_bridge
+    address = AppSettings.get().effective_fc_player_bridge_adb_address()
+    if not address:
+        return jsonify({'ok': False, 'message': 'Set a device IP first.'}), 400
+    apk_path = fc_player_bridge.bundled_apk_path()
+    if not apk_path:
+        return jsonify({
+            'ok': False,
+            'message': 'No FastChannels Player release is bundled in this build yet.',
+        }), 400
+    ok, message = fc_player_bridge.install_app(apk_path)
+    return jsonify({'ok': ok, 'message': message})
+
+
 @api_bp.route('/fc-player/heartbeat', methods=['POST'])
 def fc_player_heartbeat():
     """Periodic "still watching" ping from the /watch page for a channel that fell

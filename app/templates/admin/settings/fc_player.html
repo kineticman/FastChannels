@@ -41,9 +41,14 @@
       </div>
       <div class="field-actions">
         <span class="save-status" id="fc-player-status"></span>
+        <button class="btn btn-secondary" onclick="installFcPlayer()">Install FastChannels Player</button>
         <button class="btn btn-secondary" onclick="testFcPlayer()">Test connection</button>
         <button class="btn btn-primary" onclick="saveFcPlayerSettings()">Save</button>
       </div>
+      <div class="help">"Install" pushes the app to the device over adb — no manual sideload, and no need to
+        touch "Apps from Unknown Sources" on the device (that setting only gates the on-device tap-to-install
+        flow, not adb). Requires the IP address above to be saved first, and ADB debugging already turned on
+        on the device itself.</div>
       <div class="toggle-row" style="margin-top:12px">
         <div class="toggle-row-text">
           <div class="toggle-row-label">Stop playback when nobody's watching</div>

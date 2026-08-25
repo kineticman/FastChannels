@@ -237,6 +237,21 @@ async function saveFcPlayerIdleStopToggle() {
   await saveSettings({fc_player_idle_stop_enabled: enabled}, 'fc-player-status');
 }
 
+async function installFcPlayer() {
+  const statusEl = document.getElementById('fc-player-status');
+  statusEl.textContent = 'Installing…';
+  statusEl.className = 'save-status';
+  try {
+    const resp = await fetch('/api/settings/fc-player/install', {method: 'POST'});
+    const data = await resp.json();
+    statusEl.textContent = data.message || (data.ok ? 'Installed.' : 'Install failed.');
+    statusEl.className = 'save-status ' + (data.ok ? 'ok' : 'error');
+  } catch (e) {
+    statusEl.textContent = 'Install failed.';
+    statusEl.className = 'save-status error';
+  }
+}
+
 async function testFcPlayer() {
   const statusEl = document.getElementById('fc-player-status');
   statusEl.textContent = 'Testing…';
