@@ -8,7 +8,7 @@ mirrors the existing Roku DRM bridge (app/scrapers/roku.py's resolve_dash())
 almost exactly, reusing the same generic infrastructure:
   - app/routes/play.py's license_proxy() route (works for any scraper that
     implements get_license_url/prepare_license_request/process_license_response)
-  - app/routes/api.py's _get_playback_info() (auto-wires the license URL and
+  - app/routes/api_playback.py's _get_playback_info() (auto-wires the license URL and
     picks the right Shaka playback mode)
   - app/static/js/fc_player.js (already generically handles "hls mode + a
     license URL" — no DASH-specific code required)

@@ -23,7 +23,7 @@ _remote_fetched_at: float = 0.0
 _map_cache: dict[tuple[str, str], dict[str, str]] | None = None
 _map_cache_mtimes: tuple[float, ...] = ()
 
-# Same shape as app/routes/api.py's _GRACENOTE_RE and app/generators/m3u.py's
+# Same shape as app/routes/api_shared.py's _GRACENOTE_RE and app/generators/m3u.py's
 # _GRACENOTE_PREFIX_RE — kept in sync by hand since a station ID that doesn't
 # match all three doesn't get consistently treated as Gracenote-mapped
 # end-to-end (a channel could be excluded from the XMLTV output as "claimed"

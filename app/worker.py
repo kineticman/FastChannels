@@ -1868,7 +1868,7 @@ def _channel_ids_for_filters(filters: dict) -> list[int]:
     # Delegates to the canonical bulk-filter helper so this path can't drift
     # from the API (it previously did — silently ignoring feed/duplicates=unique
     # /drm=vod/presence=pinned). Lazy import avoids a circular import at load.
-    from app.routes.api import _apply_channel_filters
+    from app.routes.api_shared import _apply_channel_filters
     q = _apply_channel_filters(Channel.query.join(Source), filters)
     return [row[0] for row in q.with_entities(Channel.id).all()]
 
@@ -3379,7 +3379,7 @@ def _reload_gunicorn_workers():
     """Gracefully recycle gunicorn's worker processes via SIGHUP.
 
     yt_dlp is imported lazily (see stream_detector._resolve_youtube) and
-    every real caller of it — app.routes.play, app.routes.api — runs inline
+    every real caller of it — app.routes.play, app.routes.api_custom_channels — runs inline
     inside a long-lived gunicorn/gevent request worker, never inside an RQ
     job. A worker that already imported yt_dlp keeps that in-memory copy
     for its whole life (up to GUNICORN_MAX_REQUESTS), so a pip upgrade on

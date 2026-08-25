@@ -4768,7 +4768,7 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
 
     from .. import fc_player_bridge
     from ..models import AppSettings
-    from .api import _get_playback_info
+    from .api_playback import _get_playback_info
 
     settings = AppSettings.get()
     encoder_url = settings.effective_fc_player_bridge_encoder_url()
@@ -4885,7 +4885,7 @@ def watch(channel_id):
     capture_request_id = (request.args.get('fc_request_id') or '').strip()
     if capture_request_id:
         g.request_id = capture_request_id[:80]
-    from .api import _get_playback_info
+    from .api_playback import _get_playback_info
     from flask import make_response
     from ..models import AppSettings
     # Version param busts stale browser caches from before this route existed.

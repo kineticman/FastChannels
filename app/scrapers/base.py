@@ -725,7 +725,7 @@ class BaseScraper(ABC):
 
         Override when the scraper looks the CSV up by something else (a call sign, brand, or
         slugified name derived from live scrape data) — otherwise admin UI features that browse
-        or bulk-apply the community map (app/routes/api.py) will silently find no match for
+        or bulk-apply the community map (app/routes/api_gracenote.py) will silently find no match for
         this source even though scrape-time auto-assignment works fine."""
         key = getattr(channel, 'source_channel_id', None)
         return [key] if key else []

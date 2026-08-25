@@ -14,7 +14,7 @@ from .models import AppSettings
 # Player 2026-08-25) to actually decrypt through an adb-triggered device bridge. Cox and
 # Warner TVE hit a confirmed, non-fixable inputstream.adaptive same-KID session-splitting
 # wall and stay excluded.
-# Shared by app/routes/play.py, app/routes/admin.py, app/routes/api.py,
+# Shared by app/routes/play.py, app/routes/admin.py, app/routes/api_dvr.py,
 # app/generators/m3u.py, and app/worker.py — keep them all in sync via this single
 # source of truth.
 DRM_BRIDGE_TRUSTED_SOURCES = frozenset({

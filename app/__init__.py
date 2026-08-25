@@ -153,14 +153,34 @@ def create_app(config_class=Config):
         write_timezone_cache(AppSettings.get().timezone_name)
 
     from .routes.output import output_bp
-    from .routes.api import api_bp
+    from .routes.api_sources import sources_bp
+    from .routes.api_custom_channels import custom_channels_bp
+    from .routes.api_channels import channels_bp
+    from .routes.api_playback import playback_bp
+    from .routes.api_gracenote import gracenote_bp
+    from .routes.api_system import system_bp
+    from .routes.api_settings import settings_bp
+    from .routes.api_duplicates import duplicates_bp
+    from .routes.api_dvr import dvr_bp
+    from .routes.api_tve import tve_bp
     from .routes.feeds_api import feeds_api_bp
     from .routes.admin import admin_bp
     from .routes.play import play_bp
     from .routes.images import images_bp
 
     app.register_blueprint(output_bp)
-    app.register_blueprint(api_bp, url_prefix='/api')
+    # Split out of a single 6,000+ line api.py (2026-08-25) into per-domain
+    # blueprints, all still mounted at /api so routes/endpoints are unchanged.
+    app.register_blueprint(sources_bp, url_prefix='/api')
+    app.register_blueprint(custom_channels_bp, url_prefix='/api')
+    app.register_blueprint(channels_bp, url_prefix='/api')
+    app.register_blueprint(playback_bp, url_prefix='/api')
+    app.register_blueprint(gracenote_bp, url_prefix='/api')
+    app.register_blueprint(system_bp, url_prefix='/api')
+    app.register_blueprint(settings_bp, url_prefix='/api')
+    app.register_blueprint(duplicates_bp, url_prefix='/api')
+    app.register_blueprint(dvr_bp, url_prefix='/api')
+    app.register_blueprint(tve_bp, url_prefix='/api')
     app.register_blueprint(feeds_api_bp, url_prefix='/api/feeds')
     app.register_blueprint(admin_bp, url_prefix='/admin')
     app.register_blueprint(play_bp)   # /play/<source>/<id>.m3u8
