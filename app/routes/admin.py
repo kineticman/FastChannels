@@ -14,6 +14,7 @@ from ..generators.m3u import (
     _build_source_chnum_map,
     _build_sticky_gn_chnum_map,
     _drm_bridge_query_filters,
+    _has_gracenote_claim,
     _selected_channel_stubs,
     feed_namespace_start,
     feed_to_query_filters,
@@ -268,71 +269,46 @@ def _apply_admin_feed_membership_filters(query, feed: Feed):
 
 
 def _feed_split_counts(feed: Feed) -> dict[str, int]:
+    """Per-feed channel counts for the admin feeds page, split standard/Gracenote/
+    bridged/trusted the same way the real M3U generators do.
+
+    Partitions via _has_gracenote_claim() — the exact function generate_m3u/
+    generate_prismcast_m3u/generate_fc_player_m3u use — rather than a separate SQL
+    reimplementation. An earlier SQL-side approximation (`slug LIKE '%|%'`, no format
+    validation) diverged from the real Python check for any channel name that happens
+    to contain a literal pipe without being the legacy Roku gracenote-encoded slug
+    format (confirmed live 2026-08-25: "Hell's Kitchen | Kitchen Nightmares", "FOX
+    LOCAL Dallas | Fort Worth") — those got miscounted here while the actual M3U
+    output was always correct, since the generators never used the SQL version.
+    """
     filters = feed_to_query_filters(feed.filters or {})
-    from sqlalchemy import func
-    has_gracenote = (
-        (Channel.gracenote_mode != 'off')
-        & (
-            ((Channel.gracenote_id != None) & (Channel.gracenote_id != ''))
-            | Channel.slug.like('%|%')
-        )
-    )
-    row = (
-        _build_channel_query(_drm_bridge_query_filters(filters))
-        .order_by(None)
-        .with_entities(
-            func.count().label('total'),
-            func.count(case((has_gracenote, Channel.id))).label('gn_count'),
-        )
-        .one()
-    )
-    total, gn_count = row.total, row.gn_count
+
+    active_channels = _build_channel_query(_drm_bridge_query_filters(filters)).all()
+    bridged_channels = _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all()
+
+    gn_count = sum(1 for ch in active_channels if _has_gracenote_claim(ch))
+    total = len(active_channels)
+    std_count = total - gn_count
+
     # The PrismCast feeds are the standard/gracenote sets PLUS the DRM-bridge channels
     # (which the standard query excludes) — so their counts run higher than
     # channel_count(). Partition the bridged set the same way for accurate per-feed
     # counts, since PrismCast now splits into standard + gracenote like the regular feed.
-    bridged_row = (
-        _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge')
-        .order_by(None)
-        .with_entities(
-            func.count().label('total'),
-            func.count(case((has_gracenote, Channel.id))).label('gn_count'),
-        )
-        .one()
-    )
-    bridged_count, bridged_gn = bridged_row.total, bridged_row.gn_count
+    bridged_count = len(bridged_channels)
+    bridged_gn = sum(1 for ch in bridged_channels if _has_gracenote_claim(ch))
 
     # The FastChannels Player device bridge is narrower than PrismCast in two ways:
     # only sources confirmed to actually decrypt through it (see app/drm_bridge.py),
     # AND — unlike PrismCast, which carries the whole catalog — the fc-player feed
-    # includes ONLY those trusted sources' own channels, not every source's. Re-run
-    # both the bridged and the standard query restricted to that set.
-    bridge_trusted_row = (
-        _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge')
-        .filter(Source.name.in_(DRM_BRIDGE_TRUSTED_SOURCES))
-        .order_by(None)
-        .with_entities(
-            func.count().label('total'),
-            func.count(case((has_gracenote, Channel.id))).label('gn_count'),
-        )
-        .one()
-    )
-    bridge_trusted_count, bridge_trusted_gn = bridge_trusted_row.total, bridge_trusted_row.gn_count
+    # includes ONLY those trusted sources' own channels, not every source's.
+    bridge_trusted = [ch for ch in bridged_channels if ch.source and ch.source.name in DRM_BRIDGE_TRUSTED_SOURCES]
+    bridge_trusted_count = len(bridge_trusted)
+    bridge_trusted_gn = sum(1 for ch in bridge_trusted if _has_gracenote_claim(ch))
 
-    trusted_std_row = (
-        _build_channel_query(_drm_bridge_query_filters(filters))
-        .filter(Source.name.in_(DRM_BRIDGE_TRUSTED_SOURCES))
-        .order_by(None)
-        .with_entities(
-            func.count().label('total'),
-            func.count(case((has_gracenote, Channel.id))).label('gn_count'),
-        )
-        .one()
-    )
-    trusted_std_total, trusted_std_gn = trusted_std_row.total, trusted_std_row.gn_count
-    trusted_std_count = max(trusted_std_total - trusted_std_gn, 0)
+    trusted_std = [ch for ch in active_channels if ch.source and ch.source.name in DRM_BRIDGE_TRUSTED_SOURCES]
+    trusted_std_gn = sum(1 for ch in trusted_std if _has_gracenote_claim(ch))
+    trusted_std_count = len(trusted_std) - trusted_std_gn
 
-    std_count = max(total - gn_count, 0)
     return {
         'standard_count': std_count,
         'gracenote_count': gn_count,
