@@ -1603,8 +1603,9 @@ def _prewarm_logos(source_name: str, logo_urls: list[str], progress_cb=None) -> 
 
 def _refresh_xml_artifacts() -> None:
     """Refresh master/feed XML and M3U artifacts after scrape commits land."""
-    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_prismcast_m3u, generate_kodi_bridge_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_prismcast_m3u, generate_kodi_bridge_m3u, generate_fc_player_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app import kodi_bridge as _kodi_bridge
+    from app import fc_player_bridge as _fc_player_bridge
     from app.generators.xmltv import write_xmltv
 
     for attempt in range(2):
@@ -1625,6 +1626,7 @@ def _refresh_xml_artifacts() -> None:
         prismcast_url = (_settings.effective_prismcast_url() or '').strip().rstrip('/')
         prismcast_inner = (_settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
         kodi_bridge_ready = _kodi_bridge.is_configured()
+        fc_player_ready = _fc_player_bridge.is_configured()
         m3u_artifacts: list[tuple[str, Callable]] = [
             ('master-m3u', lambda fp: fp.write(generate_m3u({}, base_url=base_url))),
             # EXPERIMENTAL: mixed Gracenote/XMLTV single-source playlist — see
@@ -1641,6 +1643,11 @@ def _refresh_xml_artifacts() -> None:
             m3u_artifacts.append((
                 'master-kodi-bridge-m3u',
                 lambda fp: fp.write(generate_kodi_bridge_m3u({}, base_url=base_url)),
+            ))
+        if fc_player_ready:
+            m3u_artifacts.append((
+                'master-fc-player-m3u',
+                lambda fp: fp.write(generate_fc_player_m3u({}, base_url=base_url)),
             ))
         default_feed = Feed.query.filter_by(slug='default').first()
         default_gn_start = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
@@ -1659,6 +1666,12 @@ def _refresh_xml_artifacts() -> None:
             m3u_artifacts.append((
                 'master-kodi-bridge-gracenote-m3u',
                 lambda fp: fp.write(generate_kodi_bridge_m3u(
+                    {}, base_url=base_url, namespace_start=default_gn_start, gracenote=True)),
+            ))
+        if fc_player_ready:
+            m3u_artifacts.append((
+                'master-fc-player-gracenote-m3u',
+                lambda fp: fp.write(generate_fc_player_m3u(
                     {}, base_url=base_url, namespace_start=default_gn_start, gracenote=True)),
             ))
         for feed in Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all():
@@ -1728,6 +1741,13 @@ def _refresh_xml_artifacts() -> None:
                         generate_kodi_bridge_m3u(filters, base_url=base_url, **std_kw)
                     ),
                 ))
+            if fc_player_ready:
+                m3u_artifacts.append((
+                    f'feed-{feed.slug}-fc-player-m3u',
+                    lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                        generate_fc_player_m3u(filters, base_url=base_url, **std_kw)
+                    ),
+                ))
             if feed.chnum_start is not None:
                 gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
             else:
@@ -1752,6 +1772,13 @@ def _refresh_xml_artifacts() -> None:
                     f'feed-{feed.slug}-kodi-bridge-gracenote-m3u',
                     lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
                         generate_kodi_bridge_m3u(filters, base_url=base_url, gracenote=True, **gn_kw)
+                    ),
+                ))
+            if fc_player_ready:
+                m3u_artifacts.append((
+                    f'feed-{feed.slug}-fc-player-gracenote-m3u',
+                    lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
+                        generate_fc_player_m3u(filters, base_url=base_url, gracenote=True, **gn_kw)
                     ),
                 ))
 

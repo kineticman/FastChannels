@@ -4821,6 +4821,113 @@ def play_kodi_bridge_vlc(source_name: str, channel_id: str):
     )
 
 
+@play_bp.route('/play/fc-player/<source_name>/<channel_id>.m3u8')
+def play_fc_player_bridge(source_name: str, channel_id: str):
+    """
+    Single play URL for the FastChannels Player bridge feed — same shape and purpose
+    as play_kodi_bridge, just triggering the FastChannels Player app (app/fc_player/)
+    over adb instead of Kodi:
+      - normal channel -> identical to /play/<source>/<id>.m3u8 (resolve + 302 to CDN)
+      - bridge channel -> trigger_channel() on the device, then redirect to the
+        encoder's fixed stream URL immediately, same speed-first design as Kodi bridge.
+
+    Deliberately does NOT append the kodi_bridge=1 manifest-normalization flag
+    play_kodi_bridge does (single-bitrate-only, stripped non-AV tracks) — that's a
+    workaround for a Kodi/inputstream.adaptive-specific issue. Media3/ExoPlayer (what
+    FastChannels Player actually uses) already played the same un-normalized adaptive
+    manifest cleanly in testing; applying a Kodi-specific workaround here would just
+    remove ABR quality switching for no benefit.
+    """
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
+        .first()
+    )
+    if not channel and source_name == 'distro' and ':' not in channel_id:
+        channel = (
+            Channel.query
+            .join(Source)
+            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
+            .first()
+        )
+    if not channel:
+        abort(404)
+
+    needs_bridge = bool(channel.requires_drm_bridge) and source_name in _KODI_BRIDGE_TRUSTED_SOURCES
+    if not needs_bridge:
+        return play(source_name, channel_id)
+
+    from .. import fc_player_bridge
+    from ..models import AppSettings
+    from .api import _get_playback_info
+
+    settings = AppSettings.get()
+    encoder_url = settings.effective_fc_player_bridge_encoder_url()
+    if not encoder_url:
+        logger.error(
+            '[fc-player] play request for %s/%s but fc_player_bridge_encoder_url is not configured',
+            source_name, channel_id,
+        )
+        return Response('FastChannels Player encoder URL is not configured.\n', status=503, mimetype='text/plain')
+
+    if not fc_player_bridge.is_configured():
+        logger.error(
+            '[fc-player] play request for %s/%s but the bridge is not enabled/configured',
+            source_name, channel_id,
+        )
+        return Response('FastChannels Player bridge is not enabled or configured.\n', status=503, mimetype='text/plain')
+
+    info = _get_playback_info(channel, fast_mode=False)
+    manifest_url = info.get('preview_url') or info.get('play_url') or ''
+    if manifest_url.startswith('/'):
+        manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
+    license_url = info.get('license_url') or None
+
+    if not manifest_url:
+        logger.error('[fc-player] no manifest URL resolved for %s/%s', source_name, channel_id)
+        return _unavailable_response()
+
+    triggered = fc_player_bridge.trigger_channel(
+        manifest_url, license_url, name=channel.name or 'FastChannels',
+    )
+    logger.info(
+        '[fc-player] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s triggered=%s -> encoder',
+        getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name, triggered,
+    )
+    return redirect(encoder_url, 302)
+
+
+@play_bp.route('/play/fc-player/<source_name>/<channel_id>.m3u')
+def play_fc_player_bridge_vlc(source_name: str, channel_id: str):
+    """.m3u sibling of play_fc_player_bridge, same purpose as play_vlc: hand VLC (or
+    any media player) a downloadable playlist instead of a bare .m3u8 URL the browser
+    would otherwise try to render inline."""
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
+        .first()
+    )
+    if not channel and source_name == 'distro' and ':' not in channel_id:
+        channel = (
+            Channel.query
+            .join(Source)
+            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
+            .first()
+        )
+    if not channel:
+        abort(404)
+    base_url = request.host_url.rstrip('/')
+    stream_url = f'{base_url}/play/fc-player/{source_name}/{channel_id}.m3u8'
+    playlist = f'#EXTM3U\n#EXTINF:-1,{channel.name}\n{stream_url}\n'
+    return Response(
+        playlist,
+        mimetype='audio/x-mpegurl',
+        headers={'Content-Disposition': f'attachment; filename="{channel_id}.m3u"'},
+    )
+
+
 @play_bp.route('/play/kodi-bridge/heartbeat', methods=['POST'])
 def kodi_bridge_heartbeat():
     """Lightweight signal from the fc_bridge Kodi addon's background service

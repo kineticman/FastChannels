@@ -959,6 +959,15 @@ def _kodi_bridge_play_url(ch, base_url: str) -> str:
     channel_id = _url_quote(ch.source_channel_id, safe="")
     return f'{base_url}/play/kodi-bridge/{source_name}/{channel_id}.m3u8'
 
+
+def _fc_player_play_url(ch, base_url: str) -> str:
+    # Same shape/purpose as _kodi_bridge_play_url — play_fc_player_bridge
+    # (app/routes/play.py) decides per-request whether to trigger the FastChannels
+    # Player device or just resolve+302 directly.
+    source_name = ch.source.name
+    channel_id = _url_quote(ch.source_channel_id, safe="")
+    return f'{base_url}/play/fc-player/{source_name}/{channel_id}.m3u8'
+
 def generate_m3u(filters: dict = None, base_url: str = None,
                  feed_chnum_start: int = None, namespace_start: int = None,
                  feed_id: int = None) -> str:
@@ -1141,6 +1150,87 @@ def generate_kodi_bridge_m3u(filters: dict = None, base_url: str = None,
         _append_experimental_stream_attrs(attrs, _s)
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         lines.append(_kodi_bridge_play_url(ch, base_url))
+
+    return '\n'.join(lines)
+
+
+def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
+                            feed_chnum_start: int = None, namespace_start: int = None,
+                            feed_id: int = None, gracenote: bool = False) -> str:
+    """
+    FastChannels Player (app/fc_player/) DRM-bridge playlist — same shape and purpose
+    as generate_kodi_bridge_m3u, just triggering the FastChannels Player app over adb
+    instead of Kodi. See that function's docstring for the full rationale (DRM-bridge
+    channel union restricted to KODI_BRIDGE_TRUSTED_SOURCES, no #KODIPROP lines, the
+    gracenote param).
+    """
+    filters  = filters or {}
+    base_url = (base_url or '').rstrip('/')
+
+    _s = AppSettings.get()
+    _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
+
+    channels = _selected_channels(filters, gracenote=gracenote)
+
+    # Same trusted-source set as the Kodi bridge — sources confirmed to actually
+    # decrypt through a DRM bridge, not every DRM-capable source. Shared rather than
+    # duplicated; see KODI_BRIDGE_TRUSTED_SOURCES's own docstring.
+    _seen = {ch.id for ch in channels}
+    for ch in _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all():
+        if ch.id in _seen or (ch.source.name if ch.source else None) not in KODI_BRIDGE_TRUSTED_SOURCES:
+            continue
+        if gracenote and not _parse_gracenote_id(ch):
+            continue
+        if not gracenote and _has_gracenote_claim(ch):
+            continue
+        channels.append(ch)
+        _seen.add(ch.id)
+
+    chnum_map, warnings = _resolve_chnum_map(
+        channels,
+        feed_chnum_start=feed_chnum_start,
+        namespace_start=namespace_start,
+        feed_id=feed_id if feed_chnum_start is not None else None,
+    )
+    if feed_chnum_start is None and namespace_start is None:
+        for w in warnings:
+            log.warning('chnum overlap (fc-player): %s', w)
+    else:
+        _sort_by_assigned_chnum(channels, chnum_map)
+
+    multi_country_map = _source_multi_country_map(channels)
+    lines = ['#EXTM3U']
+    for ch in channels:
+        tvg_id = _tvg_id(ch)
+        display_name = _channel_display_name(ch, multi_country_map)
+        guide_attr = (f'tvc-guide-stationid="{_parse_gracenote_id(ch)}"'
+                      if gracenote else f'tvg-id="{tvg_id}"')
+        attrs = [
+            f'channel-id="{tvg_id}"',
+            guide_attr,
+            f'tvg-name="{_esc(display_name)}"',
+            f'group-title="{_esc(ch.category or ch.source.display_name)}"',
+        ]
+        if ch.logo_url:
+            attrs.append(f'tvg-logo="{proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url}"')
+        chnum = chnum_map.get(ch.id)
+        if chnum:
+            attrs.append(f'tvg-chno="{chnum}"')
+        if ch.description:
+            attrs.append(f'tvg-description="{_esc(ch.description)}"')
+            attrs.append(f'tvc-guide-description="{_esc(ch.description)}"')
+        if ch.stream_info:
+            vcodec, acodec = _tvc_stream_codecs(ch.stream_info)
+            if vcodec:
+                attrs.append(f'tvc-stream-vcodec="{vcodec}"')
+            if acodec:
+                attrs.append(f'tvc-stream-acodec="{acodec}"')
+        guide_cat = _tvc_guide_category(ch)
+        if guide_cat:
+            attrs.append(f'tvc-guide-categories="{guide_cat}"')
+        _append_experimental_stream_attrs(attrs, _s)
+        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
+        lines.append(_fc_player_play_url(ch, base_url))
 
     return '\n'.join(lines)
 

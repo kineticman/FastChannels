@@ -6025,12 +6025,19 @@ def app_settings():
         else:
             _push_captions = None
         if 'fc_player_enabled' in data:
-            row.fc_player_bridge_enabled = bool(data['fc_player_enabled'])
+            _new_fc_player = bool(data['fc_player_enabled'])
+            if _new_fc_player != bool(row.fc_player_bridge_enabled):
+                row.fc_player_bridge_enabled = _new_fc_player
+                # Reconcile existing DRM channels immediately, same as the kodi_bridge_enabled
+                # toggle — see kodi_bridge.drm_bridge_mode_for.
+                _reconcile_drm_bridge_mode()
         if 'fc_player_ip' in data:
             _fcp_host = _kodi_bridge_host_from_input(data['fc_player_ip'])
             if data.get('fc_player_ip') and not _fcp_host:
                 return jsonify({'error': 'Invalid Firestick/Android TV IP address.'}), 422
             row.fc_player_bridge_adb_address = f'{_fcp_host}:5555' if _fcp_host else None
+        if 'fc_player_encoder_url' in data:
+            row.fc_player_bridge_encoder_url = _normalize_server_url(data['fc_player_encoder_url'], default_port=None)
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:
@@ -6073,6 +6080,7 @@ def app_settings():
         'kodi_bridge_captions_enabled': bool(row.kodi_bridge_captions_enabled),
         'fc_player_enabled': bool(row.fc_player_bridge_enabled),
         'fc_player_ip': _fc_player_ip_display,
+        'fc_player_encoder_url': row.effective_fc_player_bridge_encoder_url() or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
@@ -6118,13 +6126,40 @@ def test_kodi_bridge():
 
 @api_bp.route('/settings/fc-player/test', methods=['POST'])
 def test_fc_player():
-    """adb-reachability check for the configured FastChannels Player device, plus
-    whether the player app is actually installed there."""
+    """adb-reachability check for the configured FastChannels Player device (plus
+    whether the player app is installed there), and a check that the encoder/capture
+    stream URL is set and reachable — a green result here should mean a bridged
+    channel would really work end-to-end, not just that the device is online."""
     from .. import fc_player_bridge
     if not fc_player_bridge.is_configured():
         return jsonify({'ok': False, 'message': 'Enable the bridge and set a device IP first.'}), 400
     ok, message = fc_player_bridge.test_connection()
-    return jsonify({'ok': ok, 'message': message})
+    if not ok:
+        return jsonify({'ok': False, 'message': message})
+
+    encoder_url = AppSettings.get().effective_fc_player_bridge_encoder_url()
+    if not encoder_url:
+        return jsonify({
+            'ok': True,
+            'warning': True,
+            'message': f'{message} No encoder/capture stream URL is set — bridged channels will fail with a 503 until you add one.',
+        })
+
+    try:
+        with _req.get(encoder_url, stream=True, timeout=3) as r:
+            if r.ok:
+                return jsonify({'ok': True, 'message': f'{message} Encoder/capture stream URL is reachable.'})
+            return jsonify({
+                'ok': True,
+                'warning': True,
+                'message': f'{message} Encoder/capture stream URL returned HTTP {r.status_code} — bridged channels may fail.',
+            })
+    except _req.RequestException:
+        return jsonify({
+            'ok': True,
+            'warning': True,
+            'message': f'{message} Encoder/capture stream URL is not reachable — bridged channels will fail until that stream is up.',
+        })
 
 
 @api_bp.route('/settings/gracenote-auto-clear', methods=['POST'])

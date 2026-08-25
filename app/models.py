@@ -418,6 +418,7 @@ class AppSettings(db.Model):
     kodi_bridge_captions_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # pushes Kodi's subtitles.parsecaptions (CEA-608/708 burn-in) on toggle
     fc_player_bridge_enabled      = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # FastChannels Player remote-play trigger (app/fc_player_bridge.py) feature toggle
     fc_player_bridge_adb_address  = db.Column(db.Text, nullable=True)  # adb address for the device running the FastChannels Player app, e.g. 192.168.86.91:5555
+    fc_player_bridge_encoder_url  = db.Column(db.Text, nullable=True)  # HDMI encoder's fixed output stream URL, same role as kodi_bridge_encoder_url
 
     @staticmethod
     def _env_int(name: str) -> int | None:
@@ -521,6 +522,14 @@ class AppSettings(db.Model):
     def effective_fc_player_bridge_adb_address(self) -> str | None:
         value = (self.fc_player_bridge_adb_address or '').strip()
         return value or self.env_fc_player_bridge_adb_address()
+
+    @classmethod
+    def env_fc_player_bridge_encoder_url(cls) -> str | None:
+        return cls._env_str('FC_PLAYER_BRIDGE_ENCODER_URL')
+
+    def effective_fc_player_bridge_encoder_url(self) -> str | None:
+        value = (self.fc_player_bridge_encoder_url or '').strip().rstrip('/')
+        return value or self.env_fc_player_bridge_encoder_url()
 
     _DEFAULT_GRACENOTE_MAP_URL = (
         'https://gist.githubusercontent.com/kineticman/'

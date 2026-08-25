@@ -259,16 +259,21 @@ async function testKodiBridge() {
 
 async function saveFcPlayerToggles() {
   const enabled = document.getElementById('fc-player-enabled').checked;
-  await saveSettings({fc_player_enabled: enabled}, 'fc-player-status');
+  const ok = await saveSettings({fc_player_enabled: enabled}, 'fc-player-status');
+  // "Enable" affects whether the feed-URL guidance block (server-rendered) shows.
+  if (ok) setTimeout(() => location.reload(), 700);
 }
 
 async function saveFcPlayerSettings() {
   const ip = document.getElementById('fc-player-ip').value.trim();
+  const encoderUrl = document.getElementById('fc-player-encoder-url').value.trim();
   const enabled = document.getElementById('fc-player-enabled').checked;
-  await saveSettings({
+  const ok = await saveSettings({
     fc_player_ip: ip || null,
+    fc_player_encoder_url: encoderUrl || null,
     fc_player_enabled: enabled,
   }, 'fc-player-status');
+  if (ok) setTimeout(() => location.reload(), 700);
 }
 
 async function testFcPlayer() {

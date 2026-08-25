@@ -152,15 +152,19 @@ KODI_BRIDGE_TRUSTED_SOURCES = frozenset({
 
 def drm_bridge_mode_for(source_name: str) -> bool:
     """Whether a DRM channel on this source should be kept active + bridged rather than
-    disabled — true if EITHER bridge can plausibly serve it: the PrismCast browser/EME
-    bridge (global drm_bridge_enabled toggle, any license_url-capable source) or this
-    Kodi/HDMI-encoder bridge (global kodi_bridge_enabled toggle, restricted to
-    KODI_BRIDGE_TRUSTED_SOURCES). Callers still separately gate on the scraper actually
-    having license_url handling."""
+    disabled — true if ANY bridge can plausibly serve it: the PrismCast browser/EME
+    bridge (global drm_bridge_enabled toggle, any license_url-capable source), this
+    Kodi/HDMI-encoder bridge, or the FastChannels Player bridge (app/fc_player_bridge.py)
+    — both of the latter gated on their own enabled toggle, restricted to
+    KODI_BRIDGE_TRUSTED_SOURCES (shared by both — the Kodi bridge's own name for this
+    constant predates the Player bridge, not worth a rename churn). Callers still
+    separately gate on the scraper actually having license_url handling."""
     settings = AppSettings.get()
     if bool(settings.drm_bridge_enabled):
         return True
-    return bool(settings.kodi_bridge_enabled) and source_name in KODI_BRIDGE_TRUSTED_SOURCES
+    if source_name not in KODI_BRIDGE_TRUSTED_SOURCES:
+        return False
+    return bool(settings.kodi_bridge_enabled) or bool(settings.fc_player_bridge_enabled)
 
 
 class KodiBridgeNotConfigured(RuntimeError):

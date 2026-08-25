@@ -755,6 +755,35 @@
         {% endif %}
         <p class="help" style="margin-top:0.5rem">{% if kodi_bridge_enabled %}Every channel uses the same play URL; only the trusted-source DRM channels actually trigger the Kodi/Firestick device — everything else streams direct in the same playlist, same as the regular feed. Gracenote-mapped channels split into their own M3U here too. Import only one per source to avoid duplicate channels. The button above registers this as distinct source(s) (named "… Kodi Bridge") separate from the standard push.{% else %}Configure the Kodi HDMI Bridge in Settings (device IP + encoder/capture stream URL) to publish a ready-to-import feed here.{% endif %}</p>
       </details>
+
+      <details class="native-endpoints">
+        <summary>FastChannels Player output <span class="badge-pill pill-beta">Experimental Beta</span>{% if fc_player_enabled and split.get('kodi_bridge_count', 0) %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ split.get('kodi_bridge_count', 0) }} channel{{ 's' if split.get('kodi_bridge_count', 0) != 1 else '' }}){% endif %}</span></summary>
+        <div class="feed-urls" style="margin-top:0.5rem">
+          {% if fc_player_enabled %}
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player')">
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">FastChannels Player M3U ({{ split.get('kodi_bridge_count', 0) }})</span>
+            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player</span>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player')">Copy</button>
+          </div>
+          {% if split.get('kodi_bridge_gracenote_count', 0) %}
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote')">
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">FastChannels Player Gracenote M3U ({{ split.get('kodi_bridge_gracenote_count', 0) }})</span>
+            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote</span>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote')">Copy</button>
+          </div>
+          {% endif %}
+          {% endif %}
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
+            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
+          </div>
+        </div>
+        <p class="help" style="margin-top:0.5rem">{% if fc_player_enabled %}Same shape as the Kodi bridge feed above (same trusted-source channel set, hence the same counts) — every channel uses the same play URL; only trusted-source DRM channels trigger the device. No "Add to Channels DVR" button yet for this one — copy the URLs above and add manually as a custom M3U/EPG source.{% else %}Configure FastChannels Player in Settings (device IP + encoder/capture stream URL) to publish a ready-to-import feed here.{% endif %}</p>
+      </details>
     </div>
     {% endfor %}
   </div>

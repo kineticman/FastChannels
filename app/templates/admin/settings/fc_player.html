@@ -5,15 +5,16 @@
         <div class="source-icon">📲</div>
         <div>
           <div class="source-name">FastChannels Player <span class="badge badge-beta">Experimental Beta</span></div>
-          <div class="source-meta">Remote-trigger a Fire TV / Android TV device to play DRM channels, using a small player app FastChannels controls directly over adb</div>
+          <div class="source-meta">Remote-trigger a Fire TV / Android TV device to play DRM channels, captured back in by an HDMI encoder</div>
         </div>
       </div>
     </div>
     <div class="source-body open">
+      <div class="help" style="color:var(--warning-soft)">Requires the FastChannels Player app installed on the device (ADB debugging must be turned on first) — same HDMI-capture setup as the Kodi bridge, just triggering FastChannels' own small player app instead of Kodi.</div>
       <div class="toggle-row">
         <div class="toggle-row-text">
           <div class="toggle-row-label">Enable FastChannels Player</div>
-          <div class="toggle-row-help">Required before the settings below take effect. The device needs ADB debugging turned on and the FastChannels Player app installed — see Install below.</div>
+          <div class="toggle-row-help">Required before the settings below take effect. Only applies to the same trusted subset of DRM sources as the Kodi bridge: Sling, NBC TVE, PBS, Amazon Prime (free), DirecTV Stream, Vidaa, Philo, Roku.</div>
         </div>
         <div class="toggle-row-control">
           <label class="toggle-switch">
@@ -30,11 +31,23 @@
                  placeholder="192.168.1.50" value="{{ fc_player_ip }}">
           <div class="help">adb port (<code>:5555</code>) is derived automatically.</div>
         </div>
+        <div class="field field-full">
+          <label for="fc-player-encoder-url">Capture/encoder stream URL</label>
+          <input type="text" id="fc-player-encoder-url"
+                 placeholder="http://192.168.1.50:8089/devices/ANY/channels/70092/stream.mpg"
+                 value="{{ fc_player_encoder_url }}">
+          <div class="help">Where a bridged channel plays from once the device is triggered. With Channels DVR's native <code>capture://</code> source, this is that channel's own stream URL: <code>http://&lt;host&gt;:8089/devices/ANY/channels/&lt;guide number&gt;/stream.mpg</code>.</div>
+        </div>
       </div>
       <div class="field-actions">
         <span class="save-status" id="fc-player-status"></span>
         <button class="btn btn-secondary" onclick="testFcPlayer()">Test connection</button>
         <button class="btn btn-primary" onclick="saveFcPlayerSettings()">Save</button>
       </div>
+      {% if fc_player_configured %}
+      <div class="help" style="margin-top:12px">Add this feed to Channels DVR from the <a href="/admin/feeds">Feeds</a> page.</div>
+      {% else %}
+      <div class="help" style="color:var(--warning-soft);margin-top:12px">Configure the fields above (and enable the bridge) to get this feed's M3U/EPG URLs.</div>
+      {% endif %}
     </div>
   </div>

@@ -245,6 +245,8 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_enabled BOOLEAN NOT NULL DEFAULT 0"))
             if "fc_player_bridge_adb_address" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_adb_address TEXT"))
+            if "fc_player_bridge_encoder_url" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_encoder_url TEXT"))
 
         if "sources" in tables:
             src_cols = {

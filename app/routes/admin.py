@@ -1343,6 +1343,11 @@ def feeds():
                                and app_settings.effective_kodi_bridge_adb_address()
                                and app_settings.effective_kodi_bridge_encoder_url()
                            ),
+                           fc_player_enabled=bool(
+                               app_settings.fc_player_bridge_enabled
+                               and app_settings.effective_fc_player_bridge_adb_address()
+                               and app_settings.effective_fc_player_bridge_encoder_url()
+                           ),
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
@@ -1437,6 +1442,12 @@ def settings():
                            ),
                            fc_player_enabled=bool(app_settings.fc_player_bridge_enabled),
                            fc_player_ip=_fc_player_ip_display(app_settings.effective_fc_player_bridge_adb_address()),
+                           fc_player_encoder_url=app_settings.effective_fc_player_bridge_encoder_url() or '',
+                           fc_player_configured=bool(
+                               app_settings.fc_player_bridge_enabled
+                               and app_settings.effective_fc_player_bridge_adb_address()
+                               and app_settings.effective_fc_player_bridge_encoder_url()
+                           ),
                            tve_provider_choices=tve_provider_choices,
                            tve_account=tve_account.to_safe_dict() if tve_account else {
                                'provider_id': 'mvpd',
