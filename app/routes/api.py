@@ -3201,6 +3201,17 @@ def _get_playback_info(ch, fast_mode=True):
         elif _settings.drm_bridge_enabled and (_settings.effective_prismcast_url() or '').strip():
             play_url = f'/play/prismcast/{ch.id}.ts'
 
+    # True exactly when the URL the watch page will actually use
+    # (info.get('preview_url') or info.get('play_url')) is the fc-player bridge URL —
+    # i.e. this specific channel has no dedicated preview-proxy route, so /watch falls
+    # through to the same trigger-the-device path Channels DVR uses. The watch page
+    # uses this to know whether to send its "still watching" heartbeat (see
+    # fc_player_bridge.note_web_heartbeat) — Channels DVR's own activity polling has
+    # no visibility into someone watching through our own browser page instead.
+    is_fc_player_bridge = bool(
+        not preview_url and play_url and play_url.startswith('/play/fc-player/')
+    )
+
     return {
         'stream_type': stream_type,
         'preview_url': preview_url,
@@ -3208,6 +3219,7 @@ def _get_playback_info(ch, fast_mode=True):
         'playback_mode': playback_mode,
         'license_url': license_url,
         'needs_detection': needs_detection,
+        'is_fc_player_bridge': is_fc_player_bridge,
     }
 
 
@@ -5871,6 +5883,8 @@ def app_settings():
             row.fc_player_bridge_adb_address = f'{_fcp_host}:5555' if _fcp_host else None
         if 'fc_player_encoder_url' in data:
             row.fc_player_bridge_encoder_url = _normalize_server_url(data['fc_player_encoder_url'], default_port=None)
+        if 'fc_player_idle_stop_enabled' in data:
+            row.fc_player_bridge_idle_stop_enabled = bool(data['fc_player_idle_stop_enabled'])
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:
@@ -5900,6 +5914,7 @@ def app_settings():
         'fc_player_enabled': bool(row.fc_player_bridge_enabled),
         'fc_player_ip': _fc_player_ip_display,
         'fc_player_encoder_url': row.effective_fc_player_bridge_encoder_url() or '',
+        'fc_player_idle_stop_enabled': bool(row.fc_player_bridge_idle_stop_enabled),
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
@@ -5942,6 +5957,24 @@ def test_fc_player():
             'warning': True,
             'message': f'{message} Encoder/capture stream URL is not reachable — bridged channels will fail until that stream is up.',
         })
+
+
+@api_bp.route('/fc-player/heartbeat', methods=['POST'])
+def fc_player_heartbeat():
+    """Periodic "still watching" ping from the /watch page for a channel that fell
+    through to the fc-player bridge path (app/templates/watch.html). Channels DVR's
+    own activity polling has zero visibility into someone watching through our own
+    browser page instead of through Channels DVR, so this is the idle-stop
+    watchdog's other signal — see fc_player_bridge.note_web_heartbeat. Always
+    best-effort and cheap: no-ops safely whether or not idle-stop is even enabled,
+    so the /watch page never needs to know that detail."""
+    from .. import fc_player_bridge
+    data = request.get_json(silent=True) or {}
+    source = (data.get('source') or '').strip()
+    channel_id = (data.get('channel_id') or '').strip()
+    if source and channel_id:
+        fc_player_bridge.note_web_heartbeat(f'{source}:{channel_id}')
+    return ('', 204)
 
 
 @api_bp.route('/settings/gracenote-auto-clear', methods=['POST'])

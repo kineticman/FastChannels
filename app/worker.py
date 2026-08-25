@@ -3647,6 +3647,18 @@ if __name__ == '__main__':
                           id='directv_token_watchdog', max_instances=1, coalesce=True,
                           misfire_grace_time=300)
 
+        def _scheduled_fc_player_idle_watchdog():
+            from app import fc_player_bridge
+            try:
+                with flask_app.app_context():
+                    fc_player_bridge.check_idle_and_stop()
+            except Exception as e:
+                logger.warning('[fc-player] idle-stop watchdog check failed: %s', e)
+
+        scheduler.add_job(_scheduled_fc_player_idle_watchdog, 'interval', seconds=45,
+                          id='fc_player_idle_watchdog', max_instances=1, coalesce=True,
+                          misfire_grace_time=60)
+
         def _scheduled_remote_gracenote_refresh():
             from app.gracenote_map import fetch_remote_gracenote_map
             with flask_app.app_context():

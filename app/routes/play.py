@@ -4798,6 +4798,7 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
 
     triggered = fc_player_bridge.trigger_channel(
         manifest_url, license_url, name=channel.name or 'FastChannels',
+        channel_key=f'{source_name}:{channel_id}',
     )
     logger.info(
         '[fc-player] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s triggered=%s -> encoder',
@@ -4911,6 +4912,7 @@ def watch(channel_id):
         request_id=getattr(g, 'request_id', ''),
         max_height=max_height,
         live_edge_sync=bool(channel.source and channel.source.name == 'philo'),
+        is_fc_player_bridge=info.get('is_fc_player_bridge', False),
     ))
     resp.headers['Cache-Control'] = 'no-store'
     return resp

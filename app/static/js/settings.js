@@ -232,6 +232,11 @@ async function saveFcPlayerSettings() {
   if (ok) setTimeout(() => location.reload(), 700);
 }
 
+async function saveFcPlayerIdleStopToggle() {
+  const enabled = document.getElementById('fc-player-idle-stop-enabled').checked;
+  await saveSettings({fc_player_idle_stop_enabled: enabled}, 'fc-player-status');
+}
+
 async function testFcPlayer() {
   const statusEl = document.getElementById('fc-player-status');
   statusEl.textContent = 'Testing…';

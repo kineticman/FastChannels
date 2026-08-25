@@ -234,6 +234,11 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_adb_address TEXT"))
             if "fc_player_bridge_encoder_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_encoder_url TEXT"))
+            if "fc_player_bridge_idle_stop_enabled" not in cols:
+                # Default off — needs Channels DVR (for the activity signal) and/or the
+                # FastChannels web player (for the heartbeat signal); neither is guaranteed
+                # to be how a given install's viewers actually watch bridged channels.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_idle_stop_enabled BOOLEAN NOT NULL DEFAULT 0"))
 
         if "sources" in tables:
             src_cols = {

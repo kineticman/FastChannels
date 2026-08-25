@@ -44,6 +44,26 @@
         <button class="btn btn-secondary" onclick="testFcPlayer()">Test connection</button>
         <button class="btn btn-primary" onclick="saveFcPlayerSettings()">Save</button>
       </div>
+      <div class="toggle-row" style="margin-top:12px">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Stop playback when nobody's watching</div>
+          <div class="toggle-row-help">
+            Detects idle bridged channels two ways: Channels DVR's own activity status, and a heartbeat
+            from FastChannels' own <code>/watch</code> page while it's open. After ~5 minutes with neither
+            signal, the device is stopped. This can't see a third-party client (Plex/Threadfin, a bare VLC
+            playlist, etc.) pointed directly at the M3U — only enable this if Channels DVR and/or the
+            FastChannels web player are the only ways bridged channels get watched.
+            {% if not channels_dvr_url %}<strong>Channels DVR URL isn't configured</strong> — the DVR-activity signal won't work until it is (the <code>/watch</code> heartbeat still will).{% endif %}
+          </div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="fc-player-idle-stop-enabled" {% if fc_player_idle_stop_enabled %}checked{% endif %}
+                   onchange="saveFcPlayerIdleStopToggle()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
       {% if fc_player_configured %}
       <div class="help" style="margin-top:12px">Add this feed to Channels DVR from the <a href="/admin/feeds">Feeds</a> page.</div>
       {% else %}

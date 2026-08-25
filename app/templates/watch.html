@@ -112,6 +112,9 @@
     const MAX_HEIGHT    = {{ max_height | default(0) | tojson }};
     const LIVE_EDGE_SYNC = {{ live_edge_sync | default(false) | tojson }};
     const WATCH_DEBUG_URL = {{ url_for('play.watch_debug', channel_id=channel.id) | tojson }};
+    const IS_FC_PLAYER_BRIDGE = {{ is_fc_player_bridge | default(false) | tojson }};
+    const FC_PLAYER_SOURCE     = {{ (channel.source.name if channel.source else '') | tojson }};
+    const FC_PLAYER_CHANNEL_ID = {{ (channel.source_channel_id or '') | tojson }};
   </script>
   {#- The default compiled build strips shaka.log entirely (it's a no-op), so it can
       never explain *why* Shaka did something. In debug mode load the debug build,
@@ -346,6 +349,26 @@
     });
 
     initPlayer();
+
+    // FastChannels Player idle-stop watchdog's other signal (app/fc_player_bridge.py's
+    // note_web_heartbeat): Channels DVR's own activity polling has no visibility into
+    // someone watching this exact channel through our own /watch page instead of
+    // through Channels DVR, so ping while the tab stays open on a bridged channel.
+    // Best-effort — a failed ping just means the next one (or DVR's own signal) covers
+    // it; never worth surfacing to the viewer.
+    if (IS_FC_PLAYER_BRIDGE && FC_PLAYER_SOURCE && FC_PLAYER_CHANNEL_ID) {
+      const sendFcPlayerHeartbeat = () => {
+        fetch('/api/fc-player/heartbeat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({source: FC_PLAYER_SOURCE, channel_id: FC_PLAYER_CHANNEL_ID}),
+          keepalive: true,
+        }).catch(() => {});
+      };
+      sendFcPlayerHeartbeat();
+      const fcPlayerHeartbeatTimer = window.setInterval(sendFcPlayerHeartbeat, 20000);
+      window.addEventListener('pagehide', () => window.clearInterval(fcPlayerHeartbeatTimer));
+    }
   </script>
 </body>
 </html>

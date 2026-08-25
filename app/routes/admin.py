@@ -1401,6 +1401,7 @@ def settings():
                            fc_player_enabled=bool(app_settings.fc_player_bridge_enabled),
                            fc_player_ip=_fc_player_ip_display(app_settings.effective_fc_player_bridge_adb_address()),
                            fc_player_encoder_url=app_settings.effective_fc_player_bridge_encoder_url() or '',
+                           fc_player_idle_stop_enabled=bool(app_settings.fc_player_bridge_idle_stop_enabled),
                            fc_player_configured=bool(
                                app_settings.fc_player_bridge_enabled
                                and app_settings.effective_fc_player_bridge_adb_address()
