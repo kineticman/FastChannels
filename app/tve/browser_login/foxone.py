@@ -19,6 +19,7 @@ from app.tve.browser_login.common import (
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
+    _autofill_xfinity_credentials,
     _is_browser_death,
     _url_for_log,
     _gateway_url_for_log,
@@ -178,10 +179,8 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
                     )
             # See _settle_after_mvpd_navigation's docstring: a
             # page.screenshot() call during Adobe/YouTubeTV's still-in-
-            # flight SAML bounce chain silently cancels it. FOX One never
-            # calls _try_autofill_credentials (polls
-            # scraper._foxone_mvpd_finish() instead), so this is the only
-            # place that can protect its first screenshot.
+            # flight SAML bounce chain silently cancels it. This is the
+            # only place that can protect its first screenshot.
             settled = _settle_after_mvpd_navigation(
                 page, set_status=set_status,
                 respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
@@ -217,6 +216,11 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
                     'Google rejected the saved browser session. Use “Sign in with Google” again, then retry.',
                 )
                 return
+            if account.username and account.password and mso_id == 'Comcast_SSO':
+                _autofill_xfinity_credentials(
+                    page, account.username, account.password, r=r,
+                    stop_key=MVPD_BROWSER_LOGIN_STOP_KEY, input_key=MVPD_BROWSER_LOGIN_INPUT_KEY,
+                )
             set_status('running', 'Signing in to FOX One…', landing_url)
 
             wait_started = time.monotonic()
