@@ -89,6 +89,19 @@ appears only after a second attempt.
 > especially after an update. If the connection later stops working, check the
 > TV screen for a new authorization prompt.
 
+> **Gotcha — each adb client needs its own approval:** ADB authorization is
+> per-key, not per-device-config. Approving the prompt from your own computer
+> (step 6 above) does **not** approve FastChannels itself — the app makes its
+> own adb connection from inside its Docker container, using a different key,
+> and needs its own separate approval the first time it connects (and again any
+> time Fire OS drops it). You'll see this as `adb: device unauthorized. This
+> adb server's $ADB_VENDOR_KEYS is not set` in logs, or an install/test action
+> in the admin UI just hanging or failing. Fix: watch the TV screen right after
+> triggering the action from FastChannels (not from a manual `adb connect`) and
+> approve the prompt that appears. If you're not physically at the TV (e.g.
+> viewing it through a capture/bridge feed), you'll need someone there, or to
+> wait until you can see the screen — there's no way to approve this remotely.
+
 ## 3. Configure FastChannels
 
 In the FastChannels admin interface, go to **Settings → FastChannels Player**
@@ -190,6 +203,15 @@ The capture pass-through uses MPEG-TS.
 - Confirm that ADB debugging is still enabled.
 - Check the TV screen for a new authorization prompt.
 - Run `adb connect <device-ip>:5555` again.
+
+### device unauthorized / `$ADB_VENDOR_KEYS is not set`
+
+This means the TV has not approved *this particular* adb client yet — usually
+FastChannels itself, connecting from inside its own container with its own
+key, separate from any adb key on your PC. Trigger the install/test action
+again and watch the TV screen for the authorization prompt, then approve it.
+You must be able to see the screen when this happens; it cannot be approved
+after the fact or from a capture/bridge feed.
 
 ## Advanced: Build the app from source
 
