@@ -1,135 +1,211 @@
 # FastChannels Player setup (experimental)
 
-FastChannels Player lets DRM channels that need real Widevine decode (Sling, PBS,
-Amazon Prime Free, Vidaa, Philo, Roku, NBC TVE, DirecTV Stream) play through a real
-Fire TV / Android TV device, captured back off its HDMI output and re-published as a
-normal channel — no browser/PrismCast bridge needed for these sources. It's the
-FastChannels-owned successor to an earlier Kodi-based version of this same idea; the
-architecture (adb-triggered device, HDMI capture, re-ingest) is unchanged, the app
-driving playback is now ours instead of Kodi.
+FastChannels Player lets supported DRM channels play through a Fire TV or
+Android TV device. The device's HDMI output is captured and sent back to
+Channels DVR as a normal channel.
 
-This is a hardware-and-software setup with several moving pieces, not a toggle. Follow
-the steps in order.
+This is an experimental hardware-and-software setup with several parts. Follow
+the steps below in order.
 
-## 1. Set up your HDMI capture card first
+## Before you begin
 
-FastChannels doesn't capture video itself — it triggers playback on a device and
-expects something else (usually Channels DVR's own `capture://` support) to already be
-grabbing that device's HDMI output and re-serving it as a stream. Set this up and
-confirm it works **before** touching FastChannels at all; everything below assumes you
-already have a working capture URL.
+You will need:
 
-See the first two posts in the community thread for the walkthrough:
+- A dedicated Fire TV or Android TV device
+- A compatible HDMI capture device
+- A working capture source in Channels DVR
+- ADB access to the Fire TV or Android TV device
+- The FastChannels Player app
+
+FastChannels Player currently supports these sources:
+
+- Sling
+- PBS
+- Amazon Prime Free
+- Vidaa
+- Philo
+- Roku
+- NBC TVE
+- DirecTV Stream
+
+FastChannels does not capture the video itself. It starts playback on the Fire
+TV or Android TV device, while your existing HDMI capture setup brings the
+video back into Channels DVR.
+
+## 1. Set up and test HDMI capture
+
+Set up your HDMI capture device before configuring FastChannels Player. The
+capture source must already be working in Channels DVR.
+
+For a capture setup walkthrough, see the first two posts here:
 <https://community.getchannels.com/t/fastchannels-fast-channels-aggregator-manager/45986/2671>
 
-Once your capture source shows up as a device in Channels DVR, get its direct stream
-URL from the DVR admin UI itself:
+Once the capture source appears as a device in Channels DVR:
 
-1. Go to the capture source's card in Channels DVR and click **Manage → Export →
-   Copy M3U**.
-2. Download that M3U and open it in a text editor. It'll have one entry, shaped like:
-   ```
-   #EXTINF:-1 channel-id="70092" tvg-chno="70092" ... ,Your Capture Channel Name
+1. Find the capture source card in the Channels DVR admin interface.
+2. Select **Manage → Export → Copy M3U**.
+3. Download the M3U and open it in a text editor.
+4. Copy the full stream URL on the second line. It should look similar to:
+
+   ```text
    http://<host>:8089/devices/<YourDevice>/channels/<N>/stream.mpg?format=ts&codec=copy
    ```
-3. That second line — the full URL including the `?format=ts&codec=copy` — is what you
-   want. Confirm it's really live by pasting it into a browser or `curl`ing it directly;
-   it should immediately start returning video, not redirect to another playlist.
 
-**Important — this must be a direct stream URL, not a playlist.** The capture
-source's own device page also exposes a `.../channels.m3u` URL (no `?format=ts`, no
-specific channel number) — that's a *playlist listing* your channels, not a stream, and
-using it here will silently break playback: Channels DVR will time out with "Tuner
-Unreachable" trying to tune through it later. Confirmed live 2026-08-25 — the direct
-`/channels/<N>/stream.mpg?format=ts&codec=copy` URL is correct; the `channels.m3u` one
-is not.
+5. Test the URL by opening it in a browser or media player. It should begin
+   returning video without redirecting to another playlist.
 
-Keep the URL from step 2; it's the **Capture/encoder stream
-URL** setting below.
+Save this URL. You will enter it as the **Capture/encoder stream URL** later.
 
-## 2. Enable ADB debugging on the Fire TV / Android TV device
+> **Important:** Use the direct URL containing
+> `/channels/<N>/stream.mpg`. Do not use the device's `channels.m3u` URL.
+> That URL is only a channel list and can cause a **Tuner Unreachable** error.
 
-FastChannels controls playback entirely over adb — there's no on-device UI to touch
-after this step.
+## 2. Enable ADB debugging
 
-1. On the device: **Settings → My Fire TV (or Device) → About**, then click the
-   device/build name **7 times** until it says "You are now a developer."
-2. Back out one screen to **Developer Options**, and turn on:
+FastChannels uses ADB to control playback on the Fire TV or Android TV device.
+
+1. On the device, open **Settings → My Fire TV** (or **Device**) → **About**.
+2. Select the device or build name seven times, until the developer message
+   appears.
+3. Go back one screen and open **Developer Options**.
+4. Enable:
    - **ADB debugging**
-   - **Apps from Unknown Sources** (needed to sideload the player app in the next step)
-3. Find the device's IP address (same screen, or **Settings → My Fire TV → About →
-   Network**) — you'll need it for both installing the app and for FastChannels'
-   settings.
-4. From a machine that can reach the device on your network:
+   - **Apps from Unknown Sources**
+5. Find the device's IP address under **Settings → My Fire TV → About →
+   Network**.
+6. From a computer on the same network, run:
+
    ```bash
    adb connect <device-ip>:5555
    ```
-   Accept the on-screen "Allow USB debugging?" prompt on the TV, checking **Always
-   allow from this computer**. If you don't see the prompt, try the `adb connect`
-   again — it sometimes only appears on a second attempt.
 
-**Known gotcha:** Fire OS can silently revert this authorization even with "always
-allow" checked — usually after an update. If FastChannels' Test Connection button (or
-the idle-stop watchdog, if enabled) starts timing out, check the device screen for a
-fresh authorization prompt before assuming something else broke.
+7. When the authorization prompt appears on the TV, select **Always allow from
+   this computer**, then approve it.
 
-## 3. Install the FastChannels Player app
+If the prompt does not appear, run the connection command again. It sometimes
+appears only after a second attempt.
 
-The entire app is one screen with no UI to speak of — everything is driven remotely.
+> **Fire TV note:** Fire OS may occasionally remove the ADB authorization,
+> especially after an update. If the connection later stops working, check the
+> TV screen for a new authorization prompt.
 
-**Once a release is published** (not yet, as of this doc): download the latest APK
-from <https://github.com/kineticman/FastChannels/releases> and install it:
+## 3. Configure FastChannels
+
+In the FastChannels admin interface, go to **Settings → FastChannels Player**
+and complete these fields:
+
+- **Enable FastChannels Player:** Turns the feature on.
+- **Firestick / Android TV IP address:** Enter the IP address found in step 2.
+  FastChannels adds ADB port `5555` automatically.
+- **Capture/encoder stream URL:** Enter the direct stream URL saved in step 1.
+- **Stop playback when nobody's watching:** Optional. When enabled, playback
+  stops after about five minutes without a confirmed viewer.
+- **Show captions when available:** Optional. Renders an English subtitle/CC
+  track when the stream advertises one.
+
+The automatic stop option detects viewers using Channels DVR's activity status
+or the FastChannels `/watch` page. It cannot detect a third-party player
+connected directly to the M3U. Leave this option off if you watch that way.
+
+Click **Save** before continuing to the next step — the device IP must already
+be saved for the install button below to work.
+
+## 4. Install FastChannels Player
+
+The player app does not require any on-device setup after installation. It is
+controlled remotely by FastChannels.
+
+### Install from the admin UI (recommended)
+
+Click **Install FastChannels Player** on the same settings card. This
+adb-installs a release APK that's already bundled into the FastChannels
+Docker image — no download or manual `adb install` needed. It requires the
+device IP from step 3 to already be saved, and ADB debugging to already be
+enabled on the device (step 2).
+
+At the time of writing, no official release has been published yet, so no APK
+is bundled and this button will report it's unavailable. Until then, use one
+of the fallback methods below.
+
+### Fallback: install a downloaded APK
+
+If a release is available but not bundled into your running image, download
+the APK from <https://github.com/kineticman/FastChannels/releases> and install
+it directly:
+
 ```bash
 adb -s <device-ip>:5555 install -r FastChannelsPlayer.apk
 ```
 
-**Until then**, build it from source:
+### Fallback: build from source
+
+If no release has been published yet, build the app yourself using the
+advanced instructions at the end of this guide.
+
+Once the app is installed, click **Test connection** on the settings card.
+FastChannels will check:
+
+- Whether the device is reachable through ADB
+- Whether FastChannels Player is installed
+- Whether the capture stream URL is reachable
+
+All checks should be green before continuing.
+
+## 5. Add the feed to Channels DVR
+
+Open `/admin/feeds` in FastChannels. Each configured feed will include a
+**FastChannels Player output** section with ready-to-use M3U and EPG URLs.
+
+Add those URLs to Channels DVR as a custom M3U and XMLTV source, just as you
+would with another FastChannels feed. The output includes only the supported
+DRM sources, not your entire channel catalog.
+
+## Troubleshooting
+
+### Tuner Unreachable
+
+Confirm that the capture URL points directly to a specific channel and contains:
+
+```text
+/channels/<N>/stream.mpg
+```
+
+Do not use the device's `channels.m3u` playlist URL.
+
+### Detected MPEG-TS instead of HLS playlist
+
+Open the capture source's settings in Channels DVR and set its stream format to
+**MPEG-TS/TS**, not HLS. The capture pass-through uses MPEG-TS.
+
+### ADB connection times out
+
+- Make sure the Fire TV or Android TV device is online and its IP address has
+  not changed.
+- Confirm that ADB debugging is still enabled.
+- Check the TV screen for a new authorization prompt.
+- Run `adb connect <device-ip>:5555` again.
+
+## Advanced: Build the app from source
+
+This section is only needed until an official APK is published, or if you want
+to build your own version.
+
+From the FastChannels project directory, run:
+
 ```bash
 cd app/fc_player
-JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew assembleRelease  # or assembleDebug
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew assembleRelease
 adb -s <device-ip>:5555 install -r app/build/outputs/apk/release/app-release.apk
 ```
-(The `JAVA_HOME` override is only needed if your machine's default JDK is one that
-ships without a compiler, e.g. a JRE-only OpenJDK 21 install — check `java -version`
-first and skip it if you already have a working JDK on `PATH`.)
 
-Every future release uses the **same signing key**, so `adb install -r` over an
-existing install works as a normal in-place update — you never need to uninstall
-first, except when switching between a self-built debug APK and an official release
-APK (different keys, Android refuses to treat that as an update — uninstall once, then
-future installs from the same source update cleanly).
+You may use `assembleDebug` instead of `assembleRelease` for a debug build.
 
-## 4. Configure FastChannels
+The `JAVA_HOME` override is only necessary when the system's default Java
+installation does not include a compiler. If a working JDK is already on your
+`PATH`, you can omit it.
 
-In FastChannels' admin UI, go to **Settings → FastChannels Player**:
-
-- **Enable FastChannels Player** — turns the feature on.
-- **Firestick / Android TV IP address** — the device's IP from step 2 (adb port
-  `:5555` is derived automatically).
-- **Capture/encoder stream URL** — the working capture URL from step 1.
-- **Stop playback when nobody's watching** (optional) — after ~5 minutes with no
-  confirmed viewer (via Channels DVR's own activity status, or FastChannels'
-  `/watch` page heartbeat), the device is stopped automatically. This can't see a
-  third-party client pointed directly at the M3U — only enable it if Channels DVR
-  and/or FastChannels' own web player are the only ways these channels get watched.
-
-Click **Test connection** — it checks adb reachability, whether the player app is
-installed, and whether the capture/encoder URL is actually reachable. All green means
-a bridged channel should really work end to end, not just that the device is online.
-
-**One more Channels DVR-side check, if playback fails with "Detected MPEG-TS instead
-of HLS playlist" or "Tuner Unreachable":** the capture source's stream **format**
-setting in Channels DVR needs to be MPEG-TS/TS, not HLS — this capture pass-through is
-always raw MPEG-TS. If that source's format is set to HLS in Channels DVR, flip it to
-MPEG-TS/TS on the source's own settings page; once it is, the plain stream URL from
-step 1 works with or without the `?format=ts&codec=copy` query string. Confirmed live
-2026-08-25 — this is a Channels DVR source setting, not anything on the FastChannels
-side.
-
-## 5. Get the feed into your client
-
-Once configured, `/admin/feeds` shows a **FastChannels Player output** section per
-feed with ready-to-use M3U + EPG URLs, scoped to just the trusted DRM sources listed
-above (not your whole channel catalog). Add those URLs to Channels DVR (or another
-client) as a custom M3U/XMLTV source the same way you would any other FastChannels
-feed.
+Official releases use the same signing key, so future releases can normally be
+installed over the existing app with `adb install -r`. Android will not install
+an official release over a self-built debug version because the signing keys
+differ. In that situation, uninstall the debug version once, install the
+official release, and use in-place updates afterward.
