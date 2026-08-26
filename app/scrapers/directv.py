@@ -760,8 +760,7 @@ def capture_directv_auth_cffi(
         raise DirectvAuthError('curl_cffi unavailable')
 
     def _status(state: str, detail: str = '') -> None:
-        level = logger.info if state != 'running' else logger.debug
-        level('[directv-auth] %s %s', state, detail)
+        logger.debug('[directv-auth] %s %s', state, detail)
         if on_status:
             try:
                 on_status(state, detail)
@@ -976,8 +975,7 @@ def capture_directv_auth(
     is best-effort (metadata/EPG scraping doesn't need it, only playback does).
     """
     def _status(state: str, detail: str = '') -> None:
-        level = logger.info if state != 'running' else logger.debug
-        level('[directv-auth] %s %s', state, detail)
+        logger.debug('[directv-auth] %s %s', state, detail)
         if on_status:
             try:
                 on_status(state, detail)
@@ -1245,7 +1243,7 @@ def run_directv_auth(
     r = _redis.from_url(redis_url)
 
     _write_status(r, source_id, 'starting', 'Signing in…')
-    logger.info('[directv-auth] starting for source_id=%s', source_id)
+    logger.debug('[directv-auth] starting for source_id=%s', source_id)
 
     def _on_status(state: str, detail: str) -> None:
         if state == 'running':
@@ -1267,6 +1265,8 @@ def run_directv_auth(
                 from app import create_app
                 app = create_app()
 
+        persisted = False
+        queued = False
         try:
             with app.app_context():
                 from ..extensions import db
@@ -1298,7 +1298,7 @@ def run_directv_auth(
                         cfg['auth_method'] = result['auth_method']
                     source.config = cfg
                     db.session.commit()
-                    logger.info('[directv-auth] persisted session to source config source_id=%s', source_id)
+                    persisted = True
 
                     # A prior scrape may have hit the stale token, skipped itself,
                     # and left DirecTV waiting for the next scheduled run (up to
@@ -1313,10 +1313,7 @@ def run_directv_auth(
                                 'app.worker.run_scraper', source.name,
                                 job_timeout=3600, job_id=f'scrape-{source.name}',
                             )
-                            logger.info(
-                                '[directv-auth] queued follow-up scrape after session refresh source_id=%s',
-                                source_id,
-                            )
+                            queued = True
                     except Exception:
                         logger.warning(
                             '[directv-auth] failed to queue follow-up scrape after refresh',
@@ -1324,6 +1321,13 @@ def run_directv_auth(
                         )
         except Exception as exc:
             logger.error('[directv-auth] failed to persist result directly: %s', exc)
+
+        summary = 'captured session'
+        if persisted:
+            summary += ', persisted to config'
+        if queued:
+            summary += ', queued follow-up scrape'
+        logger.info('[directv-auth] source_id=%s success — %s', source_id, summary)
 
         r.set(_result_key(source_id), json.dumps(result), ex=_RESULT_TTL)
         _write_status(r, source_id, 'success', 'Logged in — session captured.')
