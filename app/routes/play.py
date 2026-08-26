@@ -3424,11 +3424,38 @@ def philo_dash_proxy(channel_id: str):
     if not scraper_cls:
         return _unavailable_response()
     scraper = scraper_cls(config=channel.source.config or {})
+    r = None
     try:
-        dash_url = scraper.resolve(channel.stream_url)
-    except Exception as e:
-        logger.warning('[philo-dash] resolve failed for %s: %s', raw_id[:40], e)
-        return _unavailable_response()
+        for attempt in range(2):
+            try:
+                dash_url = scraper.resolve(channel.stream_url)
+            except Exception as e:
+                logger.warning('[philo-dash] resolve failed for %s: %s', raw_id[:40], e)
+                return _unavailable_response()
+
+            if not dash_url or not dash_url.startswith('http'):
+                logger.warning('[philo-dash] no DASH URL for %s', raw_id[:40])
+                return _unavailable_response()
+
+            try:
+                r = _requests.get(dash_url, timeout=10, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                                  '(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+                    'Origin': 'https://www.philo.com',
+                    'Referer': 'https://www.philo.com/',
+                })
+                r.raise_for_status()
+                break
+            except Exception as e:
+                logger.warning('[philo-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
+                r = None
+                if attempt == 0:
+                    # A cached playback session can go stale server-side (Philo
+                    # returns 410 Gone) well before our own _DASH_TTL expires it —
+                    # mint a fresh session instead of replaying the same dead URL
+                    # for up to 6 more hours.
+                    scraper.expire_cached_dash(raw_id)
+                    continue
     finally:
         # Persist the dash_cache (auth token) so the license proxy — a separate
         # request — can read the per-session token just resolved here.
@@ -3443,20 +3470,7 @@ def philo_dash_proxy(channel_id: str):
             except Exception:
                 pass
 
-    if not dash_url or not dash_url.startswith('http'):
-        logger.warning('[philo-dash] no DASH URL for %s', raw_id[:40])
-        return _unavailable_response()
-
-    try:
-        r = _requests.get(dash_url, timeout=10, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                          '(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
-            'Origin': 'https://www.philo.com',
-            'Referer': 'https://www.philo.com/',
-        })
-        r.raise_for_status()
-    except Exception as e:
-        logger.warning('[philo-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
+    if r is None:
         return _unavailable_response()
 
     # Philo's dynamic MPD includes a <Location> pointing back to Philo's
