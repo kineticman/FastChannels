@@ -724,18 +724,18 @@
       </details>
 
       <details class="native-endpoints">
-        <summary>FastChannels Player output <span class="badge-pill pill-beta">Experimental Beta</span>{% if fc_player_enabled and split.get('drm_bridge_count', 0) %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ split.get('drm_bridge_count', 0) }} channel{{ 's' if split.get('drm_bridge_count', 0) != 1 else '' }}){% endif %}</span></summary>
+        <summary>FastChannels Android Bridge Channels <span class="badge-pill pill-beta">Experimental Beta</span>{% if fc_player_enabled and split.get('drm_bridge_count', 0) %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ split.get('drm_bridge_count', 0) }} channel{{ 's' if split.get('drm_bridge_count', 0) != 1 else '' }}){% endif %}</span></summary>
         <div class="feed-urls" style="margin-top:0.5rem">
           {% if fc_player_enabled %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">FastChannels Player M3U ({{ split.get('drm_bridge_count', 0) }})</span>
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge M3U ({{ split.get('drm_bridge_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player</span>
             <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player')">Copy</button>
           </div>
           {% if split.get('drm_bridge_gracenote_count', 0) %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">FastChannels Player Gracenote M3U ({{ split.get('drm_bridge_gracenote_count', 0) }})</span>
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge Gracenote M3U ({{ split.get('drm_bridge_gracenote_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote</span>
             <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote')">Copy</button>
@@ -749,7 +749,14 @@
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
           </div>
         </div>
-        <p class="help" style="margin-top:0.5rem">{% if fc_player_enabled %}Every channel uses the same play URL; only trusted-source DRM channels trigger the device — everything else streams direct in the same playlist, same as the regular feed. Gracenote-mapped channels split into their own M3U here too. Import only one per source to avoid duplicate channels. No "Add to Channels DVR" button yet for this one — copy the URLs above and add manually as a custom M3U/EPG source.{% else %}Configure FastChannels Player in Settings (device IP + encoder/capture stream URL) to publish a ready-to-import feed here.{% endif %}</p>
+        {% if fc_player_enabled %}
+        <div style="margin-top:0.6rem">
+          <button class="btn btn-dvr" title="Register this feed's FastChannels Android Bridge output as a custom M3U source in Channels DVR"
+                  onclick='pushFcPlayerToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("drm_bridge_count", 0) }}, {{ split.get("drm_bridge_gracenote_count", 0) }}, this)'
+                  {% if not split.get('drm_bridge_count', 0) and not split.get('drm_bridge_gracenote_count', 0) %}disabled title="No FastChannels Android Bridge channels in this feed"{% endif %}>📺 Add to Channels DVR</button>
+        </div>
+        {% endif %}
+        <p class="help" style="margin-top:0.5rem">{% if fc_player_enabled %}Every channel uses the same play URL; only trusted-source DRM channels trigger the device — everything else streams direct in the same playlist, same as the regular feed. Gracenote-mapped channels split into their own M3U here too. Import only one per source to avoid duplicate channels. The button above registers both as distinct sources (named "… Android Bridge") separate from the standard push.{% else %}Configure FastChannels Player in Settings (device IP + encoder/capture stream URL) to publish a ready-to-import feed here.{% endif %}</p>
       </details>
     </div>
     {% endfor %}
@@ -1552,6 +1559,60 @@ async function pushPrismcastToDvr(id, name, stdCount, gnCount, btn, force = fals
         btn.disabled = false;
         btn.textContent = orig;
         return pushPrismcastToDvr(id, name, stdCount, gnCount, btn, true);
+      } else {
+        alert('Failed: ' + (data.error || `HTTP ${r.status}`));
+      }
+      btn.disabled = false;
+      btn.textContent = orig;
+      return;
+    }
+    btn.textContent = '✓ Added!';
+    btn.style.background = 'var(--success-bg-2)';
+    btn.style.color = 'var(--success-soft)';
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.style.background = '';
+      btn.style.color = '';
+      btn.disabled = false;
+    }, 3000);
+  } catch(e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+// ── Push FastChannels Android Bridge output to Channels DVR ────────────────
+async function pushFcPlayerToDvr(id, name, stdCount, gnCount, btn, force = false) {
+  // Each partition registers as its own DVR source; warn on the larger one.
+  const largest = Math.max(stdCount || 0, gnCount || 0);
+  if (largest > 750 && !force) {
+    const ok = confirm(
+      `${name}'s FastChannels Android Bridge output has ${largest} channels in one source.\n\nChannels DVR usually works best at 750 or fewer.\n\nAdd it anyway?`
+    );
+    if (!ok) return;
+  }
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Adding…';
+  try {
+    const r = await fetch(`/api/feeds/${id}/push-fc-player-to-dvr`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(force || largest > 750 ? {force: true} : {}),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      if (r.status === 400 && data.error?.includes('not configured')) {
+        alert(data.error + '\n\nGo to Settings to configure it.');
+      } else if (r.status === 504 || (r.status === 502 && /could not connect|timed out/i.test(data.error || ''))) {
+        alert('Could not reach Channels DVR.\n\nGo to Settings → Channels DVR and use the Test Connection button to verify your server URL is correct and reachable.\n\nNote: if FastChannels and Channels DVR are on the same machine, use its LAN IP address — not localhost or 127.0.0.1.');
+      } else if (r.status === 502 && data.error) {
+        alert('Channels DVR rejected the request:\n\n' + data.error);
+      } else if (r.status === 409 && data.requires_confirm && !force) {
+        btn.disabled = false;
+        btn.textContent = orig;
+        return pushFcPlayerToDvr(id, name, stdCount, gnCount, btn, true);
       } else {
         alert('Failed: ' + (data.error || `HTTP ${r.status}`));
       }

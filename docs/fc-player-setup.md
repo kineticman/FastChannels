@@ -154,11 +154,15 @@ All checks should be green before continuing.
 ## 5. Add the feed to Channels DVR
 
 Open `/admin/feeds` in FastChannels. Each configured feed will include a
-**FastChannels Player output** section with ready-to-use M3U and EPG URLs.
+**FastChannels Android Bridge Channels** section with ready-to-use M3U and EPG
+URLs, including only the supported DRM sources, not your entire channel
+catalog.
 
-Add those URLs to Channels DVR as a custom M3U and XMLTV source, just as you
-would with another FastChannels feed. The output includes only the supported
-DRM sources, not your entire channel catalog.
+Click **📺 Add to Channels DVR** in that section to register the source(s)
+automatically — Channels DVR is set to the correct MPEG-TS stream format for
+you. If you'd rather add it by hand (or Channels DVR isn't reachable from
+FastChannels), copy the M3U/EPG URLs shown and add them as a custom M3U and
+XMLTV source yourself; see the MPEG-TS note below if you do.
 
 ## Troubleshooting
 
@@ -174,8 +178,10 @@ Do not use the device's `channels.m3u` playlist URL.
 
 ### Detected MPEG-TS instead of HLS playlist
 
-Open the capture source's settings in Channels DVR and set its stream format to
-**MPEG-TS/TS**, not HLS. The capture pass-through uses MPEG-TS.
+Only applies if you added the source to Channels DVR by hand — the **Add to
+Channels DVR** button already sets this correctly. Open the capture source's
+settings in Channels DVR and set its stream format to **MPEG-TS/TS**, not HLS.
+The capture pass-through uses MPEG-TS.
 
 ### ADB connection times out
 
