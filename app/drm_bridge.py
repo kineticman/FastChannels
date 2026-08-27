@@ -19,6 +19,7 @@ from .models import AppSettings
 # source of truth.
 DRM_BRIDGE_TRUSTED_SOURCES = frozenset({
     'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa', 'philo', 'roku',
+    'fubo',
 })
 
 
@@ -35,3 +36,22 @@ def drm_bridge_mode_for(source_name: str) -> bool:
     if source_name not in DRM_BRIDGE_TRUSTED_SOURCES:
         return False
     return bool(settings.fc_player_bridge_enabled)
+
+
+def active_bridge_label(source_name: str) -> str:
+    """Human-readable name(s) of the bridge(s) actually available for this source right
+    now, for log/report messages — so "DRM→bridge" lines don't say "PrismCast" when the
+    channel is really only reachable (or also reachable) via FastChannels Player, or
+    vice versa. Callers should only call this once drm_bridge_mode_for() is already True;
+    it returns 'bridge' as a neutral fallback if neither is actually on (shouldn't happen
+    in practice, but a label bug here must never look like a bridging decision)."""
+    settings = AppSettings.get()
+    prismcast = bool(settings.drm_bridge_enabled)
+    fc_player = source_name in DRM_BRIDGE_TRUSTED_SOURCES and bool(settings.fc_player_bridge_enabled)
+    if prismcast and fc_player:
+        return 'PrismCast + FastChannels Player'
+    if fc_player:
+        return 'FastChannels Player'
+    if prismcast:
+        return 'PrismCast'
+    return 'bridge'

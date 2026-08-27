@@ -49,6 +49,7 @@ _ASSET_URL    = f'{_API}/vapi/asset/v1'
 _TOKEN_TTL    = 60 * 60 * 8   # refresh access token after 8 hours (issued for 10h)
 _EPG_HOURS    = 6              # hours per EPG request window
 _EPG_DAYS     = 7              # days of EPG to fetch
+_DASH_TTL     = 6 * 60 * 60    # Irdeto drm.token JWT is valid ~24h; refresh well before expiry
 _RICH_EPG_HOURS = 24           # metadata enrichment window
 
 # Play-time resolve() forces one real login to rule out a stale entitlement on a
@@ -187,6 +188,13 @@ class FuboScraper(BaseScraper):
     source_category  = 'premium'
     stream_audit_enabled = True
 
+    # Presence of license_url marks the source DRM-capable and enables the generic
+    # PrismCast bridge (worker.py's _bridge_capable check + /play/fubo/license proxy).
+    # NOT all channels are DRM — most FAST channels are plain HLS/AES-128. Only
+    # channels resolve_dash() actually confirms as DASH-capable (see below) get
+    # routed through the bridge; get_license_url() returns None for the rest.
+    license_url = 'https://irdeto.fubo.tv/licenseServer/widevine/v1/FuboTV/license'
+
     config_schema = [
         ConfigField('username', 'Email', required=True,
                     placeholder='you@example.com',
@@ -213,6 +221,8 @@ class FuboScraper(BaseScraper):
         # _claim_forced_relogin): still bounds repeated resolves against other
         # channels within this one instance's lifetime (a scrape/audit run).
         self._forced_relogin = False
+        self._dash_cache: dict[str, dict] = {}
+        self._load_dash_cache()
 
     def _claim_forced_relogin(self) -> bool:
         """Atomically claim the right to force one fresh login to rule out a
@@ -347,7 +357,10 @@ class FuboScraper(BaseScraper):
             if fast_only and 'fast_channel' not in tags_lower:
                 continue
 
-            logo  = ch.get('logoOnDarkUrl') or ch.get('logoOnWhiteUrl') or ''
+            # logoOnWhiteUrl is the real full-color logo (meant for a white background);
+            # logoOnDarkUrl is a white monochrome silhouette (meant for a dark background,
+            # e.g. some are literally named "..._logo_white.png") — prefer color.
+            logo  = ch.get('logoOnWhiteUrl') or ch.get('logoOnDarkUrl') or ''
             desc  = ch.get('description') or ''
             call  = ch.get('callSign') or ''
 
@@ -578,6 +591,129 @@ class FuboScraper(BaseScraper):
         if not stream_url:
             raise RuntimeError(f'Fubo: no stream URL returned for channel {ch_id}')
         return stream_url
+
+    # ── DASH + Widevine (browser/EME → PrismCast bridge) ────────────────────────
+    # resolve()/_extract_stream_url above always requests Fubo's default (HLS)
+    # packaging, which for DRM-protected channels is FairPlay-only — Chrome/EME
+    # can't decrypt it, which is why these channels used to just get disabled.
+    # The SAME content is also available as a CENC DASH manifest (Widevine +
+    # PlayReady, confirmed live 2026-08-27 by diffing a real browser HAR capture
+    # against our own requests) but only when the client advertises DASH support
+    # via x-supported-streaming-protocols — Fubo's web player always sends it,
+    # our scraper never did. Kept entirely separate from the plain resolve()
+    # path/cache so standard (non-bridge) playback is completely unaffected —
+    # most Fubo channels aren't DRM at all, and genuinely non-DRM channels keep
+    # packagingProtocol=hls even with this header (confirmed live), so this
+    # never misroutes a clean channel into the license flow.
+
+    def _load_dash_cache(self) -> None:
+        raw = self.cache.get('dash_cache') or {}
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        for cid, entry in raw.items():
+            if not isinstance(entry, dict):
+                continue
+            cached_at = entry.get('cached_at')
+            if not entry.get('mpd_url') or not isinstance(cached_at, (int, float)):
+                continue
+            if (now - float(cached_at)) >= _DASH_TTL:
+                continue
+            self._dash_cache[cid] = entry
+
+    def _cache_dash(self, cid: str, mpd_url: str, license_url: str | None, token: str | None) -> None:
+        self._dash_cache[cid] = {
+            'mpd_url': mpd_url,
+            'license_url': license_url,
+            'token': token,
+            'cached_at': time.time(),
+        }
+        self._update_cache('dash_cache', self._dash_cache)
+
+    def _cached_dash(self, cid: str) -> dict | None:
+        entry = self._dash_cache.get(cid)
+        if not entry:
+            return None
+        cached_at = entry.get('cached_at')
+        if not entry.get('mpd_url') or not isinstance(cached_at, (int, float)):
+            return None
+        if (time.time() - float(cached_at)) >= _DASH_TTL:
+            self._dash_cache.pop(cid, None)
+            self._update_cache('dash_cache', self._dash_cache)
+            return None
+        return entry
+
+    def resolve_dash(self, raw_url: str, *, allow_cached: bool = True) -> dict:
+        """Resolve a Fubo channel to its CENC DASH+Widevine variant for browser EME
+        playback. Returns {'mpd_url': str|None, 'license_url': str|None} — mpd_url is
+        None when this channel has no DASH variant (genuinely not DRM-protected)."""
+        cid = raw_url.removeprefix('fubo://')
+
+        if allow_cached:
+            cached = self._cached_dash(cid)
+            if cached:
+                return {'mpd_url': cached['mpd_url'], 'license_url': cached.get('license_url')}
+
+        self._ensure_auth()
+        headers = {**self._api_headers, 'x-supported-streaming-protocols': 'hls,dash'}
+        r = self._cffi_request(
+            'GET', _ASSET_URL,
+            params={'channelId': cid, 'type': 'live'},
+            headers=headers,
+            timeout=15,
+        )
+        if not r.ok:
+            raise RuntimeError(f'Fubo DASH resolve failed for channel {cid}: HTTP {r.status_code}')
+        data = r.json()
+        stream = data.get('stream') or {}
+        if (stream.get('packagingProtocol') or '').lower() != 'dash':
+            # Not offered for this channel — genuinely not DRM (or DASH isn't
+            # available for this content pipeline). Not an error.
+            return {'mpd_url': None, 'license_url': None}
+        mpd_url = stream.get('url', '')
+        if not mpd_url:
+            raise RuntimeError(f'Fubo: no DASH URL returned for channel {cid}')
+        drm = data.get('drm') or {}
+        license_url = drm.get('licenseUrl') or None
+        token = drm.get('token') or None
+        self._cache_dash(cid, mpd_url, license_url, token)
+        logger.info('[fubo] resolve_dash %s -> DASH (license=%s)', cid, 'yes' if token else 'no')
+        return {'mpd_url': mpd_url, 'license_url': license_url}
+
+    @classmethod
+    def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
+        # Per-channel and only present once resolve_dash() has actually confirmed
+        # this channel is DASH-capable — returning the bare class-level license_url
+        # as a fallback would attach a URL with no contentId to every non-DRM
+        # channel too (license_url's only other job is the _bridge_capable check
+        # in worker.py, which just needs it non-None at the class level).
+        if channel_id:
+            entry = (config.get('dash_cache') or {}).get(channel_id)
+            if isinstance(entry, dict) and entry.get('license_url'):
+                return entry['license_url']
+        return None
+
+    @classmethod
+    def prepare_license_request(
+        cls, challenge: bytes, config: dict, channel_id: str | None = None, **kwargs
+    ) -> tuple[bytes, dict]:
+        """Attach the per-channel Irdeto Widevine token captured during resolve_dash().
+        NOTE: Authorization: Bearer is the convention Fubo's REST API uses everywhere
+        else; the real Irdeto license exchange itself wasn't observed in the captured
+        HAR (no live CDM available to generate a genuine challenge) — verify against
+        PrismCast before trusting this end-to-end."""
+        headers = {
+            'Origin': 'https://www.fubo.tv',
+            'Referer': 'https://www.fubo.tv/',
+        }
+        token = None
+        if channel_id:
+            entry = (config.get('dash_cache') or {}).get(channel_id)
+            if isinstance(entry, dict):
+                token = entry.get('token')
+        if token:
+            headers['Authorization'] = f'Bearer {token}'
+        return challenge, headers
 
     # ── Internal ──────────────────────────────────────────────────────────────
 

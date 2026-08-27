@@ -563,21 +563,31 @@ def _get_playback_info(ch, fast_mode=True):
              or (ch.disable_reason or '').startswith('DRM'))
     )
 
+    # Fubo DRM channels: same shape as Roku above — the HLS variant is
+    # FairPlay-only, but the same content has a CENC DASH+Widevine variant
+    # (see resolve_dash() in fubo.py). Most Fubo channels are NOT DRM at all.
+    fubo_drm = bool(
+        ch.source and ch.source.name == 'fubo'
+        and (getattr(ch, 'requires_drm_bridge', False)
+             or (ch.disable_reason or '').startswith('DRM'))
+    )
+
     # These sources use AES-128 encrypted TS; Shaka 4.x cannot decrypt via MSE
     # (error 4042). Force native mode so the watch page sets video.src directly
     # and lets the browser's native HLS stack handle decryption.
-    if ch.source and ch.source.name in ('pluto', 'fubo', 'roku', 'discovery_tve') and not roku_drm:
+    if ch.source and ch.source.name in ('pluto', 'fubo', 'roku', 'discovery_tve') and not roku_drm and not fubo_drm:
         playback_mode = 'native'
-    if roku_drm:
+    if roku_drm or fubo_drm:
         playback_mode = 'dash'
 
     license_url = None
     if ch.source:
         from ..scrapers.registry import get as _get_scraper
         _scraper_cls = _get_scraper(ch.source.name)
-        # Roku is DRM-capable per-channel: only DRM-flagged Roku channels use the
-        # license path; plain Roku channels stay native HLS with no license URL.
-        if _scraper_cls and not (ch.source.name == 'roku' and not roku_drm):
+        # Roku/Fubo are DRM-capable per-channel: only DRM-flagged channels use the
+        # license path; plain channels stay native HLS with no license URL.
+        if _scraper_cls and not (ch.source.name == 'roku' and not roku_drm) \
+                and not (ch.source.name == 'fubo' and not fubo_drm):
             from flask import request as _req
             from urllib.parse import quote as _quote
             _base = _req.host_url.rstrip('/')
@@ -586,6 +596,12 @@ def _get_playback_info(ch, fast_mode=True):
                 # resolves the matching MPD. Advertise our proxy before that
                 # request so Shaka has a license server when the MPD loads.
                 license_url = f'{_base}/play/roku/license?channel_id={ch.source_channel_id}'
+            elif ch.source.name == 'fubo' and fubo_drm:
+                # Same reasoning as Roku above: get_license_url() only has
+                # something to return once /play/fubo/<id>/dash.mpd has actually
+                # resolved and cached the per-channel token, which happens after
+                # this preview info is built. Advertise the proxy URL up front.
+                license_url = f'{_base}/play/fubo/license?channel_id={ch.source_channel_id}'
             else:
                 _lu = _scraper_cls.get_license_url(
                     ch.source.config or {},
@@ -674,6 +690,13 @@ def _get_playback_info(ch, fast_mode=True):
     if roku_drm and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/roku/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+
+    # Fubo DRM → the DASH+Widevine variant. Set last (same reasoning as Roku
+    # above) so the earlier generic fubo proxy.m3u8 special-case doesn't win.
+    # Fubo's DASH CDN is CORS-open too, so the route just 302s Shaka.
+    if fubo_drm and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/fubo/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
     # Cox TVE uses XCal/CENC-protected DASH+Widevine for browser playback.
     # The HLS-shaped TVE playlists remain available through /proxy.m3u8 for

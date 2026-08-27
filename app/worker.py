@@ -722,6 +722,14 @@ def _drm_bridge_mode_for(source_name: str) -> bool:
     return drm_bridge_mode_for(source_name)
 
 
+def _active_bridge_label(source_name: str) -> str:
+    """Which bridge(s) a just-flagged channel on this source is actually reachable
+    through right now — PrismCast, FastChannels Player, or both. See
+    drm_bridge.active_bridge_label for details."""
+    from app.drm_bridge import active_bridge_label
+    return active_bridge_label(source_name)
+
+
 def run_stream_audit(source_name: str):
     """
     Stream Audit — resolves every channel (active and previously dead/VOD) via
@@ -829,22 +837,31 @@ def run_stream_audit(source_name: str):
             _redis_audit = None
 
         import json as _json_audit
-        def _audit_progress(done, total_, flagged_=0, dead_=0, vod_=0, errors_=0, skipped_403_=0, phase='checking', not_authorized_=0):
+        def _audit_progress(done, total_, flagged_=0, dead_=0, vod_=0, errors_=0, skipped_403_=0, phase='checking',
+                             not_authorized_=0, cooldown_override: tuple | None = None):
             if not _redis_audit:
                 return
             try:
                 if phase == 'done':
                     _redis_audit.delete(_audit_key)
                 else:
-                    # Surface any active rate-limit cooldown (e.g. Roku 403) so the
-                    # audit modal can show the paused state instead of freezing.
+                    # Surface any active rate-limit cooldown so the audit modal can show
+                    # the paused state instead of freezing. Two sources for this:
+                    #  - a scraper-level cooldown (e.g. Roku 403) the scraper tracks itself
+                    #    across the whole audit run via _cooldown_active/_remaining/_reason
+                    #  - cooldown_override: this loop's own generic per-request 403/429/5xx
+                    #    backoff (see the retry block below) — loop-local, not scraper state,
+                    #    so it's passed in directly as (remaining_seconds, reason) instead.
                     _cd_remaining = None
                     _cd_reason = None
-                    _cd_active = getattr(scraper, '_cooldown_active', None)
-                    if callable(_cd_active) and _cd_active():
-                        _cd_rem_fn = getattr(scraper, '_cooldown_remaining', None)
-                        _cd_remaining = int(_cd_rem_fn()) if callable(_cd_rem_fn) else None
-                        _cd_reason = getattr(scraper, '_cooldown_reason', None)
+                    if cooldown_override:
+                        _cd_remaining, _cd_reason = cooldown_override
+                    else:
+                        _cd_active = getattr(scraper, '_cooldown_active', None)
+                        if callable(_cd_active) and _cd_active():
+                            _cd_rem_fn = getattr(scraper, '_cooldown_remaining', None)
+                            _cd_remaining = int(_cd_rem_fn()) if callable(_cd_rem_fn) else None
+                            _cd_reason = getattr(scraper, '_cooldown_reason', None)
                     _redis_audit.setex(_audit_key, 600, _json_audit.dumps({
                         'phase': phase, 'done': done, 'total': total_,
                         'flagged': flagged_, 'dead': dead_, 'vod': vod_, 'errors': errors_,
@@ -1108,11 +1125,17 @@ def run_stream_audit(source_name: str):
                     # before we decide it's a persistent block.  429/5xx get the full
                     # graduated backoff as before.
                     if r.status_code == 403 and consecutive_skipped_403 < 5:
+                        _audit_progress(i - 1, total, flagged, dead, vod, errors, skipped_403,
+                                         not_authorized_=not_authorized,
+                                         cooldown_override=(10, 'HTTP 403 — geo-block check'))
                         _time.sleep(10)
                     elif r.status_code != 403 and consecutive_skipped_403 < 5:
                         wait = 30 + skipped_403 * 5
                         logger.warning('[audit] %s rate-limited (%d), backing off %ds…',
                                        source_name, r.status_code, wait)
+                        _audit_progress(i - 1, total, flagged, dead, vod, errors, skipped_403,
+                                         not_authorized_=not_authorized,
+                                         cooldown_override=(min(wait, 30), f'HTTP {r.status_code} — rate-limited'))
                         _time.sleep(min(wait, 30))
                     r = _run_with_signal_timeout(
                         f"[audit] {source_name} {i}/{total} manifest-retry {ch.name}",
@@ -1197,8 +1220,9 @@ def run_stream_audit(source_name: str):
                     if _widevine in manifest_text.lower() or _playready in manifest_text.lower():
                         _dash_drm_type = 'Widevine' if _widevine in manifest_text.lower() else 'PlayReady'
                         if _bridge_capable and _drm_bridge_mode:
-                            # DASH+Widevine (e.g. Amazon, Sling) plays via the browser/EME
-                            # PrismCast bridge — keep it active and mark it for the bridge
+                            # DASH+Widevine (e.g. Amazon, Sling) plays via whichever bridge(s)
+                            # are actually on for this source (PrismCast browser/EME and/or
+                            # FastChannels Player) — keep it active and mark it for the bridge
                             # rather than disabling.
                             ch.requires_drm_bridge = True
                             if not ch.is_active:
@@ -1212,7 +1236,8 @@ def run_stream_audit(source_name: str):
                             ch.disable_reason = None
                             bridged += 1
                             report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm_bridge', 'reason': _dash_drm_type})
-                            logger.info('[audit] DASH DRM→PrismCast bridge: %s (%s)', ch.name, _dash_drm_type)
+                            logger.info('[audit] DASH DRM→%s bridge: %s (%s)',
+                                        _active_bridge_label(source_name), ch.name, _dash_drm_type)
                         else:
                             ch.requires_drm_bridge = False
                             ch.is_active      = False
@@ -1281,10 +1306,10 @@ def run_stream_audit(source_name: str):
                 if drm:
                     _drm_type = drm.get('drm_type', 'DRM')
                     if _bridge_capable and _drm_bridge_mode:
-                        # Bridge mode + source can serve a browser-decryptable variant:
-                        # keep the channel active and mark it for the PrismCast bridge — it's
-                        # held out of the standard feed (unplayable on a normal client) but
-                        # bridged in the PrismCast feed.
+                        # Bridge mode + source can serve a decryptable variant: keep the
+                        # channel active and mark it for whichever bridge(s) are actually on
+                        # for this source — held out of the standard feed (unplayable on a
+                        # normal client) but included in the bridge feed(s).
                         ch.requires_drm_bridge = True
                         if not ch.is_active:
                             ch.is_active = True
@@ -1293,7 +1318,8 @@ def run_stream_audit(source_name: str):
                         ch.disable_reason = None
                         bridged += 1
                         report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm_bridge', 'reason': _drm_type})
-                        logger.info('[audit] DRM→PrismCast bridge: %s (%s)', ch.name, _drm_type)
+                        logger.info('[audit] DRM→%s bridge: %s (%s)',
+                                    _active_bridge_label(source_name), ch.name, _drm_type)
                     else:
                         # Disable mode (or non-bridge-capable source): drop it as before.
                         ch.requires_drm_bridge = False

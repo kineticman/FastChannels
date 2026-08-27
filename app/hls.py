@@ -273,11 +273,16 @@ def inspect_hls_drm(manifest_text: str) -> dict | None:
     Inspect HLS manifest text for client-breaking DRM/encryption.
 
     Scans all #EXT-X-KEY and #EXT-X-SESSION-KEY lines (both forms appear in
-    CMAF multi-DRM manifests).  If Widevine is present in any entry, returns
-    None — the stream is Widevine-capable and should not be disabled.  FairPlay
-    appearing first in Irdeto/CMAF manifests alongside Widevine is a red herring;
-    only FairPlay-only or PlayReady-only streams are truly unplayable on most
-    clients.
+    CMAF multi-DRM manifests). Returns the first entry found, preferring one
+    labeled Widevine when both Widevine and FairPlay/PlayReady are present
+    (FairPlay appearing first in Irdeto/CMAF manifests is common, but Widevine
+    is the scheme our bridges can actually use). The caller decides whether a
+    detected DRM should disable the channel or route it through a bridge based
+    on whether the source actually has a license_url wired up — mirroring the
+    DASH manifest path in worker.py. This function does not make that call
+    itself; it must not return None just because Widevine is present, since
+    that would silently pass an undecryptable stream through as "clear" on any
+    source with no working bridge for it.
 
     Plain AES-128 (METHOD=AES-128, no KEYFORMAT) is not flagged.
     """
@@ -320,10 +325,11 @@ def inspect_hls_drm(manifest_text: str) -> dict | None:
     if not found:
         return None
 
-    # CMAF multi-DRM: Widevine present means the stream is Widevine-capable.
-    # Don't block — FairPlay keys co-existing with Widevine in the same manifest
-    # are for Apple clients; the stream is not FairPlay-only.
+    # CMAF multi-DRM: prefer reporting Widevine when present, even if FairPlay
+    # appeared first in the manifest — it's the scheme our bridges can use.
     if has_widevine:
-        return None
+        for entry in found:
+            if entry['drm_type'] == 'Widevine':
+                return entry
 
     return found[0]

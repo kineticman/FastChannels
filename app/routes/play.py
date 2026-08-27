@@ -3069,6 +3069,103 @@ def roku_dash_proxy(channel_id: str):
     return redirect(mpd_url, code=302)
 
 
+_FUBO_MPD_SEG_ATTR_RE = re.compile(r'(initialization|media)="([^"]+)"')
+
+
+def _fubo_mpd_inject_segment_token(mpd_text: str, manifest_url: str) -> str:
+    """Fubo's DASH SegmentTemplate omits the hdnts auth token on init/media segment
+    URLs for some channels (confirmed live 2026-08-27: ESPN, ESPN2, SEC Network — ACC
+    Network and FAST-tier channels already embed their own per-segment token and are
+    untouched here) even though the manifest URL itself carries one. Akamai then 403s
+    every segment fetch with "invalid_token". The manifest-level token's ACL is a full
+    wildcard (acl=/*), so it's valid for any path on the same host — confirmed live by
+    fetching a bare init segment with this token appended (200, previously 403).
+    """
+    qs = _parse_qs(urlsplit(manifest_url).query)
+    token = (qs.get('hdnts') or [None])[0]
+    if not token:
+        return mpd_text
+
+    def _inject(m):
+        attr, value = m.group(1), m.group(2)
+        if 'hdnts=' in value:
+            return m.group(0)
+        # value is raw XML attribute text (still XML-escaped, e.g. any existing "&" in
+        # the template is already "&amp;") — a literal query-string "&" here must be
+        # escaped the same way, or the manifest becomes invalid XML.
+        sep = '&amp;' if '?' in value else '?'
+        return f'{attr}="{value}{sep}hdnts={token}"'
+
+    return _FUBO_MPD_SEG_ATTR_RE.sub(_inject, mpd_text)
+
+
+@play_bp.route('/play/fubo/<channel_id>/dash.mpd')
+def fubo_dash_proxy(channel_id: str):
+    """DASH (Widevine) variant for a Fubo channel — the browser/EME path that the
+    watch page and PrismCast bridge use when the HLS variant is FairPlay-only.
+
+    Fubo's DASH CDN sends Access-Control-Allow-Origin (confirmed live) and uses
+    absolute segment URLs, so this proxies the manifest body (rather than a plain
+    302) only to run _fubo_mpd_inject_segment_token — see its docstring. resolve_dash()
+    also caches the per-session Widevine license URL + token (persisted to
+    source_cache) so /play/fubo/license can read it back.
+    """
+    from urllib.parse import unquote as _unquote
+
+    raw_id = _unquote(channel_id)
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == 'fubo', Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    scraper_cls = registry.get('fubo')
+    if not scraper_cls:
+        return _unavailable_response()
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        result = scraper.resolve_dash(channel.stream_url)
+    except Exception as e:
+        logger.warning('[fubo-dash] resolve failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    finally:
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            except Exception:
+                pass
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+            except Exception:
+                pass
+
+    mpd_url = (result or {}).get('mpd_url')
+    if not mpd_url or not mpd_url.startswith('http'):
+        logger.warning('[fubo-dash] no DASH URL for %s', raw_id[:40])
+        return _unavailable_response()
+
+    try:
+        r = _requests.get(mpd_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[fubo-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
+        return redirect(mpd_url, code=302)
+
+    mpd = _fubo_mpd_inject_segment_token(r.text, mpd_url)
+    return Response(
+        mpd,
+        mimetype='application/dash+xml',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 _FOX_TVE_SESSION = _requests.Session()
 _FOX_TVE_SESSION.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
