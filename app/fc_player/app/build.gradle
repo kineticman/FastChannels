@@ -27,8 +27,8 @@ android {
         targetSdk 36
         // Bump both on every release: versionCode strictly increasing (Android's own
         // update-eligibility check), versionName whatever's human-meaningful.
-        versionCode 1
-        versionName '1.0.0'
+        versionCode 2
+        versionName '1.0.1-mediasession-beta'
     }
 
     compileOptions {
@@ -62,4 +62,8 @@ dependencies {
     implementation 'androidx.media3:media3-exoplayer-dash:1.5.1'
     implementation 'androidx.media3:media3-exoplayer-hls:1.5.1'
     implementation 'androidx.media3:media3-ui:1.5.1'
+    // ah4c integration test: publishes PlaybackState to dumpsys media_session so an
+    // ah4c-driven tuner (adb-only, no on-device UI) can confirm a tune actually started
+    // the way it already does for Hulu/YouTube TV, instead of always reading "not playing".
+    implementation 'androidx.media3:media3-session:1.5.1'
 }

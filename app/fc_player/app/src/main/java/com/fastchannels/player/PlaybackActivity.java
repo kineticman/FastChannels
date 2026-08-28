@@ -14,6 +14,7 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
+import androidx.media3.session.MediaSession;
 import androidx.media3.ui.PlayerView;
 
 /**
@@ -47,6 +48,7 @@ public class PlaybackActivity extends Activity {
 
     private ExoPlayer player;
     private DefaultTrackSelector trackSelector;
+    private MediaSession mediaSession;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -103,6 +105,15 @@ public class PlaybackActivity extends Activity {
                 .build();
         playerView.setPlayer(player);
         playerView.setKeepScreenOn(true);
+
+        // No lock-screen/notification controls needed — this device has no on-device UI
+        // (see class docstring) — just publishing PlaybackState to dumpsys media_session so
+        // an ah4c-driven tuner's stock is_media_playing() check (adb shell dumpsys
+        // media_session, looking for state=PlaybackState {state=3}) can see this player the
+        // same way it already sees Hulu/YouTube TV, instead of always reading "not playing".
+        // Built once here and left wrapping the same ExoPlayer instance across retunes
+        // (see onNewIntent), so it needs no per-retune handling.
+        mediaSession = new MediaSession.Builder(this, player).build();
 
         playFromIntent(getIntent());
     }
@@ -161,6 +172,10 @@ public class PlaybackActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (mediaSession != null) {
+            mediaSession.release();
+            mediaSession = null;
+        }
         if (player != null) {
             player.release();
             player = null;
