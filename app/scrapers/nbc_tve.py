@@ -136,7 +136,16 @@ UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 LIVE_PAGE_URL = 'https://www.nbc.com/live'
 GEOLOCATION_URL = 'https://geolocation.digitalsvc.apps.nbcuni.com/geolocation/live/'
 GRAPHQL_URL = 'https://friendship.nbc.com/v3/graphql'
-GUIDE_QUERY_HASH = 'e01be932ad1d10dd2473b136d52a8511636c46463e7f802f9fab584ae9f6f66b'
+# Apollo persisted-query hash for the componentsForPlaceholders(_cached) guide
+# query. NBC rotates this on deploy — the API returns a 200 with
+# {"errors":[{"code":"PERSISTED_QUERY_NOT_FOUND"}]} rather than a 4xx when it's
+# stale, which _fetch_guide() below can't distinguish from "no channels in the
+# response" on its own. Re-discovered 2026-08-28 via a real headless-browser
+# capture of nbc.com/live's network traffic (the value lives in a webpack
+# chunk, module id varies per bundle build — search a fresh generetic.*.js
+# bundle for the literal 'componentsForPlaceholders' export mapping to find it
+# again if this goes stale).
+GUIDE_QUERY_HASH = 'ce452fadd8c890b99a3bced155078c5d07db87f5f39be430ef3e5be5d4bb2e33'
 # base64 of {"type":"TvGuide","implementation":"liveGuideTvGuide","name":"","app":""} — fixed constant.
 GUIDE_COMPONENT_CONFIG_B64 = 'eyJ0eXBlIjoiVHZHdWlkZSIsImltcGxlbWVudGF0aW9uIjoibGl2ZUd1aWRlVHZHdWlkZSIsIm5hbWUiOiIiLCJhcHAiOiIifQ=='
 LEMONADE_LINEAR_URL = 'https://lemonade.nbc.com/v2/linear/'
@@ -537,7 +546,7 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             'nationalBroadcastType': 'eastCoast',
             'callSign': '',
             'app': 'nbc',
-            'appVersion': 1253003,
+            'appVersion': 1254001,
             'componentConfigs': [GUIDE_COMPONENT_CONFIG_B64],
             'queryName': 'componentsForPlaceholders_cached',
         }
