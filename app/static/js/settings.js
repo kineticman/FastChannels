@@ -220,15 +220,16 @@ async function saveFcPlayerToggles() {
   if (ok) setTimeout(() => location.reload(), 700);
 }
 
-async function saveFcPlayerSettings() {
+async function saveFcPlayerDeviceSettings() {
   const ip = document.getElementById('fc-player-ip').value.trim();
+  const ok = await saveSettings({fc_player_ip: ip || null}, 'fc-player-status');
+  // Affects whether the "add to feeds" guidance block (server-rendered) shows.
+  if (ok) setTimeout(() => location.reload(), 700);
+}
+
+async function saveFcPlayerEncoderSettings() {
   const encoderUrl = document.getElementById('fc-player-encoder-url').value.trim();
-  const enabled = document.getElementById('fc-player-enabled').checked;
-  const ok = await saveSettings({
-    fc_player_ip: ip || null,
-    fc_player_encoder_url: encoderUrl || null,
-    fc_player_enabled: enabled,
-  }, 'fc-player-status');
+  const ok = await saveSettings({fc_player_encoder_url: encoderUrl || null}, 'fc-player-encoder-status');
   if (ok) setTimeout(() => location.reload(), 700);
 }
 
@@ -240,6 +241,18 @@ async function saveFcPlayerIdleStopToggle() {
 async function saveFcPlayerCaptionsToggle() {
   const enabled = document.getElementById('fc-player-captions-enabled').checked;
   await saveSettings({fc_player_captions_enabled: enabled}, 'fc-player-status');
+}
+
+async function saveFcPlayerAh4cToggle() {
+  const enabled = document.getElementById('fc-player-ah4c-enabled').checked;
+  const ok = await saveSettings({fc_player_ah4c_enabled: enabled}, 'fc-player-ah4c-status');
+  // Affects whether the ah4c M3U option shows up on the Feeds page.
+  if (ok) setTimeout(() => location.reload(), 700);
+}
+
+async function saveFcPlayerAh4cSettings() {
+  const url = document.getElementById('fc-player-ah4c-url').value.trim();
+  await saveSettings({fc_player_ah4c_url: url || null}, 'fc-player-ah4c-status');
 }
 
 async function installFcPlayer() {
@@ -258,7 +271,7 @@ async function installFcPlayer() {
 }
 
 async function testFcPlayer() {
-  const statusEl = document.getElementById('fc-player-status');
+  const statusEl = document.getElementById('fc-player-encoder-status');
   statusEl.textContent = 'Testing…';
   statusEl.className = 'save-status';
   try {
@@ -270,6 +283,25 @@ async function testFcPlayer() {
     statusEl.textContent = 'Connection failed.';
     statusEl.className = 'save-status error';
   }
+}
+
+function openAh4cScriptsModal() {
+  // Suggested only — the ah4c container may run on a different machine/network
+  // than whoever is loading this settings page, so this is a starting point for
+  // the user to confirm or override, never submitted as-is without their eyes on it.
+  document.getElementById('ah4c-scripts-url').value = window.location.origin;
+  document.getElementById('ah4c-scripts-modal').classList.add('open');
+}
+
+function closeAh4cScriptsModal() {
+  document.getElementById('ah4c-scripts-modal').classList.remove('open');
+}
+
+function downloadAh4cScripts() {
+  const url = document.getElementById('ah4c-scripts-url').value.trim();
+  if (!url) return;
+  window.location.href = '/api/settings/fc-player/ah4c-scripts?url=' + encodeURIComponent(url);
+  closeAh4cScriptsModal();
 }
 
 

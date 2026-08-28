@@ -1652,6 +1652,7 @@ def _refresh_xml_artifacts() -> None:
         prismcast_url = (_settings.effective_prismcast_url() or '').strip().rstrip('/')
         prismcast_inner = (_settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
         fc_player_ready = _fc_player_bridge.is_configured()
+        ah4c_url = (_settings.effective_fc_player_bridge_ah4c_url() or '').strip().rstrip('/') if fc_player_ready else ''
         m3u_artifacts: list[tuple[str, Callable]] = [
             ('master-m3u', lambda fp: fp.write(generate_m3u({}, base_url=base_url))),
             # EXPERIMENTAL: mixed Gracenote/XMLTV single-source playlist — see
@@ -1668,6 +1669,11 @@ def _refresh_xml_artifacts() -> None:
             m3u_artifacts.append((
                 'master-fc-player-m3u',
                 lambda fp: fp.write(generate_fc_player_m3u({}, base_url=base_url)),
+            ))
+        if ah4c_url:
+            m3u_artifacts.append((
+                'master-fc-player-ah4c-m3u',
+                lambda fp: fp.write(generate_fc_player_m3u({}, base_url=base_url, ah4c_base_url=ah4c_url)),
             ))
         default_feed = Feed.query.filter_by(slug='default').first()
         default_gn_start = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
@@ -1687,6 +1693,12 @@ def _refresh_xml_artifacts() -> None:
                 'master-fc-player-gracenote-m3u',
                 lambda fp: fp.write(generate_fc_player_m3u(
                     {}, base_url=base_url, namespace_start=default_gn_start, gracenote=True)),
+            ))
+        if ah4c_url:
+            m3u_artifacts.append((
+                'master-fc-player-ah4c-gracenote-m3u',
+                lambda fp: fp.write(generate_fc_player_m3u(
+                    {}, base_url=base_url, namespace_start=default_gn_start, gracenote=True, ah4c_base_url=ah4c_url)),
             ))
         for feed in Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all():
             filters = feed_to_query_filters(feed.filters or {})
@@ -1755,6 +1767,13 @@ def _refresh_xml_artifacts() -> None:
                         generate_fc_player_m3u(filters, base_url=base_url, **std_kw)
                     ),
                 ))
+            if ah4c_url:
+                m3u_artifacts.append((
+                    f'feed-{feed.slug}-fc-player-ah4c-m3u',
+                    lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                        generate_fc_player_m3u(filters, base_url=base_url, ah4c_base_url=ah4c_url, **std_kw)
+                    ),
+                ))
             if feed.chnum_start is not None:
                 gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
             else:
@@ -1779,6 +1798,13 @@ def _refresh_xml_artifacts() -> None:
                     f'feed-{feed.slug}-fc-player-gracenote-m3u',
                     lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
                         generate_fc_player_m3u(filters, base_url=base_url, gracenote=True, **gn_kw)
+                    ),
+                ))
+            if ah4c_url:
+                m3u_artifacts.append((
+                    f'feed-{feed.slug}-fc-player-ah4c-gracenote-m3u',
+                    lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
+                        generate_fc_player_m3u(filters, base_url=base_url, gracenote=True, ah4c_base_url=ah4c_url, **gn_kw)
                     ),
                 ))
 

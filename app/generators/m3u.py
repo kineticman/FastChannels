@@ -959,6 +959,16 @@ def _fc_player_play_url(ch, base_url: str) -> str:
     channel_id = _url_quote(ch.source_channel_id, safe="")
     return f'{base_url}/play/fc-player/{source_name}/{channel_id}.m3u8'
 
+def _ah4c_play_url(ch, ah4c_base_url: str) -> str:
+    # ah4c's own /play/tuner/<channel> — <channel> is the same "source:channel_id"
+    # key fc_player_bridge already uses (trigger_channel's channel_key), which the
+    # exported bmitune.sh splits apart and calls our /play/fc-player/... route with.
+    # ':' is a valid unescaped path-segment character (RFC 3986 pchar), so only the
+    # channel id half needs quoting.
+    source_name = ch.source.name
+    channel_id = _url_quote(ch.source_channel_id, safe="")
+    return f'{ah4c_base_url}/play/tuner/{source_name}:{channel_id}'
+
 def generate_m3u(filters: dict = None, base_url: str = None,
                  feed_chnum_start: int = None, namespace_start: int = None,
                  feed_id: int = None) -> str:
@@ -1049,7 +1059,8 @@ def generate_m3u(filters: dict = None, base_url: str = None,
 
 def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
                             feed_chnum_start: int = None, namespace_start: int = None,
-                            feed_id: int = None, gracenote: bool = False) -> str:
+                            feed_id: int = None, gracenote: bool = False,
+                            ah4c_base_url: str = None) -> str:
     """
     FastChannels Player (app/fc_player/) DRM-bridge playlist.
 
@@ -1072,9 +1083,15 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
                        pairs with our XMLTV /epg.xml.
     gracenote=True  — only channels with a Gracenote ID; emits tvc-guide-stationid so
                        Channels DVR routes guide data through Gracenote.
+
+    ah4c_base_url — when set, every entry points at ah4c's own /play/tuner/<channel>
+                    (see _ah4c_play_url) instead of our /play/fc-player/... route, so
+                    playback routes through ah4c's HDMI capture instead of the single
+                    fixed encoder_url. Channel selection/guide data is unaffected.
     """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
+    ah4c_base_url = (ah4c_base_url or '').rstrip('/') or None
 
     _s = AppSettings.get()
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
@@ -1143,7 +1160,7 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
         _append_experimental_stream_attrs(attrs, _s)
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
-        lines.append(_fc_player_play_url(ch, base_url))
+        lines.append(_ah4c_play_url(ch, ah4c_base_url) if ah4c_base_url else _fc_player_play_url(ch, base_url))
 
     return '\n'.join(lines)
 

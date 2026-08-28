@@ -549,6 +549,78 @@ def m3u_fc_player():
     )
 
 
+def _fc_player_ah4c_not_configured():
+    return Response(
+        'ah4c support is not enabled/configured. Set it up in Settings > FastChannels Player.\n',
+        status=409,
+        mimetype='text/plain',
+    )
+
+
+@output_bp.route('/m3u/fc-player/ah4c')
+def m3u_fc_player_ah4c():
+    """ah4c-routed variant of the FastChannels Player bridge M3U: every entry points
+    at ah4c's own /play/tuner/<channel> instead of our /play/fc-player/... route, so
+    playback goes through whatever HDMI encoder ah4c is driving. Pair with /epg.xml,
+    same as the standard variant — guide data doesn't depend on capture hardware."""
+    from ..models import AppSettings
+    ah4c_url = (AppSettings.get().effective_fc_player_bridge_ah4c_url() or '').strip()
+    if not ah4c_url:
+        return _fc_player_ah4c_not_configured()
+    base_url = public_base_url()
+    filters  = _filters()
+    if filters:
+        content = generate_fc_player_m3u(filters, base_url=base_url, ah4c_base_url=ah4c_url)
+        return Response(content, mimetype='application/x-mpegurl',
+                        headers={'Content-Disposition': 'attachment; filename="fastchannels-fc-player-ah4c.m3u"'})
+    path = get_artifact('master-fc-player-ah4c-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            'FastChannels Player ah4c M3U artifact is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name='fastchannels-fc-player-ah4c.m3u',
+    )
+
+
+@output_bp.route('/m3u/fc-player/ah4c/gracenote')
+def m3u_fc_player_ah4c_gracenote():
+    """Gracenote-guide variant of the ah4c-routed FastChannels Player bridge M3U:
+    only channels with a Gracenote ID, emitted with tvc-guide-stationid, entries
+    pointing at ah4c's /play/tuner/<channel>."""
+    from ..models import AppSettings, Feed
+    ah4c_url = (AppSettings.get().effective_fc_player_bridge_ah4c_url() or '').strip()
+    if not ah4c_url:
+        return _fc_player_ah4c_not_configured()
+    base_url = public_base_url()
+    filters  = _filters()
+    if filters:
+        default_feed = Feed.query.filter_by(slug='default').first()
+        gn_start     = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
+        content = generate_fc_player_m3u(filters, base_url=base_url, ah4c_base_url=ah4c_url,
+                                          namespace_start=gn_start, gracenote=True)
+        return Response(content, mimetype='application/x-mpegurl',
+                        headers={'Content-Disposition': 'attachment; filename="fastchannels-fc-player-ah4c-gracenote.m3u"'})
+    path = get_artifact('master-fc-player-ah4c-gracenote-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            'FastChannels Player ah4c Gracenote M3U artifact is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name='fastchannels-fc-player-ah4c-gracenote.m3u',
+    )
+
+
 @output_bp.route('/m3u/fc-player/gracenote')
 def m3u_fc_player_gracenote():
     """Gracenote-guide variant of the FastChannels Player bridge M3U: only channels
@@ -600,6 +672,52 @@ def feed_m3u_fc_player(slug):
         path,
         mimetype='application/x-mpegurl',
         download_name=f'{slug}-fc-player.m3u',
+    )
+
+
+@output_bp.route('/feeds/<slug>/m3u/fc-player/ah4c')
+def feed_m3u_fc_player_ah4c(slug):
+    """ah4c-routed variant of the FastChannels Player bridge M3U for a feed.
+    Pair with /feeds/<slug>/epg.xml, same as the standard variant."""
+    from ..models import AppSettings
+    if not (AppSettings.get().effective_fc_player_bridge_ah4c_url() or '').strip():
+        return _fc_player_ah4c_not_configured()
+    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    path = get_artifact(f'feed-{slug}-fc-player-ah4c-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            f'FastChannels Player ah4c M3U artifact for {feed.slug} is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name=f'{slug}-fc-player-ah4c.m3u',
+    )
+
+
+@output_bp.route('/feeds/<slug>/m3u/fc-player/ah4c/gracenote')
+def feed_m3u_fc_player_ah4c_gracenote(slug):
+    """Gracenote-guide variant of the ah4c-routed FastChannels Player bridge M3U
+    for a feed. Pair with the Gracenote guide, not /feeds/<slug>/epg.xml."""
+    from ..models import AppSettings
+    if not (AppSettings.get().effective_fc_player_bridge_ah4c_url() or '').strip():
+        return _fc_player_ah4c_not_configured()
+    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    path = get_artifact(f'feed-{slug}-fc-player-ah4c-gracenote-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            f'FastChannels Player ah4c Gracenote M3U artifact for {feed.slug} is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name=f'{slug}-fc-player-ah4c-gracenote.m3u',
     )
 
 

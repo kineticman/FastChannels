@@ -28,6 +28,7 @@ _CHANNELS_DVR_RECOMMENDED_MAX = 750
 
 def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool,
                                prismcast: bool = False, fc_player: bool = False,
+                               ah4c_url: str | None = None,
                                force_refresh: bool = False) -> None:
     """Ensure feed artifacts exist before handing URLs to Channels DVR.
 
@@ -117,6 +118,22 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
                     )),
                     ext='m3u',
                 )
+            if ah4c_url:
+                write_artifact(
+                    f'feed-{feed.slug}-fc-player-ah4c-m3u',
+                    lambda fp: fp.write(generate_fc_player_m3u(
+                        filters, base_url=base_url, ah4c_base_url=ah4c_url, **std_kw,
+                    )),
+                    ext='m3u',
+                )
+                if has_gracenote:
+                    write_artifact(
+                        f'feed-{feed.slug}-fc-player-ah4c-gracenote-m3u',
+                        lambda fp: fp.write(generate_fc_player_m3u(
+                            filters, base_url=base_url, ah4c_base_url=ah4c_url, gracenote=True, **gn_kw,
+                        )),
+                        ext='m3u',
+                    )
         else:
             write_artifact(
                 std_key,
@@ -382,13 +399,18 @@ def push_feed_prismcast_to_dvr(feed_id):
 @dvr_bp.route('/feeds/<int:feed_id>/push-fc-player-to-dvr', methods=['POST'])
 def push_feed_fc_player_to_dvr(feed_id):
     """Register this feed's FastChannels Android Bridge Channels (FastChannels
-    Player DRM bridge) output as custom M3U source(s) in Channels DVR.
+    Player DRM bridge) output, routed through the single fixed encoder_url, as
+    custom M3U source(s) in Channels DVR.
 
     Registers up to two sources, named distinctly from the standard push so they
     sit alongside it rather than overwriting it:
     - "... Android Bridge Gracenote" (no EPG URL): only if the feed has trusted
       bridge channels with a Gracenote ID.
     - "... Android Bridge" (with our EPG XML): the standard-guide bridge playlist.
+
+    See push_feed_fc_player_ah4c_to_dvr for the ah4c-routed sibling — kept as a
+    separate route/button/UI section rather than folded into this one so someone
+    not using ah4c never sees it.
     """
     import re as _re
     from .. import fc_player_bridge
@@ -460,6 +482,98 @@ def push_feed_fc_player_to_dvr(feed_id):
             r2 = _put(std_name, f"{base}/feeds/{feed.slug}/m3u/fc-player", f"{base}/feeds/{feed.slug}/epg.xml")
             r2.raise_for_status()
             sources_added.append(std_name)
+    except _req.exceptions.ConnectionError:
+        return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
+    except _req.exceptions.Timeout:
+        return jsonify({'error': 'Channels DVR timed out.'}), 504
+    except _req.exceptions.HTTPError as exc:
+        resp = exc.response
+        return jsonify({'error': f'DVR {resp.status_code}: {resp.text[:300]}'}), 502
+
+    return jsonify({'ok': True, 'sources_added': sources_added})
+
+
+@dvr_bp.route('/feeds/<int:feed_id>/push-fc-player-ah4c-to-dvr', methods=['POST'])
+def push_feed_fc_player_ah4c_to_dvr(feed_id):
+    """ah4c-routed sibling of push_feed_fc_player_to_dvr — same channel set, same
+    EPG, but every entry points at ah4c's /play/tuner/<channel> instead of our own
+    /play/fc-player/... route. Kept as its own route/button so the two stay in
+    separate UI sections and someone not using ah4c never sees this one.
+
+    Registers up to two sources:
+    - "... Android Bridge (ah4c)" (with our EPG XML)
+    - "... Android Bridge Gracenote (ah4c)" (no EPG URL): only if the feed has
+      trusted bridge channels with a Gracenote ID.
+    """
+    import re as _re
+    from .. import fc_player_bridge
+
+    feed = Feed.query.get_or_404(feed_id)
+    settings = AppSettings.get()
+
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
+    if not fc_player_bridge.is_configured():
+        return jsonify({'error': 'FastChannels Player is not configured. Set it up in Settings.'}), 400
+    ah4c_url = (settings.effective_fc_player_bridge_ah4c_url() or '').strip()
+    if not ah4c_url:
+        return jsonify({'error': 'ah4c support is not configured. Set it up in Settings.'}), 400
+
+    base = public_base_url()
+    dvr_type = 'MPEG-TS'
+
+    split = _feed_split_counts(feed)
+    std_count = split.get('drm_bridge_count', 0)
+    gn_count  = split.get('drm_bridge_gracenote_count', 0)
+    has_gracenote = gn_count > 0
+    if std_count == 0 and gn_count == 0:
+        return jsonify({'error': 'This feed has no eligible FastChannels Android Bridge channels to add to Channels DVR.'}), 400
+
+    largest = max(std_count, gn_count)
+    force = bool((request.get_json(silent=True) or {}).get('force'))
+    if largest > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
+        return jsonify({
+            'error': f'This FastChannels Android Bridge feed has {largest} channels in one source. Channels DVR usually works best at 750 or fewer.',
+            'requires_confirm': True,
+            'channel_count': largest,
+            'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
+        }), 409
+
+    try:
+        _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote, fc_player=True,
+                                    ah4c_url=ah4c_url, force_refresh=True)
+    except TimeoutError:
+        return jsonify({'error': 'Timed out waiting for FastChannels Android Bridge feed artifacts to build. Try again in a moment.'}), 503
+
+    def _put(name, url, xmltv_url=''):
+        safe = _re.sub(r'[^a-zA-Z0-9]', '', name)
+        payload = {
+            'name':    name,
+            'type':    dvr_type,
+            'source':  'URL',
+            'url':     url,
+            'refresh': '24',
+        }
+        if xmltv_url:
+            payload['xmltv_url']     = xmltv_url
+            payload['xmltv_refresh'] = '3600'
+        return _req.put(f"{dvr_url}/providers/m3u/sources/{safe}", json=payload, timeout=30, verify=False)
+
+    ah4c_name    = f"FastChannels {feed.name} Android Bridge (ah4c)"
+    ah4c_gn_name = f"FastChannels {feed.name} Android Bridge Gracenote (ah4c)"
+    sources_added = []
+
+    try:
+        if std_count > 0:
+            r1 = _put(ah4c_name, f"{base}/feeds/{feed.slug}/m3u/fc-player/ah4c", f"{base}/feeds/{feed.slug}/epg.xml")
+            r1.raise_for_status()
+            sources_added.append(ah4c_name)
+
+        if has_gracenote:
+            r2 = _put(ah4c_gn_name, f"{base}/feeds/{feed.slug}/m3u/fc-player/ah4c/gracenote")
+            r2.raise_for_status()
+            sources_added.append(ah4c_gn_name)
     except _req.exceptions.ConnectionError:
         return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
     except _req.exceptions.Timeout:

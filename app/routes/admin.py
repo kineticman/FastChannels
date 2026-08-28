@@ -1317,6 +1317,11 @@ def feeds():
                                and app_settings.effective_fc_player_bridge_adb_address()
                                and app_settings.effective_fc_player_bridge_encoder_url()
                            ),
+                           fc_player_ah4c_configured=bool(
+                               app_settings.fc_player_bridge_enabled
+                               and app_settings.effective_fc_player_bridge_adb_address()
+                               and app_settings.effective_fc_player_bridge_ah4c_url()
+                           ),
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
@@ -1403,10 +1408,17 @@ def settings():
                            fc_player_encoder_url=app_settings.effective_fc_player_bridge_encoder_url() or '',
                            fc_player_idle_stop_enabled=bool(app_settings.fc_player_bridge_idle_stop_enabled),
                            fc_player_captions_enabled=bool(app_settings.fc_player_bridge_captions_enabled),
+                           fc_player_ah4c_enabled=bool(app_settings.fc_player_bridge_ah4c_enabled),
+                           fc_player_ah4c_url=app_settings.fc_player_bridge_ah4c_url or '',
                            fc_player_configured=bool(
                                app_settings.fc_player_bridge_enabled
                                and app_settings.effective_fc_player_bridge_adb_address()
                                and app_settings.effective_fc_player_bridge_encoder_url()
+                           ),
+                           fc_player_ah4c_configured=bool(
+                               app_settings.fc_player_bridge_enabled
+                               and app_settings.effective_fc_player_bridge_adb_address()
+                               and app_settings.effective_fc_player_bridge_ah4c_url()
                            ),
                            tve_provider_choices=tve_provider_choices,
                            tve_account=tve_account.to_safe_dict() if tve_account else {

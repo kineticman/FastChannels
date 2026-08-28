@@ -243,6 +243,13 @@ def ensure_runtime_schema() -> None:
                 # Default on — purely a rendering choice with no operational cost, unlike
                 # the other fc_player_bridge_* toggles above.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_captions_enabled BOOLEAN NOT NULL DEFAULT 1"))
+            if "fc_player_bridge_ah4c_enabled" not in cols:
+                # Default off — ah4c (github.com/sullrich/ah4c) is an alternate HDMI-capture
+                # front end for the bridge; unrelated installs shouldn't get a new M3U/DVR-push
+                # option they never asked for.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_ah4c_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "fc_player_bridge_ah4c_url" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_ah4c_url TEXT"))
 
         if "sources" in tables:
             src_cols = {

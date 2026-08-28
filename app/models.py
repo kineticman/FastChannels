@@ -415,6 +415,8 @@ class AppSettings(db.Model):
     fc_player_bridge_encoder_url  = db.Column(db.Text, nullable=True)  # HDMI encoder's fixed output stream URL
     fc_player_bridge_idle_stop_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # stop the device when Channels DVR activity + the web player's heartbeat both go quiet
     fc_player_bridge_captions_enabled  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # render an English subtitle/CC track when the stream advertises one
+    fc_player_bridge_ah4c_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # ah4c (github.com/sullrich/ah4c) as the HDMI-capture front end instead of the single fixed encoder_url
+    fc_player_bridge_ah4c_url     = db.Column(db.Text, nullable=True)  # ah4c's own base URL, e.g. http://192.168.1.30:7654 — where its /play/tuner/<channel> lives
 
     @staticmethod
     def _env_int(name: str) -> int | None:
@@ -502,6 +504,19 @@ class AppSettings(db.Model):
     def effective_fc_player_bridge_encoder_url(self) -> str | None:
         value = (self.fc_player_bridge_encoder_url or '').strip().rstrip('/')
         return value or self.env_fc_player_bridge_encoder_url()
+
+    @classmethod
+    def env_fc_player_bridge_ah4c_url(cls) -> str | None:
+        return cls._env_str('FC_PLAYER_BRIDGE_AH4C_URL')
+
+    def effective_fc_player_bridge_ah4c_url(self) -> str | None:
+        """None unless ah4c support is actually turned on — every caller (the M3U
+        URL variant, the DVR-push option) should treat that as "ah4c isn't set up"
+        rather than checking the enabled flag separately everywhere."""
+        if not self.fc_player_bridge_ah4c_enabled:
+            return None
+        value = (self.fc_player_bridge_ah4c_url or '').strip().rstrip('/')
+        return value or self.env_fc_player_bridge_ah4c_url()
 
     _DEFAULT_GRACENOTE_MAP_URL = (
         'https://gist.githubusercontent.com/kineticman/'

@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from flask import Blueprint, jsonify, request, current_app
+from flask import Blueprint, jsonify, request, current_app, Response
 from ..extensions import db
 from ..models import AppSettings
 from ..timezone_utils import normalize_timezone_name, write_timezone_cache
@@ -116,6 +116,10 @@ def app_settings():
             row.fc_player_bridge_idle_stop_enabled = bool(data['fc_player_idle_stop_enabled'])
         if 'fc_player_captions_enabled' in data:
             row.fc_player_bridge_captions_enabled = bool(data['fc_player_captions_enabled'])
+        if 'fc_player_ah4c_enabled' in data:
+            row.fc_player_bridge_ah4c_enabled = bool(data['fc_player_ah4c_enabled'])
+        if 'fc_player_ah4c_url' in data:
+            row.fc_player_bridge_ah4c_url = _normalize_server_url(data['fc_player_ah4c_url'], default_port=None)
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:
@@ -147,6 +151,8 @@ def app_settings():
         'fc_player_encoder_url': row.effective_fc_player_bridge_encoder_url() or '',
         'fc_player_idle_stop_enabled': bool(row.fc_player_bridge_idle_stop_enabled),
         'fc_player_captions_enabled': bool(row.fc_player_bridge_captions_enabled),
+        'fc_player_ah4c_enabled': bool(row.fc_player_bridge_ah4c_enabled),
+        'fc_player_ah4c_url': row.fc_player_bridge_ah4c_url or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
@@ -210,6 +216,33 @@ def install_fc_player():
         }), 400
     ok, message = fc_player_bridge.install_app(apk_path)
     return jsonify({'ok': ok, 'message': message})
+
+
+@settings_bp.route('/settings/fc-player/ah4c-scripts', methods=['GET'])
+def export_ah4c_scripts():
+    """Downloads a pre-configured ah4c STREAMER_APP script set (prebmitune.sh,
+    bmitune.sh, stopbmitune.sh, reboot.sh) for driving FastChannels Player from
+    ah4c instead of Hulu/YouTube TV/etc. — see project memory for why ah4c is a
+    useful "any HDMI encoder brand" front end for the bridge.
+
+    Takes ?url=<where this server is reachable from the ah4c host> rather than
+    inferring it from this request's own Host header — the machine asking for
+    this download (someone's browser) and the machine that will actually run
+    these scripts (the ah4c container, often a different box entirely) aren't
+    guaranteed to share a reachable address. See _normalize_server_url for what
+    counts as valid input."""
+    from ..ah4c_export import build_ah4c_scripts_tarball
+
+    fastchannels_url = _normalize_server_url(request.args.get('url'))
+    if not fastchannels_url:
+        return jsonify({'ok': False, 'message': 'A valid FastChannels URL is required.'}), 400
+
+    tarball = build_ah4c_scripts_tarball(fastchannels_url)
+    return Response(
+        tarball,
+        mimetype='application/gzip',
+        headers={'Content-Disposition': 'attachment; filename="fastchannels-ah4c-scripts.tar.gz"'},
+    )
 
 
 @settings_bp.route('/fc-player/heartbeat', methods=['POST'])

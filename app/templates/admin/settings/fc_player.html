@@ -10,11 +10,11 @@
       </div>
     </div>
     <div class="source-body open">
-      <div class="help" style="color:var(--warning-soft)">Requires the FastChannels Player app installed on the device (ADB debugging must be turned on first). An HDMI encoder captures the device's decoded output for re-ingestion elsewhere (e.g. Channels DVR).</div>
+      <div class="help" style="color:var(--warning-soft)">Requires the FastChannels Player app installed on the device (ADB debugging must be turned on first). Its decoded output is captured back in by an HDMI encoder — either a single fixed one, or a broader set of hardware driven through ah4c — for re-ingestion elsewhere (e.g. Channels DVR).</div>
       <div class="toggle-row">
         <div class="toggle-row-text">
           <div class="toggle-row-label">Enable FastChannels Player</div>
-          <div class="toggle-row-help">Required before the settings below take effect. Only applies to a trusted subset of DRM sources: Sling, NBC TVE, PBS, Amazon Prime (free), DirecTV Stream, Vidaa, Philo, Roku.</div>
+          <div class="toggle-row-help">Required before either capture method below takes effect. Only applies to a trusted subset of DRM sources: Sling, NBC TVE, PBS, Amazon Prime (free), DirecTV Stream, Vidaa, Philo, Roku.</div>
         </div>
         <div class="toggle-row-control">
           <label class="toggle-switch">
@@ -29,21 +29,13 @@
           <label for="fc-player-ip">Firestick / Android TV IP address</label>
           <input type="text" id="fc-player-ip"
                  placeholder="192.168.1.50" value="{{ fc_player_ip }}">
-          <div class="help">adb port (<code>:5555</code>) is derived automatically.</div>
-        </div>
-        <div class="field field-full">
-          <label for="fc-player-encoder-url">Capture/encoder stream URL</label>
-          <input type="text" id="fc-player-encoder-url"
-                 placeholder="http://192.168.1.50:8089/devices/ANY/channels/70092/stream.mpg"
-                 value="{{ fc_player_encoder_url }}">
-          <div class="help">Where a bridged channel plays from once the device is triggered. With Channels DVR's native <code>capture://</code> source, this is that channel's own stream URL: <code>http://&lt;host&gt;:8089/devices/ANY/channels/&lt;guide number&gt;/stream.mpg</code>.</div>
+          <div class="help">adb port (<code>:5555</code>) is derived automatically. Used to adb-trigger playback and to install the app — shared by both capture methods below.</div>
         </div>
       </div>
       <div class="field-actions">
         <span class="save-status" id="fc-player-status"></span>
         <button class="btn btn-secondary" onclick="installFcPlayer()">Install FastChannels Player</button>
-        <button class="btn btn-secondary" onclick="testFcPlayer()">Test connection</button>
-        <button class="btn btn-primary" onclick="saveFcPlayerSettings()">Save</button>
+        <button class="btn btn-primary" onclick="saveFcPlayerDeviceSettings()">Save</button>
       </div>
       <div class="help">"Install" pushes the app to the device over adb — no manual sideload, and no need to
         touch "Apps from Unknown Sources" on the device (that setting only gates the on-device tap-to-install
@@ -86,10 +78,70 @@
           </label>
         </div>
       </div>
-      {% if fc_player_configured %}
-      <div class="help" style="margin-top:12px">Add this feed's channels to Channels DVR from the "FastChannels Android Bridge Channels" section on the <a href="/admin/feeds">Feeds</a> page.</div>
+      {% if fc_player_configured or fc_player_ah4c_configured %}
+      <div class="help" style="margin-top:12px">Add this feed's channels to Channels DVR from the "FastChannels Android Bridge Channels" section(s) on the <a href="/admin/feeds">Feeds</a> page.</div>
       {% else %}
-      <div class="help" style="color:var(--warning-soft);margin-top:12px">Configure the fields above (and enable the bridge) to get this feed's M3U/EPG URLs.</div>
+      <div class="help" style="color:var(--warning-soft);margin-top:12px">Configure one of the capture methods below (and enable the bridge) to get this feed's M3U/EPG URLs.</div>
       {% endif %}
+
+      <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="source-name" style="font-size:0.95rem;margin-bottom:4px">Single HDMI encoder</div>
+        <div class="help" style="margin-bottom:12px">
+          The original capture method: one fixed encoder stream URL, e.g. Channels DVR's own
+          <code>capture://</code> source. Simplest option if you're already set up with the specific
+          encoder FastChannels documents.
+        </div>
+        <div class="fields-grid" style="max-width:480px">
+          <div class="field field-full">
+            <label for="fc-player-encoder-url">Capture/encoder stream URL</label>
+            <input type="text" id="fc-player-encoder-url"
+                   placeholder="http://192.168.1.50:8089/devices/ANY/channels/70092/stream.mpg"
+                   value="{{ fc_player_encoder_url }}">
+            <div class="help">Where a bridged channel plays from once the device is triggered. With Channels DVR's native <code>capture://</code> source, this is that channel's own stream URL: <code>http://&lt;host&gt;:8089/devices/ANY/channels/&lt;guide number&gt;/stream.mpg</code>.</div>
+          </div>
+        </div>
+        <div class="field-actions">
+          <span class="save-status" id="fc-player-encoder-status"></span>
+          <button class="btn btn-secondary" onclick="testFcPlayer()">Test connection</button>
+          <button class="btn btn-primary" onclick="saveFcPlayerEncoderSettings()">Save</button>
+        </div>
+      </div>
+
+      <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="source-name" style="font-size:0.95rem;margin-bottom:4px">ah4c</div>
+        <div class="help" style="margin-bottom:12px">
+          Drives FastChannels Player through <a href="https://github.com/sullrich/ah4c" target="_blank" rel="noopener">ah4c</a>
+          instead of a single fixed encoder URL — useful if your HDMI encoder isn't the one FastChannels
+          documents directly (ah4c already supports Hauppauge, Magewell, DeckLink, and any network encoder).
+          Adds a second, ah4c-routed M3U option next to the standard one on the <a href="/admin/feeds">Feeds</a> page.
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-row-text">
+            <div class="toggle-row-label">Enable ah4c support</div>
+            <div class="toggle-row-help">Off by default — leaves the single-encoder output above untouched.</div>
+          </div>
+          <div class="toggle-row-control">
+            <label class="toggle-switch">
+              <input type="checkbox" id="fc-player-ah4c-enabled" {% if fc_player_ah4c_enabled %}checked{% endif %}
+                     onchange="saveFcPlayerAh4cToggle()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="fields-grid" style="max-width:480px;margin-top:12px">
+          <div class="field field-full">
+            <label for="fc-player-ah4c-url">ah4c server URL</label>
+            <input type="text" id="fc-player-ah4c-url"
+                   placeholder="http://192.168.1.30:7654" value="{{ fc_player_ah4c_url }}">
+            <div class="help">Where ah4c itself is reachable — its <code>/play/tuner/&lt;channel&gt;</code> is what the generated M3U points at.</div>
+          </div>
+        </div>
+        <div class="field-actions">
+          <span class="save-status" id="fc-player-ah4c-status"></span>
+          <button class="btn btn-secondary" onclick="openAh4cScriptsModal()">Export ah4c scripts</button>
+          <button class="btn btn-primary" onclick="saveFcPlayerAh4cSettings()">Save</button>
+        </div>
+        <div class="help" style="margin-top:8px">The exported scripts tell ah4c how to adb-trigger FastChannels Player and confirm playback started — drop them into ah4c's own mounted scripts directory (see the download for exact instructions).</div>
+      </div>
     </div>
   </div>

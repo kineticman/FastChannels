@@ -33,6 +33,33 @@
     </div>
   </div>
 
+  <!-- ah4c script export modal -->
+  <div class="modal-overlay" id="ah4c-scripts-modal" onclick="if(event.target===this)closeAh4cScriptsModal()">
+    <div class="modal-box" style="max-width:520px">
+      <h3 style="margin:0 0 0.75rem">Export ah4c scripts</h3>
+      <p style="color:var(--text-subtle);margin:0 0 1rem;line-height:1.5">
+        Generates a <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">prebmitune.sh</code> /
+        <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">bmitune.sh</code> /
+        <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">stopbmitune.sh</code> /
+        <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">reboot.sh</code> set for
+        <a href="https://github.com/sullrich/ah4c" target="_blank" rel="noopener">ah4c</a>, so it can drive
+        FastChannels Player instead of Hulu/YouTube TV — useful if your HDMI encoder isn't the one FastChannels
+        documents directly. Extract into ah4c's mounted scripts directory and set
+        <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">STREAMER_APP=scripts/&lt;dir&gt;/&lt;name&gt;</code>
+        to match.
+      </p>
+      <div class="field field-full" style="margin-bottom:1rem">
+        <label for="ah4c-scripts-url">This FastChannels server's address, as reachable from the machine running ah4c</label>
+        <input type="text" id="ah4c-scripts-url" placeholder="http://192.168.1.20:5523">
+        <div class="help">Pre-filled from this page's own address — confirm it, since the ah4c container may run on a different machine/network than the one you're browsing from.</div>
+      </div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="downloadAh4cScripts()">Download</button>
+        <button class="btn-cancel-modal" onclick="closeAh4cScriptsModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Gracenote clear confirmation modal -->
   <div class="modal-overlay" id="gracenote-clear-modal" onclick="if(event.target===this)cancelGracenoteClear()">
     <div class="modal-box" style="max-width:440px">
