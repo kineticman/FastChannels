@@ -20,6 +20,7 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _autofill_xfinity_credentials,
+    _harvest_and_save_xfinity_cookies,
     _is_browser_death,
     _url_for_log,
     _gateway_url_for_log,
@@ -314,6 +315,15 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                     # comment above. Cheap to call per-channel: it no-ops
                     # instantly once a master_token is already on file.
                     _maybe_capture_google_master_token(context, mso_id)
+                elif mso_id == 'Comcast_SSO' and paired:
+                    # Same idea as the YouTubeTV branch above, for the
+                    # Xfinity cookie jar instead of a Google master_token —
+                    # was previously missing here entirely (unlike mvpd.py/
+                    # nbc.py/fox.py), so a fully successful AMCN browser
+                    # login never saved anything for OTHER TVE families'
+                    # cookie-jar fast path to reuse. See
+                    # _harvest_and_save_xfinity_cookies's docstring.
+                    _harvest_and_save_xfinity_cookies(context)
                 if cancelled:
                     failed.append(f'{channel.name}: cancelled')
                     break

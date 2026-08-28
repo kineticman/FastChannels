@@ -19,6 +19,7 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _autofill_xfinity_credentials,
+    _harvest_and_save_xfinity_cookies,
     _is_browser_death,
     _url_for_log,
     _gateway_url_for_log,
@@ -266,6 +267,14 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                 return
             if mso_id == 'YouTubeTV':
                 _maybe_capture_google_master_token(context, mso_id)
+            elif mso_id == 'Comcast_SSO':
+                # Same idea as the YouTubeTV branch above, for the Xfinity
+                # cookie jar instead of a Google master_token — see
+                # _harvest_and_save_xfinity_cookies's docstring. Was missing
+                # here entirely (unlike mvpd.py/nbc.py/fox.py), so a fully
+                # successful Discovery TVE browser login never saved
+                # anything for other TVE families' cookie-jar fast path.
+                _harvest_and_save_xfinity_cookies(context)
     except BaseException as exc:  # noqa: BLE001
         if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
             set_status('stopped', 'Cancelled')
