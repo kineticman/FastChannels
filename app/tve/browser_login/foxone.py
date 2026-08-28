@@ -351,6 +351,40 @@ def run_foxone_browser_login(mso_id: str):
             return
         scraper = FoxOneScraper(config=dict(source.config or {}))
 
+        if mso_id == 'Comcast_SSO':
+            # Try a saved cookie jar (harvested from a previous successful
+            # Comcast_SSO browser pairing for ANY TVE family — see
+            # _harvest_and_save_xfinity_cookies) BEFORE ever opening a
+            # browser, same as mvpd.py/nbc.py/fox.py already do. Confirmed
+            # live 2026-08-28: _authenticate_via_mvpd (already used by the
+            # Cox branch below) works unmodified for Comcast_SSO too once a
+            # jar exists — it's the same login_to_mvpd() dispatcher, just
+            # gated to Cox-only here before this fix.
+            cookie_jar = (account.config or {}).get('xfinity_cookie_jar')
+            if cookie_jar:
+                set_status('running', 'Trying saved sign-in (no browser needed)…')
+                try:
+                    access_token, expires_at = scraper._authenticate_via_mvpd(
+                        mso_id, account.username or '', account.password or '', cookie_jar,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.info(
+                        '[foxone-mvpd-login] saved xfinity cookie jar did not work, falling back to browser: %s', exc,
+                    )
+                else:
+                    scraper._update_config('access_token', access_token)
+                    scraper._update_config('access_expires_at', expires_at)
+                    scraper._update_config('access_token_captured_at', int(time.time()))
+                    persist_source_config_updates(source.id, scraper._pending_config_updates)
+                    account.last_auth_status = 'ok'
+                    account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD (no browser needed).'
+                    account.last_auth_at = datetime.now(timezone.utc)
+                    db.session.commit()
+                    set_status('success', 'Signed in — FOX One authorized (no browser needed).')
+                    logger.info('[foxone-mvpd-login] paired mso_id=%s via saved cookie jar (no browser)', mso_id)
+                    return
+            set_status('running', 'No usable saved sign-in — opening a browser…')
+
         if mso_id != 'Cox':
             _ctx.pop()
             _ctx_popped['v'] = True

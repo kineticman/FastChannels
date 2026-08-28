@@ -435,12 +435,6 @@ def run_amcn_browser_login(mso_id: str):
         cfg = account.config or {}
         mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
 
-        if mso_id != 'Cox':
-            _ctx.pop()
-            _ctx_popped['v'] = True
-            _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id, mso_id, CHANNELS)
-            return
-
         # The 4 channels' logins are fully independent (each its own
         # requestor_id, own adobe_auth:<requestor_id> cache entry, own
         # AdobePassCoxClient/requests.Session — nothing shared but this one
@@ -452,41 +446,90 @@ def run_amcn_browser_login(mso_id: str):
         # overlaps the OTHER three Adobe API calls each channel makes,
         # which don't touch Cox at all (code review, 2026-08-11; measured
         # live: 4 sequential cold-cache logins took ~30s, ~16s of which was
-        # pure serial throttle waiting).
-        #
+        # pure serial throttle waiting). Shared by the Cox branch below and
+        # the Comcast_SSO cookie-jar-first attempt above it — both just need
+        # "run _adobe_decision_token for every channel, bucket the results";
+        # _adobe_decision_token's own login_to_mvpd() call already knows how
+        # to use mso_id/cookie_jar correctly either way.
+        def _scripted_channel_pass():
+            stopped = r.exists(MVPD_BROWSER_LOGIN_STOP_KEY)
+            authorized, failed = [], []
+            if not stopped:
+                def _sign_in_one(channel):
+                    with flask_app.app_context():
+                        try:
+                            scraper._adobe_decision_token(channel, account, device_id, force=True)
+                            return channel.name, None
+                        except TVENotAuthorizedError as exc:
+                            return channel.name, f'not entitled ({exc})'
+                        except TVEAuthError as exc:
+                            return channel.name, str(exc)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.exception('[amcn-mvpd-login] unexpected failure for %s', channel.name)
+                            return channel.name, str(exc)
+
+                with ThreadPoolExecutor(max_workers=4, thread_name_prefix='amcn-mvpd-login') as pool:
+                    # Submitted (not as_completed) order so the final message
+                    # lists networks in CHANNELS' own order regardless of
+                    # which thread happens to finish first.
+                    futures = [pool.submit(_sign_in_one, channel) for channel in CHANNELS.values()]
+                    for future in futures:
+                        name, error = future.result()
+                        if error is None:
+                            authorized.append(name)
+                        else:
+                            failed.append(f'{name}: {error}')
+            return stopped, authorized, failed
+
+        if mso_id == 'Comcast_SSO':
+            # Try a saved cookie jar (harvested from a previous successful
+            # Comcast_SSO browser pairing for ANY TVE family — see
+            # _harvest_and_save_xfinity_cookies) BEFORE ever opening a
+            # browser, same as mvpd.py/nbc.py/fox.py already do. Confirmed
+            # live 2026-08-28 this scripted path works unmodified for AMCN
+            # too once a jar exists — all 4 channels share one Xfinity
+            # account, so "zero channels authorized" cleanly means the jar
+            # is missing/stale (falls through to the browser below) while
+            # ANY channel authorizing is treated as this attempt's result,
+            # same partial-success tolerance the browser flow already has.
+            cookie_jar = cfg.get('xfinity_cookie_jar')
+            if cookie_jar:
+                set_status('running', 'Trying saved sign-in (no browser needed)…')
+                stopped, authorized, failed = _scripted_channel_pass()
+                persist_source_config_updates(source.id, scraper._pending_config_updates)
+                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                if stopped:
+                    set_status('stopped', f'Cancelled — authorized: {", ".join(authorized)}.' if authorized else 'Cancelled.')
+                    return
+                if authorized:
+                    message = f'Signed in — authorized: {", ".join(authorized)} (no browser needed).'
+                    if failed:
+                        message += ' Not authorized: ' + '; '.join(failed) + '.'
+                    set_status('success', message)
+                    logger.info(
+                        '[amcn-mvpd-login] paired mso_id=Comcast_SSO authorized=%s failed=%s via saved cookie jar (no browser)',
+                        authorized, failed,
+                    )
+                    return
+                logger.info(
+                    '[amcn-mvpd-login] saved xfinity cookie jar did not authorize any AMCN channel, falling back to browser: %s',
+                    failed,
+                )
+            set_status('running', 'No usable saved sign-in — opening a browser…')
+
+        if mso_id != 'Cox':
+            _ctx.pop()
+            _ctx_popped['v'] = True
+            _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id, mso_id, CHANNELS)
+            return
+
         # Force-stop is checked once up front rather than between channels
         # now — once dispatched, an in-flight login couldn't be interrupted
         # either way (same limitation the old sequential loop had for
         # whichever channel was actively running), and the whole batch is
         # now short enough (~5-10s) that mid-flight cancellation matters
         # much less than it did at ~30s.
-        stopped = r.exists(MVPD_BROWSER_LOGIN_STOP_KEY)
-        authorized, failed = [], []
-        if not stopped:
-            def _sign_in_one(channel):
-                with flask_app.app_context():
-                    try:
-                        scraper._adobe_decision_token(channel, account, device_id, force=True)
-                        return channel.name, None
-                    except TVENotAuthorizedError as exc:
-                        return channel.name, f'not entitled ({exc})'
-                    except TVEAuthError as exc:
-                        return channel.name, str(exc)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.exception('[amcn-mvpd-login] unexpected failure for %s', channel.name)
-                        return channel.name, str(exc)
-
-            with ThreadPoolExecutor(max_workers=4, thread_name_prefix='amcn-mvpd-login') as pool:
-                # Submitted (not as_completed) order so the final message
-                # lists networks in CHANNELS' own order regardless of which
-                # thread happens to finish first.
-                futures = [pool.submit(_sign_in_one, channel) for channel in CHANNELS.values()]
-                for future in futures:
-                    name, error = future.result()
-                    if error is None:
-                        authorized.append(name)
-                    else:
-                        failed.append(f'{name}: {error}')
+        stopped, authorized, failed = _scripted_channel_pass()
 
         persist_source_config_updates(source.id, scraper._pending_config_updates)
         persist_source_cache_updates(source.id, scraper._pending_cache_updates)

@@ -103,7 +103,24 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
     def _extract_code(url: str) -> str:
         if not (url.startswith(AUTH_HOST) or url.startswith(CALLBACK_BASE)):
             return ''
-        return (_parse_qs_login(_urlsplit_login(url).query).get('code') or [''])[0]
+        parts = _urlsplit_login(url)
+        # gauth-sync's own JS throws deterministically ("can't access
+        # property 'type', o is undefined") before it can act on the
+        # landing URL — confirmed live 2026-08-28: reloading the exact same
+        # URL twice reproduces the identical crash both times, so it isn't
+        # the same kind of timing race the confirmed_login_url retry in
+        # common.py works around. That script likely exists to read `code`
+        # out of the URL fragment (a `#code=...` implicit-flow-style
+        # delivery, never sent to the server, so client JS has to be the
+        # one to read it) and hand it off via postMessage/redirect — which
+        # would explain why polling page.url's query string alone never
+        # saw it even though the page really did land with a valid code.
+        # Checking the fragment too costs nothing if it's actually in the
+        # query string like every other MSO.
+        code = (_parse_qs_login(parts.query).get('code') or [''])[0]
+        if code:
+            return code
+        return (_parse_qs_login(parts.fragment).get('code') or [''])[0]
 
     _PER_LOGIN_TIMEOUT_SECONDS = 150
     _POLL_SECONDS = 1.0
@@ -236,12 +253,26 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                 )
             set_status('running', 'Signing in to Discovery TVE…', landing_url)
 
+            # gauth-sync itself has a real client-side bug (confirmed live
+            # 2026-08-28: a JS error — "can't access property 'type', o is
+            # undefined" — fires right as it loads). Confirmed live the same
+            # day that reloading the exact same URL reproduces the identical
+            # crash every time — it's deterministic, not a timing race like
+            # _autofill_xfinity_credentials's confirmed_login_url retry in
+            # common.py — so this reload is really just a cheap safety net
+            # for whatever fraction of loads AREN'T hitting it, while
+            # _extract_code's fragment check (see its docstring) is the
+            # actual fix for the deterministic case.
+            _GAUTH_SYNC_STALL_SECONDS = 10.0
+            _GAUTH_SYNC_MAX_RELOADS = 2
             wait_started = time.monotonic()
             deadline = wait_started + _PER_LOGIN_TIMEOUT_SECONDS
             last_shot = 0.0
             last_poll = 0.0
             code = ''
             cancelled = False
+            gauth_sync_stalled_since = None
+            gauth_sync_reloads = 0
             while time.monotonic() < deadline:
                 if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
                     cancelled = True
@@ -254,9 +285,45 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                         break
                 if now - last_poll > _POLL_SECONDS:
                     last_poll = now
-                    code = _extract_code(_safe_page_url(page))
+                    current_url = _safe_page_url(page)
+                    code = _extract_code(current_url)
                     if code:
                         break
+                    if current_url.startswith(f'{AUTH_HOST}/gauth-sync'):
+                        if gauth_sync_stalled_since is None:
+                            gauth_sync_stalled_since = now
+                            # Param NAMES only (never values — these can
+                            # carry auth tokens) so if the fragment theory
+                            # above is wrong, the next live attempt still
+                            # tells us what's actually on this URL instead
+                            # of just timing out silently again.
+                            _url_parts = _urlsplit_login(current_url)
+                            logger.warning(
+                                '[discovery-mvpd-login] landed on gauth-sync without a code; '
+                                'query keys=%s fragment keys=%s',
+                                sorted(_parse_qs_login(_url_parts.query).keys()) or '-',
+                                sorted(_parse_qs_login(_url_parts.fragment).keys()) or '-',
+                            )
+                        elif (
+                            gauth_sync_reloads < _GAUTH_SYNC_MAX_RELOADS
+                            and now - gauth_sync_stalled_since > _GAUTH_SYNC_STALL_SECONDS
+                        ):
+                            gauth_sync_reloads += 1
+                            logger.warning(
+                                '[discovery-mvpd-login] gauth-sync stalled without a code for '
+                                '%.0fs, reloading (attempt %d/%d)',
+                                now - gauth_sync_stalled_since, gauth_sync_reloads, _GAUTH_SYNC_MAX_RELOADS,
+                            )
+                            try:
+                                page.reload(wait_until='domcontentloaded', timeout=15000)
+                            except Exception as exc:  # noqa: BLE001
+                                if _is_browser_death(exc):
+                                    raise
+                                logger.warning('[discovery-mvpd-login] gauth-sync reload failed: %s', exc)
+                            gauth_sync_stalled_since = None
+                    else:
+                        gauth_sync_stalled_since = None
+                        gauth_sync_reloads = 0
                 page.wait_for_timeout(80)
 
             if cancelled:
@@ -382,6 +449,41 @@ def run_discovery_browser_login(mso_id: str):
                 set_status('error', 'TVE credentials are not configured in Settings.')
                 return
             mso_name = ((account.config or {}).get('selected_mso_name') or mso_id).strip()
+
+            if mso_id == 'Comcast_SSO':
+                # Try a saved cookie jar (harvested from a previous
+                # successful Comcast_SSO browser pairing for ANY TVE family
+                # — see _harvest_and_save_xfinity_cookies) BEFORE ever
+                # opening a browser, same as mvpd.py/nbc.py/fox.py already
+                # do. Confirmed live 2026-08-28: scraper._authenticate()
+                # (already used by the Cox branch below, and by every
+                # scheduled session refresh) works unmodified for
+                # Comcast_SSO too once a jar exists — the interactive
+                # browser flow was what was actually tripping Comcast's own
+                # fraud/step-up check on a password-hydration retry, not
+                # anything about Discovery itself (see gauth-sync stall
+                # investigation in _run_discovery_browser_assisted_login).
+                cookie_jar = (account.config or {}).get('xfinity_cookie_jar')
+                if cookie_jar:
+                    set_status('running', 'Trying saved sign-in (no browser needed)…')
+                    try:
+                        scraper._authenticate()
+                    except TVENotAuthorizedError as exc:
+                        _record_tve_login_error('discovery', f'not entitled — {exc}')
+                        set_status('error', f'Discovery TVE: not entitled — {exc}')
+                        return
+                    except Exception as exc:  # noqa: BLE001
+                        logger.info(
+                            '[discovery-mvpd-login] saved xfinity cookie jar did not work, falling back to browser: %s',
+                            exc,
+                        )
+                    else:
+                        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                        set_status('success', 'Signed in — Discovery TVE authorized (no browser needed).')
+                        logger.info('[discovery-mvpd-login] paired mso_id=Comcast_SSO via saved cookie jar (no browser)')
+                        return
+                set_status('running', 'No usable saved sign-in — opening a browser…')
+
             _ctx.pop()
             _ctx_popped['v'] = True
             _run_discovery_browser_assisted_login(r, set_status, source, account, scraper, mso_id, mso_name)
