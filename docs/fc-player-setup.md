@@ -257,9 +257,12 @@ sections, depending on which capture method(s) you've set up:
 - **FastChannels Android Bridge Channels (ah4c)** — the same channels, routed
   through ah4c instead, only shown once ah4c support is configured.
 
-Both list only the supported DRM sources, not your entire channel catalog. Use
-whichever one matches your capture method — importing both into Channels DVR
-at once would register the same channels twice.
+Both are bridge-only — just the channels that actually need the device
+trigger, not your entire channel catalog or even the whole source. They're
+meant to be imported alongside your regular feed M3U (which already excludes
+these), not instead of it. Use whichever one matches your capture method —
+importing both into Channels DVR at once would register the same channels
+twice.
 
 Click **📺 Add to Channels DVR** in the section you're using to register the
 source(s) automatically — Channels DVR is set to the correct MPEG-TS stream

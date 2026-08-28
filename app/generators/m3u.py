@@ -1064,17 +1064,13 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
     """
     FastChannels Player (app/fc_player/) DRM-bridge playlist.
 
-    Deliberately narrow, unlike generate_prismcast_m3u/the old Kodi-bridge feed: only
-    channels from DRM_BRIDGE_TRUSTED_SOURCES appear here at all, not the full channel
-    catalog with a few DRM channels unioned in. This is a scope decision, not a
-    limitation of play_fc_player_bridge itself (it would happily resolve+302 any other
-    channel same as /play/<source>/<id>.m3u8) — may widen to the full catalog later,
-    but for now this keeps the output (and the periodic artifact refresh that builds
-    it) small and cheap.
-
-    DRM channels are bridge-only by construction (_build_channel_query's default
-    'active' selection excludes anything requires_drm_bridge — see its docstring) so
-    they're unioned back in explicitly, same pattern as generate_prismcast_m3u.
+    Bridge-only: exactly the requires_drm_bridge channels from DRM_BRIDGE_TRUSTED_SOURCES,
+    not the whole trusted source. Meant to be imported alongside the regular feed M3U,
+    not instead of it — the regular output already excludes anything requires_drm_bridge
+    (_build_channel_query's default 'active' selection — see its docstring), so the two
+    are complementary sets with no overlap. An earlier version pulled in every channel
+    from a trusted source whether it needed the bridge or not, which meant duplicates for
+    anyone importing both; see git history if that wider behavior is ever wanted back.
 
     No #KODIPROP lines — that's inputstream.adaptive-specific and irrelevant here;
     Channels DVR doesn't need them and never sees the raw manifest/license URLs.
@@ -1096,16 +1092,16 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
     _s = AppSettings.get()
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
 
-    channels = [
-        ch for ch in _selected_channels(filters, gracenote=gracenote)
-        if ch.source and ch.source.name in DRM_BRIDGE_TRUSTED_SOURCES
-    ]
-
-    # Union in the bridge-only DRM channels the base selection excludes — see
-    # docstring. Deduped, honoring the Gracenote partition, same as prismcast's union.
-    # Sources confirmed to actually decrypt through the FastChannels Player device
-    # bridge; see DRM_BRIDGE_TRUSTED_SOURCES's own docstring (app/drm_bridge.py).
-    _seen = {ch.id for ch in channels}
+    # requires_drm_bridge channels only — NOT the whole trusted source. The normal
+    # feed M3U already excludes these (_build_channel_query's default 'active'
+    # selection drops anything requires_drm_bridge — see its docstring), so this
+    # and that are complementary sets with zero overlap: import both and every
+    # channel from a trusted source appears exactly once. An earlier version of
+    # this pulled in every channel from a trusted source, bridge-eligible or not,
+    # which meant duplicates for anyone importing both — the non-bridge channels
+    # already have a home in the regular feed output.
+    channels = []
+    _seen = set()
     for ch in _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all():
         if ch.id in _seen or (ch.source.name if ch.source else None) not in DRM_BRIDGE_TRUSTED_SOURCES:
             continue
@@ -1469,15 +1465,17 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
                            feed_chnum_start: int = None, namespace_start: int = None,
                            feed_id: int = None, gracenote: bool = False, ts: bool = False) -> str:
     """
-    Hybrid PrismCast playlist where each channel takes the cheapest viable path:
+    Bridge-only PrismCast playlist: exactly the DRM channels a normal client can't
+    play (browser/EME required), wrapped through PrismCast's `/play?url=` endpoint
+    with a fullscreen profile, so its headless Chrome renders the /watch/<id> page
+    fullscreen (decrypting via EME) and re-streams clean, full-frame HLS.
 
-      * DRM channels (browser/EME required) are wrapped through PrismCast's
-        `/play?url=` endpoint with a fullscreen profile, so its headless Chrome
-        renders the /watch/<id> page fullscreen (decrypting via EME) and
-        re-streams clean, full-frame HLS.
-      * Everything else (plain/AES-128 HLS, MP4, MPEG-TS) is emitted as the
-        normal direct /play/<source>/<id>.m3u8 URL — no capture slot, no
-        transcode, full quality — exactly what the standard M3U would send.
+    Not the whole catalog — meant to be imported alongside the regular feed M3U,
+    not instead of it. The regular output already excludes anything
+    requires_drm_bridge (_build_channel_query's 'active' selection — see its
+    docstring), so the two are complementary sets with no overlap. An earlier
+    version included every channel (DRM ones bridged, everything else at its
+    normal direct URL), which meant duplicates for anyone importing both.
 
     Guide routing partitions the same way as generate_m3u / generate_gracenote_m3u:
 
@@ -1485,9 +1483,6 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
         the guide pairs with our XMLTV /epg.xml.
       * gracenote=True  — only channels with a Gracenote ID; emits
         tvc-guide-stationid so Channels DVR routes guide data through Gracenote.
-
-    The URL (bridge vs. direct) is orthogonal to guide routing — both partitions
-    apply the same DRM-bridge selection.
 
     prismcast_url   — PrismCast base, e.g. http://192.168.1.x:5589
     inner_base_url  — base URL PrismCast's Chrome uses to reach this server's
@@ -1508,13 +1503,15 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
     _s = AppSettings.get()
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
 
-    channels = _selected_channels(filters, gracenote=gracenote)
-
-    # Union in channels the audit disabled purely for DRM but which a browser can
-    # decrypt (DRM-capable source). They're absent from the standard feed (a normal
-    # client can't play them) but the PrismCast feed bridges them via /watch. Append
-    # after the active set, deduped, capturable-only, honoring the Gracenote partition.
-    _seen = {ch.id for ch in channels}
+    # Bridge-only: channels the audit disabled purely for DRM but which a browser can
+    # decrypt (DRM-capable source), NOT the whole catalog. They're absent from the
+    # standard feed by construction (_build_channel_query's 'active' selection excludes
+    # requires_drm_bridge — see its docstring), so this and that are complementary sets
+    # with no overlap — meant to be imported alongside the regular feed M3U, not instead
+    # of it. An earlier version unioned this in on top of the full standard selection,
+    # which duplicated every non-DRM channel for anyone importing both.
+    channels = []
+    _seen = set()
     for ch in _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all():
         if ch.id in _seen or not _prismcast_capturable(ch):
             continue

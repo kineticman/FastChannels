@@ -290,34 +290,29 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
     total = len(active_channels)
     std_count = total - gn_count
 
-    # The PrismCast feeds are the standard/gracenote sets PLUS the DRM-bridge channels
-    # (which the standard query excludes) — so their counts run higher than
-    # channel_count(). Partition the bridged set the same way for accurate per-feed
-    # counts, since PrismCast now splits into standard + gracenote like the regular feed.
     bridged_count = len(bridged_channels)
     bridged_gn = sum(1 for ch in bridged_channels if _has_gracenote_claim(ch))
 
-    # The FastChannels Player device bridge is narrower than PrismCast in two ways:
-    # only sources confirmed to actually decrypt through it (see app/drm_bridge.py),
-    # AND — unlike PrismCast, which carries the whole catalog — the fc-player feed
-    # includes ONLY those trusted sources' own channels, not every source's.
+    # PrismCast and the FastChannels Player device bridge (standard + ah4c) are both
+    # bridge-only now — exactly the DRM channels a normal client can't play, not the
+    # whole catalog/source. They're meant to be imported alongside the regular feed
+    # M3U, not instead of it: the standard query above already excludes anything
+    # requires_drm_bridge, so these and that are complementary counts with no overlap.
+    # The FastChannels Player bridge is narrower than PrismCast in one more way: only
+    # sources confirmed to actually decrypt through it (see app/drm_bridge.py).
     bridge_trusted = [ch for ch in bridged_channels if ch.source and ch.source.name in DRM_BRIDGE_TRUSTED_SOURCES]
     bridge_trusted_count = len(bridge_trusted)
     bridge_trusted_gn = sum(1 for ch in bridge_trusted if _has_gracenote_claim(ch))
-
-    trusted_std = [ch for ch in active_channels if ch.source and ch.source.name in DRM_BRIDGE_TRUSTED_SOURCES]
-    trusted_std_gn = sum(1 for ch in trusted_std if _has_gracenote_claim(ch))
-    trusted_std_count = len(trusted_std) - trusted_std_gn
 
     return {
         'standard_count': std_count,
         'gracenote_count': gn_count,
         'total_count': total,
         'bridged_count': bridged_count,
-        'prismcast_count': std_count + (bridged_count - bridged_gn),
-        'prismcast_gracenote_count': gn_count + bridged_gn,
-        'drm_bridge_count': trusted_std_count + (bridge_trusted_count - bridge_trusted_gn),
-        'drm_bridge_gracenote_count': trusted_std_gn + bridge_trusted_gn,
+        'prismcast_count': bridged_count - bridged_gn,
+        'prismcast_gracenote_count': bridged_gn,
+        'drm_bridge_count': bridge_trusted_count - bridge_trusted_gn,
+        'drm_bridge_gracenote_count': bridge_trusted_gn,
     }
 
 

@@ -720,7 +720,7 @@
                   {% if not split.get('prismcast_count', 0) and not split.get('prismcast_gracenote_count', 0) %}disabled title="No PrismCast channels in this feed"{% endif %}>📺 Add PrismCast to Channels DVR</button>
         </div>
         {% endif %}
-        <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}Bridge-only DRM channels are routed through your PrismCast server; standard channels are served direct in the same playlist. Like the regular feed, PrismCast splits into a standard-guide M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote). Import only one per source to avoid duplicate channels. The button above registers both as distinct sources (named "… PrismCast") separate from the standard push.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
+        <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}Bridge-only: just the DRM channels routed through your PrismCast server, not the whole catalog — import alongside the regular feed M3U, not instead of it, since the regular output already excludes these. Like the regular feed, PrismCast splits into a standard-guide M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote) — import only one of those two variants to avoid duplicate channels. The button above registers both as distinct sources (named "… PrismCast") separate from the standard push.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
       </details>
 
       <details class="native-endpoints">
@@ -756,7 +756,7 @@
                   {% if not split.get('drm_bridge_count', 0) and not split.get('drm_bridge_gracenote_count', 0) %}disabled title="No FastChannels Android Bridge channels in this feed"{% endif %}>📺 Add to Channels DVR</button>
         </div>
         {% endif %}
-        <p class="help" style="margin-top:0.5rem">{% if fc_player_enabled %}Every channel uses the same play URL; only trusted-source DRM channels trigger the device — everything else streams direct in the same playlist, same as the regular feed. Gracenote-mapped channels split into their own M3U here too. Import only one per source to avoid duplicate channels. The button above registers both as distinct sources (named "… Android Bridge") separate from the standard push.{% else %}Configure FastChannels Player in Settings (device IP + encoder/capture stream URL) to publish a ready-to-import feed here.{% endif %}</p>
+        <p class="help" style="margin-top:0.5rem">{% if fc_player_enabled %}Bridge-only: just the DRM channels that trigger the device, not the whole source — import alongside the regular feed M3U, not instead of it, since the regular output already excludes these. Gracenote-mapped channels split into their own M3U here too — import only one of those two variants to avoid duplicate channels. The button above registers both as distinct sources (named "… Android Bridge") separate from the standard push.{% else %}Configure FastChannels Player in Settings (device IP + encoder/capture stream URL) to publish a ready-to-import feed here.{% endif %}</p>
       </details>
 
       <details class="native-endpoints">
