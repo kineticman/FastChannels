@@ -11,26 +11,24 @@ there.
 from .models import AppSettings
 
 # Sources confirmed (dev/kodi/README.md; also re-validated live against FastChannels
-# Player 2026-08-25) to actually decrypt through an adb-triggered device bridge. Cox and
-# Warner TVE hit a confirmed, non-fixable inputstream.adaptive same-KID session-splitting
-# wall and stay excluded.
+# Player 2026-08-25) to actually decrypt through an adb-triggered device bridge.
 #
-# Re-tested 2026-08-28: hypothesized this was Kodi/inputstream.adaptive-specific (it
-# opens a second CDM session per stream even on shared default_KID) and might not
-# reproduce under FastChannels Player's Media3/ExoPlayer + platform MediaDrm stack.
-# It does reproduce — confirmed live against two channels (A&E, CNN) via real
-# fc_player_bridge.trigger_channel() on the Fire TV Stick: Media3 opens a single CDM
-# session (no splitting), but every cox-mds license POST still returns HTTP 403 even
-# after the server-side session-refresh retry (app/routes/play.py) exhausts its
-# attempts, ending in DefaultDrmSession/MediaDrmCallbackException. So the 403 isn't
-# session-count-dependent — it's Cox-side rejection of this device/out-of-home
-# context regardless of client stack. Stays excluded.
+# Cox and Warner TVE are excluded — confirmed root cause (2026-08-28, full trail in
+# dev/comcast/COX_FC_PLAYER_BRIDGE_INVESTIGATION.md): Cox's TVE license server rejects
+# every native-Android Widevine client by app identity, not session count, privacy
+# mode, security level, or device/platform class. Ruled out each of those in turn via
+# live testing (Fire TV Stick and a genuinely Cox-supported Galaxy phone both failed
+# identically). Chrome/Shaka works because it's a Cox-recognized browser client, not
+# because of anything about "browser" vs "Android" as a platform per se — the wall is
+# specifically "not Cox's own signed, registered Contour app." Not fixable from a
+# native DRM client on our side; only a screen-capture-style bridge (PrismCast
+# running real Chrome) could ever reach Cox TVE outside the browser.
 # Shared by app/routes/play.py, app/routes/admin.py, app/routes/api_dvr.py,
 # app/generators/m3u.py, and app/worker.py — keep them all in sync via this single
 # source of truth.
 DRM_BRIDGE_TRUSTED_SOURCES = frozenset({
     'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa', 'philo', 'roku',
-    'fubo', 'cox',
+    'fubo',
 })
 
 
