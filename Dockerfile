@@ -58,9 +58,11 @@ RUN echo "yt-dlp refresh token: ${YTDLP_REFRESH}" \
 RUN playwright install-deps chromium && playwright install chromium
 # Real Google Chrome (not open-source Chromium) — DirecTV Stream's Akamai
 # bot protection resets the connection for stock Chromium and its DRM check
-# fails without a genuine Widevine CDM; real Chrome clears both. patchright
-# (used for DirecTV login — see app/scrapers/directv.py) shares this same
-# browser registry, so no separate install step is needed for it.
+# fails without a genuine Widevine CDM; real Chrome clears both (see
+# app/scrapers/directv.py). If DirecTV's login ever falls back to patchright
+# (a CDP-patched Playwright fork, currently unused — see the comment in that
+# file), it shares this same browser registry, so no separate install step
+# would be needed for it either.
 RUN playwright install-deps chrome && playwright install chrome
 # Camoufox (anti-detect Firefox) for the interactive Sling sign-in - fetches its
 # own prebuilt browser binary; libgtk-3-0/xvfb above cover its runtime deps.

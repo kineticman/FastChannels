@@ -1013,7 +1013,8 @@ def capture_directv_auth(
             # is sufficient on its own, given our current patchright-based
             # flow has been unreliable in practice. If this regresses,
             # reverting to `from patchright.sync_api import sync_playwright`
-            # is the fix.
+            # is the fix — re-add `patchright` to requirements.txt first,
+            # it was dropped since nothing imports it live.
             #
             # channel="chrome" launches an actual Google Chrome build
             # (installed via `playwright install chrome`); a persistent
