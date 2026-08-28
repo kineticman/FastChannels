@@ -30,7 +30,7 @@ from .models import AppSettings
 # source of truth.
 DRM_BRIDGE_TRUSTED_SOURCES = frozenset({
     'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa', 'philo', 'roku',
-    'fubo',
+    'fubo', 'cox',
 })
 
 

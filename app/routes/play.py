@@ -4036,6 +4036,10 @@ def license_proxy(source_name: str, channel_id: str | None = None):
         logger.warning('[license-proxy] %s request failed: %s', source_name, e)
         abort(502)
 
+    if r.status_code == 403 and source_name == 'cox':
+        logger.warning('[cox-license-DEBUG] first attempt 403 headers=%s body=%r challenge_len=%d',
+                        dict(r.headers), r.content[:200], len(challenge))
+
     # Philo's DRMtoday token is tied to the channel's playback session. The
     # session cache can outlive the token, so refresh only this channel once
     # after a 403 rather than borrowing another channel's token.
@@ -4084,6 +4088,9 @@ def license_proxy(source_name: str, channel_id: str | None = None):
             headers.setdefault('Content-Type', 'application/octet-stream')
             logger.info('[cox-license] refreshed playback session after HTTP 403 channel=%s', channel_id)
             r = _send_license()
+            if r.status_code == 403:
+                logger.warning('[cox-license-DEBUG] retry attempt 403 headers=%s body=%r challenge_len=%d',
+                                dict(r.headers), r.content[:200], len(challenge))
         except Exception as e:
             logger.warning('[cox-license] channel refresh after HTTP 403 failed: %s', e)
     logger.debug('[license-proxy] %s channel=%s -> HTTP %s (%d bytes)',
