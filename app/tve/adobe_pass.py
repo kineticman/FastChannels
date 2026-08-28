@@ -352,33 +352,48 @@ def discover_aenetworks_software_statement(brand: str = 'history', session: Opti
 
     sess = session or requests.Session()
     sess.headers.setdefault('User-Agent', UA)
-    page_url = AENETWORKS_LIVE_PAGES.get(key, AENETWORKS_LIVE_PAGES['history'])
-    try:
-        r = sess.get(page_url, timeout=20)
-        r.raise_for_status()
-    except requests.RequestException as exc:
-        raise TVEAuthError(str(exc)) from exc
 
-    m = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', r.text, flags=re.S)
-    if m:
-        try:
-            data = json.loads(html.unescape(m.group(1)))
-            statement = (((data.get('props') or {}).get('config') or {}).get('adobeSoftwareStatement') or {}).get(key)
-            if statement and statement.startswith('eyJ'):
-                _STATEMENT_CACHE[key] = (monotonic(), statement)
-                return statement
-        except (TypeError, ValueError, json.JSONDecodeError):
-            pass
+    # A+E's __NEXT_DATA__ config carries every brand's statement in ONE
+    # shared `adobeSoftwareStatement` dict, not just the page's own brand —
+    # confirmed live 2026-08-28: play.aetv.com/live's config includes aetv,
+    # fyi, history AND lifetime together. So a brand whose own page has
+    # since died (FYI's play.fyi.tv/live now redirects to a schedule-only
+    # page with no __NEXT_DATA__ at all) can still be found on any OTHER
+    # brand's still-working page — tried here as a fallback after the
+    # brand's own page, since the brand's own page is the more direct/
+    # official source on the (likely common) case it still works.
+    primary_url = AENETWORKS_LIVE_PAGES.get(key, AENETWORKS_LIVE_PAGES['history'])
+    fallback_url = AENETWORKS_LIVE_PAGES['aetv']
+    urls_to_try = [primary_url] if primary_url == fallback_url else [primary_url, fallback_url]
 
-    for script_url in _script_urls(r.text, page_url):
+    for page_url in urls_to_try:
         try:
-            js = sess.get(script_url, timeout=20).text
+            r = sess.get(page_url, timeout=20)
+            r.raise_for_status()
         except requests.RequestException:
             continue
-        statement = _extract_adobe_statement(js, key)
-        if statement:
-            _STATEMENT_CACHE[key] = (monotonic(), statement)
-            return statement
+
+        m = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', r.text, flags=re.S)
+        if m:
+            try:
+                data = json.loads(html.unescape(m.group(1)))
+                statement = (((data.get('props') or {}).get('config') or {}).get('adobeSoftwareStatement') or {}).get(key)
+                if statement and statement.startswith('eyJ'):
+                    _STATEMENT_CACHE[key] = (monotonic(), statement)
+                    return statement
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+
+        for script_url in _script_urls(r.text, page_url):
+            try:
+                js = sess.get(script_url, timeout=20).text
+            except requests.RequestException:
+                continue
+            statement = _extract_adobe_statement(js, key)
+            if statement:
+                _STATEMENT_CACHE[key] = (monotonic(), statement)
+                return statement
+
     raise TVEAuthError('Could not discover A+E Adobe software statement from the live site.')
 
 
