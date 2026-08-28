@@ -741,6 +741,22 @@ def _autofill_xfinity_credentials(
     class _XfinityAutofillCancelled(Exception):
         pass
 
+    def _fill_and_submit_username(tag: str = '') -> None:
+        user_field = page.locator(_XFINITY_USER_SELECTOR).first
+        user_field.click(force=True, timeout=8000)
+        try:
+            if user_field.input_value(timeout=1000):
+                user_field.fill('', timeout=2000)
+        except Exception:  # noqa: BLE001
+            pass
+        user_field.fill(username)
+        submit = page.locator(_XFINITY_SUBMIT_SELECTOR).first
+        try:
+            submit.click(force=True, timeout=5000)
+        except Exception:  # noqa: BLE001
+            page.keyboard.press('Enter')
+        logger.info('[mvpd-login] xfinity autofill: submitted username for %s%s', username, tag)
+
     wait_started = time.monotonic()
     last_relay = wait_started
 
@@ -766,32 +782,59 @@ def _autofill_xfinity_credentials(
                 logger.info('[mvpd-login] xfinity autofill: still no visible username field after reload (SSO already past login, or an unrecognized form) url=%s', _safe_page_url(page))
                 return False
 
-        user_field = page.locator(_XFINITY_USER_SELECTOR).first
-        user_field.click(force=True, timeout=8000)
-        try:
-            if user_field.input_value(timeout=1000):
-                user_field.fill('', timeout=2000)
-        except Exception:  # noqa: BLE001
-            pass
-        user_field.fill(username)
-
-        submit = page.locator(_XFINITY_SUBMIT_SELECTOR).first
-        try:
-            submit.click(force=True, timeout=5000)
-        except Exception:  # noqa: BLE001
-            page.keyboard.press('Enter')
-        logger.info('[mvpd-login] xfinity autofill: submitted username for %s', username)
+        # Real, settled login.xfinity.com URL — captured HERE, the moment the
+        # username field is confirmed visible, not passed in by the caller.
+        # A caller-supplied `landing_url` looked equivalent but isn't: it's
+        # captured right after the caller's own JS-triggered navigation
+        # (window.location.href = mso_login_url), and Playwright's
+        # wait_for_load_state('domcontentloaded') there can return instantly
+        # on the PREVIOUS page's already-satisfied load state before the new
+        # navigation has even started — confirmed live 2026-08-28 via a real
+        # retry landing back on the pre-redirect page (e.g. www.amc.com/)
+        # instead of the actual login form URL. Self-capturing here sidesteps
+        # that race entirely.
+        confirmed_login_url = _safe_page_url(page)
+        _fill_and_submit_username()
 
         if not _wait_for_any(_XFINITY_PASSWORD_SELECTOR, time.monotonic() + wait_seconds):
-            # Unlike the username step, reloading here is NOT safe to retry:
-            # confirmed live 2026-08-14 that reloading after the username has
-            # already been submitted lands on a bare, unbranded login page
-            # (the client_id/step context is lost, not resumed) — worse than
-            # just giving up. Fall through to the caller's normal poll loop,
-            # where a human can complete it via the (now screenshot-relayed)
-            # modal if this was a genuine one-off render hiccup.
-            logger.info('[mvpd-login] xfinity autofill: no visible password field after username submit url=%s', _safe_page_url(page))
-            return False
+            # Confirmed live 2026-08-14 that a bare page.reload() here is NOT
+            # safe: it reloads whatever URL the page is CURRENTLY on, and a
+            # real HAR capture (2026-08-28, dev/amc/amc.har) shows the browser
+            # is already sitting on the bare https://login.xfinity.com/login
+            # (no query string) by the time the username POST lands — the
+            # client_id/acr_values/reqId context only ever existed in the
+            # query string of the FIRST GET. A plain reload() replays that
+            # bare, context-less URL and lands on a generic unbranded login
+            # page, which is why that fix made things worse and got reverted.
+            #
+            # `confirmed_login_url` (captured above, the moment the username
+            # field was confirmed visible — still carrying the full query
+            # string) is a different, untried target: re-navigate there and
+            # retry the whole username+password sequence once. A caller-
+            # supplied landing_url was tried here first and found unreliable
+            # (see confirmed_login_url's own comment above) — don't reuse that
+            # approach. Whether reqId/the Akamai c_ds_* challenge params in
+            # this URL tolerate a second GET is unconfirmed — if they're
+            # single-use nonces this recovery attempt will itself just fail
+            # cleanly and fall through to the caller's normal poll-and-give-up
+            # path, same as today.
+            current_url = _safe_page_url(page)
+            logger.info('[mvpd-login] xfinity autofill: no visible password field after username submit url=%s', current_url)
+            if not confirmed_login_url or confirmed_login_url == current_url:
+                return False
+            logger.info('[mvpd-login] xfinity autofill: retrying once via confirmed_login_url=%s', confirmed_login_url)
+            try:
+                page.goto(confirmed_login_url, wait_until='domcontentloaded', timeout=30000)
+            except Exception as exc:  # noqa: BLE001
+                logger.info('[mvpd-login] xfinity autofill: confirmed_login_url retry goto failed: %s', exc)
+                return False
+            if not _wait_for_any(_XFINITY_USER_SELECTOR, time.monotonic() + wait_seconds):
+                logger.info('[mvpd-login] xfinity autofill: no visible username field after confirmed_login_url retry url=%s', _safe_page_url(page))
+                return False
+            _fill_and_submit_username(tag=' (confirmed_login_url retry)')
+            if not _wait_for_any(_XFINITY_PASSWORD_SELECTOR, time.monotonic() + wait_seconds):
+                logger.info('[mvpd-login] xfinity autofill: still no visible password field after confirmed_login_url retry url=%s', _safe_page_url(page))
+                return False
 
         pw_field = page.locator(_XFINITY_PASSWORD_SELECTOR).first
         pw_field.click(force=True, timeout=8000)
