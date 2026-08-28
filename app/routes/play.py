@@ -4036,10 +4036,6 @@ def license_proxy(source_name: str, channel_id: str | None = None):
         logger.warning('[license-proxy] %s request failed: %s', source_name, e)
         abort(502)
 
-    if r.status_code == 403 and source_name == 'cox':
-        logger.warning('[cox-license-DEBUG] first attempt 403 headers=%s body=%r challenge_len=%d',
-                        dict(r.headers), r.content[:200], len(challenge))
-
     # Philo's DRMtoday token is tied to the channel's playback session. The
     # session cache can outlive the token, so refresh only this channel once
     # after a 403 rather than borrowing another channel's token.
@@ -4088,9 +4084,6 @@ def license_proxy(source_name: str, channel_id: str | None = None):
             headers.setdefault('Content-Type', 'application/octet-stream')
             logger.info('[cox-license] refreshed playback session after HTTP 403 channel=%s', channel_id)
             r = _send_license()
-            if r.status_code == 403:
-                logger.warning('[cox-license-DEBUG] retry attempt 403 headers=%s body=%r challenge_len=%d',
-                                dict(r.headers), r.content[:200], len(challenge))
         except Exception as e:
             logger.warning('[cox-license] channel refresh after HTTP 403 failed: %s', e)
     logger.debug('[license-proxy] %s channel=%s -> HTTP %s (%d bytes)',
@@ -4157,9 +4150,9 @@ def license_proxy(source_name: str, channel_id: str | None = None):
 @play_bp.route('/play/<source_name>/certificate', methods=['GET'])
 def license_certificate(source_name: str):
     """Return the Widevine service certificate for this source so Shaka can configure
-    privacy-mode license requests (serverCertificateUri).  Amazon returns the same static
-    certificate for all channels — we cache it in Redis after the first license round-trip
-    and fall back to fetching it on demand with a dummy SERVICE_CERTIFICATE_REQUEST."""
+    privacy-mode license requests (serverCertificateUri). Prefer a scraper's dedicated
+    certificate endpoint when it has one; otherwise use Widevine's legacy two-byte
+    SERVICE_CERTIFICATE_REQUEST against the normal license endpoint."""
     from ..models import Source
     scraper_cls = registry.get(source_name)
     if not scraper_cls or not getattr(scraper_cls, 'license_url', None):
@@ -4176,9 +4169,29 @@ def license_certificate(source_name: str):
                 return Response(cached, status=200, content_type='application/octet-stream')
         except Exception:
             pass
-    # Not cached — fetch live with a minimal SERVICE_CERTIFICATE_REQUEST challenge.
-    # Merge source_cache (Amazon channel_pe) over config — see license_proxy.
     cfg = {**(source.config or {}), **load_source_cache(source.id)}
+
+    # Prefer a source-native certificate endpoint. Cox's response contains the inner signed
+    # certificate expected by EME/MediaDrm; its normal /license endpoint instead returns an
+    # outer Widevine SignedMessage wrapper that Android correctly refuses to install.
+    fetch_service_certificate = getattr(scraper_cls, 'fetch_service_certificate', None)
+    if callable(fetch_service_certificate):
+        try:
+            cert_bytes = fetch_service_certificate(cfg, timeout=15)
+        except Exception as e:
+            logger.warning('[cert] %s dedicated fetch failed: %s', source_name, e)
+            abort(502)
+        if cert_bytes:
+            if _rdb:
+                try:
+                    _rdb.setex(f'amz_service_cert:{source_name}', 86400, cert_bytes)
+                except Exception:
+                    pass
+            return Response(cert_bytes, status=200, content_type='application/octet-stream')
+        abort(502)
+
+    # Generic fallback: fetch live with a minimal SERVICE_CERTIFICATE_REQUEST challenge.
+    # Merge source_cache (Amazon channel_pe) over config — see license_proxy.
     dummy_challenge = b'\x08\x04'  # Widevine SERVICE_CERTIFICATE_REQUEST
     channel_id = request.args.get('channel_id') or None
     license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id)

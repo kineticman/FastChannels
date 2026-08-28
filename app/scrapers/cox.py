@@ -420,43 +420,17 @@ def _cox_postal_code(value: str | None) -> str | None:
 
 def _cox_license_access_attributes(playback: dict[str, Any] | None, config: dict[str, Any], channel_id: str | None) -> dict[str, str]:
     stream_type = _optional_text(playback, 'location_stream_type', 'stream_type')
-    if not stream_type and isinstance(playback, dict) and playback.get('is_tve') is True:
-        stream_type = 'TVE'
     if not stream_type:
-        stream_type = _first_text(config.get('cox_license_stream_type')) or 'Geofenced'
-    attributes: dict[str, str] = {}
-    if stream_type:
-        attributes['content:xcal:streamType'] = stream_type
-
-    virtual_stream_id = _optional_text(playback, 'virtual_stream_id', 'stream_id', 'media_id') or channel_id
-    if virtual_stream_id:
-        attributes['content:xcal:virtualStreamId'] = virtual_stream_id
-
-    service_zone = _optional_text(playback, 'service_zone', 'service_zone_id') or _first_text(
-        config.get('service_zone'),
-        config.get('service_zone_id'),
-        config.get('cox_service_zone'),
-    )
-    if service_zone:
-        attributes['device:xcal:serviceZone'] = service_zone
-
-    device_type = _cox_device_type(
-        _optional_text(playback, 'device_type') or _first_text(config.get('device_type'), config.get('cox_device_type'))
-    )
-    if device_type:
-        attributes['device:xcal:deviceType'] = device_type
-
-    postal_code = _cox_postal_code(
-        _optional_text(playback, 'location_postal_code', 'service_zip') or _first_text(
-            config.get('location_postal_code'),
-            config.get('service_zip'),
-            config.get('cox_service_zip'),
-        )
-    )
-    if postal_code and stream_type:
-        attributes['device:xcal:locationPostalCode'] = postal_code
-
-    return attributes
+        # Cox's captured, known-good TVE browser request uses the XCal policy
+        # value "Geofenced". `isTve` is a channel-map family flag, not an XCal
+        # streamType value; translating it to "TVE" causes MDS to reject the
+        # otherwise-valid Widevine request with x-xcal status 14007.
+        stream_type = 'Geofenced'
+    # Do not synthesize virtualStreamId/device/location attributes. The captured
+    # successful Cox web request sent only streamType, and these optional XCal
+    # selectors change which policy MDS evaluates rather than merely supplying
+    # descriptive metadata.
+    return {'content:xcal:streamType': stream_type}
 
 
 def _logo_url(item: dict[str, Any]) -> str | None:
@@ -528,6 +502,13 @@ class CoxScraper(BaseScraper):
     def __init__(self, config: dict | None = None):
         super().__init__(config)
         self.session = self._new_cffi_session()
+        # XTV.api.init() creates one fingerprint for the browser session and reuses it
+        # for provisioning, DRM-session creation, catalog, and playback calls. Treat it
+        # as a device identity, not a per-request trace id: rotating it on every request
+        # can produce an XSCT whose encoded device context does not match the tune flow.
+        self.client_fingerprint = self.config.get('client_fingerprint') or _fingerprint()
+        if not self.config.get('client_fingerprint'):
+            self._update_config('client_fingerprint', self.client_fingerprint)
         self.sat_access_token = self.config.get('sat_access_token')
         self.id_token = self.config.get('id_token')
         self.features_token = self.config.get('features_token')
@@ -558,7 +539,7 @@ class CoxScraper(BaseScraper):
             'authorization': f'SAT {self.sat_access_token}',
             'referer': 'https://watchtv.cox.com/',
             'client-platform': CLIENT_PLATFORM,
-            'fingerprint': _fingerprint(),
+            'fingerprint': self.client_fingerprint,
             'x-finity-accept-language': 'en-US',
             'x-finity-client-info': _client_info(),
             'x-hypergard': '6.0.0',
@@ -1113,6 +1094,41 @@ class CoxScraper(BaseScraper):
             )
         import requests as _requests_fallback
         return _requests_fallback.post(url, data=body, headers=headers, timeout=timeout)
+
+    @classmethod
+    def fetch_service_certificate(cls, config: dict, timeout: int = 15) -> bytes:
+        """Fetch the raw certificate Cox's web player supplies to EME.
+
+        This is deliberately not the legacy two-byte Widevine certificate challenge sent
+        through /license. Cox exposes a dedicated JSON endpoint whose `certificate` field is
+        the inner signed certificate expected by MediaKeys.setServerCertificate and Android's
+        MediaDrm serviceCertificate property.
+        """
+        trace_id = str(uuid.uuid4())
+        headers = {
+            'Accept': 'application/vnd.xcal.mds.serviceCertificateResponse+json; version=1',
+            'Content-Type': 'application/vnd.xcal.mds.serviceCertificateRequest+json; version=1',
+            'Origin': 'https://watchtv.cox.com',
+            'Referer': 'https://watchtv.cox.com/',
+            'User-Agent': UA,
+            'X-MoneyTrace': f'trace-id={trace_id};parent-id={random.getrandbits(63)};span-id={random.getrandbits(63)};',
+        }
+        url = cls.license_url.rsplit('/license', 1)[0] + '/service-certificate'
+        response = cls.post_license_request(
+            url,
+            json.dumps({'keySystem': 'widevine'}).encode('utf-8'),
+            headers,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        encoded = data.get('certificate') if isinstance(data, dict) else None
+        if not encoded:
+            raise RuntimeError('Cox service-certificate response did not contain a certificate')
+        certificate = base64.b64decode(encoded + '==')
+        if len(certificate) < 64:
+            raise RuntimeError('Cox returned an invalid Widevine service certificate')
+        return certificate
 
     @classmethod
     def process_license_response(cls, response_bytes: bytes) -> bytes:
