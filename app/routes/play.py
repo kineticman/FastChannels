@@ -22,11 +22,6 @@ import requests as _requests
 from flask import Blueprint, redirect, abort, request, Response, render_template, g, stream_with_context, current_app
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
 from ..hls import inspect_hls_drm, parse_stream_info
-from ..dash_mpd_utils import (
-    _mpd_strip_non_av_tracks,
-    _mpd_keep_highest_bitrate_video,
-    _mpd_keep_highest_bitrate_audio,
-)
 from ..models import Channel, Source
 from ..url import public_base_url
 from ..scrapers import registry
@@ -2989,11 +2984,6 @@ def amazon_dash_proxy(channel_id: str):
         cdn_base = _urljoin(dash_url, '.')  # CDN directory containing the .mpd
         mpd = mpd.replace('<Period ', f'<BaseURL>{cdn_base}</BaseURL>\n  <Period ', 1)
 
-    if request.args.get('kodi_bridge'):
-        mpd = _mpd_strip_non_av_tracks(mpd, raw_id)
-        mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)
-        mpd = _mpd_keep_highest_bitrate_audio(mpd, raw_id)
-
     return Response(
         mpd,
         mimetype='application/dash+xml',
@@ -3053,18 +3043,6 @@ def roku_dash_proxy(channel_id: str):
     if not mpd_url or not mpd_url.startswith('http'):
         logger.warning('[roku-dash] no DASH URL for %s', raw_id[:40])
         return _unavailable_response()
-
-    if request.args.get('kodi_bridge'):
-        try:
-            r = _requests.get(mpd_url, timeout=10)
-            r.raise_for_status()
-        except Exception as e:
-            logger.warning('[roku-dash] kodi-bridge manifest fetch failed for %s: %s', raw_id[:40], e)
-            return redirect(mpd_url, code=302)
-        mpd = _mpd_strip_non_av_tracks(r.text, raw_id)
-        mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)
-        mpd = _mpd_keep_highest_bitrate_audio(mpd, raw_id)
-        return Response(mpd, mimetype='application/dash+xml')
 
     return redirect(mpd_url, code=302)
 
@@ -3576,11 +3554,6 @@ def philo_dash_proxy(channel_id: str):
     # continue against the same same-origin /play/philo/.../dash.mpd URL.
     manifest_text = re.sub(r'<Location>.*?</Location>\s*', '', r.text, flags=re.DOTALL)
 
-    if request.args.get('kodi_bridge'):
-        manifest_text = _mpd_strip_non_av_tracks(manifest_text, raw_id)
-        manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
-        manifest_text = _mpd_keep_highest_bitrate_audio(manifest_text, raw_id)
-
     return Response(
         manifest_text,
         mimetype='application/dash+xml',
@@ -3654,7 +3627,7 @@ def sling_dash_proxy(channel_id: str):
     # Media3/ExoPlayer (FastChannels Player) picks it up instead of the MediaItem-level
     # licenseUri override — confirmed live 2026-08-25 via a 403 straight to movetv.com that never
     # reached our /play/sling/license proxy (which attaches Sling's required auth headers).
-    # Stripping it has no legitimate use for any consumer, so it's unconditional, not kodi_bridge-gated.
+    # Stripping it has no legitimate use for any consumer, so it's unconditional.
     # The XML namespace prefix movenetworks uses for these rotates per-fetch (seen: v1:,
     # ms:, move: — confirmed live 2026-08-25), so match any/no prefix rather than a fixed one.
     mpd = re.sub(r'<(?:\w+:)?laurl\b[^>]*/>', '', mpd, flags=re.IGNORECASE)
@@ -3662,10 +3635,6 @@ def sling_dash_proxy(channel_id: str):
     # movenetworks' own custom namespace attribute carrying the same raw proxy URL,
     # attached directly to the generic mp4protection ContentProtection element.
     mpd = re.sub(r'\s+\w+:widevineProxy="[^"]*"', '', mpd, flags=re.IGNORECASE)
-    if request.args.get('kodi_bridge'):
-        mpd = _mpd_strip_non_av_tracks(mpd, raw_id)
-        mpd = _mpd_keep_highest_bitrate_video(mpd, raw_id)
-        mpd = _mpd_keep_highest_bitrate_audio(mpd, raw_id)
 
     return Response(
         mpd,
@@ -3700,10 +3669,6 @@ def vidaa_dash_proxy(channel_id: str):
         return _unavailable_response()
 
     mpd = r.text
-    if request.args.get('kodi_bridge'):
-        mpd = _mpd_strip_non_av_tracks(mpd, channel_id)
-        mpd = _mpd_keep_highest_bitrate_video(mpd, channel_id)
-        mpd = _mpd_keep_highest_bitrate_audio(mpd, channel_id)
 
     return Response(
         mpd,
@@ -3794,11 +3759,6 @@ def pbs_dash_proxy(channel_id: str):
             lambda m: f'{m.group(1)}<BaseURL>{upstream_dir}</BaseURL>',
             manifest_text, count=1,
         )
-
-    if request.args.get('kodi_bridge'):
-        manifest_text = _mpd_strip_non_av_tracks(manifest_text, raw_id)
-        manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
-        manifest_text = _mpd_keep_highest_bitrate_audio(manifest_text, raw_id)
 
     return Response(
         manifest_text,
@@ -3908,11 +3868,6 @@ def nbc_tve_dash_proxy(channel_id: str):
             lambda m: f'{m.group(1)}<BaseURL>{upstream_dir}</BaseURL>',
             manifest_text, count=1,
         )
-
-    if request.args.get('kodi_bridge'):
-        manifest_text = _mpd_strip_non_av_tracks(manifest_text, raw_id)
-        manifest_text = _mpd_keep_highest_bitrate_video(manifest_text, raw_id)
-        manifest_text = _mpd_keep_highest_bitrate_audio(manifest_text, raw_id)
 
     return Response(
         manifest_text,
@@ -4870,13 +4825,6 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
       - bridge channel -> trigger_channel() on the device, then redirect to the
         encoder's fixed stream URL immediately (speed-first design — return as soon as
         the device acknowledges the trigger, don't wait for real decode to start).
-
-    Deliberately does not apply the dash_mpd_utils single-bitrate-only manifest
-    normalization some DRM `dash.mpd` routes support via `kodi_bridge=1` — that was a
-    workaround for a Kodi/inputstream.adaptive-specific MediaCodec issue.
-    Media3/ExoPlayer (what FastChannels Player actually uses) already played the same
-    un-normalized adaptive manifest cleanly in testing; applying that workaround here
-    would just remove ABR quality switching for no benefit.
     """
     channel = (
         Channel.query
