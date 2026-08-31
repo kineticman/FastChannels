@@ -78,11 +78,11 @@ RUN chmod +x /app/entrypoint.sh
 # network dependency at install-button-click time — the only network dependency is
 # here, at image-build time, same as everything else this Dockerfile already fetches.
 # Deliberately NOT committed to git (see project memory on release signing) — this
-# pulls the signed APK from its GitHub Release instead. Fails soft: no release
-# published yet means no APK bundled and the install button reports that clearly,
-# rather than breaking the whole image build. ARG cache-bust mirrors YTDLP_REFRESH
-# above — bump it to force re-pulling whatever the latest release currently is,
-# independent of any FastChannels code change landing in the same build.
+# pulls the signed APK from its GitHub Release instead. A missing asset or temporary
+# fetch failure leaves the image usable and makes the install button report that no
+# APK was bundled, rather than breaking the whole image build. ARG cache-bust mirrors
+# YTDLP_REFRESH above — bump it to force re-pulling whatever the latest release
+# currently is, independent of any FastChannels code change landing in the same build.
 ARG FC_PLAYER_APK_REFRESH=unset
 RUN echo "fc-player APK refresh token: ${FC_PLAYER_APK_REFRESH}" \
     && (curl -fsSL -o /app/fc_player_release.apk.tmp \
@@ -90,7 +90,7 @@ RUN echo "fc-player APK refresh token: ${FC_PLAYER_APK_REFRESH}" \
         && mv /app/fc_player_release.apk.tmp /app/fc_player_release.apk \
         && echo "Bundled FastChannels Player release APK." \
         || (rm -f /app/fc_player_release.apk.tmp \
-            && echo "No FastChannels Player release available yet — install button will report unavailable."))
+            && echo "FastChannels Player APK was not available — install button will report unavailable."))
 
 # Python's requests library defaults to its own bundled certifi CA store instead of the
 # system one, and certifi doesn't always trust the same chains the OS does — confirmed

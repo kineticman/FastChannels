@@ -698,10 +698,9 @@ class FuboScraper(BaseScraper):
         cls, challenge: bytes, config: dict, channel_id: str | None = None, **kwargs
     ) -> tuple[bytes, dict]:
         """Attach the per-channel Irdeto Widevine token captured during resolve_dash().
-        NOTE: Authorization: Bearer is the convention Fubo's REST API uses everywhere
-        else; the real Irdeto license exchange itself wasn't observed in the captured
-        HAR (no live CDM available to generate a genuine challenge) — verify against
-        PrismCast before trusting this end-to-end."""
+        The Irdeto license exchange uses the same Authorization: Bearer convention as
+        Fubo's REST API. Live-verified end to end through both PrismCast and
+        FastChannels Player on 2026-08-31."""
         headers = {
             'Origin': 'https://www.fubo.tv',
             'Referer': 'https://www.fubo.tv/',

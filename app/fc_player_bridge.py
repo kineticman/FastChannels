@@ -47,9 +47,9 @@ _BUNDLED_APK_PATH = '/app/fc_player_release.apk'
 
 
 def bundled_apk_path() -> str | None:
-    """The bundled release APK's path, or None if this image was built before the
-    first release was published (or the build-time fetch failed) — the settings
-    page's Install button uses this to know whether it has anything to install."""
+    """The bundled release APK's path, or None if the release asset was unavailable
+    when this image was built — the settings page's Install button uses this to know
+    whether it has anything to install."""
     return _BUNDLED_APK_PATH if os.path.isfile(_BUNDLED_APK_PATH) else None
 
 # How long a bridged channel can sit with no confirmed viewer (neither Channels DVR

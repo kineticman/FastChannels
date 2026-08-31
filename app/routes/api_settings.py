@@ -212,7 +212,7 @@ def install_fc_player():
     if not apk_path:
         return jsonify({
             'ok': False,
-            'message': 'No FastChannels Player release is bundled in this build yet.',
+            'message': 'No FastChannels Player release is bundled in this build.',
         }), 400
     ok, message = fc_player_bridge.install_app(apk_path)
     return jsonify({'ok': ok, 'message': message})
@@ -443,5 +443,4 @@ def restore_local_backup():
     if not ok:
         return jsonify({'error': err}), 500
     return jsonify({'status': 'ok'})
-
 
