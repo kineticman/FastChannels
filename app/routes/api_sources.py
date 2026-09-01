@@ -11,7 +11,7 @@ from flask import Blueprint, jsonify, request, current_app
 from sqlalchemy.orm import defer
 from app.config_store import load_source_cache
 from ..extensions import db
-from ..models import Source, Channel
+from ..models import Source, Channel, SourceCache
 from ..scrapers import registry
 from ..source_config import is_source_config_complete
 try:
@@ -894,6 +894,49 @@ def amazon_auto_login(source_id):
     return jsonify({'status': 'started'})
 
 
+@sources_bp.route('/sources/<int:source_id>/amazon-auth', methods=['DELETE'])
+def clear_amazon_auth(source_id):
+    """Forget Amazon sign-in state but retain the user's saved credentials.
+
+    This is a recovery path for password/account changes and newly enabled MFA.
+    Playback envelopes and resolved URLs are tied to the old Amazon session, so
+    discard those along with the browser cookies.
+    """
+    import redis as _redis
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'amazon_prime_free':
+        return jsonify({'error': 'not an amazon source'}), 400
+
+    cfg = dict(source.config or {})
+    cfg.pop('cookie_header', None)
+    cfg.pop('browser_storage_state', None)
+    source.config = cfg
+    SourceCache.query.filter(
+        SourceCache.source_id == source.id,
+        SourceCache.cache_key.in_(('channel_pe', 'stream_url_cache')),
+    ).delete(synchronize_session=False)
+    db.session.commit()
+
+    # Remove any completed or waiting browser-login state so it cannot be
+    # picked up after the user has explicitly cleared the account session.
+    try:
+        r = _redis.from_url(current_app.config['REDIS_URL'])
+        r.delete(
+            f'amazon:auth:status:{source_id}',
+            f'amazon:auth:otp:{source_id}',
+            f'amazon:auth:result:{source_id}',
+        )
+    except Exception as exc:
+        # The database state is already safely cleared; Redis is only
+        # short-lived login coordination state.
+        logger.warning('[amazon-auth] unable to clear Redis state for source_id=%s: %s',
+                       source_id, exc)
+
+    logger.info('[amazon-auth] cleared saved session for source_id=%s', source_id)
+    return jsonify({'status': 'cleared'})
+
+
 @sources_bp.route('/sources/<int:source_id>/philo-login/send-code', methods=['POST'])
 def philo_login_send_code(source_id):
     """Step 1 of Philo's passwordless sign-in: email/phone → Philo sends a 6-digit code.
@@ -1076,5 +1119,4 @@ def directv_auth_status(source_id):
                 logger.error('[directv-auth] failed to persist result: %s', exc)
 
     return jsonify(data)
-
 

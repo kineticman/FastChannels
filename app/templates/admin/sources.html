@@ -2940,6 +2940,7 @@
         (values.amazon_email || '').trim() && (values.amazon_password || '').trim()
       );
       const hasCookie = !!(values.cookie_header || '').trim();
+      const hasSession = hasCookie || !!(values.browser_storage_state || '').trim();
       return `
         <div class="config-title">Amazon Prime Free Settings</div>
         <div class="config-note">
@@ -2954,6 +2955,10 @@
                     id="amazon-login-btn-${sourceId}"
                     ${hasCreds ? '' : 'disabled'}
                     onclick="amazonStartLogin(${sourceId})">${hasCookie ? 'Refresh Cookie' : 'Get Cookie'}</button>
+            <button class="btn btn-cancel btn-sm" type="button"
+                    id="amazon-clear-btn-${sourceId}"
+                    ${hasSession ? '' : 'disabled'}
+                    onclick="amazonClearSignin(${sourceId})">Clear Sign-in</button>
             <span class="amazon-status-text" id="amazon-status-${sourceId}">
               ${hasCookie ? '<span style="color:var(--success-soft)">&#10003; Cookie ready</span>' : (hasCreds ? 'Account saved. Get a cookie to finish setup.' : 'Add your Amazon account below first.')}
             </span>
@@ -2993,9 +2998,11 @@
 
     async function amazonStartLogin(sourceId) {
       const btn = document.getElementById(`amazon-login-btn-${sourceId}`);
+      const clearBtn = document.getElementById(`amazon-clear-btn-${sourceId}`);
       const statusEl = document.getElementById(`amazon-status-${sourceId}`);
       const otpRow = document.getElementById(`amazon-otp-${sourceId}`);
       btn.disabled = true;
+      if (clearBtn) clearBtn.disabled = true;
       statusEl.innerHTML = '<span style="color:var(--text-muted)">Starting…</span>';
       otpRow.style.display = 'none';
       try {
@@ -3004,11 +3011,13 @@
           const d = await r.json().catch(() => ({}));
           statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(d.error || 'Start failed')}</span>`;
           btn.disabled = false;
+          if (clearBtn) clearBtn.disabled = false;
           return;
         }
       } catch(e) {
         statusEl.innerHTML = `<span style="color:var(--danger)">Network error</span>`;
         btn.disabled = false;
+        if (clearBtn) clearBtn.disabled = false;
         return;
       }
       amazonPollStatus(sourceId);
@@ -3023,6 +3032,7 @@
       const statusEl = document.getElementById(`amazon-status-${sourceId}`);
       const otpRow   = document.getElementById(`amazon-otp-${sourceId}`);
       const btn      = document.getElementById(`amazon-login-btn-${sourceId}`);
+      const clearBtn = document.getElementById(`amazon-clear-btn-${sourceId}`);
       if (!statusEl) { clearInterval(_amazonPollTimer); return; }
 
       let data;
@@ -3052,10 +3062,28 @@
         clearInterval(_amazonPollTimer);
         _amazonPollTimer = null;
         btn.disabled = false;
+        if (clearBtn) clearBtn.disabled = false;
         if (status === 'success') {
           // Reload config so cookie badge updates
           setTimeout(() => loadSourceConfig(sourceId, 'amazon_prime_free'), 500);
         }
+      }
+    }
+
+    async function amazonClearSignin(sourceId) {
+      if (!confirm('Clear the saved Amazon cookie, browser session, and playback cache? Your saved Amazon email and password will remain.')) return;
+      const btn = document.getElementById(`amazon-clear-btn-${sourceId}`);
+      const statusEl = document.getElementById(`amazon-status-${sourceId}`);
+      if (btn) btn.disabled = true;
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/amazon-auth`, {method: 'DELETE'});
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || 'Could not clear sign-in');
+        if (statusEl) statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Sign-in cleared. Get a new cookie to reconnect.</span>';
+        setTimeout(() => loadSourceConfig(sourceId, 'amazon_prime_free'), 500);
+      } catch (e) {
+        if (statusEl) statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(e.message || 'Could not clear sign-in')}</span>`;
+        if (btn) btn.disabled = false;
       }
     }
 

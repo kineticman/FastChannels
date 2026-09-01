@@ -173,23 +173,46 @@ def _is_signed_in(page) -> bool:
         return True  # URL check already passed, assume ok
 
 
-def _wait_signed_in(page, timeout: float = 12.0) -> bool:
-    """Poll for a confirmed signed-in state.
+def _wait_for_login_outcome(page, timeout: float = 12.0) -> str:
+    """Wait for either a completed login or an MFA challenge.
 
-    The post-login redirect chain (/ap/signin → openid return_to → amazon.com)
-    plus nav hydration can lag well past the navigation event, so a single
-    immediate check races the page and yields false negatives. Poll until the
-    URL leaves the auth pages and the signed-in markers appear.
+    Amazon can navigate to its CVF page a few seconds after the password form
+    signals DOMContentLoaded.  Checking for MFA only once immediately after
+    that form therefore misses the challenge and reports it as a failed login.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if _is_otp_page(page):
+                return 'otp'
+            if _is_signed_in(page):
+                return 'signed_in'
+        except Exception:
+            pass
+        time.sleep(0.5)
+    if _is_otp_page(page):
+        return 'otp'
+    return 'signed_in' if _is_signed_in(page) else 'pending'
+
+
+def _wait_for_otp_submission(page, timeout: float = 45.0) -> str:
+    """Wait for an OTP/app-approval submission without requiring navigation.
+
+    Amazon's transaction-approval page can update in place after an app approval,
+    so ``expect_navigation`` incorrectly turns a successful submission into a
+    timeout.  Keep polling the page instead.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             if _is_signed_in(page):
-                return True
+                return 'signed_in'
+            if _is_captcha_page(page):
+                return 'captcha'
         except Exception:
             pass
         time.sleep(0.5)
-    return _is_signed_in(page)
+    return 'pending'
 
 
 # ── Debug helpers ─────────────────────────────────────────────────────────────
@@ -206,7 +229,7 @@ def _dump_page_debug(page, label: str) -> None:
         # First 800 chars of body text to see what Amazon returned
         body = (page.inner_text('body') or '')[:800].replace('\n', ' ')
         logger.info('[amazon-auth] DEBUG %s — body: %s', label, body)
-        path = f'/tmp/amazon_auth_{label.replace(" ", "_")}.png'
+        path = f'/tmp/amazon_auth_{int(time.time())}_{label.replace(" ", "_")}.png'
         page.screenshot(path=path)
         logger.info('[amazon-auth] DEBUG screenshot saved to %s', path)
     except Exception as exc:
@@ -398,8 +421,13 @@ def run_amazon_auth(
                     return
 
                 # ── OTP / 2FA ──────────────────────────────────────────────
-                if _is_otp_page(page):
+                # Amazon's CVF redirect may arrive after the password form's
+                # navigation event, so wait for either a signed-in page or a
+                # challenge instead of checking the page only once.
+                login_outcome = _wait_for_login_outcome(page)
+                if login_outcome == 'otp':
                     logger.info('[amazon-auth] OTP challenge detected for source_id=%s', source_id)
+                    _dump_page_debug(page, 'otp_challenge')
                     _write_status(r, source_id, 'waiting_otp',
                                   'Enter the one-time code Amazon sent to your phone or email.')
                     otp = _wait_for_otp(r, source_id)
@@ -417,21 +445,27 @@ def run_amazon_auth(
                         )
                         page.wait_for_selector(otp_selector, timeout=8000)
                         page.fill(otp_selector, otp.strip())
+                        _dump_page_debug(page, 'otp_ready_to_submit')
                         submit_selector = (
                             'input#auth-signin-button, '
                             'input#cvf-submit-otp-button, '
                             'input[type="submit"]'
                         )
-                        with page.expect_navigation(wait_until='domcontentloaded', timeout=15000):
-                            page.click(submit_selector)
+                        page.click(submit_selector, timeout=8000)
+                        _dump_page_debug(page, 'otp_submitted')
                     except _PWTimeout:
+                        _dump_page_debug(page, 'otp_submit_timeout')
                         _write_status(r, source_id, 'failed', 'OTP submission timed out.')
                         return
 
+                    _write_status(r, source_id, 'running',
+                                  'Waiting for Amazon to confirm the code or app approval…')
+                    login_outcome = _wait_for_otp_submission(page)
+                    if login_outcome != 'signed_in':
+                        _dump_page_debug(page, 'otp_confirmation_pending')
+
                 # ── Verify success ─────────────────────────────────────────
-                # Poll, not a one-shot check: the post-login redirect chain and
-                # nav hydration lag the navigation event by a second or two.
-                if not _wait_signed_in(page):
+                if login_outcome != 'signed_in':
                     final_url = page.url
                     _dump_page_debug(page, 'verify_failed')
                     if _is_captcha_page(page):
