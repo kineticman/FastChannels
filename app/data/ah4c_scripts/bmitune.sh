@@ -37,7 +37,12 @@ if [ -z "$SOURCE" ] || [ -z "$CHANNEL_ID" ] || [ "$SOURCE" == "$CHANNEL_ID" ]; t
 fi
 
 is_media_playing() {
-	adb -s "$TUNERIP" shell dumpsys media_session 2>/dev/null | grep -q "state=PlaybackState {state=3"
+	# Do not accept a playing session from the Fire TV launcher, Alexa, or a
+	# previous app as proof that *our* tune succeeded.  Media3 publishes the
+	# package name immediately before its PlaybackState in dumpsys output.
+	adb -s "$TUNERIP" shell dumpsys media_session 2>/dev/null | \
+		grep -A 12 "package=com.fastchannels.player" | \
+		grep -q "state=PlaybackState {state=3"
 }
 
 trigger() {
