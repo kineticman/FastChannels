@@ -385,7 +385,7 @@ def check_idle_and_stop() -> None:
 
 
 def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: str = 'FastChannels',
-                     channel_key: str | None = None) -> bool:
+                     channel_key: str | None = None, adb_address: str | None = None) -> bool:
     """Tell the FastChannels Player app to start playing this stream right now.
 
     manifest_url should already be the fully-resolved play URL (same shape
@@ -396,11 +396,16 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
 
     channel_key (f'{source_name}:{channel_id}') is only used when the idle-stop
     watchdog is enabled — see note_trigger().
+
+    adb_address overrides the single configured device for this one trigger — ah4c
+    supplies it (per allocated tuner) when it's fronting more than one streaming stick.
+    When set, idle-stop tracking is skipped: it's single-device global state, and the
+    ah4c stop script already force-stops each stick on its own disconnect.
     """
-    address = _adb_address()
+    address = adb_address or _adb_address()
     drm = bool(license_url)
 
-    if channel_key and idle_stop_enabled():
+    if channel_key and adb_address is None and idle_stop_enabled():
         note_trigger(channel_key)
 
     try:
