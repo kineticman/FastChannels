@@ -250,6 +250,8 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_ah4c_enabled BOOLEAN NOT NULL DEFAULT 0"))
             if "fc_player_bridge_ah4c_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_ah4c_url TEXT"))
+            if "fc_player_device_settings_backup" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_device_settings_backup TEXT"))
 
         if "sources" in tables:
             src_cols = {

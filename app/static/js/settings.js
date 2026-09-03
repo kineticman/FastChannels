@@ -270,6 +270,115 @@ async function installFcPlayer() {
   }
 }
 
+const FC_PLAYER_NEVER_TIMEOUT = 2147483647;
+
+function fcPlayerTimeoutLabel(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 'Unknown';
+  if (n >= FC_PLAYER_NEVER_TIMEOUT) return 'Never';
+  if (n % 3600000 === 0) return `${n / 3600000} hour${n === 3600000 ? '' : 's'}`;
+  if (n % 60000 === 0) return `${n / 60000} minutes`;
+  return `${n} ms`;
+}
+
+function setFcPlayerTimeoutSelect(id, value) {
+  const select = document.getElementById(id);
+  const text = String(value ?? '');
+  if (text && !Array.from(select.options).some((option) => option.value === text)) {
+    const option = document.createElement('option');
+    option.value = text;
+    option.textContent = fcPlayerTimeoutLabel(value);
+    select.appendChild(option);
+  }
+  if (text) select.value = text;
+}
+
+function fcPlayerDeviceMessage(message, ok = true) {
+  const el = document.getElementById('fc-player-device-controls-message');
+  el.textContent = message || '';
+  el.className = 'save-status ' + (ok ? 'ok' : 'error');
+}
+
+function closeFcPlayerDeviceControls() {
+  document.getElementById('fc-player-device-controls-modal').classList.remove('open');
+}
+
+async function openFcPlayerDeviceControls() {
+  document.getElementById('fc-player-device-controls-modal').classList.add('open');
+  await refreshFcPlayerDeviceControls();
+}
+
+async function refreshFcPlayerDeviceControls() {
+  const body = document.getElementById('fc-player-device-controls-status');
+  body.textContent = 'Loading…';
+  fcPlayerDeviceMessage('');
+  try {
+    const resp = await fetch('/api/settings/fc-player/device-controls');
+    const data = await resp.json();
+    if (!data.ok) {
+      body.textContent = data.message || 'Could not read device status.';
+      return;
+    }
+    const awake = data.awake === true ? 'Awake' : data.awake === false ? 'Asleep' : data.wakefulness;
+    const player = data.player_installed
+      ? `Installed (${data.player_version || 'version unknown'})`
+      : 'Not installed';
+    const playback = data.player_playing ? 'Playing' : 'Idle';
+    body.innerHTML = `
+      <div style="display:grid;grid-template-columns:max-content 1fr;gap:0.25rem 0.8rem">
+        <strong>Connection</strong><span style="color:var(--success)">Connected via ADB</span>
+        <strong>Device</strong><span>${_escapeHtml(data.model || 'Android TV device')}${data.android_version ? ` · Android ${_escapeHtml(data.android_version)}` : ''}</span>
+        <strong>Screen</strong><span>${_escapeHtml(awake)} · Display ${_escapeHtml(data.display_power || 'Unknown')}</span>
+        <strong>Player</strong><span>${_escapeHtml(player)} · ${playback}</span>
+        <strong>Keep awake</strong><span>${Number(data.stay_on_while_powered) ? 'On while powered' : 'Off'}</span>
+        <strong>Screen off</strong><span>${fcPlayerTimeoutLabel(data.screen_off_timeout)}</span>
+        <strong>Sleep</strong><span>${fcPlayerTimeoutLabel(data.sleep_timeout)}</span>
+      </div>`;
+    document.getElementById('fc-player-device-stay-awake').checked = Number(data.stay_on_while_powered) !== 0;
+    setFcPlayerTimeoutSelect('fc-player-device-screen-timeout', data.screen_off_timeout);
+    setFcPlayerTimeoutSelect('fc-player-device-sleep-timeout', data.sleep_timeout);
+    document.getElementById('fc-player-device-restore').disabled = !data.restore_available;
+  } catch (e) {
+    body.textContent = 'Could not read device status.';
+  }
+}
+
+async function fcPlayerDevicePost(path, payload = null) {
+  try {
+    const options = {method: 'POST', headers: {}};
+    if (payload !== null) {
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(payload);
+    }
+    const resp = await fetch(`/api/settings/fc-player/device-controls/${path}`, options);
+    const data = await resp.json();
+    fcPlayerDeviceMessage(data.message || (data.ok ? 'Saved.' : 'Action failed.'), !!data.ok);
+    if (data.ok) await refreshFcPlayerDeviceControls();
+  } catch (e) {
+    fcPlayerDeviceMessage('Device action failed.', false);
+  }
+}
+
+function wakeFcPlayerDevice() {
+  return fcPlayerDevicePost('wake');
+}
+
+function applyFcPlayerHeadlessPreset() {
+  return fcPlayerDevicePost('headless');
+}
+
+function restoreFcPlayerDeviceSettings() {
+  return fcPlayerDevicePost('restore');
+}
+
+function saveFcPlayerDevicePowerSettings() {
+  return fcPlayerDevicePost('power', {
+    stay_awake: document.getElementById('fc-player-device-stay-awake').checked,
+    screen_off_timeout: Number(document.getElementById('fc-player-device-screen-timeout').value),
+    sleep_timeout: Number(document.getElementById('fc-player-device-sleep-timeout').value),
+  });
+}
+
 async function testFcPlayer() {
   const statusEl = document.getElementById('fc-player-encoder-status');
   statusEl.textContent = 'Testing…';

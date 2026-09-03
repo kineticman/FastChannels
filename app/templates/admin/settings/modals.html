@@ -17,6 +17,57 @@
     </div>
   </div>
 
+  <!-- FastChannels Player Fire TV / Android TV controls -->
+  <div class="modal-overlay" id="fc-player-device-controls-modal" onclick="if(event.target===this)closeFcPlayerDeviceControls()">
+    <div class="modal-box" style="max-width:600px;max-height:85vh;overflow-y:auto">
+      <h3 style="margin:0 0 0.35rem">Fire TV Device Controls</h3>
+      <p style="color:var(--text-subtle);margin:0 0 1rem;line-height:1.5">
+        Live ADB status and display settings for the device FastChannels Player controls.
+      </p>
+      <div id="fc-player-device-controls-status" style="margin-bottom:1rem;line-height:1.55">Loading&hellip;</div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1.25rem">
+        <button class="btn btn-secondary" onclick="wakeFcPlayerDevice()">Wake now</button>
+        <button class="btn btn-primary" onclick="applyFcPlayerHeadlessPreset()">Apply headless preset</button>
+        <button class="btn btn-secondary" id="fc-player-device-restore" onclick="restoreFcPlayerDeviceSettings()" disabled>Restore previous settings</button>
+      </div>
+      <details>
+        <summary style="cursor:pointer;font-weight:600">Advanced display settings</summary>
+        <div class="help" style="margin:0.65rem 0 0.85rem">The headless preset keeps a powered device awake and sets both timeouts to Never. FastChannels saves the existing values once, before its first change.</div>
+        <div class="fields-grid" style="max-width:440px">
+          <div class="field field-full">
+            <label class="toggle-switch" style="vertical-align:middle;margin-right:0.5rem">
+              <input type="checkbox" id="fc-player-device-stay-awake">
+              <span class="toggle-slider"></span>
+            </label>
+            <label for="fc-player-device-stay-awake" style="display:inline">Keep awake while powered</label>
+          </div>
+          <div class="field">
+            <label for="fc-player-device-screen-timeout">Screen-off timeout</label>
+            <select id="fc-player-device-screen-timeout">
+              <option value="60000">1 minute</option><option value="300000">5 minutes</option>
+              <option value="900000">15 minutes</option><option value="1800000">30 minutes</option>
+              <option value="3600000">1 hour</option><option value="2147483647">Never</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="fc-player-device-sleep-timeout">Sleep timeout</label>
+            <select id="fc-player-device-sleep-timeout">
+              <option value="300000">5 minutes</option><option value="1200000">20 minutes</option>
+              <option value="1800000">30 minutes</option><option value="3600000">1 hour</option>
+              <option value="2147483647">Never</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:0.85rem"><button class="btn btn-secondary" onclick="saveFcPlayerDevicePowerSettings()">Save device settings</button></div>
+      </details>
+      <div id="fc-player-device-controls-message" class="save-status" style="display:block;margin-top:1rem"></div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:1.25rem">
+        <button class="btn btn-secondary" onclick="refreshFcPlayerDeviceControls()">Refresh</button>
+        <button class="btn-cancel-modal" onclick="closeFcPlayerDeviceControls()">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- PrismCast setup test modal -->
   <div class="modal-overlay" id="prismcast-test-modal">
     <div class="modal-box" style="max-width:760px;max-height:85vh;display:flex;flex-direction:column">
