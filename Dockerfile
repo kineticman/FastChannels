@@ -8,6 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Set automatically by Buildx for each target platform. It must be declared in
+# this build stage before a RUN instruction can read it.
+ARG TARGETARCH
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
@@ -56,14 +60,15 @@ RUN echo "yt-dlp refresh token: ${YTDLP_REFRESH}" \
     && pip install --force-reinstall "yt-dlp[default] @ https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz"
 
 RUN playwright install-deps chromium && playwright install chromium
-# Real Google Chrome (not open-source Chromium) — DirecTV Stream's Akamai
-# bot protection resets the connection for stock Chromium and its DRM check
-# fails without a genuine Widevine CDM; real Chrome clears both (see
-# app/scrapers/directv.py). If DirecTV's login ever falls back to patchright
-# (a CDP-patched Playwright fork, currently unused — see the comment in that
-# file), it shares this same browser registry, so no separate install step
-# would be needed for it either.
-RUN playwright install-deps chrome && playwright install chrome
+# Real Google Chrome (not open-source Chromium) is an amd64-only Playwright
+# download. DirecTV Stream's Akamai protection needs it on amd64 (see
+# app/scrapers/directv.py); arm64 retains the Chromium installed above because
+# Playwright has no Chrome-for-Linux-arm64 build to download.
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        playwright install-deps chrome && playwright install chrome; \
+    else \
+        echo "Skipping unsupported Playwright Chrome download on $TARGETARCH"; \
+    fi
 # Camoufox (anti-detect Firefox) for the interactive Sling sign-in - fetches its
 # own prebuilt browser binary; libgtk-3-0/xvfb above cover its runtime deps.
 RUN python -m camoufox fetch
