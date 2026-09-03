@@ -241,6 +241,10 @@
         maxHeight: MAX_HEIGHT,
         liveEdgeSync: LIVE_EDGE_SYNC,
         onLiveEdgeSeek: (info) => emitWatchDebug('live-edge-seek', info),
+        // fc_player deliberately omits license material, key IDs, and session IDs
+        // from this snapshot.  These milestones let us distinguish "license was
+        // rejected" from "license accepted but its key became output-restricted".
+        onDrmEvent: (info) => emitWatchDebug('shaka-drm-' + info.event, info),
         // Fullscreen overlay stays clean (no visible text) on success/native playback —
         // but still forward every transient status line to the debug log, since these
         // can flash by faster than a person can read them in the preview modal.
