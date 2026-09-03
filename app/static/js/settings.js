@@ -255,6 +255,83 @@ async function saveFcPlayerAh4cSettings() {
   await saveSettings({fc_player_ah4c_url: url || null}, 'fc-player-ah4c-status');
 }
 
+function renderAh4cTuners(tuners) {
+  const box = document.getElementById('ah4c-tuners-result');
+  box.textContent = '';
+  const table = document.createElement('table');
+  table.className = 'ah4c-tuners-table';
+  const head = table.createTHead().insertRow();
+  ['ah4c tuner', 'TUNERn_IP', 'Authorized in FastChannels'].forEach((label) => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    head.appendChild(th);
+  });
+  const body = table.createTBody();
+  const badges = {
+    device: ['✓ Authorized', 'ok'],
+    unauthorized: ['✕ Not authorized', 'warn'],
+    offline: ['✕ Offline', 'warn'],
+    unreachable: ['✕ Unreachable', 'error'],
+  };
+  tuners.forEach((t) => {
+    const row = body.insertRow();
+    row.insertCell().textContent = '#' + t.index;
+    const ipCell = row.insertCell();
+    ipCell.textContent = t.tuner_ip;
+    ipCell.className = 'mono';
+    const statusCell = row.insertCell();
+    const [text, cls] = badges[t.state] || ['✕ ' + t.state, 'error'];
+    const badge = document.createElement('span');
+    badge.className = 'ah4c-tuner-badge ' + cls;
+    badge.textContent = text;
+    statusCell.appendChild(badge);
+    if (t.message) {
+      const note = document.createElement('div');
+      note.className = 'ah4c-tuner-note';
+      note.textContent = t.message;
+      statusCell.appendChild(note);
+    }
+  });
+  box.appendChild(table);
+  box.hidden = false;
+}
+
+async function checkAh4cTuners() {
+  const statusEl = document.getElementById('fc-player-ah4c-status');
+  const box = document.getElementById('ah4c-tuners-result');
+  statusEl.textContent = 'Checking tuners…';
+  statusEl.className = 'save-status';
+  try {
+    const resp = await fetch('/api/settings/fc-player/ah4c-tuners', {method: 'POST'});
+    const data = await resp.json();
+    if (!data.ok) {
+      box.hidden = true;
+      box.textContent = '';
+      statusEl.textContent = '✕ ' + (data.message || 'Tuner check failed.');
+      statusEl.className = 'save-status error';
+      return;
+    }
+    if (!data.tuners || !data.tuners.length) {
+      box.hidden = true;
+      box.textContent = '';
+      statusEl.textContent = data.message || 'ah4c reports no configured tuners.';
+      statusEl.className = 'save-status';
+      return;
+    }
+    renderAh4cTuners(data.tuners);
+    const unauthorized = data.tuners.filter((t) => !t.authorized).length;
+    statusEl.textContent = unauthorized
+      ? `${unauthorized} of ${data.tuners.length} tuner(s) not authorized`
+      : `All ${data.tuners.length} tuner(s) authorized`;
+    statusEl.className = 'save-status ' + (unauthorized ? 'error' : 'ok');
+  } catch (e) {
+    box.hidden = true;
+    box.textContent = '';
+    statusEl.textContent = '✕ Tuner check failed.';
+    statusEl.className = 'save-status error';
+  }
+}
+
 async function installFcPlayer() {
   const statusEl = document.getElementById('fc-player-status');
   statusEl.textContent = 'Installing…';
