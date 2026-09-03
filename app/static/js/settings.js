@@ -264,6 +264,8 @@ function renderAh4cTuners(tuners) {
   ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels', 'Android / Fire OS', 'Sleep disabled'].forEach((label) => {
     const th = document.createElement('th');
     th.textContent = label;
+    // Keep the literal env-var name as-is; the other headers get uppercased by CSS.
+    if (label === 'TUNERx_IP') th.className = 'no-transform';
     head.appendChild(th);
   });
   const body = table.createTBody();

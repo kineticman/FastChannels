@@ -346,6 +346,9 @@
       text-transform: uppercase;
       letter-spacing: 0.03em;
     }
+    .ah4c-tuners-table th.no-transform {
+      text-transform: none;
+    }
     .ah4c-tuners-table td.mono {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       color: var(--accent-soft);
