@@ -59,6 +59,38 @@ _MVPD_SESSION_POLL_MAX_SECONDS = 20.0
 _MVPD_SESSION_POLL_BACKOFF = 1.5
 
 
+def _is_redirected_callback_page(actual_url: str, expected_url: str, requestor_id: str) -> bool:
+    """Return whether a known retired callback URL redirected to its landing page.
+
+    Adobe sends an unsupported-MVPD attempt straight to the supplied
+    ``redirect_url``.  Normally ``_same_page_url`` below recognizes that
+    immediately.  FYI retired its ``www.fyi.tv/mvpd-auth`` handler in late
+    August 2026, though, and now redirects that callback to A+E's FYI
+    schedule page.  Treat that destination as the same bounce so it cannot
+    be mistaken for a page where the user should continue signing in.
+
+    This deliberately remains specific to FYI's documented redirect rather
+    than treating arbitrary A+E schedule pages as callbacks.  A successful
+    warm Adobe SSO can also land on a callback; callers still grace-poll
+    Adobe before reporting this as an unsupported provider.
+    """
+    if _same_page_url(actual_url, expected_url):
+        return True
+    if requestor_id.upper() != 'FYI':
+        return False
+    try:
+        actual = _urlsplit(actual_url)
+        expected = _urlsplit(expected_url)
+        return (
+            expected.netloc.lower() == 'www.fyi.tv'
+            and expected.path.rstrip('/') == '/mvpd-auth'
+            and actual.netloc.lower() == 'www.aetv.com'
+            and actual.path.rstrip('/') == '/fyi/schedule'
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
     """Pushes its own app_context — see _prime_google_session's docstring.
     May be called mid-browser-session, after the caller has already popped
@@ -558,7 +590,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 # the same profile's Adobe session, even though Cox is
                 # genuinely a listed truTV MVPD (a cold, cookie-free
                 # `requests` session redirects cleanly to Cox's real login).
-                if _same_page_url(_safe_page_url(page), redirect_url):
+                if _is_redirected_callback_page(_safe_page_url(page), redirect_url, requestor_id):
                     if _grace_poll_pairing('landed directly on redirect_url'):
                         return
                     _step(requestor_id, 'failed', 'not a participating provider')
