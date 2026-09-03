@@ -162,6 +162,13 @@ The automatic stop option detects viewers using Channels DVR's activity status
 or the FastChannels `/watch` page. It cannot detect a third-party player
 connected directly to the M3U. Leave this option off if you watch that way.
 
+**Fire TV Device Controls** next to the Install button is the quickest way to
+diagnose a headless device: it shows ADB reachability, whether the screen is
+awake, the installed player version, and current display timeouts. **Apply
+headless preset** keeps a powered device awake and prevents its screen/sleep
+timeouts from interrupting the HDMI encoder; FastChannels saves the prior
+values so **Restore previous settings** can put them back later.
+
 If you're using the single-encoder method, scroll to the **Single HDMI
 encoder** section and enter:
 
