@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings regardless of a checkout's core.autocrlf —
+# a CRLF shebang makes the kernel look for an interpreter named "/bin/bash\r"
+# and the container fails with "exec /app/entrypoint.sh: no such file or directory".
+*.sh text eol=lf
+entrypoint.sh text eol=lf

@@ -4852,9 +4852,11 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
 
     settings = AppSettings.get()
     encoder_url = settings.effective_fc_player_bridge_encoder_url()
-    if not encoder_url:
+    ah4c_url = settings.effective_fc_player_bridge_ah4c_url()
+    if not encoder_url and not ah4c_url:
         logger.error(
-            '[fc-player] play request for %s/%s but fc_player_bridge_encoder_url is not configured',
+            '[fc-player] play request for %s/%s but neither fc_player_bridge_encoder_url '
+            'nor ah4c support is configured',
             source_name, channel_id,
         )
         return Response('FastChannels Player encoder URL is not configured.\n', status=503, mimetype='text/plain')
@@ -4881,10 +4883,17 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
         channel_key=f'{source_name}:{channel_id}',
     )
     logger.info(
-        '[fc-player] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s triggered=%s -> encoder',
+        '[fc-player] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s triggered=%s -> %s',
         getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name, triggered,
+        'encoder' if encoder_url else 'ah4c (trigger-only)',
     )
-    return redirect(encoder_url, 302)
+    if encoder_url:
+        return redirect(encoder_url, 302)
+    # ah4c-only setup: ah4c is already relaying its own HDMI capture and calls this
+    # route (via the exported bmitune.sh) purely to fire the adb play trigger, then
+    # confirms playback itself with `adb shell dumpsys media_session`. There's no
+    # encoder URL to redirect to, so just acknowledge the trigger.
+    return Response('', status=204)
 
 
 @play_bp.route('/play/fc-player/<source_name>/<channel_id>.m3u')
