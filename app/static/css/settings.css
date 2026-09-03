@@ -321,11 +321,16 @@
 
     .ah4c-tuners {
       margin-top: 0.9rem;
+      overflow-x: auto;
     }
     .ah4c-tuners-table {
       width: 100%;
       border-collapse: collapse;
       font-size: 0.8rem;
+    }
+    .ah4c-tuners-table td.ah4c-fireos {
+      color: var(--accent-soft);
+      font-weight: 600;
     }
     .ah4c-tuners-table th,
     .ah4c-tuners-table td {
@@ -357,7 +362,7 @@
       color: var(--text-soft);
       font-size: 0.74rem;
       line-height: 1.4;
-      max-width: 40ch;
+      max-width: 32ch;
     }
 
     .advanced-box {

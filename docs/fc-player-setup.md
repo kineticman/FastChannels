@@ -246,14 +246,19 @@ build or maintain on the ah4c side.
      machines aren't always the same one). Downloading produces
      `prebmitune.sh`, `bmitune.sh`, `stopbmitune.sh`, and `reboot.sh`, already
      configured with that address baked in.
-   - Click **Check tuner authorization** (any time after the server URL is
-     saved). FastChannels reads ah4c's configured `TUNERn_IP` list from ah4c's
+   - Click **Check tuner authorization(s)** (any time after the server URL is
+     saved). FastChannels reads ah4c's configured `TUNERx_IP` list from ah4c's
      own `/api/status` and, for each one, reports whether *this* FastChannels
      container can reach it over ADB and has been authorized on the device.
      Because ah4c and FastChannels are separate ADB clients with separate keys,
      a tuner ah4c already drives can still show **Not authorized** here — fix it
      the same way as any other unapproved key (trigger an action, approve the
-     prompt on that TV).
+     prompt on that TV). For authorized tuners the table also shows the device
+     OS (flagging Fire OS) and whether auto-sleep is turned off — a stick whose
+     display sleep timer is still armed will drop to "no signal" partway through
+     a session. Disable sleep on the device (Fire TV: **Settings → Display &
+     Sounds → Display → Sleep → Never**; Android TV: the screensaver / sleep
+     timeout under **Device Preferences**).
 3. On the machine running ah4c, extract those four scripts into a new
    directory under its mounted scripts folder, e.g.
    `${HOST_DIR}/ah4c/scripts/firetv/fastchannels/`, and set

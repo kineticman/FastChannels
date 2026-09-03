@@ -261,7 +261,7 @@ function renderAh4cTuners(tuners) {
   const table = document.createElement('table');
   table.className = 'ah4c-tuners-table';
   const head = table.createTHead().insertRow();
-  ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels'].forEach((label) => {
+  ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels', 'Android / Fire OS', 'Sleep disabled'].forEach((label) => {
     const th = document.createElement('th');
     th.textContent = label;
     head.appendChild(th);
@@ -273,23 +273,47 @@ function renderAh4cTuners(tuners) {
     offline: ['✕ Offline', 'warn'],
     unreachable: ['✕ Unreachable', 'error'],
   };
+  const addBadge = (cell, text, cls, note) => {
+    const badge = document.createElement('span');
+    badge.className = 'ah4c-tuner-badge ' + cls;
+    badge.textContent = text;
+    cell.appendChild(badge);
+    if (note) {
+      const el = document.createElement('div');
+      el.className = 'ah4c-tuner-note';
+      el.textContent = note;
+      cell.appendChild(el);
+    }
+  };
   tuners.forEach((t) => {
     const row = body.insertRow();
     row.insertCell().textContent = '#' + t.index;
     const ipCell = row.insertCell();
     ipCell.textContent = t.tuner_ip;
     ipCell.className = 'mono';
-    const statusCell = row.insertCell();
+
     const [text, cls] = badges[t.state] || ['✕ ' + t.state, 'error'];
-    const badge = document.createElement('span');
-    badge.className = 'ah4c-tuner-badge ' + cls;
-    badge.textContent = text;
-    statusCell.appendChild(badge);
-    if (t.message) {
-      const note = document.createElement('div');
-      note.className = 'ah4c-tuner-note';
-      note.textContent = t.message;
-      statusCell.appendChild(note);
+    addBadge(row.insertCell(), text, cls, t.message);
+
+    const osCell = row.insertCell();
+    if (t.state !== 'device') {
+      osCell.textContent = '—';
+    } else if (t.os_label) {
+      osCell.textContent = t.os_label;
+      if (t.is_fire_os) osCell.classList.add('ah4c-fireos');
+    } else {
+      osCell.textContent = 'Unknown';
+    }
+
+    const sleepCell = row.insertCell();
+    if (t.state !== 'device') {
+      sleepCell.textContent = '—';
+    } else if (t.sleep_disabled === true) {
+      addBadge(sleepCell, '✓ Disabled', 'ok', t.sleep_detail);
+    } else if (t.sleep_disabled === false) {
+      addBadge(sleepCell, '✕ Still armed', 'warn', t.sleep_detail);
+    } else {
+      addBadge(sleepCell, '? Unknown', 'warn', t.sleep_detail);
     }
   });
   box.appendChild(table);

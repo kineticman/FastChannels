@@ -252,26 +252,122 @@ def _adb_state_for(address: str) -> tuple[str, str]:
                            'that ADB debugging is enabled.')
 
 
+def _ms_to_human(ms: int) -> str:
+    if ms >= 60_000:
+        return f'{ms // 60_000} min'
+    if ms >= 1_000:
+        return f'{ms // 1_000} s'
+    return f'{ms} ms'
+
+
+# A screen-off timeout stored as (near) 2^31-1 ms is Android's "Never" sentinel.
+_NEVER_MS = 2_000_000_000
+
+
+def _device_os_and_sleep(address: str) -> dict:
+    """OS identification and auto-sleep state for one authorized device, in a
+    single adb shell round-trip. Only meaningful once _adb_state_for() said
+    'device' — a shell is needed. Every field degrades to None/'' on any failure
+    so a probe that half-answers never breaks the row."""
+    out = {
+        'os_label': '',
+        'is_fire_os': False,
+        'sleep_disabled': None,   # True / False / None (unknown)
+        'sleep_detail': '',
+    }
+    # One remote shell, newline-separated, in a fixed order we can index back out.
+    remote = (
+        'getprop ro.build.version.release; '
+        'getprop ro.product.manufacturer; '
+        'getprop ro.build.version.fireos; '
+        'getprop ro.build.version.name; '
+        'settings get secure sleep_timeout; '
+        'settings get system screen_off_timeout'
+    )
+    try:
+        res = subprocess.run(
+            ['adb', '-s', address, 'shell', remote],
+            capture_output=True, timeout=_ADB_TIMEOUT, check=False, text=True,
+        )
+    except Exception:
+        return out
+    if res.returncode != 0:
+        return out
+
+    lines = [ln.strip() for ln in (res.stdout or '').splitlines()]
+    lines += [''] * (6 - len(lines))
+    release, manufacturer, fireos, build_name, sleep_timeout, screen_off = lines[:6]
+
+    fire = 'amazon' in manufacturer.lower() or bool(fireos) or 'fire os' in build_name.lower()
+    out['is_fire_os'] = fire
+    android = f'Android {release}' if release and release.lower() != 'null' else ''
+    if fire:
+        if fireos and fireos.lower() != 'null':
+            fire_label = f'Fire OS {fireos}'
+        elif 'fire os' in build_name.lower():
+            fire_label = build_name
+        else:
+            fire_label = 'Fire OS'
+        out['os_label'] = f'{fire_label} · {android}' if android else fire_label
+    else:
+        out['os_label'] = android
+
+    def _as_int(v: str) -> int | None:
+        v = (v or '').strip()
+        if not v or v.lower() == 'null':
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            return None
+
+    st, sot = _as_int(sleep_timeout), _as_int(screen_off)
+    # Prefer `secure sleep_timeout` (what the user asked to check); fall back to
+    # `system screen_off_timeout` when the device doesn't populate it.
+    primary, key = (st, 'sleep_timeout') if st is not None else (sot, 'screen_off_timeout')
+    if primary is None:
+        out['sleep_detail'] = 'sleep_timeout unreadable'
+    elif primary <= 0 or primary >= _NEVER_MS:
+        out['sleep_disabled'] = True
+        out['sleep_detail'] = f'{key}={primary}'
+    else:
+        out['sleep_disabled'] = False
+        out['sleep_detail'] = f'{key}={primary} ({_ms_to_human(primary)})'
+    return out
+
+
 def verify_ah4c_tuners() -> list[dict]:
     """Pairs each of ah4c's configured TUNERn_IP values with what this FastChannels
     container can actually reach and is authorized for over adb. The two run
     separate adb clients with separate keys, so a tuner ah4c is happy with can
     still be unauthorized (or unreachable) from here — that's exactly what this
-    surfaces."""
+    surfaces.
+
+    For tuners that are authorized, it also reports the device OS (flagging Fire
+    OS) and whether auto-sleep is turned off — a stick that dozes off mid-session
+    is a common ah4c-path failure, so "no signal" is easier to chase down when the
+    table already says the display sleep timer is still armed."""
     results: list[dict] = []
     for idx, ip in enumerate(ah4c_tuner_ips(), start=1):
         # ah4c stores TUNERn_IP as a bare host or host:port; the container's adb
         # keys are always host:5555 (see prebmitune.sh's own optional-port match).
         address = ip if ':' in ip.rsplit(']', 1)[-1] else f'{ip}:5555'
         state, message = _adb_state_for(address)
-        results.append({
+        row = {
             'index': idx,
             'tuner_ip': ip,
             'adb_address': address,
             'state': state,
             'authorized': state == 'device',
             'message': message,
-        })
+            'os_label': '',
+            'is_fire_os': False,
+            'sleep_disabled': None,
+            'sleep_detail': '',
+        }
+        if state == 'device':
+            row.update(_device_os_and_sleep(address))
+        results.append(row)
     return results
 
 
