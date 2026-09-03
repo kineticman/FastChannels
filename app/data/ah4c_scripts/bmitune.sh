@@ -46,8 +46,16 @@ is_media_playing() {
 }
 
 trigger() {
-	echo "[TRIGGER] $FASTCHANNELS_URL/play/fc-player/$SOURCE/$CHANNEL_ID.m3u8"
-	curl -s -o /dev/null --max-time 10 "$FASTCHANNELS_URL/play/fc-player/$SOURCE/$CHANNEL_ID.m3u8"
+	# Forward the tuner adb address ah4c allocated for this tune. FastChannels does
+	# the `am start` server-side, so without this it would always trigger its single
+	# configured device — wrong once ah4c is fronting more than one streaming stick.
+	# Absent/empty $TUNERIP: server falls back to its configured adb address.
+	local url="$FASTCHANNELS_URL/play/fc-player/$SOURCE/$CHANNEL_ID.m3u8"
+	if [ -n "$TUNERIP" ]; then
+		url="$url?adb=$TUNERIP"
+	fi
+	echo "[TRIGGER] $url"
+	curl -s -o /dev/null --max-time 10 "$url"
 }
 
 trigger

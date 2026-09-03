@@ -921,6 +921,28 @@ def _client_ip() -> str:
     return request.remote_addr or 'unknown'
 
 
+_ADB_ADDRESS_RE = re.compile(r'^[A-Za-z0-9.\-]{1,255}(?::\d{1,5})?$')
+
+
+def _fc_player_adb_override(raw: str | None) -> str | None:
+    """Per-request adb target supplied by ah4c's bmitune.sh as ?adb=<tunerip>.
+
+    When one FastChannels install fronts multiple ah4c tuners, each wired to its own
+    streaming stick, ah4c is the tuner manager: it allocates a tuner per tune and
+    passes that stick's adb address into bmitune.sh. FastChannels does the `am start`
+    server-side, so it has to be told which stick to hit. We trust the well-formed
+    host[:port] ah4c hands us (it's already trusted on the LAN); anything malformed or
+    absent falls back to the single configured fc_player_bridge_adb_address.
+    """
+    raw = (raw or '').strip()
+    if not raw:
+        return None
+    if not _ADB_ADDRESS_RE.match(raw):
+        logger.warning('[fc-player] ignoring malformed ?adb= override: %r', raw)
+        return None
+    return raw
+
+
 def _stream_info_summary(si: dict | None) -> tuple:
     """Comparable tuple of the badge-relevant fields of a stream_info dict.
     Used to skip a DB write when only volatile fields (per-session variant
@@ -4878,13 +4900,16 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
         logger.error('[fc-player] no manifest URL resolved for %s/%s', source_name, channel_id)
         return _unavailable_response()
 
+    adb_override = _fc_player_adb_override(request.args.get('adb'))
     triggered = fc_player_bridge.trigger_channel(
         manifest_url, license_url, name=channel.name or 'FastChannels',
         channel_key=f'{source_name}:{channel_id}',
+        adb_address=adb_override,
     )
     logger.info(
-        '[fc-player] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s triggered=%s -> %s',
-        getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name, triggered,
+        '[fc-player] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s adb=%s triggered=%s -> %s',
+        getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name,
+        adb_override or 'default', triggered,
         'encoder' if encoder_url else 'ah4c (trigger-only)',
     )
     if encoder_url:
@@ -4918,6 +4943,9 @@ def play_fc_player_bridge_vlc(source_name: str, channel_id: str):
         abort(404)
     base_url = request.host_url.rstrip('/')
     stream_url = f'{base_url}/play/fc-player/{source_name}/{channel_id}.m3u8'
+    adb_override = _fc_player_adb_override(request.args.get('adb'))
+    if adb_override:
+        stream_url += f'?adb={adb_override}'
     playlist = f'#EXTM3U\n#EXTINF:-1,{channel.name}\n{stream_url}\n'
     return Response(
         playlist,

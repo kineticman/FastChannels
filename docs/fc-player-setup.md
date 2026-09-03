@@ -145,8 +145,11 @@ In the shared section at the top, complete:
 - **Enable FastChannels Player:** Turns the feature on — required before
   either capture method works.
 - **Firestick / Android TV IP address:** Enter the IP address found in step 2.
-  FastChannels adds ADB port `5555` automatically. Shared by both capture
-  methods, since both trigger the same device over ADB.
+  FastChannels adds ADB port `5555` automatically. This is the device the
+  single-encoder method always triggers. The ah4c method triggers whichever
+  device ah4c allocated for each tune (see [ah4c support](#ah4c-support)),
+  falling back to this one only when ah4c doesn't name a device — so with more
+  than one ah4c tuner, set this to any one of the sticks.
 - **Stop playback when nobody's watching:** Optional. When enabled, playback
   stops after about five minutes without a confirmed viewer.
 - **Show captions when available:** Optional. Renders an English subtitle/CC
@@ -229,7 +232,10 @@ build or maintain on the ah4c side.
    dedicated one) per tuner, and either `ENCODERn_URL` or `CMDn`/`CMDn_DEVICE`
    for your capture hardware. `IPADDRESS` should be set to wherever ah4c
    itself is reachable from — the same address you'll enter in FastChannels
-   below.
+   below. Multiple tuners each with their own `TUNERn_IP` and encoder are
+   supported: ah4c allocates a tuner per tune and the exported `bmitune.sh`
+   passes that tuner's device to FastChannels, so concurrent tunes each trigger
+   their own streaming stick.
 2. In FastChannels, go to **Settings → FastChannels Player → ah4c** and:
    - Toggle **Enable ah4c support** on.
    - Enter ah4c's **server URL** (e.g. `http://192.168.1.30:7654`) — the same
