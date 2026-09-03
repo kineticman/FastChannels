@@ -723,8 +723,9 @@
         <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}Bridge-only: just the DRM channels routed through your PrismCast server, not the whole catalog — import alongside the regular feed M3U, not instead of it, since the regular output already excludes these. Like the regular feed, PrismCast splits into a standard-guide M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote) — import only one of those two variants to avoid duplicate channels. The button above registers both as distinct sources (named "… PrismCast") separate from the standard push.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
       </details>
 
+      {% set android_bridge_total = split.get('drm_bridge_count', 0) + split.get('drm_bridge_gracenote_count', 0) %}
       <details class="native-endpoints">
-        <summary>FastChannels Android Bridge Channels <span class="badge-pill pill-beta">Experimental Beta</span>{% if fc_player_enabled and split.get('drm_bridge_count', 0) %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ split.get('drm_bridge_count', 0) }} channel{{ 's' if split.get('drm_bridge_count', 0) != 1 else '' }}){% endif %}</span></summary>
+        <summary>FastChannels Android Bridge Channels <span class="badge-pill pill-beta">Experimental Beta</span>{% if fc_player_enabled and android_bridge_total %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ android_bridge_total }} channel{{ 's' if android_bridge_total != 1 else '' }}){% endif %}</span></summary>
         <div class="feed-urls" style="margin-top:0.5rem">
           {% if fc_player_enabled %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player')">
@@ -760,7 +761,7 @@
       </details>
 
       <details class="native-endpoints">
-        <summary>FastChannels Android Bridge Channels (ah4c) <span class="badge-pill pill-beta">Experimental Beta</span>{% if fc_player_ah4c_configured and split.get('drm_bridge_count', 0) %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ split.get('drm_bridge_count', 0) }} channel{{ 's' if split.get('drm_bridge_count', 0) != 1 else '' }}){% endif %}</span></summary>
+        <summary>FastChannels Android Bridge Channels (ah4c) <span class="badge-pill pill-beta">Experimental Beta</span>{% if fc_player_ah4c_configured and android_bridge_total %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ android_bridge_total }} channel{{ 's' if android_bridge_total != 1 else '' }}){% endif %}</span></summary>
         <div class="feed-urls" style="margin-top:0.5rem">
           {% if fc_player_ah4c_configured %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c')">
