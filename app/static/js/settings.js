@@ -261,7 +261,7 @@ function renderAh4cTuners(tuners) {
   const table = document.createElement('table');
   table.className = 'ah4c-tuners-table';
   const head = table.createTHead().insertRow();
-  ['ah4c tuner', 'TUNERn_IP', 'Authorized in FastChannels'].forEach((label) => {
+  ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels'].forEach((label) => {
     const th = document.createElement('th');
     th.textContent = label;
     head.appendChild(th);
