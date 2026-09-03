@@ -1,3 +1,5 @@
+FROM node:24-bookworm-slim AS node_runtime
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -16,16 +18,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-utils \
     xvfb \
     libgtk-3-0 \
+    libstdc++6 \
     android-tools-adb \
     && rm -rf /var/lib/apt/lists/*
 
-# Node.js 24 (NodeSource). yt-dlp's EJS engine needs a JS runtime to solve
-# YouTube's n-signature challenge, and it requires Node >= 22 — Debian's stock
-# node is older and rejected as "unsupported", which left the n-sig unsolved and
-# made YouTube custom channels fail on many users' IPs.
-RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
-    && apt-get update && apt-get install -y --no-install-recommends nodejs=24.13.0-1nodesource1 \
-    && rm -rf /var/lib/apt/lists/*
+# Node.js 24 from its official image. yt-dlp's EJS engine needs Node >= 22 to
+# solve YouTube's n-signature challenge. Copying the runtime avoids relying on
+# NodeSource's external apt repository during every multi-architecture build.
+COPY --from=node_runtime /usr/local/bin/node /usr/local/bin/node-real
 
 # yt-dlp runs node with --permission (Node >= 23.5) for the EJS challenge, which
 # then needs explicit filesystem-read + child-process grants. We can't grant those
@@ -37,9 +37,9 @@ RUN printf '%s\n' \
     '#!/bin/sh' \
     'case " $* " in' \
     '  *" --permission "*|*" --experimental-permission "*)' \
-    '    exec /usr/bin/node --no-warnings --allow-fs-read=* --allow-child-process "$@" ;;' \
+    '    exec /usr/local/bin/node-real --no-warnings --allow-fs-read=* --allow-child-process "$@" ;;' \
     'esac' \
-    'exec /usr/bin/node "$@"' \
+    'exec /usr/local/bin/node-real "$@"' \
     > /usr/local/bin/node \
     && chmod +x /usr/local/bin/node
 
