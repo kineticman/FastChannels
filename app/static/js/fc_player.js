@@ -88,6 +88,40 @@
     ].filter(Boolean).join(' ');
   }
 
+  // DRM diagnostics must be useful without becoming a second license proxy log.
+  // In particular, never expose init data, session IDs, license URLs, or key IDs
+  // to callers: all can be content- or session-specific credentials.
+  function drmSnapshot(player) {
+    const snapshot = {};
+    try {
+      const info = player.drmInfo && player.drmInfo();
+      if (info) {
+        snapshot.key_system = info.keySystem || null;
+        snapshot.encryption_scheme = info.encryptionScheme || null;
+        snapshot.session_type = info.sessionType || null;
+      }
+    } catch (_) {}
+    try {
+      const sessions = player.getActiveSessionsMetadata && player.getActiveSessionsMetadata();
+      if (Array.isArray(sessions)) {
+        snapshot.active_sessions = sessions.length;
+        snapshot.session_types = sessions.map((session) => session.sessionType || 'temporary');
+      }
+    } catch (_) {}
+    try {
+      const stats = player.getStats && player.getStats();
+      if (stats) {
+        snapshot.stats = {
+          width: stats.width || 0,
+          height: stats.height || 0,
+          stream_bandwidth: stats.streamBandwidth || 0,
+          drm_time_seconds: Number(stats.drmTimeSeconds || 0),
+        };
+      }
+    } catch (_) {}
+    return snapshot;
+  }
+
   function seekNearLiveEdge(player, video, opts) {
     try {
       if (!player || !video) return;
@@ -155,6 +189,7 @@
     const liveEdgeSync = Boolean(opts.liveEdgeSync);
     const onStatus = opts.onStatus || function () {};
     const onError = opts.onError || function (info) { onStatus(info.message); };
+    const onDrmEvent = opts.onDrmEvent || function () {};
 
     const isDirect = ['mp4', 'webm', 'mov', 'mkv', 'direct'].includes(type);
     const safari = isSafariOrIos();
@@ -242,6 +277,17 @@
         onError({ phase: 'event', err, message: formatError(err) });
         console.error('[Shaka] error', err.code, err);
       });
+      if (license) {
+        // These are public Shaka events.  `drmsessionupdate` proves the CDM
+        // accepted the license; `keystatuschanged` tells us that a CDM key
+        // state transition occurred. Together they separate a rejected license
+        // from a later restriction failure such as 4012.
+        ['drmsessionupdate', 'keystatuschanged', 'expirationupdated'].forEach((name) => {
+          player.addEventListener(name, () => {
+            onDrmEvent({ event: name, ...drmSnapshot(player) });
+          });
+        });
+      }
       if (liveEdgeSync) {
         let lastLiveSeek = 0;
         const chaseLive = (reason) => {
@@ -267,6 +313,7 @@
       return player.load(url, null, mimeType);
     }).then(() => {
       onStatus('Stream loaded.');
+      if (license) onDrmEvent({ event: 'loaded', ...drmSnapshot(player) });
       seekNearLiveEdge(player, video, {
         liveDelay: 3,
         minSeek: liveEdgeSync ? 3 : 5,
