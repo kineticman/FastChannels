@@ -8,9 +8,6 @@
 # for this path (FastChannels' own idle-stop watchdog, used for direct
 # playback, is a slower DVR-activity poll and doesn't apply here).
 #
-# After force-stopping the player it also puts the device back to sleep
-# (KEYCODE_SLEEP), undoing the KEYCODE_WAKEUP prebmitune.sh sent on the way in.
-#
 # ah4c calls this as: stopbmitune.sh <tunerip> <channel>
 
 TUNERIP="$1"
@@ -18,8 +15,5 @@ STATION="$2"
 
 echo "[STOPPING] stopbmitune.sh $STATION $TUNERIP"
 adb -s "$TUNERIP" shell am force-stop com.fastchannels.player >/dev/null 2>&1
-# KEYCODE_SLEEP only ever turns the screen off (unlike KEYCODE_POWER), so it's a
-# no-op if the stick is already asleep — safe to send every disconnect.
-adb -s "$TUNERIP" shell input keyevent KEYCODE_SLEEP >/dev/null 2>&1
 
 exit 0

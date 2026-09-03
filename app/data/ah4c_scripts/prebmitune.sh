@@ -5,11 +5,6 @@
 # real work; this one just has to be fast, since ah4c runs it before opening the
 # encoder connection and it counts against the DVR's ~30s tune budget.
 #
-# Besides connecting adb, it also nudges the device awake (KEYCODE_WAKEUP) so a
-# stick that dozed off since the last tune is already on by the time bmitune.sh
-# fires the am start — stopbmitune.sh sends the matching KEYCODE_SLEEP on the way
-# out.
-#
 # ah4c calls this as: prebmitune.sh <tunerip> <channel>
 
 TUNERIP="$1"
@@ -23,10 +18,6 @@ if [[ "$TUNERIP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?$ ]]; then
 		echo "[ERROR] adb connect $TUNERIP failed"
 		exit 1
 	fi
-	# Wake the device now so it's ready before bmitune.sh's am start. KEYCODE_WAKEUP
-	# only ever turns the screen on (unlike KEYCODE_POWER, which would toggle it back
-	# off if it was already awake), so this is safe to send every tune.
-	adb -s "$TUNERIP" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
 fi
 
 exit 0
