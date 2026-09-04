@@ -1861,6 +1861,9 @@ async function runBridgeHealthcheck() {
       const state = check.status || 'info';
       html += `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon ${_bridgeHealthcheckEsc(state)}">${icon[state] || '?'}</span><div><div class="bridge-healthcheck-name">${_bridgeHealthcheckEsc(check.name)}</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(check.detail)}</div>${check.fix ? `<div class="bridge-healthcheck-fix">Next step: ${_bridgeHealthcheckEsc(check.fix)}</div>` : ''}</div></div>`;
     }
+    const readyForLiveTest = checks.some(check => check.name === 'FastChannels Player device' && check.status === 'ok')
+      && checks.some(check => check.name === 'HDMI Capture payload' && check.status === 'ok');
+    html += `<div class="bridge-live-test-next ${readyForLiveTest ? '' : 'not-ready'}"><div><strong>Final confirmation: Live bridge test</strong><div class="help">${readyForLiveTest ? 'Tune one real bridge channel and verify the Player → HDMI Capture path. This interrupts the configured device.' : 'Available after the FastChannels Player device and HDMI Capture payload checks pass.'}</div></div><button class="btn btn-secondary" id="bridge-live-test-open" onclick="openBridgeLiveTest()" ${readyForLiveTest ? '' : 'disabled'}>Live bridge test…</button></div>`;
     results.innerHTML = html;
     if (copy && _lastBridgeHealthcheckReport) copy.disabled = false;
   } catch (error) {
@@ -1884,10 +1887,12 @@ let _bridgeLiveTestChannels = [];
 async function openBridgeLiveTest() {
   const button = document.getElementById('bridge-live-test-open');
   const picker = document.getElementById('bridge-live-test-picker');
-  if (!button || !picker) return;
-  const original = button.textContent;
-  button.disabled = true;
-  button.textContent = 'Loading channels…';
+  if (!picker) return;
+  const original = button?.textContent || 'Live bridge test…';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Loading channels…';
+  }
   try {
     const response = await fetch('/api/settings/bridge/live-test-channels');
     const data = await response.json();
@@ -1906,8 +1911,10 @@ async function openBridgeLiveTest() {
     picker.hidden = false;
     picker.innerHTML = `<div class="bridge-healthcheck-detail" style="color:var(--danger)">${_bridgeHealthcheckEsc(error.message || error)}</div>`;
   } finally {
-    button.disabled = false;
-    button.textContent = original;
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
   }
 }
 
