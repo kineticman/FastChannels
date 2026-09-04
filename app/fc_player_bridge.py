@@ -323,26 +323,35 @@ def _device_os_and_sleep(address: str) -> dict:
 
     st, sot = _as_int(sleep_timeout), _as_int(screen_off)
 
-    def _verdict(v: int) -> tuple[bool, str]:
-        """(disabled?, humanized) for a millisecond timeout value."""
-        if v == 0 or v >= _NEVER_MS:
-            return True, 'never'
-        return False, _ms_to_human(v)
-
-    # `secure sleep_timeout` is the Android TV auto-sleep timer and the one the
-    # user asked about: 0 (or the ~2^31 "Never" sentinel) means it's off. But -1
-    # is NOT "off" — it's "unset, fall back to the normal display timeout" — and
-    # phones/tablets don't have this setting at all, so on anything but a value
-    # of 0 or a real positive we defer to `system screen_off_timeout`, which is
-    # what actually blanks the HDMI output.
+    # `secure sleep_timeout` is the Android TV inactivity-sleep timer. AOSP's
+    # PowerManagerService treats any value <= 0 as "no inactivity sleep" — so
+    # both 0 and -1 mean it's off (Google TV's "Put device to sleep after →
+    # Never" writes -1; some devices/versions use 0 or the ~2^31 sentinel). A
+    # real positive value is a live timeout. Phones/tablets don't expose this
+    # setting at all (null), so there we fall back to `system
+    # screen_off_timeout`, which governs the display/HDMI-output blanking.
     disabled: bool | None = None
     reason = ''
-    if st is not None and st >= 0:
-        disabled, human = _verdict(st)
-        reason = f'sleep_timeout={st}' + ('' if disabled else f' ({human})')
-    elif sot is not None and sot >= 0:
-        disabled, human = _verdict(sot)
-        reason = f'screen_off_timeout={sot}' + ('' if disabled else f' ({human})')
+    if st is not None:
+        if st <= 0 or st >= _NEVER_MS:
+            disabled, reason = True, f'sleep_timeout={st}'
+        else:
+            disabled, reason = False, f'sleep_timeout={st} ({_ms_to_human(st)})'
+    elif sot is not None:
+        if sot >= _NEVER_MS:
+            disabled, reason = True, f'screen_off_timeout={sot}'
+        elif sot > 0:
+            disabled, reason = False, f'screen_off_timeout={sot} ({_ms_to_human(sot)})'
+
+    # Always keep the display timeout visible as secondary context — the
+    # screensaver / screen-off path is separate from sleep_timeout, and a
+    # running player normally holds a wake lock against it, but it's the thing
+    # to check next if capture still drops with sleep_timeout already off.
+    if reason and st is not None and sot is not None and 'screen_off_timeout' not in reason:
+        if sot >= _NEVER_MS:
+            reason += ', screen_off_timeout=never'
+        elif sot > 0:
+            reason += f', screen_off_timeout={_ms_to_human(sot)}'
 
     out['sleep_disabled'] = disabled
     if reason:
