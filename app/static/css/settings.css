@@ -416,6 +416,21 @@
       padding-top: 1rem;
       border-top: 1px solid var(--border);
     }
+    .bridge-capture-picker {
+      margin-top: 0.75rem;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-2);
+    }
+    .bridge-capture-picker input,
+    .bridge-capture-picker select {
+      box-sizing: border-box;
+      width: 100%;
+      margin-top: 0.55rem;
+    }
+    .bridge-capture-picker select { min-height: 9rem; }
+    .bridge-capture-picker .field-actions { margin-top: 0.6rem; }
     .bridge-fallback-details {
       margin-top: 1rem;
       padding-top: 0.85rem;

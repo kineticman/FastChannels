@@ -6,7 +6,8 @@ import requests as _req
 
 logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
+import re
 
 from flask import Blueprint, jsonify, request, current_app, Response
 from ..extensions import db
@@ -66,6 +67,64 @@ def _looks_like_mpeg_ts(payload: bytes) -> bool:
     return any(payload[offset] == 0x47 and payload[offset + 188] == 0x47
                and payload[offset + 376] == 0x47
                for offset in range(upper_bound))
+
+
+def _m3u_attr(line: str, name: str) -> str:
+    """Return one quoted attribute from an EXTINF line, without trusting it as HTML."""
+    match = re.search(rf'\b{re.escape(name)}="([^"]*)"', line, flags=re.IGNORECASE)
+    return match.group(1).strip() if match else ''
+
+
+def _channels_dvr_capture_streams(dvr_url: str) -> list[dict]:
+    """Read Channels DVR's native MPEG-TS export and return selectable stream URLs.
+
+    Channels deliberately exposes the direct ``stream.mpg`` address only in its M3U
+    export.  Fetching the export here means the user never has to copy its URL or
+    hunt for the non-comment line.  The export can be generated with localhost as
+    its base; rebuild each URL with the configured DVR host, which is the address
+    FastChannels itself can reach from its container.
+    """
+    base = urlsplit(dvr_url)
+    export_url = f'{dvr_url.rstrip("/")}/devices/ANY/channels.m3u?format=ts'
+    response = _req.get(export_url, timeout=(3, 12))
+    response.raise_for_status()
+
+    choices: list[dict] = []
+    seen: set[str] = set()
+    extinf = ''
+    for raw_line in response.text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.upper().startswith('#EXTINF:'):
+            extinf = line
+            continue
+        if line.startswith('#'):
+            continue
+
+        parsed = urlsplit(line)
+        if parsed.scheme not in {'http', 'https'} or not parsed.path.endswith('/stream.mpg'):
+            extinf = ''
+            continue
+        stream_url = urlunsplit((base.scheme, base.netloc, parsed.path, parsed.query, ''))
+        if stream_url in seen:
+            extinf = ''
+            continue
+        seen.add(stream_url)
+        channel_number = _m3u_attr(extinf, 'tvg-chno') or _m3u_attr(extinf, 'channel-number')
+        channel_name = (extinf.rsplit(',', 1)[-1].strip() if ',' in extinf else '')
+        channel_name = _m3u_attr(extinf, 'tvg-name') or channel_name or 'Unnamed channel'
+        label = f'{channel_number} · {channel_name}' if channel_number else channel_name
+        choices.append({'label': label, 'stream_url': stream_url})
+        extinf = ''
+
+    # Capture devices are commonly named Capture, HDMI, or after their encoder.
+    # Keep every usable stream available, but surface likely choices first.
+    choices.sort(key=lambda item: (
+        not any(word in item['label'].lower() for word in ('capture', 'hdmi', 'encoder', 'usb')),
+        item['label'].lower(),
+    ))
+    return choices
 
 
 @settings_bp.route('/settings', methods=['GET', 'POST'])
@@ -226,6 +285,23 @@ def test_fc_player():
             'warning': True,
             'message': f'{message} Encoder/capture stream URL is not reachable — bridged channels will fail until that stream is up.',
         })
+
+
+@settings_bp.route('/settings/fc-player/capture-streams', methods=['GET'])
+def fc_player_capture_streams():
+    """Offer Channels DVR MPEG-TS streams for the fixed HDMI Capture path."""
+    dvr_url = (AppSettings.get().effective_channels_dvr_url() or '').strip().rstrip('/')
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured. Add it in Settings first.'}), 400
+    try:
+        streams = _channels_dvr_capture_streams(dvr_url)
+    except _req.RequestException as exc:
+        logger.info('[fc-player] could not read Channels DVR M3U export: %s', exc)
+        return jsonify({'error': 'FastChannels could not read the Channels DVR M3U export. Verify the DVR URL in Settings and its network reachability.'}), 502
+
+    if not streams:
+        return jsonify({'error': 'Channels DVR returned no MPEG-TS stream entries. Confirm the capture device is added and enabled in Channels DVR.'}), 404
+    return jsonify({'streams': streams})
 
 
 @settings_bp.route('/settings/bridge/healthcheck', methods=['POST'])

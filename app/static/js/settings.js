@@ -233,6 +233,60 @@ async function saveFcPlayerEncoderSettings() {
   if (ok) setTimeout(() => location.reload(), 700);
 }
 
+let _fcPlayerCaptureStreams = [];
+
+function renderFcPlayerCaptureStreamPicker(filter = '') {
+  const picker = document.getElementById('fc-player-capture-stream-picker');
+  if (!picker) return;
+  const needle = filter.trim().toLowerCase();
+  const matches = _fcPlayerCaptureStreams.filter((stream) =>
+    !needle || stream.label.toLowerCase().includes(needle));
+  const options = matches.map((stream, index) =>
+    `<option value="${index}">${_escapeHtml(stream.label)}</option>`).join('');
+  picker.innerHTML = `
+    <div class="help" style="margin-top:0.7rem">Choose the channel backed by your HDMI capture device. Likely capture/HDMI entries are shown first; this only fills the URL—select Save to keep it.</div>
+    <input type="search" id="fc-player-capture-stream-filter" placeholder="Filter by channel or capture-device name" value="${_escapeHtml(filter)}" oninput="renderFcPlayerCaptureStreamPicker(this.value)">
+    <select id="fc-player-capture-stream-select" size="6" ${matches.length ? '' : 'disabled'}>${options || '<option>No matching streams</option>'}</select>
+    <div class="field-actions"><button class="btn btn-secondary" onclick="chooseFcPlayerCaptureStream()" ${matches.length ? '' : 'disabled'}>Use selected stream</button></div>`;
+  picker._matches = matches;
+}
+
+async function findFcPlayerCaptureStream() {
+  const button = document.getElementById('fc-player-find-capture-stream');
+  const picker = document.getElementById('fc-player-capture-stream-picker');
+  const status = document.getElementById('fc-player-encoder-status');
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Reading Channels DVR…';
+  status.textContent = '';
+  try {
+    const response = await fetch('/api/settings/fc-player/capture-streams');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not read Channels DVR streams.');
+    _fcPlayerCaptureStreams = data.streams || [];
+    picker.hidden = false;
+    renderFcPlayerCaptureStreamPicker();
+  } catch (error) {
+    status.textContent = error.message || 'Could not read Channels DVR streams.';
+    status.className = 'save-status error';
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+function chooseFcPlayerCaptureStream() {
+  const picker = document.getElementById('fc-player-capture-stream-picker');
+  const select = document.getElementById('fc-player-capture-stream-select');
+  const stream = picker?._matches?.[Number(select?.value)];
+  if (!stream) return;
+  document.getElementById('fc-player-encoder-url').value = stream.stream_url;
+  picker.hidden = true;
+  const status = document.getElementById('fc-player-encoder-status');
+  status.textContent = `Selected ${stream.label}. Save to use it.`;
+  status.className = 'save-status ok';
+}
+
 async function saveFcPlayerIdleStopToggle() {
   const enabled = document.getElementById('fc-player-idle-stop-enabled').checked;
   await saveSettings({fc_player_idle_stop_enabled: enabled}, 'fc-player-status');

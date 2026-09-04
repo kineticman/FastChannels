@@ -60,10 +60,15 @@
         <div class="field field-full">
           <label for="fc-player-encoder-url">Capture/encoder stream URL</label>
           <input type="text" id="fc-player-encoder-url" placeholder="http://192.168.1.50:8089/devices/ANY/channels/70092/stream.mpg" value="{{ fc_player_encoder_url }}">
-          <div class="help">Where the captured bridge stream is read after the Player device is triggered.</div>
+          <div class="help">Where the captured bridge stream is read after the Player device is triggered. If the capture device is in Channels DVR, use the picker below instead of copying an M3U entry by hand.</div>
         </div>
       </div>
-      <div class="field-actions"><span class="save-status" id="fc-player-encoder-status"></span><button class="btn btn-secondary" onclick="testFcPlayer()">Test connection</button><button class="btn btn-primary" onclick="saveFcPlayerEncoderSettings()">Save</button></div>
+      <div class="field-actions"><span class="save-status" id="fc-player-encoder-status"></span><button class="btn btn-secondary" id="fc-player-find-capture-stream" onclick="findFcPlayerCaptureStream()">Find from Channels DVR</button><button class="btn btn-secondary" onclick="testFcPlayer()">Test connection</button><button class="btn btn-primary" onclick="saveFcPlayerEncoderSettings()">Save</button></div>
+      <div id="fc-player-capture-stream-picker" class="bridge-capture-picker" hidden></div>
+      <details class="help" style="margin-top:0.65rem">
+        <summary style="cursor:pointer">Need to paste it manually instead?</summary>
+        In Channels DVR, open <strong>Manage → Export → Copy M3U</strong>, open that URL, then copy the non-comment <code>/stream.mpg</code> line directly below your capture channel's <code>#EXTINF</code> entry. Paste it above and save.
+      </details>
     </div>
   </div>
 </div>
