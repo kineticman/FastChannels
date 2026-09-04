@@ -1938,9 +1938,27 @@ async function runBridgeLiveTest() {
     const icon = state === 'ok' ? '✓' : (state === 'warn' ? '⚠' : '✗');
     const player = data.player_playing ? 'Player reports playback active' : (data.player_visible ? 'FastChannels Player is foreground' : 'Player did not report active playback');
     const focus = data.player_focus ? `<br>Device focus: ${_bridgeHealthcheckEsc(data.player_focus)}` : '';
-    picker.innerHTML = `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon ${state}">${icon}</span><div><div class="bridge-healthcheck-name">Live bridge test: ${_bridgeHealthcheckEsc(data.channel || channel.label)}</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(data.detail || '')}<br>Endpoint: ${_bridgeHealthcheckEsc(data.endpoint || '')}<br>Capture: ${_bridgeHealthcheckEsc(String(data.bytes_received || 0))} bytes in ${_bridgeHealthcheckEsc(String(data.elapsed_ms || 0))} ms (${_bridgeHealthcheckEsc(data.content_type || 'unspecified')})<br>${_bridgeHealthcheckEsc(player)}${focus}</div></div></div>`;
+    picker.innerHTML = `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon ${state}">${icon}</span><div><div class="bridge-healthcheck-name">Live bridge test: ${_bridgeHealthcheckEsc(data.channel || channel.label)}</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(data.detail || '')}<br>Endpoint: ${_bridgeHealthcheckEsc(data.endpoint || '')}<br>Capture: ${_bridgeHealthcheckEsc(String(data.bytes_received || 0))} bytes in ${_bridgeHealthcheckEsc(String(data.elapsed_ms || 0))} ms (${_bridgeHealthcheckEsc(data.content_type || 'unspecified')})<br>Media: ${_bridgeHealthcheckEsc(data.media_summary || 'Not available')}<br>${_bridgeHealthcheckEsc(player)}${focus}</div><div class="field-actions"><button class="btn btn-secondary" id="bridge-live-test-stop" onclick="stopBridgeLiveTest()">Stop test playback</button></div></div></div>`;
   } catch (error) {
     picker.innerHTML = `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon fail">✗</span><div><div class="bridge-healthcheck-name">Live bridge test failed</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(error.message || error)}</div></div></div>`;
+  }
+}
+
+async function stopBridgeLiveTest() {
+  const button = document.getElementById('bridge-live-test-stop');
+  if (!button) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Stopping…';
+  try {
+    const response = await fetch('/api/settings/bridge/live-test/stop', {method: 'POST'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not stop Player playback.');
+    button.textContent = data.message || 'Playback stopped';
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = original;
+    window.alert(error.message || error);
   }
 }
 

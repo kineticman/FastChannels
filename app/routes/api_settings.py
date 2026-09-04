@@ -87,6 +87,55 @@ def _looks_like_mpeg_ts(payload: bytes) -> bool:
                for offset in range(upper_bound))
 
 
+def _mpeg_ts_stream_summary(payload: bytes) -> str:
+    """Best-effort codec summary from PAT/PMT packets in a short TS sample."""
+    packet_start = next((offset for offset in range(min(188, len(payload)))
+                         if offset + 376 < len(payload)
+                         and payload[offset] == payload[offset + 188] == payload[offset + 376] == 0x47), None)
+    if packet_start is None:
+        return 'MPEG-TS packets detected; program map was not available in this sample.'
+    pmt_pids: set[int] = set()
+    stream_types: set[int] = set()
+    for offset in range(packet_start, len(payload) - 187, 188):
+        packet = payload[offset:offset + 188]
+        if packet[0] != 0x47:
+            continue
+        pid = ((packet[1] & 0x1f) << 8) | packet[2]
+        has_payload = ((packet[3] >> 4) & 0x03) in {1, 3}
+        if not has_payload or not (packet[1] & 0x40):
+            continue
+        payload_offset = 4
+        if ((packet[3] >> 4) & 0x03) == 3:
+            payload_offset += 1 + packet[4]
+        if payload_offset >= len(packet):
+            continue
+        section = packet[payload_offset + 1 + packet[payload_offset]:]
+        if len(section) < 12:
+            continue
+        if pid == 0 and section[0] == 0x00:  # PAT
+            section_end = min(len(section), 3 + (((section[1] & 0x0f) << 8) | section[2]))
+            for index in range(8, section_end - 3, 4):
+                program = (section[index] << 8) | section[index + 1]
+                if program:
+                    pmt_pids.add(((section[index + 2] & 0x1f) << 8) | section[index + 3])
+        elif pid in pmt_pids and section[0] == 0x02:  # PMT
+            section_end = min(len(section), 3 + (((section[1] & 0x0f) << 8) | section[2]))
+            program_info_length = ((section[10] & 0x0f) << 8) | section[11]
+            index = 12 + program_info_length
+            while index + 4 < section_end - 4:
+                stream_types.add(section[index])
+                es_info_length = ((section[index + 3] & 0x0f) << 8) | section[index + 4]
+                index += 5 + es_info_length
+    names = {
+        0x02: 'MPEG-2 video', 0x1B: 'H.264 video', 0x24: 'H.265/HEVC video',
+        0x0F: 'AAC audio', 0x11: 'AAC-LATM audio', 0x03: 'MPEG audio',
+        0x04: 'MPEG audio', 0x81: 'AC-3 audio', 0x87: 'E-AC-3 audio',
+    }
+    identified = [names.get(stream_type, f'stream type 0x{stream_type:02x}')
+                  for stream_type in sorted(stream_types)]
+    return 'Detected: ' + ', '.join(identified) if identified else 'MPEG-TS packets detected; program map was not available in this sample.'
+
+
 def _m3u_attr(line: str, name: str) -> str:
     """Return one quoted attribute from an EXTINF line, without trusting it as HTML."""
     match = re.search(rf'\b{re.escape(name)}="([^"]*)"', line, flags=re.IGNORECASE)
@@ -398,7 +447,7 @@ def bridge_live_test():
     try:
         with _req.get(encoder_url, stream=True, timeout=(3, 8)) as response:
             response.raise_for_status()
-            sample = next(response.iter_content(chunk_size=32 * 1024), b'')
+            sample = next(response.iter_content(chunk_size=64 * 1024), b'')
             elapsed_ms = int((time.monotonic() - started) * 1000)
     except _req.RequestException:
         return jsonify({
@@ -429,11 +478,22 @@ def bridge_live_test():
         'bytes_received': len(sample),
         'elapsed_ms': elapsed_ms,
         'content_type': (response.headers.get('Content-Type') or 'unspecified').split(';', 1)[0],
+        'media_summary': _mpeg_ts_stream_summary(sample) if payload_ok else 'No recognizable MPEG-TS program data.',
         'player_playing': player_playing,
         'player_visible': player_visible,
         'player_focus': device.get('focus') if device.get('ok') else None,
         'detail': detail,
     })
+
+
+@settings_bp.route('/settings/bridge/live-test/stop', methods=['POST'])
+def bridge_live_test_stop():
+    """Stop the Player after an explicit live test (or any fixed HDMI test tune)."""
+    if not AppSettings.get().effective_fc_player_bridge_adb_address():
+        return jsonify({'error': 'No HDMI Capture device IP is configured.'}), 409
+    if not fc_player_bridge.stop_playback():
+        return jsonify({'error': 'FastChannels could not stop the Player device over ADB.'}), 502
+    return jsonify({'ok': True, 'message': 'FastChannels Player was stopped on the HDMI Capture device.'})
 
 
 @settings_bp.route('/settings/bridge/healthcheck', methods=['POST'])
@@ -510,7 +570,8 @@ def bridge_healthcheck():
                             add('fail', 'HDMI Capture payload', f'The capture endpoint returned HTTP {response.status_code} but sent no data within {elapsed_ms} ms.',
                                 'Check the Channels DVR capture device and confirm it is producing a live stream.')
                         elif _looks_like_mpeg_ts(sample):
-                            add('ok', 'HDMI Capture payload', f'Received {len(sample):,} bytes of MPEG-TS capture data in {elapsed_ms} ms ({content_type}).')
+                            add('ok', 'HDMI Capture payload',
+                                f'Received {len(sample):,} bytes of MPEG-TS capture data in {elapsed_ms} ms ({content_type}). {_mpeg_ts_stream_summary(sample)}')
                         else:
                             add('warn', 'HDMI Capture payload', f'Received {len(sample):,} bytes in {elapsed_ms} ms, but the sample did not resemble MPEG-TS ({content_type}).',
                                 'Open the exact capture stream URL in VLC and verify Channels DVR is serving the expected capture stream.')

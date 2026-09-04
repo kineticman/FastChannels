@@ -714,7 +714,7 @@ def _recent_web_heartbeat(channel_key: str) -> bool:
         return False
 
 
-def _stop_playback() -> bool:
+def stop_playback() -> bool:
     """Force-stops the player app entirely — blunt, but already proven reliable this
     session for clearing stale DRM sessions. No JSON-RPC-style control channel exists
     to ask it to stop gracefully (unlike the old Kodi bridge's Player.Stop)."""
@@ -731,6 +731,11 @@ def _stop_playback() -> bool:
         logger.warning('[fc-player] idle-stop: force-stop failed: %s', e)
         return False
     return result.returncode == 0
+
+
+def _stop_playback() -> bool:
+    """Compatibility name for the idle-stop watchdog's internal call sites."""
+    return stop_playback()
 
 
 def check_idle_and_stop() -> None:

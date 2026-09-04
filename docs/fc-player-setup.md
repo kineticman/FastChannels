@@ -184,7 +184,9 @@ end-to-end confirmation: choose one bridge-ready channel, confirm the warning,
 and FastChannels tunes the Player device then samples the HDMI Capture stream.
 It intentionally interrupts anything playing on that device. The result shows
 the tested stream path, payload size, timing, and whether the Player reports
-active playback.
+active playback. It also reports the MPEG-TS program's detected video/audio
+types when they appear in the short sample. Select **Stop test playback** when
+you are done to close the Player immediately.
 
 The automatic stop option detects viewers using Channels DVR's activity status
 or the FastChannels `/watch` page. It cannot detect a third-party player
