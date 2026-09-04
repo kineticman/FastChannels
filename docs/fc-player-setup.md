@@ -159,6 +159,12 @@ In the **HDMI Capture** card, complete:
 Click **Save** in that section before continuing — the device IP must already
 be saved for the install button below to work.
 
+Before attempting a real bridge-only channel, use **Bridge → Post-install
+Healthcheck → Run healthcheck**. It checks the configured hardware paths
+without tuning a channel, and **Copy forum report** creates a concise,
+credential-free report to attach to a support post. PrismCast has its own
+specialized capture test in the PrismCast Capture card.
+
 The automatic stop option detects viewers using Channels DVR's activity status
 or the FastChannels `/watch` page. It cannot detect a third-party player
 connected directly to the M3U. Leave this option off if you watch that way.

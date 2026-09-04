@@ -1778,6 +1778,53 @@ async function savePrismcastToggle() {
   setTimeout(() => location.reload(), 700);
 }
 
+let _lastBridgeHealthcheckReport = '';
+
+function _bridgeHealthcheckEsc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
+async function runBridgeHealthcheck() {
+  const run = document.getElementById('bridge-healthcheck-run');
+  const copy = document.getElementById('bridge-healthcheck-copy');
+  const results = document.getElementById('bridge-healthcheck-results');
+  if (!run || !results) return;
+  run.disabled = true;
+  if (copy) copy.disabled = true;
+  results.hidden = false;
+  results.innerHTML = '<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon info">…</span><div><div class="bridge-healthcheck-name">Running healthcheck</div><div class="bridge-healthcheck-detail">Checking configured paths without tuning a channel…</div></div></div>';
+  try {
+    const response = await fetch('/api/settings/bridge/healthcheck', {method: 'POST'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    _lastBridgeHealthcheckReport = data.forum_report || '';
+    const icon = {ok: '✓', warn: '⚠', fail: '✗', skip: '–', info: 'ℹ'};
+    const checks = data.checks || [];
+    let html = `<div class="bridge-healthcheck-summary"><strong class="${_bridgeHealthcheckEsc(data.overall)}">${_bridgeHealthcheckEsc(data.overall_label || 'COMPLETE')}</strong><span class="help">${data.summary?.ok || 0} passed · ${data.summary?.warn || 0} warning${(data.summary?.warn || 0) === 1 ? '' : 's'} · ${data.summary?.fail || 0} failed</span></div>`;
+    for (const check of checks) {
+      const state = check.status || 'info';
+      html += `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon ${_bridgeHealthcheckEsc(state)}">${icon[state] || '?'}</span><div><div class="bridge-healthcheck-name">${_bridgeHealthcheckEsc(check.name)}</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(check.detail)}</div>${check.fix ? `<div class="bridge-healthcheck-fix">Next step: ${_bridgeHealthcheckEsc(check.fix)}</div>` : ''}</div></div>`;
+    }
+    results.innerHTML = html;
+    if (copy && _lastBridgeHealthcheckReport) copy.disabled = false;
+  } catch (error) {
+    results.innerHTML = `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon fail">✗</span><div><div class="bridge-healthcheck-name">Healthcheck could not run</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(error.message || error)}</div></div></div>`;
+  } finally {
+    run.disabled = false;
+  }
+}
+
+async function copyBridgeHealthcheck() {
+  if (!_lastBridgeHealthcheckReport) return;
+  try {
+    await navigator.clipboard.writeText(_lastBridgeHealthcheckReport);
+  } catch (_) {
+    window.prompt('Copy forum report', _lastBridgeHealthcheckReport);
+  }
+}
+
 async function testDvrConnection() {
   const statusEl = document.getElementById('dvr-settings-status');
   statusEl.textContent = 'Testing…';

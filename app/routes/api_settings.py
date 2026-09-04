@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from flask import Blueprint, jsonify, request, current_app, Response
 from ..extensions import db
-from ..models import AppSettings
+from ..models import AppSettings, Source, Channel
 from .. import fc_player_bridge
 from ..timezone_utils import normalize_timezone_name, write_timezone_cache
 
@@ -215,6 +215,124 @@ def test_fc_player():
             'warning': True,
             'message': f'{message} Encoder/capture stream URL is not reachable — bridged channels will fail until that stream is up.',
         })
+
+
+@settings_bp.route('/settings/bridge/healthcheck', methods=['POST'])
+def bridge_healthcheck():
+    """Non-disruptive, forum-shareable health check for hardware bridge setup.
+
+    This intentionally does not tune a channel or change a device. PrismCast has
+    its own deeper capture diagnostic, so this check only links users to it.
+    """
+    from ..scrapers.registry import drm_capable_source_names
+
+    settings = AppSettings.get()
+    checks: list[dict] = []
+
+    def add(status: str, name: str, detail: str, fix: str = '') -> None:
+        checks.append({'status': status, 'name': name, 'detail': detail, 'fix': fix})
+
+    if settings.bridge_enabled:
+        add('ok', 'Bridge mode', 'Enabled. Eligible DRM channels can use a configured capture path.')
+    else:
+        add('warn', 'Bridge mode', 'Disabled. DRM channels will follow the normal disabled-DRM behavior.',
+            'Enable Bridge mode when your capture path is ready.')
+
+    capable_names = set(drm_capable_source_names())
+    enabled_source_ids = [source.id for source in Source.query.filter(
+        Source.name.in_(capable_names), Source.is_enabled.is_(True), Source.epg_only.is_not(True)
+    ).all()] if capable_names else []
+    bridge_candidates = (Channel.query.filter(Channel.source_id.in_(enabled_source_ids),
+                                               Channel.is_active.is_(True),
+                                               Channel.is_enabled.is_(True),
+                                               Channel.requires_drm_bridge.is_(True)).count()
+                         if enabled_source_ids else 0)
+    if not enabled_source_ids:
+        add('skip', 'Bridge sources', 'No DRM-capable sources are enabled.')
+    elif bridge_candidates:
+        add('ok', 'Bridge sources', f'{len(enabled_source_ids)} enabled source(s); {bridge_candidates} channel(s) are marked for bridge output.')
+    else:
+        add('warn', 'Bridge sources', f'{len(enabled_source_ids)} DRM-capable source(s) are enabled, but none are marked for bridge output.',
+            'Run Stream Audit on the sources you intend to bridge.')
+
+    # HDMI Capture is a fixed single-stream path. Probe only when it has been
+    # selected/configured, so unused hardware never creates a scary failure.
+    if not settings.fc_player_bridge_enabled:
+        add('skip', 'HDMI Capture', 'Hardware capture is disabled.')
+    elif not settings.effective_fc_player_bridge_adb_address():
+        add('warn', 'HDMI Capture device', 'No Android TV / Fire TV device IP is configured.',
+            'Enter the device IP in HDMI Capture, then approve its ADB prompt on the TV.')
+    else:
+        ok, message = fc_player_bridge.test_connection()
+        add('ok' if ok else 'fail', 'FastChannels Player device', message,
+            '' if ok else 'Enable ADB or Network Debugging, retry, and approve “Allow USB debugging?” on the TV.')
+
+        encoder_url = settings.effective_fc_player_bridge_encoder_url()
+        if not encoder_url:
+            add('skip', 'HDMI Capture stream', 'No fixed encoder stream is configured.')
+        else:
+            try:
+                with _req.get(encoder_url, stream=True, timeout=3) as response:
+                    if response.ok:
+                        add('ok', 'HDMI Capture stream', 'The fixed encoder stream responded successfully.')
+                    else:
+                        add('warn', 'HDMI Capture stream', f'The fixed encoder stream returned HTTP {response.status_code}.',
+                            'Confirm the capture device is powered on and the saved stream URL is correct.')
+            except _req.RequestException:
+                add('fail', 'HDMI Capture stream', 'The fixed encoder stream could not be reached.',
+                    'Confirm the capture device is powered on and reachable from FastChannels.')
+
+    # ah4c owns its own capture hardware. Its status endpoint plus the per-tuner
+    # ADB checks provide a useful setup check without starting a tune.
+    if not settings.fc_player_bridge_ah4c_enabled:
+        add('skip', 'ah4c Capture', 'ah4c Capture is disabled.')
+    elif not settings.effective_fc_player_bridge_ah4c_url():
+        add('warn', 'ah4c Capture', 'ah4c Capture is enabled but its server URL is blank.',
+            'Enter the ah4c server URL and save it.')
+    else:
+        try:
+            tuners = fc_player_bridge.verify_ah4c_tuners()
+            if not tuners:
+                add('warn', 'ah4c tuners', 'ah4c is reachable but reports no configured TUNERn_IP values.',
+                    'Configure at least one tuner and TUNERn_IP in ah4c.')
+            else:
+                authorized = sum(1 for tuner in tuners if tuner.get('authorized'))
+                status = 'ok' if authorized == len(tuners) else 'fail'
+                add(status, 'ah4c tuners', f'{authorized}/{len(tuners)} tuner device(s) are authorized by FastChannels.',
+                    '' if status == 'ok' else 'Retry an action and approve FastChannels’ ADB authorization prompt on each affected TV.')
+        except fc_player_bridge.FcPlayerNotConfigured:
+            add('warn', 'ah4c tuners', 'ah4c is not fully configured.', 'Save the ah4c server URL and retry.')
+        except (ValueError, _req.RequestException):
+            add('fail', 'ah4c server', 'FastChannels could not read ah4c status.',
+                'Confirm the ah4c URL, network reachability, and its /api/status endpoint.')
+
+    if settings.prismcast_enabled:
+        if settings.effective_prismcast_url():
+            add('info', 'PrismCast Capture', 'Configured. Use PrismCast’s dedicated Test setup button for its browser and live-capture diagnostic.')
+        else:
+            add('warn', 'PrismCast Capture', 'Enabled but no PrismCast server URL is configured.',
+                'Enter the PrismCast server URL or turn this method off.')
+    else:
+        add('skip', 'PrismCast Capture', 'Disabled. Its dedicated diagnostic was not run.')
+
+    failed = sum(check['status'] == 'fail' for check in checks)
+    warned = sum(check['status'] == 'warn' for check in checks)
+    overall = 'fail' if failed else ('warn' if warned else 'ok')
+    label = {'ok': 'READY', 'warn': 'NEEDS ATTENTION', 'fail': 'NOT READY'}[overall]
+    report = ['FastChannels Bridge Healthcheck', f'Overall: {label}', '']
+    for check in checks:
+        marker = {'ok': 'PASS', 'warn': 'WARN', 'fail': 'FAIL', 'skip': 'SKIP', 'info': 'INFO'}[check['status']]
+        report.append(f'[{marker}] {check["name"]}: {check["detail"]}')
+        if check['fix']:
+            report.append(f'  Next step: {check["fix"]}')
+    return jsonify({
+        'overall': overall,
+        'overall_label': label,
+        'checks': checks,
+        'summary': {'ok': sum(check['status'] == 'ok' for check in checks), 'warn': warned,
+                    'fail': failed, 'skip': sum(check['status'] == 'skip' for check in checks)},
+        'forum_report': '\n'.join(report),
+    })
 
 
 @settings_bp.route('/settings/fc-player/install', methods=['POST'])
