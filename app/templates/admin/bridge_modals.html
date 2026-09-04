@@ -1,0 +1,45 @@
+<!-- FastChannels Player Fire TV / Android TV controls -->
+<div class="modal-overlay" id="fc-player-device-controls-modal" onclick="if(event.target===this)closeFcPlayerDeviceControls()">
+  <div class="modal-box" style="max-width:600px;max-height:85vh;overflow-y:auto">
+    <h3 style="margin:0 0 0.35rem">Fire TV Device Controls</h3>
+    <p style="color:var(--text-subtle);margin:0 0 1rem;line-height:1.5">Live ADB status and display settings for the device FastChannels Player controls.</p>
+    <div id="fc-player-device-controls-status" style="margin-bottom:1rem;line-height:1.55">Loading&hellip;</div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1.25rem">
+      <button class="btn btn-secondary" onclick="wakeFcPlayerDevice()">Wake now</button>
+      <button class="btn btn-primary" onclick="applyFcPlayerHeadlessPreset()">Apply headless preset</button>
+      <button class="btn btn-secondary" id="fc-player-device-restore" onclick="restoreFcPlayerDeviceSettings()" disabled>Restore previous settings</button>
+    </div>
+    <details>
+      <summary style="cursor:pointer;font-weight:600">Advanced display settings</summary>
+      <div class="help" style="margin:0.65rem 0 0.85rem">The headless preset keeps a powered device awake and sets both timeouts to Never. FastChannels saves the existing values once, before its first change.</div>
+      <div class="fields-grid" style="max-width:440px">
+        <div class="field field-full"><label class="toggle-switch" style="vertical-align:middle;margin-right:0.5rem"><input type="checkbox" id="fc-player-device-stay-awake"><span class="toggle-slider"></span></label><label for="fc-player-device-stay-awake" style="display:inline">Keep awake while powered</label></div>
+        <div class="field"><label for="fc-player-device-screen-timeout">Screen-off timeout</label><select id="fc-player-device-screen-timeout"><option value="60000">1 minute</option><option value="300000">5 minutes</option><option value="900000">15 minutes</option><option value="1800000">30 minutes</option><option value="3600000">1 hour</option><option value="2147483647">Never</option></select></div>
+        <div class="field"><label for="fc-player-device-sleep-timeout">Sleep timeout</label><select id="fc-player-device-sleep-timeout"><option value="300000">5 minutes</option><option value="1200000">20 minutes</option><option value="1800000">30 minutes</option><option value="3600000">1 hour</option><option value="2147483647">Never</option></select></div>
+      </div>
+      <div style="margin-top:0.85rem"><button class="btn btn-secondary" onclick="saveFcPlayerDevicePowerSettings()">Save device settings</button></div>
+    </details>
+    <div id="fc-player-device-controls-message" class="save-status" style="display:block;margin-top:1rem"></div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:1.25rem"><button class="btn btn-secondary" onclick="refreshFcPlayerDeviceControls()">Refresh</button><button class="btn-cancel-modal" onclick="closeFcPlayerDeviceControls()">Close</button></div>
+  </div>
+</div>
+
+<!-- PrismCast setup test modal -->
+<div class="modal-overlay" id="prismcast-test-modal">
+  <div class="modal-box" style="max-width:760px;max-height:85vh;display:flex;flex-direction:column">
+    <h3 style="margin:0 0 0.25rem">PrismCast setup test</h3>
+    <p style="color:var(--text-subtle);margin:0 0 1rem;font-size:0.85rem;line-height:1.5">Checks reachability, the watch-page secure context, and runs a real capture end-to-end.</p>
+    <div id="prismcast-test-body" style="margin-bottom:1rem;line-height:1.5;font-size:0.95rem;overflow-y:auto">&hellip;</div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap"><button class="btn btn-secondary" id="prismcast-test-rerun" onclick="testPrismcast()">Re-run</button><button class="btn btn-secondary" id="prismcast-copy-diagnostics" onclick="copyPrismcastDiagnostics()" disabled>Copy diagnostics</button><button class="btn-cancel-modal" onclick="document.getElementById('prismcast-test-modal').classList.remove('open')">Close</button></div>
+  </div>
+</div>
+
+<!-- ah4c script export modal -->
+<div class="modal-overlay" id="ah4c-scripts-modal" onclick="if(event.target===this)closeAh4cScriptsModal()">
+  <div class="modal-box" style="max-width:520px">
+    <h3 style="margin:0 0 0.75rem">Export ah4c scripts</h3>
+    <p style="color:var(--text-subtle);margin:0 0 1rem;line-height:1.5">Generates a script set for <a href="https://github.com/sullrich/ah4c" target="_blank" rel="noopener">ah4c</a> so it can drive FastChannels Player. Extract it into ah4c's mounted scripts directory and set <code style="color:var(--accent-soft);font-family:ui-monospace,monospace">STREAMER_APP=scripts/&lt;dir&gt;/&lt;name&gt;</code> to match.</p>
+    <div class="field field-full" style="margin-bottom:1rem"><label for="ah4c-scripts-url">This FastChannels server's address, as reachable from ah4c</label><input type="text" id="ah4c-scripts-url" placeholder="http://192.168.1.20:5523"><div class="help">Pre-filled from this page's own address; confirm it if ah4c runs on another host or network.</div></div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap"><button class="btn btn-primary" onclick="downloadAh4cScripts()">Download</button><button class="btn-cancel-modal" onclick="closeAh4cScriptsModal()">Cancel</button></div>
+  </div>
+</div>

@@ -21,6 +21,7 @@ from ..generators.m3u import (
 )
 from ..scrapers import registry as _scraper_registry
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
+from .. import fc_player_bridge as _fc_player_bridge
 from ..source_config import (
     build_setup_checklist,
     has_meaningful_source_config,
@@ -1306,17 +1307,9 @@ def feeds():
                            feeds=feeds, sources=sources,
                            categories=categories, languages=languages, countries=countries,
                            base_url=base_url,
-                           prismcast_enabled=bool((app_settings.effective_prismcast_url() or '').strip()),
-                           fc_player_enabled=bool(
-                               app_settings.fc_player_bridge_enabled
-                               and app_settings.effective_fc_player_bridge_adb_address()
-                               and app_settings.effective_fc_player_bridge_encoder_url()
-                           ),
-                           fc_player_ah4c_configured=bool(
-                               app_settings.fc_player_bridge_enabled
-                               and app_settings.effective_fc_player_bridge_adb_address()
-                               and app_settings.effective_fc_player_bridge_ah4c_url()
-                           ),
+                           prismcast_enabled=app_settings.prismcast_capture_configured(),
+                           fc_player_enabled=_fc_player_bridge.hdmi_bridge_active(app_settings),
+                           fc_player_ah4c_configured=_fc_player_bridge.ah4c_bridge_active(app_settings),
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
@@ -1336,6 +1329,51 @@ def _drm_bridge_recoverable_count() -> int:
                     Channel.disable_reason.like('DRM%'),
                     Channel.is_active == False)
             .count())
+
+
+def _bridge_source_inventory() -> list[dict]:
+    """Enabled sources that can produce DRM bridge channels, for the Bridge page.
+
+    `requires_drm_bridge` is populated by scrape/audit work, so exposing both the
+    current candidate count and Player compatibility tells an operator exactly
+    which sources need an initial audit after enabling bridge mode.
+    """
+    from ..scrapers.registry import drm_capable_source_names
+
+    settings = AppSettings.get()
+    capable = set(drm_capable_source_names())
+    if not capable:
+        return []
+    sources = (Source.query
+               .filter(Source.name.in_(capable), Source.is_enabled.is_(True), Source.epg_only.is_not(True))
+               .order_by(Source.display_name, Source.name)
+               .all())
+    rows = []
+    for source in sources:
+        active_enabled = (Channel.query
+                          .filter_by(source_id=source.id, is_active=True, is_enabled=True)
+                          .count())
+        candidates = (Channel.query
+                      .filter_by(source_id=source.id, is_active=True, is_enabled=True,
+                                 requires_drm_bridge=True)
+                      .count())
+        player_compatible = source.name in DRM_BRIDGE_TRUSTED_SOURCES
+        active_methods = []
+        if settings.prismcast_capture_configured():
+            active_methods.append('PrismCast Capture')
+        if player_compatible and _fc_player_bridge.ah4c_bridge_active(settings):
+            active_methods.append('ah4c Multi-Tuner Capture')
+        if player_compatible and _fc_player_bridge.hdmi_bridge_active(settings):
+            active_methods.append('HDMI Capture')
+        rows.append({
+            'name': source.name,
+            'display_name': source.display_name or source.name,
+            'player_compatible': player_compatible,
+            'active_methods': active_methods,
+            'active_enabled_count': active_enabled,
+            'candidate_count': candidates,
+        })
+    return rows
 
 
 @admin_bp.route('/settings')
@@ -1397,7 +1435,8 @@ def settings():
                            prismcast_url=app_settings.effective_prismcast_url() or '',
                            prismcast_inner_url=app_settings.prismcast_inner_url or '',
                            prismcast_max_height=int(app_settings.prismcast_max_height or 0),
-                           drm_bridge_enabled=bool(app_settings.drm_bridge_enabled),
+                           bridge_enabled=bool(app_settings.bridge_enabled),
+                           prismcast_enabled=bool(app_settings.prismcast_enabled),
                            fc_player_enabled=bool(app_settings.fc_player_bridge_enabled),
                            fc_player_ip=_fc_player_ip_display(app_settings.effective_fc_player_bridge_adb_address()),
                            fc_player_encoder_url=app_settings.effective_fc_player_bridge_encoder_url() or '',
@@ -1436,6 +1475,40 @@ def settings():
                            },
                            drm_bridge_recoverable_count=_drm_bridge_recoverable_count(),
                            gracenote_contribution_url=app_settings.gracenote_contribution_url or '')
+
+
+@admin_bp.route('/bridge')
+def bridge():
+    """Dedicated configuration surface for DRM playback/capture bridge methods."""
+    app_settings = AppSettings.get()
+    return render_template(
+        'admin/bridge.html',
+        request_base_url=request.host_url.rstrip('/'),
+        prismcast_url=app_settings.effective_prismcast_url() or '',
+        prismcast_inner_url=app_settings.prismcast_inner_url or '',
+        prismcast_max_height=int(app_settings.prismcast_max_height or 0),
+        bridge_enabled=bool(app_settings.bridge_enabled),
+        prismcast_enabled=bool(app_settings.prismcast_enabled),
+        drm_bridge_recoverable_count=_drm_bridge_recoverable_count(),
+        bridge_sources=_bridge_source_inventory(),
+        fc_player_enabled=bool(app_settings.fc_player_bridge_enabled),
+        fc_player_ip=_fc_player_ip_display(app_settings.effective_fc_player_bridge_adb_address()),
+        fc_player_encoder_url=app_settings.effective_fc_player_bridge_encoder_url() or '',
+        fc_player_idle_stop_enabled=bool(app_settings.fc_player_bridge_idle_stop_enabled),
+        fc_player_captions_enabled=bool(app_settings.fc_player_bridge_captions_enabled),
+        fc_player_ah4c_enabled=bool(app_settings.fc_player_bridge_ah4c_enabled),
+        fc_player_ah4c_url=app_settings.fc_player_bridge_ah4c_url or '',
+        fc_player_configured=bool(
+            app_settings.fc_player_bridge_enabled
+            and app_settings.effective_fc_player_bridge_adb_address()
+            and app_settings.effective_fc_player_bridge_encoder_url()
+        ),
+        fc_player_ah4c_configured=bool(
+            app_settings.fc_player_bridge_enabled
+            and app_settings.effective_fc_player_bridge_adb_address()
+            and app_settings.effective_fc_player_bridge_ah4c_url()
+        ),
+    )
 
 
 @admin_bp.route('/logs')

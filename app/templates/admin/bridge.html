@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bridge — FastChannels</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}">
+  {% include 'admin/_theme_head.html' %}
+</head>
+<body>
+
+  {% set active_page = 'bridge' %}
+  {% include 'admin/_nav.html' %}
+
+  <div class="page">
+    <h1>Bridge</h1>
+    <p class="subtitle">Keep DRM channels available by routing them through a compatible playback and capture path.</p>
+
+    <div class="source-card" id="settings-card-bridge-mode" style="margin-bottom:1.5rem">
+      <div class="source-body open">
+        <div class="toggle-row">
+          <div class="toggle-row-text">
+            <div class="toggle-row-label">Enable Bridge mode</div>
+            <div class="toggle-row-help"><strong>On:</strong> DRM-capable channels can stay active when an enabled bridge method supports their source. <strong>Off:</strong> they follow the normal disabled-DRM behavior, even if a method is configured.</div>
+            <div class="help">Choose PrismCast Capture, HDMI Capture, and/or ah4c Capture below. When a hardware capture path and PrismCast can both serve a source, hardware capture is preferred.</div>
+            {% if not prismcast_url and not fc_player_enabled %}
+            <div class="help" style="color:var(--warning-soft)">Set up at least one bridge method below before enabling Bridge mode.</div>
+            {% endif %}
+          </div>
+          <div class="toggle-row-control">
+            <label class="toggle-switch">
+              <input type="checkbox" id="bridge-enabled" {% if bridge_enabled %}checked{% endif %} onchange="saveBridgeMode()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        {% if (prismcast_enabled or fc_player_enabled) and not bridge_enabled and drm_bridge_recoverable_count %}
+        <div class="help" style="color:var(--accent-soft)">💡 A bridge method is enabled and {{ drm_bridge_recoverable_count }} DRM channel{{ 's' if drm_bridge_recoverable_count != 1 else '' }} {{ 'is' if drm_bridge_recoverable_count == 1 else 'are' }} currently disabled. Turn on Bridge mode to recover {{ 'it' if drm_bridge_recoverable_count == 1 else 'them' }}.</div>
+        {% endif %}
+        <div class="bridge-audit-note">
+          <strong>First-time setup:</strong> after enabling a bridge method, run a <strong>Stream Audit</strong> for each source you intend to bridge. The audit detects DRM and marks eligible channels for bridge output; without it, existing channels may still look like ordinary or disabled streams.
+          <a href="/admin/sources">Open Sources and run audits →</a>
+        </div>
+        <div class="bridge-source-inventory">
+          <div class="bridge-source-inventory-title">Currently enabled bridge-compatible sources</div>
+          {% if bridge_sources %}
+          <div class="bridge-source-chips">
+            {% for source in bridge_sources %}
+            <a class="bridge-source-chip" href="/admin/sources" title="{{ source.name }}: {{ source.active_enabled_count }} active/enabled channel(s), {{ source.candidate_count }} currently marked for bridge output. Active method: {{ source.active_methods|join(' + ') if source.active_methods else 'none' }}">
+              <span class="bridge-source-name">{{ source.display_name }}</span>
+              <span class="bridge-source-method">{% if source.active_methods %}{{ source.active_methods|join(' + ') }}{% else %}No active method{% endif %}</span>
+              <span class="bridge-source-count">{% if source.candidate_count %}{{ source.candidate_count }} ready{% else %}audit needed{% endif %}</span>
+            </a>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="help">No DRM-capable sources are enabled yet. Enable and configure a source first, then return here to audit it.</div>
+          {% endif %}
+        </div>
+        <div class="field-actions"><span class="save-status" id="bridge-mode-status"></span></div>
+      </div>
+    </div>
+
+    <div class="source-card" style="margin-bottom:1.5rem">
+      <div class="source-body open">
+        <div class="source-name" style="font-size:1rem">Choose a bridge method</div>
+        <div class="help" style="margin-top:0.45rem;line-height:1.55">
+          <strong>Bridge mode</strong> keeps DRM-capable channels active for any enabled capture path.
+          <strong>HDMI Capture</strong> and <strong>ah4c Capture</strong> use the FastChannels Player companion app on an Android TV or Fire TV device.
+          When hardware capture and PrismCast Capture are both available, hardware capture is preferred for its verified sources.
+        </div>
+        <div class="bridge-method-grid">
+          <article class="bridge-method bridge-method-recommended">
+            <div class="bridge-method-title">ah4c Capture</div>
+            <div class="bridge-method-kicker">Best for multi-tuner setups</div>
+            <p>Use this when several tuners or encoders may run at once. ah4c assigns each tune to its own device and capture path, so concurrent sessions do not steal one another’s player.</p>
+            <a href="https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md#ah4c-capture-multi-tuner" target="_blank" rel="noopener">ah4c Capture setup guide ↗</a>
+            <a href="https://github.com/sullrich/ah4c" target="_blank" rel="noopener">ah4c documentation ↗</a>
+          </article>
+          <article class="bridge-method">
+            <div class="bridge-method-title">HDMI Capture</div>
+            <div class="bridge-method-kicker">Single stream</div>
+            <p>Best for a budget, one-stream setup: one Android/Fire TV device and one fixed HDMI capture input. It cannot serve simultaneous channels.</p>
+            <a href="https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md#1-set-up-and-test-hdmi-capture-single-stream" target="_blank" rel="noopener">HDMI Capture setup guide ↗</a>
+          </article>
+          <article class="bridge-method">
+            <div class="bridge-method-title">PrismCast Capture</div>
+            <div class="bridge-method-kicker">Browser capture</div>
+            <p>Choose this for hardware-free Chrome capture. PrismCast plays DRM in a browser and captures it in software, avoiding a dedicated device and HDMI encoder.</p>
+            <a href="https://github.com/hjdhjd/prismcast" target="_blank" rel="noopener">PrismCast documentation ↗</a>
+          </article>
+        </div>
+      </div>
+    </div>
+
+    {% include 'admin/bridge/single_encoder.html' %}
+    {% include 'admin/bridge/ah4c.html' %}
+    {% include 'admin/settings/prismcast.html' %}
+
+    <div class="source-card" id="bridge-card-feeds" style="margin-top:1.5rem">
+      <div class="source-body open">
+        <div class="source-name" style="font-size:1rem">Bridge feed outputs</div>
+        <div class="help" style="margin-top:0.45rem;line-height:1.55">After configuring a method, add its generated Bridge M3U from the <a href="/admin/feeds">Feeds</a> page alongside your regular feed. The standard feed excludes bridge-only DRM channels, so importing both is expected.</div>
+      </div>
+    </div>
+  </div>
+
+  {% include 'admin/bridge_modals.html' %}
+  <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
+  <script>window.FC_SETTINGS_BOOTSTRAP = {};</script>
+  <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+  {% include 'admin/_update_modal.html' %}
+</body>
+</html>

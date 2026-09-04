@@ -20,7 +20,7 @@
 
 <div class="page">
   <h1>Settings</h1>
-  <p class="subtitle">Use the sections below to configure server addresses, playback behavior, guide data, credentials, and maintenance tasks.</p>
+  <p class="subtitle">Use the sections below to configure server addresses, playlist behavior, guide data, credentials, and maintenance tasks.</p>
 
   {% if settings_needs_config %}
   <div class="needs-config-banner" id="settings-needs-config-banner">
@@ -60,11 +60,9 @@
     <div class="settings-section-header">
       <div>
         <h2>Playback</h2>
-        <p>Controls that affect playlist output, stream routing, image delivery, and DRM bridge behavior.</p>
+        <p>Controls that affect playlist output, stream routing, and image delivery.</p>
       </div>
     </div>
-    {% include 'admin/settings/prismcast.html' %}
-    {% include 'admin/settings/fc_player.html' %}
     {% include 'admin/settings/experimental_output.html' %}
     {% include 'admin/settings/image_proxy.html' %}
   </section>

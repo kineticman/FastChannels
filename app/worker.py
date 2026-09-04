@@ -1647,19 +1647,21 @@ def _refresh_xml_artifacts() -> None:
         xml_artifacts: list[tuple[str, Callable]] = [
             ('master', lambda fp: write_xmltv(fp, {}, base_url=base_url)),
         ]
-        # PrismCast DRM-bridge artifacts are only built when a PrismCast server is
-        # configured (most installs won't run one).
+        # Method-specific artifacts only exist while their bridge method and the
+        # global Bridge policy are both enabled.
         prismcast_url = (_settings.effective_prismcast_url() or '').strip().rstrip('/')
         prismcast_inner = (_settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
-        fc_player_ready = _fc_player_bridge.is_configured()
-        ah4c_url = (_settings.effective_fc_player_bridge_ah4c_url() or '').strip().rstrip('/') if fc_player_ready else ''
+        prismcast_ready = _settings.prismcast_capture_configured()
+        fc_player_ready = _fc_player_bridge.hdmi_bridge_active(_settings)
+        ah4c_url = ((_settings.effective_fc_player_bridge_ah4c_url() or '').strip().rstrip('/')
+                    if _fc_player_bridge.ah4c_bridge_active(_settings) else '')
         m3u_artifacts: list[tuple[str, Callable]] = [
             ('master-m3u', lambda fp: fp.write(generate_m3u({}, base_url=base_url))),
             # EXPERIMENTAL: mixed Gracenote/XMLTV single-source playlist — see
             # generate_mixed_m3u docstring.
             ('master-mixed-m3u', lambda fp: fp.write(generate_mixed_m3u({}, base_url=base_url))),
         ]
-        if prismcast_url:
+        if prismcast_ready:
             m3u_artifacts.append((
                 'master-prismcast-m3u',
                 lambda fp: fp.write(generate_prismcast_m3u(
@@ -1681,7 +1683,7 @@ def _refresh_xml_artifacts() -> None:
             'master-gracenote-m3u',
             lambda fp: fp.write(generate_gracenote_m3u({}, base_url=base_url, namespace_start=default_gn_start)),
         ))
-        if prismcast_url:
+        if prismcast_ready:
             m3u_artifacts.append((
                 'master-prismcast-gracenote-m3u',
                 lambda fp: fp.write(generate_prismcast_m3u(
@@ -1751,7 +1753,7 @@ def _refresh_xml_artifacts() -> None:
                     generate_mixed_m3u(filters, base_url=base_url, **std_kw)
                 ),
             ))
-            if prismcast_url:
+            if prismcast_ready:
                 m3u_artifacts.append((
                     f'feed-{feed.slug}-prismcast-m3u',
                     lambda fp, filters=filters, std_kw=std_kw: fp.write(
@@ -1784,7 +1786,7 @@ def _refresh_xml_artifacts() -> None:
                     generate_gracenote_m3u(filters, base_url=base_url, **gn_kw)
                 ),
             ))
-            if prismcast_url:
+            if prismcast_ready:
                 m3u_artifacts.append((
                     f'feed-{feed.slug}-prismcast-gracenote-m3u',
                     lambda fp, filters=filters, gn_kw=gn_kw: fp.write(

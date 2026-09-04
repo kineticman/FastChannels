@@ -1468,7 +1468,8 @@ function formatPrismcastDiagnostics(data) {
     `  PrismCast Server URL: ${settings.prismcast_url || '(blank)'}`,
     `  Watch-page URL base: ${settings.watch_page_url_base || '(blank)'}`,
     `  Channels DVR URL: ${settings.channels_dvr_url || '(blank)'}`,
-    `  Bridge DRM enabled: ${settings.drm_bridge_enabled}`,
+    `  Bridge mode enabled: ${settings.bridge_enabled}`,
+    `  PrismCast enabled: ${settings.prismcast_enabled}`,
     `  PrismCast max height: ${settings.prismcast_max_height || 0}`,
     `  Diagnostic runtime OS: ${settings.diagnostic_runtime_os || '(unknown)'}`,
     `  Browser origin: ${browserContext.origin || '(unknown)'}`,
@@ -1763,11 +1764,17 @@ async function testPrismcast() {
   }
 }
 
-async function saveDrmBridge() {
-  const enabled = document.getElementById('drm-bridge-enabled').checked;
-  await saveSettings({ drm_bridge_enabled: enabled }, 'prismcast-status');
+async function saveBridgeMode() {
+  const enabled = document.getElementById('bridge-enabled').checked;
+  await saveSettings({ bridge_enabled: enabled }, 'bridge-mode-status');
   // The toggle reconciles existing DRM channels server-side; reload so the nudge,
   // badges, and counts reflect the new state.
+  setTimeout(() => location.reload(), 700);
+}
+
+async function savePrismcastToggle() {
+  const enabled = document.getElementById('prismcast-enabled').checked;
+  await saveSettings({ prismcast_enabled: enabled }, 'prismcast-status');
   setTimeout(() => location.reload(), 700);
 }
 
@@ -2265,10 +2272,10 @@ async function saveContributionUrl() {
 }
 
 initSettingsSectionNav();
-loadSystemStats();
-updateTveProviderFields();
-loadTveNetworkStatus();
-_renderTveXfinityCacheStatus();
+if (document.getElementById('system-stats-body')) loadSystemStats();
+if (document.getElementById('tve-provider')) updateTveProviderFields();
+if (document.getElementById('tve-network-status')) loadTveNetworkStatus();
+if (document.getElementById('tve-xfinity-cache-status')) _renderTveXfinityCacheStatus();
 
 // ── Community Gracenote map remote status ───────────────────────────────────
 async function loadRemoteGracenoteStatus() {
@@ -2329,5 +2336,5 @@ async function refreshRemoteGracenoteMap() {
   }
 }
 
-loadRemoteGracenoteStatus();
-loadLatestBackup();
+if (document.getElementById('gn-map-url')) loadRemoteGracenoteStatus();
+if (document.getElementById('local-backups-list')) loadLatestBackup();
