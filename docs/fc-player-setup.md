@@ -6,6 +6,12 @@ Channels DVR requests a bridge-only channel, FastChannels resolves the live
 stream, launches the player on a Fire TV or Android TV device over ADB, and
 returns the device's captured HDMI output as a normal channel.
 
+> **Device support note:** The development and day-to-day test device is a Fire
+> TV Stick. Android TV devices, including onn. streaming boxes/sticks, use the
+> same Player APK and ADB workflow, but their Settings labels and wireless ADB
+> behavior vary by Android version and vendor. Treat the Android TV notes below
+> as a troubleshooting guide and report results from new device models.
+
 Playback uses Media3/ExoPlayer and the Android device's own Widevine CDM. It
 does not remove or bypass DRM: license and entitlement checks still go through
 the provider's license server, and only the device's HDMI output is captured.
@@ -98,14 +104,16 @@ Save this URL. You will enter it as the **Capture/encoder stream URL** later.
 FastChannels uses ADB to control playback on the Fire TV or Android TV device.
 
 1. On the device, open **Settings → My Fire TV** (or **Device**) → **About**.
+   On Android TV/onn. devices, this is usually **Settings → System → About**.
 2. Select the device or build name seven times, until the developer message
    appears.
-3. Go back one screen and open **Developer Options**.
-4. Enable **ADB debugging**. You do not need to enable **Apps from Unknown
-   Sources**; the FastChannels installer uses `adb install`, not Fire TV's
-   on-device package installer.
-5. Find the device's IP address under **Settings → My Fire TV → About →
-   Network**.
+3. Go back and open **Developer Options**.
+4. Enable the device's network ADB setting:
+   - **Fire TV:** enable **ADB Debugging**.
+   - **Android TV / onn.:** look for **Network Debugging** or **Wireless
+     Debugging**. Prefer a Network Debugging option that exposes normal ADB on
+     port `5555`.
+5. Find the device's LAN IP address in its network settings.
 6. From a computer on the same network, run:
 
    ```bash
@@ -117,6 +125,19 @@ FastChannels uses ADB to control playback on the Fire TV or Android TV device.
 
 If the prompt does not appear, run the connection command again. It sometimes
 appears only after a second attempt.
+
+### Android TV / onn. wireless-debugging caveat
+
+On Android 11 and later, a setting specifically named **Wireless Debugging**
+often uses Android's pairing-code flow and a temporary, device-selected port.
+FastChannels currently connects to the device's LAN address on the conventional
+ADB port `5555`; that pairing-only mode has not yet been validated as a
+FastChannels connection method. If the device offers both options, use
+**Network Debugging** / an ADB-over-network option first. If it offers only
+pairing-based Wireless Debugging, please capture the device model, Android
+version, and the connection result before relying on it for a tuner. See
+[Android's wireless debugging documentation](https://developer.android.com/studio/run/device)
+for the pairing workflow.
 
 > **Fire TV note:** Fire OS may occasionally remove the ADB authorization,
 > especially after an update. If the connection later stops working, check the
@@ -134,6 +155,44 @@ appears only after a second attempt.
 > approve the prompt that appears. If you're not physically at the TV (e.g.
 > viewing it through a capture/bridge feed), you'll need someone there, or to
 > wait until you can see the screen — there's no way to approve this remotely.
+
+### If FastChannels says the device is unauthorized
+
+Use these steps on either Fire TV or Android TV after the device IP is saved in
+**Bridge → HDMI Capture**:
+
+1. Retry **Test connection** or **Install FastChannels Player** and watch the
+   TV for **Allow USB debugging?** (or an equivalent ADB authorization prompt).
+2. Select **Always allow from this computer**, then choose **Allow**. This is
+   the authorization for the FastChannels container, not just your laptop.
+3. If no prompt appears, open **Developer Options → Revoke USB debugging
+   authorizations**.
+4. Turn the device's **ADB Debugging**, **Network Debugging**, or **Wireless
+   Debugging** setting off and back on.
+5. Retry the FastChannels connection or install action and watch for the new
+   prompt.
+
+### Manual APK fallback with Downloader
+
+If ADB installation still cannot be used, install the Player APK directly on
+an Android TV or onn. device. This gets the app onto the device, but ADB still
+must be enabled and authorized afterward for FastChannels to launch it.
+
+1. Install and open the **Downloader** app on the TV.
+2. In the device's Settings, open **Security/Privacy → Install unknown apps**
+   and allow Downloader to install apps. The exact menu name varies by vendor.
+3. Enter this URL in Downloader:
+
+   ```text
+   https://github.com/kineticman/FastChannels/releases/latest/download/FastChannelsPlayer.apk
+   ```
+
+4. Download the APK and choose **Install** when prompted.
+5. Return to Developer Options and enable **ADB Debugging**, **Network
+   Debugging**, or the device's compatible wireless ADB option.
+6. In **Bridge → HDMI Capture**, enter the device IP and retry the FastChannels
+   connection. Approve the ADB authorization prompt on the TV, selecting
+   **Always allow from this computer** first.
 
 ## 3. Configure FastChannels
 
