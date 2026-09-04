@@ -316,6 +316,34 @@ def export_ah4c_scripts():
     )
 
 
+@settings_bp.route('/settings/fc-player/ah4c-tuners', methods=['POST'])
+def check_ah4c_tuners():
+    """Cross-checks ah4c's configured TUNERn_IP list (from its own GET /api/status)
+    against what this FastChannels container can reach and is adb-authorized for.
+    ah4c and FastChannels are separate adb clients with separate keys, so a tuner
+    ah4c is fine with can still show up unauthorized here."""
+    from .. import fc_player_bridge
+    try:
+        tuners = fc_player_bridge.verify_ah4c_tuners()
+    except fc_player_bridge.FcPlayerNotConfigured:
+        return jsonify({'ok': False, 'message': 'Save an ah4c server URL first.'}), 400
+    except ValueError:
+        return jsonify({
+            'ok': False,
+            'message': "ah4c's /api/status didn't return valid JSON — double-check the server URL.",
+        }), 502
+    except _req.RequestException as e:
+        return jsonify({'ok': False, 'message': f"Couldn't reach ah4c at that URL: {e}"}), 502
+
+    if not tuners:
+        return jsonify({
+            'ok': True,
+            'tuners': [],
+            'message': 'ah4c reports no configured tuners (no TUNERn_IP values).',
+        })
+    return jsonify({'ok': True, 'tuners': tuners})
+
+
 @settings_bp.route('/fc-player/heartbeat', methods=['POST'])
 def fc_player_heartbeat():
     """Periodic "still watching" ping from the /watch page for a channel that fell

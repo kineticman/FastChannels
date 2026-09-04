@@ -190,6 +190,219 @@ def install_app(apk_path: str, timeout: int = 90) -> tuple[bool, str]:
     return False, output or f'adb install failed (rc={result.returncode})'
 
 
+_AH4C_STATUS_TIMEOUT = 5
+
+
+def _ah4c_base_url() -> str:
+    """ah4c's own base URL, from the saved setting or its env fallback — independent
+    of the "Enable ah4c support" toggle, so the tuner check can run before that's
+    flipped on. Raises FcPlayerNotConfigured when no URL is set anywhere."""
+    settings = AppSettings.get()
+    base = ((settings.fc_player_bridge_ah4c_url or '').strip()
+            or (settings.env_fc_player_bridge_ah4c_url() or '')).strip().rstrip('/')
+    if not base:
+        raise FcPlayerNotConfigured('fc_player_bridge_ah4c_url is not configured')
+    return base
+
+
+def ah4c_tuner_ips() -> list[str]:
+    """The tuner device addresses ah4c has configured (its TUNERn_IP values), read
+    from ah4c's own GET /api/status JSON ("Tuners": [{"Tunerip": ...}, ...]).
+
+    Returned in ah4c's own tuner order, as ah4c reports them — a bare host or a
+    host:port, whatever was put in TUNERn_IP — with blanks and duplicates dropped.
+    Raises FcPlayerNotConfigured if no ah4c URL is set; lets requests/JSON errors
+    propagate so the caller can tell the user why it couldn't ask ah4c."""
+    resp = requests.get(f'{_ah4c_base_url()}/api/status', timeout=_AH4C_STATUS_TIMEOUT)
+    resp.raise_for_status()
+    tuners = resp.json().get('Tuners') or []
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry in tuners:
+        ip = str((entry or {}).get('Tunerip') or '').strip()
+        if ip and ip not in seen:
+            seen.add(ip)
+            out.append(ip)
+    return out
+
+
+def _adb_state_for(address: str) -> tuple[str, str]:
+    """(state, human-readable message) for one device address, from this container's
+    own adb client — connects first (same first step a real tune takes), then asks
+    adb for the device state. state is one of: 'device' (reachable + this
+    container's adb key is authorized), 'unauthorized', 'offline', 'unreachable'."""
+    try:
+        subprocess.run(
+            ['adb', 'connect', address],
+            capture_output=True, timeout=_ADB_TIMEOUT, check=False,
+        )
+        state = subprocess.run(
+            ['adb', '-s', address, 'get-state'],
+            capture_output=True, timeout=_ADB_TIMEOUT, check=False, text=True,
+        )
+    except Exception as e:
+        return 'unreachable', f'adb error: {e}'
+
+    blob = ((state.stdout or '') + (state.stderr or '')).lower()
+    if state.returncode == 0 and (state.stdout or '').strip() == 'device':
+        return 'device', 'Authorized — reachable over adb from FastChannels.'
+    if 'unauthorized' in blob:
+        return 'unauthorized', ("Reachable, but this FastChannels container's adb key isn't "
+                                'approved on the device yet — trigger an action and approve the '
+                                'prompt on the TV.')
+    if 'offline' in blob:
+        return 'offline', 'Connected but offline — power-cycle the device or re-approve adb.'
+    return 'unreachable', ("No adb connection — check the IP, that the device is powered on, and "
+                           'that ADB debugging is enabled.')
+
+
+def _ms_to_human(ms: int) -> str:
+    if ms >= 60_000:
+        return f'{ms // 60_000} min'
+    if ms >= 1_000:
+        return f'{ms // 1_000} s'
+    return f'{ms} ms'
+
+
+# A screen-off timeout stored as (near) 2^31-1 ms is Android's "Never" sentinel.
+_NEVER_MS = 2_000_000_000
+
+
+def _device_os_and_sleep(address: str) -> dict:
+    """OS identification and auto-sleep state for one authorized device, in a
+    single adb shell round-trip. Only meaningful once _adb_state_for() said
+    'device' — a shell is needed. Every field degrades to None/'' on any failure
+    so a probe that half-answers never breaks the row."""
+    out = {
+        'os_label': '',
+        'is_fire_os': False,
+        'sleep_disabled': None,   # True / False / None (unknown)
+        'sleep_detail': '',
+    }
+    # One remote shell, newline-separated, in a fixed order we can index back out.
+    remote = (
+        'getprop ro.build.version.release; '
+        'getprop ro.product.manufacturer; '
+        'getprop ro.build.version.fireos; '
+        'getprop ro.build.version.name; '
+        'settings get secure sleep_timeout; '
+        'settings get system screen_off_timeout'
+    )
+    try:
+        res = subprocess.run(
+            ['adb', '-s', address, 'shell', remote],
+            capture_output=True, timeout=_ADB_TIMEOUT, check=False, text=True,
+        )
+    except Exception:
+        return out
+    if res.returncode != 0:
+        return out
+
+    lines = [ln.strip() for ln in (res.stdout or '').splitlines()]
+    lines += [''] * (6 - len(lines))
+    release, manufacturer, fireos, build_name, sleep_timeout, screen_off = lines[:6]
+
+    fire = 'amazon' in manufacturer.lower() or bool(fireos) or 'fire os' in build_name.lower()
+    out['is_fire_os'] = fire
+    android = f'Android {release}' if release and release.lower() != 'null' else ''
+    if fire:
+        if fireos and fireos.lower() != 'null':
+            fire_label = f'Fire OS {fireos}'
+        elif 'fire os' in build_name.lower():
+            fire_label = build_name
+        else:
+            fire_label = 'Fire OS'
+        out['os_label'] = f'{fire_label} · {android}' if android else fire_label
+    else:
+        out['os_label'] = android
+
+    def _as_int(v: str) -> int | None:
+        v = (v or '').strip()
+        if not v or v.lower() == 'null':
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            return None
+
+    st, sot = _as_int(sleep_timeout), _as_int(screen_off)
+
+    # `secure sleep_timeout` is the Android TV inactivity-sleep timer. AOSP's
+    # PowerManagerService treats any value <= 0 as "no inactivity sleep" — so
+    # both 0 and -1 mean it's off (Google TV's "Put device to sleep after →
+    # Never" writes -1; some devices/versions use 0 or the ~2^31 sentinel). A
+    # real positive value is a live timeout. Phones/tablets don't expose this
+    # setting at all (null), so there we fall back to `system
+    # screen_off_timeout`, which governs the display/HDMI-output blanking.
+    disabled: bool | None = None
+    reason = ''
+    if st is not None:
+        if st <= 0 or st >= _NEVER_MS:
+            disabled, reason = True, f'sleep_timeout={st}'
+        else:
+            disabled, reason = False, f'sleep_timeout={st} ({_ms_to_human(st)})'
+    elif sot is not None:
+        if sot >= _NEVER_MS:
+            disabled, reason = True, f'screen_off_timeout={sot}'
+        elif sot > 0:
+            disabled, reason = False, f'screen_off_timeout={sot} ({_ms_to_human(sot)})'
+
+    # Always keep the display timeout visible as secondary context — the
+    # screensaver / screen-off path is separate from sleep_timeout, and a
+    # running player normally holds a wake lock against it, but it's the thing
+    # to check next if capture still drops with sleep_timeout already off.
+    if reason and st is not None and sot is not None and 'screen_off_timeout' not in reason:
+        if sot >= _NEVER_MS:
+            reason += ', screen_off_timeout=never'
+        elif sot > 0:
+            reason += f', screen_off_timeout={_ms_to_human(sot)}'
+
+    out['sleep_disabled'] = disabled
+    if reason:
+        out['sleep_detail'] = reason
+    else:
+        # Nothing conclusive — surface the raw values so it can be chased by hand.
+        raw = [f'sleep_timeout={sleep_timeout.strip() or "?"}',
+               f'screen_off_timeout={screen_off.strip() or "?"}']
+        out['sleep_detail'] = ', '.join(raw)
+    return out
+
+
+def verify_ah4c_tuners() -> list[dict]:
+    """Pairs each of ah4c's configured TUNERn_IP values with what this FastChannels
+    container can actually reach and is authorized for over adb. The two run
+    separate adb clients with separate keys, so a tuner ah4c is happy with can
+    still be unauthorized (or unreachable) from here — that's exactly what this
+    surfaces.
+
+    For tuners that are authorized, it also reports the device OS (flagging Fire
+    OS) and whether auto-sleep is turned off — a stick that dozes off mid-session
+    is a common ah4c-path failure, so "no signal" is easier to chase down when the
+    table already says the display sleep timer is still armed."""
+    results: list[dict] = []
+    for idx, ip in enumerate(ah4c_tuner_ips(), start=1):
+        # ah4c stores TUNERn_IP as a bare host or host:port; the container's adb
+        # keys are always host:5555 (see prebmitune.sh's own optional-port match).
+        address = ip if ':' in ip.rsplit(']', 1)[-1] else f'{ip}:5555'
+        state, message = _adb_state_for(address)
+        row = {
+            'index': idx,
+            'tuner_ip': ip,
+            'adb_address': address,
+            'state': state,
+            'authorized': state == 'device',
+            'message': message,
+            'os_label': '',
+            'is_fire_os': False,
+            'sleep_disabled': None,
+            'sleep_detail': '',
+        }
+        if state == 'device':
+            row.update(_device_os_and_sleep(address))
+        results.append(row)
+    return results
+
+
 def _adb_shell(address: str, *command: str, timeout: int = _ADB_TIMEOUT) -> tuple[bool, str]:
     """Run a small adb shell command and return its combined text safely."""
     try:

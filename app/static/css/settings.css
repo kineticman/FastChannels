@@ -319,6 +319,55 @@
       border-top: 1px solid var(--border);
     }
 
+    .ah4c-tuners {
+      margin-top: 0.9rem;
+      overflow-x: auto;
+    }
+    .ah4c-tuners-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+    }
+    .ah4c-tuners-table td.ah4c-fireos {
+      color: var(--accent-soft);
+      font-weight: 600;
+    }
+    .ah4c-tuners-table th,
+    .ah4c-tuners-table td {
+      text-align: left;
+      padding: 0.5rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    .ah4c-tuners-table th {
+      font-weight: 600;
+      color: var(--text-soft);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .ah4c-tuners-table th.no-transform {
+      text-transform: none;
+    }
+    .ah4c-tuners-table td.mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--accent-soft);
+    }
+    .ah4c-tuner-badge {
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .ah4c-tuner-badge.ok { color: var(--success, #3fb950); }
+    .ah4c-tuner-badge.warn { color: var(--warning-soft, #d29922); }
+    .ah4c-tuner-badge.error { color: var(--danger, #f85149); }
+    .ah4c-tuner-note {
+      margin-top: 0.2rem;
+      color: var(--text-soft);
+      font-size: 0.74rem;
+      line-height: 1.4;
+      max-width: 32ch;
+    }
+
     .advanced-box {
       margin-top: 1rem;
       border: 1px solid var(--border);

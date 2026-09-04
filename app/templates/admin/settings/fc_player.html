@@ -137,7 +137,9 @@
             <div class="help">Where ah4c itself is reachable — its <code>/play/tuner/&lt;channel&gt;</code> is what the generated M3U points at.</div>
           </div>
         </div>
+        <div id="ah4c-tuners-result" class="ah4c-tuners" hidden></div>
         <div class="field-actions">
+          <button class="btn btn-secondary" style="margin-right:auto" onclick="checkAh4cTuners()">Check tuner authorization(s)</button>
           <span class="save-status" id="fc-player-ah4c-status"></span>
           <button class="btn btn-secondary" onclick="openAh4cScriptsModal()">Export ah4c scripts</button>
           <button class="btn btn-primary" onclick="saveFcPlayerAh4cSettings()">Save</button>
