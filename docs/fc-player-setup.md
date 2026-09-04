@@ -179,6 +179,13 @@ inside the FastChannels container, and **Copy forum report** creates a concise,
 credential-free report to attach to a support post. PrismCast has its own
 specialized capture test in the PrismCast Capture card.
 
+When the non-disruptive check passes, **Live bridge test** is the optional
+end-to-end confirmation: choose one bridge-ready channel, confirm the warning,
+and FastChannels tunes the Player device then samples the HDMI Capture stream.
+It intentionally interrupts anything playing on that device. The result shows
+the tested stream path, payload size, timing, and whether the Player reports
+active playback.
+
 The automatic stop option detects viewers using Channels DVR's activity status
 or the FastChannels `/watch` page. It cannot detect a third-party player
 connected directly to the M3U. Leave this option off if you watch that way.

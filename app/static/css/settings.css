@@ -755,6 +755,11 @@
     .bridge-healthcheck-title { font-weight: 650; color: var(--text); margin-bottom: 0.2rem; }
     .bridge-healthcheck-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; flex-shrink: 0; }
     .bridge-healthcheck-results { margin-top: 0.75rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .bridge-live-test-picker { margin-top: 0.75rem; padding: 0.85rem; border: 1px solid color-mix(in srgb, var(--warning-soft) 35%, var(--border)); border-radius: 8px; background: var(--surface-2); }
+    .bridge-live-test-picker label { display: block; margin-top: 0.7rem; font-size: 0.84rem; font-weight: 650; }
+    .bridge-live-test-picker select { box-sizing: border-box; width: 100%; margin-top: 0.35rem; }
+    .bridge-live-test-warning { color: var(--warning-soft); font-size: 0.84rem; line-height: 1.45; }
+    .bridge-live-test-picker .field-actions { margin-top: 0.65rem; }
     .bridge-healthcheck-summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.75rem 0.9rem; background: var(--surface-2); }
     .bridge-healthcheck-summary strong.ok { color: var(--success-soft); }
     .bridge-healthcheck-summary strong.warn { color: var(--warning-soft); }

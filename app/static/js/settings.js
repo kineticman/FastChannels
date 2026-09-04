@@ -1879,6 +1879,64 @@ async function copyBridgeHealthcheck() {
   }
 }
 
+let _bridgeLiveTestChannels = [];
+
+async function openBridgeLiveTest() {
+  const button = document.getElementById('bridge-live-test-open');
+  const picker = document.getElementById('bridge-live-test-picker');
+  if (!button || !picker) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Loading channels…';
+  try {
+    const response = await fetch('/api/settings/bridge/live-test-channels');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load bridge channels.');
+    _bridgeLiveTestChannels = data.channels || [];
+    picker.hidden = false;
+    if (!_bridgeLiveTestChannels.length) {
+      picker.innerHTML = '<div class="help">No active, enabled channels are currently marked for bridge output. Run Stream Audit on a DRM source first.</div>';
+      return;
+    }
+    picker.innerHTML = `<div class="bridge-live-test-warning"><strong>Live bridge test will change what is playing on the configured HDMI Capture device.</strong> It triggers one real bridge channel, waits briefly, and verifies the saved capture stream from inside FastChannels.</div>
+      <label for="bridge-live-test-channel">Bridge channel to tune</label>
+      <select id="bridge-live-test-channel">${_bridgeLiveTestChannels.map(channel => `<option value="${channel.id}">${_bridgeHealthcheckEsc(channel.label)}</option>`).join('')}</select>
+      <div class="field-actions"><button class="btn btn-primary" id="bridge-live-test-run" onclick="runBridgeLiveTest()">Start live test</button></div>`;
+  } catch (error) {
+    picker.hidden = false;
+    picker.innerHTML = `<div class="bridge-healthcheck-detail" style="color:var(--danger)">${_bridgeHealthcheckEsc(error.message || error)}</div>`;
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+async function runBridgeLiveTest() {
+  const select = document.getElementById('bridge-live-test-channel');
+  const run = document.getElementById('bridge-live-test-run');
+  const picker = document.getElementById('bridge-live-test-picker');
+  const channel = _bridgeLiveTestChannels.find(item => item.id === Number(select?.value));
+  if (!channel || !run || !picker) return;
+  if (!window.confirm(`Tune ${channel.label} on the HDMI Capture device now? This will interrupt anything currently playing there.`)) return;
+  run.disabled = true;
+  run.textContent = 'Tuning device and sampling capture…';
+  try {
+    const response = await fetch('/api/settings/bridge/live-test', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({channel_id: channel.id}),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || data.detail || `HTTP ${response.status}`);
+    const state = data.status || (data.ok ? 'ok' : 'fail');
+    const icon = state === 'ok' ? '✓' : (state === 'warn' ? '⚠' : '✗');
+    const player = data.player_playing ? 'Player reports playback active' : (data.player_visible ? 'FastChannels Player is foreground' : 'Player did not report active playback');
+    const focus = data.player_focus ? `<br>Device focus: ${_bridgeHealthcheckEsc(data.player_focus)}` : '';
+    picker.innerHTML = `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon ${state}">${icon}</span><div><div class="bridge-healthcheck-name">Live bridge test: ${_bridgeHealthcheckEsc(data.channel || channel.label)}</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(data.detail || '')}<br>Endpoint: ${_bridgeHealthcheckEsc(data.endpoint || '')}<br>Capture: ${_bridgeHealthcheckEsc(String(data.bytes_received || 0))} bytes in ${_bridgeHealthcheckEsc(String(data.elapsed_ms || 0))} ms (${_bridgeHealthcheckEsc(data.content_type || 'unspecified')})<br>${_bridgeHealthcheckEsc(player)}${focus}</div></div></div>`;
+  } catch (error) {
+    picker.innerHTML = `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon fail">✗</span><div><div class="bridge-healthcheck-name">Live bridge test failed</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(error.message || error)}</div></div></div>`;
+  }
+}
+
 async function testDvrConnection() {
   const statusEl = document.getElementById('dvr-settings-status');
   statusEl.textContent = 'Testing…';

@@ -6,7 +6,7 @@ import requests as _req
 
 logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit, urljoin
 import re
 
 from flask import Blueprint, jsonify, request, current_app, Response
@@ -337,6 +337,103 @@ def fc_player_capture_streams():
     if not streams:
         return jsonify({'error': 'Channels DVR returned no MPEG-TS stream entries. Confirm the capture device is added and enabled in Channels DVR.'}), 404
     return jsonify({'streams': streams})
+
+
+@settings_bp.route('/settings/bridge/live-test-channels', methods=['GET'])
+def bridge_live_test_channels():
+    """Bridge-ready channels that are safe candidates for an explicit live test."""
+    rows = (Channel.query.join(Source)
+            .filter(Channel.is_active.is_(True), Channel.is_enabled.is_(True),
+                    Channel.requires_drm_bridge.is_(True), Source.is_enabled.is_(True))
+            .order_by(Source.display_name, Channel.name)
+            .limit(250).all())
+    return jsonify({'channels': [
+        {'id': channel.id, 'label': f'{channel.source.display_name} · {channel.name or channel.source_channel_id}'}
+        for channel in rows
+    ]})
+
+
+@settings_bp.route('/settings/bridge/live-test', methods=['POST'])
+def bridge_live_test():
+    """Explicit, disruptive Player → HDMI Capture verification for one channel."""
+    settings = AppSettings.get()
+    if not fc_player_bridge.hdmi_bridge_active(settings):
+        return jsonify({'error': 'Enable Bridge mode, HDMI Capture, a device IP, and a fixed capture stream first.'}), 409
+    data = request.get_json(force=True) or {}
+    try:
+        channel_id = int(data.get('channel_id'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Choose a bridge-ready channel to test.'}), 422
+    channel = (Channel.query.join(Source)
+               .filter(Channel.id == channel_id, Channel.is_active.is_(True), Channel.is_enabled.is_(True),
+                       Channel.requires_drm_bridge.is_(True), Source.is_enabled.is_(True))
+               .first())
+    if channel is None:
+        return jsonify({'error': 'That channel is no longer eligible for a bridge test. Refresh the list and choose another.'}), 404
+
+    try:
+        from .api_playback import _get_playback_info
+        info = _get_playback_info(channel, fast_mode=False)
+        manifest_url = info.get('preview_url') or info.get('play_url') or ''
+        if manifest_url.startswith('/'):
+            manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
+        if not manifest_url:
+            return jsonify({'error': 'FastChannels could not resolve a playable stream for this channel.'}), 502
+        triggered = fc_player_bridge.trigger_channel(
+            manifest_url, info.get('license_url') or None,
+            name=channel.name or 'FastChannels',
+            channel_key=f'{channel.source.name}:{channel.source_channel_id}',
+        )
+    except Exception as exc:
+        logger.warning('[fc-player] live bridge test failed to trigger channel=%s: %s', channel.id, exc)
+        return jsonify({'error': 'FastChannels could not start the selected channel on the Player device.'}), 502
+    if not triggered:
+        return jsonify({'error': 'The Player device did not acknowledge the tune request. Check ADB authorization and Device Controls.'}), 502
+
+    # Give the Player a brief chance to navigate before sampling its fixed HDMI
+    # stream. This endpoint is intentionally opt-in because it changes the TV.
+    time.sleep(4)
+    encoder_url = settings.effective_fc_player_bridge_encoder_url()
+    started = time.monotonic()
+    try:
+        with _req.get(encoder_url, stream=True, timeout=(3, 8)) as response:
+            response.raise_for_status()
+            sample = next(response.iter_content(chunk_size=32 * 1024), b'')
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+    except _req.RequestException:
+        return jsonify({
+            'ok': False, 'channel': channel.name or channel.source_channel_id,
+            'detail': 'The Player accepted the tune request, but FastChannels could not receive the HDMI capture stream afterward.',
+            'endpoint': _stream_debug_path(encoder_url),
+        }), 502
+
+    device = fc_player_bridge.device_controls_status()
+    payload_ok = bool(sample) and _looks_like_mpeg_ts(sample)
+    player_playing = device.get('player_playing') if device.get('ok') else None
+    player_visible = bool(device.get('ok') and 'com.fastchannels.player' in (device.get('focus') or ''))
+    status = 'ok' if payload_ok and (player_playing or player_visible) else ('warn' if payload_ok else 'fail')
+    if payload_ok and player_playing:
+        detail = 'Player tune acknowledged; the Player reports playback active and the capture stream returned MPEG-TS after the tune.'
+    elif payload_ok and player_visible:
+        detail = 'Player tune acknowledged; FastChannels Player is foreground and the capture stream returned MPEG-TS after the tune.'
+    elif payload_ok:
+        detail = ('Player tune acknowledged and the capture stream returned MPEG-TS, but FastChannels could not confirm active Player playback. '
+                  'The stream may be a prior/stale capture; inspect the TV and Player Device Controls.')
+    else:
+        detail = 'Player tune acknowledged, but the capture endpoint returned data that did not resemble MPEG-TS.'
+    return jsonify({
+        'ok': payload_ok,
+        'status': status,
+        'channel': f'{channel.source.display_name} · {channel.name or channel.source_channel_id}',
+        'endpoint': _stream_debug_path(encoder_url),
+        'bytes_received': len(sample),
+        'elapsed_ms': elapsed_ms,
+        'content_type': (response.headers.get('Content-Type') or 'unspecified').split(';', 1)[0],
+        'player_playing': player_playing,
+        'player_visible': player_visible,
+        'player_focus': device.get('focus') if device.get('ok') else None,
+        'detail': detail,
+    })
 
 
 @settings_bp.route('/settings/bridge/healthcheck', methods=['POST'])
