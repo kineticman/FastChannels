@@ -45,10 +45,14 @@ public class PlaybackActivity extends Activity {
     static final String EXTRA_DRM = "drm";
     static final String EXTRA_LICENSE_URL = "license_url";
     static final String EXTRA_CAPTIONS = "captions";
+    static final String EXTRA_COMMAND = "command";
+    static final String EXTRA_CHANNEL_KEY = "channel_key";
+    static final String COMMAND_WARM_STOP = "warm_stop";
 
     private ExoPlayer player;
     private DefaultTrackSelector trackSelector;
     private MediaSession mediaSession;
+    private String activeChannelKey;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -134,6 +138,11 @@ public class PlaybackActivity extends Activity {
     }
 
     private void playFromIntent(Intent intent) {
+        if (COMMAND_WARM_STOP.equals(intent.getStringExtra(EXTRA_COMMAND))) {
+            warmStop(intent.getStringExtra(EXTRA_CHANNEL_KEY));
+            return;
+        }
+
         String streamUrl = intent.getStringExtra(EXTRA_STREAM_URL);
         String title = intent.getStringExtra(EXTRA_TITLE);
         boolean drm = intent.getBooleanExtra(EXTRA_DRM, false);
@@ -165,9 +174,34 @@ public class PlaybackActivity extends Activity {
         }
 
         Log.i(TAG, "playing \"" + title + "\" drm=" + drm + " url=" + streamUrl);
+        activeChannelKey = intent.getStringExtra(EXTRA_CHANNEL_KEY);
         player.setMediaItem(itemBuilder.build());
         player.prepare();
         player.setPlayWhenReady(true);
+    }
+
+    /**
+     * Stop playback without killing the process. ah4c calls this as soon as its
+     * downstream client disconnects; retaining the Activity, MediaSession, and
+     * ExoPlayer lets the next adb launch take the warm onNewIntent() path.
+     *
+     * The channel key makes a delayed stop from an old ah4c tune harmless: once
+     * a newer launch has claimed the Activity, it must not stop that new stream.
+     */
+    private void warmStop(String expectedChannelKey) {
+        if (expectedChannelKey != null && !expectedChannelKey.isEmpty()
+                && activeChannelKey != null && !expectedChannelKey.equals(activeChannelKey)) {
+            Log.i(TAG, "ignoring stale warm stop for " + expectedChannelKey
+                    + "; active=" + activeChannelKey);
+            return;
+        }
+
+        Log.i(TAG, "warm-stopping " + (activeChannelKey == null ? "player" : activeChannelKey));
+        player.stop();
+        player.clearMediaItems();
+        activeChannelKey = null;
+        // Remove the old frame from HDMI while retaining this task for a warm retune.
+        moveTaskToBack(true);
     }
 
     @Override

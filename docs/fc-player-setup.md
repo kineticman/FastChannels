@@ -162,6 +162,13 @@ The automatic stop option detects viewers using Channels DVR's activity status
 or the FastChannels `/watch` page. It cannot detect a third-party player
 connected directly to the M3U. Leave this option off if you watch that way.
 
+**Fire TV Device Controls** next to the Install button is the quickest way to
+diagnose a headless device: it shows ADB reachability, whether the screen is
+awake, the installed player version, and current display timeouts. **Apply
+headless preset** keeps a powered device awake and prevents its screen/sleep
+timeouts from interrupting the HDMI encoder; FastChannels saves the prior
+values so **Restore previous settings** can put them back later.
+
 If you're using the single-encoder method, scroll to the **Single HDMI
 encoder** section and enter:
 
@@ -297,9 +304,12 @@ build or maintain on the ah4c side.
   time to hand off on a clean moving keyframe.
 
 When a viewer leaves an ah4c channel, ah4c runs the exported
-`stopbmitune.sh` immediately and force-stops FastChannels Player. This is the
-primary cleanup path for ah4c. FastChannels' optional idle-stop watchdog still
-tracks the tune, but is a slower fallback intended for direct bridge playback.
+`stopbmitune.sh` immediately. It warm-stops FastChannels Player: the old stream
+ends and the task moves to the background, but the app and ExoPlayer stay alive
+for a faster next tune. The stop includes the channel key, so a delayed stop
+from an old tune cannot interrupt a newer one. FastChannels' optional idle-stop
+watchdog still tracks the tune, but is a slower fallback intended for direct
+bridge playback.
 
 A busy-tuner response from ah4c (all tuners in use) is normal contention, not
 a failure — it just means try again once a tuner frees up.

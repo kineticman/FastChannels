@@ -45,6 +45,10 @@ _PLAYER_COMPONENT = 'com.fastchannels.player/.PlaybackActivity'
 # than committed to git.
 _BUNDLED_APK_PATH = '/app/fc_player_release.apk'
 
+# Android's largest accepted timeout. Together with stay_on_while_plugged_in it
+# is the closest portable “never” setting for Fire TV / Android TV devices.
+_NEVER_TIMEOUT_MS = 2_147_483_647
+
 
 def bundled_apk_path() -> str | None:
     """The bundled release APK's path, or None if the release asset was unavailable
@@ -399,6 +403,161 @@ def verify_ah4c_tuners() -> list[dict]:
     return results
 
 
+def _adb_shell(address: str, *command: str, timeout: int = _ADB_TIMEOUT) -> tuple[bool, str]:
+    """Run a small adb shell command and return its combined text safely."""
+    try:
+        result = subprocess.run(
+            ['adb', '-s', address, 'shell', *command],
+            capture_output=True, timeout=timeout, check=False, text=True,
+        )
+    except Exception as e:
+        return False, f'adb error: {e}'
+    text = ((result.stdout or '') + (result.stderr or '')).strip()
+    return result.returncode == 0, text
+
+
+def _device_connected() -> tuple[bool, str, str | None]:
+    """Connect to the configured device and return its adb address if usable."""
+    try:
+        address = _adb_address()
+    except FcPlayerNotConfigured:
+        return False, 'Set a Fire TV / Android TV IP address first.', None
+    try:
+        subprocess.run(['adb', 'connect', address], capture_output=True,
+                       timeout=_ADB_TIMEOUT, check=False)
+        state = subprocess.run(['adb', '-s', address, 'get-state'], capture_output=True,
+                               timeout=_ADB_TIMEOUT, check=False, text=True)
+    except Exception as e:
+        return False, f'adb error: {e}', None
+    if state.returncode != 0 or 'device' not in (state.stdout or ''):
+        return False, 'Could not reach the device over adb. Check its IP and ADB authorization.', None
+    return True, '', address
+
+
+def _setting_number(address: str, namespace: str, name: str) -> int | None:
+    ok, value = _adb_shell(address, 'settings', 'get', namespace, name)
+    if not ok:
+        return None
+    try:
+        return int(value.strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def device_controls_status() -> dict:
+    """Return lightweight, user-facing diagnostics for the Device Controls modal.
+
+    This deliberately uses only standard adb shell commands: it works for both
+    Fire OS and Android TV, and does not require the bridge feature toggle itself
+    to be enabled.
+    """
+    connected, message, address = _device_connected()
+    if not connected:
+        return {'ok': False, 'message': message}
+
+    _, model = _adb_shell(address, 'getprop', 'ro.product.model')
+    _, release = _adb_shell(address, 'getprop', 'ro.build.version.release')
+    _, power = _adb_shell(address, 'dumpsys', 'power')
+    _, focus = _adb_shell(address, 'dumpsys', 'window')
+    _, package_info = _adb_shell(address, 'dumpsys', 'package', 'com.fastchannels.player')
+    _, sessions = _adb_shell(address, 'dumpsys', 'media_session')
+
+    wake_match = re.search(r'mWakefulness=(\w+)', power)
+    display_match = re.search(r'Display Power:\s*state=(\w+)', power)
+    version_name = re.search(r'\bversionName=([^\s]+)', package_info)
+    version_code = re.search(r'\bversionCode=(\d+)', package_info)
+    focus_match = re.search(r'mCurrentFocus=([^\r\n]+)', focus)
+    player_session = re.search(
+        r'package=com\.fastchannels\.player(?:(?!\n\s*package=).){0,1200}?'
+        r'state=PlaybackState \{state=(\d+)', sessions, re.S,
+    )
+
+    return {
+        'ok': True,
+        'address': address,
+        'model': model.strip() or 'Android TV device',
+        'android_version': release.strip() or None,
+        'awake': (wake_match.group(1).lower() == 'awake') if wake_match else None,
+        'wakefulness': wake_match.group(1) if wake_match else 'Unknown',
+        'display_power': display_match.group(1) if display_match else 'Unknown',
+        'focus': focus_match.group(1).strip() if focus_match else None,
+        'player_installed': bool(version_name),
+        'player_version': version_name.group(1) if version_name else None,
+        'player_version_code': int(version_code.group(1)) if version_code else None,
+        'player_playing': player_session.group(1) == '3' if player_session else False,
+        'stay_on_while_powered': _setting_number(address, 'global', 'stay_on_while_plugged_in') or 0,
+        'screen_off_timeout': _setting_number(address, 'system', 'screen_off_timeout'),
+        'sleep_timeout': _setting_number(address, 'secure', 'sleep_timeout'),
+    }
+
+
+def wake_device() -> tuple[bool, str]:
+    connected, message, address = _device_connected()
+    if not connected:
+        return False, message
+    ok, output = _adb_shell(address, 'input', 'keyevent', 'KEYCODE_WAKEUP')
+    return (True, 'Wake command sent.') if ok else (False, output or 'Could not wake the device.')
+
+
+def set_device_power_settings(*, stay_awake: bool, screen_off_timeout: int,
+                              sleep_timeout: int) -> tuple[bool, str, dict | None]:
+    """Apply explicit display settings and return the values they replaced."""
+    if (not isinstance(screen_off_timeout, int) or not isinstance(sleep_timeout, int)
+            or screen_off_timeout < 0 or sleep_timeout < 0
+            or screen_off_timeout > _NEVER_TIMEOUT_MS or sleep_timeout > _NEVER_TIMEOUT_MS):
+        return False, 'Invalid display timeout.', None
+    connected, message, address = _device_connected()
+    if not connected:
+        return False, message, None
+    previous = {
+        'stay_on_while_powered': _setting_number(address, 'global', 'stay_on_while_plugged_in'),
+        'screen_off_timeout': _setting_number(address, 'system', 'screen_off_timeout'),
+        'sleep_timeout': _setting_number(address, 'secure', 'sleep_timeout'),
+    }
+    commands = (
+        ('global', 'stay_on_while_plugged_in', '3' if stay_awake else '0'),
+        ('system', 'screen_off_timeout', str(screen_off_timeout)),
+        ('secure', 'sleep_timeout', str(sleep_timeout)),
+    )
+    for namespace, name, value in commands:
+        ok, output = _adb_shell(address, 'settings', 'put', namespace, name, value)
+        if not ok:
+            return False, output or f'Could not set {name}.', None
+    return True, 'Device power settings saved.', previous
+
+
+def headless_power_settings() -> tuple[bool, str, dict | None]:
+    """Apply the safe headless preset: stay awake on power plus max timeouts."""
+    return set_device_power_settings(
+        stay_awake=True,
+        screen_off_timeout=_NEVER_TIMEOUT_MS,
+        sleep_timeout=_NEVER_TIMEOUT_MS,
+    )
+
+
+def restore_device_power_settings(previous: dict) -> tuple[bool, str]:
+    """Restore the exact settings snapshot saved before a headless preset."""
+    if not isinstance(previous, dict):
+        return False, 'No saved device settings are available to restore.'
+    mapping = (
+        ('global', 'stay_on_while_plugged_in', previous.get('stay_on_while_powered')),
+        ('system', 'screen_off_timeout', previous.get('screen_off_timeout')),
+        ('secure', 'sleep_timeout', previous.get('sleep_timeout')),
+    )
+    connected, message, address = _device_connected()
+    if not connected:
+        return False, message
+    for namespace, name, value in mapping:
+        if value is not None and (not isinstance(value, int) or value < 0 or value > _NEVER_TIMEOUT_MS):
+            return False, 'Saved device settings are invalid.'
+        command = ('settings', 'delete', namespace, name) if value is None else (
+            'settings', 'put', namespace, name, str(value))
+        ok, output = _adb_shell(address, *command)
+        if not ok:
+            return False, output or f'Could not restore {name}.'
+    return True, 'Previous device power settings restored.'
+
+
 def _dvr_activity_channel_numbers(timeout: int = _DVR_POLL_TIMEOUT) -> set[str] | None:
     """The set of channel numbers Channels DVR currently reports as being watched
     (its `/dvr` status endpoint's `activity` dict, values shaped like
@@ -638,6 +797,10 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
             '-n', shlex.quote(_PLAYER_COMPONENT),
             '--es', 'stream_url', shlex.quote(manifest_url),
             '--es', 'title', shlex.quote(name),
+            # Identifies this tune to the app's warm-stop command. ah4c's stop
+            # hook supplies the same value, allowing the app to ignore a stop
+            # that arrives late after a newer tune has already started.
+            '--es', 'channel_key', shlex.quote(channel_key or ''),
             '--ez', 'drm', 'true' if drm else 'false',
             '--ez', 'captions', 'true' if captions_enabled() else 'false',
         ])

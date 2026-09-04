@@ -5,8 +5,10 @@
 #
 # ah4c runs this the moment the downstream viewer disconnects from its
 # /play/tuner/<channel> stream — the real, immediate "stopped watching" signal
-# for this path (FastChannels' own idle-stop watchdog, used for direct
-# playback, is a slower DVR-activity poll and doesn't apply here).
+# for this path. Do not force-stop the package: the player has a warm-stop
+# command that ends the old stream while retaining its Activity and ExoPlayer,
+# making the next tune materially faster. STATION guards against a delayed stop
+# from an old tune interrupting a newer one.
 #
 # ah4c calls this as: stopbmitune.sh <tunerip> <channel>
 
@@ -14,6 +16,9 @@ TUNERIP="$1"
 STATION="$2"
 
 echo "[STOPPING] stopbmitune.sh $STATION $TUNERIP"
-adb -s "$TUNERIP" shell am force-stop com.fastchannels.player >/dev/null 2>&1
+adb -s "$TUNERIP" shell am start \
+  -n com.fastchannels.player/.PlaybackActivity \
+  --es command warm_stop \
+  --es channel_key "$STATION" >/dev/null 2>&1
 
 exit 0

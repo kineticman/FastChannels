@@ -1,5 +1,6 @@
 import logging
 import os as _os
+import json
 import requests as _req
 
 logger = logging.getLogger(__name__)
@@ -216,6 +217,76 @@ def install_fc_player():
         }), 400
     ok, message = fc_player_bridge.install_app(apk_path)
     return jsonify({'ok': ok, 'message': message})
+
+
+def _remember_fc_player_device_settings(previous: dict | None) -> None:
+    """Save the pre-headless snapshot only once, so Restore stays meaningful."""
+    if not previous:
+        return
+    row = AppSettings.get()
+    if not row.fc_player_device_settings_backup:
+        row.fc_player_device_settings_backup = json.dumps(previous, separators=(',', ':'))
+        db.session.commit()
+
+
+@settings_bp.route('/settings/fc-player/device-controls', methods=['GET'])
+def fc_player_device_controls_status():
+    """Live ADB diagnostics for the settings page's Fire TV Device Controls modal."""
+    from .. import fc_player_bridge
+    status = fc_player_bridge.device_controls_status()
+    status['restore_available'] = bool(AppSettings.get().fc_player_device_settings_backup)
+    return jsonify(status), (200 if status.get('ok') else 400)
+
+
+@settings_bp.route('/settings/fc-player/device-controls/wake', methods=['POST'])
+def wake_fc_player_device():
+    from .. import fc_player_bridge
+    ok, message = fc_player_bridge.wake_device()
+    return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
+
+
+@settings_bp.route('/settings/fc-player/device-controls/power', methods=['POST'])
+def save_fc_player_device_power():
+    """Apply explicit power settings, retaining the first pre-change snapshot."""
+    from .. import fc_player_bridge
+    data = request.get_json(silent=True) or {}
+    stay_awake = data.get('stay_awake')
+    screen_off_timeout = data.get('screen_off_timeout')
+    sleep_timeout = data.get('sleep_timeout')
+    if not isinstance(stay_awake, bool):
+        return jsonify({'ok': False, 'message': 'Invalid keep-awake setting.'}), 400
+    ok, message, previous = fc_player_bridge.set_device_power_settings(
+        stay_awake=stay_awake,
+        screen_off_timeout=screen_off_timeout,
+        sleep_timeout=sleep_timeout,
+    )
+    if ok:
+        _remember_fc_player_device_settings(previous)
+    return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
+
+
+@settings_bp.route('/settings/fc-player/device-controls/headless', methods=['POST'])
+def apply_fc_player_headless_preset():
+    from .. import fc_player_bridge
+    ok, message, previous = fc_player_bridge.headless_power_settings()
+    if ok:
+        _remember_fc_player_device_settings(previous)
+    return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
+
+
+@settings_bp.route('/settings/fc-player/device-controls/restore', methods=['POST'])
+def restore_fc_player_device_power():
+    from .. import fc_player_bridge
+    row = AppSettings.get()
+    try:
+        previous = json.loads(row.fc_player_device_settings_backup or '')
+    except (TypeError, ValueError):
+        previous = None
+    ok, message = fc_player_bridge.restore_device_power_settings(previous)
+    if ok:
+        row.fc_player_device_settings_backup = None
+        db.session.commit()
+    return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
 
 
 @settings_bp.route('/settings/fc-player/ah4c-scripts', methods=['GET'])
@@ -471,4 +542,3 @@ def restore_local_backup():
     if not ok:
         return jsonify({'error': err}), 500
     return jsonify({'status': 'ok'})
-
