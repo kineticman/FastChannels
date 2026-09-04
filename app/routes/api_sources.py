@@ -532,17 +532,23 @@ def save_source_config(source_id):
         f.key in _CRED_KEYS and _norm_cred(f.key, old.get(f.key)) != _norm_cred(f.key, current.get(f.key))
         for f in schema
     )
-    def _sling_subscriptions_enabled(cfg: dict) -> bool:
-        return str(cfg.get('include_subscription_channels', '')).strip().lower() in {
-            '1', 'true', 'yes', 'on'
-        }
+    def _toggle_enabled(cfg: dict, key: str) -> bool:
+        return str(cfg.get(key, '')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
-    # Sling's subscription toggle changes the channel inventory, not just a
-    # playback preference. Clear the derived account context on either edge so
-    # enabling it cannot reuse an expired/old account lineup.
-    sling_lineup_changed = (
-        source.name == 'sling'
-        and _sling_subscriptions_enabled(old) != _sling_subscriptions_enabled(current)
+    # Sling's subscription and FAST-exclusion toggles change the channel
+    # inventory, not just a playback preference. Clear the derived account
+    # context on either edge so enabling subscriptions cannot reuse an
+    # expired/old account lineup.
+    sling_lineup_changed = source.name == 'sling' and (
+        _toggle_enabled(old, 'include_subscription_channels') != _toggle_enabled(current, 'include_subscription_channels')
+        or _toggle_enabled(old, 'exclude_fast_channels') != _toggle_enabled(current, 'exclude_fast_channels')
+    )
+    # DirecTV's FAST-exclusion toggle likewise changes the channel inventory
+    # (filters out the 4xxx FAST channel-number range) rather than a playback
+    # preference, so it also needs an immediate rescrape below.
+    directv_lineup_changed = (
+        source.name == 'directv'
+        and _toggle_enabled(old, 'exclude_fast_channels') != _toggle_enabled(current, 'exclude_fast_channels')
     )
     if creds_changed or sling_lineup_changed:
         for tk in _AUTH_STATE:
@@ -577,6 +583,36 @@ def save_source_config(source_id):
                         db.session.delete(ch)
                         pbs_deleted += 1
 
+    # Enabling "exclude FAST channels" only stops *new* FAST channels from being
+    # scraped in — existing rows still ride out the normal miss-threshold grace
+    # period (see PBS comment above) unless the paired "remove immediately"
+    # toggle is also on, in which case delete the matching rows here instead of
+    # waiting ~3 scrapes for them to quietly age out. Re-triggers whenever either
+    # toggle just turned on (not just on the exclude edge), so turning on "remove
+    # immediately" after the fact still purges retroactively.
+    fast_purged = 0
+    if source.name in ('sling', 'directv'):
+        new_exclude = _toggle_enabled(current, 'exclude_fast_channels')
+        new_purge   = _toggle_enabled(current, 'purge_fast_channels')
+        old_exclude = _toggle_enabled(old, 'exclude_fast_channels')
+        old_purge   = _toggle_enabled(old, 'purge_fast_channels')
+        if new_exclude and new_purge and (not old_exclude or not old_purge):
+            if source.name == 'sling':
+                from ..scrapers.sling import SlingScraper
+                def _is_fast(ch):
+                    return SlingScraper.FREESTREAM_TAG in {t.strip() for t in (ch.tags or '').split(',')}
+            else:
+                from ..scrapers.directv import DirectvScraper
+                def _is_fast(ch):
+                    # NOT ch.number — that's FastChannels' own reassigned guide
+                    # number (see worker.py's renumbering pass), unrelated to
+                    # DirecTV's real channel number the scraper tags against.
+                    return DirectvScraper.FAST_TAG in {t.strip() for t in (ch.tags or '').split(',')}
+            for ch in Channel.query.filter(Channel.source_id == source.id).all():
+                if _is_fast(ch):
+                    db.session.delete(ch)
+                    fast_purged += 1
+
     source.config = current
     auto_enabled = False
     if (
@@ -588,13 +624,18 @@ def save_source_config(source_id):
         source.is_enabled = True
         auto_enabled = True
     db.session.commit()
-    if pbs_deleted:
+    if pbs_deleted or fast_purged:
         _invalidate_and_refresh_xml()
     full_scrape_queued = False
     if source.name == 'sling' and (creds_changed or sling_lineup_changed) and source.is_enabled:
-        # Credentials and the subscription toggle can add/remove channels.
-        # A normal scheduled scrape may be EPG-only for other sources, so make
-        # this refresh deterministic and immediate after the config commit.
+        # Credentials and the subscription/FAST-exclusion toggles can add/remove
+        # channels. A normal scheduled scrape may be EPG-only for other sources,
+        # so make this refresh deterministic and immediate after the config commit.
+        trigger_scrape(source.name, force_full=True)
+        full_scrape_queued = True
+    elif source.name == 'directv' and directv_lineup_changed and source.is_enabled:
+        # Same rationale as Sling above — the FAST-exclusion toggle changes
+        # which channels come back from fetch_channels().
         trigger_scrape(source.name, force_full=True)
         full_scrape_queued = True
     elif source.name == 'pbs' and old != current and source.is_enabled:

@@ -297,6 +297,7 @@
     .toggle-label.off { color: var(--text-muted); }
     .toggle {
       position: relative; display: inline-block; width: 44px; height: 24px; cursor: pointer;
+      flex-shrink: 0;
     }
     .toggle input { opacity: 0; width: 0; height: 0; }
     .slider {
@@ -3113,6 +3114,27 @@
     function renderDirectvConfig(sourceId, schema, values, cfg = {}) {
       const hasSession = cfg.config_complete === true || cfg.config_status === 'configured';
       const hasCreds = !!((values.username || '').trim() && (values.password || '').trim());
+      const toggleHtml = (key, fallbackLabel, fallbackHelp) => {
+        const field = schema.find(f => f.key === key);
+        const checked = ['1', 'true', 'yes', 'on'].includes(
+          String(values[key] ?? field?.default ?? '').trim().toLowerCase()
+        );
+        const label = field?.label || fallbackLabel;
+        const help = field?.help_text || fallbackHelp;
+        return `
+          <div class="field field-full">
+            <div class="config-toggle-field">
+              <div class="config-toggle-text">
+                <label for="cfg-${sourceId}-${key}">${escapeHtml(label)}</label>
+                <div class="help">${escapeHtml(help)}</div>
+              </div>
+              <label class="toggle" title="${escapeHtml(label)}">
+                <input type="checkbox" id="cfg-${sourceId}-${key}" data-key="${key}" data-secret="false"${checked ? ' checked' : ''}>
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>`;
+      };
       return `
         <div class="config-title">DirecTV Stream Settings</div>
         <div class="config-note">
@@ -3134,6 +3156,13 @@
           </div>
         </div>
 
+        <div class="fields-grid">
+          ${toggleHtml('exclude_fast_channels', 'Exclude FAST channels',
+            'On = leave out free, ad-supported channels (DirecTV Stream numbers these 4000-4999).')}
+          ${toggleHtml('purge_fast_channels', 'Remove existing FAST channels immediately',
+            'On = when you enable the exclusion above, also delete previously-scraped 4xxx channels right away.')}
+        </div>
+
         <details class="amazon-account-details" ${hasCreds ? '' : 'open'}>
           <summary>Account settings</summary>
           <div class="fields-grid" style="margin-top:0.75rem;">
@@ -3149,12 +3178,13 @@
                      value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
             </div>
           </div>
-          <div class="config-actions">
-            <span class="config-status" id="config-status-${sourceId}"></span>
-            <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
-            <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Account</button>
-          </div>
-        </details>`;
+        </details>
+
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
     }
 
     async function directvStartLogin(sourceId) {
@@ -3383,7 +3413,9 @@
       };
 
       const toggleField = schema.find(f => f.key === 'include_subscription_channels');
-      const otherFields = schema.filter(f => f.key !== 'include_subscription_channels');
+      const fastToggleField = schema.find(f => f.key === 'exclude_fast_channels');
+      const purgeToggleField = schema.find(f => f.key === 'purge_fast_channels');
+      const otherFields = schema.filter(f => !['include_subscription_channels', 'exclude_fast_channels', 'purge_fast_channels'].includes(f.key));
       const lastSignIn = _epochAgo(cfg && cfg.oauth_token_time);
       const lastSignInHtml = lastSignIn
         ? `<div class="help" id="sling-last-signin-${sourceId}" style="color:var(--success-soft);">✓ Last signed in successfully: ${lastSignIn}</div>`
@@ -3394,6 +3426,8 @@
         <div class="config-note">Freestream works with no sign-in needed. Turn on the toggle below to also include paid Sling subscription channels.</div>
         <div class="fields-grid">
           ${toggleField ? fieldHtml(toggleField) : ''}
+          ${fastToggleField ? fieldHtml(fastToggleField) : ''}
+          ${purgeToggleField ? fieldHtml(purgeToggleField) : ''}
           <div class="field field-full" style="margin:0.25rem 0 0.5rem;">
             <button class="btn btn-run" type="button" onclick="openSlingLoginModal(${sourceId})">Sign in to Sling</button>
             <div class="help">Opens a real Sling sign-in page right here — solve the captcha yourself if it's shown, and FastChannels saves the resulting session automatically. No credentials are typed by FastChannels.</div>
