@@ -161,7 +161,8 @@ be saved for the install button below to work.
 
 Before attempting a real bridge-only channel, use **Bridge → Post-install
 Healthcheck → Run healthcheck**. It checks the configured hardware paths
-without tuning a channel, and **Copy forum report** creates a concise,
+without tuning a channel, samples the configured HDMI Capture stream from
+inside the FastChannels container, and **Copy forum report** creates a concise,
 credential-free report to attach to a support post. PrismCast has its own
 specialized capture test in the PrismCast Capture card.
 

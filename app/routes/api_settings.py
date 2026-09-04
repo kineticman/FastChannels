@@ -1,6 +1,7 @@
 import logging
 import os as _os
 import json
+import time
 import requests as _req
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,16 @@ def _bridge_host_from_input(value: str | None) -> str | None:
     if '://' not in raw:
         raw = f'http://{raw}'
     return urlsplit(raw).hostname or None
+
+
+def _looks_like_mpeg_ts(payload: bytes) -> bool:
+    """Recognize a short raw MPEG-TS sample without retaining stream contents."""
+    if len(payload) < 3 * 188:
+        return False
+    upper_bound = len(payload) - (2 * 188)
+    return any(payload[offset] == 0x47 and payload[offset + 188] == 0x47
+               and payload[offset + 376] == 0x47
+               for offset in range(upper_bound))
 
 
 @settings_bp.route('/settings', methods=['GET', 'POST'])
@@ -271,16 +282,31 @@ def bridge_healthcheck():
         if not encoder_url:
             add('skip', 'HDMI Capture stream', 'No fixed encoder stream is configured.')
         else:
+            host = (urlsplit(encoder_url).hostname or '').lower()
+            if host in {'localhost', '127.0.0.1', '::1'}:
+                add('warn', 'Docker capture address', 'The capture URL uses localhost, which means the FastChannels container itself—not the Mac or another host.',
+                    'For Docker Desktop on macOS, use host.docker.internal or the capture host’s LAN IP.')
+            started = time.monotonic()
             try:
-                with _req.get(encoder_url, stream=True, timeout=3) as response:
-                    if response.ok:
-                        add('ok', 'HDMI Capture stream', 'The fixed encoder stream responded successfully.')
-                    else:
+                with _req.get(encoder_url, stream=True, timeout=(3, 4)) as response:
+                    if not response.ok:
                         add('warn', 'HDMI Capture stream', f'The fixed encoder stream returned HTTP {response.status_code}.',
                             'Confirm the capture device is powered on and the saved stream URL is correct.')
+                    else:
+                        sample = next(response.iter_content(chunk_size=32 * 1024), b'')
+                        elapsed_ms = int((time.monotonic() - started) * 1000)
+                        content_type = (response.headers.get('Content-Type') or 'unspecified').split(';', 1)[0]
+                        if not sample:
+                            add('fail', 'HDMI Capture payload', f'The capture endpoint returned HTTP {response.status_code} but sent no data within {elapsed_ms} ms.',
+                                'Check the Channels DVR capture device and confirm it is producing a live stream.')
+                        elif _looks_like_mpeg_ts(sample):
+                            add('ok', 'HDMI Capture payload', f'Received {len(sample):,} bytes of MPEG-TS capture data in {elapsed_ms} ms ({content_type}).')
+                        else:
+                            add('warn', 'HDMI Capture payload', f'Received {len(sample):,} bytes in {elapsed_ms} ms, but the sample did not resemble MPEG-TS ({content_type}).',
+                                'Open the exact capture stream URL in VLC and verify Channels DVR is serving the expected capture stream.')
             except _req.RequestException:
-                add('fail', 'HDMI Capture stream', 'The fixed encoder stream could not be reached.',
-                    'Confirm the capture device is powered on and reachable from FastChannels.')
+                add('fail', 'HDMI Capture payload', 'FastChannels could not connect to the fixed capture stream or receive a payload.',
+                    'Confirm the capture host is reachable from Docker and that Channels DVR is producing the stream.')
 
     # ah4c owns its own capture hardware. Its status endpoint plus the per-tuner
     # ADB checks provide a useful setup check without starting a tune.
