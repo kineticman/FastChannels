@@ -291,9 +291,12 @@ build or maintain on the ah4c side.
   time to hand off on a clean moving keyframe.
 
 When a viewer leaves an ah4c channel, ah4c runs the exported
-`stopbmitune.sh` immediately and force-stops FastChannels Player. This is the
-primary cleanup path for ah4c. FastChannels' optional idle-stop watchdog still
-tracks the tune, but is a slower fallback intended for direct bridge playback.
+`stopbmitune.sh` immediately. It warm-stops FastChannels Player: the old stream
+ends and the task moves to the background, but the app and ExoPlayer stay alive
+for a faster next tune. The stop includes the channel key, so a delayed stop
+from an old tune cannot interrupt a newer one. FastChannels' optional idle-stop
+watchdog still tracks the tune, but is a slower fallback intended for direct
+bridge playback.
 
 A busy-tuner response from ah4c (all tuners in use) is normal contention, not
 a failure — it just means try again once a tuner frees up.

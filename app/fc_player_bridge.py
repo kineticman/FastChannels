@@ -584,6 +584,10 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
             '-n', shlex.quote(_PLAYER_COMPONENT),
             '--es', 'stream_url', shlex.quote(manifest_url),
             '--es', 'title', shlex.quote(name),
+            # Identifies this tune to the app's warm-stop command. ah4c's stop
+            # hook supplies the same value, allowing the app to ignore a stop
+            # that arrives late after a newer tune has already started.
+            '--es', 'channel_key', shlex.quote(channel_key or ''),
             '--ez', 'drm', 'true' if drm else 'false',
             '--ez', 'captions', 'true' if captions_enabled() else 'false',
         ])
