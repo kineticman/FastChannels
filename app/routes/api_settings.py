@@ -47,6 +47,24 @@ def _normalize_server_url(value: str | None, default_port: int | None = None) ->
     return f'{scheme}://{host}'.rstrip('/')
 
 
+def _normalize_stream_url(value: str | None) -> str | None:
+    """Normalize an HTTP stream URL while retaining its required query string.
+
+    The ordinary server-address normalizer intentionally discards a path/query.
+    A Channels DVR ``stream.mpg`` link can carry ``format=ts`` and, on some
+    installations, a session token, so those are part of this setting's identity.
+    """
+    raw = (value or '').strip()
+    if not raw:
+        return None
+    if '://' not in raw:
+        raw = f'http://{raw}'
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        return None
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or '/', parsed.query, ''))
+
+
 def _bridge_host_from_input(value: str | None) -> str | None:
     """Extract a bare host from a device-bridge IP field — strips any scheme/port
     the user typed. The admin form takes one "IP[:port]" field and derives the
@@ -193,7 +211,10 @@ def app_settings():
                 return jsonify({'error': 'Invalid Firestick/Android TV IP address.'}), 422
             row.fc_player_bridge_adb_address = f'{_fcp_host}:5555' if _fcp_host else None
         if 'fc_player_encoder_url' in data:
-            row.fc_player_bridge_encoder_url = _normalize_server_url(data['fc_player_encoder_url'], default_port=None)
+            encoder_url = _normalize_stream_url(data['fc_player_encoder_url'])
+            if data.get('fc_player_encoder_url') and not encoder_url:
+                return jsonify({'error': 'Invalid HDMI capture stream URL.'}), 422
+            row.fc_player_bridge_encoder_url = encoder_url
         if 'fc_player_idle_stop_enabled' in data:
             row.fc_player_bridge_idle_stop_enabled = bool(data['fc_player_idle_stop_enabled'])
         if 'fc_player_captions_enabled' in data:
