@@ -145,6 +145,20 @@ def _channels_dvr_capture_streams(dvr_url: str) -> list[dict]:
     return choices
 
 
+def _stream_debug_path(stream_url: str) -> str:
+    """Useful stream identity for diagnostics without exposing host or credentials."""
+    parsed = urlsplit(stream_url)
+    redacted_keys = {'session', 'token', 'access_token', 'auth', 'authorization', 'key', 'password'}
+    query_parts = []
+    for part in parsed.query.split('&'):
+        if not part:
+            continue
+        key, separator, value = part.partition('=')
+        query_parts.append(f'{key}=[redacted]' if key.lower() in redacted_keys else part)
+    query = f'?{"&".join(query_parts)}' if query_parts else ''
+    return f'{parsed.path or "/"}{query}'
+
+
 @settings_bp.route('/settings', methods=['GET', 'POST'])
 def app_settings():
     row = AppSettings.get()
@@ -379,6 +393,8 @@ def bridge_healthcheck():
         if not encoder_url:
             add('skip', 'HDMI Capture stream', 'No fixed encoder stream is configured.')
         else:
+            add('info', 'HDMI Capture endpoint',
+                f'Testing saved stream {_stream_debug_path(encoder_url)} from inside the FastChannels container.')
             host = (urlsplit(encoder_url).hostname or '').lower()
             if host in {'localhost', '127.0.0.1', '::1'}:
                 add('warn', 'Docker capture address', 'The capture URL uses localhost, which means the FastChannels container itself—not the Mac or another host.',

@@ -244,7 +244,7 @@ function renderFcPlayerCaptureStreamPicker(filter = '') {
   const options = matches.map((stream, index) =>
     `<option value="${index}">${_escapeHtml(stream.label)}</option>`).join('');
   picker.innerHTML = `
-    <div class="help" style="margin-top:0.7rem">Choose the channel backed by your HDMI capture device. Likely capture/HDMI entries are shown first; this only fills the URL—select Save to keep it.</div>
+    <div class="help" style="margin-top:0.7rem">Channels DVR returned ${_fcPlayerCaptureStreams.length} direct MPEG-TS stream${_fcPlayerCaptureStreams.length === 1 ? '' : 's'}. Choose the channel backed by your HDMI capture device. Likely capture/HDMI entries are shown first; this only fills the URL—select Save to keep it.</div>
     <input type="search" id="fc-player-capture-stream-filter" placeholder="Filter by channel or capture-device name" value="${_escapeHtml(filter)}" oninput="renderFcPlayerCaptureStreamPicker(this.value)">
     <select id="fc-player-capture-stream-select" size="6" ${matches.length ? '' : 'disabled'}>${options || '<option>No matching streams</option>'}</select>
     <div class="field-actions"><button class="btn btn-secondary" onclick="chooseFcPlayerCaptureStream()" ${matches.length ? '' : 'disabled'}>Use selected stream</button></div>`;
