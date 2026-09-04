@@ -34,13 +34,14 @@ DRM_BRIDGE_TRUSTED_SOURCES = frozenset({
 
 def drm_bridge_mode_for(source_name: str) -> bool:
     """Whether a DRM channel on this source should be kept active + bridged rather than
-    disabled — true if ANY bridge can plausibly serve it: the PrismCast browser/EME
-    bridge (global drm_bridge_enabled toggle, any license_url-capable source), or the
-    FastChannels Player bridge (app/fc_player_bridge.py), gated on its own enabled
-    toggle and restricted to DRM_BRIDGE_TRUSTED_SOURCES. Callers still separately gate
-    on the scraper actually having license_url handling."""
+    disabled — true only when the global Bridge policy is on and at least one enabled
+    method can serve it: PrismCast works for any license_url-capable source, while
+    FastChannels Player is restricted to DRM_BRIDGE_TRUSTED_SOURCES. Callers still
+    separately gate on the scraper actually having license_url handling."""
     settings = AppSettings.get()
-    if bool(settings.drm_bridge_enabled):
+    if not bool(settings.bridge_enabled):
+        return False
+    if settings.prismcast_enabled:
         return True
     if source_name not in DRM_BRIDGE_TRUSTED_SOURCES:
         return False
@@ -55,8 +56,9 @@ def active_bridge_label(source_name: str) -> str:
     it returns 'bridge' as a neutral fallback if neither is actually on (shouldn't happen
     in practice, but a label bug here must never look like a bridging decision)."""
     settings = AppSettings.get()
-    prismcast = bool(settings.drm_bridge_enabled)
-    fc_player = source_name in DRM_BRIDGE_TRUSTED_SOURCES and bool(settings.fc_player_bridge_enabled)
+    prismcast = settings.prismcast_bridge_active()
+    fc_player = (bool(settings.bridge_enabled) and source_name in DRM_BRIDGE_TRUSTED_SOURCES
+                 and bool(settings.fc_player_bridge_enabled))
     if prismcast and fc_player:
         return 'PrismCast + FastChannels Player'
     if fc_player:

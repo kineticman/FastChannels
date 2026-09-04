@@ -77,13 +77,23 @@ def app_settings():
             if max_height not in {0, 360, 480, 720, 1080}:
                 return jsonify({'error': 'Invalid PrismCast max resolution.'}), 422
             row.prismcast_max_height = max_height
+        bridge_mode_changed = False
+        if 'bridge_enabled' in data:
+            new_bridge_enabled = bool(data['bridge_enabled'])
+            bridge_mode_changed |= new_bridge_enabled != bool(row.bridge_enabled)
+            row.bridge_enabled = new_bridge_enabled
+        if 'prismcast_enabled' in data:
+            new_prismcast_enabled = bool(data['prismcast_enabled'])
+            bridge_mode_changed |= new_prismcast_enabled != bool(row.prismcast_enabled)
+            row.prismcast_enabled = new_prismcast_enabled
         if 'drm_bridge_enabled' in data:
-            _new_drm_bridge = bool(data['drm_bridge_enabled'])
-            if _new_drm_bridge != bool(row.drm_bridge_enabled):
-                row.drm_bridge_enabled = _new_drm_bridge
-                # Reconcile existing DRM channels immediately so the toggle takes effect
-                # without waiting for the next stream audit.
-                _reconcile_drm_bridge_mode()
+            # Compatibility for an old, already-open Settings page: its one switch
+            # meant both “allow bridges” and “enable PrismCast”.
+            legacy_enabled = bool(data['drm_bridge_enabled'])
+            bridge_mode_changed |= legacy_enabled != bool(row.bridge_enabled) or legacy_enabled != bool(row.prismcast_enabled)
+            row.bridge_enabled = legacy_enabled
+            row.prismcast_enabled = legacy_enabled
+            row.drm_bridge_enabled = legacy_enabled
         if 'timezone_name' in data:
             tz_name = normalize_timezone_name(data.get('timezone_name'))
             if data.get('timezone_name') and tz_name is None:
@@ -103,9 +113,7 @@ def app_settings():
             _new_fc_player = bool(data['fc_player_enabled'])
             if _new_fc_player != bool(row.fc_player_bridge_enabled):
                 row.fc_player_bridge_enabled = _new_fc_player
-                # Reconcile existing DRM channels immediately so the toggle takes effect
-                # without waiting for the next stream audit — see drm_bridge.drm_bridge_mode_for.
-                _reconcile_drm_bridge_mode()
+                bridge_mode_changed = True
         if 'fc_player_ip' in data:
             _fcp_host = _bridge_host_from_input(data['fc_player_ip'])
             if data.get('fc_player_ip') and not _fcp_host:
@@ -119,6 +127,10 @@ def app_settings():
             row.fc_player_bridge_captions_enabled = bool(data['fc_player_captions_enabled'])
         if 'fc_player_ah4c_enabled' in data:
             row.fc_player_bridge_ah4c_enabled = bool(data['fc_player_ah4c_enabled'])
+        if bridge_mode_changed:
+            # Make changed bridge eligibility effective now, rather than waiting for
+            # the next source audit.
+            _reconcile_drm_bridge_mode()
         if 'fc_player_ah4c_url' in data:
             row.fc_player_bridge_ah4c_url = _normalize_server_url(data['fc_player_ah4c_url'], default_port=None)
         if 'gracenote_map_url' in data:
@@ -146,7 +158,9 @@ def app_settings():
         'prismcast_url': row.effective_prismcast_url() or '',
         'prismcast_inner_url': row.prismcast_inner_url or '',
         'prismcast_max_height': int(row.prismcast_max_height or 0),
-        'drm_bridge_enabled': bool(row.drm_bridge_enabled),
+        'bridge_enabled': bool(row.bridge_enabled),
+        'prismcast_enabled': bool(row.prismcast_enabled),
+        'drm_bridge_enabled': bool(row.bridge_enabled),  # deprecated API alias
         'fc_player_enabled': bool(row.fc_player_bridge_enabled),
         'fc_player_ip': _fc_player_ip_display,
         'fc_player_encoder_url': row.effective_fc_player_bridge_encoder_url() or '',

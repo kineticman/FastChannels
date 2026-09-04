@@ -3032,7 +3032,7 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
         )
         return Response('FastChannels Player encoder URL is not configured.\n', status=503, mimetype='text/plain')
 
-    if not fc_player_bridge.is_configured():
+    if not settings.bridge_enabled or not fc_player_bridge.is_configured():
         logger.error(
             '[fc-player] play request for %s/%s but the bridge is not enabled/configured',
             source_name, channel_id,
@@ -3131,8 +3131,8 @@ def prismcast_bridge_ts(channel_id):
     channel = Channel.query.get_or_404(channel_id)
     settings = AppSettings.get()
     prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
-    if not prismcast_url:
-        return Response('PrismCast is not configured.\n', status=503, mimetype='text/plain')
+    if not settings.prismcast_bridge_active() or not prismcast_url:
+        return Response('PrismCast bridge mode is disabled or not configured.\n', status=503, mimetype='text/plain')
     inner_base_url = (settings.effective_prismcast_inner_url() or public_base_url()).strip().rstrip('/')
     play_url = _prismcast_bridge_url(channel, prismcast_url, inner_base_url)
 

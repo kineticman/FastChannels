@@ -766,11 +766,12 @@ def _get_playback_info(ch, fast_mode=True):
         _settings = AppSettings.get()
         if (
             ch.source.name in _DRM_TRUSTED
+            and _settings.bridge_enabled
             and _settings.fc_player_bridge_enabled
             and _fc_player_bridge.is_configured()
         ):
             play_url = f'/play/fc-player/{ch.source.name}/{_quote(ch.source_channel_id, safe="")}.m3u8'
-        elif _settings.drm_bridge_enabled and (_settings.effective_prismcast_url() or '').strip():
+        elif _settings.prismcast_bridge_active() and (_settings.effective_prismcast_url() or '').strip():
             play_url = f'/play/prismcast/{ch.id}.ts'
 
     # True exactly when the URL the watch page will actually use
@@ -898,5 +899,4 @@ def preview_channel(channel_id):
         'epg_hours': epg_hours,
         'feed_memberships': _channel_feed_summaries(ch),
     })
-
 

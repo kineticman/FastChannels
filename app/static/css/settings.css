@@ -368,6 +368,119 @@
       max-width: 32ch;
     }
 
+    .bridge-method-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.8rem;
+      margin-top: 1rem;
+    }
+    .bridge-method {
+      padding: 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-2, var(--surface));
+    }
+    .bridge-method-recommended {
+      border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+    }
+    .bridge-method-title {
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.9rem;
+      line-height: 1.35;
+    }
+    .bridge-method-kicker {
+      margin-top: 0.15rem;
+      color: var(--accent-soft);
+      font-size: 0.75rem;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+    .bridge-method p {
+      margin: 0.45rem 0 0.65rem;
+      color: var(--text-soft);
+      font-size: 0.8rem;
+      line-height: 1.45;
+    }
+    .bridge-method a {
+      display: block;
+      width: fit-content;
+      color: var(--accent-soft);
+      font-size: 0.8rem;
+      line-height: 1.5;
+      text-decoration: none;
+    }
+    .bridge-method a:hover { text-decoration: underline; }
+    .bridge-method-config {
+      margin-top: 1.25rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+    }
+    .bridge-fallback-details {
+      margin-top: 1rem;
+      padding-top: 0.85rem;
+      border-top: 1px solid var(--border);
+    }
+    .bridge-fallback-details summary {
+      cursor: pointer;
+      color: var(--text-soft);
+      font-size: 0.84rem;
+      font-weight: 600;
+    }
+    .bridge-fallback-details .help { margin-top: 0.6rem; }
+    .bridge-audit-note {
+      margin-top: 1rem;
+      padding: 0.75rem 0.85rem;
+      border: 1px solid color-mix(in srgb, var(--warning-soft) 45%, var(--border));
+      border-radius: 8px;
+      color: var(--text-soft);
+      font-size: 0.83rem;
+      line-height: 1.5;
+    }
+    .bridge-audit-note a {
+      display: block;
+      width: fit-content;
+      margin-top: 0.4rem;
+      color: var(--accent-soft);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .bridge-audit-note a:hover { text-decoration: underline; }
+    .bridge-source-inventory {
+      margin-top: 1rem;
+      padding-top: 0.9rem;
+      border-top: 1px solid var(--border);
+    }
+    .bridge-source-inventory-title {
+      margin-bottom: 0.55rem;
+      color: var(--text-soft);
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .bridge-source-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+    }
+    .bridge-source-chip {
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 0.08rem 0.45rem;
+      padding: 0.45rem 0.55rem;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface-2, var(--surface));
+      color: var(--text);
+      text-decoration: none;
+    }
+    .bridge-source-chip:hover { border-color: var(--accent); }
+    .bridge-source-name { font-size: 0.8rem; font-weight: 600; }
+    .bridge-source-method { color: var(--text-muted); font-size: 0.7rem; }
+    .bridge-source-count { grid-column: 1 / -1; color: var(--accent-soft); font-size: 0.68rem; }
+    @media (max-width: 720px) {
+      .bridge-method-grid { grid-template-columns: 1fr; }
+    }
+
     .advanced-box {
       margin-top: 1rem;
       border: 1px solid var(--border);

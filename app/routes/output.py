@@ -332,7 +332,7 @@ def feed_m3u_mixed(slug):
 
 def _prismcast_not_configured():
     return Response(
-        'PrismCast is not configured. Set the PrismCast server URL in Settings.\n',
+        'PrismCast bridge mode is disabled or not configured. Enable it in Bridge settings.\n',
         status=409,
         mimetype='text/plain',
     )
@@ -346,7 +346,7 @@ def m3u_prismcast():
     from ..models import AppSettings
     settings = AppSettings.get()
     prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
-    if not prismcast_url:
+    if not settings.prismcast_bridge_active() or not prismcast_url:
         return _prismcast_not_configured()
     base_url = public_base_url()
     filters  = _filters()
@@ -381,7 +381,7 @@ def m3u_prismcast_ts():
     from ..models import AppSettings
     settings = AppSettings.get()
     prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
-    if not prismcast_url:
+    if not settings.prismcast_bridge_active() or not prismcast_url:
         return _prismcast_not_configured()
     base_url = public_base_url()
     inner = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
@@ -399,7 +399,7 @@ def m3u_prismcast_gracenote():
     from ..models import AppSettings, Feed
     settings = AppSettings.get()
     prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
-    if not prismcast_url:
+    if not settings.prismcast_bridge_active() or not prismcast_url:
         return _prismcast_not_configured()
     base_url = public_base_url()
     filters  = _filters()
@@ -445,7 +445,8 @@ def feed_m3u_watch_compat(slug):
 def feed_m3u_prismcast(slug):
     """PrismCast DRM-bridge M3U for a feed. Pair with /feeds/<slug>/epg.xml."""
     from ..models import AppSettings
-    if not (AppSettings.get().effective_prismcast_url() or '').strip():
+    settings = AppSettings.get()
+    if not settings.prismcast_bridge_active() or not (settings.effective_prismcast_url() or '').strip():
         return _prismcast_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     path = get_artifact(f'feed-{slug}-prismcast-m3u', ext='m3u')
@@ -471,7 +472,7 @@ def feed_m3u_prismcast_ts(slug):
     from ..models import AppSettings
     settings = AppSettings.get()
     prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
-    if not prismcast_url:
+    if not settings.prismcast_bridge_active() or not prismcast_url:
         return _prismcast_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     base_url = public_base_url()
@@ -493,7 +494,8 @@ def feed_m3u_prismcast_gracenote(slug):
     """Gracenote-guide variant of the PrismCast DRM-bridge M3U for a feed.
     Pair with the Gracenote guide, not /feeds/<slug>/epg.xml."""
     from ..models import AppSettings
-    if not (AppSettings.get().effective_prismcast_url() or '').strip():
+    settings = AppSettings.get()
+    if not settings.prismcast_bridge_active() or not (settings.effective_prismcast_url() or '').strip():
         return _prismcast_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     path = get_artifact(f'feed-{slug}-prismcast-gracenote-m3u', ext='m3u')
@@ -519,6 +521,13 @@ def _fc_player_not_configured():
     )
 
 
+def _fc_player_bridge_ready() -> bool:
+    """Player output is available only while global Bridge mode is enabled."""
+    from ..models import AppSettings
+    from .. import fc_player_bridge
+    return bool(AppSettings.get().bridge_enabled and fc_player_bridge.is_configured())
+
+
 @output_bp.route('/m3u/fc-player')
 def m3u_fc_player():
     """FastChannels Player DRM-bridge M3U: every channel uses the same
@@ -526,7 +535,7 @@ def m3u_fc_player():
     per-request whether a channel actually needs the device trigger or just resolves
     directly. Pair with /epg.xml."""
     from .. import fc_player_bridge
-    if not fc_player_bridge.is_configured():
+    if not _fc_player_bridge_ready():
         return _fc_player_not_configured()
     base_url = public_base_url()
     filters  = _filters()
@@ -564,8 +573,9 @@ def m3u_fc_player_ah4c():
     playback goes through whatever HDMI encoder ah4c is driving. Pair with /epg.xml,
     same as the standard variant — guide data doesn't depend on capture hardware."""
     from ..models import AppSettings
-    ah4c_url = (AppSettings.get().effective_fc_player_bridge_ah4c_url() or '').strip()
-    if not ah4c_url:
+    settings = AppSettings.get()
+    ah4c_url = (settings.effective_fc_player_bridge_ah4c_url() or '').strip()
+    if not (settings.bridge_enabled and settings.fc_player_bridge_ah4c_enabled and ah4c_url):
         return _fc_player_ah4c_not_configured()
     base_url = public_base_url()
     filters  = _filters()
@@ -594,8 +604,9 @@ def m3u_fc_player_ah4c_gracenote():
     only channels with a Gracenote ID, emitted with tvc-guide-stationid, entries
     pointing at ah4c's /play/tuner/<channel>."""
     from ..models import AppSettings, Feed
-    ah4c_url = (AppSettings.get().effective_fc_player_bridge_ah4c_url() or '').strip()
-    if not ah4c_url:
+    settings = AppSettings.get()
+    ah4c_url = (settings.effective_fc_player_bridge_ah4c_url() or '').strip()
+    if not (settings.bridge_enabled and settings.fc_player_bridge_ah4c_enabled and ah4c_url):
         return _fc_player_ah4c_not_configured()
     base_url = public_base_url()
     filters  = _filters()
@@ -627,7 +638,7 @@ def m3u_fc_player_gracenote():
     with a Gracenote ID, emitted with tvc-guide-stationid."""
     from .. import fc_player_bridge
     from ..models import Feed
-    if not fc_player_bridge.is_configured():
+    if not _fc_player_bridge_ready():
         return _fc_player_not_configured()
     base_url = public_base_url()
     filters  = _filters()
@@ -657,7 +668,7 @@ def m3u_fc_player_gracenote():
 def feed_m3u_fc_player(slug):
     """FastChannels Player DRM-bridge M3U for a feed. Pair with /feeds/<slug>/epg.xml."""
     from .. import fc_player_bridge
-    if not fc_player_bridge.is_configured():
+    if not _fc_player_bridge_ready():
         return _fc_player_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     path = get_artifact(f'feed-{slug}-fc-player-m3u', ext='m3u')
@@ -680,7 +691,8 @@ def feed_m3u_fc_player_ah4c(slug):
     """ah4c-routed variant of the FastChannels Player bridge M3U for a feed.
     Pair with /feeds/<slug>/epg.xml, same as the standard variant."""
     from ..models import AppSettings
-    if not (AppSettings.get().effective_fc_player_bridge_ah4c_url() or '').strip():
+    settings = AppSettings.get()
+    if not (settings.bridge_enabled and settings.fc_player_bridge_ah4c_enabled and (settings.effective_fc_player_bridge_ah4c_url() or '').strip()):
         return _fc_player_ah4c_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     path = get_artifact(f'feed-{slug}-fc-player-ah4c-m3u', ext='m3u')
@@ -703,7 +715,8 @@ def feed_m3u_fc_player_ah4c_gracenote(slug):
     """Gracenote-guide variant of the ah4c-routed FastChannels Player bridge M3U
     for a feed. Pair with the Gracenote guide, not /feeds/<slug>/epg.xml."""
     from ..models import AppSettings
-    if not (AppSettings.get().effective_fc_player_bridge_ah4c_url() or '').strip():
+    settings = AppSettings.get()
+    if not (settings.bridge_enabled and settings.fc_player_bridge_ah4c_enabled and (settings.effective_fc_player_bridge_ah4c_url() or '').strip()):
         return _fc_player_ah4c_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     path = get_artifact(f'feed-{slug}-fc-player-ah4c-gracenote-m3u', ext='m3u')
@@ -726,7 +739,7 @@ def feed_m3u_fc_player_gracenote(slug):
     """Gracenote-guide variant of the FastChannels Player bridge M3U for a feed.
     Pair with the Gracenote guide, not /feeds/<slug>/epg.xml."""
     from .. import fc_player_bridge
-    if not fc_player_bridge.is_configured():
+    if not _fc_player_bridge_ready():
         return _fc_player_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     path = get_artifact(f'feed-{slug}-fc-player-gracenote-m3u', ext='m3u')
@@ -742,5 +755,3 @@ def feed_m3u_fc_player_gracenote(slug):
         mimetype='application/x-mpegurl',
         download_name=f'{slug}-fc-player-gracenote.m3u',
     )
-
-

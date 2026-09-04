@@ -75,7 +75,7 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
 
         if prismcast:
             settings = AppSettings.get()
-            prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
+            prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/') if settings.prismcast_bridge_active() else ''
             prismcast_inner = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
             write_artifact(
                 std_key,
@@ -324,8 +324,8 @@ def push_feed_prismcast_to_dvr(feed_id):
     dvr_url = (settings.effective_channels_dvr_url() or '').strip()
     if not dvr_url:
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
-    if not (settings.effective_prismcast_url() or '').strip():
-        return jsonify({'error': 'PrismCast is not configured. Set the PrismCast server URL in Settings.'}), 400
+    if not settings.prismcast_bridge_active() or not (settings.effective_prismcast_url() or '').strip():
+        return jsonify({'error': 'PrismCast bridge mode is disabled or not configured. Enable it in Bridge settings.'}), 400
 
     base = public_base_url()
 
@@ -421,8 +421,8 @@ def push_feed_fc_player_to_dvr(feed_id):
     dvr_url = (settings.effective_channels_dvr_url() or '').strip()
     if not dvr_url:
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
-    if not fc_player_bridge.is_configured():
-        return jsonify({'error': 'FastChannels Player is not configured. Set it up in Settings.'}), 400
+    if not settings.bridge_enabled or not fc_player_bridge.is_configured():
+        return jsonify({'error': 'FastChannels Player bridge mode is disabled or not configured. Enable it in Bridge settings.'}), 400
 
     base = public_base_url()
 
@@ -514,10 +514,10 @@ def push_feed_fc_player_ah4c_to_dvr(feed_id):
     dvr_url = (settings.effective_channels_dvr_url() or '').strip()
     if not dvr_url:
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
-    if not fc_player_bridge.is_configured():
-        return jsonify({'error': 'FastChannels Player is not configured. Set it up in Settings.'}), 400
+    if not settings.bridge_enabled or not fc_player_bridge.is_configured():
+        return jsonify({'error': 'FastChannels Player bridge mode is disabled or not configured. Enable it in Bridge settings.'}), 400
     ah4c_url = (settings.effective_fc_player_bridge_ah4c_url() or '').strip()
-    if not ah4c_url:
+    if not settings.fc_player_bridge_ah4c_enabled or not ah4c_url:
         return jsonify({'error': 'ah4c support is not configured. Set it up in Settings.'}), 400
 
     base = public_base_url()
@@ -778,7 +778,8 @@ def test_prismcast():
             'prismcast_url': prismcast_url,
             'watch_page_url_base': inner,
             'channels_dvr_url': dvr_url,
-            'drm_bridge_enabled': bool(settings.drm_bridge_enabled),
+            'bridge_enabled': bool(settings.bridge_enabled),
+            'prismcast_enabled': bool(settings.prismcast_enabled),
             'prismcast_max_height': int(settings.prismcast_max_height or 0),
             'diagnostic_runtime_os': _runtime_os,
         },
@@ -1370,9 +1371,8 @@ def _drm_bridge_capable_sources() -> list[str]:
 
 
 def _reconcile_drm_bridge_mode() -> None:
-    """Apply a DRM-bridge toggle change (PrismCast's drm_bridge_enabled or
-    FastChannels Player's fc_player_bridge_enabled) to existing channels so it takes
-    effect at once, without waiting for the next stream audit.
+    """Apply a global Bridge policy or method-toggle change to existing channels so it
+    takes effect at once, without waiting for the next stream audit.
 
     Per bridge-capable source, recomputes eligibility via drm_bridge.drm_bridge_mode_for
     (true if EITHER bridge can serve it) and reconciles accordingly:
@@ -1432,5 +1432,3 @@ def _reconcile_drm_bridge_mode() -> None:
     logger.info('[drm-bridge] mode reconciled — recovered %d disabled-DRM + flagged %d intrinsic, '
                 'disabled %d no-longer-bridged channel(s)', recovered, intrinsic_flagged, disabled)
     db.session.flush()
-
-
