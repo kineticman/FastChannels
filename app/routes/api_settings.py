@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from flask import Blueprint, jsonify, request, current_app, Response
 from ..extensions import db
 from ..models import AppSettings
+from .. import fc_player_bridge
 from ..timezone_utils import normalize_timezone_name, write_timezone_cache
 
 from .api_shared import _invalidate_and_refresh_xml
@@ -61,6 +62,8 @@ def app_settings():
     row = AppSettings.get()
     if request.method == 'POST':
         data = request.get_json(force=True) or {}
+        hardware_capture_was_active = fc_player_bridge.hardware_bridge_active(row)
+        prismcast_was_active = row.prismcast_capture_configured()
         if 'channels_dvr_url' in data:
             row.channels_dvr_url = _normalize_server_url(data['channels_dvr_url'], default_port=8089)
         if 'public_base_url' in data:
@@ -127,12 +130,14 @@ def app_settings():
             row.fc_player_bridge_captions_enabled = bool(data['fc_player_captions_enabled'])
         if 'fc_player_ah4c_enabled' in data:
             row.fc_player_bridge_ah4c_enabled = bool(data['fc_player_ah4c_enabled'])
+        if 'fc_player_ah4c_url' in data:
+            row.fc_player_bridge_ah4c_url = _normalize_server_url(data['fc_player_ah4c_url'], default_port=None)
+        bridge_mode_changed |= hardware_capture_was_active != fc_player_bridge.hardware_bridge_active(row)
+        bridge_mode_changed |= prismcast_was_active != row.prismcast_capture_configured()
         if bridge_mode_changed:
             # Make changed bridge eligibility effective now, rather than waiting for
             # the next source audit.
             _reconcile_drm_bridge_mode()
-        if 'fc_player_ah4c_url' in data:
-            row.fc_player_bridge_ah4c_url = _normalize_server_url(data['fc_player_ah4c_url'], default_port=None)
         if 'gracenote_map_url' in data:
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:

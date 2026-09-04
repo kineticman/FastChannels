@@ -21,6 +21,7 @@ from ..generators.m3u import (
 )
 from ..scrapers import registry as _scraper_registry
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
+from .. import fc_player_bridge as _fc_player_bridge
 from ..source_config import (
     build_setup_checklist,
     has_meaningful_source_config,
@@ -1306,19 +1307,9 @@ def feeds():
                            feeds=feeds, sources=sources,
                            categories=categories, languages=languages, countries=countries,
                            base_url=base_url,
-                           prismcast_enabled=bool(app_settings.prismcast_bridge_active() and (app_settings.effective_prismcast_url() or '').strip()),
-                           fc_player_enabled=bool(
-                               app_settings.bridge_enabled
-                               and app_settings.fc_player_bridge_enabled
-                               and app_settings.effective_fc_player_bridge_adb_address()
-                               and app_settings.effective_fc_player_bridge_encoder_url()
-                           ),
-                           fc_player_ah4c_configured=bool(
-                               app_settings.bridge_enabled
-                               and app_settings.fc_player_bridge_enabled
-                               and app_settings.effective_fc_player_bridge_adb_address()
-                               and app_settings.effective_fc_player_bridge_ah4c_url()
-                           ),
+                           prismcast_enabled=app_settings.prismcast_capture_configured(),
+                           fc_player_enabled=_fc_player_bridge.hdmi_bridge_active(app_settings),
+                           fc_player_ah4c_configured=_fc_player_bridge.ah4c_bridge_active(app_settings),
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
@@ -1350,7 +1341,6 @@ def _bridge_source_inventory() -> list[dict]:
     from ..scrapers.registry import drm_capable_source_names
 
     settings = AppSettings.get()
-    settings = AppSettings.get()
     capable = set(drm_capable_source_names())
     if not capable:
         return []
@@ -1369,14 +1359,11 @@ def _bridge_source_inventory() -> list[dict]:
                       .count())
         player_compatible = source.name in DRM_BRIDGE_TRUSTED_SOURCES
         active_methods = []
-        if settings.prismcast_bridge_active():
+        if settings.prismcast_capture_configured():
             active_methods.append('PrismCast Capture')
-        if (settings.bridge_enabled and settings.fc_player_bridge_enabled and player_compatible
-                and settings.fc_player_bridge_ah4c_enabled
-                and settings.effective_fc_player_bridge_ah4c_url()):
+        if player_compatible and _fc_player_bridge.ah4c_bridge_active(settings):
             active_methods.append('ah4c Multi-Tuner Capture')
-        if (settings.bridge_enabled and settings.fc_player_bridge_enabled and player_compatible
-                and settings.effective_fc_player_bridge_encoder_url()):
+        if player_compatible and _fc_player_bridge.hdmi_bridge_active(settings):
             active_methods.append('HDMI Capture')
         rows.append({
             'name': source.name,

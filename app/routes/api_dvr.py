@@ -75,7 +75,7 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
 
         if prismcast:
             settings = AppSettings.get()
-            prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/') if settings.prismcast_bridge_active() else ''
+            prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/') if settings.prismcast_capture_configured() else ''
             prismcast_inner = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
             write_artifact(
                 std_key,
@@ -324,7 +324,7 @@ def push_feed_prismcast_to_dvr(feed_id):
     dvr_url = (settings.effective_channels_dvr_url() or '').strip()
     if not dvr_url:
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
-    if not settings.prismcast_bridge_active() or not (settings.effective_prismcast_url() or '').strip():
+    if not settings.prismcast_capture_configured():
         return jsonify({'error': 'PrismCast bridge mode is disabled or not configured. Enable it in Bridge settings.'}), 400
 
     base = public_base_url()
@@ -421,7 +421,7 @@ def push_feed_fc_player_to_dvr(feed_id):
     dvr_url = (settings.effective_channels_dvr_url() or '').strip()
     if not dvr_url:
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
-    if not settings.bridge_enabled or not fc_player_bridge.is_configured():
+    if not fc_player_bridge.hdmi_bridge_active(settings):
         return jsonify({'error': 'FastChannels Player bridge mode is disabled or not configured. Enable it in Bridge settings.'}), 400
 
     base = public_base_url()
@@ -514,11 +514,9 @@ def push_feed_fc_player_ah4c_to_dvr(feed_id):
     dvr_url = (settings.effective_channels_dvr_url() or '').strip()
     if not dvr_url:
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
-    if not settings.bridge_enabled or not fc_player_bridge.is_configured():
-        return jsonify({'error': 'FastChannels Player bridge mode is disabled or not configured. Enable it in Bridge settings.'}), 400
+    if not fc_player_bridge.ah4c_bridge_active(settings):
+        return jsonify({'error': 'ah4c Capture is disabled or not configured. Enable it in Bridge settings.'}), 400
     ah4c_url = (settings.effective_fc_player_bridge_ah4c_url() or '').strip()
-    if not settings.fc_player_bridge_ah4c_enabled or not ah4c_url:
-        return jsonify({'error': 'ah4c support is not configured. Set it up in Settings.'}), 400
 
     base = public_base_url()
     dvr_type = 'MPEG-TS'

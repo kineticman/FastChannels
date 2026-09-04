@@ -113,6 +113,51 @@ def is_configured() -> bool:
     )
 
 
+def hdmi_capture_configured(settings=None) -> bool:
+    """Whether the fixed, single-stream HDMI Capture path is usable."""
+    settings = settings or AppSettings.get()
+    return bool(
+        settings.fc_player_bridge_enabled
+        and settings.effective_fc_player_bridge_adb_address()
+        and settings.effective_fc_player_bridge_encoder_url()
+    )
+
+
+def ah4c_capture_configured(settings=None) -> bool:
+    """Whether the ah4c multi-tuner Capture path is usable."""
+    settings = settings or AppSettings.get()
+    return bool(
+        settings.fc_player_bridge_enabled
+        and settings.effective_fc_player_bridge_adb_address()
+        and settings.fc_player_bridge_ah4c_enabled
+        and settings.effective_fc_player_bridge_ah4c_url()
+    )
+
+
+def hardware_capture_configured(settings=None) -> bool:
+    """Whether either hardware capture path can actually accept a tune."""
+    settings = settings or AppSettings.get()
+    return hdmi_capture_configured(settings) or ah4c_capture_configured(settings)
+
+
+def hardware_bridge_active(settings=None) -> bool:
+    """Whether global Bridge mode and at least one usable hardware path are on."""
+    settings = settings or AppSettings.get()
+    return bool(settings.bridge_enabled and hardware_capture_configured(settings))
+
+
+def hdmi_bridge_active(settings=None) -> bool:
+    """Whether the global policy and fixed HDMI Capture path are both on."""
+    settings = settings or AppSettings.get()
+    return bool(settings.bridge_enabled and hdmi_capture_configured(settings))
+
+
+def ah4c_bridge_active(settings=None) -> bool:
+    """Whether the global policy and usable ah4c Capture path are both on."""
+    settings = settings or AppSettings.get()
+    return bool(settings.bridge_enabled and ah4c_capture_configured(settings))
+
+
 def _adb_address() -> str:
     address = AppSettings.get().effective_fc_player_bridge_adb_address()
     if not address:

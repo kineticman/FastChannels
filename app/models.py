@@ -493,6 +493,10 @@ class AppSettings(db.Model):
         """Whether PrismCast is an enabled bridge method, independent of its URL."""
         return bool(self.bridge_enabled and self.prismcast_enabled)
 
+    def prismcast_capture_configured(self) -> bool:
+        """Whether the enabled PrismCast Capture method has a usable server URL."""
+        return bool(self.prismcast_bridge_active() and self.effective_prismcast_url())
+
     def effective_prismcast_inner_url(self) -> str | None:
         # Base URL PrismCast's headless Chrome uses to load this server's /watch
         # pages. For DRM (EME) it must be a browser-trusted SECURE CONTEXT:

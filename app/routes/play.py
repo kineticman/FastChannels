@@ -3024,20 +3024,12 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
     settings = AppSettings.get()
     encoder_url = settings.effective_fc_player_bridge_encoder_url()
     ah4c_url = settings.effective_fc_player_bridge_ah4c_url()
-    if not encoder_url and not ah4c_url:
+    if not fc_player_bridge.hardware_bridge_active(settings):
         logger.error(
-            '[fc-player] play request for %s/%s but neither fc_player_bridge_encoder_url '
-            'nor ah4c support is configured',
+            '[fc-player] play request for %s/%s but no hardware capture path is enabled/configured',
             source_name, channel_id,
         )
-        return Response('FastChannels Player encoder URL is not configured.\n', status=503, mimetype='text/plain')
-
-    if not settings.bridge_enabled or not fc_player_bridge.is_configured():
-        logger.error(
-            '[fc-player] play request for %s/%s but the bridge is not enabled/configured',
-            source_name, channel_id,
-        )
-        return Response('FastChannels Player bridge is not enabled or configured.\n', status=503, mimetype='text/plain')
+        return Response('Hardware capture is not enabled or configured.\n', status=503, mimetype='text/plain')
 
     info = _get_playback_info(channel, fast_mode=False)
     manifest_url = info.get('preview_url') or info.get('play_url') or ''
@@ -3131,7 +3123,7 @@ def prismcast_bridge_ts(channel_id):
     channel = Channel.query.get_or_404(channel_id)
     settings = AppSettings.get()
     prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
-    if not settings.prismcast_bridge_active() or not prismcast_url:
+    if not settings.prismcast_capture_configured():
         return Response('PrismCast bridge mode is disabled or not configured.\n', status=503, mimetype='text/plain')
     inner_base_url = (settings.effective_prismcast_inner_url() or public_base_url()).strip().rstrip('/')
     play_url = _prismcast_bridge_url(channel, prismcast_url, inner_base_url)
