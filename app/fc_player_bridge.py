@@ -322,17 +322,36 @@ def _device_os_and_sleep(address: str) -> dict:
             return None
 
     st, sot = _as_int(sleep_timeout), _as_int(screen_off)
-    # Prefer `secure sleep_timeout` (what the user asked to check); fall back to
-    # `system screen_off_timeout` when the device doesn't populate it.
-    primary, key = (st, 'sleep_timeout') if st is not None else (sot, 'screen_off_timeout')
-    if primary is None:
-        out['sleep_detail'] = 'sleep_timeout unreadable'
-    elif primary <= 0 or primary >= _NEVER_MS:
-        out['sleep_disabled'] = True
-        out['sleep_detail'] = f'{key}={primary}'
+
+    def _verdict(v: int) -> tuple[bool, str]:
+        """(disabled?, humanized) for a millisecond timeout value."""
+        if v == 0 or v >= _NEVER_MS:
+            return True, 'never'
+        return False, _ms_to_human(v)
+
+    # `secure sleep_timeout` is the Android TV auto-sleep timer and the one the
+    # user asked about: 0 (or the ~2^31 "Never" sentinel) means it's off. But -1
+    # is NOT "off" — it's "unset, fall back to the normal display timeout" — and
+    # phones/tablets don't have this setting at all, so on anything but a value
+    # of 0 or a real positive we defer to `system screen_off_timeout`, which is
+    # what actually blanks the HDMI output.
+    disabled: bool | None = None
+    reason = ''
+    if st is not None and st >= 0:
+        disabled, human = _verdict(st)
+        reason = f'sleep_timeout={st}' + ('' if disabled else f' ({human})')
+    elif sot is not None and sot >= 0:
+        disabled, human = _verdict(sot)
+        reason = f'screen_off_timeout={sot}' + ('' if disabled else f' ({human})')
+
+    out['sleep_disabled'] = disabled
+    if reason:
+        out['sleep_detail'] = reason
     else:
-        out['sleep_disabled'] = False
-        out['sleep_detail'] = f'{key}={primary} ({_ms_to_human(primary)})'
+        # Nothing conclusive — surface the raw values so it can be chased by hand.
+        raw = [f'sleep_timeout={sleep_timeout.strip() or "?"}',
+               f'screen_off_timeout={screen_off.strip() or "?"}']
+        out['sleep_detail'] = ', '.join(raw)
     return out
 
 
