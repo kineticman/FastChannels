@@ -66,6 +66,34 @@
       <div class="field-actions"><span class="save-status" id="fc-player-encoder-status"></span><button class="btn btn-secondary" id="fc-player-find-capture-stream" onclick="findFcPlayerCaptureStream()">Find from Channels DVR</button><button class="btn btn-secondary" onclick="testFcPlayer()">Test connection</button><button class="btn btn-primary" onclick="saveFcPlayerEncoderSettings()">Save</button></div>
       <div id="fc-player-capture-stream-picker" class="bridge-capture-picker" hidden></div>
       <details class="help" style="margin-top:0.65rem">
+        <summary style="cursor:pointer">No camera source in Channels DVR yet?</summary>
+        <div style="margin-top:0.65rem">Create a native USB/HDMI capture source in Channels DVR, then FastChannels will select its exported stream automatically. Confirm the new capture channel plays in Channels before relying on it for bridge playback.</div>
+        <div class="fields-grid" style="max-width:480px;margin-top:0.65rem">
+          <div class="field">
+            <label for="fc-player-capture-platform">DVR platform</label>
+            <select id="fc-player-capture-platform" onchange="updateFcPlayerCaptureSourceFields()">
+              <option value="linux">Linux</option>
+              <option value="macos">macOS</option>
+              <option value="windows">Windows</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="fc-player-capture-framerate">Frame rate</label>
+            <input id="fc-player-capture-framerate" type="number" min="1" max="120" value="60">
+          </div>
+          <div class="field">
+            <label for="fc-player-capture-video">Video device</label>
+            <input id="fc-player-capture-video" value="video0" placeholder="video0">
+          </div>
+          <div class="field">
+            <label for="fc-player-capture-audio">Audio device</label>
+            <input id="fc-player-capture-audio" value="hw:1,0" placeholder="hw:1,0">
+          </div>
+        </div>
+        <div class="help" id="fc-player-capture-source-help" style="margin-top:0.45rem">Uses <code>capture://v4l2/video0/hw:1,0/?framerate=60</code>. Device names are from the computer running Channels DVR, not the FastChannels container.</div>
+        <div class="field-actions"><button class="btn btn-secondary" id="fc-player-create-capture-source" onclick="createFcPlayerCaptureSource()">Add FastChannels Capture Card to Channels DVR</button></div>
+      </details>
+      <details class="help" style="margin-top:0.65rem">
         <summary style="cursor:pointer">Need to paste it manually instead?</summary>
         In Channels DVR, open <strong>Manage → Export → Copy M3U</strong>, open that URL, then copy the non-comment <code>/stream.mpg</code> line directly below your capture channel's <code>#EXTINF</code> entry. Paste it above and save.
       </details>

@@ -287,6 +287,57 @@ function chooseFcPlayerCaptureStream() {
   status.className = 'save-status ok';
 }
 
+const _fcPlayerCapturePlatformDefaults = {
+  linux: {video: 'video0', audio: 'hw:1,0', example: 'capture://v4l2/video0/hw:1,0/?framerate=60'},
+  macos: {video: '', audio: '', example: 'capture://avfoundation/USB Video/USB Digital Audio/?framerate=60'},
+  windows: {video: '', audio: '', example: 'capture://dshow/<video device>/<audio device>/?framerate=60'},
+};
+
+function updateFcPlayerCaptureSourceFields() {
+  const platform = document.getElementById('fc-player-capture-platform')?.value || 'linux';
+  const defaults = _fcPlayerCapturePlatformDefaults[platform];
+  const video = document.getElementById('fc-player-capture-video');
+  const audio = document.getElementById('fc-player-capture-audio');
+  const help = document.getElementById('fc-player-capture-source-help');
+  if (!defaults || !video || !audio || !help) return;
+  video.value = defaults.video;
+  audio.value = defaults.audio;
+  video.placeholder = platform === 'linux' ? 'video0' : 'Video device name';
+  audio.placeholder = platform === 'linux' ? 'hw:1,0' : 'Audio device name';
+  help.innerHTML = `Creates a Channels DVR <strong>HLS / Text</strong> source with ignored M3U channel numbering. Example: <code>${_escapeHtml(defaults.example)}</code>. Device names are from the computer running Channels DVR, not the FastChannels container.`;
+}
+
+async function createFcPlayerCaptureSource() {
+  const button = document.getElementById('fc-player-create-capture-source');
+  const status = document.getElementById('fc-player-encoder-status');
+  const original = button.textContent;
+  const payload = {
+    platform: document.getElementById('fc-player-capture-platform').value,
+    video: document.getElementById('fc-player-capture-video').value.trim(),
+    audio: document.getElementById('fc-player-capture-audio').value.trim(),
+    framerate: document.getElementById('fc-player-capture-framerate').value,
+  };
+  button.disabled = true;
+  button.textContent = 'Creating in Channels DVR…';
+  status.textContent = '';
+  try {
+    const response = await fetch('/api/settings/fc-player/create-capture-source', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not create the capture source.');
+    if (data.stream_url) document.getElementById('fc-player-encoder-url').value = data.stream_url;
+    status.textContent = data.message || 'Capture source created.';
+    status.className = `save-status ${data.warning ? 'warning' : 'ok'}`;
+  } catch (error) {
+    status.textContent = error.message || 'Could not create the capture source.';
+    status.className = 'save-status error';
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
 async function saveFcPlayerIdleStopToggle() {
   const enabled = document.getElementById('fc-player-idle-stop-enabled').checked;
   await saveSettings({fc_player_idle_stop_enabled: enabled}, 'fc-player-status');

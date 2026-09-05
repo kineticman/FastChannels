@@ -194,6 +194,92 @@ def _channels_dvr_capture_streams(dvr_url: str) -> list[dict]:
     return choices
 
 
+def _capture_source_value(value, label: str) -> str:
+    """Validate one user-supplied component of a Channels ``capture://`` URL."""
+    value = str(value or '').strip()
+    if not value or '\n' in value or '\r' in value:
+        raise ValueError(f'{label} is required and cannot contain a line break.')
+    return value
+
+
+@settings_bp.route('/settings/fc-player/create-capture-source', methods=['POST'])
+def create_fc_player_capture_source():
+    """Create FastChannels' native USB/HDMI capture source in Channels DVR.
+
+    The source is deliberately a Channels *HLS/Text* source.  Channels turns the
+    local ``capture://`` input into its own export stream; the bridge later uses
+    that export's MPEG-TS ``stream.mpg`` URL.
+    """
+    settings = AppSettings.get()
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip().rstrip('/')
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured. Add it in Settings first.'}), 400
+
+    data = request.get_json(silent=True) or {}
+    platform = (data.get('platform') or '').strip().lower()
+    if platform not in {'macos', 'windows', 'linux'}:
+        return jsonify({'error': 'Choose macOS, Windows, or Linux.'}), 422
+    try:
+        video = _capture_source_value(data.get('video'), 'Video device')
+        audio = _capture_source_value(data.get('audio'), 'Audio device')
+        framerate = int(data.get('framerate') or 60)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 422
+    if not 1 <= framerate <= 120:
+        return jsonify({'error': 'Frame rate must be between 1 and 120.'}), 422
+
+    # These are the capture syntaxes documented by Channels.  Linux includes
+    # audio too: e.g. capture://v4l2/video0/hw:1,0/?framerate=60.
+    driver = {'macos': 'avfoundation', 'windows': 'dshow', 'linux': 'v4l2'}[platform]
+    capture_url = f'capture://{driver}/{video}/{audio}/?framerate={framerate}'
+    source_name = 'FastChannels Capture Card'
+    source_id = 'FastChannelsCaptureCard'
+    text = (
+        '#EXTM3U\n'
+        '#EXTINF:-1 channel-id="fastchannels-capture-card",FastChannels Capture Card\n'
+        f'{capture_url}\n'
+    )
+    payload = {
+        'name': source_name,
+        'type': 'HLS',
+        'source': 'Text',
+        'url': '',
+        'text': text,
+        'refresh': '',
+        'limit': '',
+        'satip': '',
+        'numbering': 'ignore',
+        'logos': '',
+        'xmltv_url': '',
+        'xmltv_refresh': '',
+    }
+    try:
+        response = _req.put(f'{dvr_url}/providers/m3u/sources/{source_id}', json=payload,
+                            timeout=20, verify=False)
+        response.raise_for_status()
+    except _req.exceptions.ConnectionError:
+        return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}.'}), 502
+    except _req.exceptions.Timeout:
+        return jsonify({'error': 'Channels DVR timed out while creating the capture source.'}), 504
+    except _req.exceptions.HTTPError as exc:
+        body = (exc.response.text or '')[:300] if exc.response is not None else ''
+        return jsonify({'error': f'Channels DVR rejected the capture source: {body or exc}'}), 502
+
+    try:
+        streams = _channels_dvr_capture_streams(dvr_url)
+    except _req.RequestException:
+        streams = []
+    stream = next((item for item in streams
+                   if item['label'].lower().endswith('fastchannels capture card')), None)
+    if stream:
+        settings.fc_player_bridge_encoder_url = stream['stream_url']
+        db.session.commit()
+        return jsonify({'ok': True, 'stream_url': stream['stream_url'],
+                        'message': 'Created FastChannels Capture Card and selected its MPEG-TS export stream.'})
+    return jsonify({'ok': True, 'warning': True,
+                    'message': 'Created FastChannels Capture Card. It is still initializing in Channels DVR; use “Find from Channels DVR” in a moment to select its stream.'})
+
+
 def _stream_debug_path(stream_url: str) -> str:
     """Useful stream identity for diagnostics without exposing host or credentials."""
     parsed = urlsplit(stream_url)
