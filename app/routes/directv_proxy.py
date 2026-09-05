@@ -99,7 +99,10 @@ def _directv_activate_identity(scraper_cls, cfg: dict, challenge: bytes):
     except Exception as exc:
         logger.warning('[directv-license] activation request failed: %s', exc)
         return None, None, None, None, None
-    logger.info('[directv-license] activation -> HTTP %s (%d bytes)', r.status_code, len(r.content))
+    # Activation happens repeatedly during normal DRM startup/key rotation;
+    # keep successful exchanges available when debugging without filling the
+    # main log at INFO.
+    logger.debug('[directv-license] activation -> HTTP %s (%d bytes)', r.status_code, len(r.content))
     if r.status_code < 200 or r.status_code >= 300:
         logger.warning('[directv-license] activation HTTP %s: %s', r.status_code, r.content[:500])
         return None, None, None, r.status_code, r.content

@@ -75,9 +75,9 @@ _SUCCESS_SUPPRESS_PATTERNS = (
 )
 _SUCCESS_SUPPRESS_RE = re.compile(r'(?:GET|HEAD) /play/directv/browser-asset\?url=')
 _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa|fubo)/[^/]+/dash\.mpd')
-# cox uses path-form license URLs (/license/<id>), vidaa/fubo use query-form
-# (/license?channel_id=<id>) — matched via the alternated separator below.
-_LICENSE_RE = re.compile(r'POST /play/(cox|vidaa|fubo)/license(?:/|\?channel_id=)')
+# DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo use
+# query-form URLs (/license?channel_id=<id>) — matched via the separator below.
+_LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo)/license(?:/|\?channel_id=)')
 
 
 class _AccessFilter(logging.Filter):
