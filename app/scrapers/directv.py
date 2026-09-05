@@ -1533,6 +1533,7 @@ class DirectvScraper(BaseScraper):
 
         exclude_fast = self._exclude_fast_channels()
         self.excluded_channel_ids = set()
+        non_streamable = 0
         channels: list[ChannelData] = []
 
         for row in rows:
@@ -1540,6 +1541,16 @@ class DirectvScraper(BaseScraper):
             resource_id = _pick(row, 'resourceId', 'resourceID', 'resource_id', 'guid')
             name = _pick(row, 'channelName', 'name', 'displayName', 'title')
             if not ccid or not resource_id or not name:
+                continue
+
+            # Satellite lineups include receiver-only entries alongside their
+            # streamable variants. Trust only an explicit JSON false: missing
+            # metadata must preserve compatibility with other account lineups.
+            augmentation = row.get('augmentation')
+            constraints = augmentation.get('constraints') if isinstance(augmentation, dict) else None
+            if isinstance(constraints, dict) and constraints.get('isLiveStreamEnabled') is False:
+                self.excluded_channel_ids.add(ccid)
+                non_streamable += 1
                 continue
 
             number_raw = _pick(row, 'channelNumber', 'channel_number', 'number')
@@ -1579,6 +1590,10 @@ class DirectvScraper(BaseScraper):
                 tags=[self.FAST_TAG] if is_fast else [],
             ))
 
+        logger.info(
+            '[directv] channel eligibility: upstream=%d included=%d non_streamable=%d excluded=%d',
+            len(rows), len(channels), non_streamable, len(self.excluded_channel_ids),
+        )
         _progress(self, 'channels', 1, 1)
         return channels
 
