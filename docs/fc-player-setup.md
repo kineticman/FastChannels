@@ -81,16 +81,29 @@ For a capture setup walkthrough, see the first two posts here:
 
 Once the capture source appears as a device in Channels DVR:
 
+1. In FastChannels, configure the **Channels DVR URL** under **Settings**.
+2. In the **HDMI Capture** card, select **Find from Channels DVR**.
+3. Search for and select the channel backed by the HDMI capture device, then
+   select **Use selected stream**. Capture/HDMI-like names are shown first.
+4. Select **Save** in the HDMI Capture card.
+
+FastChannels reads Channels DVR's MPEG-TS export itself, preserves any session
+parameter it needs, and uses the DVR address configured in FastChannels rather
+than a potentially unusable `localhost` address from the export.
+
+If the picker cannot reach a remote or separately authenticated DVR, retrieve
+the direct URL manually:
+
 1. Find the capture source card in the Channels DVR admin interface.
-2. Select **Manage → Export → Copy M3U**.
-3. Download the M3U and open it in a text editor.
-4. Copy the full stream URL on the second line. It should look similar to:
+2. Select **Manage → Export → Copy M3U** and open that URL.
+3. Copy the non-comment stream URL immediately below the capture channel's
+   `#EXTINF` line. It should look similar to:
 
    ```text
    http://<host>:8089/devices/<YourDevice>/channels/<N>/stream.mpg?format=ts&codec=copy
    ```
 
-5. Test the URL by opening it in a browser or media player. It should begin
+4. Test the URL by opening it in a browser or media player. It should begin
    returning video without redirecting to another playlist.
 
 Save this URL. You will enter it as the **Capture/encoder stream URL** later.
@@ -217,6 +230,22 @@ In the **HDMI Capture** card, complete:
 
 Click **Save** in that section before continuing — the device IP must already
 be saved for the install button below to work.
+
+Before attempting a real bridge-only channel, use **Bridge → Post-install
+Healthcheck → Run healthcheck**. It checks the configured hardware paths
+without tuning a channel, samples the configured HDMI Capture stream from
+inside the FastChannels container, and **Copy forum report** creates a concise,
+credential-free report to attach to a support post. PrismCast has its own
+specialized capture test in the PrismCast Capture card.
+
+When the non-disruptive check passes, **Live bridge test** is the optional
+end-to-end confirmation: choose one bridge-ready channel, confirm the warning,
+and FastChannels tunes the Player device then samples the HDMI Capture stream.
+It intentionally interrupts anything playing on that device. The result shows
+the tested stream path, payload size, timing, and whether the Player reports
+active playback. It also reports the MPEG-TS program's detected video/audio
+types when they appear in the short sample. Select **Stop test playback** when
+you are done to close the Player immediately.
 
 The automatic stop option detects viewers using Channels DVR's activity status
 or the FastChannels `/watch` page. It cannot detect a third-party player

@@ -41,6 +41,18 @@
         {% if (prismcast_enabled or fc_player_enabled) and not bridge_enabled and drm_bridge_recoverable_count %}
         <div class="help" style="color:var(--accent-soft)">💡 A bridge method is enabled and {{ drm_bridge_recoverable_count }} DRM channel{{ 's' if drm_bridge_recoverable_count != 1 else '' }} {{ 'is' if drm_bridge_recoverable_count == 1 else 'are' }} currently disabled. Turn on Bridge mode to recover {{ 'it' if drm_bridge_recoverable_count == 1 else 'them' }}.</div>
         {% endif %}
+        <div class="bridge-healthcheck">
+          <div class="bridge-healthcheck-copy">
+            <div class="bridge-healthcheck-title">Post-install Healthcheck</div>
+            <div class="help">Checks Bridge mode, the FastChannels Player device, HDMI Capture—including a small capture-payload sample from inside Docker—and ah4c tuners without tuning a channel or changing a device. For a deliberate end-to-end tune, use Live bridge test. PrismCast keeps its own deeper capture test below.</div>
+          </div>
+          <div class="bridge-healthcheck-actions">
+            <button class="btn btn-secondary" id="bridge-healthcheck-copy" onclick="copyBridgeHealthcheck()" disabled>Copy forum report</button>
+            <button class="btn btn-primary" id="bridge-healthcheck-run" onclick="runBridgeHealthcheck()">Run healthcheck</button>
+          </div>
+        </div>
+        <div id="bridge-healthcheck-results" class="bridge-healthcheck-results" hidden aria-live="polite"></div>
+        <div id="bridge-live-test-picker" class="bridge-live-test-picker" hidden></div>
         <div class="bridge-audit-note">
           <strong>First-time setup:</strong> after enabling a bridge method, run a <strong>Stream Audit</strong> for each source you intend to bridge. The audit detects DRM and marks eligible channels for bridge output; without it, existing channels may still look like ordinary or disabled streams.
           <a href="/admin/sources">Open Sources and run audits →</a>

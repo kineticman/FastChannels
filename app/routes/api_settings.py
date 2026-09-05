@@ -1,15 +1,17 @@
 import logging
 import os as _os
 import json
+import time
 import requests as _req
 
 logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit, urljoin
+import re
 
 from flask import Blueprint, jsonify, request, current_app, Response
 from ..extensions import db
-from ..models import AppSettings
+from ..models import AppSettings, Source, Channel
 from .. import fc_player_bridge
 from ..timezone_utils import normalize_timezone_name, write_timezone_cache
 
@@ -45,6 +47,24 @@ def _normalize_server_url(value: str | None, default_port: int | None = None) ->
     return f'{scheme}://{host}'.rstrip('/')
 
 
+def _normalize_stream_url(value: str | None) -> str | None:
+    """Normalize an HTTP stream URL while retaining its required query string.
+
+    The ordinary server-address normalizer intentionally discards a path/query.
+    A Channels DVR ``stream.mpg`` link can carry ``format=ts`` and, on some
+    installations, a session token, so those are part of this setting's identity.
+    """
+    raw = (value or '').strip()
+    if not raw:
+        return None
+    if '://' not in raw:
+        raw = f'http://{raw}'
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        return None
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or '/', parsed.query, ''))
+
+
 def _bridge_host_from_input(value: str | None) -> str | None:
     """Extract a bare host from a device-bridge IP field — strips any scheme/port
     the user typed. The admin form takes one "IP[:port]" field and derives the
@@ -55,6 +75,223 @@ def _bridge_host_from_input(value: str | None) -> str | None:
     if '://' not in raw:
         raw = f'http://{raw}'
     return urlsplit(raw).hostname or None
+
+
+def _looks_like_mpeg_ts(payload: bytes) -> bool:
+    """Recognize a short raw MPEG-TS sample without retaining stream contents."""
+    if len(payload) < 3 * 188:
+        return False
+    upper_bound = len(payload) - (2 * 188)
+    return any(payload[offset] == 0x47 and payload[offset + 188] == 0x47
+               and payload[offset + 376] == 0x47
+               for offset in range(upper_bound))
+
+
+def _mpeg_ts_stream_summary(payload: bytes) -> str:
+    """Best-effort codec summary from PAT/PMT packets in a short TS sample."""
+    packet_start = next((offset for offset in range(min(188, len(payload)))
+                         if offset + 376 < len(payload)
+                         and payload[offset] == payload[offset + 188] == payload[offset + 376] == 0x47), None)
+    if packet_start is None:
+        return 'MPEG-TS packets detected; program map was not available in this sample.'
+    pmt_pids: set[int] = set()
+    stream_types: set[int] = set()
+    for offset in range(packet_start, len(payload) - 187, 188):
+        packet = payload[offset:offset + 188]
+        if packet[0] != 0x47:
+            continue
+        pid = ((packet[1] & 0x1f) << 8) | packet[2]
+        has_payload = ((packet[3] >> 4) & 0x03) in {1, 3}
+        if not has_payload or not (packet[1] & 0x40):
+            continue
+        payload_offset = 4
+        if ((packet[3] >> 4) & 0x03) == 3:
+            payload_offset += 1 + packet[4]
+        if payload_offset >= len(packet):
+            continue
+        section = packet[payload_offset + 1 + packet[payload_offset]:]
+        if len(section) < 12:
+            continue
+        if pid == 0 and section[0] == 0x00:  # PAT
+            section_end = min(len(section), 3 + (((section[1] & 0x0f) << 8) | section[2]))
+            for index in range(8, section_end - 3, 4):
+                program = (section[index] << 8) | section[index + 1]
+                if program:
+                    pmt_pids.add(((section[index + 2] & 0x1f) << 8) | section[index + 3])
+        elif pid in pmt_pids and section[0] == 0x02:  # PMT
+            section_end = min(len(section), 3 + (((section[1] & 0x0f) << 8) | section[2]))
+            program_info_length = ((section[10] & 0x0f) << 8) | section[11]
+            index = 12 + program_info_length
+            while index + 4 < section_end - 4:
+                stream_types.add(section[index])
+                es_info_length = ((section[index + 3] & 0x0f) << 8) | section[index + 4]
+                index += 5 + es_info_length
+    names = {
+        0x02: 'MPEG-2 video', 0x1B: 'H.264 video', 0x24: 'H.265/HEVC video',
+        0x0F: 'AAC audio', 0x11: 'AAC-LATM audio', 0x03: 'MPEG audio',
+        0x04: 'MPEG audio', 0x81: 'AC-3 audio', 0x87: 'E-AC-3 audio',
+    }
+    identified = [names.get(stream_type, f'stream type 0x{stream_type:02x}')
+                  for stream_type in sorted(stream_types)]
+    return 'Detected: ' + ', '.join(identified) if identified else 'MPEG-TS packets detected; program map was not available in this sample.'
+
+
+def _m3u_attr(line: str, name: str) -> str:
+    """Return one quoted attribute from an EXTINF line, without trusting it as HTML."""
+    match = re.search(rf'\b{re.escape(name)}="([^"]*)"', line, flags=re.IGNORECASE)
+    return match.group(1).strip() if match else ''
+
+
+def _channels_dvr_capture_streams(dvr_url: str) -> list[dict]:
+    """Read Channels DVR's native MPEG-TS export and return selectable stream URLs.
+
+    Channels deliberately exposes the direct ``stream.mpg`` address only in its M3U
+    export.  Fetching the export here means the user never has to copy its URL or
+    hunt for the non-comment line.  The export can be generated with localhost as
+    its base; rebuild each URL with the configured DVR host, which is the address
+    FastChannels itself can reach from its container.
+    """
+    base = urlsplit(dvr_url)
+    export_url = f'{dvr_url.rstrip("/")}/devices/ANY/channels.m3u?format=ts'
+    response = _req.get(export_url, timeout=(3, 12))
+    response.raise_for_status()
+
+    choices: list[dict] = []
+    seen: set[str] = set()
+    extinf = ''
+    for raw_line in response.text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.upper().startswith('#EXTINF:'):
+            extinf = line
+            continue
+        if line.startswith('#'):
+            continue
+
+        parsed = urlsplit(line)
+        if parsed.scheme not in {'http', 'https'} or not parsed.path.endswith('/stream.mpg'):
+            extinf = ''
+            continue
+        stream_url = urlunsplit((base.scheme, base.netloc, parsed.path, parsed.query, ''))
+        if stream_url in seen:
+            extinf = ''
+            continue
+        seen.add(stream_url)
+        channel_number = _m3u_attr(extinf, 'tvg-chno') or _m3u_attr(extinf, 'channel-number')
+        channel_name = (extinf.rsplit(',', 1)[-1].strip() if ',' in extinf else '')
+        channel_name = _m3u_attr(extinf, 'tvg-name') or channel_name or 'Unnamed channel'
+        label = f'{channel_number} · {channel_name}' if channel_number else channel_name
+        choices.append({'label': label, 'stream_url': stream_url})
+        extinf = ''
+
+    # Capture devices are commonly named Capture, HDMI, or after their encoder.
+    # Keep every usable stream available, but surface likely choices first.
+    choices.sort(key=lambda item: (
+        not any(word in item['label'].lower() for word in ('capture', 'hdmi', 'encoder', 'usb')),
+        item['label'].lower(),
+    ))
+    return choices
+
+
+def _capture_source_value(value, label: str) -> str:
+    """Validate one user-supplied component of a Channels ``capture://`` URL."""
+    value = str(value or '').strip()
+    if not value or '\n' in value or '\r' in value:
+        raise ValueError(f'{label} is required and cannot contain a line break.')
+    return value
+
+
+@settings_bp.route('/settings/fc-player/create-capture-source', methods=['POST'])
+def create_fc_player_capture_source():
+    """Create FastChannels' native USB/HDMI capture source in Channels DVR.
+
+    The source is deliberately a Channels *HLS/Text* source.  Channels turns the
+    local ``capture://`` input into its own export stream; the bridge later uses
+    that export's MPEG-TS ``stream.mpg`` URL.
+    """
+    settings = AppSettings.get()
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip().rstrip('/')
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured. Add it in Settings first.'}), 400
+
+    data = request.get_json(silent=True) or {}
+    platform = (data.get('platform') or '').strip().lower()
+    if platform not in {'macos', 'windows', 'linux'}:
+        return jsonify({'error': 'Choose macOS, Windows, or Linux.'}), 422
+    try:
+        video = _capture_source_value(data.get('video'), 'Video device')
+        audio = _capture_source_value(data.get('audio'), 'Audio device')
+        framerate = int(data.get('framerate') or 60)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 422
+    if not 1 <= framerate <= 120:
+        return jsonify({'error': 'Frame rate must be between 1 and 120.'}), 422
+
+    # These are the capture syntaxes documented by Channels.  Linux includes
+    # audio too: e.g. capture://v4l2/video0/hw:1,0/?framerate=60.
+    driver = {'macos': 'avfoundation', 'windows': 'dshow', 'linux': 'v4l2'}[platform]
+    capture_url = f'capture://{driver}/{video}/{audio}/?framerate={framerate}'
+    source_name = 'FastChannels Capture Card'
+    source_id = 'FastChannelsCaptureCard'
+    text = (
+        '#EXTM3U\n'
+        '#EXTINF:-1 channel-id="fastchannels-capture-card",FastChannels Capture Card\n'
+        f'{capture_url}\n'
+    )
+    payload = {
+        'name': source_name,
+        'type': 'HLS',
+        'source': 'Text',
+        'url': '',
+        'text': text,
+        'refresh': '',
+        'limit': '',
+        'satip': '',
+        'numbering': 'ignore',
+        'logos': '',
+        'xmltv_url': '',
+        'xmltv_refresh': '',
+    }
+    try:
+        response = _req.put(f'{dvr_url}/providers/m3u/sources/{source_id}', json=payload,
+                            timeout=20, verify=False)
+        response.raise_for_status()
+    except _req.exceptions.ConnectionError:
+        return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}.'}), 502
+    except _req.exceptions.Timeout:
+        return jsonify({'error': 'Channels DVR timed out while creating the capture source.'}), 504
+    except _req.exceptions.HTTPError as exc:
+        body = (exc.response.text or '')[:300] if exc.response is not None else ''
+        return jsonify({'error': f'Channels DVR rejected the capture source: {body or exc}'}), 502
+
+    try:
+        streams = _channels_dvr_capture_streams(dvr_url)
+    except _req.RequestException:
+        streams = []
+    stream = next((item for item in streams
+                   if item['label'].lower().endswith('fastchannels capture card')), None)
+    if stream:
+        settings.fc_player_bridge_encoder_url = stream['stream_url']
+        db.session.commit()
+        return jsonify({'ok': True, 'stream_url': stream['stream_url'],
+                        'message': 'Created FastChannels Capture Card and selected its MPEG-TS export stream.'})
+    return jsonify({'ok': True, 'warning': True,
+                    'message': 'Created FastChannels Capture Card. It is still initializing in Channels DVR; use “Find from Channels DVR” in a moment to select its stream.'})
+
+
+def _stream_debug_path(stream_url: str) -> str:
+    """Useful stream identity for diagnostics without exposing host or credentials."""
+    parsed = urlsplit(stream_url)
+    redacted_keys = {'session', 'token', 'access_token', 'auth', 'authorization', 'key', 'password'}
+    query_parts = []
+    for part in parsed.query.split('&'):
+        if not part:
+            continue
+        key, separator, value = part.partition('=')
+        query_parts.append(f'{key}=[redacted]' if key.lower() in redacted_keys else part)
+    query = f'?{"&".join(query_parts)}' if query_parts else ''
+    return f'{parsed.path or "/"}{query}'
 
 
 @settings_bp.route('/settings', methods=['GET', 'POST'])
@@ -123,7 +360,10 @@ def app_settings():
                 return jsonify({'error': 'Invalid Firestick/Android TV IP address.'}), 422
             row.fc_player_bridge_adb_address = f'{_fcp_host}:5555' if _fcp_host else None
         if 'fc_player_encoder_url' in data:
-            row.fc_player_bridge_encoder_url = _normalize_server_url(data['fc_player_encoder_url'], default_port=None)
+            encoder_url = _normalize_stream_url(data['fc_player_encoder_url'])
+            if data.get('fc_player_encoder_url') and not encoder_url:
+                return jsonify({'error': 'Invalid HDMI capture stream URL.'}), 422
+            row.fc_player_bridge_encoder_url = encoder_url
         if 'fc_player_idle_stop_enabled' in data:
             row.fc_player_bridge_idle_stop_enabled = bool(data['fc_player_idle_stop_enabled'])
         if 'fc_player_captions_enabled' in data:
@@ -215,6 +455,267 @@ def test_fc_player():
             'warning': True,
             'message': f'{message} Encoder/capture stream URL is not reachable — bridged channels will fail until that stream is up.',
         })
+
+
+@settings_bp.route('/settings/fc-player/capture-streams', methods=['GET'])
+def fc_player_capture_streams():
+    """Offer Channels DVR MPEG-TS streams for the fixed HDMI Capture path."""
+    dvr_url = (AppSettings.get().effective_channels_dvr_url() or '').strip().rstrip('/')
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured. Add it in Settings first.'}), 400
+    try:
+        streams = _channels_dvr_capture_streams(dvr_url)
+    except _req.RequestException as exc:
+        logger.info('[fc-player] could not read Channels DVR M3U export: %s', exc)
+        return jsonify({'error': 'FastChannels could not read the Channels DVR M3U export. Verify the DVR URL in Settings and its network reachability.'}), 502
+
+    if not streams:
+        return jsonify({'error': 'Channels DVR returned no MPEG-TS stream entries. Confirm the capture device is added and enabled in Channels DVR.'}), 404
+    return jsonify({'streams': streams})
+
+
+@settings_bp.route('/settings/bridge/live-test-channels', methods=['GET'])
+def bridge_live_test_channels():
+    """Bridge-ready channels that are safe candidates for an explicit live test."""
+    rows = (Channel.query.join(Source)
+            .filter(Channel.is_active.is_(True), Channel.is_enabled.is_(True),
+                    Channel.requires_drm_bridge.is_(True), Source.is_enabled.is_(True))
+            .order_by(Source.display_name, Channel.name)
+            .limit(250).all())
+    return jsonify({'channels': [
+        {'id': channel.id, 'label': f'{channel.source.display_name} · {channel.name or channel.source_channel_id}'}
+        for channel in rows
+    ]})
+
+
+@settings_bp.route('/settings/bridge/live-test', methods=['POST'])
+def bridge_live_test():
+    """Explicit, disruptive Player → HDMI Capture verification for one channel."""
+    settings = AppSettings.get()
+    if not fc_player_bridge.hdmi_bridge_active(settings):
+        return jsonify({'error': 'Enable Bridge mode, HDMI Capture, a device IP, and a fixed capture stream first.'}), 409
+    data = request.get_json(force=True) or {}
+    try:
+        channel_id = int(data.get('channel_id'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Choose a bridge-ready channel to test.'}), 422
+    channel = (Channel.query.join(Source)
+               .filter(Channel.id == channel_id, Channel.is_active.is_(True), Channel.is_enabled.is_(True),
+                       Channel.requires_drm_bridge.is_(True), Source.is_enabled.is_(True))
+               .first())
+    if channel is None:
+        return jsonify({'error': 'That channel is no longer eligible for a bridge test. Refresh the list and choose another.'}), 404
+
+    try:
+        from .api_playback import _get_playback_info
+        info = _get_playback_info(channel, fast_mode=False)
+        manifest_url = info.get('preview_url') or info.get('play_url') or ''
+        if manifest_url.startswith('/'):
+            manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
+        if not manifest_url:
+            return jsonify({'error': 'FastChannels could not resolve a playable stream for this channel.'}), 502
+        triggered = fc_player_bridge.trigger_channel(
+            manifest_url, info.get('license_url') or None,
+            name=channel.name or 'FastChannels',
+            channel_key=f'{channel.source.name}:{channel.source_channel_id}',
+        )
+    except Exception as exc:
+        logger.warning('[fc-player] live bridge test failed to trigger channel=%s: %s', channel.id, exc)
+        return jsonify({'error': 'FastChannels could not start the selected channel on the Player device.'}), 502
+    if not triggered:
+        return jsonify({'error': 'The Player device did not acknowledge the tune request. Check ADB authorization and Device Controls.'}), 502
+
+    # Give the Player a brief chance to navigate before sampling its fixed HDMI
+    # stream. This endpoint is intentionally opt-in because it changes the TV.
+    time.sleep(4)
+    encoder_url = settings.effective_fc_player_bridge_encoder_url()
+    started = time.monotonic()
+    try:
+        with _req.get(encoder_url, stream=True, timeout=(3, 8)) as response:
+            response.raise_for_status()
+            sample = next(response.iter_content(chunk_size=64 * 1024), b'')
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+    except _req.RequestException:
+        return jsonify({
+            'ok': False, 'channel': channel.name or channel.source_channel_id,
+            'detail': 'The Player accepted the tune request, but FastChannels could not receive the HDMI capture stream afterward.',
+            'endpoint': _stream_debug_path(encoder_url),
+        }), 502
+
+    device = fc_player_bridge.device_controls_status()
+    payload_ok = bool(sample) and _looks_like_mpeg_ts(sample)
+    player_playing = device.get('player_playing') if device.get('ok') else None
+    player_visible = bool(device.get('ok') and 'com.fastchannels.player' in (device.get('focus') or ''))
+    status = 'ok' if payload_ok and (player_playing or player_visible) else ('warn' if payload_ok else 'fail')
+    if payload_ok and player_playing:
+        detail = 'Player tune acknowledged; the Player reports playback active and the capture stream returned MPEG-TS after the tune.'
+    elif payload_ok and player_visible:
+        detail = 'Player tune acknowledged; FastChannels Player is foreground and the capture stream returned MPEG-TS after the tune.'
+    elif payload_ok:
+        detail = ('Player tune acknowledged and the capture stream returned MPEG-TS, but FastChannels could not confirm active Player playback. '
+                  'The stream may be a prior/stale capture; inspect the TV and Player Device Controls.')
+    else:
+        detail = 'Player tune acknowledged, but the capture endpoint returned data that did not resemble MPEG-TS.'
+    return jsonify({
+        'ok': payload_ok,
+        'status': status,
+        'channel': f'{channel.source.display_name} · {channel.name or channel.source_channel_id}',
+        'endpoint': _stream_debug_path(encoder_url),
+        'bytes_received': len(sample),
+        'elapsed_ms': elapsed_ms,
+        'content_type': (response.headers.get('Content-Type') or 'unspecified').split(';', 1)[0],
+        'media_summary': _mpeg_ts_stream_summary(sample) if payload_ok else 'No recognizable MPEG-TS program data.',
+        'player_playing': player_playing,
+        'player_visible': player_visible,
+        'player_focus': device.get('focus') if device.get('ok') else None,
+        'detail': detail,
+    })
+
+
+@settings_bp.route('/settings/bridge/live-test/stop', methods=['POST'])
+def bridge_live_test_stop():
+    """Stop the Player after an explicit live test (or any fixed HDMI test tune)."""
+    if not AppSettings.get().effective_fc_player_bridge_adb_address():
+        return jsonify({'error': 'No HDMI Capture device IP is configured.'}), 409
+    if not fc_player_bridge.stop_playback():
+        return jsonify({'error': 'FastChannels could not stop the Player device over ADB.'}), 502
+    return jsonify({'ok': True, 'message': 'FastChannels Player was stopped on the HDMI Capture device.'})
+
+
+@settings_bp.route('/settings/bridge/healthcheck', methods=['POST'])
+def bridge_healthcheck():
+    """Non-disruptive, forum-shareable health check for hardware bridge setup.
+
+    This intentionally does not tune a channel or change a device. PrismCast has
+    its own deeper capture diagnostic, so this check only links users to it.
+    """
+    from ..scrapers.registry import drm_capable_source_names
+
+    settings = AppSettings.get()
+    checks: list[dict] = []
+
+    def add(status: str, name: str, detail: str, fix: str = '') -> None:
+        checks.append({'status': status, 'name': name, 'detail': detail, 'fix': fix})
+
+    if settings.bridge_enabled:
+        add('ok', 'Bridge mode', 'Enabled. Eligible DRM channels can use a configured capture path.')
+    else:
+        add('warn', 'Bridge mode', 'Disabled. DRM channels will follow the normal disabled-DRM behavior.',
+            'Enable Bridge mode when your capture path is ready.')
+
+    capable_names = set(drm_capable_source_names())
+    enabled_source_ids = [source.id for source in Source.query.filter(
+        Source.name.in_(capable_names), Source.is_enabled.is_(True), Source.epg_only.is_not(True)
+    ).all()] if capable_names else []
+    bridge_candidates = (Channel.query.filter(Channel.source_id.in_(enabled_source_ids),
+                                               Channel.is_active.is_(True),
+                                               Channel.is_enabled.is_(True),
+                                               Channel.requires_drm_bridge.is_(True)).count()
+                         if enabled_source_ids else 0)
+    if not enabled_source_ids:
+        add('skip', 'Bridge sources', 'No DRM-capable sources are enabled.')
+    elif bridge_candidates:
+        add('ok', 'Bridge sources', f'{len(enabled_source_ids)} enabled source(s); {bridge_candidates} channel(s) are marked for bridge output.')
+    else:
+        add('warn', 'Bridge sources', f'{len(enabled_source_ids)} DRM-capable source(s) are enabled, but none are marked for bridge output.',
+            'Run Stream Audit on the sources you intend to bridge.')
+
+    # HDMI Capture is a fixed single-stream path. Probe only when it has been
+    # selected/configured, so unused hardware never creates a scary failure.
+    if not settings.fc_player_bridge_enabled:
+        add('skip', 'HDMI Capture', 'Hardware capture is disabled.')
+    elif not settings.effective_fc_player_bridge_adb_address():
+        add('warn', 'HDMI Capture device', 'No Android TV / Fire TV device IP is configured.',
+            'Enter the device IP in HDMI Capture, then approve its ADB prompt on the TV.')
+    else:
+        ok, message = fc_player_bridge.test_connection()
+        add('ok' if ok else 'fail', 'FastChannels Player device', message,
+            '' if ok else 'Enable ADB or Network Debugging, retry, and approve “Allow USB debugging?” on the TV.')
+
+        encoder_url = settings.effective_fc_player_bridge_encoder_url()
+        if not encoder_url:
+            add('skip', 'HDMI Capture stream', 'No fixed encoder stream is configured.')
+        else:
+            add('info', 'HDMI Capture endpoint',
+                f'Testing saved stream {_stream_debug_path(encoder_url)} from inside the FastChannels container.')
+            host = (urlsplit(encoder_url).hostname or '').lower()
+            if host in {'localhost', '127.0.0.1', '::1'}:
+                add('warn', 'Docker capture address', 'The capture URL uses localhost, which means the FastChannels container itself—not the Mac or another host.',
+                    'For Docker Desktop on macOS, use host.docker.internal or the capture host’s LAN IP.')
+            started = time.monotonic()
+            try:
+                with _req.get(encoder_url, stream=True, timeout=(3, 4)) as response:
+                    if not response.ok:
+                        add('warn', 'HDMI Capture stream', f'The fixed encoder stream returned HTTP {response.status_code}.',
+                            'Confirm the capture device is powered on and the saved stream URL is correct.')
+                    else:
+                        sample = next(response.iter_content(chunk_size=32 * 1024), b'')
+                        elapsed_ms = int((time.monotonic() - started) * 1000)
+                        content_type = (response.headers.get('Content-Type') or 'unspecified').split(';', 1)[0]
+                        if not sample:
+                            add('fail', 'HDMI Capture payload', f'The capture endpoint returned HTTP {response.status_code} but sent no data within {elapsed_ms} ms.',
+                                'Check the Channels DVR capture device and confirm it is producing a live stream.')
+                        elif _looks_like_mpeg_ts(sample):
+                            add('ok', 'HDMI Capture payload',
+                                f'Received {len(sample):,} bytes of MPEG-TS capture data in {elapsed_ms} ms ({content_type}). {_mpeg_ts_stream_summary(sample)}')
+                        else:
+                            add('warn', 'HDMI Capture payload', f'Received {len(sample):,} bytes in {elapsed_ms} ms, but the sample did not resemble MPEG-TS ({content_type}).',
+                                'Open the exact capture stream URL in VLC and verify Channels DVR is serving the expected capture stream.')
+            except _req.RequestException:
+                add('fail', 'HDMI Capture payload', 'FastChannels could not connect to the fixed capture stream or receive a payload.',
+                    'Confirm the capture host is reachable from Docker and that Channels DVR is producing the stream.')
+
+    # ah4c owns its own capture hardware. Its status endpoint plus the per-tuner
+    # ADB checks provide a useful setup check without starting a tune.
+    if not settings.fc_player_bridge_ah4c_enabled:
+        add('skip', 'ah4c Capture', 'ah4c Capture is disabled.')
+    elif not settings.effective_fc_player_bridge_ah4c_url():
+        add('warn', 'ah4c Capture', 'ah4c Capture is enabled but its server URL is blank.',
+            'Enter the ah4c server URL and save it.')
+    else:
+        try:
+            tuners = fc_player_bridge.verify_ah4c_tuners()
+            if not tuners:
+                add('warn', 'ah4c tuners', 'ah4c is reachable but reports no configured TUNERn_IP values.',
+                    'Configure at least one tuner and TUNERn_IP in ah4c.')
+            else:
+                authorized = sum(1 for tuner in tuners if tuner.get('authorized'))
+                status = 'ok' if authorized == len(tuners) else 'fail'
+                add(status, 'ah4c tuners', f'{authorized}/{len(tuners)} tuner device(s) are authorized by FastChannels.',
+                    '' if status == 'ok' else 'Retry an action and approve FastChannels’ ADB authorization prompt on each affected TV.')
+        except fc_player_bridge.FcPlayerNotConfigured:
+            add('warn', 'ah4c tuners', 'ah4c is not fully configured.', 'Save the ah4c server URL and retry.')
+        except (ValueError, _req.RequestException):
+            add('fail', 'ah4c server', 'FastChannels could not read ah4c status.',
+                'Confirm the ah4c URL, network reachability, and its /api/status endpoint.')
+
+    if settings.prismcast_enabled:
+        if settings.effective_prismcast_url():
+            add('info', 'PrismCast Capture', 'Configured. Use PrismCast’s dedicated Test setup button for its browser and live-capture diagnostic.')
+        else:
+            add('warn', 'PrismCast Capture', 'Enabled but no PrismCast server URL is configured.',
+                'Enter the PrismCast server URL or turn this method off.')
+    else:
+        add('skip', 'PrismCast Capture', 'Disabled. Its dedicated diagnostic was not run.')
+
+    failed = sum(check['status'] == 'fail' for check in checks)
+    warned = sum(check['status'] == 'warn' for check in checks)
+    overall = 'fail' if failed else ('warn' if warned else 'ok')
+    label = {'ok': 'READY', 'warn': 'NEEDS ATTENTION', 'fail': 'NOT READY'}[overall]
+    report = ['FastChannels Bridge Healthcheck', f'Overall: {label}', '']
+    for check in checks:
+        marker = {'ok': 'PASS', 'warn': 'WARN', 'fail': 'FAIL', 'skip': 'SKIP', 'info': 'INFO'}[check['status']]
+        report.append(f'[{marker}] {check["name"]}: {check["detail"]}')
+        if check['fix']:
+            report.append(f'  Next step: {check["fix"]}')
+    return jsonify({
+        'overall': overall,
+        'overall_label': label,
+        'checks': checks,
+        'summary': {'ok': sum(check['status'] == 'ok' for check in checks), 'warn': warned,
+                    'fail': failed, 'skip': sum(check['status'] == 'skip' for check in checks)},
+        'forum_report': '\n'.join(report),
+    })
 
 
 @settings_bp.route('/settings/fc-player/install', methods=['POST'])

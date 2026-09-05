@@ -233,6 +233,111 @@ async function saveFcPlayerEncoderSettings() {
   if (ok) setTimeout(() => location.reload(), 700);
 }
 
+let _fcPlayerCaptureStreams = [];
+
+function renderFcPlayerCaptureStreamPicker(filter = '') {
+  const picker = document.getElementById('fc-player-capture-stream-picker');
+  if (!picker) return;
+  const needle = filter.trim().toLowerCase();
+  const matches = _fcPlayerCaptureStreams.filter((stream) =>
+    !needle || stream.label.toLowerCase().includes(needle));
+  const options = matches.map((stream, index) =>
+    `<option value="${index}">${_escapeHtml(stream.label)}</option>`).join('');
+  picker.innerHTML = `
+    <div class="help" style="margin-top:0.7rem">Channels DVR returned ${_fcPlayerCaptureStreams.length} direct MPEG-TS stream${_fcPlayerCaptureStreams.length === 1 ? '' : 's'}. Choose the channel backed by your HDMI capture device. Likely capture/HDMI entries are shown first; this only fills the URL—select Save to keep it.</div>
+    <input type="search" id="fc-player-capture-stream-filter" placeholder="Filter by channel or capture-device name" value="${_escapeHtml(filter)}" oninput="renderFcPlayerCaptureStreamPicker(this.value)">
+    <select id="fc-player-capture-stream-select" size="6" ${matches.length ? '' : 'disabled'}>${options || '<option>No matching streams</option>'}</select>
+    <div class="field-actions"><button class="btn btn-secondary" onclick="chooseFcPlayerCaptureStream()" ${matches.length ? '' : 'disabled'}>Use selected stream</button></div>`;
+  picker._matches = matches;
+}
+
+async function findFcPlayerCaptureStream() {
+  const button = document.getElementById('fc-player-find-capture-stream');
+  const picker = document.getElementById('fc-player-capture-stream-picker');
+  const status = document.getElementById('fc-player-encoder-status');
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Reading Channels DVR…';
+  status.textContent = '';
+  try {
+    const response = await fetch('/api/settings/fc-player/capture-streams');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not read Channels DVR streams.');
+    _fcPlayerCaptureStreams = data.streams || [];
+    picker.hidden = false;
+    renderFcPlayerCaptureStreamPicker();
+  } catch (error) {
+    status.textContent = error.message || 'Could not read Channels DVR streams.';
+    status.className = 'save-status error';
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+function chooseFcPlayerCaptureStream() {
+  const picker = document.getElementById('fc-player-capture-stream-picker');
+  const select = document.getElementById('fc-player-capture-stream-select');
+  const stream = picker?._matches?.[Number(select?.value)];
+  if (!stream) return;
+  document.getElementById('fc-player-encoder-url').value = stream.stream_url;
+  picker.hidden = true;
+  const status = document.getElementById('fc-player-encoder-status');
+  status.textContent = `Selected ${stream.label}. Save to use it.`;
+  status.className = 'save-status ok';
+}
+
+const _fcPlayerCapturePlatformDefaults = {
+  linux: {video: 'video0', audio: 'hw:1,0', example: 'capture://v4l2/video0/hw:1,0/?framerate=60'},
+  macos: {video: '', audio: '', example: 'capture://avfoundation/USB Video/USB Digital Audio/?framerate=60'},
+  windows: {video: '', audio: '', example: 'capture://dshow/<video device>/<audio device>/?framerate=60'},
+};
+
+function updateFcPlayerCaptureSourceFields() {
+  const platform = document.getElementById('fc-player-capture-platform')?.value || 'linux';
+  const defaults = _fcPlayerCapturePlatformDefaults[platform];
+  const video = document.getElementById('fc-player-capture-video');
+  const audio = document.getElementById('fc-player-capture-audio');
+  const help = document.getElementById('fc-player-capture-source-help');
+  if (!defaults || !video || !audio || !help) return;
+  video.value = defaults.video;
+  audio.value = defaults.audio;
+  video.placeholder = platform === 'linux' ? 'video0' : 'Video device name';
+  audio.placeholder = platform === 'linux' ? 'hw:1,0' : 'Audio device name';
+  help.innerHTML = `Creates a Channels DVR <strong>HLS / Text</strong> source with ignored M3U channel numbering. Example: <code>${_escapeHtml(defaults.example)}</code>. Device names are from the computer running Channels DVR, not the FastChannels container.`;
+}
+
+async function createFcPlayerCaptureSource() {
+  const button = document.getElementById('fc-player-create-capture-source');
+  const status = document.getElementById('fc-player-encoder-status');
+  const original = button.textContent;
+  const payload = {
+    platform: document.getElementById('fc-player-capture-platform').value,
+    video: document.getElementById('fc-player-capture-video').value.trim(),
+    audio: document.getElementById('fc-player-capture-audio').value.trim(),
+    framerate: document.getElementById('fc-player-capture-framerate').value,
+  };
+  button.disabled = true;
+  button.textContent = 'Creating in Channels DVR…';
+  status.textContent = '';
+  try {
+    const response = await fetch('/api/settings/fc-player/create-capture-source', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not create the capture source.');
+    if (data.stream_url) document.getElementById('fc-player-encoder-url').value = data.stream_url;
+    status.textContent = data.message || 'Capture source created.';
+    status.className = `save-status ${data.warning ? 'warning' : 'ok'}`;
+  } catch (error) {
+    status.textContent = error.message || 'Could not create the capture source.';
+    status.className = 'save-status error';
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
 async function saveFcPlayerIdleStopToggle() {
   const enabled = document.getElementById('fc-player-idle-stop-enabled').checked;
   await saveSettings({fc_player_idle_stop_enabled: enabled}, 'fc-player-status');
@@ -1776,6 +1881,136 @@ async function savePrismcastToggle() {
   const enabled = document.getElementById('prismcast-enabled').checked;
   await saveSettings({ prismcast_enabled: enabled }, 'prismcast-status');
   setTimeout(() => location.reload(), 700);
+}
+
+let _lastBridgeHealthcheckReport = '';
+
+function _bridgeHealthcheckEsc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
+async function runBridgeHealthcheck() {
+  const run = document.getElementById('bridge-healthcheck-run');
+  const copy = document.getElementById('bridge-healthcheck-copy');
+  const results = document.getElementById('bridge-healthcheck-results');
+  if (!run || !results) return;
+  run.disabled = true;
+  if (copy) copy.disabled = true;
+  results.hidden = false;
+  results.innerHTML = '<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon info">…</span><div><div class="bridge-healthcheck-name">Running healthcheck</div><div class="bridge-healthcheck-detail">Checking configured paths without tuning a channel…</div></div></div>';
+  try {
+    const response = await fetch('/api/settings/bridge/healthcheck', {method: 'POST'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    _lastBridgeHealthcheckReport = data.forum_report || '';
+    const icon = {ok: '✓', warn: '⚠', fail: '✗', skip: '–', info: 'ℹ'};
+    const checks = data.checks || [];
+    let html = `<div class="bridge-healthcheck-summary"><strong class="${_bridgeHealthcheckEsc(data.overall)}">${_bridgeHealthcheckEsc(data.overall_label || 'COMPLETE')}</strong><span class="help">${data.summary?.ok || 0} passed · ${data.summary?.warn || 0} warning${(data.summary?.warn || 0) === 1 ? '' : 's'} · ${data.summary?.fail || 0} failed</span></div>`;
+    for (const check of checks) {
+      const state = check.status || 'info';
+      html += `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon ${_bridgeHealthcheckEsc(state)}">${icon[state] || '?'}</span><div><div class="bridge-healthcheck-name">${_bridgeHealthcheckEsc(check.name)}</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(check.detail)}</div>${check.fix ? `<div class="bridge-healthcheck-fix">Next step: ${_bridgeHealthcheckEsc(check.fix)}</div>` : ''}</div></div>`;
+    }
+    const readyForLiveTest = checks.some(check => check.name === 'FastChannels Player device' && check.status === 'ok')
+      && checks.some(check => check.name === 'HDMI Capture payload' && check.status === 'ok');
+    html += `<div class="bridge-live-test-next ${readyForLiveTest ? '' : 'not-ready'}"><div><strong>Final confirmation: Live bridge test</strong><div class="help">${readyForLiveTest ? 'Tune one real bridge channel and verify the Player → HDMI Capture path. This interrupts the configured device.' : 'Available after the FastChannels Player device and HDMI Capture payload checks pass.'}</div></div><button class="btn btn-secondary" id="bridge-live-test-open" onclick="openBridgeLiveTest()" ${readyForLiveTest ? '' : 'disabled'}>Live bridge test…</button></div>`;
+    results.innerHTML = html;
+    if (copy && _lastBridgeHealthcheckReport) copy.disabled = false;
+  } catch (error) {
+    results.innerHTML = `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon fail">✗</span><div><div class="bridge-healthcheck-name">Healthcheck could not run</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(error.message || error)}</div></div></div>`;
+  } finally {
+    run.disabled = false;
+  }
+}
+
+async function copyBridgeHealthcheck() {
+  if (!_lastBridgeHealthcheckReport) return;
+  try {
+    await navigator.clipboard.writeText(_lastBridgeHealthcheckReport);
+  } catch (_) {
+    window.prompt('Copy forum report', _lastBridgeHealthcheckReport);
+  }
+}
+
+let _bridgeLiveTestChannels = [];
+
+async function openBridgeLiveTest() {
+  const button = document.getElementById('bridge-live-test-open');
+  const picker = document.getElementById('bridge-live-test-picker');
+  if (!picker) return;
+  const original = button?.textContent || 'Live bridge test…';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Loading channels…';
+  }
+  try {
+    const response = await fetch('/api/settings/bridge/live-test-channels');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load bridge channels.');
+    _bridgeLiveTestChannels = data.channels || [];
+    picker.hidden = false;
+    if (!_bridgeLiveTestChannels.length) {
+      picker.innerHTML = '<div class="help">No active, enabled channels are currently marked for bridge output. Run Stream Audit on a DRM source first.</div>';
+      return;
+    }
+    picker.innerHTML = `<div class="bridge-live-test-warning"><strong>Live bridge test will change what is playing on the configured HDMI Capture device.</strong> It triggers one real bridge channel, waits briefly, and verifies the saved capture stream from inside FastChannels.</div>
+      <label for="bridge-live-test-channel">Bridge channel to tune</label>
+      <select id="bridge-live-test-channel">${_bridgeLiveTestChannels.map(channel => `<option value="${channel.id}">${_bridgeHealthcheckEsc(channel.label)}</option>`).join('')}</select>
+      <div class="field-actions"><button class="btn btn-primary" id="bridge-live-test-run" onclick="runBridgeLiveTest()">Start live test</button></div>`;
+  } catch (error) {
+    picker.hidden = false;
+    picker.innerHTML = `<div class="bridge-healthcheck-detail" style="color:var(--danger)">${_bridgeHealthcheckEsc(error.message || error)}</div>`;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+}
+
+async function runBridgeLiveTest() {
+  const select = document.getElementById('bridge-live-test-channel');
+  const run = document.getElementById('bridge-live-test-run');
+  const picker = document.getElementById('bridge-live-test-picker');
+  const channel = _bridgeLiveTestChannels.find(item => item.id === Number(select?.value));
+  if (!channel || !run || !picker) return;
+  if (!window.confirm(`Tune ${channel.label} on the HDMI Capture device now? This will interrupt anything currently playing there.`)) return;
+  run.disabled = true;
+  run.textContent = 'Tuning device and sampling capture…';
+  try {
+    const response = await fetch('/api/settings/bridge/live-test', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({channel_id: channel.id}),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || data.detail || `HTTP ${response.status}`);
+    const state = data.status || (data.ok ? 'ok' : 'fail');
+    const icon = state === 'ok' ? '✓' : (state === 'warn' ? '⚠' : '✗');
+    const player = data.player_playing ? 'Player reports playback active' : (data.player_visible ? 'FastChannels Player is foreground' : 'Player did not report active playback');
+    const focus = data.player_focus ? `<br>Device focus: ${_bridgeHealthcheckEsc(data.player_focus)}` : '';
+    picker.innerHTML = `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon ${state}">${icon}</span><div><div class="bridge-healthcheck-name">Live bridge test: ${_bridgeHealthcheckEsc(data.channel || channel.label)}</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(data.detail || '')}<br>Endpoint: ${_bridgeHealthcheckEsc(data.endpoint || '')}<br>Capture: ${_bridgeHealthcheckEsc(String(data.bytes_received || 0))} bytes in ${_bridgeHealthcheckEsc(String(data.elapsed_ms || 0))} ms (${_bridgeHealthcheckEsc(data.content_type || 'unspecified')})<br>Media: ${_bridgeHealthcheckEsc(data.media_summary || 'Not available')}<br>${_bridgeHealthcheckEsc(player)}${focus}</div><div class="field-actions"><button class="btn btn-secondary" id="bridge-live-test-stop" onclick="stopBridgeLiveTest()">Stop test playback</button></div></div></div>`;
+  } catch (error) {
+    picker.innerHTML = `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon fail">✗</span><div><div class="bridge-healthcheck-name">Live bridge test failed</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(error.message || error)}</div></div></div>`;
+  }
+}
+
+async function stopBridgeLiveTest() {
+  const button = document.getElementById('bridge-live-test-stop');
+  if (!button) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Stopping…';
+  try {
+    const response = await fetch('/api/settings/bridge/live-test/stop', {method: 'POST'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not stop Player playback.');
+    button.textContent = data.message || 'Playback stopped';
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = original;
+    window.alert(error.message || error);
+  }
 }
 
 async function testDvrConnection() {

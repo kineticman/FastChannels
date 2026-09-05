@@ -416,6 +416,21 @@
       padding-top: 1rem;
       border-top: 1px solid var(--border);
     }
+    .bridge-capture-picker {
+      margin-top: 0.75rem;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-2);
+    }
+    .bridge-capture-picker input,
+    .bridge-capture-picker select {
+      box-sizing: border-box;
+      width: 100%;
+      margin-top: 0.55rem;
+    }
+    .bridge-capture-picker select { min-height: 9rem; }
+    .bridge-capture-picker .field-actions { margin-top: 0.6rem; }
     .bridge-fallback-details {
       margin-top: 1rem;
       padding-top: 0.85rem;
@@ -729,6 +744,37 @@
     }
     .needs-config-banner li.item-configured { color: var(--success-soft); }
     .needs-config-banner li.item-configured a { color: var(--success-soft); }
+
+    /* ── Bridge post-install healthcheck ── */
+    .bridge-healthcheck {
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+      margin-top: 1rem; padding: 0.9rem 1rem;
+      background: color-mix(in srgb, var(--accent-bg) 48%, var(--surface));
+      border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); border-radius: 8px;
+    }
+    .bridge-healthcheck-title { font-weight: 650; color: var(--text); margin-bottom: 0.2rem; }
+    .bridge-healthcheck-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; flex-shrink: 0; }
+    .bridge-healthcheck-results { margin-top: 0.75rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .bridge-live-test-picker { margin-top: 0.75rem; padding: 0.85rem; border: 1px solid color-mix(in srgb, var(--warning-soft) 35%, var(--border)); border-radius: 8px; background: var(--surface-2); }
+    .bridge-live-test-picker label { display: block; margin-top: 0.7rem; font-size: 0.84rem; font-weight: 650; }
+    .bridge-live-test-picker select { box-sizing: border-box; width: 100%; margin-top: 0.35rem; }
+    .bridge-live-test-warning { color: var(--warning-soft); font-size: 0.84rem; line-height: 1.45; }
+    .bridge-live-test-picker .field-actions { margin-top: 0.65rem; }
+    .bridge-healthcheck-summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.75rem 0.9rem; background: var(--surface-2); }
+    .bridge-healthcheck-summary strong.ok { color: var(--success-soft); }
+    .bridge-healthcheck-summary strong.warn { color: var(--warning-soft); }
+    .bridge-healthcheck-summary strong.fail { color: var(--danger); }
+    .bridge-healthcheck-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.65rem; padding: 0.7rem 0.9rem; border-top: 1px solid var(--border); }
+    .bridge-healthcheck-icon { font-weight: 700; line-height: 1.35; }
+    .bridge-healthcheck-icon.ok { color: var(--success-soft); }
+    .bridge-healthcheck-icon.warn { color: var(--warning-soft); }
+    .bridge-healthcheck-icon.fail { color: var(--danger); }
+    .bridge-healthcheck-icon.skip, .bridge-healthcheck-icon.info { color: var(--text-muted); }
+    .bridge-healthcheck-name { font-size: 0.88rem; font-weight: 650; color: var(--text); }
+    .bridge-healthcheck-detail { margin-top: 0.18rem; color: var(--text-subtle); font-size: 0.83rem; line-height: 1.45; }
+    .bridge-healthcheck-fix { margin-top: 0.28rem; color: var(--warning-soft); font-size: 0.8rem; line-height: 1.4; }
+    .bridge-live-test-next { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.8rem 0.9rem; border-top: 1px solid var(--border); background: var(--surface-2); font-size: 0.86rem; }
+    .bridge-live-test-next.not-ready { opacity: 0.72; }
     @media (max-width: 760px) {
       html { font-size: 16px; }
       nav { padding: 0.9rem 1rem; gap: 0.75rem 1rem; }
@@ -744,4 +790,6 @@
       .source-body { padding: 0 1rem 1rem; }
       .field-actions { flex-wrap: wrap; justify-content: flex-start; }
       .save-status { min-width: 0; text-align: left; }
+      .bridge-healthcheck { align-items: flex-start; flex-direction: column; }
+      .bridge-live-test-next { align-items: flex-start; flex-direction: column; }
     }
