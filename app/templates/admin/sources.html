@@ -3159,8 +3159,6 @@
         <div class="fields-grid">
           ${toggleHtml('exclude_fast_channels', 'Exclude FAST channels',
             'On = leave out free, ad-supported channels (DirecTV Stream numbers these 4000-4999).')}
-          ${toggleHtml('purge_fast_channels', 'Remove existing FAST channels immediately',
-            'On = when you enable the exclusion above, also delete previously-scraped 4xxx channels right away.')}
         </div>
 
         <details class="amazon-account-details" ${hasCreds ? '' : 'open'}>
@@ -3414,8 +3412,7 @@
 
       const toggleField = schema.find(f => f.key === 'include_subscription_channels');
       const fastToggleField = schema.find(f => f.key === 'exclude_fast_channels');
-      const purgeToggleField = schema.find(f => f.key === 'purge_fast_channels');
-      const otherFields = schema.filter(f => !['include_subscription_channels', 'exclude_fast_channels', 'purge_fast_channels'].includes(f.key));
+      const otherFields = schema.filter(f => !['include_subscription_channels', 'exclude_fast_channels'].includes(f.key));
       const lastSignIn = _epochAgo(cfg && cfg.oauth_token_time);
       const lastSignInHtml = lastSignIn
         ? `<div class="help" id="sling-last-signin-${sourceId}" style="color:var(--success-soft);">✓ Last signed in successfully: ${lastSignIn}</div>`
@@ -3427,7 +3424,6 @@
         <div class="fields-grid">
           ${toggleField ? fieldHtml(toggleField) : ''}
           ${fastToggleField ? fieldHtml(fastToggleField) : ''}
-          ${purgeToggleField ? fieldHtml(purgeToggleField) : ''}
           <div class="field field-full" style="margin:0.25rem 0 0.5rem;">
             <button class="btn btn-run" type="button" onclick="openSlingLoginModal(${sourceId})">Sign in to Sling</button>
             <div class="help">Opens a real Sling sign-in page right here — solve the captcha yourself if it's shown, and FastChannels saves the resulting session automatically. No credentials are typed by FastChannels.</div>

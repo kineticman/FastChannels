@@ -79,12 +79,6 @@ class SlingScraper(BaseScraper):
                         'On = leave out free, ad-supported Freestream channels. '
                         'Only useful together with the paid account toggle above — otherwise this source scrapes nothing.'
                     )),
-        ConfigField('purge_fast_channels', 'Remove existing FAST channels immediately',
-                    field_type='toggle', default='false',
-                    help_text=(
-                        'On = when you enable the exclusion above, also delete previously-scraped Freestream '
-                        'channels right away. Off = they stay listed and quietly age out over the next few scrapes.'
-                    )),
         ConfigField('username', 'Email', placeholder='you@example.com',
                     help_text='Used by the "Sign in to Sling" button to auto-fill the sign-in form.'),
         ConfigField('password', 'Password', field_type='password', secret=True,
@@ -96,7 +90,7 @@ class SlingScraper(BaseScraper):
         'inputstream.adaptive.license_type': 'com.widevine.alpha',
     }
     channel_refresh_hours = 0    # fetch channel list every run — one summary call; avoids channel-list staleness
-    FREESTREAM_TAG = 'Sling Freestream'  # also referenced by api_sources.py's immediate-purge path
+    FREESTREAM_TAG = 'Sling Freestream'
 
     CMW_FAST = "https://p-cmwnext-fast.movetv.com"
     CMW = "https://p-cmwnext.movetv.com"
@@ -178,16 +172,22 @@ class SlingScraper(BaseScraper):
         summary_channels = payload.get("channels") or []
         channels: dict[str, ChannelData] = {}
 
-        if not self._exclude_fast_channels():
-            for item in summary_channels:
-                channel = self._channel_from_summary(item)
-                if channel is not None:
+        self.excluded_channel_ids = set()
+        exclude_fast = self._exclude_fast_channels()
+        for item in summary_channels:
+            channel = self._channel_from_summary(item)
+            if channel is not None:
+                if exclude_fast:
+                    self.excluded_channel_ids.add(channel.source_channel_id)
+                else:
                     channels[channel.source_channel_id] = channel
 
         if self._include_subscription_channels():
             for channel in self._fetch_subscription_channels():
                 channels[channel.source_channel_id] = channel
 
+        # Paid entitlement wins when the same channel appears in both lists.
+        self.excluded_channel_ids.difference_update(channels)
         result = sorted(channels.values(), key=lambda c: (c.name or "", c.source_channel_id))
         logger.info("[%s] %d channels", self.source_name, len(result))
         return result

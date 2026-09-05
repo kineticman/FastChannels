@@ -535,10 +535,11 @@ def save_source_config(source_id):
     def _toggle_enabled(cfg: dict, key: str) -> bool:
         return str(cfg.get(key, '')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
-    # Sling's subscription and FAST-exclusion toggles change the channel
-    # inventory, not just a playback preference. Clear the derived account
-    # context on either edge so enabling subscriptions cannot reuse an
-    # expired/old account lineup.
+    # Both toggles change the lineup. Only a subscription-mode change needs
+    # the existing auth reset; FAST filtering must preserve the browser login.
+    sling_subscription_changed = source.name == 'sling' and (
+        _toggle_enabled(old, 'include_subscription_channels') != _toggle_enabled(current, 'include_subscription_channels')
+    )
     sling_lineup_changed = source.name == 'sling' and (
         _toggle_enabled(old, 'include_subscription_channels') != _toggle_enabled(current, 'include_subscription_channels')
         or _toggle_enabled(old, 'exclude_fast_channels') != _toggle_enabled(current, 'exclude_fast_channels')
@@ -550,7 +551,7 @@ def save_source_config(source_id):
         source.name == 'directv'
         and _toggle_enabled(old, 'exclude_fast_channels') != _toggle_enabled(current, 'exclude_fast_channels')
     )
-    if creds_changed or sling_lineup_changed:
+    if creds_changed or sling_subscription_changed:
         for tk in _AUTH_STATE:
             if data.get(tk) in (None, '', '••••••••'):  # skip values set in this save
                 current.pop(tk, None)
@@ -583,36 +584,6 @@ def save_source_config(source_id):
                         db.session.delete(ch)
                         pbs_deleted += 1
 
-    # Enabling "exclude FAST channels" only stops *new* FAST channels from being
-    # scraped in — existing rows still ride out the normal miss-threshold grace
-    # period (see PBS comment above) unless the paired "remove immediately"
-    # toggle is also on, in which case delete the matching rows here instead of
-    # waiting ~3 scrapes for them to quietly age out. Re-triggers whenever either
-    # toggle just turned on (not just on the exclude edge), so turning on "remove
-    # immediately" after the fact still purges retroactively.
-    fast_purged = 0
-    if source.name in ('sling', 'directv'):
-        new_exclude = _toggle_enabled(current, 'exclude_fast_channels')
-        new_purge   = _toggle_enabled(current, 'purge_fast_channels')
-        old_exclude = _toggle_enabled(old, 'exclude_fast_channels')
-        old_purge   = _toggle_enabled(old, 'purge_fast_channels')
-        if new_exclude and new_purge and (not old_exclude or not old_purge):
-            if source.name == 'sling':
-                from ..scrapers.sling import SlingScraper
-                def _is_fast(ch):
-                    return SlingScraper.FREESTREAM_TAG in {t.strip() for t in (ch.tags or '').split(',')}
-            else:
-                from ..scrapers.directv import DirectvScraper
-                def _is_fast(ch):
-                    # NOT ch.number — that's FastChannels' own reassigned guide
-                    # number (see worker.py's renumbering pass), unrelated to
-                    # DirecTV's real channel number the scraper tags against.
-                    return DirectvScraper.FAST_TAG in {t.strip() for t in (ch.tags or '').split(',')}
-            for ch in Channel.query.filter(Channel.source_id == source.id).all():
-                if _is_fast(ch):
-                    db.session.delete(ch)
-                    fast_purged += 1
-
     source.config = current
     auto_enabled = False
     if (
@@ -624,7 +595,7 @@ def save_source_config(source_id):
         source.is_enabled = True
         auto_enabled = True
     db.session.commit()
-    if pbs_deleted or fast_purged:
+    if pbs_deleted:
         _invalidate_and_refresh_xml()
     full_scrape_queued = False
     if source.name == 'sling' and (creds_changed or sling_lineup_changed) and source.is_enabled:
@@ -1160,4 +1131,3 @@ def directv_auth_status(source_id):
                 logger.error('[directv-auth] failed to persist result: %s', exc)
 
     return jsonify(data)
-
