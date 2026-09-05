@@ -73,6 +73,12 @@ class SlingScraper(BaseScraper):
                         'Off = Freestream only (free, anonymous; no sign-in needed). '
                         'On = also include paid subscription channels; requires a paid Sling account.'
                     )),
+        ConfigField('exclude_fast_channels', 'Exclude FAST channels (Freestream)',
+                    field_type='toggle', default='false',
+                    help_text=(
+                        'On = leave out free, ad-supported Freestream channels. '
+                        'Only useful together with the paid account toggle above — otherwise this source scrapes nothing.'
+                    )),
         ConfigField('username', 'Email', placeholder='you@example.com',
                     help_text='Used by the "Sign in to Sling" button to auto-fill the sign-in form.'),
         ConfigField('password', 'Password', field_type='password', secret=True,
@@ -84,6 +90,7 @@ class SlingScraper(BaseScraper):
         'inputstream.adaptive.license_type': 'com.widevine.alpha',
     }
     channel_refresh_hours = 0    # fetch channel list every run — one summary call; avoids channel-list staleness
+    FREESTREAM_TAG = 'Sling Freestream'
 
     CMW_FAST = "https://p-cmwnext-fast.movetv.com"
     CMW = "https://p-cmwnext.movetv.com"
@@ -165,15 +172,22 @@ class SlingScraper(BaseScraper):
         summary_channels = payload.get("channels") or []
         channels: dict[str, ChannelData] = {}
 
+        self.excluded_channel_ids = set()
+        exclude_fast = self._exclude_fast_channels()
         for item in summary_channels:
             channel = self._channel_from_summary(item)
             if channel is not None:
-                channels[channel.source_channel_id] = channel
+                if exclude_fast:
+                    self.excluded_channel_ids.add(channel.source_channel_id)
+                else:
+                    channels[channel.source_channel_id] = channel
 
         if self._include_subscription_channels():
             for channel in self._fetch_subscription_channels():
                 channels[channel.source_channel_id] = channel
 
+        # Paid entitlement wins when the same channel appears in both lists.
+        self.excluded_channel_ids.difference_update(channels)
         result = sorted(channels.values(), key=lambda c: (c.name or "", c.source_channel_id))
         logger.info("[%s] %d channels", self.source_name, len(result))
         return result
@@ -260,6 +274,9 @@ class SlingScraper(BaseScraper):
 
     def _include_subscription_channels(self) -> bool:
         return str(self.config.get('include_subscription_channels', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+    def _exclude_fast_channels(self) -> bool:
+        return str(self.config.get('exclude_fast_channels', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
     def _oauth(self, token: str | None = None, token_secret: str | None = None):
         if OAuth1 is None:
@@ -672,7 +689,7 @@ class SlingScraper(BaseScraper):
             number=self._to_int(item.get("channel_number")),
             gracenote_id=resolve_gracenote('sling', upstream_id=item.get('gracenote_channel_id'), lookup_key=channel_guid),
             guide_key=qvt_url,
-            tags=['Sling Freestream'] if require_free else ['Sling Subscription'],
+            tags=[self.FREESTREAM_TAG] if require_free else ['Sling Subscription'],
         )
 
     def _best_summary_channel_name(self, item: dict[str, Any]) -> str | None:

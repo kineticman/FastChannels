@@ -505,6 +505,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                                 rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
                                 allow_suspicious_collapse=getattr(scraper, 'allow_suspicious_channel_collapse', False),
                                 pinned_channel_ids=getattr(scraper, 'pinned_channel_ids', frozenset()),
+                                excluded_channel_ids=getattr(scraper, 'excluded_channel_ids', frozenset()),
                             )
                         # Persist scraper config/cache FIRST. persist_*() call
                         # db.session.expire_all(), which DISCARDS unflushed attribute
@@ -2436,7 +2437,8 @@ def _sync_intrinsic_drm_bridge(source) -> None:
 
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None,
                      miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False,
-                     allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset()):
+                     allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset(),
+                     excluded_channel_ids: frozenset = frozenset()):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
 
     # Build a guide_key → channel index so we can re-use an existing DB row
@@ -2617,6 +2619,18 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     seen = {cd.source_channel_id for cd in channel_data_list}
     existing_active_ids = {ch_id for ch_id, ch in existing.items() if ch.is_active}
     missing_active_ids = existing_active_ids - seen
+    # Explicit scraper filters are not missing upstream channels. Identify them
+    # from the fetched inventory, including rows imported before tags existed.
+    filtered_ids = (set(excluded_channel_ids) & set(existing)) - seen
+    for ch_id in filtered_ids:
+        ch = existing[ch_id]
+        if ch.is_active:
+            ch.went_inactive_at = seen_at
+        ch.is_active = False
+        # Keep user settings and refresh last_seen_at while upstream still
+        # lists the channel, so orphan cleanup does not erase filtered rows.
+        ch.last_seen_at = seen_at
+        ch.missed_scrapes = 0
 
     # Channels from regions the scraper no longer has configured are intentionally
     # absent — exclude them from the collapse ratio so a region removal doesn't
@@ -2628,13 +2642,13 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         }
     else:
         region_removed_ids = set()
-    missing_active_organic = missing_active_ids - region_removed_ids
+    missing_active_organic = missing_active_ids - region_removed_ids - filtered_ids
 
     # Guard against upstream/parser glitches returning a tiny partial lineup.
     # If we previously had a substantial active set and the new fetch would
     # deactivate most of it, keep the old rows active and log loudly instead
     # of collapsing the source to a handful of channels.
-    organic_existing = len(existing_active_ids) - len(region_removed_ids)
+    organic_existing = len(existing_active_ids - region_removed_ids - filtered_ids)
     if organic_existing > 0:
         missing_ratio = len(missing_active_organic) / max(organic_existing, 1)
     else:
@@ -2674,7 +2688,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         )
     else:
         for ch_id, ch in existing.items():
-            if ch_id not in seen and ch_id not in region_removed_ids:
+            if ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids:
                 if not ch.is_active:
                     continue  # already inactive — don't touch to avoid bumping updated_at
                 next_missed = (ch.missed_scrapes or 0) + 1
