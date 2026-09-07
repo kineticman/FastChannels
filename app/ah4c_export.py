@@ -10,6 +10,10 @@ The scripts don't hardcode anything about a user's setup except one thing: the
 URL this FastChannels server is reachable at from wherever the ah4c container
 runs, which callers must supply (see api_settings.export_ah4c_scripts for why
 that can't be inferred from the request that asks for this download).
+
+When you change any script in data/ah4c_scripts/, bump the ``# YYYY.MM.DD`` date
+line in that script's header (line 3) so a re-exported copy is visibly newer than
+whatever a user already has deployed in their STREAMER_APP directory.
 """
 
 import io

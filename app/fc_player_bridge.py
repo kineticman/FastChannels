@@ -512,9 +512,12 @@ def device_controls_status() -> dict:
     version_name = re.search(r'\bversionName=([^\s]+)', package_info)
     version_code = re.search(r'\bversionCode=(\d+)', package_info)
     focus_match = re.search(r'mCurrentFocus=([^\r\n]+)', focus)
+    # Accept both PlaybackState renderings: Fire OS prints "state=3", newer AOSP
+    # (Google TV, onn., Chromecast) prints "state=PLAYING(3)". The optional
+    # "[A-Z_]+(" swallows the state-name prefix so the capture is always the int.
     player_session = re.search(
         r'package=com\.fastchannels\.player(?:(?!\n\s*package=).){0,1200}?'
-        r'state=PlaybackState \{state=(\d+)', sessions, re.S,
+        r'state=PlaybackState \{state=(?:[A-Z_]+\()?(\d+)', sessions, re.S,
     )
 
     return {
