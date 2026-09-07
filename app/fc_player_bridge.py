@@ -323,15 +323,21 @@ def _device_os_and_sleep(address: str) -> dict:
         'is_fire_os': False,
         'sleep_disabled': None,   # True / False / None (unknown)
         'sleep_detail': '',
+        'player_installed': None,  # True / False / None (unknown)
+        'player_version': None,    # versionName string when installed
     }
     # One remote shell, newline-separated, in a fixed order we can index back out.
+    # The player dumpsys goes last and unbounded — we scrape versionName/versionCode
+    # out of the whole blob with a regex rather than by line index, so its multi-line
+    # output can't shift the six fixed fields above it.
     remote = (
         'getprop ro.build.version.release; '
         'getprop ro.product.manufacturer; '
         'getprop ro.build.version.fireos; '
         'getprop ro.build.version.name; '
         'settings get secure sleep_timeout; '
-        'settings get system screen_off_timeout'
+        'settings get system screen_off_timeout; '
+        'dumpsys package com.fastchannels.player'
     )
     try:
         res = subprocess.run(
@@ -343,9 +349,23 @@ def _device_os_and_sleep(address: str) -> dict:
     if res.returncode != 0:
         return out
 
-    lines = [ln.strip() for ln in (res.stdout or '').splitlines()]
+    stdout = res.stdout or ''
+    lines = [ln.strip() for ln in stdout.splitlines()]
     lines += [''] * (6 - len(lines))
     release, manufacturer, fireos, build_name, sleep_timeout, screen_off = lines[:6]
+
+    # `dumpsys package` only prints a versionName/versionCode block for a package
+    # that's actually installed, so a hit here doubles as the "is it installed?"
+    # answer. A missing package prints "Unable to find package:" and matches neither.
+    version_name = re.search(r'\bversionName=(\S+)', stdout)
+    version_code = re.search(r'\bversionCode=(\d+)', stdout)
+    if version_name or version_code:
+        out['player_installed'] = True
+        out['player_version'] = version_name.group(1) if version_name else f'code {version_code.group(1)}'
+    elif 'Unable to find package' in stdout:
+        out['player_installed'] = False
+    # else: dumpsys gave us nothing usable — leave player_installed None (Unknown)
+    # rather than guessing "not installed".
 
     fire = 'amazon' in manufacturer.lower() or bool(fireos) or 'fire os' in build_name.lower()
     out['is_fire_os'] = fire
@@ -421,9 +441,11 @@ def verify_ah4c_tuners() -> list[dict]:
     surfaces.
 
     For tuners that are authorized, it also reports the device OS (flagging Fire
-    OS) and whether auto-sleep is turned off — a stick that dozes off mid-session
+    OS), whether auto-sleep is turned off — a stick that dozes off mid-session
     is a common ah4c-path failure, so "no signal" is easier to chase down when the
-    table already says the display sleep timer is still armed."""
+    table already says the display sleep timer is still armed — and the installed
+    FastChannels Player version (its presence confirms the app is installed at
+    all; ah4c can drive a stick that never got the player sideloaded)."""
     results: list[dict] = []
     for idx, ip in enumerate(ah4c_tuner_ips(), start=1):
         # ah4c stores TUNERn_IP as a bare host or host:port; the container's adb
@@ -441,6 +463,8 @@ def verify_ah4c_tuners() -> list[dict]:
             'is_fire_os': False,
             'sleep_disabled': None,
             'sleep_detail': '',
+            'player_installed': None,
+            'player_version': None,
         }
         if state == 'device':
             row.update(_device_os_and_sleep(address))

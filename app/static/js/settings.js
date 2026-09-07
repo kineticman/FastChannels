@@ -366,7 +366,7 @@ function renderAh4cTuners(tuners) {
   const table = document.createElement('table');
   table.className = 'ah4c-tuners-table';
   const head = table.createTHead().insertRow();
-  ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels', 'Android / Fire OS', 'Sleep disabled'].forEach((label) => {
+  ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels', 'Android / Fire OS', 'Sleep disabled', 'FC Player'].forEach((label) => {
     const th = document.createElement('th');
     th.textContent = label;
     // Keep the literal env-var name as-is; the other headers get uppercased by CSS.
@@ -421,6 +421,17 @@ function renderAh4cTuners(tuners) {
       addBadge(sleepCell, '✕ Still armed', 'warn', t.sleep_detail);
     } else {
       addBadge(sleepCell, '? Unknown', 'warn', t.sleep_detail);
+    }
+
+    const playerCell = row.insertCell();
+    if (t.state !== 'device') {
+      playerCell.textContent = '—';
+    } else if (t.player_installed === true) {
+      addBadge(playerCell, '✓ ' + (t.player_version || 'Installed'), 'ok');
+    } else if (t.player_installed === false) {
+      addBadge(playerCell, '✕ Not installed', 'warn');
+    } else {
+      addBadge(playerCell, '? Unknown', 'warn');
     }
   });
   box.appendChild(table);
