@@ -11,14 +11,16 @@ services:
   fastchannels:
     image: ghcr.io/kineticman/fastchannels:latest
     container_name: fastchannels
-    restart: unless-stopped
     ports:
-      - "5523:5523"
+      - 5523:5523
     volumes:
       - db_data:/data
+      - adb_keys:/root/.android
+    restart: unless-stopped
 
 volumes:
   db_data:
+  adb_keys:
 ```
 
 - Deploy the stack.
@@ -26,15 +28,17 @@ volumes:
 - On first boot, sources seed automatically and channels begin populating within a few minutes.
 - If you want a specific published version, replace `:latest` with a version tag from the [Releases page](https://github.com/kineticman/FastChannels/releases).
 - Keep the `/data` volume mount so the SQLite database survives container recreation.
+- Keep the `/root/.android` volume mount too: it holds the ADB key the FastChannels Player bridge pairs with your Fire TV / Android TV device. Without it, every container recreate forces you to re-approve the authorization prompt on the TV. Harmless to leave in place even if you never use the bridge.
 
 ## Deploy with Docker
 
 ```bash
 docker run -d \
   --name fastchannels \
-  --restart unless-stopped \
   -p 5523:5523 \
   -v fastchannels_data:/data \
+  -v fastchannels_adb:/root/.android \
+  --restart unless-stopped \
   ghcr.io/kineticman/fastchannels:latest
 ```
 
@@ -81,7 +85,8 @@ Go to **Admin → Feeds** and build filtered channel lists for your players (see
 | `/admin/channels` | Browse, enable/disable, inspect, and resolve duplicate channels |
 | `/admin/feeds` | Create and manage named output feeds |
 | `/admin/guide` | Preview the EPG grid as your players will see it |
-| `/admin/settings` | Server URLs, Gracenote options, and system stats |
+| `/admin/settings` | Server URLs, Gracenote options, TV Everywhere sign-in, and system stats |
+| `/admin/bridge` | DRM bridge setup — HDMI Capture, ah4c Capture, PrismCast, post-install healthcheck, tuner authorization checks |
 | `/admin/logs` | Live log tail |
 | `/admin/reports/channel-changes` | Inferred New / Now Inactive / At Risk channels (BETA) |
 | `/admin/help` | In-app help and source gotchas |
@@ -305,6 +310,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 - **Sling Freestream**: streams are DRM-only for generic IPTV clients. Toggle on "Paid Sling account (premium channels)" to add premium channels. Off = Freestream-only (free, anonymous; no sign-in, no browser).
   - Sling gates its login form with invisible hCaptcha Enterprise, which reliably challenges automated browsers regardless of fingerprint spoofing — so signing in still needs a human to solve the captcha when one is shown. Save your email/password in the source config, then click **Sign in to Sling**: FastChannels launches a real anti-detect browser (Camoufox) against the actual sign-in page, auto-fills your saved credentials, and streams it live in an admin-UI modal — you only need to solve the captcha if one appears. Once signed in, it captures the session automatically and caches the OAuth credentials; no manual token pasting needed.
 - **Samsung TV Plus**: EPG covers approximately the current day. All credit for the data to [Matt Huisman](https://github.com/matthuisman/samsung-tvplus-for-channels).
+- **DirecTV Stream / Sling**: both source cards have an **Exclude FAST channels** toggle to drop the free ad-supported channels that overlap with the standalone FAST sources, plus a paired **Remove existing FAST channels immediately** toggle that purges already-scraped ones on the spot instead of waiting out the normal miss-threshold grace period. DirecTV also now resolves Gracenote IDs from its own API first (near-complete coverage) and filters out non-streamable satellite-only lineup entries.
 
 ### TV Everywhere (TVE) sources
 
