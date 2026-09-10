@@ -1,14 +1,14 @@
-version: '3.9'
-
 services:
   fastchannels:
     image: ghcr.io/${GHCR_OWNER:-kineticman}/fastchannels:${FASTCHANNELS_IMAGE_TAG:-latest}
     container_name: fastchannels
-    restart: unless-stopped
     ports:
-      - "5523:5523"
+      - 5523:5523
     volumes:
       - db_data:/data
+      - adb_keys:/root/.android
+    restart: unless-stopped
 
 volumes:
   db_data:
+  adb_keys:
