@@ -4,7 +4,7 @@ import re
 import time as _time
 
 logger = logging.getLogger(__name__)
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 _APP_START = _time.time()
 from flask import Blueprint, jsonify, request, current_app
@@ -441,6 +441,15 @@ def get_source_config(source_id):
     source      = Source.query.get_or_404(source_id)
     scraper_cls = registry.get(source.name)
     schema      = [f.to_dict() for f in (scraper_cls.config_schema if scraper_cls else []) if not f.hidden]
+    retired     = None
+    if scraper_cls is None and source.scraper_missing_since is not None:
+        from ..worker import _SCRAPER_MISSING_GRACE_DAYS
+        missing_since = source.scraper_missing_since
+        if missing_since.tzinfo is None:
+            missing_since = missing_since.replace(tzinfo=timezone.utc)
+        purge_at = missing_since + timedelta(days=_SCRAPER_MISSING_GRACE_DAYS)
+        days_left = max(0, (purge_at - datetime.now(timezone.utc)).days)
+        retired = {'purge_at': purge_at.isoformat(), 'days_left': days_left}
     saved       = source.config or {}
     secret_keys = {f['key'] for f in schema if f['secret']}
     values = {}
@@ -463,7 +472,8 @@ def get_source_config(source_id):
     )
     return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
                     'config_status': config_status,
-                    'oauth_token_time': saved.get('oauth_token_time')})
+                    'oauth_token_time': saved.get('oauth_token_time'),
+                    'retired': retired})
 
 
 @sources_bp.route('/sources/<int:source_id>/config', methods=['POST'])
@@ -532,19 +542,26 @@ def save_source_config(source_id):
         f.key in _CRED_KEYS and _norm_cred(f.key, old.get(f.key)) != _norm_cred(f.key, current.get(f.key))
         for f in schema
     )
-    def _sling_subscriptions_enabled(cfg: dict) -> bool:
-        return str(cfg.get('include_subscription_channels', '')).strip().lower() in {
-            '1', 'true', 'yes', 'on'
-        }
+    def _toggle_enabled(cfg: dict, key: str) -> bool:
+        return str(cfg.get(key, '')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
-    # Sling's subscription toggle changes the channel inventory, not just a
-    # playback preference. Clear the derived account context on either edge so
-    # enabling it cannot reuse an expired/old account lineup.
-    sling_lineup_changed = (
-        source.name == 'sling'
-        and _sling_subscriptions_enabled(old) != _sling_subscriptions_enabled(current)
+    # Both toggles change the lineup. Only a subscription-mode change needs
+    # the existing auth reset; FAST filtering must preserve the browser login.
+    sling_subscription_changed = source.name == 'sling' and (
+        _toggle_enabled(old, 'include_subscription_channels') != _toggle_enabled(current, 'include_subscription_channels')
     )
-    if creds_changed or sling_lineup_changed:
+    sling_lineup_changed = source.name == 'sling' and (
+        _toggle_enabled(old, 'include_subscription_channels') != _toggle_enabled(current, 'include_subscription_channels')
+        or _toggle_enabled(old, 'exclude_fast_channels') != _toggle_enabled(current, 'exclude_fast_channels')
+    )
+    # DirecTV's FAST-exclusion toggle likewise changes the channel inventory
+    # (filters out the 4xxx FAST channel-number range) rather than a playback
+    # preference, so it also needs an immediate rescrape below.
+    directv_lineup_changed = (
+        source.name == 'directv'
+        and _toggle_enabled(old, 'exclude_fast_channels') != _toggle_enabled(current, 'exclude_fast_channels')
+    )
+    if creds_changed or sling_subscription_changed:
         for tk in _AUTH_STATE:
             if data.get(tk) in (None, '', '••••••••'):  # skip values set in this save
                 current.pop(tk, None)
@@ -592,9 +609,14 @@ def save_source_config(source_id):
         _invalidate_and_refresh_xml()
     full_scrape_queued = False
     if source.name == 'sling' and (creds_changed or sling_lineup_changed) and source.is_enabled:
-        # Credentials and the subscription toggle can add/remove channels.
-        # A normal scheduled scrape may be EPG-only for other sources, so make
-        # this refresh deterministic and immediate after the config commit.
+        # Credentials and the subscription/FAST-exclusion toggles can add/remove
+        # channels. A normal scheduled scrape may be EPG-only for other sources,
+        # so make this refresh deterministic and immediate after the config commit.
+        trigger_scrape(source.name, force_full=True)
+        full_scrape_queued = True
+    elif source.name == 'directv' and directv_lineup_changed and source.is_enabled:
+        # Same rationale as Sling above — the FAST-exclusion toggle changes
+        # which channels come back from fetch_channels().
         trigger_scrape(source.name, force_full=True)
         full_scrape_queued = True
     elif source.name == 'pbs' and old != current and source.is_enabled:
@@ -1119,4 +1141,3 @@ def directv_auth_status(source_id):
                 logger.error('[directv-auth] failed to persist result: %s', exc)
 
     return jsonify(data)
-

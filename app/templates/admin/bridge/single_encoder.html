@@ -1,0 +1,102 @@
+<!-- HDMI Capture (single stream) / FastChannels Player companion card -->
+<div class="source-card" id="bridge-card-single-encoder">
+  <div class="source-header" style="cursor:default">
+    <div class="source-title">
+      <div class="source-icon">📲</div>
+      <div>
+        <div class="source-name">HDMI Capture <span class="badge badge-beta">Experimental Beta</span></div>
+        <div class="source-meta">Single stream — one FastChannels Player device captured through one fixed HDMI encoder</div>
+      </div>
+    </div>
+  </div>
+  <div class="source-body open">
+    <div class="help" style="color:var(--warning-soft)">Best for one concurrent stream. The FastChannels Player companion app runs on a Fire TV or Android TV device; its HDMI output is captured back into your DVR through a fixed encoder URL.</div>
+    <div class="toggle-row">
+      <div class="toggle-row-text">
+        <div class="toggle-row-label">Enable hardware capture</div>
+        <div class="toggle-row-help">Enables the FastChannels Player companion app used by HDMI Capture and ah4c Capture. It only applies to verified DRM sources: Sling, NBCUniversal TVE, PBS, Amazon Prime (free), DirecTV Stream, Vidaa, Philo, Roku, and Fubo.</div>
+      </div>
+      <div class="toggle-row-control">
+        <label class="toggle-switch">
+          <input type="checkbox" id="fc-player-enabled" {% if fc_player_enabled %}checked{% endif %} onchange="saveFcPlayerToggles()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="fields-grid" style="max-width:480px">
+      <div class="field field-full">
+        <label for="fc-player-ip">HDMI Capture device IP</label>
+        <input type="text" id="fc-player-ip" placeholder="192.168.1.50" value="{{ fc_player_ip }}">
+        <div class="help">adb port (<code>:5555</code>) is derived automatically. Required for HDMI Capture; also retained as a compatibility fallback when ah4c does not name a tuner device.</div>
+      </div>
+    </div>
+    <div class="field-actions">
+      <span class="save-status" id="fc-player-status"></span>
+      <button class="btn btn-secondary" onclick="installFcPlayer()">Install FastChannels Player</button>
+      <button class="btn btn-secondary" onclick="openFcPlayerDeviceControls()">Fire TV Device Controls</button>
+      <button class="btn btn-primary" onclick="saveFcPlayerDeviceSettings()">Save</button>
+    </div>
+    <div class="help">Install pushes the app over ADB; it requires the device IP to be saved and ADB debugging enabled on the device.</div>
+
+    <div class="toggle-row" style="margin-top:12px">
+      <div class="toggle-row-text">
+        <div class="toggle-row-label">Stop playback when nobody's watching</div>
+        <div class="toggle-row-help">For HDMI Capture, stop playback after about five minutes without Channels DVR activity or a FastChannels <code>/watch</code> heartbeat. Leave this off for third-party clients pointed straight at an M3U. ah4c stops its assigned device through its own disconnect hook.</div>
+      </div>
+      <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-idle-stop-enabled" {% if fc_player_idle_stop_enabled %}checked{% endif %} onchange="saveFcPlayerIdleStopToggle()"><span class="toggle-slider"></span></label></div>
+    </div>
+    <div class="toggle-row" style="margin-top:12px">
+      <div class="toggle-row-text">
+        <div class="toggle-row-label">Show captions when available</div>
+        <div class="toggle-row-help">Renders an English subtitle/CC track when available. Takes effect on the next tune.</div>
+      </div>
+      <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-captions-enabled" {% if fc_player_captions_enabled %}checked{% endif %} onchange="saveFcPlayerCaptionsToggle()"><span class="toggle-slider"></span></label></div>
+    </div>
+
+    <div class="bridge-method-config">
+      <div class="source-name" style="font-size:0.95rem;margin-bottom:4px">Fixed capture stream</div>
+      <div class="help" style="margin-bottom:12px">Set the stream produced by the one HDMI encoder. With Channels DVR’s native <code>capture://</code> source, use that device channel’s stream URL.</div>
+      <div class="fields-grid" style="max-width:480px">
+        <div class="field field-full">
+          <label for="fc-player-encoder-url">Capture/encoder stream URL</label>
+          <input type="text" id="fc-player-encoder-url" placeholder="http://192.168.1.50:8089/devices/ANY/channels/70092/stream.mpg" value="{{ fc_player_encoder_url }}">
+          <div class="help">Where the captured bridge stream is read after the Player device is triggered. If the capture device is in Channels DVR, use the picker below instead of copying an M3U entry by hand.</div>
+        </div>
+      </div>
+      <div class="field-actions"><span class="save-status" id="fc-player-encoder-status"></span><button class="btn btn-secondary" id="fc-player-find-capture-stream" onclick="findFcPlayerCaptureStream()">Find from Channels DVR</button><button class="btn btn-secondary" onclick="testFcPlayer()">Test connection</button><button class="btn btn-primary" onclick="saveFcPlayerEncoderSettings()">Save</button></div>
+      <div id="fc-player-capture-stream-picker" class="bridge-capture-picker" hidden></div>
+      <details class="help" style="margin-top:0.65rem">
+        <summary style="cursor:pointer">No camera source in Channels DVR yet?</summary>
+        <div style="margin-top:0.65rem">Create a native USB/HDMI capture source in Channels DVR, then FastChannels will select its exported stream automatically. Confirm the new capture channel plays in Channels before relying on it for bridge playback.</div>
+        <div class="fields-grid" style="max-width:480px;margin-top:0.65rem">
+          <div class="field">
+            <label for="fc-player-capture-platform">DVR platform</label>
+            <select id="fc-player-capture-platform" onchange="updateFcPlayerCaptureSourceFields()">
+              <option value="linux">Linux</option>
+              <option value="macos">macOS</option>
+              <option value="windows">Windows</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="fc-player-capture-framerate">Frame rate</label>
+            <input id="fc-player-capture-framerate" type="number" min="1" max="120" value="60">
+          </div>
+          <div class="field">
+            <label for="fc-player-capture-video">Video device</label>
+            <input id="fc-player-capture-video" value="video0" placeholder="video0">
+          </div>
+          <div class="field">
+            <label for="fc-player-capture-audio">Audio device</label>
+            <input id="fc-player-capture-audio" value="hw:1,0" placeholder="hw:1,0">
+          </div>
+        </div>
+        <div class="help" id="fc-player-capture-source-help" style="margin-top:0.45rem">Uses <code>capture://v4l2/video0/hw:1,0/?framerate=60</code>. Device names are from the computer running Channels DVR, not the FastChannels container.</div>
+        <div class="field-actions"><button class="btn btn-secondary" id="fc-player-create-capture-source" onclick="createFcPlayerCaptureSource()">Add FastChannels Capture Card to Channels DVR</button></div>
+      </details>
+      <details class="help" style="margin-top:0.65rem">
+        <summary style="cursor:pointer">Need to paste it manually instead?</summary>
+        In Channels DVR, open <strong>Manage → Export → Copy M3U</strong>, open that URL, then copy the non-comment <code>/stream.mpg</code> line directly below your capture channel's <code>#EXTINF</code> entry. Paste it above and save.
+      </details>
+    </div>
+  </div>
+</div>

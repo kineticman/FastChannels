@@ -99,7 +99,10 @@ def _directv_activate_identity(scraper_cls, cfg: dict, challenge: bytes):
     except Exception as exc:
         logger.warning('[directv-license] activation request failed: %s', exc)
         return None, None, None, None, None
-    logger.info('[directv-license] activation -> HTTP %s (%d bytes)', r.status_code, len(r.content))
+    # Activation happens repeatedly during normal DRM startup/key rotation;
+    # keep successful exchanges available when debugging without filling the
+    # main log at INFO.
+    logger.debug('[directv-license] activation -> HTTP %s (%d bytes)', r.status_code, len(r.content))
     if r.status_code < 200 or r.status_code >= 300:
         logger.warning('[directv-license] activation HTTP %s: %s', r.status_code, r.content[:500])
         return None, None, None, r.status_code, r.content
@@ -224,8 +227,8 @@ def _fetch_prismcast_with_retry(play_url: str, channel_id, label: str, stream: b
 def _directv_prismcast_play_url(channel) -> str | None:
     from ..models import AppSettings
     settings = AppSettings.get()
-    prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
-    if not prismcast_url:
+    prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/') if settings.prismcast_capture_configured() else ''
+    if not settings.prismcast_capture_configured() or not prismcast_url:
         return None
     selector = (channel.name or channel.source_channel_id or '').strip()
     if not selector:
@@ -423,6 +426,8 @@ def directv_prismcast_asset():
     if not raw_url:
         abort(400)
     settings = AppSettings.get()
+    if not settings.prismcast_capture_configured():
+        abort(409)
     prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
     allowed = urlsplit(prismcast_url)
     target = urlsplit(raw_url)

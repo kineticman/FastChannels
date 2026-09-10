@@ -505,6 +505,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                                 rehome_by_guide_key=getattr(scraper, 'rehome_by_guide_key', False),
                                 allow_suspicious_collapse=getattr(scraper, 'allow_suspicious_channel_collapse', False),
                                 pinned_channel_ids=getattr(scraper, 'pinned_channel_ids', frozenset()),
+                                excluded_channel_ids=getattr(scraper, 'excluded_channel_ids', frozenset()),
                             )
                         # Persist scraper config/cache FIRST. persist_*() call
                         # db.session.expire_all(), which DISCARDS unflushed attribute
@@ -1045,7 +1046,7 @@ def run_stream_audit(source_name: str):
                         ch.is_active = True
                         ch.disable_reason = None
                         logger.info('[audit] re-activated previously dead channel: %s', ch.name)
-                    # Opaque-URL scrapers (stirr/distro/xumo/roku/localnow/plex) confirm
+                    # Opaque-URL scrapers (stirr/xumo/roku/localnow/plex) confirm
                     # liveness without fetching the manifest, so stream_info (the
                     # resolution/codec badge) would otherwise never be populated by an
                     # audit. Backfill it once when missing via a play-time resolve +
@@ -1647,19 +1648,21 @@ def _refresh_xml_artifacts() -> None:
         xml_artifacts: list[tuple[str, Callable]] = [
             ('master', lambda fp: write_xmltv(fp, {}, base_url=base_url)),
         ]
-        # PrismCast DRM-bridge artifacts are only built when a PrismCast server is
-        # configured (most installs won't run one).
+        # Method-specific artifacts only exist while their bridge method and the
+        # global Bridge policy are both enabled.
         prismcast_url = (_settings.effective_prismcast_url() or '').strip().rstrip('/')
         prismcast_inner = (_settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
-        fc_player_ready = _fc_player_bridge.is_configured()
-        ah4c_url = (_settings.effective_fc_player_bridge_ah4c_url() or '').strip().rstrip('/') if fc_player_ready else ''
+        prismcast_ready = _settings.prismcast_capture_configured()
+        fc_player_ready = _fc_player_bridge.hdmi_bridge_active(_settings)
+        ah4c_url = ((_settings.effective_fc_player_bridge_ah4c_url() or '').strip().rstrip('/')
+                    if _fc_player_bridge.ah4c_bridge_active(_settings) else '')
         m3u_artifacts: list[tuple[str, Callable]] = [
             ('master-m3u', lambda fp: fp.write(generate_m3u({}, base_url=base_url))),
             # EXPERIMENTAL: mixed Gracenote/XMLTV single-source playlist — see
             # generate_mixed_m3u docstring.
             ('master-mixed-m3u', lambda fp: fp.write(generate_mixed_m3u({}, base_url=base_url))),
         ]
-        if prismcast_url:
+        if prismcast_ready:
             m3u_artifacts.append((
                 'master-prismcast-m3u',
                 lambda fp: fp.write(generate_prismcast_m3u(
@@ -1681,7 +1684,7 @@ def _refresh_xml_artifacts() -> None:
             'master-gracenote-m3u',
             lambda fp: fp.write(generate_gracenote_m3u({}, base_url=base_url, namespace_start=default_gn_start)),
         ))
-        if prismcast_url:
+        if prismcast_ready:
             m3u_artifacts.append((
                 'master-prismcast-gracenote-m3u',
                 lambda fp: fp.write(generate_prismcast_m3u(
@@ -1751,7 +1754,7 @@ def _refresh_xml_artifacts() -> None:
                     generate_mixed_m3u(filters, base_url=base_url, **std_kw)
                 ),
             ))
-            if prismcast_url:
+            if prismcast_ready:
                 m3u_artifacts.append((
                     f'feed-{feed.slug}-prismcast-m3u',
                     lambda fp, filters=filters, std_kw=std_kw: fp.write(
@@ -1784,7 +1787,7 @@ def _refresh_xml_artifacts() -> None:
                     generate_gracenote_m3u(filters, base_url=base_url, **gn_kw)
                 ),
             ))
-            if prismcast_url:
+            if prismcast_ready:
                 m3u_artifacts.append((
                     f'feed-{feed.slug}-prismcast-gracenote-m3u',
                     lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
@@ -2434,7 +2437,8 @@ def _sync_intrinsic_drm_bridge(source) -> None:
 
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None,
                      miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False,
-                     allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset()):
+                     allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset(),
+                     excluded_channel_ids: frozenset = frozenset()):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
 
     # Build a guide_key → channel index so we can re-use an existing DB row
@@ -2615,6 +2619,18 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     seen = {cd.source_channel_id for cd in channel_data_list}
     existing_active_ids = {ch_id for ch_id, ch in existing.items() if ch.is_active}
     missing_active_ids = existing_active_ids - seen
+    # Explicit scraper filters are not missing upstream channels. Identify them
+    # from the fetched inventory, including rows imported before tags existed.
+    filtered_ids = (set(excluded_channel_ids) & set(existing)) - seen
+    for ch_id in filtered_ids:
+        ch = existing[ch_id]
+        if ch.is_active:
+            ch.went_inactive_at = seen_at
+        ch.is_active = False
+        # Keep user settings and refresh last_seen_at while upstream still
+        # lists the channel, so orphan cleanup does not erase filtered rows.
+        ch.last_seen_at = seen_at
+        ch.missed_scrapes = 0
 
     # Channels from regions the scraper no longer has configured are intentionally
     # absent — exclude them from the collapse ratio so a region removal doesn't
@@ -2626,13 +2642,13 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         }
     else:
         region_removed_ids = set()
-    missing_active_organic = missing_active_ids - region_removed_ids
+    missing_active_organic = missing_active_ids - region_removed_ids - filtered_ids
 
     # Guard against upstream/parser glitches returning a tiny partial lineup.
     # If we previously had a substantial active set and the new fetch would
     # deactivate most of it, keep the old rows active and log loudly instead
     # of collapsing the source to a handful of channels.
-    organic_existing = len(existing_active_ids) - len(region_removed_ids)
+    organic_existing = len(existing_active_ids - region_removed_ids - filtered_ids)
     if organic_existing > 0:
         missing_ratio = len(missing_active_organic) / max(organic_existing, 1)
     else:
@@ -2672,7 +2688,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         )
     else:
         for ch_id, ch in existing.items():
-            if ch_id not in seen and ch_id not in region_removed_ids:
+            if ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids:
                 if not ch.is_active:
                     continue  # already inactive — don't touch to avoid bumping updated_at
                 next_missed = (ch.missed_scrapes or 0) + 1
@@ -3143,7 +3159,7 @@ def _schedule_due_scrapes():
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
-        default_disabled_sources = {'amazon_prime_free', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cox', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'distro', 'philo', 'directv', 'pbs'}
+        default_disabled_sources = {'amazon_prime_free', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cox', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi'}
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():
             db.session.add(Source(

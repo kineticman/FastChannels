@@ -27,8 +27,8 @@ android {
         targetSdk 36
         // Bump both on every release: versionCode strictly increasing (Android's own
         // update-eligibility check), versionName whatever's human-meaningful.
-        versionCode 3
-        versionName '5.1.0'
+        versionCode 4
+        versionName '5.2.0'
     }
 
     compileOptions {

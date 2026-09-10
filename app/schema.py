@@ -230,6 +230,19 @@ def ensure_runtime_schema() -> None:
                 # Default off so installs without the FastChannels Player app (app/fc_player/)
                 # are unaffected.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "bridge_enabled" not in cols:
+                # The former PrismCast-only switch was also the de facto global
+                # bridge policy. Preserve Player-only installations on upgrade.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN bridge_enabled BOOLEAN NOT NULL DEFAULT 0"))
+                conn.execute(text(
+                    "UPDATE app_settings SET bridge_enabled = "
+                    "CASE WHEN COALESCE(drm_bridge_enabled, 0) OR COALESCE(fc_player_bridge_enabled, 0) "
+                    "THEN 1 ELSE 0 END"
+                ))
+            if "prismcast_enabled" not in cols:
+                # Old drm_bridge_enabled specifically meant PrismCast was active.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_enabled BOOLEAN NOT NULL DEFAULT 0"))
+                conn.execute(text("UPDATE app_settings SET prismcast_enabled = COALESCE(drm_bridge_enabled, 0)"))
             if "fc_player_bridge_adb_address" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_adb_address TEXT"))
             if "fc_player_bridge_encoder_url" not in cols:

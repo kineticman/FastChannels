@@ -9,7 +9,7 @@ from flask import Blueprint, Response, abort, request
 
 from ..hls import inspect_hls_drm, parse_stream_info
 from ..models import Channel, Source
-from ..scrapers.distro import _pick_best_variant as _pick_best_hls_variant
+from ..scrapers.cspan import pick_best_variant as _pick_best_hls_variant
 
 logger = logging.getLogger(__name__)
 custom_proxy_bp = Blueprint('custom_proxy', __name__)

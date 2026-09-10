@@ -656,7 +656,7 @@ def _get_playback_info(ch, fast_mode=True):
     # the 302) rather than the redirect target, sending sub-playlist requests back
     # to our server.  The proxy fetches the master server-side and rewrites all
     # variant URLs to absolute proxy URLs, eliminating the relative-URL problem.
-    if ch.source and ch.source.name in ('fubo', 'tubi', 'pluto', 'samsung', 'distro') and ch.source_channel_id:
+    if ch.source and ch.source.name in ('fubo', 'tubi', 'pluto', 'samsung') and ch.source_channel_id:
         from urllib.parse import quote as _quote
         _enc = _quote(ch.source_channel_id, safe='')
         preview_url = f'/play/{ch.source.name}/{_enc}/proxy.m3u8'
@@ -766,11 +766,10 @@ def _get_playback_info(ch, fast_mode=True):
         _settings = AppSettings.get()
         if (
             ch.source.name in _DRM_TRUSTED
-            and _settings.fc_player_bridge_enabled
-            and _fc_player_bridge.is_configured()
+            and _fc_player_bridge.hdmi_bridge_active(_settings)
         ):
             play_url = f'/play/fc-player/{ch.source.name}/{_quote(ch.source_channel_id, safe="")}.m3u8'
-        elif _settings.drm_bridge_enabled and (_settings.effective_prismcast_url() or '').strip():
+        elif _settings.prismcast_capture_configured():
             play_url = f'/play/prismcast/{ch.id}.ts'
 
     # True exactly when the URL the watch page will actually use
@@ -898,5 +897,3 @@ def preview_channel(channel_id):
         'epg_hours': epg_hours,
         'feed_memberships': _channel_feed_summaries(ch),
     })
-
-

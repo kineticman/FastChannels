@@ -1,9 +1,16 @@
-# FastChannels Player setup (experimental)
+# HDMI Capture and ah4c Capture setup (experimental)
 
-FastChannels Player is the Android playback companion for FastChannels. When
+FastChannels Player is the Android playback companion used by FastChannels'
+hardware capture paths. When
 Channels DVR requests a bridge-only channel, FastChannels resolves the live
 stream, launches the player on a Fire TV or Android TV device over ADB, and
 returns the device's captured HDMI output as a normal channel.
+
+> **Device support note:** The development and day-to-day test device is a Fire
+> TV Stick. Android TV devices, including onn. streaming boxes/sticks, use the
+> same Player APK and ADB workflow, but their Settings labels and wireless ADB
+> behavior vary by Android version and vendor. Treat the Android TV notes below
+> as a troubleshooting guide and report results from new device models.
 
 Playback uses Media3/ExoPlayer and the Android device's own Widevine CDM. It
 does not remove or bypass DRM: license and entitlement checks still go through
@@ -19,28 +26,43 @@ Fire TV or Android TV device over ADB. Something else has to capture that
 device's HDMI output and hand it back to Channels DVR. There are two ways to
 do that:
 
-- **Single HDMI encoder** (this guide's main path) — one fixed encoder/capture
+- **HDMI Capture (Single Stream)** (this guide's main path) — one fixed encoder/capture
   stream URL, e.g. Channels DVR's own `capture://` source. Simplest option if
   you already have the specific capture setup this guide walks through.
-- **[ah4c](https://github.com/sullrich/ah4c)** — a separate, independently
+- **ah4c Capture (Multi-Tuner)** via [ah4c](https://github.com/sullrich/ah4c) — a separate, independently
   maintained project that already knows how to drive a broad range of HDMI
   capture hardware (Hauppauge, Magewell, Blackmagic DeckLink, and any network
   encoder) and ADB-controlled devices. Use this if your capture hardware isn't
-  the one this guide documents. See [ah4c support](#ah4c-support) below —
+  the one this guide documents. See [ah4c Capture](#ah4c-capture-multi-tuner) below —
   it's a genuine alternative to Step 1, not an add-on to it.
 
 Steps 2 (ADB debugging) and 4 (installing the app) apply to both methods. Only
-Step 1 and the *Single HDMI encoder* part of Step 3 are specific to the
+Step 1 and the *HDMI Capture* part of Step 3 are specific to the
 single-encoder path.
 
 ## Before you begin
 
+> **Device warning — don't buy a Vega OS Fire TV Stick:** Amazon has started
+> shipping some Fire TV Stick models on **Vega OS**, a new non-Android
+> operating system that does not support the Downloader app or APK
+> sideloading at all. FastChannels Player cannot be installed on a Vega OS
+> device, so it cannot be used for this setup. Known Vega OS models include
+> the **Fire TV Stick HD** and **Fire TV Stick 4K Select** — avoid these.
+> Devices that still run Android-based Fire OS (and work with this guide)
+> include the **Fire TV Stick 4K Max**, **Fire TV Stick 4K Plus**, and most
+> older/previous-generation Fire TV Sticks and Fire TV Cubes. If you're buying
+> a new device for this setup, confirm the exact model still runs Fire OS
+> before purchasing — when in doubt, an older-generation stick is the safer
+> bet. See
+> [aftvnews.com's rundown of which Fire TVs support sideloading](https://www.aftvnews.com/these-are-the-fire-tvs-that-dont-support-sideloading-or-downloader-due-to-vega-os-replacing-fire-os/)
+> for the current list.
+
 You will need:
 
 - A dedicated Fire TV or Android TV device
-- Either a compatible HDMI capture device (single-encoder method) or a running
+- Either a compatible HDMI capture device (HDMI Capture) or a running
   [ah4c](https://github.com/sullrich/ah4c) instance (ah4c method)
-- A working capture source in Channels DVR (single-encoder method only — ah4c
+- A working capture source in Channels DVR (HDMI Capture only — ah4c
   handles this itself)
 - ADB access to the Fire TV or Android TV device
 - FastChannels 5.1.0 or newer
@@ -57,11 +79,11 @@ FastChannels Player currently supports these sources:
 - DirecTV Stream
 - Fubo
 
-Only channels FastChannels has identified as requiring the bridge appear in
-the FastChannels Player feed. Clear channels from the same sources remain in
+Only channels FastChannels has identified as requiring the bridge appear in a
+hardware-capture feed. Clear channels from the same sources remain in
 the regular feed and play directly.
 
-## 1. Set up and test HDMI capture (single-encoder method)
+## 1. Set up and test HDMI Capture (Single Stream)
 
 If you're using ah4c instead, skip this step and continue with Step 2. You will
 configure ah4c after installing the player in Step 4.
@@ -74,16 +96,29 @@ For a capture setup walkthrough, see the first two posts here:
 
 Once the capture source appears as a device in Channels DVR:
 
+1. In FastChannels, configure the **Channels DVR URL** under **Settings**.
+2. In the **HDMI Capture** card, select **Find from Channels DVR**.
+3. Search for and select the channel backed by the HDMI capture device, then
+   select **Use selected stream**. Capture/HDMI-like names are shown first.
+4. Select **Save** in the HDMI Capture card.
+
+FastChannels reads Channels DVR's MPEG-TS export itself, preserves any session
+parameter it needs, and uses the DVR address configured in FastChannels rather
+than a potentially unusable `localhost` address from the export.
+
+If the picker cannot reach a remote or separately authenticated DVR, retrieve
+the direct URL manually:
+
 1. Find the capture source card in the Channels DVR admin interface.
-2. Select **Manage → Export → Copy M3U**.
-3. Download the M3U and open it in a text editor.
-4. Copy the full stream URL on the second line. It should look similar to:
+2. Select **Manage → Export → Copy M3U** and open that URL.
+3. Copy the non-comment stream URL immediately below the capture channel's
+   `#EXTINF` line. It should look similar to:
 
    ```text
    http://<host>:8089/devices/<YourDevice>/channels/<N>/stream.mpg?format=ts&codec=copy
    ```
 
-5. Test the URL by opening it in a browser or media player. It should begin
+4. Test the URL by opening it in a browser or media player. It should begin
    returning video without redirecting to another playlist.
 
 Save this URL. You will enter it as the **Capture/encoder stream URL** later.
@@ -97,14 +132,16 @@ Save this URL. You will enter it as the **Capture/encoder stream URL** later.
 FastChannels uses ADB to control playback on the Fire TV or Android TV device.
 
 1. On the device, open **Settings → My Fire TV** (or **Device**) → **About**.
+   On Android TV/onn. devices, this is usually **Settings → System → About**.
 2. Select the device or build name seven times, until the developer message
    appears.
-3. Go back one screen and open **Developer Options**.
-4. Enable **ADB debugging**. You do not need to enable **Apps from Unknown
-   Sources**; the FastChannels installer uses `adb install`, not Fire TV's
-   on-device package installer.
-5. Find the device's IP address under **Settings → My Fire TV → About →
-   Network**.
+3. Go back and open **Developer Options**.
+4. Enable the device's network ADB setting:
+   - **Fire TV:** enable **ADB Debugging**.
+   - **Android TV / onn.:** look for **Network Debugging** or **Wireless
+     Debugging**. Prefer a Network Debugging option that exposes normal ADB on
+     port `5555`.
+5. Find the device's LAN IP address in its network settings.
 6. From a computer on the same network, run:
 
    ```bash
@@ -116,6 +153,19 @@ FastChannels uses ADB to control playback on the Fire TV or Android TV device.
 
 If the prompt does not appear, run the connection command again. It sometimes
 appears only after a second attempt.
+
+### Android TV / onn. wireless-debugging caveat
+
+On Android 11 and later, a setting specifically named **Wireless Debugging**
+often uses Android's pairing-code flow and a temporary, device-selected port.
+FastChannels currently connects to the device's LAN address on the conventional
+ADB port `5555`; that pairing-only mode has not yet been validated as a
+FastChannels connection method. If the device offers both options, use
+**Network Debugging** / an ADB-over-network option first. If it offers only
+pairing-based Wireless Debugging, please capture the device model, Android
+version, and the connection result before relying on it for a tuner. See
+[Android's wireless debugging documentation](https://developer.android.com/studio/run/device)
+for the pairing workflow.
 
 > **Fire TV note:** Fire OS may occasionally remove the ADB authorization,
 > especially after an update. If the connection later stops working, check the
@@ -134,19 +184,60 @@ appears only after a second attempt.
 > viewing it through a capture/bridge feed), you'll need someone there, or to
 > wait until you can see the screen — there's no way to approve this remotely.
 
+### If FastChannels says the device is unauthorized
+
+Use these steps on either Fire TV or Android TV after the device IP is saved in
+**Bridge → HDMI Capture**:
+
+1. Retry **Test connection** or **Install FastChannels Player** and watch the
+   TV for **Allow USB debugging?** (or an equivalent ADB authorization prompt).
+2. Select **Always allow from this computer**, then choose **Allow**. This is
+   the authorization for the FastChannels container, not just your laptop.
+3. If no prompt appears, open **Developer Options → Revoke USB debugging
+   authorizations**.
+4. Turn the device's **ADB Debugging**, **Network Debugging**, or **Wireless
+   Debugging** setting off and back on.
+5. Retry the FastChannels connection or install action and watch for the new
+   prompt.
+
+### Manual APK fallback with Downloader
+
+If ADB installation still cannot be used, install the Player APK directly on
+an Android TV or onn. device. This gets the app onto the device, but ADB still
+must be enabled and authorized afterward for FastChannels to launch it.
+
+1. Install and open the **Downloader** app on the TV.
+2. In the device's Settings, open **Security/Privacy → Install unknown apps**
+   and allow Downloader to install apps. The exact menu name varies by vendor.
+3. Enter this URL in Downloader:
+
+   ```text
+   https://github.com/kineticman/FastChannels/releases/latest/download/FastChannelsPlayer.apk
+   ```
+
+4. Download the APK and choose **Install** when prompted.
+5. Return to Developer Options and enable **ADB Debugging**, **Network
+   Debugging**, or the device's compatible wireless ADB option.
+6. In **Bridge → HDMI Capture**, enter the device IP and retry the FastChannels
+   connection. Approve the ADB authorization prompt on the TV, selecting
+   **Always allow from this computer** first.
+
 ## 3. Configure FastChannels
 
-In the FastChannels admin interface, go to **Settings → FastChannels Player**.
-The card is split into a shared section at the top and one section per capture
-method below it, each with its own **Save** button.
+In the FastChannels admin interface, go to **Bridge**. The **HDMI Capture**
+card contains the shared FastChannels Player companion-app controls; ah4c
+Capture has its own card and Save button.
 
-In the shared section at the top, complete:
+In the **HDMI Capture** card, complete:
 
-- **Enable FastChannels Player:** Turns the feature on — required before
-  either capture method works.
-- **Firestick / Android TV IP address:** Enter the IP address found in step 2.
-  FastChannels adds ADB port `5555` automatically. Shared by both capture
-  methods, since both trigger the same device over ADB.
+- **Enable hardware capture:** Turns on the FastChannels Player companion app
+  — required before either hardware capture path works.
+- **HDMI Capture device IP:** Enter the IP address found in step 2.
+  FastChannels adds ADB port `5555` automatically. This is the device the
+  HDMI Capture path always triggers. ah4c Capture triggers whichever
+  device ah4c allocated for each tune (see [ah4c Capture](#ah4c-capture-multi-tuner)),
+  falling back to this one only when ah4c doesn't name a device — so with more
+  than one ah4c tuner, set this to any one of the sticks.
 - **Stop playback when nobody's watching:** Optional. When enabled, playback
   stops after about five minutes without a confirmed viewer.
 - **Show captions when available:** Optional. Renders an English subtitle/CC
@@ -154,6 +245,22 @@ In the shared section at the top, complete:
 
 Click **Save** in that section before continuing — the device IP must already
 be saved for the install button below to work.
+
+Before attempting a real bridge-only channel, use **Bridge → Post-install
+Healthcheck → Run healthcheck**. It checks the configured hardware paths
+without tuning a channel, samples the configured HDMI Capture stream from
+inside the FastChannels container, and **Copy forum report** creates a concise,
+credential-free report to attach to a support post. PrismCast has its own
+specialized capture test in the PrismCast Capture card.
+
+When the non-disruptive check passes, **Live bridge test** is the optional
+end-to-end confirmation: choose one bridge-ready channel, confirm the warning,
+and FastChannels tunes the Player device then samples the HDMI Capture stream.
+It intentionally interrupts anything playing on that device. The result shows
+the tested stream path, payload size, timing, and whether the Player reports
+active playback. It also reports the MPEG-TS program's detected video/audio
+types when they appear in the short sample. Select **Stop test playback** when
+you are done to close the Player immediately.
 
 The automatic stop option detects viewers using Channels DVR's activity status
 or the FastChannels `/watch` page. It cannot detect a third-party player
@@ -166,13 +273,12 @@ headless preset** keeps a powered device awake and prevents its screen/sleep
 timeouts from interrupting the HDMI encoder; FastChannels saves the prior
 values so **Restore previous settings** can put them back later.
 
-If you're using the single-encoder method, scroll to the **Single HDMI
-encoder** section and enter:
+If you're using HDMI Capture, scroll to the **HDMI Capture** section and enter:
 
 - **Capture/encoder stream URL:** the direct stream URL saved in step 1.
 
 Click **Save** in that section too. If you're using ah4c, skip this field and
-complete the [ah4c configuration](#ah4c-support) after installing the player.
+complete the [ah4c Capture configuration](#ah4c-capture-multi-tuner) after installing the player.
 
 ## 4. Install FastChannels Player
 
@@ -205,7 +311,7 @@ Building from source is also available in the [advanced
 section](#advanced-build-the-app-from-source).
 
 Once the app is installed, click **Test connection** in the **Single HDMI
-encoder** section (single-encoder method only — ah4c has no equivalent test
+Capture** section (HDMI Capture only — ah4c Capture has no equivalent test
 button here, since it runs its own reachability checks). FastChannels will
 check:
 
@@ -215,11 +321,11 @@ check:
 
 All checks should be green before continuing.
 
-## ah4c support
+## ah4c Capture (Multi-Tuner)
 
 [ah4c](https://github.com/sullrich/ah4c) is a separate, independently
 maintained project — not part of FastChannels, and not something FastChannels
-installs for you. Use it instead of the single-encoder method above if your
+installs for you. Use it instead of HDMI Capture above if your
 HDMI capture hardware isn't the one this guide documents; ah4c already knows
 how to drive Hauppauge, Magewell, Blackmagic DeckLink, and any network
 encoder, plus the same ADB-triggered app-launch mechanism as Step 2 above.
@@ -236,8 +342,11 @@ build or maintain on the ah4c side.
    dedicated one) per tuner, and either `ENCODERn_URL` or `CMDn`/`CMDn_DEVICE`
    for your capture hardware. `IPADDRESS` should be set to wherever ah4c
    itself is reachable from — the same address you'll enter in FastChannels
-   below.
-2. In FastChannels, go to **Settings → FastChannels Player → ah4c** and:
+   below. Multiple tuners each with their own `TUNERn_IP` and encoder are
+   supported: ah4c allocates a tuner per tune and the exported `bmitune.sh`
+   passes that tuner's device to FastChannels, so concurrent tunes each trigger
+   their own streaming stick.
+2. In FastChannels, go to **Bridge → ah4c Capture** and:
    - Toggle **Enable ah4c support** on.
    - Enter ah4c's **server URL** (e.g. `http://192.168.1.30:7654`) — the same
      address as `IPADDRESS` above. Click **Save**.
@@ -246,7 +355,29 @@ build or maintain on the ah4c side.
      pre-filled from your browser's address, but confirm it — the two
      machines aren't always the same one). Downloading produces
      `prebmitune.sh`, `bmitune.sh`, `stopbmitune.sh`, and `reboot.sh`, already
-     configured with that address baked in.
+     configured with that address as the default. To override it without
+     re-exporting, set `FASTCHANNELS_URL` in ah4c's container environment to the
+     FastChannels server URL (without a trailing slash). An unset or empty
+     variable uses the exported address.
+   - Click **Check tuner authorization(s)** (any time after the server URL is
+     saved). FastChannels reads ah4c's configured `TUNERx_IP` list from ah4c's
+     own `/api/status` and, for each one, reports whether *this* FastChannels
+     container can reach it over ADB and has been authorized on the device.
+     Because ah4c and FastChannels are separate ADB clients with separate keys,
+     a tuner ah4c already drives can still show **Not authorized** here — fix it
+     the same way as any other unapproved key (trigger an action, approve the
+     prompt on that TV). For authorized tuners the table also shows the device
+     OS (flagging Fire OS), whether auto-sleep is turned off, and the installed
+     **FC Player** version — a version number there confirms FastChannels Player
+     is installed for the active Android user on that stick. **Not installed**
+     means the player is absent for that user, even if it exists for another
+     user (install it with the button on the HDMI Capture card, or the manual
+     APK fallback). **Unknown** means the device did not report enough information
+     to confirm installation for the active user. A stick whose
+     display sleep timer is still armed will drop to "no signal" partway through
+     a session. Disable sleep on the device (Fire TV: **Settings → Display &
+     Sounds → Display → Sleep → Never**; Android TV: the screensaver / sleep
+     timeout under **Device Preferences**).
 3. On the machine running ah4c, extract those four scripts into a new
    directory under its mounted scripts folder, e.g.
    `${HOST_DIR}/ah4c/scripts/firetv/fastchannels/`, and set
@@ -285,9 +416,12 @@ build or maintain on the ah4c side.
   time to hand off on a clean moving keyframe.
 
 When a viewer leaves an ah4c channel, ah4c runs the exported
-`stopbmitune.sh` immediately and force-stops FastChannels Player. This is the
-primary cleanup path for ah4c. FastChannels' optional idle-stop watchdog still
-tracks the tune, but is a slower fallback intended for direct bridge playback.
+`stopbmitune.sh` immediately. It warm-stops FastChannels Player: the old stream
+ends and the task moves to the background, but the app and ExoPlayer stay alive
+for a faster next tune. The stop includes the channel key, so a delayed stop
+from an old tune cannot interrupt a newer one. FastChannels' optional idle-stop
+watchdog still tracks the tune, but is a slower fallback intended for direct
+bridge playback.
 
 A busy-tuner response from ah4c (all tuners in use) is normal contention, not
 a failure — it just means try again once a tuner frees up.
@@ -297,7 +431,7 @@ a failure — it just means try again once a tuner frees up.
 Open `/admin/feeds` in FastChannels. Each configured feed includes up to two
 sections, depending on which capture method(s) you've set up:
 
-- **FastChannels Android Bridge Channels** — the single-encoder method, with
+- **FastChannels HDMI Capture** — the HDMI Capture path, with
   ready-to-use M3U and EPG URLs.
 - **FastChannels Android Bridge Channels (ah4c)** — the same channels, routed
   through ah4c instead, only shown once ah4c support is configured.

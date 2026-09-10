@@ -1,41 +1,34 @@
   <!-- PrismCast (DRM bridge) card -->
-  <div class="source-card" id="settings-card-prismcast">
+  <div class="source-card" id="bridge-card-prismcast">
     <div class="source-header" style="cursor:default">
       <div class="source-title">
         <div class="source-icon">🔓</div>
         <div>
-          <div class="source-name">PrismCast (DRM bridge) <span class="badge badge-beta">Beta</span></div>
+          <div class="source-name">PrismCast Capture <span class="badge badge-beta">Browser capture</span></div>
           <div class="source-meta">Route DRM channels through a PrismCast capture server so they play in Channels DVR</div>
         </div>
       </div>
     </div>
     <div class="source-body open">
-      <div class="toggle-row">
+      <div class="toggle-row" style="margin-bottom:1rem">
         <div class="toggle-row-text">
-          <div class="toggle-row-label">Bridge DRM channels (keep them active)</div>
-          <div class="toggle-row-help"><strong>On:</strong> DRM channels (e.g. Roku FairPlay) stay active and route through the PrismCast feed — kept out of the standard feed, badged 🔒🌉. <strong>Off</strong> (default): they're disabled and dropped. Only DRM-capable sources can bridge.</div>
-          {% if not prismcast_url %}
-          <div class="help" style="color:var(--warning-soft)">Set the PrismCast Server URL below first, or bridged channels won't play.</div>
-          {% endif %}
-          <div class="help">Also see <a href="#settings-card-fc-player">FastChannels Player</a> below — a second, independent way to bridge DRM channels. If both are enabled, FastChannels Player wins for its trusted sources; everything else still routes through PrismCast.</div>
+          <div class="toggle-row-label">Enable PrismCast Capture</div>
+          <div class="toggle-row-help">Use PrismCast's Chrome capture method for DRM-capable sources. Bridge mode above must also be enabled before its output is published.</div>
+          {% if not bridge_enabled %}<div class="help" style="color:var(--warning-soft)">PrismCast is configured independently; turn on Bridge mode at the top of this page when you are ready to use it.</div>{% endif %}
         </div>
         <div class="toggle-row-control">
           <label class="toggle-switch">
-            <input type="checkbox" id="drm-bridge-enabled" {% if drm_bridge_enabled %}checked{% endif %}
-                   onchange="saveDrmBridge()">
+            <input type="checkbox" id="prismcast-enabled" {% if prismcast_enabled %}checked{% endif %} onchange="savePrismcastToggle()">
             <span class="toggle-slider"></span>
           </label>
         </div>
       </div>
-      {% if prismcast_url and not drm_bridge_enabled and drm_bridge_recoverable_count %}
-      <div class="help" style="color:var(--accent-soft)">💡 You have PrismCast configured and {{ drm_bridge_recoverable_count }} DRM channel{{ 's' if drm_bridge_recoverable_count != 1 else '' }} currently disabled. Turn on “Bridge DRM channels” to recover {{ 'them' if drm_bridge_recoverable_count != 1 else 'it' }} via PrismCast.</div>
-      {% endif %}
       <div class="fields-grid" style="max-width:480px">
         <div class="field field-full">
           <label for="prismcast-url">PrismCast Server URL</label>
           <input type="text" id="prismcast-url"
                  placeholder="http://192.168.1.50:5589" value="{{ prismcast_url }}">
-          <div class="help">Your <a href="https://github.com/hjdhjd/prismcast" target="_blank">PrismCast</a> server (default port <code>:5589</code>). DRM channels go through PrismCast, everything else streams direct. Like the regular feed, it splits into a standard playlist at <code>{{ request_base_url }}/m3u/prismcast</code> (pairs with <code>/epg.xml</code>) and a Gracenote one at <code>{{ request_base_url }}/m3u/prismcast/gracenote</code>.</div>
+          <div class="help">Your <a href="https://github.com/hjdhjd/prismcast" target="_blank">PrismCast</a> server (default port <code>:5589</code>). When both toggles are enabled, DRM channels go through PrismCast and everything else streams direct. Like the regular feed, it splits into a standard playlist at <code>{{ request_base_url }}/m3u/prismcast</code> (pairs with <code>/epg.xml</code>) and a Gracenote one at <code>{{ request_base_url }}/m3u/prismcast/gracenote</code>.</div>
         </div>
         <div class="field field-full">
           <label for="prismcast-inner-url">Watch-page URL for PrismCast's browser <span style="color:var(--text-muted);font-weight:400">(optional)</span></label>

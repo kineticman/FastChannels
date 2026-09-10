@@ -1,0 +1,41 @@
+<!-- ah4c Capture (multi-tuner) card -->
+<div class="source-card" id="bridge-card-ah4c">
+  <div class="source-header" style="cursor:default">
+    <div class="source-title">
+      <div class="source-icon">📡</div>
+      <div>
+        <div class="source-name">ah4c Capture <span class="badge badge-beta">Multi-tuner beta</span></div>
+        <div class="source-meta">Let ah4c allocate a tuner, FastChannels Player device, and encoder for each concurrent tune</div>
+      </div>
+    </div>
+  </div>
+  <div class="source-body open">
+    <div class="help" style="margin-bottom:12px">Use ah4c when several channels may run at once or each Fire TV/Android TV has its own encoder. ah4c selects the assigned <code>TUNERn_IP</code>; the exported scripts forward that device address to FastChannels for every tune.</div>
+    <div class="toggle-row">
+      <div class="toggle-row-text">
+        <div class="toggle-row-label">Enable ah4c Capture</div>
+        <div class="toggle-row-help">Publishes a separate ah4c Capture M3U on the Feeds page. Each tune uses ah4c’s assigned tuner instead of the HDMI Capture stream.</div>
+      </div>
+      <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-ah4c-enabled" {% if fc_player_ah4c_enabled %}checked{% endif %} onchange="saveFcPlayerAh4cToggle()"><span class="toggle-slider"></span></label></div>
+    </div>
+    <div class="fields-grid" style="max-width:480px;margin-top:12px">
+      <div class="field field-full">
+        <label for="fc-player-ah4c-url">ah4c server URL</label>
+        <input type="text" id="fc-player-ah4c-url" placeholder="http://192.168.1.30:7654" value="{{ fc_player_ah4c_url }}">
+        <div class="help">Where ah4c is reachable. Its <code>/play/tuner/&lt;channel&gt;</code> endpoint is what the generated M3U points at.</div>
+      </div>
+    </div>
+    <div id="ah4c-tuners-result" class="ah4c-tuners" hidden></div>
+    <div class="field-actions">
+      <button class="btn btn-secondary" style="margin-right:auto" onclick="checkAh4cTuners()">Check tuner authorization(s)</button>
+      <span class="save-status" id="fc-player-ah4c-status"></span>
+      <button class="btn btn-secondary" onclick="openAh4cScriptsModal()">Export ah4c scripts</button>
+      <button class="btn btn-primary" onclick="saveFcPlayerAh4cSettings()">Save</button>
+    </div>
+    <div class="help" style="margin-top:8px">Export the script set after updating FastChannels. It tells ah4c how to trigger the FastChannels Player companion app on its assigned device and confirm playback started.</div>
+    <details class="bridge-fallback-details">
+      <summary>Advanced: HDMI Capture device fallback</summary>
+      <div class="help">Normal ah4c operation uses its own <code>TUNERn_IP</code> values. The HDMI Capture device in the <a href="#bridge-card-single-encoder">HDMI Capture</a> card remains a compatibility fallback for an ah4c script that does not provide a tuner address.</div>
+    </details>
+  </div>
+</div>

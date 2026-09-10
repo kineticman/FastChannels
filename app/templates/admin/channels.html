@@ -1851,7 +1851,7 @@
               <div class="channel-actions">
                 <div id="flags-cell-{{ ch.id }}" class="flag-group">
                   {% if ch.requires_drm_bridge %}
-                  <span class="flag-icon" title="DRM (e.g. FairPlay) — excluded from the standard feed (won't play on a normal client) but bridged via PrismCast or FastChannels Player, whichever is active for this channel.">🔒🌉</span>
+                  <span class="flag-icon" title="DRM (e.g. FairPlay) — excluded from the standard feed (won't play on a normal client) but bridged via PrismCast Capture, HDMI Capture, or ah4c Capture, whichever is active for this channel.">🔒🌉</span>
                   {% elif ch.disable_reason and ch.disable_reason.startswith('DRM') %}
                   <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'DRM')" title="{{ ch.disable_reason }} — stream is protected, not playable in generic IPTV clients. Click to re-enable.">🔒</span>
                   {% elif ch.disable_reason == 'Dead' %}
@@ -1921,7 +1921,7 @@
             <div class="mcard-badges">
               {% if ch.identity_changed_at %}<span class="mcard-flag" title="Content changed upstream — slot now carries a different channel. Review its Gracenote ID.">🔁</span>{% endif %}
               {% if _is_rotator %}<span class="mcard-flag" title="Rotating / featured slot — content may change over time. Enable with caution.">♻️</span>{% endif %}
-              {% if ch.requires_drm_bridge %}<span class="mcard-flag" title="DRM — bridged via PrismCast or FastChannels Player (excluded from standard feed)">🔒🌉</span>{% endif %}
+              {% if ch.requires_drm_bridge %}<span class="mcard-flag" title="DRM — bridged via PrismCast Capture or hardware capture (excluded from standard feed)">🔒🌉</span>{% endif %}
               {% if ch.disable_reason and ch.disable_reason.startswith('DRM') %}<span class="mcard-flag" title="{{ ch.disable_reason }}">🔒</span>{% endif %}
               {% if ch.disable_reason == 'Dead' %}<span class="mcard-flag" title="Stream dead">💀</span>{% endif %}
               {% if ch.disable_reason == 'VOD' %}<span class="mcard-flag" title="VOD only">📼</span>{% endif %}

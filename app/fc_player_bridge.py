@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import shlex
+import struct
 import subprocess
 import time
 
@@ -55,6 +56,138 @@ def bundled_apk_path() -> str | None:
     when this image was built — the settings page's Install button uses this to know
     whether it has anything to install."""
     return _BUNDLED_APK_PATH if os.path.isfile(_BUNDLED_APK_PATH) else None
+
+
+_bundled_version_cache: tuple[float, tuple[str | None, int | None]] | None = None
+
+
+def bundled_player_version() -> tuple[str | None, int | None]:
+    """(versionName, versionCode) baked into the bundled release APK, read straight
+    out of its compiled AndroidManifest.xml — the same fields `dumpsys package`
+    exposes for an installed app, so a bundled-vs-installed comparison is apples to
+    apples without needing aapt or a heavy APK-parsing dependency. Memoized by the
+    APK file's mtime since it never changes without an image rebuild + restart."""
+    global _bundled_version_cache
+    path = bundled_apk_path()
+    if not path:
+        return None, None
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None, None
+    if _bundled_version_cache and _bundled_version_cache[0] == mtime:
+        return _bundled_version_cache[1]
+    version = _read_apk_manifest_versions(path)
+    _bundled_version_cache = (mtime, version)
+    return version
+
+
+def _bundled_update_status(installed_version_code: int | None) -> dict:
+    """Compares an installed player's versionCode against the bundled release APK's,
+    for the Device Controls modal and ah4c tuner table. versionCode (a plain,
+    strictly-increasing int) is used rather than versionName so ordering is never
+    ambiguous the way comparing "5.10.0" against "5.2.0" as strings would be."""
+    bundled_name, bundled_code = bundled_player_version()
+    update_available = None
+    if installed_version_code is not None and bundled_code is not None:
+        update_available = installed_version_code < bundled_code
+    return {
+        'bundled_version': bundled_name,
+        'bundled_version_code': bundled_code,
+        'update_available': update_available,
+    }
+
+
+def _read_apk_manifest_versions(apk_path: str) -> tuple[str | None, int | None]:
+    import zipfile
+    try:
+        with zipfile.ZipFile(apk_path) as zf:
+            manifest = zf.read('AndroidManifest.xml')
+    except Exception:
+        return None, None
+    try:
+        return _parse_axml_manifest_versions(manifest)
+    except Exception:
+        logger.exception('Failed to parse bundled fc-player AndroidManifest.xml')
+        return None, None
+
+
+def _axml_read_utf16_string(data: bytes, pos: int) -> tuple[str, int]:
+    length = struct.unpack_from('<H', data, pos)[0]
+    if length & 0x8000:
+        low = struct.unpack_from('<H', data, pos + 2)[0]
+        length = ((length & 0x7FFF) << 16) | low
+        pos += 4
+    else:
+        pos += 2
+    raw = data[pos:pos + length * 2]
+    return raw.decode('utf-16-le', 'replace'), pos + length * 2 + 2
+
+
+def _axml_read_utf8_string(data: bytes, pos: int) -> tuple[str, int]:
+    # Skip the UTF-16 character-length prefix (1-2 bytes), then read the UTF-8 byte length.
+    def _read_len(p: int) -> tuple[int, int]:
+        n = data[p]
+        if n & 0x80:
+            return ((n & 0x7F) << 8) | data[p + 1], p + 2
+        return n, p + 1
+    _, pos = _read_len(pos)
+    byte_len, pos = _read_len(pos)
+    raw = data[pos:pos + byte_len]
+    return raw.decode('utf-8', 'replace'), pos + byte_len + 1
+
+
+def _axml_parse_string_pool(data: bytes, chunk_start: int) -> list[str]:
+    string_count, _style_count, flags, strings_start, _styles_start = struct.unpack_from(
+        '<IIIII', data, chunk_start + 8,
+    )
+    is_utf8 = bool(flags & 0x100)
+    offsets = struct.unpack_from(f'<{string_count}I', data, chunk_start + 28)
+    pool_start = chunk_start + strings_start
+    strings = []
+    for rel in offsets:
+        text, _ = (_axml_read_utf8_string if is_utf8 else _axml_read_utf16_string)(data, pool_start + rel)
+        strings.append(text)
+    return strings
+
+
+def _parse_axml_manifest_versions(data: bytes) -> tuple[str | None, int | None]:
+    """Minimal Android Binary XML reader — just enough to find the <manifest> root
+    element's android:versionCode / android:versionName attributes. Chunk layout
+    per AOSP's ResourceTypes.h; this format has been stable since Android 1.0."""
+    strings: list[str] = []
+    pos = 8  # past the outer RES_XML_TYPE chunk header (type, headerSize, size)
+    while pos + 8 <= len(data):
+        chunk_type, _header_size, chunk_size = struct.unpack_from('<HHI', data, pos)
+        if chunk_size <= 0:
+            break
+        if chunk_type == 0x0001:  # RES_STRING_POOL_TYPE
+            strings = _axml_parse_string_pool(data, pos)
+        elif chunk_type == 0x0102:  # RES_XML_START_ELEMENT_TYPE
+            name_idx = struct.unpack_from('<i', data, pos + 20)[0]
+            if 0 <= name_idx < len(strings) and strings[name_idx] == 'manifest':
+                attr_start, attr_size, attr_count = struct.unpack_from('<HHH', data, pos + 24)
+                base = pos + 16 + attr_start
+                version_name = version_code = None
+                for i in range(attr_count):
+                    entry = base + i * attr_size
+                    attr_name_idx = struct.unpack_from('<i', data, entry + 4)[0]
+                    raw_value_idx = struct.unpack_from('<i', data, entry + 8)[0]
+                    data_type = data[entry + 15]
+                    value = struct.unpack_from('<I', data, entry + 16)[0]
+                    if not (0 <= attr_name_idx < len(strings)):
+                        continue
+                    attr_name = strings[attr_name_idx]
+                    if attr_name == 'versionCode' and data_type in (0x10, 0x11):
+                        version_code = value
+                    elif attr_name == 'versionName':
+                        if 0 <= raw_value_idx < len(strings):
+                            version_name = strings[raw_value_idx]
+                        elif data_type == 0x03 and 0 <= value < len(strings):
+                            version_name = strings[value]
+                return version_name, version_code
+        pos += chunk_size
+    return None, None
 
 # How long a bridged channel can sit with no confirmed viewer (neither Channels DVR
 # activity nor a /watch heartbeat) before we stop it. Matches the old Kodi bridge's
@@ -111,6 +244,51 @@ def is_configured() -> bool:
         settings.fc_player_bridge_enabled
         and settings.effective_fc_player_bridge_adb_address()
     )
+
+
+def hdmi_capture_configured(settings=None) -> bool:
+    """Whether the fixed, single-stream HDMI Capture path is usable."""
+    settings = settings or AppSettings.get()
+    return bool(
+        settings.fc_player_bridge_enabled
+        and settings.effective_fc_player_bridge_adb_address()
+        and settings.effective_fc_player_bridge_encoder_url()
+    )
+
+
+def ah4c_capture_configured(settings=None) -> bool:
+    """Whether the ah4c multi-tuner Capture path is usable."""
+    settings = settings or AppSettings.get()
+    return bool(
+        settings.fc_player_bridge_enabled
+        and settings.effective_fc_player_bridge_adb_address()
+        and settings.fc_player_bridge_ah4c_enabled
+        and settings.effective_fc_player_bridge_ah4c_url()
+    )
+
+
+def hardware_capture_configured(settings=None) -> bool:
+    """Whether either hardware capture path can actually accept a tune."""
+    settings = settings or AppSettings.get()
+    return hdmi_capture_configured(settings) or ah4c_capture_configured(settings)
+
+
+def hardware_bridge_active(settings=None) -> bool:
+    """Whether global Bridge mode and at least one usable hardware path are on."""
+    settings = settings or AppSettings.get()
+    return bool(settings.bridge_enabled and hardware_capture_configured(settings))
+
+
+def hdmi_bridge_active(settings=None) -> bool:
+    """Whether the global policy and fixed HDMI Capture path are both on."""
+    settings = settings or AppSettings.get()
+    return bool(settings.bridge_enabled and hdmi_capture_configured(settings))
+
+
+def ah4c_bridge_active(settings=None) -> bool:
+    """Whether the global policy and usable ah4c Capture path are both on."""
+    settings = settings or AppSettings.get()
+    return bool(settings.bridge_enabled and ah4c_capture_configured(settings))
 
 
 def _adb_address() -> str:
@@ -190,6 +368,263 @@ def install_app(apk_path: str, timeout: int = 90) -> tuple[bool, str]:
     return False, output or f'adb install failed (rc={result.returncode})'
 
 
+_AH4C_STATUS_TIMEOUT = 5
+
+
+def _ah4c_base_url() -> str:
+    """ah4c's own base URL, from the saved setting or its env fallback — independent
+    of the "Enable ah4c support" toggle, so the tuner check can run before that's
+    flipped on. Raises FcPlayerNotConfigured when no URL is set anywhere."""
+    settings = AppSettings.get()
+    base = ((settings.fc_player_bridge_ah4c_url or '').strip()
+            or (settings.env_fc_player_bridge_ah4c_url() or '')).strip().rstrip('/')
+    if not base:
+        raise FcPlayerNotConfigured('fc_player_bridge_ah4c_url is not configured')
+    return base
+
+
+def ah4c_tuner_ips() -> list[str]:
+    """The tuner device addresses ah4c has configured (its TUNERn_IP values), read
+    from ah4c's own GET /api/status JSON ("Tuners": [{"Tunerip": ...}, ...]).
+
+    Returned in ah4c's own tuner order, as ah4c reports them — a bare host or a
+    host:port, whatever was put in TUNERn_IP — with blanks and duplicates dropped.
+    Raises FcPlayerNotConfigured if no ah4c URL is set; lets requests/JSON errors
+    propagate so the caller can tell the user why it couldn't ask ah4c."""
+    resp = requests.get(f'{_ah4c_base_url()}/api/status', timeout=_AH4C_STATUS_TIMEOUT)
+    resp.raise_for_status()
+    tuners = resp.json().get('Tuners') or []
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry in tuners:
+        ip = str((entry or {}).get('Tunerip') or '').strip()
+        if ip and ip not in seen:
+            seen.add(ip)
+            out.append(ip)
+    return out
+
+
+def _adb_state_for(address: str) -> tuple[str, str]:
+    """(state, human-readable message) for one device address, from this container's
+    own adb client — connects first (same first step a real tune takes), then asks
+    adb for the device state. state is one of: 'device' (reachable + this
+    container's adb key is authorized), 'unauthorized', 'offline', 'unreachable'."""
+    try:
+        subprocess.run(
+            ['adb', 'connect', address],
+            capture_output=True, timeout=_ADB_TIMEOUT, check=False,
+        )
+        state = subprocess.run(
+            ['adb', '-s', address, 'get-state'],
+            capture_output=True, timeout=_ADB_TIMEOUT, check=False, text=True,
+        )
+    except Exception as e:
+        return 'unreachable', f'adb error: {e}'
+
+    blob = ((state.stdout or '') + (state.stderr or '')).lower()
+    if state.returncode == 0 and (state.stdout or '').strip() == 'device':
+        return 'device', 'Authorized — reachable over adb from FastChannels.'
+    if 'unauthorized' in blob:
+        return 'unauthorized', ("Reachable, but this FastChannels container's adb key isn't "
+                                'approved on the device yet — trigger an action and approve the '
+                                'prompt on the TV.')
+    if 'offline' in blob:
+        return 'offline', 'Connected but offline — power-cycle the device or re-approve adb.'
+    return 'unreachable', ("No adb connection — check the IP, that the device is powered on, and "
+                           'that ADB debugging is enabled.')
+
+
+def _ms_to_human(ms: int) -> str:
+    if ms >= 60_000:
+        return f'{ms // 60_000} min'
+    if ms >= 1_000:
+        return f'{ms // 1_000} s'
+    return f'{ms} ms'
+
+
+# A screen-off timeout stored as (near) 2^31-1 ms is Android's "Never" sentinel.
+_NEVER_MS = 2_000_000_000
+
+
+def _device_os_and_sleep(address: str) -> dict:
+    """OS identification and auto-sleep state for one authorized device, in a
+    single adb shell round-trip. Only meaningful once _adb_state_for() said
+    'device' — a shell is needed. Every field degrades to None/'' on any failure
+    so a probe that half-answers never breaks the row."""
+    out = {
+        'os_label': '',
+        'is_fire_os': False,
+        'sleep_disabled': None,   # True / False / None (unknown)
+        'sleep_detail': '',
+        'player_installed': None,  # True / False / None (unknown)
+        'player_version': None,    # versionName string when installed
+        'player_version_code': None,
+        'bundled_version': None,
+        'bundled_version_code': None,
+        'update_available': None,  # True / False / None (unknown — nothing to compare against)
+    }
+    # One remote shell, newline-separated, in a fixed order we can index back out.
+    # The player dumpsys goes last so its multi-line output cannot shift the
+    # OS, sleep, and current-user fields above it.
+    remote = (
+        'getprop ro.build.version.release; '
+        'getprop ro.product.manufacturer; '
+        'getprop ro.build.version.fireos; '
+        'getprop ro.build.version.name; '
+        'settings get secure sleep_timeout; '
+        'settings get system screen_off_timeout; '
+        'am get-current-user; '
+        'dumpsys package com.fastchannels.player'
+    )
+    try:
+        res = subprocess.run(
+            ['adb', '-s', address, 'shell', remote],
+            capture_output=True, timeout=_ADB_TIMEOUT, check=False, text=True,
+        )
+    except Exception:
+        return out
+    if res.returncode != 0:
+        return out
+
+    stdout = res.stdout or ''
+    lines = [ln.strip() for ln in stdout.splitlines()]
+    lines += [''] * (7 - len(lines))
+    release, manufacturer, fireos, build_name, sleep_timeout, screen_off, current_user = lines[:7]
+    package_info = '\n'.join(lines[7:])
+
+    # Version metadata is device-wide and can survive a per-user uninstall.
+    # Playback launches for the foreground user, so require that user's explicit
+    # installed flag before showing a version as confirmation of installation.
+    if 'Unable to find package' in package_info:
+        out['player_installed'] = False
+    elif re.fullmatch(r'[0-9]+', current_user):
+        user_state = re.search(
+            rf'^User {current_user}:[^\n]*\binstalled=(true|false)\b',
+            package_info, re.MULTILINE,
+        )
+        if user_state:
+            out['player_installed'] = user_state.group(1) == 'true'
+            if out['player_installed']:
+                version_name = re.search(r'\bversionName=(\S+)', package_info)
+                version_code = re.search(r'\bversionCode=(\d+)', package_info)
+                if version_code:
+                    out['player_version_code'] = int(version_code.group(1))
+                if version_name:
+                    out['player_version'] = version_name.group(1)
+                elif version_code:
+                    out['player_version'] = f'code {version_code.group(1)}'
+                out.update(_bundled_update_status(out['player_version_code']))
+    # Missing user or installation state stays Unknown, even if a version exists.
+
+    fire = 'amazon' in manufacturer.lower() or bool(fireos) or 'fire os' in build_name.lower()
+    out['is_fire_os'] = fire
+    android = f'Android {release}' if release and release.lower() != 'null' else ''
+    if fire:
+        if fireos and fireos.lower() != 'null':
+            fire_label = f'Fire OS {fireos}'
+        elif 'fire os' in build_name.lower():
+            fire_label = build_name
+        else:
+            fire_label = 'Fire OS'
+        out['os_label'] = f'{fire_label} · {android}' if android else fire_label
+    else:
+        out['os_label'] = android
+
+    def _as_int(v: str) -> int | None:
+        v = (v or '').strip()
+        if not v or v.lower() == 'null':
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            return None
+
+    st, sot = _as_int(sleep_timeout), _as_int(screen_off)
+
+    # `secure sleep_timeout` is the Android TV inactivity-sleep timer. AOSP's
+    # PowerManagerService treats any value <= 0 as "no inactivity sleep" — so
+    # both 0 and -1 mean it's off (Google TV's "Put device to sleep after →
+    # Never" writes -1; some devices/versions use 0 or the ~2^31 sentinel). A
+    # real positive value is a live timeout. Phones/tablets don't expose this
+    # setting at all (null), so there we fall back to `system
+    # screen_off_timeout`, which governs the display/HDMI-output blanking.
+    disabled: bool | None = None
+    reason = ''
+    if st is not None:
+        if st <= 0 or st >= _NEVER_MS:
+            disabled, reason = True, f'sleep_timeout={st}'
+        else:
+            disabled, reason = False, f'sleep_timeout={st} ({_ms_to_human(st)})'
+    elif sot is not None:
+        if sot >= _NEVER_MS:
+            disabled, reason = True, f'screen_off_timeout={sot}'
+        elif sot > 0:
+            disabled, reason = False, f'screen_off_timeout={sot} ({_ms_to_human(sot)})'
+
+    # Always keep the display timeout visible as secondary context — the
+    # screensaver / screen-off path is separate from sleep_timeout, and a
+    # running player normally holds a wake lock against it, but it's the thing
+    # to check next if capture still drops with sleep_timeout already off.
+    if reason and st is not None and sot is not None and 'screen_off_timeout' not in reason:
+        if sot >= _NEVER_MS:
+            reason += ', screen_off_timeout=never'
+        elif sot > 0:
+            reason += f', screen_off_timeout={_ms_to_human(sot)}'
+
+    out['sleep_disabled'] = disabled
+    if reason:
+        out['sleep_detail'] = reason
+    else:
+        # Nothing conclusive — surface the raw values so it can be chased by hand.
+        raw = [f'sleep_timeout={sleep_timeout.strip() or "?"}',
+               f'screen_off_timeout={screen_off.strip() or "?"}']
+        out['sleep_detail'] = ', '.join(raw)
+    return out
+
+
+def verify_ah4c_tuners() -> list[dict]:
+    """Pairs each of ah4c's configured TUNERn_IP values with what this FastChannels
+    container can actually reach and is authorized for over adb. The two run
+    separate adb clients with separate keys, so a tuner ah4c is happy with can
+    still be unauthorized (or unreachable) from here — that's exactly what this
+    surfaces.
+
+    For tuners that are authorized, it also reports the device OS (flagging Fire
+    OS), whether auto-sleep is turned off — a stick that dozes off mid-session
+    is a common ah4c-path failure, so "no signal" is easier to chase down when the
+    table already says the display sleep timer is still armed — and the installed
+    FastChannels Player version after confirming installation for the active
+    Android user; ah4c can drive a stick that never got the player sideloaded."""
+    results: list[dict] = []
+    for idx, ip in enumerate(ah4c_tuner_ips(), start=1):
+        # ah4c stores TUNERn_IP as a bare host or host:port; the container's adb
+        # keys are always host:5555 (see prebmitune.sh's own optional-port match).
+        address = ip if ':' in ip.rsplit(']', 1)[-1] else f'{ip}:5555'
+        state, message = _adb_state_for(address)
+        row = {
+            'index': idx,
+            'tuner_ip': ip,
+            'adb_address': address,
+            'state': state,
+            'authorized': state == 'device',
+            'message': message,
+            'os_label': '',
+            'is_fire_os': False,
+            'sleep_disabled': None,
+            'sleep_detail': '',
+            'player_installed': None,
+            'player_version': None,
+            'player_version_code': None,
+            'bundled_version': None,
+            'bundled_version_code': None,
+            'update_available': None,
+        }
+        if state == 'device':
+            row.update(_device_os_and_sleep(address))
+        results.append(row)
+    return results
+
+
 def _adb_shell(address: str, *command: str, timeout: int = _ADB_TIMEOUT) -> tuple[bool, str]:
     """Run a small adb shell command and return its combined text safely."""
     try:
@@ -254,12 +689,16 @@ def device_controls_status() -> dict:
     version_name = re.search(r'\bversionName=([^\s]+)', package_info)
     version_code = re.search(r'\bversionCode=(\d+)', package_info)
     focus_match = re.search(r'mCurrentFocus=([^\r\n]+)', focus)
+    # Accept both PlaybackState renderings: Fire OS prints "state=3", newer AOSP
+    # (Google TV, onn., Chromecast) prints "state=PLAYING(3)". The optional
+    # "[A-Z_]+(" swallows the state-name prefix so the capture is always the int.
     player_session = re.search(
         r'package=com\.fastchannels\.player(?:(?!\n\s*package=).){0,1200}?'
-        r'state=PlaybackState \{state=(\d+)', sessions, re.S,
+        r'state=PlaybackState \{state=(?:[A-Z_]+\()?(\d+)', sessions, re.S,
     )
 
-    return {
+    player_version_code = int(version_code.group(1)) if version_code else None
+    result = {
         'ok': True,
         'address': address,
         'model': model.strip() or 'Android TV device',
@@ -270,12 +709,17 @@ def device_controls_status() -> dict:
         'focus': focus_match.group(1).strip() if focus_match else None,
         'player_installed': bool(version_name),
         'player_version': version_name.group(1) if version_name else None,
-        'player_version_code': int(version_code.group(1)) if version_code else None,
+        'player_version_code': player_version_code,
         'player_playing': player_session.group(1) == '3' if player_session else False,
         'stay_on_while_powered': _setting_number(address, 'global', 'stay_on_while_plugged_in') or 0,
         'screen_off_timeout': _setting_number(address, 'system', 'screen_off_timeout'),
         'sleep_timeout': _setting_number(address, 'secure', 'sleep_timeout'),
     }
+    if version_name:
+        result.update(_bundled_update_status(player_version_code))
+    else:
+        result.update({'bundled_version': None, 'bundled_version_code': None, 'update_available': None})
+    return result
 
 
 def wake_device() -> tuple[bool, str]:
@@ -456,7 +900,7 @@ def _recent_web_heartbeat(channel_key: str) -> bool:
         return False
 
 
-def _stop_playback() -> bool:
+def stop_playback() -> bool:
     """Force-stops the player app entirely — blunt, but already proven reliable this
     session for clearing stale DRM sessions. No JSON-RPC-style control channel exists
     to ask it to stop gracefully (unlike the old Kodi bridge's Player.Stop)."""
@@ -473,6 +917,11 @@ def _stop_playback() -> bool:
         logger.warning('[fc-player] idle-stop: force-stop failed: %s', e)
         return False
     return result.returncode == 0
+
+
+def _stop_playback() -> bool:
+    """Compatibility name for the idle-stop watchdog's internal call sites."""
+    return stop_playback()
 
 
 def check_idle_and_stop() -> None:
@@ -544,7 +993,7 @@ def check_idle_and_stop() -> None:
 
 
 def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: str = 'FastChannels',
-                     channel_key: str | None = None) -> bool:
+                     channel_key: str | None = None, adb_address: str | None = None) -> bool:
     """Tell the FastChannels Player app to start playing this stream right now.
 
     manifest_url should already be the fully-resolved play URL (same shape
@@ -555,11 +1004,16 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
 
     channel_key (f'{source_name}:{channel_id}') is only used when the idle-stop
     watchdog is enabled — see note_trigger().
+
+    adb_address overrides the single configured device for this one trigger — ah4c
+    supplies it (per allocated tuner) when it's fronting more than one streaming stick.
+    When set, idle-stop tracking is skipped: it's single-device global state, and the
+    ah4c stop script already force-stops each stick on its own disconnect.
     """
-    address = _adb_address()
+    address = adb_address or _adb_address()
     drm = bool(license_url)
 
-    if channel_key and idle_stop_enabled():
+    if channel_key and adb_address is None and idle_stop_enabled():
         note_trigger(channel_key)
 
     try:
@@ -579,6 +1033,10 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
             '-n', shlex.quote(_PLAYER_COMPONENT),
             '--es', 'stream_url', shlex.quote(manifest_url),
             '--es', 'title', shlex.quote(name),
+            # Identifies this tune to the app's warm-stop command. ah4c's stop
+            # hook supplies the same value, allowing the app to ignore a stop
+            # that arrives late after a newer tune has already started.
+            '--es', 'channel_key', shlex.quote(channel_key or ''),
             '--ez', 'drm', 'true' if drm else 'false',
             '--ez', 'captions', 'true' if captions_enabled() else 'false',
         ])

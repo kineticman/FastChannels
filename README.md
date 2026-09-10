@@ -1,6 +1,6 @@
 # FastChannels
 
-FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, cable-network channels via TV Everywhere (NBCUniversal, FOX, FOX One, Discovery, AMC Networks, A+E Networks, Warner Bros Discovery), your own HDHomeRun tuner, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.). DRM-protected sources play back through a real Widevine bridge (browser-based PrismCast, or FastChannels' own Fire TV / Android TV player app) rather than being dropped.
+FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, cable-network channels via TV Everywhere (NBCUniversal, FOX, FOX One, Discovery, AMC Networks, A+E Networks, Warner Bros Discovery), your own HDHomeRun tuner, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.). DRM-protected sources play back through a real Widevine bridge (browser-based PrismCast, or FastChannels' own Fire TV / Android TV player app) rather than being dropped.
 
 ## Deploy with Portainer
 
@@ -11,14 +11,16 @@ services:
   fastchannels:
     image: ghcr.io/kineticman/fastchannels:latest
     container_name: fastchannels
-    restart: unless-stopped
     ports:
-      - "5523:5523"
+      - 5523:5523
     volumes:
       - db_data:/data
+      - adb_keys:/root/.android
+    restart: unless-stopped
 
 volumes:
   db_data:
+  adb_keys:
 ```
 
 - Deploy the stack.
@@ -26,15 +28,17 @@ volumes:
 - On first boot, sources seed automatically and channels begin populating within a few minutes.
 - If you want a specific published version, replace `:latest` with a version tag from the [Releases page](https://github.com/kineticman/FastChannels/releases).
 - Keep the `/data` volume mount so the SQLite database survives container recreation.
+- Keep the `/root/.android` volume mount too: it holds the ADB key the FastChannels Player bridge pairs with your Fire TV / Android TV device. Without it, every container recreate forces you to re-approve the authorization prompt on the TV. Harmless to leave in place even if you never use the bridge.
 
 ## Deploy with Docker
 
 ```bash
 docker run -d \
   --name fastchannels \
-  --restart unless-stopped \
   -p 5523:5523 \
   -v fastchannels_data:/data \
+  -v fastchannels_adb:/root/.android \
+  --restart unless-stopped \
   ghcr.io/kineticman/fastchannels:latest
 ```
 
@@ -61,7 +65,7 @@ Go to **Admin → Settings** and set two things:
 **3. Configure Sources.**
 Go to **Admin → Sources**. Enable or disable sources to taste, and expand any source card to enter credentials. Changes take effect on the next scrape.
 
-Most sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, DistroTV, Vidaa Free TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, every TV Everywhere source (A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, Warner Bros Discovery), and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), Frndly/Fubo/FreeCast/DirecTV Stream/Cox Contour require account credentials, Philo signs in with a passwordless emailed code, and the TV Everywhere sources authenticate once via **Settings → TV Everywhere** rather than per-source. See [Source Notes](#source-notes) for per-source details.
+Most sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, Vidaa Free TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, every TV Everywhere source (A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, Warner Bros Discovery), and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), Frndly/Fubo/FreeCast/DirecTV Stream/Cox Contour require account credentials, Philo signs in with a passwordless emailed code, and the TV Everywhere sources authenticate once via **Settings → TV Everywhere** rather than per-source. See [Source Notes](#source-notes) for per-source details.
 
 **4. Run Stream Audits.**
 Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
@@ -81,7 +85,8 @@ Go to **Admin → Feeds** and build filtered channel lists for your players (see
 | `/admin/channels` | Browse, enable/disable, inspect, and resolve duplicate channels |
 | `/admin/feeds` | Create and manage named output feeds |
 | `/admin/guide` | Preview the EPG grid as your players will see it |
-| `/admin/settings` | Server URLs, Gracenote options, and system stats |
+| `/admin/settings` | Server URLs, Gracenote options, TV Everywhere sign-in, and system stats |
+| `/admin/bridge` | DRM bridge setup — HDMI Capture, ah4c Capture, PrismCast, post-install healthcheck, tuner authorization checks |
 | `/admin/logs` | Live log tail |
 | `/admin/reports/channel-changes` | Inferred New / Now Inactive / At Risk channels (BETA) |
 | `/admin/help` | In-app help and source gotchas |
@@ -269,7 +274,6 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Xumo Play | None | Public API |
 | Samsung TV Plus | None | Channel data and EPG via [Matt Huisman's public mirror](https://github.com/matthuisman/samsung-tvplus-for-channels). Region configurable (default: `us`). |
 | Sling Freestream | Optional (paid) | **Default off.** Two modes: Freestream-only (free, anonymous) or paid Sling account for premium channels; streams are DRM-only for generic IPTV clients |
-| DistroTV | None | **Default off.** Upstream lineup has shrunk considerably. Android TV UA required, URL macro substitution |
 | LG Channels | None | Country configurable (default: `US`) |
 | Local Now | None | **Default off.** Public API |
 | STIRR | None | Public API |
@@ -305,6 +309,8 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 - **Sling Freestream**: streams are DRM-only for generic IPTV clients. Toggle on "Paid Sling account (premium channels)" to add premium channels. Off = Freestream-only (free, anonymous; no sign-in, no browser).
   - Sling gates its login form with invisible hCaptcha Enterprise, which reliably challenges automated browsers regardless of fingerprint spoofing — so signing in still needs a human to solve the captcha when one is shown. Save your email/password in the source config, then click **Sign in to Sling**: FastChannels launches a real anti-detect browser (Camoufox) against the actual sign-in page, auto-fills your saved credentials, and streams it live in an admin-UI modal — you only need to solve the captcha if one appears. Once signed in, it captures the session automatically and caches the OAuth credentials; no manual token pasting needed.
 - **Samsung TV Plus**: EPG covers approximately the current day. All credit for the data to [Matt Huisman](https://github.com/matthuisman/samsung-tvplus-for-channels).
+- **DirecTV Stream / Sling**: both source cards have an **Exclude FAST channels** toggle to leave out free, ad-supported channels. Saving a change to this toggle on an enabled source queues a full scrape. That scrape marks excluded channels inactive without waiting for the normal miss-threshold grace period, while retaining their saved settings.
+- **DirecTV Stream**: resolves Gracenote IDs from its own API first, with community-map fallback, and filters out non-streamable satellite-only lineup entries.
 
 ### TV Everywhere (TVE) sources
 

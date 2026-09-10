@@ -493,7 +493,10 @@ class CoxScraper(BaseScraper):
     config_schema = [
         ConfigField('username', 'Cox Username', required=True,
                     placeholder='you@cox.net',
-                    help_text='Your Cox Contour login. Cox email usernames are submitted to Okta without the @cox.net suffix.'),
+                    help_text='Your actual Cox Contour login — NOT your Xfinity/Comcast credentials. '
+                               'Cox email usernames are submitted to Okta without the @cox.net suffix. '
+                               '(Signing in to TVE networks with Xfinity as your provider is configured '
+                               'separately under Settings → TVE.)'),
         ConfigField('password', 'Password', field_type='password', required=True,
                     secret=True,
                     help_text='Your Cox Contour password.'),

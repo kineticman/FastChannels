@@ -408,7 +408,11 @@ class AppSettings(db.Model):
     prismcast_url        = db.Column(db.Text, nullable=True)     # PrismCast capture server, e.g. http://192.168.1.x:5589 (DRM bridge)
     prismcast_inner_url  = db.Column(db.Text, nullable=True)     # base URL PrismCast's Chrome uses to reach /watch (loopback/HTTPS for EME secure-context); falls back to public_base_url
     prismcast_max_height = db.Column(db.Integer, nullable=False, default=0, server_default=db.text('0'))  # max source height for /watch playback through PrismCast; 0 = auto
-    drm_bridge_enabled   = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # False=disable DRM channels (audit drops them); True=keep DRM channels active + route via PrismCast bridge
+    # Kept for compatibility with pre-bridge-page clients.  New code uses the two
+    # explicit settings below: the global policy gate and the PrismCast method.
+    drm_bridge_enabled   = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))
+    bridge_enabled       = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # global: keep bridge-compatible DRM channels eligible
+    prismcast_enabled    = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # method: use PrismCast/Chrome capture
     tvtv_cache_last_attempt_at = db.Column(db.DateTime, nullable=True)  # throttles startup retry loops when tvtv cache refresh fails
     fc_player_bridge_enabled      = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # FastChannels Player remote-play trigger (app/fc_player_bridge.py) feature toggle
     fc_player_bridge_adb_address  = db.Column(db.Text, nullable=True)  # adb address for the device running the FastChannels Player app, e.g. 192.168.86.91:5555
@@ -484,6 +488,14 @@ class AppSettings(db.Model):
     def effective_prismcast_url(self) -> str | None:
         value = (self.prismcast_url or '').strip().rstrip('/')
         return value or self.env_prismcast_url()
+
+    def prismcast_bridge_active(self) -> bool:
+        """Whether PrismCast is an enabled bridge method, independent of its URL."""
+        return bool(self.bridge_enabled and self.prismcast_enabled)
+
+    def prismcast_capture_configured(self) -> bool:
+        """Whether the enabled PrismCast Capture method has a usable server URL."""
+        return bool(self.prismcast_bridge_active() and self.effective_prismcast_url())
 
     def effective_prismcast_inner_url(self) -> str | None:
         # Base URL PrismCast's headless Chrome uses to load this server's /watch

@@ -7,12 +7,12 @@ services:
         #   YTDLP_REFRESH=$(date +%s) docker compose build
         YTDLP_REFRESH: ${YTDLP_REFRESH:-unset}
     container_name: fastchannels
-    restart: unless-stopped
     ports:
-      - "5523:5523"
+      - 5523:5523
     volumes:
       - db_data:/data
       - adb_keys:/root/.android
+    restart: unless-stopped
 
 volumes:
   db_data:

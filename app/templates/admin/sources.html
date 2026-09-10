@@ -263,6 +263,11 @@
       color: var(--info-soft, #7eb8f7);
       border-color: color-mix(in srgb, var(--info-soft, #7eb8f7) 35%, transparent);
     }
+    .config-badge.retired {
+      background: color-mix(in srgb, var(--danger) 12%, transparent);
+      color: var(--danger-soft, var(--danger));
+      border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+    }
 
     /* Scrape / audit status in dashboard row */
     .scrape-status { font-size: 0.75rem; margin-top: 0.2rem; display: flex; align-items: center; gap: 0.35rem; min-height: 0; }
@@ -297,6 +302,7 @@
     .toggle-label.off { color: var(--text-muted); }
     .toggle {
       position: relative; display: inline-block; width: 44px; height: 24px; cursor: pointer;
+      flex-shrink: 0;
     }
     .toggle input { opacity: 0; width: 0; height: 0; }
     .slider {
@@ -779,6 +785,7 @@
           {% set ns = namespace(last_cat=None) %}
           {% for source in sources %}
           {% set cfg_status = source_config_status.get(source.id, 'none') %}
+          {% set retired = source_retired.get(source.id) %}
           {% set is_custom = source.name == 'custom' %}
           {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'specialty' %}
           {% if this_cat != ns.last_cat %}
@@ -808,7 +815,10 @@
                   {% if under_development.get(source.name) %}
                     <span class="config-badge development" title="This source is under development and disabled by default">Under development</span>
                   {% endif %}
-                  {% if cfg_status == 'configured' %}
+                  {% if retired %}
+                    <span class="config-badge retired" id="config-badge-{{ source.id }}"
+                          title="Upstream shut down; this scraper was removed. Auto-removed from this list in {{ retired.days_left }} day{{ '' if retired.days_left == 1 else 's' }}.">Retired</span>
+                  {% elif cfg_status == 'configured' %}
                     <span class="config-badge configured" id="config-badge-{{ source.id }}">Configured</span>
                   {% elif cfg_status == 'required' %}
                     <span class="config-badge needs-config" id="config-badge-{{ source.id }}">⚠ Needs Config</span>
@@ -822,7 +832,7 @@
                 {% endif %}
                 {% set _sd = source.to_dict() %}
                 <span class="config-badge auto"><span id="ch-count-{{ source.id }}">{{ _sd.channel_count }}</span> channels</span>
-                {% if _sd.drm_bridge_count %}<a class="config-badge auto" href="/admin/channels?source={{ source.name }}&drm=bridge" title="DRM channels bridged via PrismCast or FastChannels Player — click to view"><span id="bridge-count-{{ source.id }}">🌉 {{ _sd.drm_bridge_count }}</span> bridged</a>{% endif %}
+                {% if _sd.drm_bridge_count %}<a class="config-badge auto" href="/admin/channels?source={{ source.name }}&drm=bridge" title="DRM channels bridged via PrismCast Capture or hardware capture — click to view"><span id="bridge-count-{{ source.id }}">🌉 {{ _sd.drm_bridge_count }}</span> bridged</a>{% endif %}
               </div>
               <div class="source-meta" id="source-meta-{{ source.id }}">
                 {% if not is_custom %}
@@ -1950,7 +1960,7 @@
           html += renderGroup('VOD — finite content, not a broken stream', vod, true);
           html += renderGroup('Not authorized — account is not entitled', unauthorized, true);
           html += renderGroup('DRM', drm, false);
-          html += renderGroup('Bridged — DRM detected, kept active via PrismCast/FastChannels Player', bridged, false);
+          html += renderGroup('Bridged — DRM detected, kept active via a configured capture path', bridged, false);
           html += renderGroup('Rate-limited', limited, false);
           html += renderGroup('Errors', errors, false);
           html += `</div>`;
@@ -2286,25 +2296,6 @@
         </div>`;
     }
 
-    const DISTRO_REGION_OPTIONS = [
-      { code: 'US', label: 'United States' },
-      { code: 'CA', label: 'Canada' },
-      { code: 'MX', label: 'Mexico' },
-      { code: 'AR', label: 'Argentina' },
-      { code: 'GB', label: 'United Kingdom' },
-      { code: 'DE', label: 'Germany' },
-      { code: 'FR', label: 'France' },
-      { code: 'IT', label: 'Italy' },
-      { code: 'ES', label: 'Spain' },
-      { code: 'AT', label: 'Austria' },
-      { code: 'CH', label: 'Switzerland' },
-      { code: 'JP', label: 'Japan' },
-      { code: 'NZ', label: 'New Zealand' },
-      { code: 'IN', label: 'India' },
-      { code: 'XE', label: 'Spanish Feed' },
-      { code: 'QQ', label: 'Worldwide Feed' },
-    ];
-
     const VIDAA_REGION_OPTIONS = [
       { code: 'AR', label: 'Argentina' },
       { code: 'AT', label: 'Austria' },
@@ -2350,51 +2341,6 @@
       { code: 'ch', label: 'Switzerland' },
     ];
 
-    function renderDistroConfig(sourceId, schema, values) {
-      const geoField = schema.find(f => f.key === 'geo') || {
-        key: 'geo',
-        label: 'Geo Feeds',
-        default: 'US',
-        help_text: 'If you need a region that is not listed above, enter its code here, separated by commas.',
-      };
-      const selected = new Set(String(values.geo || geoField.default || 'US')
-        .split(/[,\s|/]+/)
-        .map(v => v.trim().toUpperCase())
-        .filter(Boolean));
-      const presetCodes = new Set(DISTRO_REGION_OPTIONS.map(opt => opt.code));
-      const customCodes = [...selected].filter(code => !presetCodes.has(code));
-      const options = DISTRO_REGION_OPTIONS.map(opt => {
-        const checked = selected.has(opt.code);
-        return `<option value="${opt.code}" ${checked ? 'selected' : ''}>${opt.label} (${opt.code})</option>`;
-      }).join('');
-
-      return `
-        <div class="config-title">Source Settings</div>
-        <div class="config-note">Choose one or more Distro regions to include. Channels will be combined into one source.</div>
-        <div class="field field-full">
-          <label>${escapeHtml(geoField.label)}</label>
-          <select id="cfg-${sourceId}-geo-select" class="region-select" data-key="geo" multiple>
-            ${options}
-          </select>
-          <div class="region-custom">
-            <label for="cfg-${sourceId}-geo-custom">Additional regions</label>
-            <input type="text"
-                   id="cfg-${sourceId}-geo-custom"
-                   data-key="geo"
-                   data-geo-custom="true"
-                   value="${escapeHtml(customCodes.join(', '))}"
-                   placeholder="Optional, comma-separated region codes">
-            <div class="help">${escapeHtml(geoField.help_text || '')}</div>
-          </div>
-          <div class="region-summary">The list above covers the main Distro regions. You can add others manually if needed.</div>
-        </div>
-        <div class="config-actions">
-          <span class="config-status" id="config-status-${sourceId}"></span>
-          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
-          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
-        </div>`;
-    }
-
     // sourceId -> Set of "station_id:profile" keys already added, so search results
     // can mark a feed "Added" instead of offering to add it a second time.
     const _pbsManualFeedCache = {};
@@ -2437,7 +2383,7 @@
 
       return `
         <div class="config-title">PBS Settings</div>
-        <div class="config-note">The scraper automatically imports clear (non-DRM) HLS feeds from the curated station list and any ZIP codes below. Individual feeds — clear or DRM — can also be hand-picked below; DRM feeds (main/PBS KIDS) are opt-in only and play through the PrismCast or FastChannels Player DRM bridge.</div>
+        <div class="config-note">The scraper automatically imports clear (non-DRM) HLS feeds from the curated station list and any ZIP codes below. Individual feeds — clear or DRM — can also be hand-picked below; DRM feeds (main/PBS KIDS) are opt-in only and play through PrismCast Capture or a hardware capture path.</div>
         <div class="fields-grid">
           <div class="field field-full">
             <div class="config-toggle-field">
@@ -2466,7 +2412,7 @@
 
         <details class="pbs-drm-details" open>
           <summary>Station &amp; Feed Finder</summary>
-          <div class="config-note">Search by ZIP code, then add individual feeds — mix and match clear and DRM per station (e.g. a clear secondary feed plus just the Main DRM feed, skipping PBS KIDS). DRM feeds only play through a DRM bridge — turn on PrismCast or FastChannels Player bridging in Settings to use them.</div>
+          <div class="config-note">Search by ZIP code, then add individual feeds — mix and match clear and DRM per station (e.g. a clear secondary feed plus just the Main DRM feed, skipping PBS KIDS). DRM feeds only play through a DRM bridge — turn on PrismCast Capture or hardware capture in Bridge settings to use them.</div>
           <div style="display:flex;align-items:flex-end;gap:8px;margin:0.5rem 0;">
             <div class="field" style="margin:0;flex:0 0 auto;max-width:160px;">
               <label for="pbs-drm-zip-${sourceId}">ZIP code</label>
@@ -2890,6 +2836,23 @@
         const schema = cfg.schema || [];
         const values = cfg.values || {};
 
+        if (cfg.retired) {
+          if (badge) {
+            badge.textContent = 'Retired';
+            badge.className = 'config-badge retired';
+            badge.style.display = '';
+          }
+          if (container) {
+            const days = cfg.retired.days_left;
+            const purgeDate = new Date(cfg.retired.purge_at).toLocaleDateString();
+            container.innerHTML = `
+              <div class="config-title">Source Retired</div>
+              <div class="config-note">This source's scraper has been removed from FastChannels (the upstream service shut down). It will be automatically removed from this list in ${days} day${days === 1 ? '' : 's'} (around ${purgeDate}). No action is needed.</div>`;
+            container.classList.remove('hidden');
+          }
+          return;
+        }
+
         if (!schema.length) {
           if (badge) {
             badge.textContent = 'Auto';
@@ -3113,11 +3076,32 @@
     function renderDirectvConfig(sourceId, schema, values, cfg = {}) {
       const hasSession = cfg.config_complete === true || cfg.config_status === 'configured';
       const hasCreds = !!((values.username || '').trim() && (values.password || '').trim());
+      const toggleHtml = (key, fallbackLabel, fallbackHelp) => {
+        const field = schema.find(f => f.key === key);
+        const checked = ['1', 'true', 'yes', 'on'].includes(
+          String(values[key] ?? field?.default ?? '').trim().toLowerCase()
+        );
+        const label = field?.label || fallbackLabel;
+        const help = field?.help_text || fallbackHelp;
+        return `
+          <div class="field field-full">
+            <div class="config-toggle-field">
+              <div class="config-toggle-text">
+                <label for="cfg-${sourceId}-${key}">${escapeHtml(label)}</label>
+                <div class="help">${escapeHtml(help)}</div>
+              </div>
+              <label class="toggle" title="${escapeHtml(label)}">
+                <input type="checkbox" id="cfg-${sourceId}-${key}" data-key="${key}" data-secret="false"${checked ? ' checked' : ''}>
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>`;
+      };
       return `
         <div class="config-title">DirecTV Stream Settings</div>
         <div class="config-note">
           DirecTV Stream channels are DRM-protected and only play through a DRM bridge
-          (Settings &rarr; PrismCast or FastChannels Player). ${hasSession
+          (Bridge &rarr; PrismCast Capture, HDMI Capture, or ah4c Capture). ${hasSession
             ? 'FastChannels has an active DirecTV session.'
             : 'Connect your DirecTV Stream account below, then click Authenticate.'}
         </div>
@@ -3132,6 +3116,11 @@
               ${hasSession ? '<span style="color:var(--success-soft)">&#10003; Session active</span>' : (hasCreds ? 'Account saved. Authenticate to finish setup.' : 'Add your DirecTV account below first.')}
             </span>
           </div>
+        </div>
+
+        <div class="fields-grid">
+          ${toggleHtml('exclude_fast_channels', 'Exclude FAST channels',
+            'On = leave out free, ad-supported channels (DirecTV Stream numbers these 4000-4999).')}
         </div>
 
         <details class="amazon-account-details" ${hasCreds ? '' : 'open'}>
@@ -3149,12 +3138,13 @@
                      value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
             </div>
           </div>
-          <div class="config-actions">
-            <span class="config-status" id="config-status-${sourceId}"></span>
-            <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
-            <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Account</button>
-          </div>
-        </details>`;
+        </details>
+
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
     }
 
     async function directvStartLogin(sourceId) {
@@ -3383,7 +3373,8 @@
       };
 
       const toggleField = schema.find(f => f.key === 'include_subscription_channels');
-      const otherFields = schema.filter(f => f.key !== 'include_subscription_channels');
+      const fastToggleField = schema.find(f => f.key === 'exclude_fast_channels');
+      const otherFields = schema.filter(f => !['include_subscription_channels', 'exclude_fast_channels'].includes(f.key));
       const lastSignIn = _epochAgo(cfg && cfg.oauth_token_time);
       const lastSignInHtml = lastSignIn
         ? `<div class="help" id="sling-last-signin-${sourceId}" style="color:var(--success-soft);">✓ Last signed in successfully: ${lastSignIn}</div>`
@@ -3394,6 +3385,7 @@
         <div class="config-note">Freestream works with no sign-in needed. Turn on the toggle below to also include paid Sling subscription channels.</div>
         <div class="fields-grid">
           ${toggleField ? fieldHtml(toggleField) : ''}
+          ${fastToggleField ? fieldHtml(fastToggleField) : ''}
           <div class="field field-full" style="margin:0.25rem 0 0.5rem;">
             <button class="btn btn-run" type="button" onclick="openSlingLoginModal(${sourceId})">Sign in to Sling</button>
             <div class="help">Opens a real Sling sign-in page right here — solve the captcha yourself if it's shown, and FastChannels saves the resulting session automatically. No credentials are typed by FastChannels.</div>
@@ -3558,8 +3550,6 @@
         return renderTCLConfig(sourceId, schema, values);
       } else if (sourceName === 'localnow') {
         return renderLocalNowConfig(sourceId, schema, values);
-      } else if (sourceName === 'distro') {
-        return renderDistroConfig(sourceId, schema, values);
       } else if (sourceName === 'vidaa') {
         return renderVidaaConfig(sourceId, schema, values);
       } else if (sourceName === 'samsung') {

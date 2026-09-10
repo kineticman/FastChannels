@@ -1369,7 +1369,16 @@ class DirectvScraper(BaseScraper):
         ConfigField('password', 'Password', field_type='password', required=True,
                     secret=True,
                     help_text='Your DirecTV Stream password.'),
+        ConfigField('exclude_fast_channels', 'Exclude FAST channels',
+                    field_type='toggle', default='false',
+                    help_text=(
+                        'On = leave out free, ad-supported channels. '
+                        'DirecTV Stream puts these in the 4000-4999 channel number range.'
+                    )),
     ]
+
+    _FAST_CHANNEL_NUMBER_RANGE = range(4000, 5000)
+    FAST_TAG = 'DirecTV FAST'
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
@@ -1392,6 +1401,9 @@ class DirectvScraper(BaseScraper):
                 )
             except Exception:
                 continue
+
+    def _exclude_fast_channels(self) -> bool:
+        return str(self.config.get('exclude_fast_channels', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 
@@ -1519,6 +1531,9 @@ class DirectvScraper(BaseScraper):
         if not rows:
             raise ScrapeSkipError('DirecTV Stream: could not find a channel list in the AllChannels response')
 
+        exclude_fast = self._exclude_fast_channels()
+        self.excluded_channel_ids = set()
+        non_streamable = 0
         channels: list[ChannelData] = []
 
         for row in rows:
@@ -1528,8 +1543,26 @@ class DirectvScraper(BaseScraper):
             if not ccid or not resource_id or not name:
                 continue
 
+            # Satellite lineups include receiver-only entries alongside their
+            # streamable variants. Trust only an explicit JSON false: missing
+            # metadata must preserve compatibility with other account lineups.
+            augmentation = row.get('augmentation')
+            constraints = augmentation.get('constraints') if isinstance(augmentation, dict) else None
+            if isinstance(constraints, dict) and constraints.get('isLiveStreamEnabled') is False:
+                self.excluded_channel_ids.add(ccid)
+                non_streamable += 1
+                continue
+
             number_raw = _pick(row, 'channelNumber', 'channel_number', 'number')
             number = int(number_raw) if number_raw.isdigit() else None
+            # DirecTV's own channel number, not FastChannels' guide-output number
+            # (Channel.number gets globally reassigned for M3U/guide purposes — see
+            # worker.py's _renumber — so it can't be used later to identify FAST
+            # channels; tag them instead, which survives that reassignment).
+            is_fast = number is not None and number in self._FAST_CHANNEL_NUMBER_RANGE
+            if exclude_fast and is_fast:
+                self.excluded_channel_ids.add(ccid)
+                continue
             logo = _pick(row, 'logoUrl', 'logoURL', 'logo_url') or (
                 f"https://dfwfis.prod.dtvcdn.com/catalog/image/imageserver/v1/"
                 f"service/channel/{resource_id}/chlogo-clb-guide/120/90"
@@ -1537,6 +1570,11 @@ class DirectvScraper(BaseScraper):
 
             category = category_for_channel(name, None) or infer_category_from_name(name) or 'Entertainment'
             language = infer_language_from_metadata(name)
+
+            # Stream lineups can supply Gracenote IDs here. Satellite lineups
+            # also contain internal channel IDs; retain resolver validation and
+            # community-map fallback rather than accepting every value.
+            external_listing_id = _pick(row, 'externalListingId')
 
             channels.append(ChannelData(
                 source_channel_id=ccid,
@@ -1547,10 +1585,15 @@ class DirectvScraper(BaseScraper):
                 language=language,
                 stream_type='hls',
                 number=number,
-                gracenote_id=(resolve_gracenote('directv', lookup_key=ccid)
+                gracenote_id=(resolve_gracenote('directv', upstream_id=external_listing_id, lookup_key=ccid)
                               or resolve_gracenote('directv', lookup_key=f'name:{_directv_gracenote_key(name)}')),
+                tags=[self.FAST_TAG] if is_fast else [],
             ))
 
+        logger.info(
+            '[directv] channel eligibility: upstream=%d included=%d non_streamable=%d excluded=%d',
+            len(rows), len(channels), non_streamable, len(self.excluded_channel_ids),
+        )
         _progress(self, 'channels', 1, 1)
         return channels
 

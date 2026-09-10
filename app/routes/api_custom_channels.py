@@ -121,7 +121,7 @@ def custom_channel_preview_manifest():
     effective_url = r.url
 
     if '#EXT-X-STREAM-INF' in text:
-        from app.scrapers.distro import _pick_best_variant
+        from app.scrapers.cspan import pick_best_variant as _pick_best_variant
         best = _pick_best_variant(text, effective_url)
         if not best:
             return ('No variant found', 502)
