@@ -26,6 +26,7 @@ from ..models import Channel, Source
 from ..url import public_base_url
 from ..scrapers import registry
 from .custom_proxy import (
+    _absolutize_hls_manifest,
     _custom_proxy_headers,
     _log_custom_play_path,
     _redetect_custom_stream_with_info,

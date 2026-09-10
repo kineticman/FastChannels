@@ -21,6 +21,7 @@ env:
 
 jobs:
   docker:
+    if: github.repository == 'kineticman/FastChannels'
     runs-on: ubuntu-latest
     permissions:
       contents: read
