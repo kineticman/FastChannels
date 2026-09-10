@@ -351,9 +351,11 @@ build or maintain on the ah4c side.
      prompt on that TV). For authorized tuners the table also shows the device
      OS (flagging Fire OS), whether auto-sleep is turned off, and the installed
      **FC Player** version — a version number there confirms FastChannels Player
-     is installed on that stick, and **Not installed** means ah4c can reach the
-     device but the player was never sideloaded onto it (install it with the
-     button on the HDMI Capture card, or the manual APK fallback). A stick whose
+     is installed for the active Android user on that stick. **Not installed**
+     means the player is absent for that user, even if it exists for another
+     user (install it with the button on the HDMI Capture card, or the manual
+     APK fallback). **Unknown** means the device did not report enough information
+     to confirm installation for the active user. A stick whose
      display sleep timer is still armed will drop to "no signal" partway through
      a session. Disable sleep on the device (Fire TV: **Settings → Display &
      Sounds → Display → Sleep → Never**; Android TV: the screensaver / sleep

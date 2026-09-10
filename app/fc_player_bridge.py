@@ -327,9 +327,8 @@ def _device_os_and_sleep(address: str) -> dict:
         'player_version': None,    # versionName string when installed
     }
     # One remote shell, newline-separated, in a fixed order we can index back out.
-    # The player dumpsys goes last and unbounded — we scrape versionName/versionCode
-    # out of the whole blob with a regex rather than by line index, so its multi-line
-    # output can't shift the six fixed fields above it.
+    # The player dumpsys goes last so its multi-line output cannot shift the
+    # OS, sleep, and current-user fields above it.
     remote = (
         'getprop ro.build.version.release; '
         'getprop ro.product.manufacturer; '
@@ -337,6 +336,7 @@ def _device_os_and_sleep(address: str) -> dict:
         'getprop ro.build.version.name; '
         'settings get secure sleep_timeout; '
         'settings get system screen_off_timeout; '
+        'am get-current-user; '
         'dumpsys package com.fastchannels.player'
     )
     try:
@@ -351,21 +351,30 @@ def _device_os_and_sleep(address: str) -> dict:
 
     stdout = res.stdout or ''
     lines = [ln.strip() for ln in stdout.splitlines()]
-    lines += [''] * (6 - len(lines))
-    release, manufacturer, fireos, build_name, sleep_timeout, screen_off = lines[:6]
+    lines += [''] * (7 - len(lines))
+    release, manufacturer, fireos, build_name, sleep_timeout, screen_off, current_user = lines[:7]
+    package_info = '\n'.join(lines[7:])
 
-    # `dumpsys package` only prints a versionName/versionCode block for a package
-    # that's actually installed, so a hit here doubles as the "is it installed?"
-    # answer. A missing package prints "Unable to find package:" and matches neither.
-    version_name = re.search(r'\bversionName=(\S+)', stdout)
-    version_code = re.search(r'\bversionCode=(\d+)', stdout)
-    if version_name or version_code:
-        out['player_installed'] = True
-        out['player_version'] = version_name.group(1) if version_name else f'code {version_code.group(1)}'
-    elif 'Unable to find package' in stdout:
+    # Version metadata is device-wide and can survive a per-user uninstall.
+    # Playback launches for the foreground user, so require that user's explicit
+    # installed flag before showing a version as confirmation of installation.
+    if 'Unable to find package' in package_info:
         out['player_installed'] = False
-    # else: dumpsys gave us nothing usable — leave player_installed None (Unknown)
-    # rather than guessing "not installed".
+    elif re.fullmatch(r'[0-9]+', current_user):
+        user_state = re.search(
+            rf'^User {current_user}:[^\n]*\binstalled=(true|false)\b',
+            package_info, re.MULTILINE,
+        )
+        if user_state:
+            out['player_installed'] = user_state.group(1) == 'true'
+            if out['player_installed']:
+                version_name = re.search(r'\bversionName=(\S+)', package_info)
+                version_code = re.search(r'\bversionCode=(\d+)', package_info)
+                if version_name:
+                    out['player_version'] = version_name.group(1)
+                elif version_code:
+                    out['player_version'] = f'code {version_code.group(1)}'
+    # Missing user or installation state stays Unknown, even if a version exists.
 
     fire = 'amazon' in manufacturer.lower() or bool(fireos) or 'fire os' in build_name.lower()
     out['is_fire_os'] = fire
@@ -444,8 +453,8 @@ def verify_ah4c_tuners() -> list[dict]:
     OS), whether auto-sleep is turned off — a stick that dozes off mid-session
     is a common ah4c-path failure, so "no signal" is easier to chase down when the
     table already says the display sleep timer is still armed — and the installed
-    FastChannels Player version (its presence confirms the app is installed at
-    all; ah4c can drive a stick that never got the player sideloaded)."""
+    FastChannels Player version after confirming installation for the active
+    Android user; ah4c can drive a stick that never got the player sideloaded."""
     results: list[dict] = []
     for idx, ip in enumerate(ah4c_tuner_ips(), start=1):
         # ah4c stores TUNERn_IP as a bare host or host:port; the container's adb
