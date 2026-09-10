@@ -333,8 +333,17 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             )
             r.raise_for_status()
             partners = r.json() or []
-        except (requests.RequestException, ValueError):
-            return None
+        except (requests.RequestException, ValueError) as exc:
+            # Distinct from "fetched the list, mso_id/mso_name just isn't in
+            # it" (a real, definitive not-a-participant verdict — see the
+            # caller's TVENotAuthorizedError below). A failed/malformed fetch
+            # here is transient and says nothing about entitlement — letting
+            # it fall through to a `None` return conflated the two and
+            # produced a bogus "Comcast XFINITY is not a participating TV
+            # provider" for what was actually just a network hiccup
+            # (confirmed live via a 2026-09 forum report for an MSO that
+            # unambiguously IS a partner, per the exact-match check below).
+            raise TVEAuthError(f'Discovery TVE: partner list lookup failed: {exc}') from exc
 
         # Each partner entry's own `flows[]` can carry an
         # `external_partner_id` that's literally the Adobe Pass mso_id —

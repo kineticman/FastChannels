@@ -58,7 +58,24 @@ def xfinity_cookie_jar_login(auth_url: str, username: str, password: str, cookie
     the legacy/NBC/FOX families do. Those callers can just ignore the
     return value.
     """
-    from curl_cffi import requests as curl_requests
+    from curl_cffi import CurlError, requests as curl_requests
+    from curl_cffi.const import CurlECode
+
+    def _raise_auth_error(exc: Exception) -> None:
+        # A stale/un-matured jar doesn't always fail cleanly with a 4xx (see
+        # the username-step check below) — confirmed live 2026-09: Akamai can
+        # instead bounce the session between the login page and the
+        # "automatically signed in" interstitial forever, which just blows
+        # through curl_cffi's redirect cap rather than erroring outright.
+        # Recognize that specific failure and give it the same actionable
+        # message as the other stale-jar case, instead of surfacing a raw
+        # "curl: (47) Maximum (30) redirects followed" to the user.
+        if isinstance(exc, CurlError) and getattr(exc, 'code', None) == CurlECode.TOO_MANY_REDIRECTS:
+            raise TVEAuthError(
+                'Xfinity cookie-jar sign-in stuck in a login/interstitial redirect loop '
+                '(cookie jar likely stale — needs a fresh browser pairing).'
+            ) from exc
+        raise TVEAuthError(str(exc)) from exc
 
     def _follow_interstitial_if_present(session, html_text: str) -> str | None:
         m = re.search(r'continue:\s*"([^"]+)"', html_text)
@@ -68,7 +85,7 @@ def xfinity_cookie_jar_login(auth_url: str, username: str, password: str, cookie
         try:
             r3 = session.get(continue_url, timeout=30, allow_redirects=True)
         except Exception as exc:  # noqa: BLE001
-            raise TVEAuthError(str(exc)) from exc
+            _raise_auth_error(exc)
         # Deliberately NOT raising on a non-2xx/3xx status here — this hop
         # lands on the CALLER's own redirect_url (e.g. a TVE network's own
         # /live page), which is irrelevant to whether Adobe's own
@@ -95,7 +112,7 @@ def xfinity_cookie_jar_login(auth_url: str, username: str, password: str, cookie
     try:
         r = xfinity_session.get(auth_url, timeout=30, allow_redirects=True)
     except Exception as exc:  # noqa: BLE001
-        raise TVEAuthError(str(exc)) from exc
+        _raise_auth_error(exc)
     if r.status_code >= 400 or 'login.xfinity.com' not in str(r.url):
         raise TVEAuthError(f'Xfinity cookie-jar sign-in did not reach the login page: HTTP {r.status_code}.')
 
@@ -114,7 +131,7 @@ def xfinity_cookie_jar_login(auth_url: str, username: str, password: str, cookie
             timeout=30, allow_redirects=True,
         )
     except Exception as exc:  # noqa: BLE001
-        raise TVEAuthError(str(exc)) from exc
+        _raise_auth_error(exc)
     if r2.status_code >= 400:
         raise TVEAuthError(
             f'Xfinity cookie-jar sign-in blocked at username step: HTTP {r2.status_code} '
@@ -141,7 +158,7 @@ def xfinity_cookie_jar_login(auth_url: str, username: str, password: str, cookie
             timeout=30, allow_redirects=True,
         )
     except Exception as exc:  # noqa: BLE001
-        raise TVEAuthError(str(exc)) from exc
+        _raise_auth_error(exc)
     if r3.status_code >= 400:
         raise TVEAuthError(f'Xfinity cookie-jar sign-in blocked at password step: HTTP {r3.status_code}.')
     return str(r3.url)
