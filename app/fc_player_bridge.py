@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import shlex
+import struct
 import subprocess
 import time
 
@@ -55,6 +56,138 @@ def bundled_apk_path() -> str | None:
     when this image was built — the settings page's Install button uses this to know
     whether it has anything to install."""
     return _BUNDLED_APK_PATH if os.path.isfile(_BUNDLED_APK_PATH) else None
+
+
+_bundled_version_cache: tuple[float, tuple[str | None, int | None]] | None = None
+
+
+def bundled_player_version() -> tuple[str | None, int | None]:
+    """(versionName, versionCode) baked into the bundled release APK, read straight
+    out of its compiled AndroidManifest.xml — the same fields `dumpsys package`
+    exposes for an installed app, so a bundled-vs-installed comparison is apples to
+    apples without needing aapt or a heavy APK-parsing dependency. Memoized by the
+    APK file's mtime since it never changes without an image rebuild + restart."""
+    global _bundled_version_cache
+    path = bundled_apk_path()
+    if not path:
+        return None, None
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None, None
+    if _bundled_version_cache and _bundled_version_cache[0] == mtime:
+        return _bundled_version_cache[1]
+    version = _read_apk_manifest_versions(path)
+    _bundled_version_cache = (mtime, version)
+    return version
+
+
+def _bundled_update_status(installed_version_code: int | None) -> dict:
+    """Compares an installed player's versionCode against the bundled release APK's,
+    for the Device Controls modal and ah4c tuner table. versionCode (a plain,
+    strictly-increasing int) is used rather than versionName so ordering is never
+    ambiguous the way comparing "5.10.0" against "5.2.0" as strings would be."""
+    bundled_name, bundled_code = bundled_player_version()
+    update_available = None
+    if installed_version_code is not None and bundled_code is not None:
+        update_available = installed_version_code < bundled_code
+    return {
+        'bundled_version': bundled_name,
+        'bundled_version_code': bundled_code,
+        'update_available': update_available,
+    }
+
+
+def _read_apk_manifest_versions(apk_path: str) -> tuple[str | None, int | None]:
+    import zipfile
+    try:
+        with zipfile.ZipFile(apk_path) as zf:
+            manifest = zf.read('AndroidManifest.xml')
+    except Exception:
+        return None, None
+    try:
+        return _parse_axml_manifest_versions(manifest)
+    except Exception:
+        logger.exception('Failed to parse bundled fc-player AndroidManifest.xml')
+        return None, None
+
+
+def _axml_read_utf16_string(data: bytes, pos: int) -> tuple[str, int]:
+    length = struct.unpack_from('<H', data, pos)[0]
+    if length & 0x8000:
+        low = struct.unpack_from('<H', data, pos + 2)[0]
+        length = ((length & 0x7FFF) << 16) | low
+        pos += 4
+    else:
+        pos += 2
+    raw = data[pos:pos + length * 2]
+    return raw.decode('utf-16-le', 'replace'), pos + length * 2 + 2
+
+
+def _axml_read_utf8_string(data: bytes, pos: int) -> tuple[str, int]:
+    # Skip the UTF-16 character-length prefix (1-2 bytes), then read the UTF-8 byte length.
+    def _read_len(p: int) -> tuple[int, int]:
+        n = data[p]
+        if n & 0x80:
+            return ((n & 0x7F) << 8) | data[p + 1], p + 2
+        return n, p + 1
+    _, pos = _read_len(pos)
+    byte_len, pos = _read_len(pos)
+    raw = data[pos:pos + byte_len]
+    return raw.decode('utf-8', 'replace'), pos + byte_len + 1
+
+
+def _axml_parse_string_pool(data: bytes, chunk_start: int) -> list[str]:
+    string_count, _style_count, flags, strings_start, _styles_start = struct.unpack_from(
+        '<IIIII', data, chunk_start + 8,
+    )
+    is_utf8 = bool(flags & 0x100)
+    offsets = struct.unpack_from(f'<{string_count}I', data, chunk_start + 28)
+    pool_start = chunk_start + strings_start
+    strings = []
+    for rel in offsets:
+        text, _ = (_axml_read_utf8_string if is_utf8 else _axml_read_utf16_string)(data, pool_start + rel)
+        strings.append(text)
+    return strings
+
+
+def _parse_axml_manifest_versions(data: bytes) -> tuple[str | None, int | None]:
+    """Minimal Android Binary XML reader — just enough to find the <manifest> root
+    element's android:versionCode / android:versionName attributes. Chunk layout
+    per AOSP's ResourceTypes.h; this format has been stable since Android 1.0."""
+    strings: list[str] = []
+    pos = 8  # past the outer RES_XML_TYPE chunk header (type, headerSize, size)
+    while pos + 8 <= len(data):
+        chunk_type, _header_size, chunk_size = struct.unpack_from('<HHI', data, pos)
+        if chunk_size <= 0:
+            break
+        if chunk_type == 0x0001:  # RES_STRING_POOL_TYPE
+            strings = _axml_parse_string_pool(data, pos)
+        elif chunk_type == 0x0102:  # RES_XML_START_ELEMENT_TYPE
+            name_idx = struct.unpack_from('<i', data, pos + 20)[0]
+            if 0 <= name_idx < len(strings) and strings[name_idx] == 'manifest':
+                attr_start, attr_size, attr_count = struct.unpack_from('<HHH', data, pos + 24)
+                base = pos + 16 + attr_start
+                version_name = version_code = None
+                for i in range(attr_count):
+                    entry = base + i * attr_size
+                    attr_name_idx = struct.unpack_from('<i', data, entry + 4)[0]
+                    raw_value_idx = struct.unpack_from('<i', data, entry + 8)[0]
+                    data_type = data[entry + 15]
+                    value = struct.unpack_from('<I', data, entry + 16)[0]
+                    if not (0 <= attr_name_idx < len(strings)):
+                        continue
+                    attr_name = strings[attr_name_idx]
+                    if attr_name == 'versionCode' and data_type in (0x10, 0x11):
+                        version_code = value
+                    elif attr_name == 'versionName':
+                        if 0 <= raw_value_idx < len(strings):
+                            version_name = strings[raw_value_idx]
+                        elif data_type == 0x03 and 0 <= value < len(strings):
+                            version_name = strings[value]
+                return version_name, version_code
+        pos += chunk_size
+    return None, None
 
 # How long a bridged channel can sit with no confirmed viewer (neither Channels DVR
 # activity nor a /watch heartbeat) before we stop it. Matches the old Kodi bridge's
@@ -325,6 +458,10 @@ def _device_os_and_sleep(address: str) -> dict:
         'sleep_detail': '',
         'player_installed': None,  # True / False / None (unknown)
         'player_version': None,    # versionName string when installed
+        'player_version_code': None,
+        'bundled_version': None,
+        'bundled_version_code': None,
+        'update_available': None,  # True / False / None (unknown — nothing to compare against)
     }
     # One remote shell, newline-separated, in a fixed order we can index back out.
     # The player dumpsys goes last so its multi-line output cannot shift the
@@ -370,10 +507,13 @@ def _device_os_and_sleep(address: str) -> dict:
             if out['player_installed']:
                 version_name = re.search(r'\bversionName=(\S+)', package_info)
                 version_code = re.search(r'\bversionCode=(\d+)', package_info)
+                if version_code:
+                    out['player_version_code'] = int(version_code.group(1))
                 if version_name:
                     out['player_version'] = version_name.group(1)
                 elif version_code:
                     out['player_version'] = f'code {version_code.group(1)}'
+                out.update(_bundled_update_status(out['player_version_code']))
     # Missing user or installation state stays Unknown, even if a version exists.
 
     fire = 'amazon' in manufacturer.lower() or bool(fireos) or 'fire os' in build_name.lower()
@@ -474,6 +614,10 @@ def verify_ah4c_tuners() -> list[dict]:
             'sleep_detail': '',
             'player_installed': None,
             'player_version': None,
+            'player_version_code': None,
+            'bundled_version': None,
+            'bundled_version_code': None,
+            'update_available': None,
         }
         if state == 'device':
             row.update(_device_os_and_sleep(address))
@@ -553,7 +697,8 @@ def device_controls_status() -> dict:
         r'state=PlaybackState \{state=(?:[A-Z_]+\()?(\d+)', sessions, re.S,
     )
 
-    return {
+    player_version_code = int(version_code.group(1)) if version_code else None
+    result = {
         'ok': True,
         'address': address,
         'model': model.strip() or 'Android TV device',
@@ -564,12 +709,17 @@ def device_controls_status() -> dict:
         'focus': focus_match.group(1).strip() if focus_match else None,
         'player_installed': bool(version_name),
         'player_version': version_name.group(1) if version_name else None,
-        'player_version_code': int(version_code.group(1)) if version_code else None,
+        'player_version_code': player_version_code,
         'player_playing': player_session.group(1) == '3' if player_session else False,
         'stay_on_while_powered': _setting_number(address, 'global', 'stay_on_while_plugged_in') or 0,
         'screen_off_timeout': _setting_number(address, 'system', 'screen_off_timeout'),
         'sleep_timeout': _setting_number(address, 'secure', 'sleep_timeout'),
     }
+    if version_name:
+        result.update(_bundled_update_status(player_version_code))
+    else:
+        result.update({'bundled_version': None, 'bundled_version_code': None, 'update_available': None})
+    return result
 
 
 def wake_device() -> tuple[bool, str]:

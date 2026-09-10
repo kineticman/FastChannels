@@ -632,6 +632,23 @@ def bridge_healthcheck():
         add('ok' if ok else 'fail', 'FastChannels Player device', message,
             '' if ok else 'Enable ADB or Network Debugging, retry, and approve “Allow USB debugging?” on the TV.')
 
+        if ok:
+            device_status = fc_player_bridge.device_controls_status()
+            if not device_status.get('player_installed'):
+                add('warn', 'FastChannels Player version', 'FastChannels Player is not installed on this device.',
+                    'Click Install FastChannels Player above.')
+            elif device_status.get('update_available'):
+                add('warn', 'FastChannels Player version',
+                    f"Installed {device_status.get('player_version')}, but {device_status.get('bundled_version')} "
+                    'is bundled in this FastChannels image.',
+                    'Open Fire TV Device Controls and click Update FastChannels Player.')
+            elif device_status.get('bundled_version_code') is None:
+                add('skip', 'FastChannels Player version',
+                    f"Installed {device_status.get('player_version')}. "
+                    'No bundled release APK in this image to compare against.')
+            else:
+                add('ok', 'FastChannels Player version', f"Installed {device_status.get('player_version')} — up to date.")
+
         encoder_url = settings.effective_fc_player_bridge_encoder_url()
         if not encoder_url:
             add('skip', 'HDMI Capture stream', 'No fixed encoder stream is configured.')
@@ -683,6 +700,16 @@ def bridge_healthcheck():
                 status = 'ok' if authorized == len(tuners) else 'fail'
                 add(status, 'ah4c tuners', f'{authorized}/{len(tuners)} tuner device(s) are authorized by FastChannels.',
                     '' if status == 'ok' else 'Retry an action and approve FastChannels’ ADB authorization prompt on each affected TV.')
+
+                outdated = [tuner for tuner in tuners if tuner.get('update_available')]
+                installed = [tuner for tuner in tuners if tuner.get('player_installed')]
+                if outdated:
+                    add('warn', 'ah4c player versions',
+                        f'{len(outdated)}/{len(tuners)} tuner device(s) are running an outdated FastChannels Player build '
+                        f"(tuner #{', #'.join(str(t['index']) for t in outdated)}).",
+                        'Reinstall FastChannels Player on those devices, or rebuild this image to bundle the latest release.')
+                elif installed:
+                    add('ok', 'ah4c player versions', 'All ah4c tuner devices are running the current bundled FastChannels Player build.')
         except fc_player_bridge.FcPlayerNotConfigured:
             add('warn', 'ah4c tuners', 'ah4c is not fully configured.', 'Save the ah4c server URL and retry.')
         except (ValueError, _req.RequestException):

@@ -427,7 +427,12 @@ function renderAh4cTuners(tuners) {
     if (t.state !== 'device') {
       playerCell.textContent = '—';
     } else if (t.player_installed === true) {
-      addBadge(playerCell, '✓ ' + (t.player_version || 'Installed'), 'ok');
+      if (t.update_available) {
+        addBadge(playerCell, '⬆ ' + (t.player_version || 'Installed'), 'warn',
+          `Update available (${t.bundled_version || 'newer build'})`);
+      } else {
+        addBadge(playerCell, '✓ ' + (t.player_version || 'Installed'), 'ok');
+      }
     } else if (t.player_installed === false) {
       addBadge(playerCell, '✕ Not installed', 'warn');
     } else {
@@ -483,6 +488,9 @@ async function installFcPlayer() {
     const data = await resp.json();
     statusEl.textContent = data.message || (data.ok ? 'Installed.' : 'Install failed.');
     statusEl.className = 'save-status ' + (data.ok ? 'ok' : 'error');
+    if (data.ok && document.getElementById('fc-player-device-controls-modal').classList.contains('open')) {
+      await refreshFcPlayerDeviceControls();
+    }
   } catch (e) {
     statusEl.textContent = 'Install failed.';
     statusEl.className = 'save-status error';
@@ -539,16 +547,19 @@ async function refreshFcPlayerDeviceControls() {
       return;
     }
     const awake = data.awake === true ? 'Awake' : data.awake === false ? 'Asleep' : data.wakefulness;
-    const player = data.player_installed
-      ? `Installed (${data.player_version || 'version unknown'})`
+    let player = data.player_installed
+      ? `Installed (${_escapeHtml(data.player_version || 'version unknown')})`
       : 'Not installed';
+    if (data.update_available) {
+      player += ` — <span style="color:var(--warning)">update available${data.bundled_version ? ` (${_escapeHtml(data.bundled_version)})` : ''}</span>`;
+    }
     const playback = data.player_playing ? 'Playing' : 'Idle';
     body.innerHTML = `
       <div style="display:grid;grid-template-columns:max-content 1fr;gap:0.25rem 0.8rem">
         <strong>Connection</strong><span style="color:var(--success)">Connected via ADB</span>
         <strong>Device</strong><span>${_escapeHtml(data.model || 'Android TV device')}${data.android_version ? ` · Android ${_escapeHtml(data.android_version)}` : ''}</span>
         <strong>Screen</strong><span>${_escapeHtml(awake)} · Display ${_escapeHtml(data.display_power || 'Unknown')}</span>
-        <strong>Player</strong><span>${_escapeHtml(player)} · ${playback}</span>
+        <strong>Player</strong><span>${player} · ${playback}</span>
         <strong>Keep awake</strong><span>${Number(data.stay_on_while_powered) ? 'On while powered' : 'Off'}</span>
         <strong>Screen off</strong><span>${fcPlayerTimeoutLabel(data.screen_off_timeout)}</span>
         <strong>Sleep</strong><span>${fcPlayerTimeoutLabel(data.sleep_timeout)}</span>
@@ -557,6 +568,7 @@ async function refreshFcPlayerDeviceControls() {
     setFcPlayerTimeoutSelect('fc-player-device-screen-timeout', data.screen_off_timeout);
     setFcPlayerTimeoutSelect('fc-player-device-sleep-timeout', data.sleep_timeout);
     document.getElementById('fc-player-device-restore').disabled = !data.restore_available;
+    document.getElementById('fc-player-device-update').hidden = !data.update_available;
   } catch (e) {
     body.textContent = 'Could not read device status.';
   }
