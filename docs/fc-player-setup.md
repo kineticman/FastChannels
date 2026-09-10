@@ -42,6 +42,21 @@ single-encoder path.
 
 ## Before you begin
 
+> **Device warning — don't buy a Vega OS Fire TV Stick:** Amazon has started
+> shipping some Fire TV Stick models on **Vega OS**, a new non-Android
+> operating system that does not support the Downloader app or APK
+> sideloading at all. FastChannels Player cannot be installed on a Vega OS
+> device, so it cannot be used for this setup. Known Vega OS models include
+> the **Fire TV Stick HD** and **Fire TV Stick 4K Select** — avoid these.
+> Devices that still run Android-based Fire OS (and work with this guide)
+> include the **Fire TV Stick 4K Max**, **Fire TV Stick 4K Plus**, and most
+> older/previous-generation Fire TV Sticks and Fire TV Cubes. If you're buying
+> a new device for this setup, confirm the exact model still runs Fire OS
+> before purchasing — when in doubt, an older-generation stick is the safer
+> bet. See
+> [aftvnews.com's rundown of which Fire TVs support sideloading](https://www.aftvnews.com/these-are-the-fire-tvs-that-dont-support-sideloading-or-downloader-due-to-vega-os-replacing-fire-os/)
+> for the current list.
+
 You will need:
 
 - A dedicated Fire TV or Android TV device
