@@ -49,3 +49,4 @@ docker-compose.test.yml
 CLAUDE.md
 AGENTS.md
 tests/
+docs/bridge-ui-redesign.md
