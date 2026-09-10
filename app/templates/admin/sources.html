@@ -785,6 +785,7 @@
           {% set ns = namespace(last_cat=None) %}
           {% for source in sources %}
           {% set cfg_status = source_config_status.get(source.id, 'none') %}
+          {% set retired = source_retired.get(source.id) %}
           {% set is_custom = source.name == 'custom' %}
           {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'specialty' %}
           {% if this_cat != ns.last_cat %}
@@ -814,7 +815,10 @@
                   {% if under_development.get(source.name) %}
                     <span class="config-badge development" title="This source is under development and disabled by default">Under development</span>
                   {% endif %}
-                  {% if cfg_status == 'configured' %}
+                  {% if retired %}
+                    <span class="config-badge retired" id="config-badge-{{ source.id }}"
+                          title="Upstream shut down; this scraper was removed. Auto-removed from this list in {{ retired.days_left }} day{{ '' if retired.days_left == 1 else 's' }}.">Retired</span>
+                  {% elif cfg_status == 'configured' %}
                     <span class="config-badge configured" id="config-badge-{{ source.id }}">Configured</span>
                   {% elif cfg_status == 'required' %}
                     <span class="config-badge needs-config" id="config-badge-{{ source.id }}">⚠ Needs Config</span>

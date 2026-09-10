@@ -542,6 +542,25 @@ def sources():
         if s.name in all_scrapers
     }
 
+    # Sources whose scraper module was deleted (e.g. an upstream FAST service
+    # shut down) sit here for a grace period before auto-purge — see
+    # purge_orphaned_sources() in worker.py. Surface the countdown directly on
+    # the row so it doesn't need a click into Configure to be noticed.
+    source_retired = {}
+    _retired_sources = [s for s in sources_list if s.name not in all_scrapers and s.scraper_missing_since is not None]
+    if _retired_sources:
+        from ..worker import _SCRAPER_MISSING_GRACE_DAYS
+        _now = datetime.now(timezone.utc)
+        for s in _retired_sources:
+            missing_since = s.scraper_missing_since
+            if missing_since.tzinfo is None:
+                missing_since = missing_since.replace(tzinfo=timezone.utc)
+            purge_at = missing_since + timedelta(days=_SCRAPER_MISSING_GRACE_DAYS)
+            source_retired[s.id] = {
+                'purge_at': purge_at.isoformat(),
+                'days_left': max(0, (purge_at - _now).days),
+            }
+
     # Channel-fetch freshness: only meaningful for sources that fetch the channel
     # list on a slower cadence than EPG (channel_refresh_hours > 0). NULL means
     # "not yet fetched under the new clock — heals on next scrape"; stale means
@@ -593,6 +612,7 @@ def sources():
                            source_categories=source_categories,
                            source_interval_meta=source_interval_meta,
                            source_config_status=source_config_status,
+                           source_retired=source_retired,
                            channel_fetch_meta=channel_fetch_meta,
                            epg_meta=_epg_freshness_meta(sources_list, _now),
                            needs_config=needs_config,
