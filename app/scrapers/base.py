@@ -568,7 +568,7 @@ class BaseScraper(ABC):
         # so Source-entity loads (incl. report joins) never deserialize them.
         # Lazily loaded on first `self.cache` access (see the property below) so the
         # play/resolve hot path doesn't pay a DB join for sources that never use a
-        # cache (xumo, distro, pluto, tubi, …) — they just never touch self.cache.
+        # cache (xumo, pluto, tubi, …) — they just never touch self.cache.
         self._cache: dict | None = None
         self._pending_cache_updates: dict = {}
         self._progress_cb = None   # optional callable(phase, done, total) set by worker

@@ -1,6 +1,6 @@
 # FastChannels
 
-FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, DistroTV, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, cable-network channels via TV Everywhere (NBCUniversal, FOX, FOX One, Discovery, AMC Networks, A+E Networks, Warner Bros Discovery), your own HDHomeRun tuner, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.). DRM-protected sources play back through a real Widevine bridge (browser-based PrismCast, or FastChannels' own Fire TV / Android TV player app) rather than being dropped.
+FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, cable-network channels via TV Everywhere (NBCUniversal, FOX, FOX One, Discovery, AMC Networks, A+E Networks, Warner Bros Discovery), your own HDHomeRun tuner, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.). DRM-protected sources play back through a real Widevine bridge (browser-based PrismCast, or FastChannels' own Fire TV / Android TV player app) rather than being dropped.
 
 ## Deploy with Portainer
 
@@ -65,7 +65,7 @@ Go to **Admin → Settings** and set two things:
 **3. Configure Sources.**
 Go to **Admin → Sources**. Enable or disable sources to taste, and expand any source card to enter credentials. Changes take effect on the next scrape.
 
-Most sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, DistroTV, Vidaa Free TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, every TV Everywhere source (A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, Warner Bros Discovery), and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), Frndly/Fubo/FreeCast/DirecTV Stream/Cox Contour require account credentials, Philo signs in with a passwordless emailed code, and the TV Everywhere sources authenticate once via **Settings → TV Everywhere** rather than per-source. See [Source Notes](#source-notes) for per-source details.
+Most sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, Vidaa Free TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, every TV Everywhere source (A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, Warner Bros Discovery), and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), Frndly/Fubo/FreeCast/DirecTV Stream/Cox Contour require account credentials, Philo signs in with a passwordless emailed code, and the TV Everywhere sources authenticate once via **Settings → TV Everywhere** rather than per-source. See [Source Notes](#source-notes) for per-source details.
 
 **4. Run Stream Audits.**
 Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
@@ -274,7 +274,6 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Xumo Play | None | Public API |
 | Samsung TV Plus | None | Channel data and EPG via [Matt Huisman's public mirror](https://github.com/matthuisman/samsung-tvplus-for-channels). Region configurable (default: `us`). |
 | Sling Freestream | Optional (paid) | **Default off.** Two modes: Freestream-only (free, anonymous) or paid Sling account for premium channels; streams are DRM-only for generic IPTV clients |
-| DistroTV | None | **Default off.** Upstream lineup has shrunk considerably. Android TV UA required, URL macro substitution |
 | LG Channels | None | Country configurable (default: `US`) |
 | Local Now | None | **Default off.** Public API |
 | STIRR | None | Public API |

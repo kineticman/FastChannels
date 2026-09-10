@@ -1046,7 +1046,7 @@ def run_stream_audit(source_name: str):
                         ch.is_active = True
                         ch.disable_reason = None
                         logger.info('[audit] re-activated previously dead channel: %s', ch.name)
-                    # Opaque-URL scrapers (stirr/distro/xumo/roku/localnow/plex) confirm
+                    # Opaque-URL scrapers (stirr/xumo/roku/localnow/plex) confirm
                     # liveness without fetching the manifest, so stream_info (the
                     # resolution/codec badge) would otherwise never be populated by an
                     # audit. Backfill it once when missing via a play-time resolve +
@@ -3159,7 +3159,7 @@ def _schedule_due_scrapes():
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
-        default_disabled_sources = {'amazon_prime_free', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cox', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'distro', 'philo', 'directv', 'pbs', 'tubi'}
+        default_disabled_sources = {'amazon_prime_free', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cox', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi'}
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():
             db.session.add(Source(

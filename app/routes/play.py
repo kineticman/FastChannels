@@ -45,11 +45,6 @@ from .directv_proxy import (
     configure_directv_proxy,
     directv_proxy_bp,
 )
-from .distro_proxy import (
-    configure_distro_proxy,
-    distro_proxy_bp,
-    manifest_proxy_hosts as _DISTRO_MANIFEST_PROXY_HOSTS,
-)
 from .fox_tve_proxy import (
     _FOX_TVE_PROXY_REQUIRED_CHANNELS,
     configure_fox_tve_proxy,
@@ -82,7 +77,6 @@ from .tasks import trigger_channel_auto_disable
 logger = logging.getLogger(__name__)
 
 play_bp = Blueprint('play', __name__)
-play_bp.register_blueprint(distro_proxy_bp)
 
 _BROWSER_UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -172,7 +166,6 @@ def _stream_upstream_response(
     return response
 
 
-configure_distro_proxy(stream_upstream_response=_stream_upstream_response)
 configure_custom_proxy(
     unavailable_response=_unavailable_response,
     stream_upstream_response=_stream_upstream_response,
@@ -393,13 +386,6 @@ def play_vlc(source_name: str, channel_id: str):
         .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
         .first()
     )
-    if not channel and source_name == 'distro' and ':' not in channel_id:
-        channel = (
-            Channel.query
-            .join(Source)
-            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
-            .first()
-        )
     if not channel:
         abort(404)
     base_url = request.host_url.rstrip('/')
@@ -2627,16 +2613,6 @@ def play(source_name: str, channel_id: str):
         .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
         .first()
     )
-    if not channel and source_name == 'distro' and ':' not in channel_id:
-        # Legacy Distro IDs were bare integers (e.g. "39730"); multi-region
-        # support prefixed them with "US:" — fall back so old cached playlists
-        # still work.
-        channel = (
-            Channel.query
-            .join(Source)
-            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
-            .first()
-        )
     if not channel:
         logger.warning('[play] request ip=%s unknown channel %s/%s', client_ip, source_name, channel_id)
         abort(404)
@@ -2871,19 +2847,6 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
-    # Distro channels with browser-sensitive manifests: serve a manifest proxy
-    # so Shaka sees absolute segment URLs and so header-gated CDNs are fetched
-    # server-side. The proxy still leaves public segment URLs direct.
-    if source_name == 'distro' and resolved_url:
-        from urllib.parse import urlsplit as _urlsplit
-        if _urlsplit(resolved_url).netloc in _DISTRO_MANIFEST_PROXY_HOSTS:
-            from urllib.parse import quote as _quote
-            encoded_id = _quote(channel.source_channel_id, safe='')
-            return redirect(
-                f"{request.host_url.rstrip('/')}/play/distro/{encoded_id}/proxy.m3u8",
-                302,
-            )
-
     # TCL channels routed through FutureToday/Publica's SSAI pipeline: the
     # manifest CDN (getpublica.com) sets CORS correctly, but the content
     # segments it stitches in live on a separate origin (e.g. cachefly.net)
@@ -2924,7 +2887,7 @@ def play(source_name: str, channel_id: str):
             reason, stream_info = _check_manifest(resolved_url, s)
             # Refresh the resolution/codec badge off the same manifest fetch, for the
             # redirect-to-CDN sources that reach this generic path (xumo/roku/plex/
-            # localnow). Proxied sources (stirr/distro) refresh in their own proxy
+            # localnow). Proxied sources (stirr) refresh in their own proxy
             # endpoints instead. Only write when the displayed summary changes, so the
             # per-tune probe doesn't churn the DB on volatile session metadata.
             if stream_info:
@@ -3003,13 +2966,6 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
         .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
         .first()
     )
-    if not channel and source_name == 'distro' and ':' not in channel_id:
-        channel = (
-            Channel.query
-            .join(Source)
-            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
-            .first()
-        )
     if not channel:
         abort(404)
 
@@ -3073,13 +3029,6 @@ def play_fc_player_bridge_vlc(source_name: str, channel_id: str):
         .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
         .first()
     )
-    if not channel and source_name == 'distro' and ':' not in channel_id:
-        channel = (
-            Channel.query
-            .join(Source)
-            .filter(Source.name == source_name, Channel.source_channel_id == f'US:{channel_id}')
-            .first()
-        )
     if not channel:
         abort(404)
     base_url = request.host_url.rstrip('/')

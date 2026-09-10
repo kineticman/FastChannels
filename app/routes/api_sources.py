@@ -4,7 +4,7 @@ import re
 import time as _time
 
 logger = logging.getLogger(__name__)
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 _APP_START = _time.time()
 from flask import Blueprint, jsonify, request, current_app
@@ -441,6 +441,15 @@ def get_source_config(source_id):
     source      = Source.query.get_or_404(source_id)
     scraper_cls = registry.get(source.name)
     schema      = [f.to_dict() for f in (scraper_cls.config_schema if scraper_cls else []) if not f.hidden]
+    retired     = None
+    if scraper_cls is None and source.scraper_missing_since is not None:
+        from ..worker import _SCRAPER_MISSING_GRACE_DAYS
+        missing_since = source.scraper_missing_since
+        if missing_since.tzinfo is None:
+            missing_since = missing_since.replace(tzinfo=timezone.utc)
+        purge_at = missing_since + timedelta(days=_SCRAPER_MISSING_GRACE_DAYS)
+        days_left = max(0, (purge_at - datetime.now(timezone.utc)).days)
+        retired = {'purge_at': purge_at.isoformat(), 'days_left': days_left}
     saved       = source.config or {}
     secret_keys = {f['key'] for f in schema if f['secret']}
     values = {}
@@ -463,7 +472,8 @@ def get_source_config(source_id):
     )
     return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
                     'config_status': config_status,
-                    'oauth_token_time': saved.get('oauth_token_time')})
+                    'oauth_token_time': saved.get('oauth_token_time'),
+                    'retired': retired})
 
 
 @sources_bp.route('/sources/<int:source_id>/config', methods=['POST'])
