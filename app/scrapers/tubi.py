@@ -3,11 +3,23 @@
 Tubi TV scraper for FastChannels.
 
 Two auth modes:
-  - Anonymous (default): GETs tubitv.com/live, extracts the embedded
-    window.__data JSON blob to get channel IDs + groups, then calls the
-    public /oz/epg/programming endpoint for stream URLs and EPG.
-  - Authenticated: POSTs email/password for a Bearer token, then uses the
-    authenticated tensor-cdn EPG API (richer metadata, more channels).
+  - Anonymous: GETs tubitv.com/live, extracts the embedded window.__data
+    JSON blob to get channel IDs + groups, then calls the public
+    /oz/epg/programming endpoint for stream URLs and EPG.
+  - Authenticated (required as of 2026-09): POSTs email/password for a
+    Bearer token, then uses the tensor-cdn EPG API for the channel list.
+
+    As of Sep 2026 Tubi no longer embeds the live channel list in
+    tubitv.com/live's server-rendered window.__data — the web client now
+    lazy-loads it client-side via tensor-cdn using a Bearer token, even
+    for signed-out visitors (a *guest* token minted through a signed
+    /device/anonymous/token exchange we can't replicate without
+    reverse-engineering Tubi's request-signing scheme). So
+    _channels_anon() reliably returns zero channels now. A real Tubi
+    account (config username/password) is required for channel
+    discovery; _channels_anon() is kept only as the fetch_epg()
+    fallback (EPG-by-id still works anonymously) and a best-effort
+    fallback if auth is misconfigured.
 
 No extra dependencies beyond what's already in requirements.txt.
 """
@@ -24,7 +36,7 @@ from urllib.parse import unquote
 
 import requests
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata, null_placeholder_season_episode
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, infer_language_from_metadata, null_placeholder_season_episode
 from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
@@ -76,18 +88,20 @@ class TubiScraper(BaseScraper):
     stream_audit_enabled  = True
     scrape_before_audit   = True   # fetch_channels() warms _url_cache + session cookies before audit
     scrape_interval = 360
+    config_required = True   # anon channel discovery is broken (Sep 2026) — a real account is required
 
     config_schema = [
         ConfigField(
             key='username', label='Tubi Username',
-            field_type='text', secret=False,
+            field_type='text', secret=False, required=True,
             placeholder='email@example.com',
-            help_text='Optional — anonymous access works for most channels.',
+            help_text='Required — Tubi no longer exposes the live channel list to signed-out '
+                       'requests, so a free Tubi account is needed to discover channels.',
         ),
         ConfigField(
             key='password', label='Tubi Password',
-            field_type='password', secret=True,
-            help_text='Optional. Only needed if username is set.',
+            field_type='password', secret=True, required=True,
+            help_text='Required — same account as above.',
         ),
     ]
 
@@ -112,10 +126,16 @@ class TubiScraper(BaseScraper):
 
     def fetch_channels(self) -> list[ChannelData]:
         if self._username and self._password:
+            # _channels_auth() (via _get_token()) raises ScrapeSkipError on a
+            # login rejection (e.g. bad/expired password) — let that propagate
+            # so it lands in Source.last_error instead of masking it behind a
+            # silent fallback to the anon path, which can no longer discover
+            # channels at all (see module docstring) and would just return 0
+            # either way.
             channels = self._channels_auth()
             if channels:
                 return channels
-            logger.warning('[tubi] auth channel fetch failed, falling back to anonymous')
+            logger.warning('[tubi] auth channel fetch returned 0 channels, falling back to anonymous')
         return self._channels_anon()
 
     # ── Optional ─────────────────────────────────────────────────────────────
@@ -126,7 +146,14 @@ class TubiScraper(BaseScraper):
             return []
         programs = None
         if self._username and self._password:
-            programs = self._epg_auth(ids)
+            try:
+                programs = self._epg_auth(ids)
+            except ScrapeSkipError as e:
+                # Unlike channel discovery, anon EPG-by-content_id still works
+                # (it doesn't need the broken window.__data listing), so a
+                # login failure here is worth falling back for rather than
+                # losing the guide entirely.
+                logger.warning('[tubi] auth EPG fetch failed (%s), falling back to anonymous', e)
         if not programs:
             programs = self._epg_anon(ids)
         null_placeholder_season_episode(programs)
@@ -505,18 +532,30 @@ class TubiScraper(BaseScraper):
             'credentials': {'email': self._username, 'password': self._password},
             'errorLog': False,
         }
-        try:
-            r = self.session.post(_LOGIN_URL, json=payload,
-                                  headers={**self.session.headers, 'content-type': 'application/json'},
-                                  timeout=15)
-            r.raise_for_status()
-        except Exception as e:
-            logger.error('[tubi] login failed: %s', e)
-            return None
+        # Network/timeout errors are intentionally NOT caught here — they
+        # propagate to worker.py's generic handler, which already knows how
+        # to tell a transient network blip from a real failure. Only a
+        # response Tubi actually sent back (e.g. rejected credentials) is
+        # handled below.
+        r = self.session.post(_LOGIN_URL, json=payload,
+                              headers={**self.session.headers, 'content-type': 'application/json'},
+                              timeout=15)
+        if not r.ok:
+            try:
+                body = r.json()
+                err = body.get('message') or body.get('code') or r.text[:120]
+            except ValueError:
+                err = r.text[:120]
+            # ScrapeSkipError is logged as a single WARNING line (no traceback)
+            # and lands verbatim in Source.last_error, so a stale/bad password
+            # shows up clearly in the admin UI instead of silently degrading
+            # to the (also-broken) anonymous path and reporting 0 channels
+            # with no explanation.
+            raise ScrapeSkipError(f'Tubi TV login failed ({err}) — check username/password in source config')
 
         resp = r.json()
         self._token    = resp.get('access_token')
         self._token_at = now
         self._token_ttl = float(resp.get('expires_in', 3600))
-        logger.debug('[tubi] token refreshed, ttl=%.0fs', self._token_ttl)
+        logger.info('[tubi] logged in as %s (token ttl=%.0fs)', self._username, self._token_ttl)
         return self._token
