@@ -340,7 +340,10 @@ build or maintain on the ah4c side.
      pre-filled from your browser's address, but confirm it — the two
      machines aren't always the same one). Downloading produces
      `prebmitune.sh`, `bmitune.sh`, `stopbmitune.sh`, and `reboot.sh`, already
-     configured with that address baked in.
+     configured with that address as the default. To override it without
+     re-exporting, set `FASTCHANNELS_URL` in ah4c's container environment to the
+     FastChannels server URL (without a trailing slash). An unset or empty
+     variable uses the exported address.
    - Click **Check tuner authorization(s)** (any time after the server URL is
      saved). FastChannels reads ah4c's configured `TUNERx_IP` list from ah4c's
      own `/api/status` and, for each one, reports whether *this* FastChannels

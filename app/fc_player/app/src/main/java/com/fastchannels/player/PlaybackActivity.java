@@ -113,8 +113,9 @@ public class PlaybackActivity extends Activity {
         // No lock-screen/notification controls needed — this device has no on-device UI
         // (see class docstring) — just publishing PlaybackState to dumpsys media_session so
         // an ah4c-driven tuner's stock is_media_playing() check (adb shell dumpsys
-        // media_session, looking for state=PlaybackState {state=3}) can see this player the
-        // same way it already sees Hulu/YouTube TV, instead of always reading "not playing".
+        // media_session, looking for a PLAYING PlaybackState — rendered "state=3" on Fire OS,
+        // "state=PLAYING(3)" on newer AOSP) can see this player the same way it already sees
+        // Hulu/YouTube TV, instead of always reading "not playing".
         // Built once here and left wrapping the same ExoPlayer instance across retunes
         // (see onNewIntent), so it needs no per-retune handling.
         mediaSession = new MediaSession.Builder(this, player).build();
