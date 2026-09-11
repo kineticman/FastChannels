@@ -6,6 +6,9 @@ services:
         # Bump to force a fresh yt-dlp master pull, e.g.:
         #   YTDLP_REFRESH=$(date +%s) docker compose build
         YTDLP_REFRESH: ${YTDLP_REFRESH:-unset}
+        # Bump to force re-pulling the latest FastChannels Player release APK, e.g.:
+        #   FC_PLAYER_APK_REFRESH=$(date +%s) docker compose build
+        FC_PLAYER_APK_REFRESH: ${FC_PLAYER_APK_REFRESH:-unset}
     container_name: fastchannels
     ports:
       - 5523:5523

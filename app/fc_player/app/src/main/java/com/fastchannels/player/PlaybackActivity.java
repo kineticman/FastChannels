@@ -201,8 +201,9 @@ public class PlaybackActivity extends Activity {
         player.stop();
         player.clearMediaItems();
         activeChannelKey = null;
-        // Remove the old frame from HDMI while retaining this task for a warm retune.
-        moveTaskToBack(true);
+        // Stay foregrounded instead of moveTaskToBack(): backgrounding exposed the Fire TV
+        // launcher for the entire gap until the next tune's am start arrives (1-2.5s observed
+        // live), and doesn't speed up the retune.
     }
 
     @Override

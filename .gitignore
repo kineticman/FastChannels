@@ -42,6 +42,7 @@ Thumbs.db
 # Internal docs / research (never push)
 dev/
 Dev/
+experiments/
 stress_test.py
 probe_amazon.py
 docker-compose.override.yml

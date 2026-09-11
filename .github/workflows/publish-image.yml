@@ -71,6 +71,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             YTDLP_REFRESH=${{ github.sha }}
-            FC_PLAYER_APK_REFRESH=${{ github.sha }}
+            FC_PLAYER_APK_REFRESH=${{ github.run_id }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
