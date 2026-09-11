@@ -1883,6 +1883,8 @@ _NAME_OVERRIDES: dict[str, str] = {
     'third watch':                          'Classic TV',
     'madtv':                                'Comedy',
     'mtv pluto tv':                         'Reality TV',
+    'w3':                                    'Lifestyle',
+    'ontv4u':                                'Shopping',
 }
 
 
