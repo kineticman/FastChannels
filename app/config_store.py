@@ -1,5 +1,6 @@
 import copy
 import fcntl
+import logging
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,24 +12,69 @@ from app.extensions import db
 from app.models import Source, SourceCache
 from app.scrapers.base import merge_config_updates
 
+logger = logging.getLogger(__name__)
+
+# fcntl.flock is a raw OS-level lock — unlike sockets/threading/subprocess/time.sleep,
+# gevent's monkey.patch_all() does NOT make it cooperative. A plain blocking
+# flock(LOCK_EX) call doesn't yield to the gevent hub, so it freezes the ENTIRE
+# worker (every other concurrent request on it, not just this one) for as long as
+# another holder keeps the lock. Confirmed 2026-09-12 as the likely mechanism behind
+# a community-reported gunicorn WORKER TIMEOUT: this lock is held across a 3x SQLite
+# retry loop (persist_source_config_updates / persist_source_cache_updates) that can
+# itself burn up to the full 30s PRAGMA busy_timeout per attempt, so one call could
+# legitimately hold the old blocking lock for well over a minute under contention —
+# and this lock guards the play/resolve hot path, shared across virtually every
+# scraper's cache/config writes for a given source.
+_LOCK_ACQUIRE_TIMEOUT_S = 10
+_LOCK_POLL_INTERVAL_S = 0.1
+
 
 @contextmanager
 def _source_config_lock(source_id: int):
+    """Exclusive per-source advisory lock serializing config/cache writes.
+
+    Polls with LOCK_NB and a plain (gevent-patched) time.sleep() between attempts
+    instead of blocking on the raw syscall, so a worker waiting on a busy lock keeps
+    running its other greenlets meanwhile. Giving up after _LOCK_ACQUIRE_TIMEOUT_S is
+    safe: every caller here is a best-effort cache/config write — persist_* already
+    returns a bool for "did this actually get saved" — so skipping one just means the
+    next resolve() call redoes the underlying fetch, never a correctness issue, unlike
+    freezing the whole worker for a minute-plus.
+
+    Yields whether the lock was actually acquired; callers must check it.
+    """
     lock_path = Path('/tmp') / f'fastchannels-source-config-{source_id}.lock'
     lock_path.touch(exist_ok=True)
     with lock_path.open('r+') as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        fd = lock_file.fileno()
+        deadline = time.monotonic() + _LOCK_ACQUIRE_TIMEOUT_S
+        acquired = False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(_LOCK_POLL_INTERVAL_S)
         try:
-            yield
+            yield acquired
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            if acquired:
+                fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 def persist_source_config_updates(source_id: int, updates: dict | None) -> bool:
     """Safely merge scraper-generated config updates for a Source row."""
     if not updates:
         return False
-    with _source_config_lock(source_id):
+    with _source_config_lock(source_id) as acquired:
+        if not acquired:
+            logger.warning('[config-store] could not acquire source %s config lock within %ss; '
+                            'skipping this update (will retry on the next resolve)',
+                            source_id, _LOCK_ACQUIRE_TIMEOUT_S)
+            return False
         db.session.expire_all()
         live_source = db.session.get(Source, source_id, populate_existing=True)
         if not live_source:
@@ -108,7 +154,12 @@ def persist_source_cache_updates(source_id: int, updates: dict | None) -> bool:
     which is how callers clear a cache (e.g. an expired Roku osm_session)."""
     if not updates:
         return False
-    with _source_config_lock(source_id):
+    with _source_config_lock(source_id) as acquired:
+        if not acquired:
+            logger.warning('[config-store] could not acquire source %s cache lock within %ss; '
+                            'skipping this update (will retry on the next resolve)',
+                            source_id, _LOCK_ACQUIRE_TIMEOUT_S)
+            return False
         for _attempt in range(3):
             try:
                 db.session.expire_all()
