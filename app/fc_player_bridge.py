@@ -818,6 +818,48 @@ def _dvr_activity_channel_numbers(timeout: int = _DVR_POLL_TIMEOUT) -> set[str] 
     return numbers
 
 
+def _dvr_active_recording_channel_numbers(timeout: int = _DVR_POLL_TIMEOUT) -> set[str] | None:
+    """Guide numbers Channels DVR is actively recording right now, via its `/dvr/jobs`
+    endpoint (each job has `Time`, `Duration`, and a `Channels` guide-number list).
+
+    Added 2026-09-12 after a real community bug report: a scheduled recording gets
+    silently cut ~5 minutes in when idle-stop is enabled, because _dvr_activity_
+    channel_numbers()'s `/dvr` `activity` dict — scoped to live "Watching ch..."
+    client sessions — never gains an entry for an unattended scheduled recording (no
+    client tuned in, just the DVR's own recording engine pulling the stream).
+    Confirmed live against a real Channels DVR 2026-09-12: `/dvr/jobs` lists every
+    scheduled/in-progress job with absolute Time/Duration regardless of whether a
+    client is watching, so a job whose window contains "now" is treated as "in use"
+    here independent of the `/dvr` activity dict entirely.
+
+    Returns an empty set when DVR was reachable but nothing is recording right now.
+    Returns None only when DVR itself couldn't be reached — same "never treated as
+    idle" convention as _dvr_activity_channel_numbers().
+    """
+    dvr_url = (AppSettings.get().effective_channels_dvr_url() or '').strip().rstrip('/')
+    if not dvr_url:
+        return None
+    try:
+        resp = requests.get(f'{dvr_url}/dvr/jobs', timeout=timeout)
+        resp.raise_for_status()
+        jobs = resp.json() or []
+    except Exception as e:
+        logger.warning('[fc-player] DVR jobs check failed: %s', e)
+        return None
+    now = time.time()
+    numbers = set()
+    for job in jobs:
+        if job.get('Skipped') or job.get('Failed') or job.get('Dead'):
+            continue
+        start = job.get('Time')
+        duration = job.get('Duration')
+        if not isinstance(start, (int, float)) or not isinstance(duration, (int, float)):
+            continue
+        if start <= now <= start + duration:
+            numbers.update(str(n) for n in (job.get('Channels') or []))
+    return numbers
+
+
 def _dvr_guide_numbers_for_channel(channel_key: str, timeout: int = _DVR_POLL_TIMEOUT) -> set[str] | None:
     """Every DVR guide number, across all of Channels DVR's configured sources, whose
     channel `ID` matches this channel — found by scanning the `/devices` endpoint for
@@ -927,8 +969,10 @@ def _stop_playback() -> bool:
 def check_idle_and_stop() -> None:
     """Watchdog tick (app.worker's scheduled job). Resolves the triggered channel to
     its DVR guide number(s) via _dvr_guide_numbers_for_channel() (once, then cached),
-    and treats it as "in use" if either that guide number shows up in DVR's live
-    activity, or a recent /watch heartbeat exists for the same channel.
+    and treats it as "in use" if any of: that guide number shows up in DVR's live
+    "Watching" activity, DVR has an in-progress recording job for that guide number
+    (see _dvr_active_recording_channel_numbers()), or a recent /watch heartbeat
+    exists for the same channel.
     """
     if not idle_stop_enabled():
         return
@@ -967,6 +1011,10 @@ def check_idle_and_stop() -> None:
             now_numbers = _dvr_activity_channel_numbers()
             if now_numbers is not None and (tracked & now_numbers):
                 active = True
+            if not active:
+                recording_numbers = _dvr_active_recording_channel_numbers()
+                if recording_numbers is not None and (tracked & recording_numbers):
+                    active = True
         if not active and channel_key and _recent_web_heartbeat(channel_key):
             active = True
 
