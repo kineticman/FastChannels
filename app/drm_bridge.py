@@ -14,7 +14,7 @@ from . import fc_player_bridge
 # Sources confirmed (dev/kodi/README.md; also re-validated live against FastChannels
 # Player 2026-08-25) to actually decrypt through an adb-triggered device bridge.
 #
-# Cox and Warner TVE are excluded — confirmed root cause (2026-08-28, full trail in
+# Cox is excluded — confirmed root cause (2026-08-28, full trail in
 # dev/comcast/COX_FC_PLAYER_BRIDGE_INVESTIGATION.md): Cox's TVE license server rejects
 # every native-Android Widevine client by app identity, not session count, privacy
 # mode, security level, or device/platform class. Ruled out each of those in turn via
@@ -24,12 +24,25 @@ from . import fc_player_bridge
 # specifically "not Cox's own signed, registered Contour app." Not fixable from a
 # native DRM client on our side; only a screen-capture-style bridge (PrismCast
 # running real Chrome) could ever reach Cox TVE outside the browser.
+#
+# Warner TVE was ALSO excluded on the same assumption (dev/kodi/README.md recorded a
+# real failure via the old Kodi bridge: "repeated stream-reopen loop... same failure
+# shape as Cox") — but that was inputstream.adaptive's client-side session-splitting
+# hitting Turner's one-license-per-attempt backend, not a Cox-style app-identity wall.
+# Re-tested live 2026-09-12 against fc_player (Media3, a different native Widevine
+# client): real MVPD-entitled TNT (East), confirmed genuine Widevine CENC (device made
+# a real POST to our license proxy, got a real 200/947-byte license), sustained ~2.5
+# minutes of stable state=PLAYING with one harmless ~188ms self-recovering session
+# blip — no reopen loop. Media3's session handling doesn't reproduce what Kodi hit.
+# See also [[project_warner_ad_break_drm_audit_flap]] for a related but separate audit
+# bug this re-test surfaced (fixed alongside, in run_stream_audit).
+#
 # Shared by app/routes/play.py, app/routes/admin.py, app/routes/api_dvr.py,
 # app/generators/m3u.py, and app/worker.py — keep them all in sync via this single
 # source of truth.
 DRM_BRIDGE_TRUSTED_SOURCES = frozenset({
     'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa', 'philo', 'roku',
-    'fubo',
+    'fubo', 'warner_tve',
 })
 
 
