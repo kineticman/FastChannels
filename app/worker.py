@@ -3740,6 +3740,18 @@ if __name__ == '__main__':
                           id='fc_player_idle_watchdog', max_instances=1, coalesce=True,
                           misfire_grace_time=60)
 
+        def _scheduled_fc_player_playback_error_watchdog():
+            from app import fc_player_bridge
+            try:
+                with flask_app.app_context():
+                    fc_player_bridge.check_playback_errors()
+            except Exception as e:
+                logger.warning('[fc-player] playback-error watchdog check failed: %s', e)
+
+        scheduler.add_job(_scheduled_fc_player_playback_error_watchdog, 'interval', seconds=20,
+                          id='fc_player_playback_error_watchdog', max_instances=1, coalesce=True,
+                          misfire_grace_time=60)
+
         def _scheduled_remote_gracenote_refresh():
             from app.gracenote_map import fetch_remote_gracenote_map
             with flask_app.app_context():

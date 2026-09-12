@@ -8,6 +8,8 @@ import android.view.WindowManager;
 
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
@@ -107,6 +109,21 @@ public class PlaybackActivity extends Activity {
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(this)
                         .setDataSourceFactory(httpDataSourceFactory))
                 .build();
+        // Without this, a failed tune (entitlement rejection, DRM license denial, decode
+        // error — ExoPlayer treats all of these as a fatal PlaybackException) left the
+        // Activity sitting on a blank surface forever: nothing observed the error, so
+        // there was no log line, no retry, and no finish(). Confirmed live via a
+        // community bug report 2026-09-12 (both an unentitled channel and an entitled
+        // one hung this way). Logging under TAG here is also what
+        // fc_player_bridge.check_playback_errors() tails via `adb logcat -s
+        // FCPlayer.Playback:E` to surface the failure in FastChannels' own logs.
+        player.addListener(new Player.Listener() {
+            @Override
+            public void onPlayerError(PlaybackException error) {
+                Log.e(TAG, "playback error channel_key=" + activeChannelKey + ": " + error, error);
+                finish();
+            }
+        });
         playerView.setPlayer(player);
         playerView.setKeepScreenOn(true);
 

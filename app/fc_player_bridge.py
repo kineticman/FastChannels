@@ -214,6 +214,14 @@ _IDLE_SINCE_KEY = 'fc:fc-player:idle-since'
 _WEB_HEARTBEAT_PREFIX = 'fc:fc-player:web-heartbeat:'
 _WEB_HEARTBEAT_TTL_S = 45
 
+# PlaybackActivity.onPlayerError logs at ERROR under this tag (see PlaybackActivity.java)
+# rather than reporting back over any network channel — there is none, everything here
+# is one-way adb. check_playback_errors() tails logcat for it instead so a failed tune
+# (DRM denial, entitlement rejection, decode error) shows up in FastChannels' own log
+# stream without pulling logcat off the device by hand.
+_PLAYBACK_ERROR_LOG_TAG = 'FCPlayer.Playback'
+_LAST_ERROR_LOGCAT_LINE_KEY = 'fc:fc-player:last-error-logcat-line'
+
 
 def _redis():
     return redis.from_url(current_app.config['REDIS_URL'])
@@ -1038,6 +1046,105 @@ def check_idle_and_stop() -> None:
             r.delete(_IDLE_SINCE_KEY)
     except Exception as e:
         logger.warning('[fc-player] idle-stop watchdog tick failed: %s', e)
+
+
+_LOGCAT_HEADER_RE = re.compile(r'^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \S+/\S+\(\s*\d+\):')
+
+
+def _group_logcat_entries(text: str) -> list[str]:
+    """Group `adb logcat -v time` output back into whole log entries.
+
+    Log.e(tag, msg, throwable) writes ONE entry whose message embeds the full stack
+    trace, but `-v time` repeats the IDENTICAL timestamp/tag/pid header on every
+    physical line of that trace when printing it — so a naive per-line split (or a
+    split on "line starts with a timestamp", since every line does) still shreds one
+    error into a dozen. Consecutive lines sharing the exact same header belong to the
+    same entry; a changed header (a different call, always at a different
+    millisecond in practice) starts a new one.
+    """
+    entries = []
+    current: list[str] = []
+    current_header = None
+    for line in text.splitlines():
+        # `-d` prints a bare "--------- beginning of <buffer>" marker for each ring
+        # buffer it dumps (main/system/crash/...) — not a real log line, and it
+        # carries no header to attach to whatever entry came before or after it, so
+        # drop it outright rather than let it become its own bogus "entry".
+        if not line.strip() or line.startswith('--------- beginning of'):
+            continue
+        m = _LOGCAT_HEADER_RE.match(line)
+        header = m.group(0) if m else current_header
+        if header != current_header and current:
+            entries.append('\n'.join(current))
+            current = []
+        current_header = header
+        current.append(line)
+    if current:
+        entries.append('\n'.join(current))
+    return entries
+
+
+def check_playback_errors() -> None:
+    """Watchdog tick (app.worker's scheduled job): tail the device's logcat for a fresh
+    PlaybackActivity.onPlayerError entry and re-emit its summary line into
+    FastChannels' own log stream under this module's logger, so a failed tune shows
+    up in the admin log viewer without anyone needing to physically pull logcat off
+    the Fire TV/Android device.
+
+    Each adb server (this container's included) needs its own `adb connect` before
+    `adb -s <address> shell ...` works — trigger_channel() already does this per call;
+    this watchdog runs independently of any trigger, so it has to do the same.
+
+    `adb logcat -d` dumps the whole (circular, bounded) buffer for the filtered tag
+    each time — cheap since the tag is only ever written on a real player error.
+    Log.e(tag, msg, throwable) writes ONE entry whose message embeds the full stack
+    trace, but `-v time` repeats the timestamp/tag/pid header on every line of that
+    trace when printing it — so this splits back into whole entries on that repeated
+    header (one onPlayerError call must become one emitted log line, not a dozen) and
+    tracks the last whole entry it already emitted in Redis, logging only the newest
+    line of any new one. If that entry has aged out of the buffer (device rebooted,
+    app reinstalled, first run ever) it deliberately only surfaces the newest entry
+    rather than replaying whatever backlog remains, the same "don't replay a
+    backlog" caution check_idle_and_stop() uses for its own DVR lookup cache.
+    """
+    if not is_configured():
+        return
+    try:
+        address = _adb_address()
+    except FcPlayerNotConfigured:
+        return
+    try:
+        subprocess.run(['adb', 'connect', address], capture_output=True,
+                        timeout=_ADB_TIMEOUT, check=False)
+    except Exception as e:
+        logger.warning('[fc-player] playback-error watchdog adb connect failed: %s', e)
+        return
+    ok, text = _adb_shell(address, 'logcat', '-d', '-v', 'time',
+                           '-s', f'{_PLAYBACK_ERROR_LOG_TAG}:E', '*:S')
+    if not ok or not text.strip():
+        return
+    entries = _group_logcat_entries(text)
+    if not entries:
+        return
+
+    try:
+        r = _redis()
+        last_seen = (r.get(_LAST_ERROR_LOGCAT_LINE_KEY) or b'').decode() or None
+    except Exception as e:
+        logger.warning('[fc-player] playback-error watchdog redis read failed: %s', e)
+        return
+
+    if last_seen and last_seen in entries:
+        new_entries = entries[entries.index(last_seen) + 1:]
+    else:
+        new_entries = entries[-1:]
+    for entry in new_entries:
+        logger.warning('[fc-player] device playback error: %s', entry.splitlines()[0].strip())
+
+    try:
+        r.set(_LAST_ERROR_LOGCAT_LINE_KEY, entries[-1])
+    except Exception as e:
+        logger.warning('[fc-player] playback-error watchdog redis write failed: %s', e)
 
 
 def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: str = 'FastChannels',
