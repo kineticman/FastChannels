@@ -8,6 +8,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import OperationalError
 from ..extensions import db
 from ..models import Source, Channel
+from ..drm_bridge import drm_bridge_mode_for
 from .tasks import (
     trigger_bulk_channel_update,
     trigger_bulk_channel_review,
@@ -173,8 +174,26 @@ def update_channel(channel_id):
         if data.get('review_action') == 'keep_disabled':
             ch.review_state = 'approved'
         if data.get('is_enabled') is True and 'is_active' not in data:
+            was_drm_disabled = (ch.disable_reason or '').startswith('DRM')
+            if was_drm_disabled:
+                # This channel was disabled because no bridge (PrismCast or
+                # FastChannels Player) could serve its DRM — see
+                # _reconcile_drm_bridge_mode(), which is what re-enables these in
+                # bulk the moment a bridge actually becomes available again.
+                # Letting a manual toggle here silently clear that and reactivate
+                # the channel regardless left it "on" with nowhere to actually
+                # play — confirmed as a real gap 2026-09-12 while investigating a
+                # community report of Cox channels needing manual re-enabling.
+                source_name = ch.source.name if ch.source else None
+                if not source_name or not drm_bridge_mode_for(source_name):
+                    raise ValueError(
+                        'This channel needs DRM bridging (PrismCast or FastChannels '
+                        'Player) to play, and none is currently configured/enabled. '
+                        'Enable a bridge in Settings first, then it will come back '
+                        'automatically — no need to toggle it manually.'
+                    )
             ch.is_active = True
-            if ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized') or (ch.disable_reason or '').startswith('DRM'):
+            if ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized') or was_drm_disabled:
                 ch.disable_reason = None
             ch.last_seen_at = datetime.now(timezone.utc)
             ch.missed_scrapes = 0
