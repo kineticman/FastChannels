@@ -109,6 +109,37 @@
       </div>
     </div>
 
+    <div class="source-card" style="margin-bottom:1.5rem">
+      <div class="source-body open">
+        <div class="source-name" style="font-size:1rem">Tested &amp; supported sources</div>
+        <div class="help" style="margin-top:0.45rem;line-height:1.55">
+          Sources the project has individually verified over each method — not just sources you've
+          already added. PrismCast's browser/EME capture works for any source exposing DRM license
+          handling, so it covers more than FastChannels Player's native adb bridge, which is
+          re-tested one source at a time (e.g. Cox's app-identity wall blocks native clients but not
+          the browser path, so it's PrismCast-only).
+        </div>
+        <div class="bridge-supported-columns">
+          <div class="bridge-supported-column">
+            <div class="bridge-supported-column-title">PrismCast Capture</div>
+            <div class="bridge-source-chips">
+              {% for source in bridge_supported_sources.prismcast %}
+              <span class="bridge-source-chip bridge-source-chip-static">{{ source.display_name }}</span>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="bridge-supported-column">
+            <div class="bridge-supported-column-title">FastChannels Player (HDMI / ah4c Capture)</div>
+            <div class="bridge-source-chips">
+              {% for source in bridge_supported_sources.fc_player %}
+              <span class="bridge-source-chip bridge-source-chip-static">{{ source.display_name }}</span>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     {% include 'admin/bridge/single_encoder.html' %}
     {% include 'admin/bridge/ah4c.html' %}
     {% include 'admin/settings/prismcast.html' %}

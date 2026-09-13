@@ -1351,6 +1351,34 @@ def _drm_bridge_recoverable_count() -> int:
             .count())
 
 
+def _bridge_supported_sources() -> dict:
+    """Static reference lists for the Bridge page: which sources the project has
+    actually verified over each bridge method, independent of whether the operator
+    has added/enabled that source yet (unlike `_bridge_source_inventory`, which only
+    covers sources already configured here).
+
+    PrismCast's list is every scraper with a `license_url` (registry.drm_capable_source_names —
+    the same single source of truth the feed/audit/PrismCast-test code already routes
+    through), since PrismCast's browser/EME capture only needs a source to expose DRM
+    license handling at all. FastChannels Player's list is the narrower
+    DRM_BRIDGE_TRUSTED_SOURCES — sources individually re-tested against its native
+    adb-triggered device bridge, since a license_url alone doesn't mean a native
+    Widevine client can reach it (Cox's app-identity wall is the standing example: it
+    has a license_url and works over PrismCast, but is deliberately excluded here)."""
+    scrapers = _scraper_registry.get_all()
+
+    def _label(name: str) -> str:
+        cls = scrapers.get(name)
+        return (getattr(cls, 'display_name', None) or name) if cls else name
+
+    prismcast_names = _scraper_registry.drm_capable_source_names()
+    fc_player_names = sorted(DRM_BRIDGE_TRUSTED_SOURCES)
+    return {
+        'prismcast': [{'name': n, 'display_name': _label(n)} for n in sorted(prismcast_names, key=_label)],
+        'fc_player': [{'name': n, 'display_name': _label(n)} for n in sorted(fc_player_names, key=_label)],
+    }
+
+
 def _bridge_source_inventory() -> list[dict]:
     """Enabled sources that can produce DRM bridge channels, for the Bridge page.
 
@@ -1511,6 +1539,7 @@ def bridge():
         prismcast_enabled=bool(app_settings.prismcast_enabled),
         drm_bridge_recoverable_count=_drm_bridge_recoverable_count(),
         bridge_sources=_bridge_source_inventory(),
+        bridge_supported_sources=_bridge_supported_sources(),
         fc_player_enabled=bool(app_settings.fc_player_bridge_enabled),
         fc_player_ip=_fc_player_ip_display(app_settings.effective_fc_player_bridge_adb_address()),
         fc_player_encoder_url=app_settings.effective_fc_player_bridge_encoder_url() or '',
