@@ -363,6 +363,23 @@ class AdobePassV2Client:
         if not auth_path:
             raise TVEAuthError('Adobe Pass v2: sessions call did not return an authenticate url.')
 
+        # Adobe recognizes THIS access_token + device fingerprint pair as
+        # already authenticated with `mso_id` (true for every call after the
+        # very first successful one, since both values are cached/reused —
+        # see load_cached_adobe_client_creds and _ensure_device_fingerprint)
+        # and skips the MVPD-login dance entirely: `url` here is a
+        # `decisions/authorize/<mso>` POST endpoint (same shape
+        # amcn_tve.py's _adobe_decision_finish POSTs to), not the GET-redirect
+        # login endpoint used on a genuinely fresh session. Confirmed live
+        # 2026-09-12: GET'ing it the old way got a 405 Method Not Allowed
+        # (Allow: POST) on every call after the first, which surfaced as the
+        # misleading "did not return an MVPD login redirect" error. No MVPD
+        # login is needed in this case — preauthorize() (called by
+        # _ensure_entitled right after authorize() returns) already gets a
+        # live decision from this same access_token.
+        if session_data.get('reasonType') == 'authenticated':
+            return {}
+
         try:
             r = self.session.get(
                 f'{ADOBE_BASE}{auth_path}', headers=self._bearer_headers(),
