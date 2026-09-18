@@ -462,7 +462,13 @@ def run_amcn_browser_login(mso_id: str):
         scraper.cache  # noqa: B018
 
         cfg = account.config or {}
-        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+        # mso_id is the caller's — the ONE caller (amcn_browser_login_start
+        # in app/routes/api_tve.py) already resolves it from this same cfg
+        # before invoking this function. Confirmed live 2026-09-18: this
+        # used to re-derive and silently OVERWRITE the parameter from cfg
+        # here too, so passing any other mso_id (e.g. for a one-off test)
+        # had no effect at all — it always signed in as whatever was saved,
+        # regardless of what was asked for.
 
         # The 4 channels' logins are fully independent (each its own
         # requestor_id, own adobe_auth:<requestor_id> cache entry, own
@@ -545,36 +551,40 @@ def run_amcn_browser_login(mso_id: str):
                     failed,
                 )
             set_status('running', 'No usable saved sign-in — opening a browser…')
+        elif mso_id == 'Cox':
+            # Try the fast scripted Cox login first — still correct for a
+            # genuinely native (non-Spectrum-migrated) Cox account. Falls
+            # through to the browser on ANY failure (zero channels
+            # authorized), same tolerance the Comcast_SSO branch above
+            # uses. Confirmed live 2026-09-18: this test account's Cox
+            # identity now routes through Spectrum's real login page (a
+            # 200 auto-submit SAML form, not login.cox.com) — the scripted
+            # path has no browser to hand that form to, so it always fails
+            # here for an account in that state, and only the browser can
+            # actually complete it.
+            set_status('running', 'Trying scripted sign-in (no browser needed)…')
+            stopped, authorized, failed = _scripted_channel_pass()
+            persist_source_config_updates(source.id, scraper._pending_config_updates)
+            persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+            if stopped:
+                set_status('stopped', f'Cancelled — authorized: {", ".join(authorized)}.' if authorized else 'Cancelled.')
+                return
+            if authorized:
+                message = f'Signed in — authorized: {", ".join(authorized)} (no browser needed).'
+                if failed:
+                    message += ' Not authorized: ' + '; '.join(failed) + '.'
+                set_status('success', message)
+                logger.info(
+                    '[amcn-mvpd-login] paired mso_id=Cox authorized=%s failed=%s via scripted login (no browser)',
+                    authorized, failed,
+                )
+                return
+            logger.info('[amcn-mvpd-login] scripted Cox login authorized nothing, falling back to browser: %s', failed)
+            set_status('running', 'No usable saved sign-in — opening a browser…')
 
-        if mso_id != 'Cox':
-            _ctx.pop()
-            _ctx_popped['v'] = True
-            _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id, mso_id, CHANNELS)
-            return
-
-        # Force-stop is checked once up front rather than between channels
-        # now — once dispatched, an in-flight login couldn't be interrupted
-        # either way (same limitation the old sequential loop had for
-        # whichever channel was actively running), and the whole batch is
-        # now short enough (~5-10s) that mid-flight cancellation matters
-        # much less than it did at ~30s.
-        stopped, authorized, failed = _scripted_channel_pass()
-
-        persist_source_config_updates(source.id, scraper._pending_config_updates)
-        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-
-        if stopped:
-            set_status('stopped', f'Cancelled — authorized: {", ".join(authorized)}.' if authorized else 'Cancelled.')
-        elif authorized:
-            message = f'Signed in — authorized: {", ".join(authorized)}.'
-            if failed:
-                message += ' Not authorized: ' + '; '.join(failed) + '.'
-            set_status('success', message)
-            logger.info('[amcn-mvpd-login] paired mso_id=%s authorized=%s failed=%s (scripted, no browser)', mso_id, authorized, failed)
-        else:
-            message = '; '.join(failed) or 'No AMC Networks channels authorized.'
-            _record_tve_login_error('amcn', message)
-            set_status('error', message)
+        _ctx.pop()
+        _ctx_popped['v'] = True
+        _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id, mso_id, CHANNELS)
     finally:
         uninstall_browser_login_activity_log(_activity_handler)
         if not _ctx_popped['v']:
