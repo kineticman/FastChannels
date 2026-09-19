@@ -4200,6 +4200,8 @@
         _ccDetectPollTimer = null;
       }
       _ccDetectJobId = null;
+      const btn = document.getElementById('cc-detect-btn');
+      if (btn) { btn.disabled = false; btn.textContent = 'Detect'; }
     }
 
     function _formatDetectElapsed(ms) {
@@ -4405,10 +4407,10 @@
       const url = document.getElementById('cc-input-url').value.trim();
       if (!url) { alert('Enter a URL first.'); return; }
 
+      _clearDetectPolling();
       const btn = document.getElementById('cc-detect-btn');
       btn.disabled = true;
       btn.textContent = '…';
-      _clearDetectPolling();
       _ccDetectedUrl = null;
       _ccDetectedType = null;
       _ccDetectedHeaders = {};
