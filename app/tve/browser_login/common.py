@@ -1036,6 +1036,73 @@ def _autofill_google_account_chooser(page) -> bool:
         return False
 
 
+def _autofill_spectrum_sso_confirm(page) -> bool:
+    """Click through Spectrum/Charter's "You're signing in as: <user>" SSO
+    identity-confirmation screen automatically instead of waiting on a human.
+
+    Confirmed live 2026-09-18: id.spectrum.net shows this — NOT a credential
+    form or a captcha, just a one-click confirmation of an
+    already-authenticated identity — whenever the shared persistent profile
+    already carries a valid Spectrum session cookie (built up from the
+    Spectrum scraper's own native-app logins on this same profile). It can
+    show up more than once across the SAML hop chain (id.spectrum.net ->
+    tve.spectrum.net -> back to id.spectrum.net), each a genuinely separate
+    page load. When the profile has no such valid session, this same URL
+    instead shows a real credential form behind a reCAPTCHA — this function
+    is a no-op then, since there's no matching Continue button to find, and
+    _try_autofill_credentials'/_relay_input_and_screenshot's normal human
+    hand-off still applies for that case.
+
+    Cheap and safe to call on every poll iteration regardless of which page
+    is currently showing — the domain check makes it a no-op everywhere
+    else, same shape as _autofill_google_account_chooser above (including
+    the same window-flag guard against double-clicking within one page
+    load; a real navigation to the next hop gets a fresh JS context so a
+    genuinely new occurrence still gets clicked).
+    """
+    try:
+        if 'id.spectrum.net' not in page.url and 'tve.spectrum.net' not in page.url:
+            return False
+        # Flag is only set to True right before the actual click below — NOT
+        # just because this page/URL matched — so a selector that finds
+        # nothing (e.g. the page hasn't finished rendering yet, or is
+        # genuinely the credential+captcha variant instead) gets retried on
+        # the next poll tick instead of silently giving up forever on this
+        # page load.
+        already = page.evaluate("() => !!window.__fcSpectrumContinueClicked")
+        if already:
+            return False
+        # Not assumed to be a native <button> — try several shapes rather
+        # than guessing one exact element type/role.
+        btn = None
+        for locator in (
+            page.get_by_role('button', name='Continue', exact=True),
+            page.get_by_role('link', name='Continue', exact=True),
+            page.get_by_text('Continue', exact=True),
+            page.locator('button:has-text("Continue"), a:has-text("Continue"), [role="button"]:has-text("Continue")'),
+        ):
+            try:
+                if locator.count() > 0:
+                    btn = locator.first
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+        if btn is None:
+            logger.debug('[mvpd-login] spectrum SSO-confirm: no Continue element found url=%s', _safe_page_url(page))
+            return False
+        btn.click(timeout=2000)
+        page.evaluate("() => { window.__fcSpectrumContinueClicked = true; }")
+        logger.info('[mvpd-login] clicked Spectrum SSO "Continue" confirmation url=%s', _safe_page_url(page))
+        deadline = time.monotonic() + 5
+        start_url = page.url
+        while time.monotonic() < deadline and page.url == start_url:
+            page.wait_for_timeout(150)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.debug('[mvpd-login] spectrum SSO-confirm autofill failed: %s', exc)
+        return False
+
+
 _GOOGLE_SETUP_URL = 'https://accounts.google.com/embedded/setup/v2/android?ipt=&ipr=&flowName=EmbeddedSetupAndroid'
 
 
@@ -1252,6 +1319,7 @@ def _relay_input_and_screenshot(
     shot_key = shot_key or MVPD_BROWSER_LOGIN_SHOT_KEY
     hint_key = hint_key or MVPD_BROWSER_LOGIN_HINT_KEY
     _autofill_google_account_chooser(page)
+    _autofill_spectrum_sso_confirm(page)
     stopped = False
     try:
         stopped = bool(r.exists(stop_key))

@@ -222,6 +222,17 @@ def _rand_rsc() -> str:
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
 
 
+def _retry_after_seconds(response: requests.Response, *, default: float, cap: float) -> float:
+    """Parse a numeric Retry-After header (seconds form only), clamped to `cap`."""
+    raw = response.headers.get("Retry-After")
+    if raw:
+        try:
+            return min(float(raw), cap)
+        except ValueError:
+            pass
+    return min(default, cap)
+
+
 def _build_category_map(rsc_objects: list[dict]) -> tuple[dict[str, str], set[str], dict[str, list[str]]]:
     """
     Parse the categories list from RSC objects.
@@ -1103,6 +1114,22 @@ class PlexScraper(BaseScraper):
                 r2 = self.session.get(manifest_url, timeout=15, allow_redirects=True)
                 if r2.status_code == 200:
                     return r2.url
+
+        # epg.provider.plex.tv rate-limits the shared anonymous token; a 429
+        # here is often a short-lived blip rather than a sustained block. One
+        # bounded retry recovers most of those transparently instead of
+        # surfacing a failed recording to the caller. Honor Retry-After when
+        # present but cap it — recorders have limited patience for a single
+        # play request.
+        if r.status_code == 429:
+            wait = _retry_after_seconds(r, default=1.5, cap=3.0)
+            logger.info("[plex] manifest 429 for %s — retrying once in %.1fs", channel_id, wait)
+            time.sleep(wait)
+            r = self.session.get(manifest_url, timeout=15, allow_redirects=True)
+            if r.status_code == 200:
+                final = r.url
+                logger.debug("[plex] resolved %s → %s… (after 429 retry)", channel_id, final[:60])
+                return final
 
         if r.status_code in (400, 404, 410, 422, 504):
             raise StreamDeadError(format_http_reason("[plex] channel not playable", r.status_code, channel_id))

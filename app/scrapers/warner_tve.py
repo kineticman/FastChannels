@@ -463,6 +463,16 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         except TVENotAuthorizedError as exc:
             raise TVENotAuthorizedError(f'Warner TVE: MVPD is not authorized for {channel.brand_key}: {exc}') from exc
         except TVEAuthError as exc:
+            # See fox_tve.py's _fox_sports_access_token() for why this also
+            # needs the per-network status — authorize_mvpd() never touches
+            # TVEAccount.last_auth_message either, so without this an
+            # auth failure here is invisible everywhere, not just the
+            # per-network banner.
+            try:
+                from ..tve.browser_login.common import _record_tve_login_error
+                _record_tve_login_error(brand_cfg['requestor_id'], str(exc)[:300])
+            except Exception:  # noqa: BLE001
+                pass
             raise TVEAuthError(f'Warner TVE: Adobe Pass auth failed for {channel.brand_key}: {exc}') from exc
 
         manifest_url, isp_token = self._resolve_manifest(session, brand_cfg, channel, adobe_token)

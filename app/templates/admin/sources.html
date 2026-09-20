@@ -268,6 +268,11 @@
       color: var(--danger-soft, var(--danger));
       border-color: color-mix(in srgb, var(--danger) 30%, transparent);
     }
+    .config-badge.sunsetting {
+      background: color-mix(in srgb, var(--warning-bg) 60%, transparent);
+      color: var(--warning-soft);
+      border-color: var(--warning-border);
+    }
 
     /* Scrape / audit status in dashboard row */
     .scrape-status { font-size: 0.75rem; margin-top: 0.2rem; display: flex; align-items: center; gap: 0.35rem; min-height: 0; }
@@ -815,6 +820,9 @@
                   {% if under_development.get(source.name) %}
                     <span class="config-badge development" title="This source is under development and disabled by default">Under development</span>
                   {% endif %}
+                  {% if source.name == 'cox' and not retired %}
+                    <span class="config-badge sunsetting" title="Cox is being folded into Spectrum and sign-ins have already started breaking as a result. This source is likely to be retired soon.">Sunsetting</span>
+                  {% endif %}
                   {% if retired %}
                     <span class="config-badge retired" id="config-badge-{{ source.id }}"
                           title="Upstream shut down; this scraper was removed. Auto-removed from this list in {{ retired.days_left }} day{{ '' if retired.days_left == 1 else 's' }}.">Retired</span>
@@ -1089,6 +1097,22 @@
       </div>
     </div>
   </div>
+
+  <!-- Spectrum interactive browser sign-in -->
+  <div class="modal-overlay" id="spectrum-login-modal" onclick="closeSpectrumLoginModal(event)">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:1340px;">
+      <h2>Sign in to Spectrum</h2>
+      <p id="spectrum-login-status" style="margin-bottom:0.75rem;">Launching browser…</p>
+      <img id="spectrum-login-frame" alt="Spectrum sign-in" tabindex="0" draggable="false"
+           onmousedown="spectrumLoginFrameMousedown(event)" onkeydown="spectrumLoginFrameKeydown(event)"
+           onmousemove="spectrumLoginFrameMousemove(event)" ondragstart="return false;"
+           style="max-width:100%;width:1280px;border:1px solid var(--border);border-radius:4px;cursor:text;outline-offset:2px;background:#111;user-select:none;">
+      <div class="modal-actions">
+        <button class="btn btn-cancel" type="button" onclick="_closeSpectrumLoginModal(true)">Cancel</button>
+      </div>
+    </div>
+  </div>
+
 
   <!-- Confirm disable modal -->
   <div class="modal-overlay" id="confirm-modal">
@@ -1865,7 +1889,7 @@
         if (data.dead)        bits.push(`<span class="aud-dead">${data.dead} dead</span>`);
         if (data.vod)         bits.push(`<span class="aud-vod">${data.vod} VOD</span>`);
         if (data.flagged)     bits.push(`<span class="aud-drm">${data.flagged} DRM</span>`);
-        if (data.skipped_403) bits.push(`<span class="aud-403">${data.skipped_403} rate-limited</span>`);
+        if (data.skipped_403) bits.push(`<span class="aud-403">${data.skipped_403} blocked</span>`);
         let statusText, note, sectionClass = 'audit-running-section';
         if (inCooldown) {
           const mins = Math.max(1, Math.ceil((data.cooldown_remaining || 0) / 60));
@@ -1903,7 +1927,7 @@
             result.not_authorized ? `<span class="aud-auth">${result.not_authorized} not authorized</span>` : null,
             result.flagged     ? `<span class="aud-drm">${result.flagged} DRM</span>`              : null,
             result.bridged     ? `<span class="aud-bridge">${result.bridged} bridged (DRM)</span>` : null,
-            result.skipped_403 ? `<span class="aud-403">${result.skipped_403} rate-limited</span>` : null,
+            result.skipped_403 ? `<span class="aud-403">${result.skipped_403} blocked</span>` : null,
             result.errors      ? `${result.errors} errors`                                         : null,
           ].filter(Boolean);
           html += `
@@ -1926,16 +1950,12 @@
 
           const formatReasonText = (reason, status) => {
             const text = String(reason || '').trim();
-            if (!text) return status === 'dead' ? 'Dead' : status === 'vod' ? 'VOD' : '';
+            if (!text) return status === 'dead' ? 'Dead' : status === 'vod' ? 'VOD' : status === 'rate-limited' ? 'Blocked' : '';
             if (status === 'dead') return 'Dead';
             if (status === 'vod') return 'VOD';
             if (status === 'not-authorized') return 'Not authorized';
             if (status === 'drm') return 'DRM';
             if (status === 'drm_bridge') return text ? `${text} (bridged)` : 'Bridged';
-            if (status === 'rate-limited') {
-              const codeMatch = text.match(/\bHTTP\s+(\d{3})\b/i);
-              return codeMatch ? `HTTP ${codeMatch[1]}` : 'Rate-limited';
-            }
             const httpMatch = text.match(/^HTTP\s+(\d{3})(?::\s*(.*))?$/i);
             if (httpMatch) return `HTTP ${httpMatch[1]}`;
             const embeddedHttp = text.match(/\bHTTP\s+(\d{3})\b/i);
@@ -1961,7 +1981,7 @@
           html += renderGroup('Not authorized — account is not entitled', unauthorized, true);
           html += renderGroup('DRM', drm, false);
           html += renderGroup('Bridged — DRM detected, kept active via a configured capture path', bridged, false);
-          html += renderGroup('Rate-limited', limited, false);
+          html += renderGroup('Blocked — geo/location or rate-limited, not a session problem', limited, false);
           html += renderGroup('Errors', errors, false);
           html += `</div>`;
           _lastRecheckIds[sourceId] = limited.map(c => c.id).filter(Boolean);
@@ -2181,7 +2201,7 @@
           const bits = [`${data.done} / ${data.total} (${pct}%)`];
           if (data.flagged)      bits.push(`${data.flagged} DRM`);
           if (data.dead)         bits.push(`${data.dead} dead`);
-          if (data.skipped_403)  bits.push(`${data.skipped_403} rate-limited`);
+          if (data.skipped_403)  bits.push(`${data.skipped_403} blocked`);
           return { cls: 'audit-status-running', text: '📋 ' + bits.join(' · ') };
         }
         return { cls: 'audit-status-running', text: 'Stream Audit running…' };
@@ -2202,7 +2222,7 @@
       if (r.not_authorized)   bits.push(`<span class="aud-auth">${r.not_authorized} not authorized</span>`);
       if (r.flagged)          bits.push(`<span class="aud-drm">${r.flagged} DRM</span>`);
       if (r.bridged)          bits.push(`<span class="aud-bridge">${r.bridged} bridged (DRM)</span>`);
-      if (r.skipped_403)      bits.push(`<span class="aud-403">${r.skipped_403} rate-limited</span>`);
+      if (r.skipped_403)      bits.push(`<span class="aud-403">${r.skipped_403} blocked</span>`);
       if (r.errors)           bits.push(`${r.errors} errors`);
       el.innerHTML = `Last audit: ${bits.join(' · ')}${r.partial ? ' <span class="aud-partial">(partial)</span>' : ''}${ts ? ' <span style="opacity:.5">· ' + ts + '</span>' : ''}`;
     }
@@ -3400,6 +3420,202 @@
         </div>`;
     }
 
+    function renderSpectrumConfig(sourceId, schema, values, cfg) {
+      const fieldHtml = (f) => {
+        const val = values[f.key] ?? f.default ?? '';
+        const help = f.help_text ? `<div class="help">${escapeHtml(f.help_text)}</div>` : '';
+        const inputType = f.field_type === 'password' ? 'password' : 'text';
+        const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : '';
+        return `
+          <div class="field">
+            <label for="cfg-${sourceId}-${f.key}">${escapeHtml(f.label)}</label>
+            <input type="${inputType}" id="cfg-${sourceId}-${f.key}" data-key="${f.key}"
+                   data-secret="${f.secret}" value="${escapeHtml(String(val))}" ${placeholder} autocomplete="off">
+            ${help}
+          </div>`;
+      };
+
+      const signedIn = !!(cfg && cfg.token_captured_at);
+      const lastSignIn = _epochAgo(cfg && cfg.token_captured_at);
+      const lastSignInHtml = lastSignIn
+        ? `<div class="help" id="spectrum-last-signin-${sourceId}" style="color:var(--success-soft);">✓ Last signed in successfully: ${lastSignIn}</div>`
+        : `<div class="help" id="spectrum-last-signin-${sourceId}">Not signed in yet — no channels until you do.</div>`;
+
+      return `
+        <div class="config-title">Spectrum Settings</div>
+        <div class="config-note">Spectrum's login is protected by reCAPTCHA — save your username/password below to auto-fill the real sign-in page, or leave them blank and type directly into the sign-in window instead.</div>
+        <div class="fields-grid">
+          ${schema.map(fieldHtml).join('')}
+          <div class="field field-full" style="margin:0.25rem 0 0.5rem;">
+            <button class="btn btn-run" type="button" onclick="openSpectrumLoginModal(${sourceId})">Sign in to Spectrum</button>
+            <button class="btn btn-cancel" type="button" id="spectrum-clear-btn-${sourceId}"
+                    onclick="spectrumClearSignin(${sourceId})" ${signedIn ? '' : 'disabled'}>Clear sign-in</button>
+            <div class="help">Opens a real Spectrum sign-in page right here — solve the captcha yourself if it's shown, and FastChannels saves the resulting session automatically. No credentials are typed by FastChannels.</div>
+            <div id="spectrum-clear-status-${sourceId}"></div>
+            ${lastSignInHtml}
+          </div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
+    }
+
+    async function spectrumClearSignin(sourceId) {
+      if (!confirm('Clear the saved Spectrum sign-in — tokens, device id, and the cached cox.com cookies? You\'ll need to sign in again before this source can scrape.')) return;
+      const btn = document.getElementById(`spectrum-clear-btn-${sourceId}`);
+      const statusEl = document.getElementById(`spectrum-clear-status-${sourceId}`);
+      if (btn) btn.disabled = true;
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/spectrum-auth`, {method: 'DELETE'});
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || 'Could not clear sign-in');
+        if (statusEl) statusEl.innerHTML = '<span style="color:var(--success-soft)">✓ Sign-in cleared.</span>';
+        setTimeout(() => loadSourceConfig(sourceId, 'spectrum'), 500);
+      } catch (e) {
+        if (statusEl) statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(e.message || 'Could not clear sign-in')}</span>`;
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    let _spectrumLoginSourceId = null;
+    let _spectrumLoginPollTimer = null;
+    let _spectrumLoginDone = false;
+
+    function openSpectrumLoginModal(sourceId) {
+      _spectrumLoginSourceId = sourceId;
+      _spectrumLoginDone = false;
+      if (_spectrumLoginPollTimer) { clearTimeout(_spectrumLoginPollTimer); _spectrumLoginPollTimer = null; }
+      const modal = document.getElementById('spectrum-login-modal');
+      const frame = document.getElementById('spectrum-login-frame');
+      const status = document.getElementById('spectrum-login-status');
+      frame.removeAttribute('src');
+      frame.style.visibility = 'hidden';  // no src yet - avoid showing a broken-image icon
+      status.className = '';
+      status.textContent = 'Launching browser…';
+      modal.classList.add('open');
+      fetch(`/api/sources/${sourceId}/spectrum-browser-login/start`, { method: 'POST' })
+        .then(r => r.json())
+        .catch(() => {})
+        .finally(() => _pollSpectrumLoginModal());
+    }
+
+    function closeSpectrumLoginModal(event) {
+      if (event && event.target !== document.getElementById('spectrum-login-modal')) return;
+      _closeSpectrumLoginModal(true);
+    }
+
+    function _closeSpectrumLoginModal(cancel) {
+      document.getElementById('spectrum-login-modal').classList.remove('open');
+      if (_spectrumLoginPollTimer) { clearTimeout(_spectrumLoginPollTimer); _spectrumLoginPollTimer = null; }
+      const sourceId = _spectrumLoginSourceId;
+      _spectrumLoginSourceId = null;
+      if (cancel && !_spectrumLoginDone && sourceId) {
+        fetch(`/api/sources/${sourceId}/spectrum-browser-login/stop`, { method: 'POST' }).catch(() => {});
+      }
+    }
+
+    async function _pollSpectrumLoginModal() {
+      if (!_spectrumLoginSourceId) return;
+      const sourceId = _spectrumLoginSourceId;
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/spectrum-browser-login/state`);
+        const d = await r.json();
+        if (_spectrumLoginSourceId !== sourceId) return;  // modal was closed/reopened mid-poll
+
+        const status = document.getElementById('spectrum-login-status');
+        const frame = document.getElementById('spectrum-login-frame');
+        if (d.screenshot) {
+          frame.src = `data:image/jpeg;base64,${d.screenshot}`;
+          frame.style.visibility = 'visible';
+        }
+
+        if (d.state === 'success') {
+          _spectrumLoginDone = true;
+          status.className = 'success';
+          status.textContent = '✓ Signed in — tokens saved.';
+          setTimeout(() => {
+            _closeSpectrumLoginModal(false);
+            loadSourceConfig(sourceId, getSourceName(sourceId));
+          }, 1800);
+          return;
+        }
+        if (d.state === 'error' || d.state === 'stopped') {
+          _spectrumLoginDone = true;
+          status.className = d.state === 'error' ? 'error' : '';
+          const prefix = d.state === 'error' ? '✗ ' : '';
+          status.textContent = prefix + (d.message || 'Sign-in stopped.');
+          return;  // leave the modal open showing the message; user closes manually
+        }
+        status.className = '';
+        status.textContent = d.message || 'Signing in…';
+      } catch (e) {
+        // transient — keep polling
+      }
+      _spectrumLoginPollTimer = setTimeout(_pollSpectrumLoginModal, 400);
+    }
+
+    function _spectrumLoginFrameScale(frame) {
+      const rect = frame.getBoundingClientRect();
+      return {
+        x: (frame.naturalWidth || rect.width) / rect.width,
+        y: (frame.naturalHeight || rect.height) / rect.height,
+        rect,
+      };
+    }
+
+    function _spectrumLoginSendInput(payload) {
+      if (!_spectrumLoginSourceId) return;
+      fetch(`/api/sources/${_spectrumLoginSourceId}/spectrum-browser-login/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+    }
+
+    let _spectrumLoginDragging = false;
+
+    function spectrumLoginFrameMousedown(event) {
+      if (!_spectrumLoginSourceId) return;
+      const frame = event.currentTarget;
+      frame.focus();
+      _spectrumLoginDragging = true;
+      const { x: sx, y: sy, rect } = _spectrumLoginFrameScale(frame);
+      _spectrumLoginSendInput({ type: 'mousedown', x: (event.clientX - rect.left) * sx, y: (event.clientY - rect.top) * sy });
+    }
+
+    // Registered once on document (not just the frame) so a drag that ends outside
+    // the image bounds still releases the mouse button on the remote page.
+    document.addEventListener('mouseup', function (event) {
+      if (!_spectrumLoginDragging) return;
+      _spectrumLoginDragging = false;
+      const frame = document.getElementById('spectrum-login-frame');
+      if (!frame) return;
+      const { x: sx, y: sy, rect } = _spectrumLoginFrameScale(frame);
+      _spectrumLoginSendInput({ type: 'mouseup', x: (event.clientX - rect.left) * sx, y: (event.clientY - rect.top) * sy });
+    });
+
+    let _spectrumLoginLastMoveSent = 0;
+
+    function spectrumLoginFrameMousemove(event) {
+      if (!_spectrumLoginSourceId) return;
+      const now = performance.now();
+      if (now - _spectrumLoginLastMoveSent < 60) return;  // throttle to ~16/s
+      _spectrumLoginLastMoveSent = now;
+      const frame = event.currentTarget;
+      const { x: sx, y: sy, rect } = _spectrumLoginFrameScale(frame);
+      const x = (event.clientX - rect.left) * sx;
+      const y = (event.clientY - rect.top) * sy;
+      _spectrumLoginSendInput({ type: 'mousemove', x, y });
+    }
+
+    function spectrumLoginFrameKeydown(event) {
+      if (!_spectrumLoginSourceId) return;
+      event.preventDefault();
+      _spectrumLoginSendInput({ type: 'key', key: event.key });
+    }
+
     let _slingLoginSourceId = null;
     let _slingLoginPollTimer = null;
     let _slingLoginDone = false;
@@ -3566,6 +3782,8 @@
         return renderPhiloConfig(sourceId, schema, values);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'spectrum') {
+        return renderSpectrumConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'pbs') {
         return renderPbsConfig(sourceId, schema, values);
       }
@@ -3982,6 +4200,8 @@
         _ccDetectPollTimer = null;
       }
       _ccDetectJobId = null;
+      const btn = document.getElementById('cc-detect-btn');
+      if (btn) { btn.disabled = false; btn.textContent = 'Detect'; }
     }
 
     function _formatDetectElapsed(ms) {
@@ -4187,10 +4407,10 @@
       const url = document.getElementById('cc-input-url').value.trim();
       if (!url) { alert('Enter a URL first.'); return; }
 
+      _clearDetectPolling();
       const btn = document.getElementById('cc-detect-btn');
       btn.disabled = true;
       btn.textContent = '…';
-      _clearDetectPolling();
       _ccDetectedUrl = null;
       _ccDetectedType = null;
       _ccDetectedHeaders = {};

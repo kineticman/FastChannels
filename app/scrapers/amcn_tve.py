@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import html
 import json
+import logging
 import re
 import time
 import uuid
@@ -25,6 +26,8 @@ from ..tve.adobe_pass import (
     _hidden_form,
     throttle_cox_login,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # AMC Networks TVE scraper.
@@ -612,6 +615,7 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
 
     def _adobe_session_redirect(
         self, channel: AMCNChannel, software_statement: str, device_id: str, mso_id: str,
+        allow_empty_redirect: bool = False,
     ) -> tuple[AdobePassCoxClient, str, str, dict[str, str], requests.Response]:
         """Registers an Adobe Pass v2 client and starts a session for `mso_id`.
 
@@ -622,6 +626,16 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
         redirect it's just the raw 3xx response (unused), but DIRECTV's own
         backend needs its body directly since DIRECTV never redirects here
         at all (see app/tve/mvpd/directv.py's directv_login() docstring).
+
+        allow_empty_redirect=True suppresses the raise below for a 200 with
+        no real redirect (Spectrum's shape — confirmed live 2026-09-18, an
+        auto-submit SAML form rather than a 3xx) instead of only DTV, and
+        just returns mso_login_url='' — only safe for a caller that can act
+        on page_response itself, i.e. app.tve.browser_login.amcn's
+        browser-assisted loop navigating a real browser straight to
+        page_response.url so its onload JS submits the form natively. The
+        scripted (non-browser) callers below never pass this — they have no
+        browser to hand an unfollowed form to.
         """
         client = AdobePassCoxClient(
             requestor_id=channel.requestor_id,
@@ -679,7 +693,11 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             # r.url — same exemption fox_tve.py's equivalent call makes.
             r.raise_for_status()
             mso_login_url = ''
-        if not mso_login_url and mso_id != 'DTV':
+        if not mso_login_url and mso_id != 'DTV' and not allow_empty_redirect:
+            logger.warning(
+                '[amcn-tve] no MVPD redirect for mso_id=%s: HTTP %d final_url=%s body[:300]=%r',
+                mso_id, r.status_code, r.url, r.text[:300],
+            )
             raise TVEAuthError(f'{channel.name}: Adobe did not return an MVPD login redirect.')
         return client, code, mso_login_url, auth_headers, r
 
@@ -696,10 +714,15 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             timeout=30,
         )
         profile.raise_for_status()
-        mso_profile = ((profile.json().get('profiles') or {}).get(mso_id) or {})
+        profile_json = profile.json()
+        mso_profile = ((profile_json.get('profiles') or {}).get(mso_id) or {})
         attrs = mso_profile.get('attributes') or {}
         adobe_id = (((attrs.get('userID') or {}).get('value')) or '').strip()
         if not adobe_id:
+            logger.warning(
+                '[amcn-tve] profile lookup for mso_id=%s: available profile keys=%s full_response=%r',
+                mso_id, list((profile_json.get('profiles') or {}).keys()), profile_json,
+            )
             raise TVEAuthError(f'{channel.name}: Adobe profile did not include a {mso_id} userID.')
 
         decision = session.post(
@@ -876,6 +899,15 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             except TVENotAuthorizedError as exc:
                 raise TVENotAuthorizedError(f'{channel.name}: {exc}') from exc
             except TVEAuthError as exc:
+                # See fox_tve.py's _fox_sports_access_token() for why this
+                # also needs the per-network status — AMCN doesn't even
+                # track this in TVEAccount.last_auth_message, so without
+                # this the failure would otherwise be invisible everywhere.
+                try:
+                    from ..tve.browser_login.common import _record_tve_login_error
+                    _record_tve_login_error('amcn', str(exc)[:300])
+                except Exception:  # noqa: BLE001
+                    pass
                 raise TVEAuthError(f'{channel.name}: {exc}') from exc
 
         adobe_token, adobe_id, notafter_ms = self._adobe_decision_finish(client.session, channel, code, mso_id, auth_headers)

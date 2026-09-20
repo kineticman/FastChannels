@@ -170,6 +170,8 @@ def ensure_runtime_schema() -> None:
                 ))
             if "gracenote_map_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN gracenote_map_url TEXT"))
+            if "gracenote_exclusions_url" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN gracenote_exclusions_url TEXT"))
             if "migration_011_done" not in cols:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN migration_011_done BOOLEAN NOT NULL DEFAULT 0"
@@ -823,6 +825,34 @@ def ensure_runtime_schema() -> None:
                 conn.execute(
                     text("UPDATE channels SET category = :cat WHERE id = :id"),
                     [{"cat": cat, "id": row_id} for cat, row_id in updates],
+                )
+
+        # Clear known-bad Gracenote IDs (github.com/kineticman/FastChannels/issues/58)
+        # from any channel that picked one up via the community CSV. Runs every boot,
+        # not gated by a one-time migration flag, since the exclusion list itself can
+        # grow over time (it has its own remote refresh, same as the map). Manual/off
+        # channels are left untouched — this only reverses auto-mode CSV assignments,
+        # matching the issue's scope.
+        # channels.gracenote_id has no index, so this is a full table scan regardless —
+        # batch the exclusion set into IN(...) clauses (rather than one UPDATE per id)
+        # so a boot costs one scan per batch, not one scan per excluded id. Matters
+        # because this runs on every single boot indefinitely, and the list is expected
+        # to keep growing via its remote refresh.
+        if "channels" in tables:
+            from .gracenote_map import get_excluded_tmsids
+            excluded = sorted(get_excluded_tmsids())
+            _EXCLUSION_BATCH = 500
+            for i in range(0, len(excluded), _EXCLUSION_BATCH):
+                batch = excluded[i:i + _EXCLUSION_BATCH]
+                placeholders = ",".join(f":t{j}" for j in range(len(batch)))
+                params = {f"t{j}": tmsid for j, tmsid in enumerate(batch)}
+                conn.execute(
+                    text(
+                        f"UPDATE channels SET gracenote_id = NULL "
+                        f"WHERE gracenote_id IN ({placeholders}) "
+                        f"AND (gracenote_mode IS NULL OR gracenote_mode NOT IN ('manual', 'off'))"
+                    ),
+                    params,
                 )
 
         # Migrate global_chnum_start from AppSettings → default Feed.chnum_start.

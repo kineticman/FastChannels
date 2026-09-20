@@ -52,7 +52,7 @@ REGION_LANGUAGE = {
 
 X_FORWARD = {
     "local":   {"X-Forwarded-For": ""},
-    "uk":      {"X-Forwarded-For": "178.238.11.6"},
+    "uk":      {"X-Forwarded-For": "86.130.14.22"},
     "ca":      {"X-Forwarded-For": "192.206.151.131"},
     "fr":      {"X-Forwarded-For": "193.169.64.141"},
     "de":      {"X-Forwarded-For": "81.173.176.155"},

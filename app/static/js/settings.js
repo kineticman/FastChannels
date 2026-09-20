@@ -689,6 +689,8 @@ function updateTveProviderFields() {
   const isCox = provider.id === 'Cox';
   if (testBtn) testBtn.style.display = isCox ? '' : 'none';
   if (lastStatus) lastStatus.style.display = isCox ? '' : 'none';
+  const coxRetiringNotice = document.getElementById('tve-cox-retiring-notice');
+  if (coxRetiringNotice) coxRetiringNotice.style.display = isCox ? '' : 'none';
   const googleRow = document.getElementById('tve-google-signin-row');
   if (googleRow) googleRow.style.display = provider.id === 'YouTubeTV' ? '' : 'none';
   if (select) select.dataset.previousProvider = provider.id;

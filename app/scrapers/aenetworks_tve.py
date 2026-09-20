@@ -464,4 +464,13 @@ class AENetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
                 if not configured_statement:
                     invalidate_aenetworks_software_statement(network.brand)
                 logger.warning('[aenetworks-tve] MVPD auth failed for %s: %s', network.brand, exc)
+                # See fox_tve.py's _fox_sports_access_token() for why this
+                # also needs the per-network status — this failure is
+                # non-fatal to playback (the DAI stream still plays below
+                # regardless), but was otherwise only ever a log line.
+                try:
+                    from ..tve.browser_login.common import _record_tve_login_error
+                    _record_tve_login_error(network.requestor_id, str(exc)[:300])
+                except Exception:  # noqa: BLE001
+                    pass
         return network.dai_master

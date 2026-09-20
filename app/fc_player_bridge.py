@@ -214,6 +214,79 @@ _IDLE_SINCE_KEY = 'fc:fc-player:idle-since'
 _WEB_HEARTBEAT_PREFIX = 'fc:fc-player:web-heartbeat:'
 _WEB_HEARTBEAT_TTL_S = 45
 
+# Tracks currently-triggered channels independent of idle-stop (unlike
+# _CHANNEL_KEY_KEY above, which only gets set when idle_stop_enabled()) — used solely
+# to confirm a pending block-boundary retune still applies to what's actually playing
+# before firing it, so tuning away to something else before the boundary hits doesn't
+# yank the device back. TTL is generous (a Sling clipslist block runs up to ~2h) but
+# not permanent, so a long-idle device doesn't hold stale state forever.
+#
+# One Redis key PER channel_key (fc:fc-player:active-channel:<channel_key>, value is
+# the resolved adb address it's playing on) rather than a single shared slot — a
+# single slot silently broke multi-tuner ah4c setups (confirmed 2026-09-15, not yet
+# seen in the wild but expected to be common): ah4c always passes a per-tuner
+# adb_address override, and the old design only tracked anything when adb_address
+# was None, so with N concurrent tuners the server-side watchdog would never
+# discover or schedule a retune for any of them — only the client-side Lever 2 swap
+# (which never depended on this key at all) would have been protecting those
+# streams. Per-channel-key entries mean N concurrent tuners each get independently
+# tracked with no extra plumbing from ah4c's side — every tune already flows through
+# our own /play/fc-player/... route, so we already see every (channel_key,
+# adb_address) pair at trigger time.
+_ACTIVE_CHANNEL_PREFIX = 'fc:fc-player:active-channel:'
+_ACTIVE_DEVICE_PREFIX = 'fc:fc-player:active-device:'
+_ACTIVE_CHANNEL_KEY_TTL_S = 6 * 60 * 60
+
+# See sling.py resolve()'s last_schedule_next comment: the wall-clock moment a
+# content block (e.g. Sling's clipslist/spanning_ads window) ends, keyed by
+# channel_key. TTL is set dynamically per-boundary in note_block_boundary().
+_BLOCK_BOUNDARY_PREFIX = 'fc:fc-player:block-boundary:'
+# Small head start before the first verification poll — firing exactly at the
+# declared boundary wastes one poll cycle for certain (schedule.qvt can't possibly
+# have flipped yet at T+0), so this just skips the guaranteed-miss first attempt.
+_BLOCK_BOUNDARY_INITIAL_DELAY_S = 2
+# Once past the initial delay, actively poll resolve() (see _sling_block_confirmed)
+# rather than guessing a fixed margin — fire the instant it confirms the new block,
+# instead of always waiting the same padded amount regardless of how fast Sling's
+# backend actually flips. This is what replaced the old fixed-25s-buffer design
+# (2026-09-15) after measuring it wasted most of that margin on a boundary that had
+# often already flipped much sooner.
+_BLOCK_BOUNDARY_VERIFY_POLL_S = 1.5
+# Safety ceiling, in case verification never succeeds (a resolve() failure loop,
+# Sling's backend genuinely slow that day, etc.) — fire anyway once we've waited this
+# long past the boundary, matching the old fixed-buffer's worst case so this redesign
+# is never worse than what it replaced, only potentially much faster.
+_BLOCK_BOUNDARY_VERIFY_MAX_WAIT_S = 25
+# Marks a boundary as already handled so a re-scheduled job (or the discovery tick
+# noticing the same boundary again before it's cleared) doesn't retune twice.
+_BLOCK_BOUNDARY_RETUNED_PREFIX = 'fc:fc-player:block-boundary-retuned:'
+# Sling's clipslist manifest URL shape: .../clipslist/<id>/<startZ>/<endZ>/spanning_ads.mpd
+_SLING_CLIPSLIST_START_RE = re.compile(r'/clipslist/\d+/(\d{8}T\d{6}Z)/')
+
+# PlaybackActivity.onPlayerError logs at ERROR under this tag (see PlaybackActivity.java)
+# rather than reporting back over any network channel — there is none, everything here
+# is one-way adb. check_playback_errors() tails logcat for it instead so a failed tune
+# (DRM denial, entitlement rejection, decode error) shows up in FastChannels' own log
+# stream without pulling logcat off the device by hand.
+_PLAYBACK_ERROR_LOG_TAG = 'FCPlayer.Playback'
+# onPlayerError only ever fires for errors Media3's own internal playback thread catches
+# and wraps into a PlaybackException — a bug anywhere else in the app (onCreate, a
+# MediaSession callback, PlayerView's surface handling) runs outside that protection and
+# force-closes instead. PlaybackActivity's global UncaughtExceptionHandler (2026-09-14) logs
+# those under this SEPARATE tag before chaining to the platform's own crash handling —
+# separate from _PLAYBACK_ERROR_LOG_TAG deliberately: confirmed live that logging a real
+# forced crash (`adb shell am crash`) under the same tag as onPlayerError made it get
+# classified here as a mere "playback error" WARNING instead of an ERROR, since this
+# module only had the tag to go on. _ANDROIDRUNTIME_LOG_TAG is a second, independent
+# fallback — Android's own platform crash dump, which our handler chains into and which
+# would still fire even for a hypothetical crash before our handler gets installed — but
+# it's a shared system tag every crashing app on the device writes to, so entries under it
+# are filtered to ones naming our own package before being surfaced.
+_APP_CRASH_LOG_TAG = 'FCPlayer.Crash'
+_ANDROIDRUNTIME_LOG_TAG = 'AndroidRuntime'
+_PACKAGE_NAME = 'com.fastchannels.player'
+_LAST_ERROR_LOGCAT_LINE_KEY = 'fc:fc-player:last-error-logcat-line'
+
 
 def _redis():
     return redis.from_url(current_app.config['REDIS_URL'])
@@ -902,6 +975,413 @@ def _dvr_guide_numbers_for_channel(channel_key: str, timeout: int = _DVR_POLL_TI
     return numbers
 
 
+def _note_active_channel_key(channel_key: str, adb_address: str) -> None:
+    """Best-effort, independent of idle-stop — see _ACTIVE_CHANNEL_PREFIX. Stores the
+    resolved device address (not just an override, if any) so stop_playback() can
+    later identify exactly which tracked channel(s) belong to its one single-device
+    target, without touching entries that belong to other tuners."""
+    try:
+        # Update both directions atomically: a device can only play one channel.
+        # Clear the prior channel only if this device still owns its entry.
+        _redis().eval("""
+            local previous = redis.call('GET', KEYS[1])
+            if previous and previous ~= ARGV[1] then
+                local old_key = ARGV[4] .. previous
+                if redis.call('GET', old_key) == ARGV[2] then
+                    redis.call('DEL', old_key, ARGV[5] .. previous, ARGV[6] .. previous)
+                end
+            end
+            redis.call('SETEX', KEYS[1], ARGV[3], ARGV[1])
+            redis.call('SETEX', KEYS[2], ARGV[3], ARGV[2])
+        """, 2, _ACTIVE_DEVICE_PREFIX + (adb_address or ''),
+            _ACTIVE_CHANNEL_PREFIX + channel_key,
+            channel_key, adb_address or '', _ACTIVE_CHANNEL_KEY_TTL_S,
+            _ACTIVE_CHANNEL_PREFIX, _BLOCK_BOUNDARY_PREFIX, _BLOCK_BOUNDARY_RETUNED_PREFIX)
+    except Exception as e:
+        logger.warning('[fc-player] _note_active_channel_key failed: %s', e)
+
+
+def _tracked_channel_address(r, channel_key: str) -> str | None:
+    """Ignore stale channel entries unless the device still names that channel."""
+    raw = r.get(_ACTIVE_CHANNEL_PREFIX + channel_key)
+    if raw is None:
+        return None
+    address = raw.decode()
+    current = r.get(_ACTIVE_DEVICE_PREFIX + address)
+    if current != channel_key.encode():
+        return None
+    return address
+
+
+def note_block_boundary(channel_key: str, next_pointer: str) -> None:
+    """Records when the content block currently playing on channel_key is due to end,
+    parsed from a schedule.qvt-style "_next" pointer URL whose path embeds the
+    boundary as a 14-digit UTC timestamp (.../<guid>/20260915200000/schedule.qvt) —
+    see sling.py resolve()'s last_schedule_next comment for why this matters: a
+    client-side manifest refresh can't bridge one of these boundaries on its own, so
+    check_block_boundaries_and_retune() uses this to force a fresh tune right as it
+    turns over instead of waiting for playback to silently stall.
+
+    Best-effort and non-blocking, called from the hot manifest-poll path (every ~2s
+    per active DRM-bridge session) — any failure here must never affect the actual
+    manifest response.
+    """
+    if not channel_key or not next_pointer:
+        return
+    match = re.search(r'/(\d{14})/', next_pointer)
+    if not match:
+        return
+    try:
+        from datetime import datetime, timezone
+        boundary_dt = datetime.strptime(match.group(1), '%Y%m%d%H%M%S').replace(tzinfo=timezone.utc)
+        boundary_ts = boundary_dt.timestamp()
+        ttl = max(60, int(boundary_ts - time.time()) + 600)
+        r = _redis()
+        r.setex(_BLOCK_BOUNDARY_PREFIX + channel_key, ttl, str(boundary_ts))
+    except Exception as e:
+        logger.warning('[fc-player] note_block_boundary failed: %s', e)
+
+
+def pending_block_boundaries() -> list[tuple[str, float]]:
+    """Discovery half of the two-part design (app.worker's scheduler owns the other
+    half — see _scheduled_fc_player_block_boundary_discovery in worker.py). This alone used to BE the
+    watchdog: a 20s-interval poll that fired the retune directly once a boundary had
+    passed. Measured live 2026-09-15 that shape wastes up to ~20s of pure
+    tick-alignment slop on top of the buffer — the poll only checks every 20s, so a
+    boundary that clears the buffer at T+25s might not get noticed until T+35-45s.
+
+    Since the boundary is known (via note_block_boundary(), fed by the player's own
+    ~2s manifest-poll cadence) minutes to hours before it's needed, there's no reason
+    to wait on a recurring poll to *act* on it — only to *discover* it, which this
+    function does. app.worker then schedules a precise one-shot APScheduler job for
+    the exact instant, eliminating the tick-alignment waste entirely.
+
+    Returns a list of (channel_key, boundary_ts) for every currently-tracked channel
+    with a known, not-yet-fired boundary — plural since ah4c can front multiple
+    concurrent tuners (see _ACTIVE_CHANNEL_PREFIX), each independently tracked.
+    Usually empty or one entry; scanning is cheap (a handful of Redis keys at most).
+    """
+    results = []
+    try:
+        r = _redis()
+        for raw_key in r.scan_iter(_ACTIVE_CHANNEL_PREFIX + '*'):
+            key_str = raw_key.decode() if isinstance(raw_key, bytes) else raw_key
+            channel_key = key_str[len(_ACTIVE_CHANNEL_PREFIX):]
+            if not channel_key:
+                continue
+            if _tracked_channel_address(r, channel_key) is None:
+                continue
+            boundary_raw = r.get(_BLOCK_BOUNDARY_PREFIX + channel_key)
+            if boundary_raw is None:
+                continue
+            if r.exists(_BLOCK_BOUNDARY_RETUNED_PREFIX + channel_key):
+                continue
+            results.append((channel_key, float(boundary_raw)))
+    except Exception as e:
+        logger.warning('[fc-player] pending_block_boundaries check failed: %s', e)
+    return results
+
+
+def _sling_resolve_manifest(channel_id: str) -> tuple[str, str] | tuple[None, None]:
+    """Fresh resolve() + manifest fetch for this sling channel. Returns
+    (dash_url, manifest_text) or (None, None) on any failure."""
+    try:
+        from .models import Channel, Source
+        from .scrapers.registry import get as get_scraper_cls
+        channel = (
+            Channel.query.join(Source)
+            .filter(Source.name == 'sling', Channel.source_channel_id == channel_id)
+            .first()
+        )
+        if not channel:
+            return None, None
+        scraper_cls = get_scraper_cls('sling')
+        if not scraper_cls:
+            return None, None
+        scraper = scraper_cls(config=channel.source.config or {})
+        dash_url = scraper.resolve(channel.stream_url)
+        if not dash_url or not dash_url.startswith('http'):
+            return None, None
+        resp = requests.get(dash_url, timeout=10, headers={
+            'Origin': 'https://watch.sling.com', 'Referer': 'https://watch.sling.com/',
+        })
+        resp.raise_for_status()
+        return dash_url, resp.text
+    except Exception as e:
+        logger.warning('[fc-player] manifest resolve/fetch failed for %s: %s', channel_id, e)
+        return None, None
+
+
+def _sling_segment_url_for_now(manifest_text: str) -> str | None:
+    """Parses just enough of a Sling clipslist manifest (availabilityStartTime, the
+    video AdaptationSet's SegmentTemplate + first Representation id, a BaseURL) to
+    construct the real CDN URL for the segment that should be current right now,
+    wall-clock. Returns None if anything doesn't parse as expected — callers treat
+    that as "can't verify at this level," not as a failure.
+    """
+    avail_match = re.search(r'availabilityStartTime="([^"]+)"', manifest_text)
+    video_match = re.search(r'<AdaptationSet[^>]*contentType="video".*?</AdaptationSet>', manifest_text, re.DOTALL)
+    base_match = re.search(r'<BaseURL[^>]*>([^<]+)</BaseURL>', manifest_text)
+    if not (avail_match and video_match and base_match):
+        return None
+    video_block = video_match.group(0)
+    template_match = re.search(r'<SegmentTemplate\b([^>]*)>', video_block)
+    rep_match = re.search(r'<Representation\s+id="([^"]+)"', video_block)
+    if not (template_match and rep_match):
+        return None
+    attrs = template_match.group(1)
+
+    def attr(name):
+        m = re.search(fr'{name}="([^"]*)"', attrs)
+        return m.group(1) if m else None
+
+    timescale, duration, start_number, media = (
+        attr('timescale'), attr('duration'), attr('startNumber'), attr('media'))
+    if not (timescale and duration and start_number and media):
+        return None
+
+    try:
+        from datetime import datetime, timezone
+        availability_start = datetime.strptime(
+            avail_match.group(1), '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc).timestamp()
+        segment_duration_s = int(duration) / int(timescale)
+        elapsed = time.time() - availability_start
+        segment_index = max(0, int(elapsed // segment_duration_s))
+        number = int(start_number) + segment_index
+    except (ValueError, ZeroDivisionError):
+        return None
+
+    media_path = media.replace('$RepresentationID$', rep_match.group(1))
+    media_path = re.sub(r'\$Number%0(\d+)x\$', lambda m: format(number, f'0{m.group(1)}x'), media_path)
+    media_path = media_path.replace('$Number$', str(number))
+    return base_match.group(1).rstrip('/') + '/' + media_path
+
+
+def _sling_block_confirmed(channel_id: str, boundary_ts: float) -> bool:
+    """The real verification check: is the new block not just *declared* live (its
+    clipslist URL's own start timestamp matches the boundary) but *actually*
+    fetchable — does the segment corresponding to right now return real data, not a
+    404?
+
+    Confirmed live 2026-09-15 (EventLogger trace, Grit boundary): the clipslist-
+    timestamp check alone isn't sufficient — a manifest can correctly report the new
+    block has started while individual segments still 404 against the CDN for
+    several seconds after (15+ real 404s observed on one run). This closes that gap
+    at the verification layer instead of only recovering from it after a stall.
+
+    If segment-level parsing fails for any reason (manifest shape changed, no video
+    AdaptationSet found, etc.), falls back to the clipslist-timestamp check alone
+    rather than blocking forever on something we can't verify.
+    """
+    dash_url, manifest_text = _sling_resolve_manifest(channel_id)
+    if not manifest_text:
+        return False
+    match = _SLING_CLIPSLIST_START_RE.search(dash_url or '')
+    if not match:
+        return False
+    from datetime import datetime, timezone
+    clipslist_start = datetime.strptime(
+        match.group(1), '%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc).timestamp()
+    if clipslist_start < boundary_ts - 1:
+        return False  # still the old block per its own declared window
+
+    segment_url = _sling_segment_url_for_now(manifest_text)
+    if not segment_url:
+        return True  # couldn't parse segment info — clipslist check alone is our best signal
+
+    try:
+        seg_resp = requests.get(segment_url, timeout=5, headers={
+            'Origin': 'https://watch.sling.com', 'Referer': 'https://watch.sling.com/',
+            'Range': 'bytes=0-0',
+        })
+        return seg_resp.status_code in (200, 206)
+    except Exception as e:
+        logger.warning('[fc-player] segment readiness check failed for %s: %s', channel_id, e)
+        return False
+
+
+def clear_active_channel_tracking(channel_key: str) -> None:
+    """Called (best-effort, fire-and-forget) by fc_player's warmStop() — see
+    PlaybackActivity.java — right after ah4c tells it a viewer disconnected. Without
+    this, a channel's active-channel/boundary tracking (6h TTL) outlives the actual
+    viewing session: the block-boundary discovery tick has no way to know nobody's
+    watching anymore, so it keeps scheduling and firing retunes (real adb am start
+    calls, relaunching the app) for a channel that was warm-stopped potentially hours
+    ago. Confirmed live 2026-09-15 — a Bravo boundary retune fired over an hour after
+    the app had been force-stopped.
+
+    The reverse device assignment is removed only if it still names this channel,
+    so a delayed stop for an old channel cannot clear a newer device assignment.
+    """
+    if not channel_key:
+        return
+    try:
+        r = _redis()
+        r.eval("""
+            local address = redis.call('GET', KEYS[1])
+            if address then
+                local device_key = ARGV[2] .. address
+                if redis.call('GET', device_key) == ARGV[1] then
+                    redis.call('DEL', device_key)
+                end
+            end
+            redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
+        """, 3, _ACTIVE_CHANNEL_PREFIX + channel_key,
+            _BLOCK_BOUNDARY_PREFIX + channel_key, _BLOCK_BOUNDARY_RETUNED_PREFIX + channel_key,
+            channel_key, _ACTIVE_DEVICE_PREFIX)
+    except Exception as e:
+        logger.warning('[fc-player] clear_active_channel_tracking failed for %s: %s', channel_key, e)
+
+
+def mark_boundary_handled_by_client(channel_id: str) -> None:
+    """Called (best-effort, fire-and-forget) by fc_player itself right after a
+    successful Lever 2 local swap — see PlaybackActivity.java's onBoundaryStatusResult.
+    Claims the same _BLOCK_BOUNDARY_RETUNED_PREFIX marker fire_block_boundary_retune()
+    checks, so the server-side one-shot job (Lever 1) sees "already handled" on its
+    post-verification-poll re-check and skips its own redundant adb retune.
+
+    Confirmed live 2026-09-15: without this, both paths independently verify against
+    the same underlying fact (has Sling's backend actually flipped) on similar poll
+    cadences, so they tend to confirm within ~1s of each other and both fire — a
+    harmless-but-visible rebuffering blip (redundant am start landing mid-swap) rather
+    than a clean one. This doesn't fully eliminate that race (whichever side confirms
+    second could still lose to a check that already ran), it just meaningfully shrinks
+    the window it can happen in.
+    """
+    channel_key = f'sling:{channel_id}'
+    try:
+        r = _redis()
+        r.delete(_BLOCK_BOUNDARY_PREFIX + channel_key)
+        r.setex(_BLOCK_BOUNDARY_RETUNED_PREFIX + channel_key, 600, '1')
+    except Exception as e:
+        logger.warning('[fc-player] mark_boundary_handled_by_client failed for %s: %s', channel_id, e)
+
+
+def sling_boundary_status(channel_id: str) -> dict:
+    """Read-only status check for fc_player's own client-side polling (Lever 2,
+    2026-09-15): lets PlaybackActivity ask "is my next block live yet?" and swap its
+    own MediaItem locally the instant it is, instead of waiting on the server's own
+    one-shot job to notice, call back into /play/fc-player/.../m3u8, and trigger a
+    fresh adb am start — that whole round trip is pure latency once verification
+    itself is done, which is the same check either path needs regardless of who acts
+    on it.
+
+    Deliberately never touches _BLOCK_BOUNDARY_RETUNED_PREFIX — only
+    fire_block_boundary_retune() claims that, so the server-side one-shot job (see
+    worker.py) still runs as a fallback if the client's own swap never happens (a
+    dropped poll, an app crash, whatever). Known tradeoff for this first version: if
+    both paths do end up firing, that's a harmless redundant am start
+    (launchMode="singleTask" + onNewIntent make it a no-op) rather than a deeper
+    coordination problem — accepted rather than engineered away for now.
+
+    Returns {"confirmed": bool, "boundary_epoch": float | None}. Cheap when nothing
+    is pending; costs one resolve() call when a boundary has passed and isn't yet
+    confirmed (same cost fire_block_boundary_retune's own poll loop already pays).
+    """
+    channel_key = f'sling:{channel_id}'
+    try:
+        r = _redis()
+        boundary_raw = r.get(_BLOCK_BOUNDARY_PREFIX + channel_key)
+        if boundary_raw is None:
+            return {'confirmed': False, 'boundary_epoch': None}
+        boundary_ts = float(boundary_raw)
+        if time.time() < boundary_ts:
+            return {'confirmed': False, 'boundary_epoch': boundary_ts}
+        confirmed = _sling_block_confirmed(channel_id, boundary_ts)
+        return {'confirmed': confirmed, 'boundary_epoch': boundary_ts}
+    except Exception as e:
+        logger.warning('[fc-player] sling_boundary_status failed for %s: %s', channel_id, e)
+        return {'confirmed': False, 'boundary_epoch': None}
+
+
+def fire_block_boundary_retune(channel_key: str, boundary_ts: float) -> None:
+    """The actual action — called by app.worker's precise one-shot job, scheduled for
+    boundary_ts + _BLOCK_BOUNDARY_INITIAL_DELAY_S. Force a fresh trigger_channel()
+    call: a full re-prepare is the only thing that reliably recovers playback across
+    one of these boundaries, since the new block's manifest resets to Period id="1"
+    start="PT0S" rather than continuing the timeline the player was already on
+    (confirmed live 2026-09-15). Runs regardless of the idle-stop toggle — this is a
+    different concern (a scheduled content transition, not an idle viewer).
+
+    Actively polls _sling_current_block_start() rather than trusting a fixed buffer
+    had elapsed long enough — fires the instant the new block is confirmed live
+    server-side, capped at _BLOCK_BOUNDARY_VERIFY_MAX_WAIT_S past the boundary as a
+    fallback so a verification failure loop is never worse than the old fixed-buffer
+    design, just potentially not faster than it either.
+
+    Re-verifies everything at fire time (and again after the poll loop, since real
+    time has passed) rather than trusting the scheduling-time snapshot — a viewer
+    switching channels or the boundary already having been handled both need to still
+    short-circuit here, not just at discovery time.
+    """
+    try:
+        r = _redis()
+        tracked_address = _tracked_channel_address(r, channel_key)
+        if tracked_address is None:
+            return  # viewer tuned away (or this tuner stopped) since this was scheduled
+        retuned_key = _BLOCK_BOUNDARY_RETUNED_PREFIX + channel_key
+        if r.exists(retuned_key):
+            return
+
+        source_name, sep, channel_id = channel_key.partition(':')
+        if not sep or not source_name or not channel_id:
+            return
+
+        if source_name == 'sling':
+            deadline = boundary_ts + _BLOCK_BOUNDARY_VERIFY_MAX_WAIT_S
+            confirmed = False
+            attempts = 0
+            while time.time() < deadline:
+                attempts += 1
+                if _sling_block_confirmed(channel_id, boundary_ts):
+                    confirmed = True
+                    break
+                time.sleep(_BLOCK_BOUNDARY_VERIFY_POLL_S)
+            logger.info('[fc-player] block-boundary verification for %s: confirmed=%s after %d attempt(s)',
+                        channel_key, confirmed, attempts)
+            # Re-check post-poll — the poll loop can run for several seconds, during
+            # which a viewer could tune away or another path could already handle it.
+            tracked_address = _tracked_channel_address(r, channel_key)
+            if tracked_address is None or r.exists(retuned_key):
+                return
+
+        # Clear immediately (not after the retune attempt) so a retry-worthy failure
+        # below doesn't get masked by "already handled" — worst case is one extra
+        # retry on the next discovery tick, which is harmless.
+        r.delete(_BLOCK_BOUNDARY_PREFIX + channel_key)
+        r.setex(retuned_key, 600, '1')
+
+        base_url = (AppSettings.get().effective_public_base_url() or '').rstrip('/')
+        if not base_url:
+            logger.warning('[fc-player] block-boundary retune for %s skipped: no public_base_url configured', channel_key)
+            return
+        retune_url = f'{base_url}/play/fc-player/{source_name}/{channel_id}.m3u8'
+        # CONFIRMED LIVE BUG, 2026-09-15: this was previously built with no ?adb=
+        # at all, so a retune for a channel playing on a non-default device (any
+        # ah4c tuner override) silently retuned the WRONG device — the default one
+        # — doing nothing for the tuner that was actually stuck. Caught because a
+        # real Disney Channel freeze on a non-default device (.91) stayed frozen
+        # for a full minute past when the (misdirected) retune reported success.
+        # tracked_address is always the resolved device trigger_channel() actually
+        # used (see _note_active_channel_key) — passing it back explicitly is a
+        # harmless no-op when it happens to equal the configured default, and the
+        # fix when it doesn't.
+        if tracked_address:
+            from urllib.parse import quote as _urlquote
+            retune_url += f'?adb={_urlquote(tracked_address)}'
+        try:
+            resp = requests.get(retune_url, timeout=15, allow_redirects=False)
+            ok = resp.status_code in (200, 204, 302)
+        except Exception as e:
+            logger.warning('[fc-player] block-boundary retune request failed for %s: %s', channel_key, e)
+            return
+        logger.info('[fc-player] block-boundary retune for %s: status=%s', channel_key, resp.status_code)
+        if not ok:
+            logger.warning('[fc-player] block-boundary retune for %s got unexpected status %s', channel_key, resp.status_code)
+    except Exception as e:
+        logger.warning('[fc-player] block-boundary retune fire failed: %s', e)
+
+
 def note_trigger(channel_key: str) -> None:
     """Called at the start of trigger_channel() when idle-stop is enabled: just marks
     that something was triggered and which channel it was. The (heavier) DVR guide-
@@ -945,11 +1425,38 @@ def _recent_web_heartbeat(channel_key: str) -> bool:
 def stop_playback() -> bool:
     """Force-stops the player app entirely — blunt, but already proven reliable this
     session for clearing stale DRM sessions. No JSON-RPC-style control channel exists
-    to ask it to stop gracefully (unlike the old Kodi bridge's Player.Stop)."""
+    to ask it to stop gracefully (unlike the old Kodi bridge's Player.Stop).
+
+    Unlike ah4c's graceful warm_stop (see clear_active_channel_tracking, called by the
+    app itself over HTTP right after a warm stop), a force-stop kills the process
+    outright — no Java code runs, so the app has no chance to tell the server it's no
+    longer playing anything. This is the ONLY stop path single-HDMI-Capture-mode
+    installs have at all (no ah4c managing per-tuner disconnects there), so without
+    clearing tracking here too, those installs would keep the exact phantom-retune bug
+    the ack fix addresses for ah4c — confirmed live 2026-09-15 that a warm-stopped
+    channel's tracking otherwise outlives the session by hours. Clearing it here
+    (server-side, no round-trip needed) covers both single-Capture mode and ah4c's own
+    idle-stop fallback in one place.
+    """
     try:
         address = _adb_address()
     except FcPlayerNotConfigured:
         return False
+
+    try:
+        r = _redis()
+        # Only clear tracking for channel(s) actually on THIS device — stop_playback()
+        # always targets the single configured default address, so with per-channel
+        # entries now possibly spanning multiple ah4c tuners, it must not touch
+        # tracking that belongs to a different tuner's stream.
+        for raw_key in r.scan_iter(_ACTIVE_CHANNEL_PREFIX + '*'):
+            key_str = raw_key.decode() if isinstance(raw_key, bytes) else raw_key
+            stored_address = (r.get(key_str) or b'').decode()
+            if stored_address == address:
+                clear_active_channel_tracking(key_str[len(_ACTIVE_CHANNEL_PREFIX):])
+    except Exception as e:
+        logger.warning('[fc-player] stop_playback: tracking cleanup failed: %s', e)
+
     try:
         result = subprocess.run(
             ['adb', '-s', address, 'shell', 'am', 'force-stop', 'com.fastchannels.player'],
@@ -1040,6 +1547,160 @@ def check_idle_and_stop() -> None:
         logger.warning('[fc-player] idle-stop watchdog tick failed: %s', e)
 
 
+_LOGCAT_HEADER_RE = re.compile(r'^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \S+/\S+\(\s*\d+\):')
+
+
+def _group_logcat_entries(text: str) -> list[str]:
+    """Group `adb logcat -v time` output back into whole log entries.
+
+    Log.e(tag, msg, throwable) writes ONE entry whose message embeds the full stack
+    trace, but `-v time` repeats the IDENTICAL timestamp/tag/pid header on every
+    physical line of that trace when printing it — so a naive per-line split (or a
+    split on "line starts with a timestamp", since every line does) still shreds one
+    error into a dozen. Consecutive lines sharing the exact same header belong to the
+    same entry; a changed header (a different call, always at a different
+    millisecond in practice) starts a new one.
+    """
+    entries = []
+    current: list[str] = []
+    current_header = None
+    for line in text.splitlines():
+        # `-d` prints a bare "--------- beginning of <buffer>" marker for each ring
+        # buffer it dumps (main/system/crash/...) — not a real log line, and it
+        # carries no header to attach to whatever entry came before or after it, so
+        # drop it outright rather than let it become its own bogus "entry".
+        if not line.strip() or line.startswith('--------- beginning of'):
+            continue
+        m = _LOGCAT_HEADER_RE.match(line)
+        header = m.group(0) if m else current_header
+        if header != current_header and current:
+            entries.append('\n'.join(current))
+            current = []
+        current_header = header
+        current.append(line)
+    if current:
+        entries.append('\n'.join(current))
+    return entries
+
+
+def _is_relevant_entry(entry: str) -> bool:
+    """_ANDROIDRUNTIME_LOG_TAG is a shared system tag — every crashing app on the device
+    writes to it, not just ours — so an entry under it only counts if it actually names
+    our package (the standard "Process: <pkg>, PID: <pid>" line a FATAL EXCEPTION dump
+    always includes). Entries under our own two tags are never filtered here since those
+    are already exclusively ours."""
+    first_line = entry.splitlines()[0] if entry else ''
+    if _ANDROIDRUNTIME_LOG_TAG not in first_line:
+        return True
+    return _PACKAGE_NAME in entry
+
+
+def _entry_is_crash(entry: str) -> bool:
+    """True for a real crash (our own pre-crash tag, or the platform's own dump naming
+    our package — _is_relevant_entry already dropped ones that don't). False for a plain
+    _PLAYBACK_ERROR_LOG_TAG entry, which is a playback error Media3 already handled via
+    onPlayerError, not an uncaught exception."""
+    first_line = entry.splitlines()[0] if entry else ''
+    return _APP_CRASH_LOG_TAG in first_line or _ANDROIDRUNTIME_LOG_TAG in first_line
+
+
+def _entry_summary(entry: str) -> str:
+    """One-line summary for the log: for our own tags that's just the first physical
+    line, as before. For an AndroidRuntime dump specifically, the first line is only
+    ever "FATAL EXCEPTION: <thread>" — the actual exception type/message and the
+    process line follow a couple of lines later, so surface up to 3 header-stripped
+    lines instead of the uninformative first one alone."""
+    lines = entry.splitlines()
+    if not lines:
+        return entry.strip()
+    if _ANDROIDRUNTIME_LOG_TAG not in lines[0]:
+        return lines[0].strip()
+    content = [ln.split('): ', 1)[-1].strip() for ln in lines[:3]]
+    return ' | '.join(c for c in content if c)
+
+
+def check_playback_errors() -> None:
+    """Watchdog tick (app.worker's scheduled job): tail the device's logcat for a fresh
+    PlaybackActivity.onPlayerError entry OR an actual app crash (our own pre-crash tag,
+    or the platform's own AndroidRuntime dump scoped to our package — see
+    _is_relevant_entry/_entry_is_crash), and re-emit a summary line into FastChannels'
+    own log stream under this module's logger, so either one shows up in the admin log
+    viewer without anyone needing to physically pull logcat off the Fire TV/Android
+    device. The two are logged at different levels (error vs warning) so a real crash
+    — meaning something outside Media3's own internal error handling broke, see
+    PlaybackActivity's UncaughtExceptionHandler — reads as more severe than a playback
+    error the app already recovered from or cleanly exited on.
+
+    Each adb server (this container's included) needs its own `adb connect` before
+    `adb -s <address> shell ...` works — trigger_channel() already does this per call;
+    this watchdog runs independently of any trigger, so it has to do the same.
+
+    `adb logcat -d` dumps the whole (circular, bounded) buffer for the filtered tags
+    each time — cheap since our own two tags are only ever written on a real failure,
+    and AndroidRuntime entries not naming our package are dropped immediately. A
+    genuine post-onCreate crash produces both our own tag's entry AND an AndroidRuntime
+    entry for the same event (our UncaughtExceptionHandler logs, then chains to the
+    platform's own handler) — both get surfaced rather than deduplicated, since they
+    carry complementary detail (ours has the channel_key; AndroidRuntime's has
+    Android's canonical process/thread framing) and the redundancy only shows up on an
+    actual crash, which should be rare.
+
+    Log.e(tag, msg, throwable) writes ONE entry whose message embeds the full stack
+    trace, but `-v time` repeats the timestamp/tag/pid header on every line of that
+    trace when printing it — so this splits back into whole entries on that repeated
+    header (one onPlayerError call, or one crash dump, must become one emitted log
+    line, not a dozen) and tracks the last whole entry it already emitted in Redis,
+    logging only the newest lines of any new ones. If that entry has aged out of the
+    buffer (device rebooted, app reinstalled, first run ever) it deliberately only
+    surfaces the newest entry rather than replaying whatever backlog remains, the same
+    "don't replay a backlog" caution check_idle_and_stop() uses for its own DVR lookup
+    cache.
+    """
+    if not is_configured():
+        return
+    try:
+        address = _adb_address()
+    except FcPlayerNotConfigured:
+        return
+    try:
+        subprocess.run(['adb', 'connect', address], capture_output=True,
+                        timeout=_ADB_TIMEOUT, check=False)
+    except Exception as e:
+        logger.warning('[fc-player] playback-error watchdog adb connect failed: %s', e)
+        return
+    ok, text = _adb_shell(address, 'logcat', '-d', '-v', 'time',
+                           '-s', f'{_PLAYBACK_ERROR_LOG_TAG}:E', f'{_APP_CRASH_LOG_TAG}:E',
+                           f'{_ANDROIDRUNTIME_LOG_TAG}:E', '*:S')
+    if not ok or not text.strip():
+        return
+    entries = [e for e in _group_logcat_entries(text) if _is_relevant_entry(e)]
+    if not entries:
+        return
+
+    try:
+        r = _redis()
+        last_seen = (r.get(_LAST_ERROR_LOGCAT_LINE_KEY) or b'').decode() or None
+    except Exception as e:
+        logger.warning('[fc-player] playback-error watchdog redis read failed: %s', e)
+        return
+
+    if last_seen and last_seen in entries:
+        new_entries = entries[entries.index(last_seen) + 1:]
+    else:
+        new_entries = entries[-1:]
+    for entry in new_entries:
+        if _entry_is_crash(entry):
+            logger.error('[fc-player] device app CRASHED (uncaught exception, not just a '
+                         'playback error): %s', _entry_summary(entry))
+        else:
+            logger.warning('[fc-player] device playback error: %s', _entry_summary(entry))
+
+    try:
+        r.set(_LAST_ERROR_LOGCAT_LINE_KEY, entries[-1])
+    except Exception as e:
+        logger.warning('[fc-player] playback-error watchdog redis write failed: %s', e)
+
+
 def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: str = 'FastChannels',
                      channel_key: str | None = None, adb_address: str | None = None) -> bool:
     """Tell the FastChannels Player app to start playing this stream right now.
@@ -1050,19 +1711,27 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
     acknowledged the am start call — not proof playback actually started; there is no
     separate confirm_playback() here since there's no remote-control channel to poll.
 
-    channel_key (f'{source_name}:{channel_id}') is only used when the idle-stop
-    watchdog is enabled — see note_trigger().
+    channel_key (f'{source_name}:{channel_id}') is used both for idle-stop tracking
+    (when enabled) and for the block-boundary watchdog's per-channel tracking (always
+    on regardless of idle-stop — see _note_active_channel_key).
 
     adb_address overrides the single configured device for this one trigger — ah4c
-    supplies it (per allocated tuner) when it's fronting more than one streaming stick.
-    When set, idle-stop tracking is skipped: it's single-device global state, and the
-    ah4c stop script already force-stops each stick on its own disconnect.
+    supplies it (per allocated tuner) when it's fronting more than one streaming
+    stick. When set, idle-stop tracking is skipped (it's single-device global state,
+    and the ah4c stop script already force-stops each stick on its own disconnect) —
+    but the block-boundary watchdog tracks this trigger regardless, keyed by
+    channel_key rather than a single shared slot, specifically so N concurrent
+    ah4c tuners each get independently watched (confirmed live 2026-09-15 that a
+    single shared slot silently meant the watchdog never engaged at all for any
+    multi-tuner setup, since adb_address is never None there).
     """
     address = adb_address or _adb_address()
     drm = bool(license_url)
 
-    if channel_key and adb_address is None and idle_stop_enabled():
-        note_trigger(channel_key)
+    if channel_key:
+        if adb_address is None and idle_stop_enabled():
+            note_trigger(channel_key)
+        _note_active_channel_key(channel_key, address)
 
     try:
         subprocess.run(

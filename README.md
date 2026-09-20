@@ -65,7 +65,7 @@ Go to **Admin → Settings** and set two things:
 **3. Configure Sources.**
 Go to **Admin → Sources**. Enable or disable sources to taste, and expand any source card to enter credentials. Changes take effect on the next scrape.
 
-Most sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, Vidaa Free TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, every TV Everywhere source (A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, Warner Bros Discovery), and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), Frndly/Fubo/FreeCast/DirecTV Stream/Cox Contour require account credentials, Philo signs in with a passwordless emailed code, and the TV Everywhere sources authenticate once via **Settings → TV Everywhere** rather than per-source. See [Source Notes](#source-notes) for per-source details.
+Most sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Tubi TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, Vidaa Free TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, every TV Everywhere source (A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, Warner Bros Discovery), and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), **Tubi TV also requires a free account** (its anonymous channel list stopped working), Frndly/Fubo/FreeCast/DirecTV Stream/Cox Contour require account credentials, Philo signs in with a passwordless emailed code, and the TV Everywhere sources authenticate once via **Settings → TV Everywhere** rather than per-source. See [Source Notes](#source-notes) for per-source details.
 
 **4. Run Stream Audits.**
 Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
@@ -162,7 +162,7 @@ who want to make Plex work anyway, **[docs/plex.md](docs/plex.md)** covers both 
 ### FastChannels Player (experimental)
 
 DRM channels that need real Widevine playback (Sling, PBS, Amazon Prime Free, Vidaa,
-Philo, Roku, NBCUniversal TVE, DirecTV Stream, Fubo) can be routed through a real Fire TV /
+Philo, Roku, NBCUniversal TVE, Warner Bros Discovery TVE, DirecTV Stream, Fubo) can be routed through a real Fire TV /
 Android TV device running FastChannels' own player app, captured back off its HDMI
 output and re-published as a normal channel — no browser/PrismCast bridge needed for
 these sources. An alternate HDMI-capture front end, [ah4c](https://github.com/sullrich/ah4c),
@@ -250,10 +250,6 @@ Gracenote station IDs link channels to Channels DVR's guide database for rich EP
 
 Feeds expose a `/m3u/gracenote` variant that emits Gracenote IDs for Channels DVR. A curated community CSV fills in IDs for sources that don't expose native ones; configure or browse it from **Settings**.
 
-### EPG-only sources
-
-A source can be flagged **EPG Only** on the Sources page. EPG-only sources are excluded from M3U output but still scrape and store their guide data. Amazon Prime Free is the primary use case.
-
 ### Channel flags
 
 - **`is_active`** — set by the scraper; means the channel still exists upstream. Updated automatically on re-scrape.
@@ -268,7 +264,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Source | Auth | Notes |
 |--------|------|-------|
 | Pluto TV | Login required | **Default off.** Free Pluto account required; per-country feeds; configurable session pool (default 10); JWT stitcher auth |
-| Tubi TV | Optional email/password | Bearer token auth |
+| Tubi TV | Email/password required | **Default off.** Tubi no longer exposes its channel list to signed-out requests; a free Tubi account is required for channel discovery |
 | The Roku Channel | None | Session cookie auth, HLS variant selection; Cloudflare-sensitive — avoid hammering if you get 403s |
 | Plex | None | Session cookie auth |
 | Xumo Play | None | Public API |
@@ -281,7 +277,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Vizio WatchFree+ | None | Public API; clear HLS |
 | Whale TV+ | None | Public API |
 | Adult Swim | None | 24/7 marathon streams |
-| Amazon Prime Free | Optional cookie header | **Default off.** EPG-only by default; streams are DRM-only |
+| Amazon Prime Free | Optional cookie header | **Default off.** Streams are DRM-only, bridged like the other DRM sources below |
 | Bally Sports Live | None | Free, unauthenticated |
 | Hallmark | None | Free, unauthenticated |
 | TCL TV+ | None | Country configurable (default: `US`) |
@@ -316,7 +312,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 
 A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, and Warner Bros Discovery all authenticate the same way: through your TV provider (MVPD), not a per-source login. Go to **Settings → TV Everywhere**, pick your provider, and sign in — a real browser session opens in an admin-UI modal for the provider's pairing flow. **Sign in to all** repeats that flow for every TVE-backed network in one pass, with a short pause between each to avoid tripping your provider's rate limiting.
 
-🧪 **Beta**: the sign-in dropdown lists every provider Adobe Pass supports, but it's only been verified working with **Cox**, **Sling TV**, and **Xfinity/Comcast**. Other providers may fail. All of these channels are DRM-only (Widevine CENC) and play back via the PrismCast browser bridge; NBCUniversal TVE is additionally eligible for the FastChannels Player bridge, the others currently are not (see [FastChannels Player](#fastchannels-player-experimental)).
+🧪 **Beta**: the sign-in dropdown lists every provider Adobe Pass supports, but it's only been verified working with **Cox**, **Sling TV**, and **Xfinity/Comcast**. Other providers may fail. All of these channels are DRM-only (Widevine CENC) and play back via the PrismCast browser bridge; NBCUniversal TVE and Warner Bros Discovery TVE are additionally eligible for the FastChannels Player bridge, the others currently are not (see [FastChannels Player](#fastchannels-player-experimental)).
 
 ## Advanced
 

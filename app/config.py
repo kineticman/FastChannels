@@ -1,6 +1,6 @@
 import os
 
-VERSION = "5.2.2"
+VERSION = "5.3.0"
 
 
 class Config:

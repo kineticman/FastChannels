@@ -24,6 +24,8 @@ _SUPPRESS_PATTERNS = (
     'tve/foxone/browser-login/input',
     'tve/google/browser-login/state',   # admin UI polls every ~250ms during the standalone Google sign-in
     'tve/google/browser-login/input',   # mousemove/click/key forwarding — up to ~16/s while dragging
+    'spectrum-browser-login/state', # admin UI polls every ~400ms during Spectrum sign-in
+    'spectrum-browser-login/input', # mousemove/click/key forwarding — up to ~16/s while dragging
     '/api/custom-channels/detect/', # stream detection status polling
     '/images/proxy',           # per-image cache hits — too noisy
     '/logos/',                 # cached logo file hits — too noisy
@@ -32,6 +34,7 @@ _SUPPRESS_PATTERNS = (
     '/play/stirr/segment',     # stirr relay segments — one per ~5s per viewer
     '/play/cspan/segment',     # cspan relay segments — one per ~6s per viewer
     '/play/stirr/variant',     # stirr variant manifest refresh every ~5s
+    '/boundary-status',        # fc_player's Lever 2 poll — 30s far out, 1.5s near a known boundary
     '/proxy.m3u8',             # manifest proxy polls every ~3s during playback
     '"GET /static/',           # static asset cache hits — 304s add no signal
     '"HEAD /static/',          # deployment/sanity probes of static assets

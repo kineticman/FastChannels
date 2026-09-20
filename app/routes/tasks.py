@@ -511,10 +511,13 @@ def stop_sling_browser_login():
 # below must check ALL of these job_ids before enqueueing, not just its own —
 # otherwise two families queue up back-to-back and the second one silently
 # waits (up to job_timeout) for the first to release the shared profile.
-_MVPD_TVE_PROFILE_JOB_IDS = ('mvpd-browser-login', 'nbc-mvpd-browser-login', 'fox-mvpd-browser-login', 'google-signin')
+_MVPD_TVE_PROFILE_JOB_IDS = (
+    'mvpd-browser-login', 'nbc-mvpd-browser-login', 'fox-mvpd-browser-login', 'google-signin',
+    'spectrum-signin',
+)
 _MVPD_TVE_PROFILE_THREAD_NAMES = (
     'mvpd-browser-login-fallback', 'nbc-mvpd-browser-login-fallback', 'fox-mvpd-browser-login-fallback',
-    'google-signin-fallback',
+    'google-signin-fallback', 'spectrum-signin-fallback',
 )
 
 
@@ -558,11 +561,17 @@ def _force_kill_mvpd_browser() -> None:
     """
     import os as _os_kill
     import subprocess
-    try:
-        subprocess.run(['pkill', '-9', '-f', 'mvpd_tve'], timeout=5, check=False)
-    except Exception as e:
-        logger.warning(f'Failed to force-kill MVPD browser process: {e}')
-    for _profile_dir in ('/data/browser_profiles/mvpd_tve',):
+    # 'mvpd_tve' covers the shared profile every non-YouTubeTV-MSO login uses;
+    # 'browser_profiles/youtubetv' additionally covers the isolated profile
+    # NBC/FOX's own YouTubeTV-MSO branch uses (see
+    # _YOUTUBETV_ISOLATED_PROFILE_DIR's docstring in
+    # app/tve/browser_login/common.py).
+    for _pattern in ('mvpd_tve', 'browser_profiles/youtubetv'):
+        try:
+            subprocess.run(['pkill', '-9', '-f', _pattern], timeout=5, check=False)
+        except Exception as e:
+            logger.warning(f'Failed to force-kill MVPD browser process (pattern={_pattern}): {e}')
+    for _profile_dir in ('/data/browser_profiles/mvpd_tve', '/data/browser_profiles/youtubetv'):
         for _lock_name in ('.parentlock', 'lock', 'parent.lock'):
             _lock_path = _os_kill.path.join(_profile_dir, _lock_name)
             try:
@@ -824,6 +833,39 @@ def stop_google_signin() -> None:
         r.setex('google-signin:browser-login:stop', 30, '1')
     except Exception as e:
         logger.warning(f'Failed to signal Google sign-in stop: {e}')
+    _force_kill_mvpd_browser()
+
+
+def trigger_spectrum_signin() -> bool:
+    """Standalone Spectrum sign-in — see app.tve.browser_login.spectrum.run_spectrum_signin's
+    docstring. Returns True if a job was enqueued, False if one is already running."""
+    try:
+        q = get_fast_queue()
+        job_id = 'spectrum-signin'
+        if _mvpd_tve_profile_busy(q):
+            logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
+            return False
+        q.enqueue('app.tve.browser_login.spectrum.run_spectrum_signin', job_timeout=630, job_id=job_id)
+        logger.info('Enqueued Spectrum sign-in')
+        return True
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for Spectrum sign-in')
+        import threading
+        from app.tve.browser_login.spectrum import run_spectrum_signin
+        thread_name = 'spectrum-signin-fallback'
+        if _mvpd_tve_profile_busy_fallback():
+            logger.info('MVPD browser login fallback thread already running')
+            return False
+        threading.Thread(target=run_spectrum_signin, daemon=True, name=thread_name).start()
+        return True
+
+
+def stop_spectrum_signin() -> None:
+    try:
+        r = redis.from_url(current_app.config['REDIS_URL'])
+        r.setex('spectrum:browser-login:stop', 30, '1')
+    except Exception as e:
+        logger.warning(f'Failed to signal Spectrum sign-in stop: {e}')
     _force_kill_mvpd_browser()
 
 

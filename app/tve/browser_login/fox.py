@@ -485,6 +485,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 f5_retried = False
                 session_poll_interval = _FOX_SESSION_POLL_SECONDS
                 last_seen_page_url = _safe_page_url(page)
+                preauth_incomplete_since: float | None = None
                 current_job = get_current_job()
                 _MAX_CONSECUTIVE_FAILURES = 15
                 while time.monotonic() < deadline:
@@ -569,6 +570,24 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                         if check.status_code == 404:
                             _back_off_and_log(404)
                             continue  # human hasn't finished the MSO login yet
+                        if check.status_code == 424:
+                            # "SaveEntitlements Error: preauthorization incomplete" —
+                            # confirmed live 2026-09-18: this landed on the very
+                            # FIRST poll, ~2s after the SAML round-trip finished
+                            # navigating to foxsports.com, while FOX's own backend
+                            # was still writing the entitlement record server-side.
+                            # Treat it as transient like a 404, but bounded — if
+                            # FOX is still returning this after a full minute,
+                            # something's genuinely wrong rather than just slow,
+                            # so fall through to the normal hard failure instead
+                            # of spinning for the whole job deadline.
+                            if preauth_incomplete_since is None:
+                                preauth_incomplete_since = now
+                            elif now - preauth_incomplete_since > 60:
+                                set_status('error', f'FOX checkadobeauthn returned HTTP {check.status_code}: {check.text[:300]}')
+                                return
+                            _back_off_and_log(424)
+                            continue
                         if not check.ok:
                             set_status('error', f'FOX checkadobeauthn returned HTTP {check.status_code}: {check.text[:300]}')
                             return

@@ -25,6 +25,7 @@ from app.tve.browser_login.common import (
     _record_tve_login_error,
     _cox_login_error_detail,
     _autofill_google_account_chooser,
+    _autofill_spectrum_sso_confirm,
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
@@ -635,6 +636,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     # this family (History/A&E/Warner) is exactly the one
                     # that hits Google's account-chooser most often tonight.
                     _autofill_google_account_chooser(page)
+                    _autofill_spectrum_sso_confirm(page)
 
                     for _ in range(20):
                         raw = r.lpop(MVPD_BROWSER_LOGIN_INPUT_KEY)

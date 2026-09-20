@@ -1380,6 +1380,22 @@ class DirectvScraper(BaseScraper):
     _FAST_CHANNEL_NUMBER_RANGE = range(4000, 5000)
     FAST_TAG = 'DirecTV FAST'
 
+    # DirecTV's AllChannels endpoint is backed by multiple nodes/caches that
+    # don't always agree: some correctly flag receiver-only/blackout channels
+    # via augmentation.constraints.isLiveStreamEnabled=false, others report
+    # every row as streamable and pad the catalog with channels outside the
+    # account's real lineup. Track the largest non_streamable count this
+    # source has actually seen as its trusted baseline; a response reporting
+    # zero once that baseline is established is treated as a bad node rather
+    # than a real lineup change.
+    _MIN_TRUSTED_NON_STREAMABLE = 20
+
+    # A bad node is common enough that a few retries within one scrape
+    # usually lands on a good one, instead of leaving the channel list
+    # empty or stale until the next scheduled run.
+    _ELIGIBILITY_RETRY_ATTEMPTS = 4
+    _ELIGIBILITY_RETRY_DELAY = 5
+
     def __init__(self, config: dict | None = None):
         super().__init__(config)
         self.session.headers.update({
@@ -1504,10 +1520,124 @@ class DirectvScraper(BaseScraper):
 
         _progress(self, 'channels', 0, 1)
         params = {'sort': 'OrdCh=ASC'}
-        client_context = self.config.get('client_context')
-        if client_context:
-            params['clientContext'] = client_context
+        # Deliberately NOT sending clientContext to AllChannels. It's a
+        # device/proximity-scoped blob the browser-fallback auth path
+        # (capture_directv_auth) captures for the per-channel channel/v1
+        # playback-authorization call, which does need it -- but it reflects
+        # wherever our own server/browser happens to be, not the subscriber's
+        # real service address, so it has no business steering which local
+        # affiliates or region-scoped rows AllChannels returns. AllChannels
+        # has always worked correctly without it via the normal curl-cffi
+        # auth path, which never captures one in the first place.
 
+        baseline_non_streamable = int((self.config.get('_eligibility_baseline') or {}).get('non_streamable', 0))
+        exclude_fast = self._exclude_fast_channels()
+
+        rows: list[dict] = []
+        channels: list[ChannelData] = []
+        non_streamable = 0
+
+        # Hard failures (auth, transport, malformed payload) raise immediately
+        # from _fetch_allchannels_rows() and are not retried here -- only the
+        # "looks like a bad backend node" case below is.
+        for attempt in range(1, self._ELIGIBILITY_RETRY_ATTEMPTS + 1):
+            rows = self._fetch_allchannels_rows(params)
+            self.excluded_channel_ids = set()
+            non_streamable = 0
+            channels = []
+
+            for row in rows:
+                ccid = _pick(row, 'ccid', 'ccId', 'channelId', 'channel_id', 'id')
+                resource_id = _pick(row, 'resourceId', 'resourceID', 'resource_id', 'guid')
+                name = _pick(row, 'channelName', 'name', 'displayName', 'title')
+                if not ccid or not resource_id or not name:
+                    continue
+
+                # Satellite lineups include receiver-only entries alongside their
+                # streamable variants. Trust only an explicit JSON false: missing
+                # metadata must preserve compatibility with other account lineups.
+                augmentation = row.get('augmentation')
+                constraints = augmentation.get('constraints') if isinstance(augmentation, dict) else None
+                if isinstance(constraints, dict) and constraints.get('isLiveStreamEnabled') is False:
+                    self.excluded_channel_ids.add(ccid)
+                    non_streamable += 1
+                    continue
+
+                number_raw = _pick(row, 'channelNumber', 'channel_number', 'number')
+                number = int(number_raw) if number_raw.isdigit() else None
+                # DirecTV's own channel number, not FastChannels' guide-output number
+                # (Channel.number gets globally reassigned for M3U/guide purposes — see
+                # worker.py's _renumber — so it can't be used later to identify FAST
+                # channels; tag them instead, which survives that reassignment).
+                is_fast = number is not None and number in self._FAST_CHANNEL_NUMBER_RANGE
+                if exclude_fast and is_fast:
+                    self.excluded_channel_ids.add(ccid)
+                    continue
+                logo = _pick(row, 'logoUrl', 'logoURL', 'logo_url') or (
+                    f"https://dfwfis.prod.dtvcdn.com/catalog/image/imageserver/v1/"
+                    f"service/channel/{resource_id}/chlogo-clb-guide/120/90"
+                )
+
+                category = category_for_channel(name, None) or infer_category_from_name(name) or 'Entertainment'
+                language = infer_language_from_metadata(name)
+
+                # Stream lineups can supply Gracenote IDs here. Satellite lineups
+                # also contain internal channel IDs; retain resolver validation and
+                # community-map fallback rather than accepting every value.
+                external_listing_id = _pick(row, 'externalListingId')
+
+                channels.append(ChannelData(
+                    source_channel_id=ccid,
+                    name=name,
+                    stream_url=f'directv://{ccid}/{quote(resource_id, safe="")}',
+                    logo_url=logo,
+                    category=category,
+                    language=language,
+                    stream_type='hls',
+                    number=number,
+                    gracenote_id=(resolve_gracenote('directv', upstream_id=external_listing_id, lookup_key=ccid)
+                                  or resolve_gracenote('directv', lookup_key=f'name:{_directv_gracenote_key(name)}')),
+                    tags=[self.FAST_TAG] if is_fast else [],
+                ))
+
+            logger.info(
+                '[directv] channel eligibility: upstream=%d included=%d non_streamable=%d excluded=%d',
+                len(rows), len(channels), non_streamable, len(self.excluded_channel_ids),
+            )
+
+            # See _MIN_TRUSTED_NON_STREAMABLE above. The per-row augmentation/
+            # constraints check can't catch this failure mode: the field is
+            # present and well-formed, just wrong on every row. Compare against
+            # this source's own history instead of a fixed catalog-composition
+            # assumption, so the guard still works if DirecTV's real lineup
+            # composition legitimately shifts over time.
+            looks_bad = non_streamable == 0 and baseline_non_streamable >= self._MIN_TRUSTED_NON_STREAMABLE
+            if not looks_bad:
+                break
+            if attempt < self._ELIGIBILITY_RETRY_ATTEMPTS:
+                logger.warning(
+                    '[directv] AllChannels returned 0 non-streamable channels (upstream=%d) against a '
+                    'trusted baseline of %d — retrying (%d/%d)',
+                    len(rows), baseline_non_streamable, attempt, self._ELIGIBILITY_RETRY_ATTEMPTS,
+                )
+                time.sleep(self._ELIGIBILITY_RETRY_DELAY)
+
+        if non_streamable == 0 and baseline_non_streamable >= self._MIN_TRUSTED_NON_STREAMABLE:
+            raise ScrapeSkipError(
+                f'DirecTV Stream: AllChannels returned 0 non-streamable channels after '
+                f'{self._ELIGIBILITY_RETRY_ATTEMPTS} attempts (upstream={len(rows)}), below the trusted '
+                f"baseline of {baseline_non_streamable}. Skipping this scrape; if DirecTV's lineup "
+                "legitimately changed, clear this source's config key _eligibility_baseline to accept it."
+            )
+        self._update_config('_eligibility_baseline', {'non_streamable': non_streamable, 'upstream': len(rows)})
+
+        _progress(self, 'channels', 1, 1)
+        return channels
+
+    def _fetch_allchannels_rows(self, params: dict) -> list[dict]:
+        """One AllChannels GET plus the hard-failure checks (auth/transport/
+        shape). These are never retried -- only the soft bad-node condition
+        in fetch_channels() is."""
         try:
             r = self.session.get(_ALLCHANNELS_URL, params=params, timeout=20)
         except requests.RequestException as exc:
@@ -1531,71 +1661,25 @@ class DirectvScraper(BaseScraper):
         if not rows:
             raise ScrapeSkipError('DirecTV Stream: could not find a channel list in the AllChannels response')
 
-        exclude_fast = self._exclude_fast_channels()
-        self.excluded_channel_ids = set()
-        non_streamable = 0
-        channels: list[ChannelData] = []
-
-        for row in rows:
-            ccid = _pick(row, 'ccid', 'ccId', 'channelId', 'channel_id', 'id')
-            resource_id = _pick(row, 'resourceId', 'resourceID', 'resource_id', 'guid')
-            name = _pick(row, 'channelName', 'name', 'displayName', 'title')
-            if not ccid or not resource_id or not name:
-                continue
-
-            # Satellite lineups include receiver-only entries alongside their
-            # streamable variants. Trust only an explicit JSON false: missing
-            # metadata must preserve compatibility with other account lineups.
-            augmentation = row.get('augmentation')
-            constraints = augmentation.get('constraints') if isinstance(augmentation, dict) else None
-            if isinstance(constraints, dict) and constraints.get('isLiveStreamEnabled') is False:
-                self.excluded_channel_ids.add(ccid)
-                non_streamable += 1
-                continue
-
-            number_raw = _pick(row, 'channelNumber', 'channel_number', 'number')
-            number = int(number_raw) if number_raw.isdigit() else None
-            # DirecTV's own channel number, not FastChannels' guide-output number
-            # (Channel.number gets globally reassigned for M3U/guide purposes — see
-            # worker.py's _renumber — so it can't be used later to identify FAST
-            # channels; tag them instead, which survives that reassignment).
-            is_fast = number is not None and number in self._FAST_CHANNEL_NUMBER_RANGE
-            if exclude_fast and is_fast:
-                self.excluded_channel_ids.add(ccid)
-                continue
-            logo = _pick(row, 'logoUrl', 'logoURL', 'logo_url') or (
-                f"https://dfwfis.prod.dtvcdn.com/catalog/image/imageserver/v1/"
-                f"service/channel/{resource_id}/chlogo-clb-guide/120/90"
+        # If no row carries an augmentation.constraints block at all, the
+        # response shape isn't the one the non-streamable filter relies on,
+        # and treating every row as streamable would corrupt the channel
+        # list. A correctly-shaped response always has hundreds of these
+        # (satellite receiver-only/blackout channels), so zero is a reliable
+        # signal something is wrong. Not retried: unlike a bad-node response,
+        # a malformed one is unlikely to change on retry.
+        augmented_rows = sum(
+            1 for row in rows
+            if isinstance(row.get('augmentation'), dict)
+            and isinstance(row['augmentation'].get('constraints'), dict)
+        )
+        if augmented_rows == 0:
+            raise ScrapeSkipError(
+                'DirecTV Stream: AllChannels response is missing augmentation/constraints data '
+                f'on all {len(rows)} rows -- refusing to trust every channel as streamable'
             )
 
-            category = category_for_channel(name, None) or infer_category_from_name(name) or 'Entertainment'
-            language = infer_language_from_metadata(name)
-
-            # Stream lineups can supply Gracenote IDs here. Satellite lineups
-            # also contain internal channel IDs; retain resolver validation and
-            # community-map fallback rather than accepting every value.
-            external_listing_id = _pick(row, 'externalListingId')
-
-            channels.append(ChannelData(
-                source_channel_id=ccid,
-                name=name,
-                stream_url=f'directv://{ccid}/{quote(resource_id, safe="")}',
-                logo_url=logo,
-                category=category,
-                language=language,
-                stream_type='hls',
-                number=number,
-                gracenote_id=(resolve_gracenote('directv', upstream_id=external_listing_id, lookup_key=ccid)
-                              or resolve_gracenote('directv', lookup_key=f'name:{_directv_gracenote_key(name)}')),
-                tags=[self.FAST_TAG] if is_fast else [],
-            ))
-
-        logger.info(
-            '[directv] channel eligibility: upstream=%d included=%d non_streamable=%d excluded=%d',
-            len(rows), len(channels), non_streamable, len(self.excluded_channel_ids),
-        )
-        _progress(self, 'channels', 1, 1)
-        return channels
+        return rows
 
     # ── EPG ──────────────────────────────────────────────────────────────────
 

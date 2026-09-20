@@ -13,8 +13,20 @@ _BUILTIN_PATH = Path(__file__).resolve().parent / "data" / "gracenote_map.csv"
 _OVERRIDE_PATH = Path(os.environ.get("FASTCHANNELS_GRACENOTE_MAP_PATH") or "/data/gracenote_map_overrides.csv")
 _REMOTE_CACHE_PATH = Path("/data/gracenote_map_remote.csv")
 
+# Known-bad Gracenote/TMS station IDs (dead or generic-placeholder guide data —
+# see github.com/kineticman/FastChannels/issues/58). Any row in the map above
+# whose tmsid lands here is dropped at load time, regardless of which layer
+# (builtin/remote/override) it came from, so a bad ID can never be auto-assigned
+# to a channel via the community CSV.
+_EXCLUSIONS_BUILTIN_PATH = Path(__file__).resolve().parent / "data" / "gracenote_exclusions.csv"
+_EXCLUSIONS_OVERRIDE_PATH = Path(
+    os.environ.get("FASTCHANNELS_GRACENOTE_EXCLUSIONS_PATH") or "/data/gracenote_exclusion_overrides.csv"
+)
+_EXCLUSIONS_REMOTE_CACHE_PATH = Path("/data/gracenote_exclusions_remote.csv")
+
 # Timestamp of the last successful remote fetch (epoch seconds, 0 = never).
 _remote_fetched_at: float = 0.0
+_exclusions_remote_fetched_at: float = 0.0
 
 # mtime-based in-process cache — shared across requests in this worker,
 # but automatically invalidated when any source file changes on disk.
@@ -22,6 +34,12 @@ _remote_fetched_at: float = 0.0
 # cache-clear signal.
 _map_cache: dict[tuple[str, str], dict[str, str]] | None = None
 _map_cache_mtimes: tuple[float, ...] = ()
+
+# Separate, cheaper cache for just the exclusion set (also mtime-gated) — used
+# by resolve_gracenote() on every scraped channel, so it must not re-parse the
+# 3 exclusion files per call the way going through the full map load would.
+_exclusions_cache: set[str] | None = None
+_exclusions_cache_mtimes: tuple[float, ...] = ()
 
 # Same shape as app/routes/api_shared.py's _GRACENOTE_RE and app/generators/m3u.py's
 # _GRACENOTE_PREFIX_RE — kept in sync by hand since a station ID that doesn't
@@ -67,7 +85,10 @@ def _iter_rows(path: Path):
 
 def _source_mtimes() -> tuple[float, ...]:
     mtimes = []
-    for path in (_BUILTIN_PATH, _REMOTE_CACHE_PATH, _OVERRIDE_PATH):
+    for path in (
+        _BUILTIN_PATH, _REMOTE_CACHE_PATH, _OVERRIDE_PATH,
+        _EXCLUSIONS_BUILTIN_PATH, _EXCLUSIONS_REMOTE_CACHE_PATH, _EXCLUSIONS_OVERRIDE_PATH,
+    ):
         try:
             mtimes.append(path.stat().st_mtime)
         except FileNotFoundError:
@@ -75,11 +96,51 @@ def _source_mtimes() -> tuple[float, ...]:
     return tuple(mtimes)
 
 
+def _exclusion_mtimes() -> tuple[float, ...]:
+    mtimes = []
+    for path in (_EXCLUSIONS_BUILTIN_PATH, _EXCLUSIONS_REMOTE_CACHE_PATH, _EXCLUSIONS_OVERRIDE_PATH):
+        try:
+            mtimes.append(path.stat().st_mtime)
+        except FileNotFoundError:
+            mtimes.append(0.0)
+    return tuple(mtimes)
+
+
+def _load_exclusion_ids() -> set[str]:
+    global _exclusions_cache, _exclusions_cache_mtimes
+    current_mtimes = _exclusion_mtimes()
+    if _exclusions_cache is not None and current_mtimes == _exclusions_cache_mtimes:
+        return _exclusions_cache
+
+    excluded: set[str] = set()
+    for path in (_EXCLUSIONS_BUILTIN_PATH, _EXCLUSIONS_REMOTE_CACHE_PATH, _EXCLUSIONS_OVERRIDE_PATH):
+        for row in _iter_rows(path) or ():
+            tmsid = normalize_gracenote_id(row.get("tmsid"))
+            if tmsid:
+                excluded.add(tmsid)
+
+    _exclusions_cache = excluded
+    _exclusions_cache_mtimes = current_mtimes
+    return excluded
+
+
+def get_excluded_tmsids() -> set[str]:
+    """Known-bad Gracenote/TMS station IDs that must never be auto-assigned.
+
+    Exposed separately from _load_map() so callers (e.g. the boot-time backfill
+    in schema.py) can check an already-stored gracenote_id against the current
+    exclusion set without needing the full provider/key mapping.
+    """
+    return _load_exclusion_ids()
+
+
 def _load_map() -> dict[tuple[str, str], dict[str, str]]:
     global _map_cache, _map_cache_mtimes
     current_mtimes = _source_mtimes()
     if _map_cache is not None and current_mtimes == _map_cache_mtimes:
         return _map_cache
+
+    excluded = _load_exclusion_ids()
 
     # Priority: builtin < remote cache < local overrides
     mapping: dict[tuple[str, str], dict[str, str]] = {}
@@ -89,6 +150,8 @@ def _load_map() -> dict[tuple[str, str], dict[str, str]]:
             key = (row.get("key") or "").strip()
             tmsid = normalize_gracenote_id(row.get("tmsid"))
             if not provider or not key or not tmsid:
+                continue
+            if tmsid in excluded:
                 continue
             payload = {"tmsid": tmsid}
             time_shift = (row.get("time_shift") or "").strip()
@@ -113,8 +176,9 @@ def _load_map() -> dict[tuple[str, str], dict[str, str]]:
 
 
 def reload_gracenote_map() -> None:
-    global _map_cache
+    global _map_cache, _exclusions_cache
     _map_cache = None
+    _exclusions_cache = None
 
 
 def fetch_remote_gracenote_map(url: str) -> tuple[bool, str]:
@@ -153,6 +217,54 @@ def fetch_remote_gracenote_map(url: str) -> tuple[bool, str]:
     row_count = sum(1 for ln in lines[1:] if ln.strip())
     log.info("[gracenote-map] remote map refreshed — %d rows from %s", row_count, url)
     return True, f"OK — {row_count} rows loaded."
+
+
+def fetch_remote_gracenote_exclusions(url: str) -> tuple[bool, str]:
+    """Download the remote known-bad-ID list CSV and cache it to disk.
+
+    Same shape as fetch_remote_gracenote_map(): clears the in-memory map cache
+    on success (via reload_gracenote_map()) so the exclusion filter in
+    _load_map() picks up the new list on the next lookup.
+    """
+    global _exclusions_remote_fetched_at
+    if not url:
+        return False, "No remote URL configured."
+
+    import requests
+    try:
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        content = r.text
+    except Exception as exc:
+        log.warning("[gracenote-exclusions] remote fetch failed: %s", exc)
+        return False, f"Fetch failed: {exc}"
+
+    lines = content.strip().splitlines()
+    if not lines or "tmsid" not in lines[0].lower():
+        return False, "Remote file does not look like a valid gracenote_exclusions CSV (missing 'tmsid' header)."
+
+    try:
+        _EXCLUSIONS_REMOTE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _EXCLUSIONS_REMOTE_CACHE_PATH.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        log.warning("[gracenote-exclusions] could not write remote cache: %s", exc)
+        return False, f"Could not write cache file: {exc}"
+
+    _exclusions_remote_fetched_at = time.time()
+    reload_gracenote_map()
+    row_count = sum(1 for ln in lines[1:] if ln.strip())
+    log.info("[gracenote-exclusions] remote list refreshed — %d rows from %s", row_count, url)
+    return True, f"OK — {row_count} rows loaded."
+
+
+def remote_exclusions_status() -> dict:
+    """Return metadata about the remote exclusion list for display in the UI."""
+    return {
+        "cached": _EXCLUSIONS_REMOTE_CACHE_PATH.exists(),
+        "fetched_at": _exclusions_remote_fetched_at or None,
+        "cache_path": str(_EXCLUSIONS_REMOTE_CACHE_PATH),
+        "row_count": sum(1 for _ in _iter_rows(_EXCLUSIONS_REMOTE_CACHE_PATH)) if _EXCLUSIONS_REMOTE_CACHE_PATH.exists() else 0,
+    }
 
 
 def remote_map_status() -> dict:
@@ -196,7 +308,12 @@ def get_all_tmsids() -> list[str]:
 
 def resolve_gracenote(provider: str, *, upstream_id=None, lookup_key: str | None = None) -> str | None:
     direct = normalize_gracenote_id(upstream_id)
-    if direct:
+    # A native ID a source reports directly (e.g. Pluto's own EPG tmsid attribute)
+    # can itself be one of the known-bad IDs (issues/58) — a source faithfully
+    # reporting its own dead/generic-placeholder guide data isn't limited to IDs
+    # that arrived via the community CSV. Skip an excluded native ID and fall
+    # through to the CSV lookup rather than returning it.
+    if direct and direct not in _load_exclusion_ids():
         return direct
     if lookup_key:
         match = lookup_gracenote(provider, lookup_key)

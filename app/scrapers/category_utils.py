@@ -320,6 +320,18 @@ _CANONICAL_MAP: dict[str, str] = {
     'western':                      'Westerns',
     'western & classic tv':         'Westerns',
     'westerns & country':           'Westerns',
+
+    # Spectrum channels/v3 raw genre labels — confirmed live 2026-09-17 that
+    # 113/502 channels (HBO, AMC, Discovery, Bravo, HGTV, Lifetime, local
+    # affiliates...) fell through to no category before these were added;
+    # 'Premiums' covers HBO/Showtime/Starz/Cinemax-type premium channels.
+    'premiums':                     'Movies',
+    'broadcasters':                 'Broadcast',
+    'life & style':                 'Lifestyle',
+    'news & info':                  'News',
+    'inspiration':                  'Faith',
+    'learning':                     'Documentary',
+    'kids & teens':                 'Kids',
 }
 
 
@@ -397,6 +409,12 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'jim rome',
         'nhl network', 'nbc sports', 'bowling', 'poker', 'surf league',
         'baseball tv', 'beinsport', 'bein sport', 'sportsnet', 'willow sport',
+        # Spectrum's numbered MLB Extra Innings out-of-market feed slots (e.g.
+        # "iND Game 02 HD IP") — the channel name itself carries no other
+        # sports keyword; confirmed live 2026-09-17 by cross-referencing the
+        # channel's own EPG (100% MLB programming) since the raw genre field
+        # is empty for most of these slots.
+        'ind game',
     }, 'Sports'),
     # Music
     ({
@@ -609,6 +627,11 @@ _NAME_CATEGORY_RULES: list[tuple[set[str], str]] = [
         'emoción atres', 'emocion atres', 'única tv', 'unica tv',
         'cine exclusivo', 'azteca', 'univision', 'canal estrellas',
         'imagen tv', 'tvnotas', 'bandamax', 'ritmoson',
+        # Estrella TV (Liberman Broadcasting) local affiliates, e.g.
+        # "Estrella (KVPA)" — confirmed live 2026-09-17 via its own EPG (all
+        # Spanish-language telenovelas/variety/news; "Noticiero Estrella TV").
+        # Distinct from 'canal estrellas' above (TV Azteca's unrelated network).
+        'estrella',
     }, 'Latino'),
     # Shopping
     ({
@@ -2005,6 +2028,13 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
                 return 'Local News'
     # Numbered local affiliates: "10 NBC ...", "6 NEWS NBC ...", "News 12 ..."
     if name_lower.startswith(('news 12', 'news10', 'news channel', 'newsday')):
+        return 'Local News'
+    # Spectrum's own regional news feeds sit in two naming styles: "Spectrum
+    # News 1 - <City>" (already caught above via the bare 'news' keyword) and
+    # a handful of placeholder-numbered ones with no city label yet, e.g.
+    # "Spectrum1", "Spectrum7 HD" — same channel-number block as the named
+    # ones (confirmed live 2026-09-17), just missing "News" in the name.
+    if re.match(r'^spectrum\d', name_lower):
         return 'Local News'
 
     # 3. Scraper-provided category, normalized

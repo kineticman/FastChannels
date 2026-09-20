@@ -698,6 +698,16 @@ def _get_playback_info(ch, fast_mode=True):
         from urllib.parse import quote as _quote
         preview_url = f'/play/fubo/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
+    # Spectrum: every channel is DASH+Widevine, no HLS variant at all (unlike
+    # Roku/Fubo's per-channel roku_drm/fubo_drm split above), so this is
+    # unconditional. Same reasoning as Roku/Fubo: the generic .../id.m3u8
+    # proxy URL made ExoPlayer infer HLS from the extension and fail trying
+    # to parse the (correctly DASH) response as an M3U8 playlist — confirmed
+    # live 2026-09-17.
+    if ch.source and ch.source.name == 'spectrum' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/spectrum/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+
     # Cox TVE uses XCal/CENC-protected DASH+Widevine for browser playback.
     # The HLS-shaped TVE playlists remain available through /proxy.m3u8 for
     # inspection, but observed segments are not clear MPEG-TS.

@@ -668,6 +668,17 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
                 account.last_auth_message = f'FOX One {mso_id} MVPD auth failed: {exc}'[:500]
                 account.last_auth_at = datetime.now(timezone.utc)
                 db.session.commit()
+                # Surface this on the TVE settings page's per-network status
+                # line — see fox_tve.py's _fox_sports_access_token() for why:
+                # a provider with no scripted refresh path (anything but
+                # Cox/Comcast_SSO/DTV, see login_to_mvpd()) fails silently
+                # here on every resolve/audit once its token expires,
+                # otherwise with nothing pointing the admin at re-signing-in.
+                try:
+                    from ..tve.browser_login.common import _record_tve_login_error
+                    _record_tve_login_error('foxone', str(exc)[:300])
+                except Exception:  # noqa: BLE001
+                    pass
                 mvpd_exc = exc
                 if not access_token:
                     raise

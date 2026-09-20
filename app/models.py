@@ -403,6 +403,7 @@ class AppSettings(db.Model):
     image_proxy_enabled  = db.Column(db.Boolean, nullable=False, default=True)  # proxy/cache logos and posters in output
     m3u_rewrite_timestamps = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # experimental: add Channels DVR timestamp-rewrite directive to M3U entries
     gracenote_map_url          = db.Column(db.Text, nullable=True)      # remote community CSV URL (defaults to built-in Gist)
+    gracenote_exclusions_url   = db.Column(db.Text, nullable=True)      # remote known-bad-ID CSV URL (defaults to built-in Gist)
     gracenote_contribution_url = db.Column(db.Text, nullable=True)      # webhook URL for submitting community contributions
     last_contribution_at       = db.Column(db.DateTime, nullable=True)  # server-side rate-limit: last successful submission
     prismcast_url        = db.Column(db.Text, nullable=True)     # PrismCast capture server, e.g. http://192.168.1.x:5589 (DRM bridge)
@@ -538,12 +539,19 @@ class AppSettings(db.Model):
         'https://gist.githubusercontent.com/kineticman/'
         '87765d469610233f894c9c225cb4f2ca/raw/gistfile1.txt'
     )
+    _DEFAULT_GRACENOTE_EXCLUSIONS_URL = (
+        'https://gist.githubusercontent.com/kineticman/'
+        'd15d0d96ef09b0c159f016f8d4b881d7/raw/gistfile1.txt'
+    )
     _DEFAULT_CONTRIBUTION_URL = (
         'https://hook.us2.make.com/op063u88o0mx9noggvv9wgx4gass96iv'
     )
 
     def effective_gracenote_map_url(self) -> str:
         return (self.gracenote_map_url or '').strip() or self._DEFAULT_GRACENOTE_MAP_URL
+
+    def effective_gracenote_exclusions_url(self) -> str:
+        return (self.gracenote_exclusions_url or '').strip() or self._DEFAULT_GRACENOTE_EXCLUSIONS_URL
 
     def effective_gracenote_contribution_url(self) -> str:
         return (self.gracenote_contribution_url or '').strip() or self._DEFAULT_CONTRIBUTION_URL

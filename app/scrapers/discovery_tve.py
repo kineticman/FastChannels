@@ -380,6 +380,7 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
 
     def _discovery_session_redirect(
         self, session: requests.Session, device_id: str, mso_id: str, mso_name: str,
+        allow_empty_redirect: bool = False,
     ) -> tuple[str, requests.Response]:
         """Registers a Discovery gauth session and returns (mso_login_url,
         page_response) without completing any login — this is the scripted
@@ -448,7 +449,14 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         # response's body directly, so it's exempt from the "no redirect"
         # check every other MSO needs. Confirmed live 2026-08-17: YouTubeTV
         # is the same shape (a 200 auto-submit SAML form, not a redirect).
-        if not mso_login_url and mso_id not in ('DTV', 'YouTubeTV'):
+        # Confirmed live 2026-09-18: Spectrum is the same shape too — but
+        # unlike DTV/YouTubeTV it's not exempted unconditionally here, since
+        # the scripted (non-browser) caller below has no browser to hand an
+        # unfollowed form to. allow_empty_redirect=True is only passed by
+        # app.tve.browser_login.discovery's browser-assisted loop, which
+        # already falls back to page_response.url (see its nav_url line)
+        # and lets a real browser execute the form's onload JS itself.
+        if not mso_login_url and mso_id not in ('DTV', 'YouTubeTV') and not allow_empty_redirect:
             raise TVEAuthError('Adobe authenticate call did not return an MVPD login redirect.')
         return mso_login_url, r
 
@@ -557,10 +565,25 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             from ..tve.mvpd import login_to_mvpd
             cookie_jar = cfg.get('xfinity_cookie_jar')
             page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
-            code_url = login_to_mvpd(
-                mso_id, page_html, page_url, account.username or '', account.password or '',
-                cookie_jar=cookie_jar,
-            )
+            try:
+                code_url = login_to_mvpd(
+                    mso_id, page_html, page_url, account.username or '', account.password or '',
+                    cookie_jar=cookie_jar,
+                )
+            except TVENotAuthorizedError:
+                raise
+            except TVEAuthError as exc:
+                # See fox_tve.py's _fox_sports_access_token() for why this
+                # also needs the per-network status — Discovery doesn't even
+                # track this in TVEAccount.last_auth_message (no try/except
+                # existed here at all before), so without this the failure
+                # would otherwise be invisible everywhere.
+                try:
+                    from ..tve.browser_login.common import _record_tve_login_error
+                    _record_tve_login_error('discovery', str(exc)[:300])
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
 
         code = (parse_qs(urlsplit(code_url).query).get('code') or [''])[0]
         if not code:

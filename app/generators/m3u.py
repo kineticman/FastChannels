@@ -56,7 +56,7 @@ _WIN1252_REMAP = str.maketrans({
     0xFFFD: None,    # REPLACEMENT CHARACTER
 })
 
-_CHNUM_NAMESPACE_BLOCK = 100000
+_CHNUM_NAMESPACE_BLOCK = 10000
 _MASTER_GRACENOTE_START = 100000
 _FEED_NAMESPACE_BASE = 200000
 _REGION_LABEL_SOURCES = {"pluto", "samsung", "tcl"}
@@ -908,7 +908,7 @@ def get_global_chnum_overlaps() -> list[str]:
     # Across different feeds, check std feeds against each other and gracenote
     # feeds against each other.  Don't compare a std feed against an unrelated
     # gracenote feed — for namespace-numbered feeds the two live in separate
-    # 100k blocks and a user adds both halves of a feed, not halves of two feeds.
+    # 10k blocks and a user adds both halves of a feed, not halves of two feeds.
     _check([o for o in feed_outputs if not o[0].endswith('/gracenote')])
     _check([o for o in feed_outputs if o[0].endswith('/gracenote')])
     # Within a single chnum_start feed, std and gracenote channels DO share one

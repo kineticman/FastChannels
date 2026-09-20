@@ -49,8 +49,7 @@ def list_sources():
     # defer(Source.config): this endpoint is polled on every UI cycle and to_dict()
     # never reads config, but config is effectively a cache blob (Roku's is ~1.2MB).
     # Loading it on every poll re-parses ~1.2MB of JSON for nothing and feeds
-    # allocator fragmentation on the long-lived workers. See project memory:
-    # Source.config join hazard.
+    # allocator fragmentation on the long-lived workers.
     return jsonify([
         s.to_dict()
         for s in Source.query.options(defer(Source.config)).order_by(Source.display_name).all()
@@ -473,6 +472,7 @@ def get_source_config(source_id):
     return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
                     'config_status': config_status,
                     'oauth_token_time': saved.get('oauth_token_time'),
+                    'token_captured_at': saved.get('token_captured_at'),
                     'retired': retired})
 
 
@@ -885,6 +885,112 @@ def sling_browser_login_stop(source_id):
         return jsonify({'error': 'not a sling source'}), 400
     stop_sling_browser_login()
     return jsonify({'status': 'stopping'})
+
+
+# ── Spectrum interactive browser sign-in ────────────────────────────────────
+# Same shape as Sling's above: a Camoufox tab drives id.spectrum.net's real
+# login page and the admin UI streams screenshots / forwards clicks+keystrokes
+# so a human solves the real reCAPTCHA and types credentials directly into the
+# live page. See app.tve.browser_login.spectrum.run_spectrum_signin's
+# docstring for the recaptcha/ThreatMetrix gate this exists to get past.
+
+@sources_bp.route('/sources/<int:source_id>/spectrum-browser-login/start', methods=['POST'])
+def spectrum_browser_login_start(source_id):
+    from .tasks import trigger_spectrum_signin
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'spectrum':
+        return jsonify({'error': 'not a spectrum source'}), 400
+    started = trigger_spectrum_signin()
+    return jsonify({'status': 'started' if started else 'already_running'})
+
+
+@sources_bp.route('/sources/<int:source_id>/spectrum-browser-login/state')
+def spectrum_browser_login_state(source_id):
+    import base64
+    import redis as _redis
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'spectrum':
+        return jsonify({'error': 'not a spectrum source'}), 400
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw_status = r.get('spectrum:browser-login:status')
+    result = json.loads(raw_status) if raw_status else {'state': 'idle'}
+    shot = r.get('spectrum:browser-login:screenshot')
+    if shot:
+        result['screenshot'] = base64.b64encode(shot).decode('ascii')
+    return jsonify(result)
+
+
+@sources_bp.route('/sources/<int:source_id>/spectrum-browser-login/input', methods=['POST'])
+def spectrum_browser_login_input(source_id):
+    import redis as _redis
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'spectrum':
+        return jsonify({'error': 'not a spectrum source'}), 400
+    data = request.get_json() or {}
+    kind = data.get('type')
+    if kind in ('click', 'mousemove', 'mousedown', 'mouseup'):
+        try:
+            payload = {'type': kind, 'x': float(data['x']), 'y': float(data['y'])}
+        except (KeyError, TypeError, ValueError):
+            return jsonify({'error': f'{kind} requires numeric x/y'}), 400
+    elif kind == 'key':
+        key = str(data.get('key') or '')
+        if not key:
+            return jsonify({'error': 'key requires a non-empty key'}), 400
+        payload = {'type': 'key', 'key': key}
+    else:
+        return jsonify({'error': 'invalid input type'}), 400
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    r.rpush('spectrum:browser-login:input', json.dumps(payload))
+    r.expire('spectrum:browser-login:input', 60)
+    return jsonify({'status': 'ok'})
+
+
+@sources_bp.route('/sources/<int:source_id>/spectrum-browser-login/stop', methods=['POST'])
+def spectrum_browser_login_stop(source_id):
+    from .tasks import stop_spectrum_signin
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'spectrum':
+        return jsonify({'error': 'not a spectrum source'}), 400
+    stop_spectrum_signin()
+    return jsonify({'status': 'stopping'})
+
+
+@sources_bp.route('/sources/<int:source_id>/spectrum-auth', methods=['DELETE'])
+def clear_spectrum_auth(source_id):
+    """Forget everything Spectrum sign-in captured — tokens, device id, and the
+    opportunistically-harvested cox.com cookie jar. Unlike Amazon's equivalent,
+    there's no separate saved username/password to preserve — Spectrum's login
+    is entirely browser-driven (see app.tve.browser_login.spectrum), so a full
+    wipe is the only meaningful "clear creds" here. Does NOT touch the shared
+    /data/browser_profiles/mvpd_tve Camoufox profile — that's shared with
+    every other MVPD login and clearing it would sign those out too."""
+    import redis as _redis
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'spectrum':
+        return jsonify({'error': 'not a spectrum source'}), 400
+
+    source.config = {}
+    db.session.commit()
+
+    try:
+        r = _redis.from_url(current_app.config['REDIS_URL'])
+        r.delete(
+            'spectrum:browser-login:status', 'spectrum:browser-login:screenshot',
+            'spectrum:browser-login:input', 'spectrum:browser-login:stop',
+            'spectrum:browser-login:hint',
+        )
+    except Exception as exc:
+        logger.warning('[spectrum-auth] unable to clear Redis state for source_id=%s: %s',
+                       source_id, exc)
+
+    logger.info('[spectrum-auth] cleared saved session for source_id=%s', source_id)
+    return jsonify({'status': 'cleared'})
 
 
 # ── Amazon auto-login ──────────────────────────────────────────────────────────

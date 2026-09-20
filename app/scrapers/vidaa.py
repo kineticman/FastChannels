@@ -43,6 +43,13 @@ _EPG_HORIZON_DAYS    = 5          # confirmed live: schedule data stops between 
 _EPG_CIRCUIT_THRESHOLD = 5        # consecutive failed EPG batches before giving up without more requests
 _SPANISH_COLUMN_TITLE = "In Spanish"  # a language grouping, not a genre — forces language='es' instead of category
 
+# Same TTL PBS uses for its analogous _station_cache. Unlike PBS's per-station
+# lookup though, this one is hit on EVERY Widevine license request for a DRM
+# tile — including mid-stream renewals — so an uncached live call here is a
+# repeated point of failure unique to Vidaa (every other DRM source caches its
+# license params once via source_cache instead of re-resolving per request).
+_DRM_PARAM_TTL = 30 * 60
+
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 # deviceId isn't a capability gate (auth is accessToken + request signature) —
@@ -141,6 +148,23 @@ class VidaaScraper(BaseScraper):
         self.session.headers.update({"User-Agent": _UA})
         self._access_token: str | None = None
         self._token_expires_at: float = 0.0
+        self._drm_param_cache: dict[str, dict] = {}
+        self._load_drm_param_cache()
+
+    def _load_drm_param_cache(self) -> None:
+        raw = self.cache.get("drm_param_cache") or {}
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        for cid, entry in raw.items():
+            if not isinstance(entry, dict):
+                continue
+            cached_at = entry.get("cached_at")
+            if not entry.get("params") or not isinstance(cached_at, (int, float)):
+                continue
+            if (now - float(cached_at)) >= _DRM_PARAM_TTL:
+                continue
+            self._drm_param_cache[cid] = entry
 
     # ── auth ─────────────────────────────────────────────────────────────────
 
@@ -405,13 +429,19 @@ class VidaaScraper(BaseScraper):
     # server round-trip. Confirmed live: a plain L3 Widevine challenge posted with
     # this header returns a real license (content key matched the manifest's KID).
     # `stream_id` is a distinct per-tile asset id (not the Vidaa channel id) that
-    # only appears inside the wrapper URL, so both methods below re-fetch it live
-    # via mediasInfo rather than guessing — same reasoning as PBS's get_license_url.
+    # only appears inside the wrapper URL, so both methods below re-resolve it via
+    # mediasInfo rather than guessing — same reasoning as PBS's get_license_url.
+    # Result is cached (see _DRM_PARAM_TTL) so a live Widevine renewal mid-stream
+    # doesn't have to repeat the upstream call every time.
 
     @classmethod
     def _lookup_drm_params(cls, config: dict, channel_id: str) -> dict | None:
+        cid = str(channel_id)
+        scraper = cls(config=config)
+        cached = scraper._drm_param_cache.get(cid)
+        if cached:
+            return cached["params"]
         try:
-            scraper = cls(config=config)
             detail = scraper._fetch_medias_info([int(channel_id)], int(time.time()))
         except Exception as exc:
             logger.warning("[vidaa] DRM param lookup failed for %s: %s", channel_id, exc)
@@ -420,7 +450,35 @@ class VidaaScraper(BaseScraper):
         if not medias:
             return None
         raw = (medias[0].get("channelInfo") or {}).get("streamingParam") or ""
-        return _parse_mini_player(raw)
+        params = _parse_mini_player(raw)
+        if params:
+            scraper._drm_param_cache[cid] = {"params": params, "cached_at": time.time()}
+            scraper._update_cache("drm_param_cache", scraper._drm_param_cache)
+            cls._persist_drm_param_cache(scraper)
+        return params
+
+    @staticmethod
+    def _persist_drm_param_cache(scraper: "VidaaScraper") -> None:
+        """get_license_url/prepare_license_request are invoked as bare classmethods
+        from the generic license_proxy route (app/routes/play.py), which has no
+        scraper instance to persist _pending_cache_updates from afterward — so
+        persist synchronously here instead. Without this, the cache above would
+        be rebuilt and immediately discarded on every call, live-hitting Vidaa's
+        mediasInfo API on every Widevine license request (including mid-stream
+        renewals) — the actual root cause behind intermittent fc_player failures
+        reported against Vidaa specifically (no other DRM source re-resolves its
+        license params per-request instead of caching them once)."""
+        if not scraper._pending_cache_updates:
+            return
+        try:
+            from ..models import Source
+            source = Source.query.filter_by(name=scraper.source_name).first()
+            if not source:
+                return
+            from ..config_store import persist_source_cache_updates
+            persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+        except Exception:
+            logger.debug("[vidaa] could not persist drm_param_cache", exc_info=True)
 
     @classmethod
     def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:

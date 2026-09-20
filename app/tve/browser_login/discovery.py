@@ -19,6 +19,7 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _autofill_xfinity_credentials,
+    _try_autofill_credentials,
     _harvest_and_save_xfinity_cookies,
     _is_browser_death,
     _url_for_log,
@@ -83,7 +84,9 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
         scraper._update_config('device_id', device_id)
 
     try:
-        mso_login_url, page_response = scraper._discovery_session_redirect(session, device_id, mso_id, mso_name)
+        mso_login_url, page_response = scraper._discovery_session_redirect(
+            session, device_id, mso_id, mso_name, allow_empty_redirect=True,
+        )
     except TVENotAuthorizedError as exc:
         _record_tve_login_error('discovery', f'not entitled — {exc}')
         set_status('error', f'Discovery TVE: not entitled — {exc}')
@@ -250,6 +253,19 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                 _autofill_xfinity_credentials(
                     page, account.username, account.password, r=r,
                     stop_key=MVPD_BROWSER_LOGIN_STOP_KEY, input_key=MVPD_BROWSER_LOGIN_INPUT_KEY,
+                )
+            elif account.username and account.password and mso_id != 'YouTubeTV':
+                # Every other generic MSO (Spectrum included) needs the same
+                # credential-form autofill mvpd.py/nbc.py/fox.py already do
+                # — confirmed live 2026-09-18 this was simply missing here
+                # (found and fixed the identical gap in AMCN's own copy of
+                # this same loop first). YouTubeTV's own Google flow is
+                # excluded — it has its own dedicated account-chooser
+                # handling instead of a password form.
+                _try_autofill_credentials(
+                    page, account.username, account.password, r=r,
+                    stop_key=MVPD_BROWSER_LOGIN_STOP_KEY, input_key=MVPD_BROWSER_LOGIN_INPUT_KEY,
+                    navigation_already_settled=True,
                 )
             set_status('running', 'Signing in to Discovery TVE…', landing_url)
 

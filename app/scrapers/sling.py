@@ -253,6 +253,18 @@ class SlingScraper(BaseScraper):
                 raise StreamDeadError(format_http_reason("[sling] channel not found", 404, channel_guid)) from exc
             raise
 
+        # schedule.qvt's own "what comes after this" pointer — its embedded timestamp
+        # (.../<guid>/20260915200000/schedule.qvt) is the exact moment the current
+        # clipslist/spanning_ads block ends. Stashed as a plain instance attribute
+        # (not persisted — this scraper instance is per-request) so the caller
+        # (play.sling_dash_proxy) can feed it to fc_player_bridge's block-boundary
+        # watchdog: a client-side manifest refresh can't bridge one of these
+        # boundaries (each block resets to Period id="1" start="PT0S" instead of
+        # continuing the timeline — confirmed live 2026-09-15), so the only reliable
+        # recovery is a full re-tune, and knowing the boundary in advance means we
+        # can do that proactively instead of waiting for playback to silently stall.
+        self.last_schedule_next = payload.get("_next")
+
         playback = payload.get("playback_info") or {}
         for key in ("dash_manifest_url", "live_m3u8_url_template", "m3u8_url_template"):
             url = (playback.get(key) or "").strip()

@@ -856,6 +856,20 @@ def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
             account.last_auth_message = f'FOX Sports {mso_id} auth failed: {exc}'[:500]
             account.last_auth_at = datetime.now(timezone.utc)
             db.session.commit()
+            # Surface this on the TVE settings page's per-network status line
+            # (same mechanism the browser-assisted sign-in flows use), not
+            # just the easily-overwritten account-wide last_auth_message —
+            # without this, a provider whose token can't be silently
+            # refreshed (anything other than Cox/Comcast_SSO/DTV — see
+            # app/tve/mvpd/__init__.py's login_to_mvpd()) fails this way on
+            # every resolve/audit with no visible signal that re-signing-in
+            # would fix it; the caller only ever sees an unentitled preview
+            # stream instead.
+            try:
+                from ..tve.browser_login.common import _record_tve_login_error
+                _record_tve_login_error('fox', str(exc)[:300])
+            except Exception:  # noqa: BLE001
+                pass
 
     return _fox_sports_preview_token(session, device_id)
 
