@@ -234,6 +234,7 @@ _WEB_HEARTBEAT_TTL_S = 45
 # our own /play/fc-player/... route, so we already see every (channel_key,
 # adb_address) pair at trigger time.
 _ACTIVE_CHANNEL_PREFIX = 'fc:fc-player:active-channel:'
+_ACTIVE_DEVICE_PREFIX = 'fc:fc-player:active-device:'
 _ACTIVE_CHANNEL_KEY_TTL_S = 6 * 60 * 60
 
 # See sling.py resolve()'s last_schedule_next comment: the wall-clock moment a
@@ -980,9 +981,36 @@ def _note_active_channel_key(channel_key: str, adb_address: str) -> None:
     later identify exactly which tracked channel(s) belong to its one single-device
     target, without touching entries that belong to other tuners."""
     try:
-        _redis().setex(_ACTIVE_CHANNEL_PREFIX + channel_key, _ACTIVE_CHANNEL_KEY_TTL_S, adb_address or '')
+        # Update both directions atomically: a device can only play one channel.
+        # Clear the prior channel only if this device still owns its entry.
+        _redis().eval("""
+            local previous = redis.call('GET', KEYS[1])
+            if previous and previous ~= ARGV[1] then
+                local old_key = ARGV[4] .. previous
+                if redis.call('GET', old_key) == ARGV[2] then
+                    redis.call('DEL', old_key, ARGV[5] .. previous, ARGV[6] .. previous)
+                end
+            end
+            redis.call('SETEX', KEYS[1], ARGV[3], ARGV[1])
+            redis.call('SETEX', KEYS[2], ARGV[3], ARGV[2])
+        """, 2, _ACTIVE_DEVICE_PREFIX + (adb_address or ''),
+            _ACTIVE_CHANNEL_PREFIX + channel_key,
+            channel_key, adb_address or '', _ACTIVE_CHANNEL_KEY_TTL_S,
+            _ACTIVE_CHANNEL_PREFIX, _BLOCK_BOUNDARY_PREFIX, _BLOCK_BOUNDARY_RETUNED_PREFIX)
     except Exception as e:
         logger.warning('[fc-player] _note_active_channel_key failed: %s', e)
+
+
+def _tracked_channel_address(r, channel_key: str) -> str | None:
+    """Ignore stale channel entries unless the device still names that channel."""
+    raw = r.get(_ACTIVE_CHANNEL_PREFIX + channel_key)
+    if raw is None:
+        return None
+    address = raw.decode()
+    current = r.get(_ACTIVE_DEVICE_PREFIX + address)
+    if current != channel_key.encode():
+        return None
+    return address
 
 
 def note_block_boundary(channel_key: str, next_pointer: str) -> None:
@@ -1040,6 +1068,8 @@ def pending_block_boundaries() -> list[tuple[str, float]]:
             key_str = raw_key.decode() if isinstance(raw_key, bytes) else raw_key
             channel_key = key_str[len(_ACTIVE_CHANNEL_PREFIX):]
             if not channel_key:
+                continue
+            if _tracked_channel_address(r, channel_key) is None:
                 continue
             boundary_raw = r.get(_BLOCK_BOUNDARY_PREFIX + channel_key)
             if boundary_raw is None:
@@ -1180,21 +1210,25 @@ def clear_active_channel_tracking(channel_key: str) -> None:
     ago. Confirmed live 2026-09-15 — a Bravo boundary retune fired over an hour after
     the app had been force-stopped.
 
-    Now that tracking is one key per channel_key (see _ACTIVE_CHANNEL_PREFIX) rather
-    than a single shared slot, this can't clear a *different* channel's tracking by
-    mistake — the old staleness guard against cross-channel collision is structurally
-    unnecessary. The only remaining edge case is a delayed warm_stop for channel A
-    landing after a *newer* session of that same A has already started — rare, and
-    self-healing within ~2s once that new session's own manifest polling repopulates
-    the entry via note_block_boundary().
+    The reverse device assignment is removed only if it still names this channel,
+    so a delayed stop for an old channel cannot clear a newer device assignment.
     """
     if not channel_key:
         return
     try:
         r = _redis()
-        r.delete(_ACTIVE_CHANNEL_PREFIX + channel_key)
-        r.delete(_BLOCK_BOUNDARY_PREFIX + channel_key)
-        r.delete(_BLOCK_BOUNDARY_RETUNED_PREFIX + channel_key)
+        r.eval("""
+            local address = redis.call('GET', KEYS[1])
+            if address then
+                local device_key = ARGV[2] .. address
+                if redis.call('GET', device_key) == ARGV[1] then
+                    redis.call('DEL', device_key)
+                end
+            end
+            redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
+        """, 3, _ACTIVE_CHANNEL_PREFIX + channel_key,
+            _BLOCK_BOUNDARY_PREFIX + channel_key, _BLOCK_BOUNDARY_RETUNED_PREFIX + channel_key,
+            channel_key, _ACTIVE_DEVICE_PREFIX)
     except Exception as e:
         logger.warning('[fc-player] clear_active_channel_tracking failed for %s: %s', channel_key, e)
 
@@ -1282,10 +1316,9 @@ def fire_block_boundary_retune(channel_key: str, boundary_ts: float) -> None:
     """
     try:
         r = _redis()
-        tracked_address = r.get(_ACTIVE_CHANNEL_PREFIX + channel_key)
+        tracked_address = _tracked_channel_address(r, channel_key)
         if tracked_address is None:
             return  # viewer tuned away (or this tuner stopped) since this was scheduled
-        tracked_address = tracked_address.decode()
         retuned_key = _BLOCK_BOUNDARY_RETUNED_PREFIX + channel_key
         if r.exists(retuned_key):
             return
@@ -1308,14 +1341,9 @@ def fire_block_boundary_retune(channel_key: str, boundary_ts: float) -> None:
                         channel_key, confirmed, attempts)
             # Re-check post-poll — the poll loop can run for several seconds, during
             # which a viewer could tune away or another path could already handle it.
-            if not r.exists(_ACTIVE_CHANNEL_PREFIX + channel_key) or r.exists(retuned_key):
+            tracked_address = _tracked_channel_address(r, channel_key)
+            if tracked_address is None or r.exists(retuned_key):
                 return
-            # If this is a different device now (a rare re-trigger for the same
-            # channel_key on a new tuner mid-poll), the SET has already replaced the
-            # tracked address — re-read it so the retune below targets the current one.
-            refreshed = r.get(_ACTIVE_CHANNEL_PREFIX + channel_key)
-            if refreshed is not None:
-                tracked_address = refreshed.decode()
 
         # Clear immediately (not after the retune attempt) so a retry-worthy failure
         # below doesn't get masked by "already handled" — worst case is one extra

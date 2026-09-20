@@ -47,12 +47,14 @@ back to the button.
 from __future__ import annotations
 
 import logging
+import fcntl
 import re
 import time
 import uuid
 import random
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
 
 import requests
 
@@ -154,7 +156,9 @@ class SpectrumScraper(BaseScraper):
                 '[spectrum] no session — use the source\'s "Sign in to Spectrum" '
                 'button (Camoufox, reCAPTCHA-gated) to authenticate.')
         expires_at = self.config.get('token_expires_at')
-        if expires_at and time.time() > float(expires_at) - _TOKEN_REFRESH_BUFFER:
+        # Older browser captures omitted expiry. Refresh those once instead of
+        # treating an unknown expiry as an indefinitely valid access token.
+        if not expires_at or time.time() > float(expires_at) - _TOKEN_REFRESH_BUFFER:
             if not self._refresh_session():
                 raise ScrapeSkipError(
                     '[spectrum] saved session has expired and could not be refreshed — '
@@ -439,16 +443,59 @@ class SpectrumScraper(BaseScraper):
 
     # ── Playback ─────────────────────────────────────────────────────────────
 
+    @contextmanager
+    def _stream_cache_transaction(self):
+        """Serialize session mint/eviction and commit before returning a manifest.
+
+        A separate process-shared lock covers the upstream calls as well as the
+        cache write. The config-store lock only serializes writes and cannot
+        protect snapshots loaded by concurrent scraper instances. Polling flock
+        keeps gevent workers cooperative while another request is minting.
+        """
+        from ..config_store import load_source_cache_by_name, persist_source_cache_updates
+        from ..models import Source
+
+        with open('/tmp/fastchannels-spectrum-stream.lock', 'a+') as lock_file:
+            deadline = time.monotonic() + 90
+            while True:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('[spectrum] timed out waiting for stream session lock')
+                    time.sleep(0.1)
+            try:
+                source = Source.query.filter_by(name=self.source_name).first()
+                if source is None:
+                    raise RuntimeError('[spectrum] source no longer exists')
+                self._stream_cache = dict(load_source_cache_by_name(
+                    self.source_name, keys=['stream_cache']).get('stream_cache') or {})
+                self._pending_cache_updates.pop('stream_cache', None)
+                try:
+                    yield
+                finally:
+                    # Do not leave a snapshot for the caller's later persistence:
+                    # that would overwrite another transaction after we unlock.
+                    updates = self._pending_cache_updates.pop('stream_cache', None)
+                    if updates is not None and not persist_source_cache_updates(
+                        source.id, {'stream_cache': updates}
+                    ):
+                        raise RuntimeError('[spectrum] could not save stream session credentials')
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def resolve(self, raw_url: str) -> str:
         self._ensure_session()
         cid = raw_url.removeprefix('spectrum://')
-        cached = self._cached_stream(cid)
-        if cached:
-            return cached['manifest_url']
-        self._evict_lru_sessions(cid)
-        manifest_url, ast, stream_session_id, aegis_token = self._mint_stream(cid)
-        self._cache_stream(cid, manifest_url, ast, stream_session_id, aegis_token)
-        return manifest_url
+        with self._stream_cache_transaction():
+            cached = self._cached_stream(cid)
+            if cached:
+                return cached['manifest_url']
+            self._evict_lru_sessions(cid)
+            manifest_url, ast, stream_session_id, aegis_token = self._mint_stream(cid)
+            self._cache_stream(cid, manifest_url, ast, stream_session_id, aegis_token)
+            return manifest_url
 
     def audit_resolve(self, raw_url: str) -> str:
         """Stream Audit checks all ~500 channels back-to-back, one right after
@@ -466,11 +513,16 @@ class SpectrumScraper(BaseScraper):
         resolved for the current request."""
         self._ensure_session()
         cid = raw_url.removeprefix('spectrum://')
-        manifest_url, ast, stream_session_id, aegis_token = self._mint_stream(cid)
-        self._cache_stream(cid, manifest_url, ast, stream_session_id)
-        if aegis_token:
-            self._release_aegis(aegis_token)
-        return manifest_url
+        with self._stream_cache_transaction():
+            # Reuse an active playback session without replacing its credentials
+            # or releasing it. Audit-only sessions need no persisted license data.
+            cached = self._cached_stream(cid)
+            if cached:
+                return cached['manifest_url']
+            manifest_url, ast, stream_session_id, aegis_token = self._mint_stream(cid)
+            if aegis_token:
+                self._release_aegis(aegis_token)
+            return manifest_url
 
     def _release_aegis(self, aegis_token: str) -> None:
         try:
@@ -732,6 +784,7 @@ def save_login_result(local_storage: dict, cox_cookies: list[dict] | None) -> No
     cfg['refresh_token'] = local_storage.get('xoauth_refresh_token')
     cfg['device_verifier'] = local_storage.get('xoauth_device_verifier')
     cfg['token_captured_at'] = int(_time.time())
+    cfg.pop('token_expires_at', None)
     expiration_ms = local_storage.get('xoauth_token_expiration')
     if expiration_ms:
         try:

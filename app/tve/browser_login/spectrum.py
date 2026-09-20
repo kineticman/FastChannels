@@ -128,6 +128,16 @@ def run_spectrum_signin():
                             ),
                             'xoauth_device_verifier': data.get('deviceVerifier'),
                         }
+                        # Use the same absolute millisecond expiry as localStorage.
+                        # The intercepted response wins over that fallback, so its
+                        # expires_in must survive through save_login_result().
+                        try:
+                            ttl = int(data.get('expires_in') or 0)
+                            if ttl > 0:
+                                captured['candidate']['xoauth_token_expiration'] = int(
+                                    (time.time() + ttl) * 1000)
+                        except (TypeError, ValueError, OverflowError):
+                            pass
             except Exception as exc:  # noqa: BLE001
                 logger.debug('[spectrum-signin] response capture failed for %s: %s', response.url, exc)
 
