@@ -137,6 +137,16 @@ _SERIES_GENRES = {
 }
 
 
+# The boot endpoint takes credentials as query params, and requests embeds the full
+# URL in its exception text — so a failed request would otherwise write the account's
+# username and password into the logs (and any error surfaced in the UI).
+_CREDENTIAL_QS_RE = re.compile(r'([?&](?:username|password)=)[^&\s]*', re.IGNORECASE)
+
+
+def _redact_credentials(text: str) -> str:
+    return _CREDENTIAL_QS_RE.sub(r'\1<redacted>', text)
+
+
 class _StreamSession:
     """One virtual device — own clientID, session, and per-country token cache."""
 
@@ -174,7 +184,7 @@ class _StreamSession:
         try:
             r = self.session.get('https://boot.pluto.tv/v4/start', headers=headers, params=params, timeout=15)
         except Exception as e:
-            return None, f"boot request failed: {e}"
+            return None, f"boot request failed: {_redact_credentials(str(e))}"
 
         if not (200 <= r.status_code <= 201):
             return None, f"boot HTTP {r.status_code}"
