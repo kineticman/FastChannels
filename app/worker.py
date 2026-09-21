@@ -3755,14 +3755,16 @@ if __name__ == '__main__':
                           misfire_grace_time=300)
 
         def _scheduled_spectrum_relogin_watchdog():
-            # Unlike DirecTV's token watchdog above, this doesn't refresh anything
-            # itself — SpectrumScraper.check_relogin_due() just decides whether the
-            # refresh_token's absolute ceiling (refresh_ceiling_at) is close enough
-            # to warrant firing the same Camoufox login flow the "Sign in to
-            # Spectrum" button uses (async, via trigger_spectrum_signin), and this
-            # persists the cooldown marker check_relogin_due sets on trigger. A
-            # 20min interval against a 3h buffer and 45min cooldown leaves room
-            # for several unattended retries before the ceiling actually hits.
+            # Two jobs, both persisted here. refresh_if_due() silently refreshes the
+            # access token while it still has <2h left — the scrape cadence alone
+            # only ever reached it after expiry, when the refresh grant 401s and a
+            # full browser re-login was needed every 12h. check_relogin_due()
+            # decides whether the refresh_token's absolute ceiling
+            # (refresh_ceiling_at) is close enough to warrant firing the same
+            # Camoufox login flow the "Sign in to Spectrum" button uses (async, via
+            # trigger_spectrum_signin) and sets a cooldown marker. A 20min interval
+            # against a 3h buffer and 45min cooldown leaves room for several
+            # unattended retries before the ceiling actually hits.
             from app.scrapers.spectrum import SpectrumScraper
             try:
                 with flask_app.app_context():
@@ -3770,6 +3772,7 @@ if __name__ == '__main__':
                     if not source:
                         return
                     scraper = SpectrumScraper(config=source.config or {})
+                    scraper.refresh_if_due()
                     scraper.check_relogin_due()
                     if scraper._pending_config_updates:
                         persist_source_config_updates(source.id, scraper._pending_config_updates)
