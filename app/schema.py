@@ -842,17 +842,40 @@ def ensure_runtime_schema() -> None:
             from .gracenote_map import get_excluded_tmsids
             excluded = sorted(get_excluded_tmsids())
             _EXCLUSION_BATCH = 500
+            _cleared = []  # (source, channel name, tmsid) — recorded so the wipe is never silent
             for i in range(0, len(excluded), _EXCLUSION_BATCH):
                 batch = excluded[i:i + _EXCLUSION_BATCH]
                 placeholders = ",".join(f":t{j}" for j in range(len(batch)))
                 params = {f"t{j}": tmsid for j, tmsid in enumerate(batch)}
+                _not_manual_or_off = "(gracenote_mode IS NULL OR gracenote_mode NOT IN ('manual', 'off'))"
+                if "sources" in tables:
+                    _cleared.extend(conn.execute(
+                        text(
+                            "SELECT s.name, c.name, c.gracenote_id FROM channels c "
+                            "JOIN sources s ON s.id = c.source_id "
+                            f"WHERE c.gracenote_id IN ({placeholders}) "
+                            "AND (c.gracenote_mode IS NULL OR c.gracenote_mode NOT IN ('manual', 'off'))"
+                        ),
+                        params,
+                    ).fetchall())
                 conn.execute(
                     text(
                         f"UPDATE channels SET gracenote_id = NULL "
-                        f"WHERE gracenote_id IN ({placeholders}) "
-                        f"AND (gracenote_mode IS NULL OR gracenote_mode NOT IN ('manual', 'off'))"
+                        f"WHERE gracenote_id IN ({placeholders}) AND {_not_manual_or_off}"
                     ),
                     params,
+                )
+            if _cleared:
+                import collections as _collections
+                import logging as _logging
+                _by_source = _collections.Counter(row[0] for row in _cleared)
+                _logging.getLogger(__name__).warning(
+                    "[gracenote-exclusions] boot cleared the Gracenote ID from %d auto-mode "
+                    "channel(s) holding a known-bad ID (by source: %s). Examples: %s. "
+                    "Restore any you want back via the Gracenote helper (manual IDs are never cleared).",
+                    len(_cleared),
+                    ", ".join(f"{name}={n}" for name, n in _by_source.most_common()),
+                    "; ".join(f"{row[0]}/{row[1]}={row[2]}" for row in _cleared[:8]),
                 )
 
         # Migrate global_chnum_start from AppSettings → default Feed.chnum_start.
