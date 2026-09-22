@@ -72,6 +72,68 @@ def _is_spectrum_own_cookie_domain(domain: str) -> bool:
     return any(bare == suf or bare.endswith('.' + suf) for suf in _SPECTRUM_OWN_COOKIE_SUFFIXES)
 
 
+def _dismiss_spectrum_tos_welcome(page) -> bool:
+    """Click through Spectrum's one-time "Welcome to Spectrum TV" consent
+    gate (agree to Terms and Conditions + Privacy Policy) automatically,
+    same shape as common.py's _autofill_spectrum_sso_confirm but for a
+    DIFFERENT screen entirely — this one has no relation to an existing SSO
+    session, it's a plain consent screen shown to any account that hasn't
+    accepted these terms yet, with a "Continue" button and no password field
+    anywhere on it.
+
+    Found live via a real forum report (2026-09-22, community thread post
+    #3180): a legacy Cox-migrated account hit this on watch.spectrum.net
+    with no handling for it at all — _try_autofill_credentials' own wait
+    loop only looks for a visible password field, which this screen never
+    has, so it just sits there until its own 12s timeout without ever
+    clicking Continue, regardless of whether autofill or a human is
+    driving. Never observed once in this session's own extensive testing
+    (the account used for that has evidently already accepted these terms
+    long ago) — a one-time per-account gate, not something every login
+    re-shows, which is exactly why it went unhandled: the only account this
+    flow was ever tested against had already cleared it.
+
+    Scoped by CONTENT rather than domain (unlike _autofill_spectrum_sso_confirm,
+    built for the generic multi-site MVPD flow) — this flow only ever shows
+    watch.spectrum.net pages, so a bare "Continue" button text match alone
+    risks catching some other unrelated Continue button somewhere else in
+    the app; requiring the "Terms and Conditions" text alongside it keeps
+    this specific to the actual consent screen.
+    """
+    try:
+        already = page.evaluate("() => !!window.__fcSpectrumTosClicked")
+        if already:
+            return False
+        if page.get_by_text('Terms and Conditions').count() == 0:
+            return False
+        btn = None
+        for locator in (
+            page.get_by_role('button', name='Continue', exact=True),
+            page.locator('button:has-text("Continue")'),
+        ):
+            try:
+                if locator.count() > 0:
+                    btn = locator.first
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+        if btn is None:
+            return False
+        btn.click(timeout=2000)
+        page.evaluate("() => { window.__fcSpectrumTosClicked = true; }")
+        logger.info(
+            '[spectrum-signin] clicked through the "Welcome to Spectrum TV" '
+            'Terms and Conditions/Privacy Policy consent screen url=%s', _safe_page_url(page))
+        deadline = time.monotonic() + 5
+        start_url = page.url
+        while time.monotonic() < deadline and page.url == start_url:
+            page.wait_for_timeout(150)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.debug('[spectrum-signin] ToS-welcome click failed: %s', exc)
+        return False
+
+
 def run_spectrum_signin():
     _ctx = flask_app.app_context()
     _ctx.push()
@@ -578,6 +640,15 @@ def run_spectrum_signin():
                         page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
                         set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
+                # Some accounts (confirmed live: a legacy Cox-migrated one,
+                # forum post #3180) land on a one-time "Welcome to Spectrum
+                # TV" Terms and Conditions consent screen instead of the
+                # login form — no password field on it at all, so
+                # _try_autofill_credentials' own wait would just time out
+                # without this. Never observed against this session's own
+                # test account (already accepted, presumably long ago).
+                _dismiss_spectrum_tos_welcome(page)
+
                 if username and password:
                     set_status('running', 'Auto-filling saved credentials…', page.url)
                     _try_autofill_credentials(
@@ -596,6 +667,13 @@ def run_spectrum_signin():
                         return
                     if page.is_closed():
                         raise _BrowserSessionDied('browser page closed before sign-in completed')
+                    # Same consent screen as above — checked here too since
+                    # it's not fully confirmed whether it can show up AFTER
+                    # credential submission instead of only before (the
+                    # forum report's own description reads as if it appeared
+                    # right after entering a password), and this is cheap
+                    # to check on every poll tick regardless.
+                    _dismiss_spectrum_tos_welcome(page)
                     now = time.monotonic()
                     if now - last_shot > 0.25:
                         last_shot = now
