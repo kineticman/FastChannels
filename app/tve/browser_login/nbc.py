@@ -537,7 +537,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             page, mvpd_username, mvpd_password, r=r,
                             stop_key=NBC_BROWSER_LOGIN_STOP_KEY, input_key=NBC_BROWSER_LOGIN_INPUT_KEY,
                             shot_key=NBC_BROWSER_LOGIN_SHOT_KEY, hint_key=NBC_BROWSER_LOGIN_HINT_KEY,
-                            navigation_already_settled=True,
+                            navigation_already_settled=True, log_tag='nbc-mvpd-login',
                         )
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 

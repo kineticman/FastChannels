@@ -265,7 +265,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                 _try_autofill_credentials(
                     page, account.username, account.password, r=r,
                     stop_key=MVPD_BROWSER_LOGIN_STOP_KEY, input_key=MVPD_BROWSER_LOGIN_INPUT_KEY,
-                    navigation_already_settled=True,
+                    navigation_already_settled=True, log_tag='discovery-mvpd-login',
                 )
             set_status('running', 'Signing in to Discovery TVE…', landing_url)
 

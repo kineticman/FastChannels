@@ -584,6 +584,7 @@ def run_spectrum_signin():
                         page, username, password, wait_seconds=12.0, r=r,
                         stop_key=SPECTRUM_SIGNIN_STOP_KEY, input_key=SPECTRUM_SIGNIN_INPUT_KEY,
                         shot_key=SPECTRUM_SIGNIN_SHOT_KEY, hint_key=SPECTRUM_SIGNIN_HINT_KEY,
+                        log_tag='spectrum-signin',
                     )
                     set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
