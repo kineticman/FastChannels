@@ -153,46 +153,55 @@ class BallysScraper(BaseScraper):
     def _parse_page(self, html: str) -> tuple[list[dict], list[dict]]:
         """
         Extract channelData and epgData from the Next.js RSC payload embedded
-        in the HTML.  The payload is in self.__next_f.push([1, "<json-string>"])
-        script blocks; the JSON string uses \\$D prefix for Date values and
-        \\$undefined for undefined.
+        in the HTML.  The payload is spread across several
+        self.__next_f.push([1, "<chunk-id>:<json-fragment>"]) script blocks —
+        channelData and epgData often land in *different* chunks, and later
+        chunks may only carry a back-reference (e.g. "$1c:props:...") to an
+        earlier chunk instead of the real array.  So each chunk is scanned
+        independently for a real `"channelData":[...]` / `"epgData":[...]`
+        array rather than assuming one chunk holds a single top-level object.
+        The JSON string uses a \\$D prefix for Date values and \\$undefined
+        for undefined.
         """
         import json
 
-        rsc_str = self._find_rsc_string(html)
-        if not rsc_str:
+        chunks = self._find_rsc_chunks(html)
+        if not chunks:
             logger.warning("[%s] RSC payload not found in page", self.source_name)
             return [], []
 
-        # Replace RSC special values so the string is valid JSON
-        rsc_clean = re.sub(r'"\$D([^"]+)"', r'"\1"', rsc_str)
-        rsc_clean = re.sub(r'"\$undefined"', "null", rsc_clean)
+        channel_entries: list[dict] = []
+        epg_events: list[dict] = []
+        for chunk in chunks:
+            # Replace RSC special values so extracted arrays are valid JSON
+            cleaned = re.sub(r'"\$D([^"]+)"', r'"\1"', chunk)
+            cleaned = re.sub(r'"\$undefined"', "null", cleaned)
 
-        # The object containing channelData/epgData sits at the end of the RSC block
-        obj_start = rsc_clean.find('{"channelData"')
-        if obj_start == -1:
+            if not channel_entries:
+                arr = self._extract_json_array(cleaned, "channelData")
+                if arr:
+                    channel_entries = arr
+            if not epg_events:
+                arr = self._extract_json_array(cleaned, "epgData")
+                if arr:
+                    epg_events = arr
+            if channel_entries and epg_events:
+                break
+
+        if not channel_entries:
             logger.warning("[%s] channelData not found in RSC payload", self.source_name)
-            return [], []
 
-        obj_end = rsc_clean.rfind("}")
-        try:
-            obj = json.loads(rsc_clean[obj_start:obj_end + 1])
-        except Exception as exc:
-            logger.warning("[%s] Failed to parse RSC object: %s", self.source_name, exc)
-            return [], []
-
-        channel_entries = obj.get("channelData") or []
-        epg_events = obj.get("epgData") or []
         return channel_entries, epg_events
 
     @staticmethod
-    def _find_rsc_string(html: str) -> str | None:
+    def _find_rsc_chunks(html: str) -> list[str]:
         """
-        Locate the __next_f.push([1, "..."]) call that contains channelData
-        and return the decoded inner string.
+        Return the decoded inner strings of every __next_f.push([1, "..."])
+        call whose payload mentions channelData or epgData.
         """
         import json
 
+        chunks = []
         for m in re.finditer(r'self\.__next_f\.push\((\[.*?\])\)', html, re.DOTALL):
             try:
                 arr = json.loads(m.group(1))
@@ -203,10 +212,64 @@ class BallysScraper(BaseScraper):
                 and len(arr) >= 2
                 and arr[0] == 1
                 and isinstance(arr[1], str)
-                and "channelData" in arr[1]
+                and ("channelData" in arr[1] or "epgData" in arr[1])
             ):
-                return arr[1]
-        return None
+                chunks.append(arr[1])
+        return chunks
+
+    @staticmethod
+    def _extract_json_array(s: str, key: str) -> list | None:
+        """
+        Find `"<key>":` in `s` and, if followed by a real JSON array (not a
+        `"$..."` back-reference string), bracket-match and parse just that
+        array. Skips past false matches (e.g. the key appearing as a
+        reference value) to the next occurrence.
+        """
+        import json
+
+        pattern = f'"{key}":'
+        idx = 0
+        while True:
+            pos = s.find(pattern, idx)
+            if pos == -1:
+                return None
+
+            val_start = pos + len(pattern)
+            while val_start < len(s) and s[val_start] in " \t\n\r":
+                val_start += 1
+            if val_start >= len(s) or s[val_start] != "[":
+                idx = pos + 1
+                continue
+
+            depth = 0
+            in_str = False
+            esc = False
+            i = val_start
+            while i < len(s):
+                c = s[i]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif c == "\\":
+                        esc = True
+                    elif c == '"':
+                        in_str = False
+                else:
+                    if c == '"':
+                        in_str = True
+                    elif c == "[":
+                        depth += 1
+                    elif c == "]":
+                        depth -= 1
+                        if depth == 0:
+                            i += 1
+                            break
+                i += 1
+
+            try:
+                return json.loads(s[val_start:i])
+            except Exception:
+                idx = pos + 1
 
     @staticmethod
     def _parse_iso(val: Any) -> datetime | None:
