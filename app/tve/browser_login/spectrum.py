@@ -7,13 +7,29 @@ like every other MVPD flow in this package — credentials are typed directly
 into the live browser view rendered in the admin UI, never passed through any
 other layer of this app.
 
-Reuses the SAME shared /data/browser_profiles/mvpd_tve Camoufox profile as
-every other MVPD browser-login (same profile-busy gating in app.routes.tasks)
-rather than a fresh one — deliberately: Spectrum's login blocked a genuinely
-fresh/incognito device outright (403 AUTH_REJECT_BY_RECAPTCHA_PASS_THMX_REJECT_
-STATUS) while a device with real prior history passed, so reusing this
-already-established, long-lived profile is closer to the case that worked than
-starting clean would be.
+Uses its OWN persistent Camoufox profile (/data/browser_profiles/spectrum),
+isolated from the mvpd_tve profile every Adobe-Pass TVE flow shares — added
+2026-09-22 after the account-mismatch guard below revealed just how much
+cross-flow cookie carryover the shared profile invited. Isolating it removes
+Spectrum from that blast radius entirely (a Cox/Xfinity/NBC session dying or
+getting corrupted can no longer touch Spectrum's, and vice versa) with no
+downside the other TVE flows would have: Spectrum doesn't share its account
+with any sibling network the way e.g. TNT/TBS/truTV all ride one Cox login,
+so there's nothing to lose by not sharing its browser state either.
+
+CRITICAL constraint this migration had to respect: a genuinely fresh/incognito
+device is NOT safe here — Spectrum's login blocked one outright (403
+AUTH_REJECT_BY_RECAPTCHA_PASS_THMX_REJECT_STATUS) while a device with real
+prior history passed (confirmed live 2026-09-17, original mvpd_tve-sharing
+decision). This profile was therefore seeded as a copy of the already-warmed
+mvpd_tve profile at migration time, never created empty — still gated by the
+SAME profile-busy check in app.routes.tasks as every other MVPD flow (harmless
+extra caution now that it's not literally the same directory, just no longer
+load-bearing for correctness the way it is for the shared ones). Long-term
+trust-score stability of a profile that only ever visits spectrum.net/cox.com
+going forward (vs. the broader cross-site history it inherited from having
+been part of the shared pool) is unconfirmed — watch for a THMX rejection
+resurfacing over time, same signature as above.
 """
 from __future__ import annotations
 
@@ -88,9 +104,44 @@ def run_spectrum_signin():
         username = saved_cfg.get('username')
         password = saved_cfg.get('password')
 
-        profile_dir = '/data/browser_profiles/mvpd_tve'
+        # Isolated from the mvpd_tve profile every Adobe-Pass TVE flow shares
+        # — see module docstring for why, and the migration constraint (must
+        # be seeded as a copy of an already-warmed profile, never created
+        # empty).
+        #
+        # This matters for every existing public install, not just this one:
+        # anyone who already signed into Spectrum successfully has real,
+        # trusted history sitting in the OLD shared mvpd_tve profile. Without
+        # migrating it forward, upgrading to this code would hand them a
+        # brand-new EMPTY profile at this path — precisely the
+        # genuinely-fresh-device case Spectrum's gate rejects outright,
+        # silently regressing every previously-working install the next time
+        # its saved session needs a real re-login (which could be weeks
+        # later, via the unattended watchdog, with nobody watching). One-time,
+        # self-healing, idempotent — same shape as schema.py's boot-time
+        # backfills — so no separate migration script or manual step is
+        # needed; it just runs itself the first time this flow does after the
+        # upgrade. A box that has never signed into ANY MVPD before has no
+        # old profile to migrate and starts cold either way, same as it
+        # always has.
+        profile_dir = '/data/browser_profiles/spectrum'
+        _old_shared_profile_dir = '/data/browser_profiles/mvpd_tve'
         try:
             import os as _os_login
+            if not _os_login.path.exists(profile_dir) and _os_login.path.isdir(_old_shared_profile_dir):
+                import shutil as _shutil_login
+                logger.info(
+                    '[spectrum-signin] first run on the isolated profile — seeding it from '
+                    'the existing %s (preserves the device trust that already passed '
+                    'Spectrum\'s recaptcha/ThreatMetrix gate, rather than starting fresh)',
+                    _old_shared_profile_dir)
+                try:
+                    _shutil_login.copytree(_old_shared_profile_dir, profile_dir)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        '[spectrum-signin] could not seed isolated profile from %s (%s) — '
+                        'falling back to an empty profile, which may hit a fresh-device '
+                        'rejection on first use', _old_shared_profile_dir, exc)
             _os_login.makedirs(profile_dir, exist_ok=True)
         except Exception as exc:  # noqa: BLE001
             logger.warning('[spectrum-signin] could not create profile dir %s: %s', profile_dir, exc)
