@@ -74,7 +74,8 @@ _CLIENT_VERSION = '17.32.0.289483649'
 _USER_AGENT = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                '(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36')
 _TOKEN_REFRESH_BUFFER = 10 * 60  # refresh 10min before actual expiry, not exactly at it
-_RELOGIN_BUFFER = 3 * 60 * 60    # trigger an unattended re-login with 3h of runway left on the refresh_token's ceiling
+_PROACTIVE_REFRESH_WINDOW = 2 * 60 * 60  # refresh the access token once it has under 2h left (watchdog runs every 20min)
+_RELOGIN_BUFFER = 3 * 60 * 60   # trigger an unattended re-login with 3h of runway left on the refresh_token's ceiling
 _RELOGIN_COOLDOWN = 45 * 60      # don't re-trigger more than once per 45min if a prior attempt is still in flight or failed
 
 _MC_NAME_RE = re.compile(r'^~mc(\d+):?$')
@@ -230,6 +231,25 @@ class SpectrumScraper(BaseScraper):
         if ceiling_ttl is not None:
             self._update_config('refresh_ceiling_at', int(time.time()) + ceiling_ttl)
         return True
+
+    def refresh_if_due(self) -> bool:
+        """Called on a timer by app.worker's spectrum_relogin_watchdog job.
+        Refreshes the access token while it still has _PROACTIVE_REFRESH_WINDOW
+        of life left. Confirmed live 2026-09-21 the refresh grant succeeds on a
+        still-valid token but was rejected (401) all 3 times it was attempted,
+        which was always ~2min AFTER expiry because the 6h scrape cadence lines
+        up with the 12h token life — that forced a full browser re-login every
+        12h and skipped a scrape each time. Refreshing ahead of expiry avoids
+        both. No-op unless a session is actually saved."""
+        if not (self.config.get('access_token') and self.config.get('refresh_token')
+                and self.config.get('client_device_id')):
+            return False
+        expires_at = self.config.get('token_expires_at')
+        if not expires_at:
+            return False  # unknown expiry — _ensure_session refreshes these on the next scrape/resolve
+        if float(expires_at) - time.time() > _PROACTIVE_REFRESH_WINDOW:
+            return False
+        return self._refresh_session()
 
     def check_relogin_due(self) -> bool:
         """Called on a timer by app.worker's spectrum_relogin_watchdog job, NOT
@@ -760,7 +780,8 @@ def _fetch_refresh_ceiling(access_token: str, refresh_token: str, client_device_
         return None
 
 
-def save_login_result(local_storage: dict, cox_cookies: list[dict] | None) -> None:
+def save_login_result(local_storage: dict, cox_cookies: list[dict] | None,
+                       observed_username: str | None = None) -> None:
     """Persists tokens harvested by app.tve.browser_login.spectrum.run_spectrum_signin
     onto the spectrum Source row. local_storage is the raw {oauth_token,
     xoauth_refresh_token, device_id, xoauth_device_verifier, xoauth_username,
@@ -770,7 +791,17 @@ def save_login_result(local_storage: dict, cox_cookies: list[dict] | None) -> No
     or silently carried over via the persistent Camoufox profile's cookies.
     cox_cookies is cached purely so a future Cox TVE integration (this account
     authenticates against Cox's own Okta org) can reuse this same session
-    without a second interactive login; nothing reads it yet."""
+    without a second interactive login; nothing reads it yet.
+
+    observed_username is the SAME identity the account-mismatch guard checks
+    (run_spectrum_signin's _try_capture, unwrapped from the page's JSON-quoted
+    localStorage value) — passed through separately from local_storage since a
+    token captured via response interception rather than localStorage doesn't
+    carry it. Auto-fills the config's username field when it's blank, so the
+    mismatch guard and the force-fresh-signin flow below start protecting this
+    install from its very first successful sign-in, without requiring anyone
+    to know to type their username into a field whose help text never
+    mentioned this."""
     import time as _time
     from ..extensions import db
     from ..models import Source
@@ -780,6 +811,11 @@ def save_login_result(local_storage: dict, cox_cookies: list[dict] | None) -> No
         src = Source(name='spectrum', display_name='Spectrum', is_enabled=False)
         db.session.add(src)
     cfg = dict(src.config or {})
+    if observed_username and not (cfg.get('username') or '').strip():
+        cfg['username'] = observed_username
+        logger.info(
+            '[spectrum] auto-populated the blank username field with the signed-in '
+            'account (%r) so future sign-ins can be verified against it', observed_username)
     cfg['access_token'] = local_storage.get('oauth_token')
     cfg['refresh_token'] = local_storage.get('xoauth_refresh_token')
     cfg['device_verifier'] = local_storage.get('xoauth_device_verifier')

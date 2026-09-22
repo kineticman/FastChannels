@@ -7,13 +7,29 @@ like every other MVPD flow in this package — credentials are typed directly
 into the live browser view rendered in the admin UI, never passed through any
 other layer of this app.
 
-Reuses the SAME shared /data/browser_profiles/mvpd_tve Camoufox profile as
-every other MVPD browser-login (same profile-busy gating in app.routes.tasks)
-rather than a fresh one — deliberately: Spectrum's login blocked a genuinely
-fresh/incognito device outright (403 AUTH_REJECT_BY_RECAPTCHA_PASS_THMX_REJECT_
-STATUS) while a device with real prior history passed, so reusing this
-already-established, long-lived profile is closer to the case that worked than
-starting clean would be.
+Uses its OWN persistent Camoufox profile (/data/browser_profiles/spectrum),
+isolated from the mvpd_tve profile every Adobe-Pass TVE flow shares — added
+2026-09-22 after the account-mismatch guard below revealed just how much
+cross-flow cookie carryover the shared profile invited. Isolating it removes
+Spectrum from that blast radius entirely (a Cox/Xfinity/NBC session dying or
+getting corrupted can no longer touch Spectrum's, and vice versa) with no
+downside the other TVE flows would have: Spectrum doesn't share its account
+with any sibling network the way e.g. TNT/TBS/truTV all ride one Cox login,
+so there's nothing to lose by not sharing its browser state either.
+
+CRITICAL constraint this migration had to respect: a genuinely fresh/incognito
+device is NOT safe here — Spectrum's login blocked one outright (403
+AUTH_REJECT_BY_RECAPTCHA_PASS_THMX_REJECT_STATUS) while a device with real
+prior history passed (confirmed live 2026-09-17, original mvpd_tve-sharing
+decision). This profile was therefore seeded as a copy of the already-warmed
+mvpd_tve profile at migration time, never created empty — still gated by the
+SAME profile-busy check in app.routes.tasks as every other MVPD flow (harmless
+extra caution now that it's not literally the same directory, just no longer
+load-bearing for correctness the way it is for the shared ones). Long-term
+trust-score stability of a profile that only ever visits spectrum.net/cox.com
+going forward (vs. the broader cross-site history it inherited from having
+been part of the shared pool) is unconfirmed — watch for a THMX rejection
+resurfacing over time, same signature as above.
 """
 from __future__ import annotations
 
@@ -87,10 +103,65 @@ def run_spectrum_signin():
         saved_cfg = source.config or {} if source else {}
         username = saved_cfg.get('username')
         password = saved_cfg.get('password')
+        # Set by save_source_config when the saved username/password actually
+        # change, and by the "Clear sign-in" button (clear_spectrum_auth) —
+        # both in app/routes/api_sources.py. Consumed once below to force a
+        # real fresh sign-in (clearing Spectrum/Cox cookies before ever
+        # trusting a carried-over session) instead of the passive mismatch
+        # guard's slower reject-and-wait-for-timeout path. See module
+        # docstring's forum-reports paragraph for why a proactive path matters
+        # here: someone who just changed credentials wants a real login form
+        # NOW, not a multi-minute reject loop.
+        force_fresh = bool(saved_cfg.get('force_fresh_signin'))
 
-        profile_dir = '/data/browser_profiles/mvpd_tve'
+        # Isolated from the mvpd_tve profile every Adobe-Pass TVE flow shares
+        # — see module docstring for why, and the migration constraint (must
+        # be seeded as a copy of an already-warmed profile, never created
+        # empty).
+        #
+        # This matters for every existing public install, not just this one:
+        # anyone who already signed into Spectrum successfully has real,
+        # trusted history sitting in the OLD shared mvpd_tve profile. Without
+        # migrating it forward, upgrading to this code would hand them a
+        # brand-new EMPTY profile at this path — precisely the
+        # genuinely-fresh-device case Spectrum's gate rejects outright,
+        # silently regressing every previously-working install the next time
+        # its saved session needs a real re-login (which could be weeks
+        # later, via the unattended watchdog, with nobody watching). One-time,
+        # self-healing, idempotent — same shape as schema.py's boot-time
+        # backfills — so no separate migration script or manual step is
+        # needed; it just runs itself the first time this flow does after the
+        # upgrade. A box that has never signed into ANY MVPD before has no
+        # old profile to migrate and starts cold either way, same as it
+        # always has.
+        profile_dir = '/data/browser_profiles/spectrum'
+        _old_shared_profile_dir = '/data/browser_profiles/mvpd_tve'
         try:
             import os as _os_login
+            if not _os_login.path.exists(profile_dir) and _os_login.path.isdir(_old_shared_profile_dir):
+                import shutil as _shutil_login
+                logger.info(
+                    '[spectrum-signin] first run on the isolated profile — seeding it from '
+                    'the existing %s (preserves the device trust that already passed '
+                    'Spectrum\'s recaptcha/ThreatMetrix gate, rather than starting fresh)',
+                    _old_shared_profile_dir)
+                try:
+                    # symlinks=True: a real (not freshly-created) Firefox
+                    # profile has a `lock` symlink pointing at "host:pid" —
+                    # not a real path, so copytree's default dereferencing
+                    # behavior fails on it outright (confirmed live 2026-09-22
+                    # against a real prod profile's stale lock left over from
+                    # an unclean Camoufox exit; silently degrading to an empty
+                    # profile is exactly the failure this migration exists to
+                    # prevent). Recreate symlinks as symlinks instead, same as
+                    # `cp -a` — the migration must never silently produce an
+                    # empty profile just because a stale lock exists.
+                    _shutil_login.copytree(_old_shared_profile_dir, profile_dir, symlinks=True)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        '[spectrum-signin] could not seed isolated profile from %s (%s) — '
+                        'falling back to an empty profile, which may hit a fresh-device '
+                        'rejection on first use', _old_shared_profile_dir, exc)
             _os_login.makedirs(profile_dir, exist_ok=True)
         except Exception as exc:  # noqa: BLE001
             logger.warning('[spectrum-signin] could not create profile dir %s: %s', profile_dir, exc)
@@ -100,6 +171,13 @@ def run_spectrum_signin():
         deadline = time.monotonic() + _SPECTRUM_SIGNIN_TIMEOUT_SECONDS
         captured: dict = {}
         _rejected: set = set()  # access_token values already proven dead — never re-try one
+        _last_mismatch: dict = {}  # {'account': str} — last valid-but-wrong-account
+        # identity seen, so a final timeout can say WHY instead of a generic
+        # "timed out" that looks identical to every other stuck sign-in.
+        _observed_username: dict = {}  # {'value': str} — whatever account actually signed
+        # in, captured regardless of whether a username was configured, so a
+        # blank config field can be auto-populated on success (see
+        # save_login_result's observed_username param).
 
         # Response interception is primary (proven reliable across multiple live
         # runs); localStorage is a fallback for the case SSO carries over via the
@@ -110,6 +188,20 @@ def run_spectrum_signin():
         # trusted until verified with a real validateSession call from inside
         # the page itself. Only a verified token is ever saved or reported as
         # success; an unverified one is discarded and the wait continues.
+        #
+        # A VALID token isn't enough either — forum reports (2026-09-22) of users
+        # getting "signed in successfully" with no login form ever shown, and of
+        # the login form flashing then vanishing before they could pick an
+        # account, point at Spectrum silently authenticating the browser as some
+        # OTHER account: either stale cookie SSO carried over in this shared
+        # persistent profile, or (for anyone actually browsing from a Spectrum
+        # residential IP) Charter's own network-based auto-auth, neither of which
+        # has anything to do with the username/password saved in config. When a
+        # username IS configured, the captured identity (localStorage's
+        # xoauth_username, which the page itself sets on any successful auth —
+        # cookie-carried-over, network-auto-authed, or freshly typed) must match
+        # it before a candidate is accepted, or we silently save someone else's
+        # session under this install's config.
         def _on_response(response):
             try:
                 if (
@@ -194,9 +286,84 @@ def run_spectrum_signin():
                 _rejected.add(candidate['oauth_token'])
                 captured.pop('candidate', None)
                 return False
+            # Read regardless of whether a username is configured — needed
+            # both for the mismatch check below AND to auto-populate a blank
+            # username field on success (see _observed_username's docstring).
+            try:
+                captured_username = page.evaluate("() => localStorage.getItem('xoauth_username')") or ''
+            except Exception as exc:  # noqa: BLE001
+                logger.debug('[spectrum-signin] xoauth_username read failed: %s', exc)
+                captured_username = ''
+            captured_username = captured_username.strip()
+            # Confirmed live 2026-09-22: the page stores this value
+            # JSON-stringified (literal surrounding quotes included), not as
+            # a bare string — compare against the *unwrapped* value or a
+            # correctly-configured username falsely mismatches its own
+            # quoted echo every time.
+            if len(captured_username) >= 2 and captured_username[0] == '"' and captured_username[-1] == '"':
+                try:
+                    captured_username = json.loads(captured_username)
+                except (ValueError, TypeError):
+                    captured_username = captured_username[1:-1]
+            captured_username = captured_username.strip()
+            if captured_username:
+                _observed_username['value'] = captured_username
+            if username:
+                # Only reject on a CONFIRMED mismatch — an empty read means we
+                # can't tell (e.g. this build of the page doesn't set it) and
+                # shouldn't block an otherwise-valid session over missing data.
+                if captured_username and captured_username.lower() != username.strip().lower():
+                    logger.warning(
+                        '[spectrum-signin] captured a VALID session for account %r, '
+                        'but %r is configured — this is SSO/network-auto-auth carryover '
+                        'for a different account, not this install\'s login; discarding '
+                        'and forcing a fresh sign-in', captured_username, username)
+                    _last_mismatch['account'] = captured_username
+                    _rejected.add(candidate['oauth_token'])
+                    captured.pop('candidate', None)
+                    set_status(
+                        'running',
+                        'Signed-in account doesn\'t match the configured username — '
+                        'forcing a fresh sign-in…', page.url)
+                    return False
             captured['verified'] = candidate
             logger.info('[spectrum-signin] captured and verified a working token')
             return True
+
+        def _clear_spectrum_cox_cookies(context, page, reason: str) -> None:
+            """Scoped to ONLY Spectrum/Cox cookies — never the whole profile:
+            clearing the whole context once wiped every other MVPD's cookies
+            back when this profile was still shared (pre-b0b19fe). No longer
+            load-bearing for that specific reason now that Spectrum has its
+            own isolated profile, but kept scoped anyway — no reason to wipe
+            more than the two domains that actually matter here."""
+            logger.info('[spectrum-signin] %s — clearing Spectrum/Cox cookies only to force a fresh login', reason)
+            try:
+                for domain in ('.spectrum.net', 'id.spectrum.net', 'watch.spectrum.net',
+                               'apis.spectrum.net', '.cox.com', 'login.cox.com'):
+                    context.clear_cookies(domain=domain)
+                page.evaluate("() => { try { localStorage.clear(); } catch(e) {} "
+                              "try { sessionStorage.clear(); } catch(e) {} }")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('[spectrum-signin] cookie clear failed: %s', exc)
+
+        def _clear_force_fresh_flag() -> None:
+            """Consumed exactly once per force_fresh_signin request (set by
+            save_source_config on a credential change, or the "Clear sign-in"
+            button) — pushes its own app_context since the outer one was
+            already popped before Camoufox launched (see
+            _prime_google_session's docstring in common.py for why)."""
+            try:
+                with flask_app.app_context():
+                    src = Source.query.filter_by(name='spectrum').first()
+                    if src and (src.config or {}).get('force_fresh_signin'):
+                        cfg = dict(src.config)
+                        cfg.pop('force_fresh_signin', None)
+                        src.config = cfg
+                        from app.extensions import db
+                        db.session.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('[spectrum-signin] could not clear force_fresh_signin flag: %s', exc)
 
         cox_cookies: list = []
         try:
@@ -213,31 +380,33 @@ def run_spectrum_signin():
                 page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
-                # SSO can carry over instantly via this profile's existing cookies —
-                # the page looks fully signed in (real Guide data, no login form to
-                # autofill) while the underlying token is actually already dead
-                # (confirmed live 2026-09-17: even the page's OWN fetch() with its
-                # OWN localStorage token failed validateSession). Give that a brief
-                # chance to verify; if it's there but invalid, force a real fresh
-                # login instead of sitting forever waiting for a login form that
-                # SSO carryover means will never appear. Scoped to ONLY Spectrum/
-                # Cox cookies — never the whole shared profile: clearing the whole
-                # context once wiped every other MVPD's cookies.
-                page.wait_for_timeout(1500)
-                if not _try_capture(page) and _rejected:
-                    set_status('running', 'Saved session looks stale — starting a fresh sign-in…', page.url)
-                    logger.info('[spectrum-signin] SSO-carried-over token failed verification — '
-                                'clearing Spectrum/Cox cookies only to force a fresh login')
-                    try:
-                        for domain in ('.spectrum.net', 'id.spectrum.net', 'watch.spectrum.net',
-                                       'apis.spectrum.net', '.cox.com', 'login.cox.com'):
-                            context.clear_cookies(domain=domain)
-                        page.evaluate("() => { try { localStorage.clear(); } catch(e) {} "
-                                      "try { sessionStorage.clear(); } catch(e) {} }")
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning('[spectrum-signin] recovery cookie clear failed: %s', exc)
+                if force_fresh:
+                    # A human or an automatic credential change explicitly
+                    # asked for a real fresh sign-in — never give the SSO-
+                    # carryover fast path below a chance to silently reuse
+                    # whatever session is still sitting in this profile.
+                    set_status('running', 'Forcing a fresh sign-in…', page.url)
+                    _clear_spectrum_cox_cookies(
+                        context, page,
+                        'force_fresh_signin requested (credentials changed, or "Clear sign-in" was used)')
                     page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
                     set_status('running', 'Sign in below, including any captcha if shown.', page.url)
+                    _clear_force_fresh_flag()
+                else:
+                    # SSO can carry over instantly via this profile's existing cookies —
+                    # the page looks fully signed in (real Guide data, no login form to
+                    # autofill) while the underlying token is actually already dead
+                    # (confirmed live 2026-09-17: even the page's OWN fetch() with its
+                    # OWN localStorage token failed validateSession). Give that a brief
+                    # chance to verify; if it's there but invalid, force a real fresh
+                    # login instead of sitting forever waiting for a login form that
+                    # SSO carryover means will never appear.
+                    page.wait_for_timeout(1500)
+                    if not _try_capture(page) and _rejected:
+                        set_status('running', 'Saved session looks stale — starting a fresh sign-in…', page.url)
+                        _clear_spectrum_cox_cookies(context, page, 'SSO-carried-over token failed verification')
+                        page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                        set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 if username and password:
                     set_status('running', 'Auto-filling saved credentials…', page.url)
@@ -271,7 +440,19 @@ def run_spectrum_signin():
                     page.wait_for_timeout(200)
 
                 if 'verified' not in captured:
-                    set_status('error', 'Timed out waiting for sign-in to complete.')
+                    if _last_mismatch.get('account'):
+                        set_status(
+                            'error',
+                            f"Timed out — kept detecting a signed-in session for "
+                            f"account {_last_mismatch['account']!r}, not the "
+                            f"configured {username!r}. This means this device/network "
+                            f"already has an existing Spectrum session for a "
+                            f"different account (shared browser profile, or "
+                            f"network-based auto-auth) — check that the configured "
+                            f"username is the account you want, or try from a "
+                            f"different network.")
+                    else:
+                        set_status('error', 'Timed out waiting for sign-in to complete.')
                     return
 
                 # Best-effort — purely so a future Cox TVE integration can reuse
@@ -295,7 +476,7 @@ def run_spectrum_signin():
         try:
             with flask_app.app_context():
                 from app.scrapers.spectrum import save_login_result
-                save_login_result(captured['verified'], cox_cookies)
+                save_login_result(captured['verified'], cox_cookies, observed_username=_observed_username.get('value'))
         except Exception as exc:  # noqa: BLE001
             logger.exception('[spectrum-signin] failed to save tokens')
             set_status('error', f'Signed in but failed to save tokens: {exc}')

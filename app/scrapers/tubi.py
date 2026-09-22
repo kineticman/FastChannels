@@ -111,7 +111,6 @@ class TubiScraper(BaseScraper):
 
         self._username: Optional[str] = self.config.get('username') or None
         self._password: Optional[str] = self.config.get('password') or None
-        self._device_id               = str(uuid.uuid4())
 
         # Bearer token cache
         self._token: Optional[str]     = None
@@ -121,6 +120,22 @@ class TubiScraper(BaseScraper):
         # stream URL cache: channel_id → real HLS URL
         # populated by fetch_channels(), consumed by resolve()
         self._url_cache: dict[str, str] = {}
+
+    def _ensure_device_id(self) -> str:
+        """Returns this account's persisted device_id, minting + saving one on
+        first use. Tubi's login endpoint appears to flag an account that
+        re-authenticates from a constantly-rotating device_id as suspicious
+        (same shape as credential stuffing) and starts rejecting logins with
+        a generic 'Request params is invalid' error — confirmed 2026-09-22
+        after a previously-working account started failing every other
+        scrape. A real browser keeps one device_id per profile forever;
+        minting a fresh uuid4() every __init__ (the old behavior) never did.
+        Mirrors the same fix already used by sling.py/fox_one.py."""
+        device_id = (self.config.get('device_id') or '').strip()
+        if not device_id:
+            device_id = str(uuid.uuid4())
+            self._update_config('device_id', device_id)
+        return device_id
 
     # ── Required ─────────────────────────────────────────────────────────────
 
@@ -372,7 +387,7 @@ class TubiScraper(BaseScraper):
                    'x-tubi-mode':     'all',
                    'x-tubi-platform': 'web',
                    'content-type':    'application/json'}
-        params  = {'mode': 'tubitv_us_linear', 'platform': 'web', 'device_id': self._device_id}
+        params  = {'mode': 'tubitv_us_linear', 'platform': 'web', 'device_id': self._ensure_device_id()}
 
         try:
             r = self.session.get(_CHANNELS_URL, params=params, headers=headers, timeout=30)
@@ -444,7 +459,7 @@ class TubiScraper(BaseScraper):
                    'authorization':   f'Bearer {bearer}',
                    'x-tubi-mode':     'all',
                    'x-tubi-platform': 'web'}
-        params  = {'platform': 'web', 'device_id': self._device_id, 'lookahead': 1}
+        params  = {'platform': 'web', 'device_id': self._ensure_device_id(), 'lookahead': 1}
 
         rows: list[dict] = []
         total = len(channel_ids)
@@ -528,7 +543,7 @@ class TubiScraper(BaseScraper):
         payload = {
             'type':     'email',
             'platform': 'web',
-            'device_id': self._device_id,
+            'device_id': self._ensure_device_id(),
             'credentials': {'email': self._username, 'password': self._password},
             'errorLog': False,
         }
