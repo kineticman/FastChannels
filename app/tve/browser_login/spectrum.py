@@ -60,6 +60,17 @@ _SPECTRUM_SIGNIN_TIMEOUT_SECONDS = 600
 
 _START_URL = 'https://watch.spectrum.net/guide'
 
+# Suffix match (not a fixed list of subdomains) so any current or future
+# spectrum.net-owned host (watch./id./apis./bare) counts as "ours" without
+# needing a code update — everything else found in the profile is foreign
+# and gets cleared by the one-time scrub below (see foreign_cookies_scrubbed).
+_SPECTRUM_OWN_COOKIE_SUFFIXES = ('spectrum.net',)
+
+
+def _is_spectrum_own_cookie_domain(domain: str) -> bool:
+    bare = (domain or '').lstrip('.')
+    return any(bare == suf or bare.endswith('.' + suf) for suf in _SPECTRUM_OWN_COOKIE_SUFFIXES)
+
 
 def run_spectrum_signin():
     _ctx = flask_app.app_context()
@@ -113,6 +124,29 @@ def run_spectrum_signin():
         # here: someone who just changed credentials wants a real login form
         # NOW, not a multi-minute reject loop.
         force_fresh = bool(saved_cfg.get('force_fresh_signin'))
+        # Deliberately NOT the same thing as just_migrated below — installs
+        # that already ran the migration BEFORE this scrub existed (every
+        # public install between b0b19fe and this commit) already have a
+        # populated profile_dir, so "only scrub right after a fresh
+        # migration" would never fire for them at all. Keyed to its own
+        # persisted flag instead, so it retroactively covers an
+        # already-migrated profile the next time this flow runs, not just a
+        # brand-new one.
+        #
+        # Broader than just Cox: inspecting a real migrated profile live
+        # (2026-09-22) found cookies AND localStorage for 20+ foreign
+        # domains inherited wholesale from the shared mvpd_tve profile —
+        # Xfinity (login.xfinity.com/oauth.xfinity.com), Adobe Pass's own
+        # domains (api.auth.adobe.com/sp.auth.adobe.com), Google
+        # (accounts.google.com), and full TVE network sessions (aetv.com,
+        # foxsports.com, history.com, mylifetime.com, nbc.com) — not just
+        # cox.com. An earlier version of this scrub only targeted cox.com
+        # specifically (the one case that happened to get noticed first);
+        # fixed to an allowlist instead — keep ONLY Spectrum's own domains,
+        # clear every other cookie found in the profile, so it isn't a
+        # denylist that has to be manually extended every time a new foreign
+        # domain turns up.
+        foreign_cookies_scrubbed = bool(saved_cfg.get('foreign_cookies_scrubbed'))
 
         # Isolated from the mvpd_tve profile every Adobe-Pass TVE flow shares
         # — see module docstring for why, and the migration constraint (must
@@ -136,10 +170,11 @@ def run_spectrum_signin():
         # always has.
         profile_dir = '/data/browser_profiles/spectrum'
         _old_shared_profile_dir = '/data/browser_profiles/mvpd_tve'
+        just_migrated = False
         try:
             import os as _os_login
+            import shutil as _shutil_login
             if not _os_login.path.exists(profile_dir) and _os_login.path.isdir(_old_shared_profile_dir):
-                import shutil as _shutil_login
                 logger.info(
                     '[spectrum-signin] first run on the isolated profile — seeding it from '
                     'the existing %s (preserves the device trust that already passed '
@@ -157,12 +192,53 @@ def run_spectrum_signin():
                     # `cp -a` — the migration must never silently produce an
                     # empty profile just because a stale lock exists.
                     _shutil_login.copytree(_old_shared_profile_dir, profile_dir, symlinks=True)
+                    just_migrated = True
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         '[spectrum-signin] could not seed isolated profile from %s (%s) — '
                         'falling back to an empty profile, which may hit a fresh-device '
                         'rejection on first use', _old_shared_profile_dir, exc)
             _os_login.makedirs(profile_dir, exist_ok=True)
+
+            # Filesystem-level counterpart to the in-browser cookie scrub
+            # below: cookies aren't the only thing inherited wholesale from
+            # mvpd_tve. Firefox stores each origin's localStorage/IndexedDB/
+            # Cache API data in its own directory under storage/default/,
+            # named "<scheme>+++<host>" — e.g. "https+++login.xfinity.com".
+            # The in-browser clear can only reach the CURRENT page's own
+            # origin (same-origin policy — page.evaluate()'s
+            # localStorage.clear() can't touch a different origin's storage
+            # no matter what page it runs from), so a foreign origin's
+            # localStorage would otherwise survive indefinitely even after
+            # every one of its cookies is gone. Done here, before Camoufox
+            # ever opens the profile, rather than from inside it — no need
+            # to navigate to 20 different origins one at a time, and no live
+            # file-lock contention with Firefox's own process. Same
+            # one-time gate as the cookie scrub (foreign_cookies_scrubbed,
+            # checked again below); skips moz-extension+++... directories
+            # (Camoufox's own bundled extensions, not a real site).
+            if not foreign_cookies_scrubbed:
+                storage_default_dir = _os_login.path.join(profile_dir, 'storage', 'default')
+                if _os_login.path.isdir(storage_default_dir):
+                    pruned_origins = []
+                    for entry in _os_login.listdir(storage_default_dir):
+                        if not (entry.startswith('https+++') or entry.startswith('http+++')):
+                            continue
+                        parts = entry.split('+++')
+                        host = parts[1] if len(parts) > 1 else ''
+                        if host and not _is_spectrum_own_cookie_domain(host):
+                            target = _os_login.path.join(storage_default_dir, entry)
+                            try:
+                                _shutil_login.rmtree(target)
+                                pruned_origins.append(host)
+                            except Exception as exc:  # noqa: BLE001
+                                logger.warning(
+                                    '[spectrum-signin] could not prune storage dir for %s: %s',
+                                    host, exc)
+                    if pruned_origins:
+                        logger.info(
+                            '[spectrum-signin] pruned localStorage/IndexedDB/cache for %d '
+                            'foreign origin(s): %s', len(pruned_origins), ', '.join(sorted(pruned_origins)))
         except Exception as exc:  # noqa: BLE001
             logger.warning('[spectrum-signin] could not create profile dir %s: %s', profile_dir, exc)
 
@@ -365,6 +441,24 @@ def run_spectrum_signin():
             except Exception as exc:  # noqa: BLE001
                 logger.warning('[spectrum-signin] could not clear force_fresh_signin flag: %s', exc)
 
+        def _mark_foreign_cookies_scrubbed() -> None:
+            """Persists the one-time foreign_cookies_scrubbed flag so the
+            inherited-cookie cleanup above never repeats after its first
+            real run — same app_context-pushing pattern as
+            _clear_force_fresh_flag, for the same reason (outer context
+            already popped before Camoufox launched)."""
+            try:
+                with flask_app.app_context():
+                    src = Source.query.filter_by(name='spectrum').first()
+                    if src and not (src.config or {}).get('foreign_cookies_scrubbed'):
+                        cfg = dict(src.config or {})
+                        cfg['foreign_cookies_scrubbed'] = True
+                        src.config = cfg
+                        from app.extensions import db
+                        db.session.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('[spectrum-signin] could not persist foreign_cookies_scrubbed: %s', exc)
+
         cox_cookies: list = []
         try:
             with Camoufox(
@@ -376,6 +470,82 @@ def run_spectrum_signin():
                 page.on('close', lambda p: logger.warning('[spectrum-signin] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[spectrum-signin] page JS error: %s', str(exc)[:500]))
                 page.on('response', _on_response)
+
+                if not foreign_cookies_scrubbed:
+                    # This profile's non-spectrum.net cookies are
+                    # unattributable — some could be Spectrum's own past Okta
+                    # round-trip (ex-Cox accounts authenticate through Cox's
+                    # Okta org, see module docstring), but most are from
+                    # COMPLETELY UNRELATED products: this same shared
+                    # mvpd_tve profile is also what every other MVPD/TVE
+                    # browser-login uses (Cox/Xfinity/NBC/FOX/AMCN/
+                    # Discovery/Google), each writing its own session
+                    # cookies. A stale foreign-context session riding along
+                    # on this install's Spectrum sign-in could plausibly
+                    # confuse or short-circuit Spectrum's own Cox-Okta-backed
+                    # device-linking flow the same way a stale Cox one could
+                    # — confirmed live 2026-09-22 that a real migrated
+                    # profile carried real session cookies for cox.com,
+                    # xfinity.com, Adobe Pass's own domains, Google, and
+                    # several TVE networks (aetv.com/foxsports.com/
+                    # history.com/mylifetime.com/nbc.com), not just cox.com.
+                    # An earlier version of this scrub targeted cox.com
+                    # specifically (the one case noticed first by inspecting
+                    # the cookie DB) — fixed to an ALLOWLIST instead: keep
+                    # only Spectrum's own domains, clear every other cookie
+                    # actually found in the profile, so a denylist never has
+                    # to be manually extended again for the next foreign
+                    # domain that turns up. Never clears spectrum.net's own
+                    # cookies — that accumulated device trust is the entire
+                    # reason the migration exists.
+                    #
+                    # Deliberately keyed to foreign_cookies_scrubbed, NOT
+                    # just_migrated: every public install that already ran
+                    # the migration before this scrub existed (b0b19fe
+                    # through 0bbec49) has a profile_dir that already exists,
+                    # so gating this on "did a migration just happen" would
+                    # never fire for them — this needs to retroactively catch
+                    # an already-migrated profile too, exactly once, not just
+                    # a brand-new one.
+                    #
+                    # NOTE (confirmed live 2026-09-22 against a real 20-foreign-
+                    # domain profile): this reliably clears every actual
+                    # session/auth cookie — api.auth.adobe.com, sp.auth.adobe.
+                    # com, login.cox.com, oauth.xfinity.com, and the TVE
+                    # "play." domains all end up with ZERO cookies left. What
+                    # survives on some domains is exclusively analytics/bot-
+                    # detection residue (Tealium, Adobe Analytics/Target,
+                    # Datadog, Akamai Bot Manager, Cloudflare, Incapsula —
+                    # e.g. cox.com's `_cidt`, httpOnly) that resists even an
+                    # exact name+domain+path clear — likely Firefox's cookie
+                    # partitioning (Total Cookie Protection) holding a
+                    # third-party-context copy Playwright can't reach without
+                    # a fully unfiltered clear_cookies(), which would also
+                    # destroy the spectrum.net trust this migration exists to
+                    # preserve. Not a session/identity leak — bot-detection/
+                    # analytics continuity tokens, lower risk than what this
+                    # guards against.
+                    try:
+                        foreign_domains = {
+                            c['domain'] for c in context.cookies()
+                            if not _is_spectrum_own_cookie_domain(c.get('domain', ''))
+                        }
+                        logger.info(
+                            '[spectrum-signin] clearing cookies for %d foreign domain(s) found '
+                            'in this profile (%s this run): %s',
+                            len(foreign_domains),
+                            'just migrated' if just_migrated else 'already migrated previously',
+                            ', '.join(sorted(foreign_domains)) or '(none found)')
+                        for domain in foreign_domains:
+                            context.clear_cookies(domain=domain)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning('[spectrum-signin] could not clear foreign cookies: %s', exc)
+                    # Mark it done regardless of whether the clear above fully
+                    # succeeded — this is a one-time cleanup, not something to
+                    # retry every single sign-in attempt forever (that would
+                    # also defeat legitimate same-account SSO carryover after
+                    # the first successful post-scrub login).
+                    _mark_foreign_cookies_scrubbed()
 
                 page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)

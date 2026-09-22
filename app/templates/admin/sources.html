@@ -3483,7 +3483,7 @@
     let _spectrumLoginPollTimer = null;
     let _spectrumLoginDone = false;
 
-    function openSpectrumLoginModal(sourceId) {
+    async function openSpectrumLoginModal(sourceId) {
       _spectrumLoginSourceId = sourceId;
       _spectrumLoginDone = false;
       if (_spectrumLoginPollTimer) { clearTimeout(_spectrumLoginPollTimer); _spectrumLoginPollTimer = null; }
@@ -3493,8 +3493,24 @@
       frame.removeAttribute('src');
       frame.style.visibility = 'hidden';  // no src yet - avoid showing a broken-image icon
       status.className = '';
-      status.textContent = 'Launching browser…';
+      status.textContent = 'Saving…';
       modal.classList.add('open');
+      // Save whatever's currently typed in the username/password fields
+      // BEFORE starting the sign-in job — the job reads Source.config from
+      // the DB, not these unsaved inputs, and api_sources.py's
+      // save_source_config is what sets force_fresh_signin on a real
+      // credential change. Without this, typing new creds and clicking
+      // straight to "Sign in to Spectrum" (never separately clicking "Save
+      // Settings") would silently skip that entirely and the job would just
+      // reuse whatever was previously saved. Best-effort: a save failure
+      // (e.g. a transient error) still falls through to opening the modal
+      // with whatever's already saved, same as before this existed.
+      try {
+        await saveSourceConfig(sourceId);
+      } catch (e) {
+        // ignore — see comment above
+      }
+      status.textContent = 'Launching browser…';
       fetch(`/api/sources/${sourceId}/spectrum-browser-login/start`, { method: 'POST' })
         .then(r => r.json())
         .catch(() => {})
