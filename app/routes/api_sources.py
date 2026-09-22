@@ -565,6 +565,19 @@ def save_source_config(source_id):
         for tk in _AUTH_STATE:
             if data.get(tk) in (None, '', '••••••••'):  # skip values set in this save
                 current.pop(tk, None)
+    # Spectrum's sign-in is entirely browser-driven (app.tve.browser_login.
+    # spectrum), so the auth-state purge above (which only clears DB-side
+    # bookkeeping like access_token) doesn't touch the actual risk: a stale
+    # session for the OLD account can still be sitting in the isolated
+    # Camoufox profile and silently carry over on the next "Sign in to
+    # Spectrum" click, without ever showing a real login form for the NEW
+    # credentials just saved here. force_fresh_signin makes the next sign-in
+    # clear Spectrum/Cox cookies before ever trusting a carried-over session,
+    # rather than relying on the account-mismatch guard to catch it
+    # reactively (which works, but ends in a slow reject-and-timeout instead
+    # of an immediate real login form).
+    if source.name == 'spectrum' and creds_changed:
+        current['force_fresh_signin'] = True
     # Turning off PBS's curated station set drops those stations from the next
     # scrape's fetch_channels() result, but the normal reconcile path only marks
     # missed channels — it waits out a miss-threshold grace period before deleting,
@@ -966,16 +979,27 @@ def clear_spectrum_auth(source_id):
     opportunistically-harvested cox.com cookie jar. Unlike Amazon's equivalent,
     there's no separate saved username/password to preserve — Spectrum's login
     is entirely browser-driven (see app.tve.browser_login.spectrum), so a full
-    wipe is the only meaningful "clear creds" here. Does NOT touch the shared
-    /data/browser_profiles/mvpd_tve Camoufox profile — that's shared with
-    every other MVPD login and clearing it would sign those out too."""
+    wipe is the only meaningful "clear creds" here.
+
+    Sets force_fresh_signin on the (otherwise emptied) config rather than
+    leaving it truly blank: this route only clears DB-side bookkeeping
+    synchronously, but a stale session for the old account can still be
+    sitting in the isolated Camoufox profile (/data/browser_profiles/spectrum,
+    added 2026-09-22 — before that it was the profile every MVPD login shared,
+    which is why this route used to leave it untouched entirely: no safe way
+    to clear just Spectrum's part of a shared profile from here). The flag
+    makes the NEXT "Sign in to Spectrum" click clear those cookies for real
+    before ever trusting a carried-over session, so this button actually
+    delivers what its confirm dialog promises — a real fresh sign-in next
+    time — rather than only resetting bookkeeping the browser's own saved
+    session would silently paper over."""
     import redis as _redis
 
     source = Source.query.get_or_404(source_id)
     if source.name != 'spectrum':
         return jsonify({'error': 'not a spectrum source'}), 400
 
-    source.config = {}
+    source.config = {'force_fresh_signin': True}
     db.session.commit()
 
     try:

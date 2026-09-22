@@ -103,6 +103,16 @@ def run_spectrum_signin():
         saved_cfg = source.config or {} if source else {}
         username = saved_cfg.get('username')
         password = saved_cfg.get('password')
+        # Set by save_source_config when the saved username/password actually
+        # change, and by the "Clear sign-in" button (clear_spectrum_auth) —
+        # both in app/routes/api_sources.py. Consumed once below to force a
+        # real fresh sign-in (clearing Spectrum/Cox cookies before ever
+        # trusting a carried-over session) instead of the passive mismatch
+        # guard's slower reject-and-wait-for-timeout path. See module
+        # docstring's forum-reports paragraph for why a proactive path matters
+        # here: someone who just changed credentials wants a real login form
+        # NOW, not a multi-minute reject loop.
+        force_fresh = bool(saved_cfg.get('force_fresh_signin'))
 
         # Isolated from the mvpd_tve profile every Adobe-Pass TVE flow shares
         # — see module docstring for why, and the migration constraint (must
@@ -164,6 +174,10 @@ def run_spectrum_signin():
         _last_mismatch: dict = {}  # {'account': str} — last valid-but-wrong-account
         # identity seen, so a final timeout can say WHY instead of a generic
         # "timed out" that looks identical to every other stuck sign-in.
+        _observed_username: dict = {}  # {'value': str} — whatever account actually signed
+        # in, captured regardless of whether a username was configured, so a
+        # blank config field can be auto-populated on success (see
+        # save_login_result's observed_username param).
 
         # Response interception is primary (proven reliable across multiple live
         # runs); localStorage is a fallback for the case SSO carries over via the
@@ -272,27 +286,33 @@ def run_spectrum_signin():
                 _rejected.add(candidate['oauth_token'])
                 captured.pop('candidate', None)
                 return False
-            if username:
+            # Read regardless of whether a username is configured — needed
+            # both for the mismatch check below AND to auto-populate a blank
+            # username field on success (see _observed_username's docstring).
+            try:
+                captured_username = page.evaluate("() => localStorage.getItem('xoauth_username')") or ''
+            except Exception as exc:  # noqa: BLE001
+                logger.debug('[spectrum-signin] xoauth_username read failed: %s', exc)
+                captured_username = ''
+            captured_username = captured_username.strip()
+            # Confirmed live 2026-09-22: the page stores this value
+            # JSON-stringified (literal surrounding quotes included), not as
+            # a bare string — compare against the *unwrapped* value or a
+            # correctly-configured username falsely mismatches its own
+            # quoted echo every time.
+            if len(captured_username) >= 2 and captured_username[0] == '"' and captured_username[-1] == '"':
                 try:
-                    captured_username = page.evaluate("() => localStorage.getItem('xoauth_username')") or ''
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug('[spectrum-signin] xoauth_username read failed: %s', exc)
-                    captured_username = ''
-                captured_username = captured_username.strip()
-                # Confirmed live 2026-09-22: the page stores this value
-                # JSON-stringified (literal surrounding quotes included), not as
-                # a bare string — compare against the *unwrapped* value or a
-                # correctly-configured username falsely mismatches its own
-                # quoted echo every time.
-                if len(captured_username) >= 2 and captured_username[0] == '"' and captured_username[-1] == '"':
-                    try:
-                        captured_username = json.loads(captured_username)
-                    except (ValueError, TypeError):
-                        captured_username = captured_username[1:-1]
+                    captured_username = json.loads(captured_username)
+                except (ValueError, TypeError):
+                    captured_username = captured_username[1:-1]
+            captured_username = captured_username.strip()
+            if captured_username:
+                _observed_username['value'] = captured_username
+            if username:
                 # Only reject on a CONFIRMED mismatch — an empty read means we
                 # can't tell (e.g. this build of the page doesn't set it) and
                 # shouldn't block an otherwise-valid session over missing data.
-                if captured_username.strip() and captured_username.strip().lower() != username.strip().lower():
+                if captured_username and captured_username.lower() != username.strip().lower():
                     logger.warning(
                         '[spectrum-signin] captured a VALID session for account %r, '
                         'but %r is configured — this is SSO/network-auto-auth carryover '
@@ -310,6 +330,41 @@ def run_spectrum_signin():
             logger.info('[spectrum-signin] captured and verified a working token')
             return True
 
+        def _clear_spectrum_cox_cookies(context, page, reason: str) -> None:
+            """Scoped to ONLY Spectrum/Cox cookies — never the whole profile:
+            clearing the whole context once wiped every other MVPD's cookies
+            back when this profile was still shared (pre-b0b19fe). No longer
+            load-bearing for that specific reason now that Spectrum has its
+            own isolated profile, but kept scoped anyway — no reason to wipe
+            more than the two domains that actually matter here."""
+            logger.info('[spectrum-signin] %s — clearing Spectrum/Cox cookies only to force a fresh login', reason)
+            try:
+                for domain in ('.spectrum.net', 'id.spectrum.net', 'watch.spectrum.net',
+                               'apis.spectrum.net', '.cox.com', 'login.cox.com'):
+                    context.clear_cookies(domain=domain)
+                page.evaluate("() => { try { localStorage.clear(); } catch(e) {} "
+                              "try { sessionStorage.clear(); } catch(e) {} }")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('[spectrum-signin] cookie clear failed: %s', exc)
+
+        def _clear_force_fresh_flag() -> None:
+            """Consumed exactly once per force_fresh_signin request (set by
+            save_source_config on a credential change, or the "Clear sign-in"
+            button) — pushes its own app_context since the outer one was
+            already popped before Camoufox launched (see
+            _prime_google_session's docstring in common.py for why)."""
+            try:
+                with flask_app.app_context():
+                    src = Source.query.filter_by(name='spectrum').first()
+                    if src and (src.config or {}).get('force_fresh_signin'):
+                        cfg = dict(src.config)
+                        cfg.pop('force_fresh_signin', None)
+                        src.config = cfg
+                        from app.extensions import db
+                        db.session.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('[spectrum-signin] could not clear force_fresh_signin flag: %s', exc)
+
         cox_cookies: list = []
         try:
             with Camoufox(
@@ -325,31 +380,33 @@ def run_spectrum_signin():
                 page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
-                # SSO can carry over instantly via this profile's existing cookies —
-                # the page looks fully signed in (real Guide data, no login form to
-                # autofill) while the underlying token is actually already dead
-                # (confirmed live 2026-09-17: even the page's OWN fetch() with its
-                # OWN localStorage token failed validateSession). Give that a brief
-                # chance to verify; if it's there but invalid, force a real fresh
-                # login instead of sitting forever waiting for a login form that
-                # SSO carryover means will never appear. Scoped to ONLY Spectrum/
-                # Cox cookies — never the whole shared profile: clearing the whole
-                # context once wiped every other MVPD's cookies.
-                page.wait_for_timeout(1500)
-                if not _try_capture(page) and _rejected:
-                    set_status('running', 'Saved session looks stale — starting a fresh sign-in…', page.url)
-                    logger.info('[spectrum-signin] SSO-carried-over token failed verification — '
-                                'clearing Spectrum/Cox cookies only to force a fresh login')
-                    try:
-                        for domain in ('.spectrum.net', 'id.spectrum.net', 'watch.spectrum.net',
-                                       'apis.spectrum.net', '.cox.com', 'login.cox.com'):
-                            context.clear_cookies(domain=domain)
-                        page.evaluate("() => { try { localStorage.clear(); } catch(e) {} "
-                                      "try { sessionStorage.clear(); } catch(e) {} }")
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning('[spectrum-signin] recovery cookie clear failed: %s', exc)
+                if force_fresh:
+                    # A human or an automatic credential change explicitly
+                    # asked for a real fresh sign-in — never give the SSO-
+                    # carryover fast path below a chance to silently reuse
+                    # whatever session is still sitting in this profile.
+                    set_status('running', 'Forcing a fresh sign-in…', page.url)
+                    _clear_spectrum_cox_cookies(
+                        context, page,
+                        'force_fresh_signin requested (credentials changed, or "Clear sign-in" was used)')
                     page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
                     set_status('running', 'Sign in below, including any captcha if shown.', page.url)
+                    _clear_force_fresh_flag()
+                else:
+                    # SSO can carry over instantly via this profile's existing cookies —
+                    # the page looks fully signed in (real Guide data, no login form to
+                    # autofill) while the underlying token is actually already dead
+                    # (confirmed live 2026-09-17: even the page's OWN fetch() with its
+                    # OWN localStorage token failed validateSession). Give that a brief
+                    # chance to verify; if it's there but invalid, force a real fresh
+                    # login instead of sitting forever waiting for a login form that
+                    # SSO carryover means will never appear.
+                    page.wait_for_timeout(1500)
+                    if not _try_capture(page) and _rejected:
+                        set_status('running', 'Saved session looks stale — starting a fresh sign-in…', page.url)
+                        _clear_spectrum_cox_cookies(context, page, 'SSO-carried-over token failed verification')
+                        page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                        set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 if username and password:
                     set_status('running', 'Auto-filling saved credentials…', page.url)
@@ -419,7 +476,7 @@ def run_spectrum_signin():
         try:
             with flask_app.app_context():
                 from app.scrapers.spectrum import save_login_result
-                save_login_result(captured['verified'], cox_cookies)
+                save_login_result(captured['verified'], cox_cookies, observed_username=_observed_username.get('value'))
         except Exception as exc:  # noqa: BLE001
             logger.exception('[spectrum-signin] failed to save tokens')
             set_status('error', f'Signed in but failed to save tokens: {exc}')

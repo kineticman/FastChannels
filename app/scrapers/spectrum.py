@@ -780,7 +780,8 @@ def _fetch_refresh_ceiling(access_token: str, refresh_token: str, client_device_
         return None
 
 
-def save_login_result(local_storage: dict, cox_cookies: list[dict] | None) -> None:
+def save_login_result(local_storage: dict, cox_cookies: list[dict] | None,
+                       observed_username: str | None = None) -> None:
     """Persists tokens harvested by app.tve.browser_login.spectrum.run_spectrum_signin
     onto the spectrum Source row. local_storage is the raw {oauth_token,
     xoauth_refresh_token, device_id, xoauth_device_verifier, xoauth_username,
@@ -790,7 +791,17 @@ def save_login_result(local_storage: dict, cox_cookies: list[dict] | None) -> No
     or silently carried over via the persistent Camoufox profile's cookies.
     cox_cookies is cached purely so a future Cox TVE integration (this account
     authenticates against Cox's own Okta org) can reuse this same session
-    without a second interactive login; nothing reads it yet."""
+    without a second interactive login; nothing reads it yet.
+
+    observed_username is the SAME identity the account-mismatch guard checks
+    (run_spectrum_signin's _try_capture, unwrapped from the page's JSON-quoted
+    localStorage value) — passed through separately from local_storage since a
+    token captured via response interception rather than localStorage doesn't
+    carry it. Auto-fills the config's username field when it's blank, so the
+    mismatch guard and the force-fresh-signin flow below start protecting this
+    install from its very first successful sign-in, without requiring anyone
+    to know to type their username into a field whose help text never
+    mentioned this."""
     import time as _time
     from ..extensions import db
     from ..models import Source
@@ -800,6 +811,11 @@ def save_login_result(local_storage: dict, cox_cookies: list[dict] | None) -> No
         src = Source(name='spectrum', display_name='Spectrum', is_enabled=False)
         db.session.add(src)
     cfg = dict(src.config or {})
+    if observed_username and not (cfg.get('username') or '').strip():
+        cfg['username'] = observed_username
+        logger.info(
+            '[spectrum] auto-populated the blank username field with the signed-in '
+            'account (%r) so future sign-ins can be verified against it', observed_username)
     cfg['access_token'] = local_storage.get('oauth_token')
     cfg['refresh_token'] = local_storage.get('xoauth_refresh_token')
     cfg['device_verifier'] = local_storage.get('xoauth_device_verifier')
