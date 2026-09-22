@@ -100,6 +100,9 @@ def run_spectrum_signin():
         deadline = time.monotonic() + _SPECTRUM_SIGNIN_TIMEOUT_SECONDS
         captured: dict = {}
         _rejected: set = set()  # access_token values already proven dead — never re-try one
+        _last_mismatch: dict = {}  # {'account': str} — last valid-but-wrong-account
+        # identity seen, so a final timeout can say WHY instead of a generic
+        # "timed out" that looks identical to every other stuck sign-in.
 
         # Response interception is primary (proven reliable across multiple live
         # runs); localStorage is a fallback for the case SSO carries over via the
@@ -110,6 +113,20 @@ def run_spectrum_signin():
         # trusted until verified with a real validateSession call from inside
         # the page itself. Only a verified token is ever saved or reported as
         # success; an unverified one is discarded and the wait continues.
+        #
+        # A VALID token isn't enough either — forum reports (2026-09-22) of users
+        # getting "signed in successfully" with no login form ever shown, and of
+        # the login form flashing then vanishing before they could pick an
+        # account, point at Spectrum silently authenticating the browser as some
+        # OTHER account: either stale cookie SSO carried over in this shared
+        # persistent profile, or (for anyone actually browsing from a Spectrum
+        # residential IP) Charter's own network-based auto-auth, neither of which
+        # has anything to do with the username/password saved in config. When a
+        # username IS configured, the captured identity (localStorage's
+        # xoauth_username, which the page itself sets on any successful auth —
+        # cookie-carried-over, network-auto-authed, or freshly typed) must match
+        # it before a candidate is accepted, or we silently save someone else's
+        # session under this install's config.
         def _on_response(response):
             try:
                 if (
@@ -194,6 +211,40 @@ def run_spectrum_signin():
                 _rejected.add(candidate['oauth_token'])
                 captured.pop('candidate', None)
                 return False
+            if username:
+                try:
+                    captured_username = page.evaluate("() => localStorage.getItem('xoauth_username')") or ''
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug('[spectrum-signin] xoauth_username read failed: %s', exc)
+                    captured_username = ''
+                captured_username = captured_username.strip()
+                # Confirmed live 2026-09-22: the page stores this value
+                # JSON-stringified (literal surrounding quotes included), not as
+                # a bare string — compare against the *unwrapped* value or a
+                # correctly-configured username falsely mismatches its own
+                # quoted echo every time.
+                if len(captured_username) >= 2 and captured_username[0] == '"' and captured_username[-1] == '"':
+                    try:
+                        captured_username = json.loads(captured_username)
+                    except (ValueError, TypeError):
+                        captured_username = captured_username[1:-1]
+                # Only reject on a CONFIRMED mismatch — an empty read means we
+                # can't tell (e.g. this build of the page doesn't set it) and
+                # shouldn't block an otherwise-valid session over missing data.
+                if captured_username.strip() and captured_username.strip().lower() != username.strip().lower():
+                    logger.warning(
+                        '[spectrum-signin] captured a VALID session for account %r, '
+                        'but %r is configured — this is SSO/network-auto-auth carryover '
+                        'for a different account, not this install\'s login; discarding '
+                        'and forcing a fresh sign-in', captured_username, username)
+                    _last_mismatch['account'] = captured_username
+                    _rejected.add(candidate['oauth_token'])
+                    captured.pop('candidate', None)
+                    set_status(
+                        'running',
+                        'Signed-in account doesn\'t match the configured username — '
+                        'forcing a fresh sign-in…', page.url)
+                    return False
             captured['verified'] = candidate
             logger.info('[spectrum-signin] captured and verified a working token')
             return True
@@ -271,7 +322,19 @@ def run_spectrum_signin():
                     page.wait_for_timeout(200)
 
                 if 'verified' not in captured:
-                    set_status('error', 'Timed out waiting for sign-in to complete.')
+                    if _last_mismatch.get('account'):
+                        set_status(
+                            'error',
+                            f"Timed out — kept detecting a signed-in session for "
+                            f"account {_last_mismatch['account']!r}, not the "
+                            f"configured {username!r}. This means this device/network "
+                            f"already has an existing Spectrum session for a "
+                            f"different account (shared browser profile, or "
+                            f"network-based auto-auth) — check that the configured "
+                            f"username is the account you want, or try from a "
+                            f"different network.")
+                    else:
+                        set_status('error', 'Timed out waiting for sign-in to complete.')
                     return
 
                 # Best-effort — purely so a future Cox TVE integration can reuse
