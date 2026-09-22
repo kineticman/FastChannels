@@ -136,7 +136,17 @@ def run_spectrum_signin():
                     'Spectrum\'s recaptcha/ThreatMetrix gate, rather than starting fresh)',
                     _old_shared_profile_dir)
                 try:
-                    _shutil_login.copytree(_old_shared_profile_dir, profile_dir)
+                    # symlinks=True: a real (not freshly-created) Firefox
+                    # profile has a `lock` symlink pointing at "host:pid" —
+                    # not a real path, so copytree's default dereferencing
+                    # behavior fails on it outright (confirmed live 2026-09-22
+                    # against a real prod profile's stale lock left over from
+                    # an unclean Camoufox exit; silently degrading to an empty
+                    # profile is exactly the failure this migration exists to
+                    # prevent). Recreate symlinks as symlinks instead, same as
+                    # `cp -a` — the migration must never silently produce an
+                    # empty profile just because a stale lock exists.
+                    _shutil_login.copytree(_old_shared_profile_dir, profile_dir, symlinks=True)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         '[spectrum-signin] could not seed isolated profile from %s (%s) — '
