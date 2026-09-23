@@ -2564,6 +2564,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             ch.name          = cd.name
             ch.stream_url    = cd.stream_url
             ch.stream_type   = cd.stream_type
+            ch.provider_number = cd.provider_number
             old_logo_url = ch.logo_url
             if not getattr(ch, 'logo_url_pinned', False):
                 next_logo = _resolved_logo_url(ch.logo_url, cd.logo_url, logo_validation_cache)
@@ -2630,6 +2631,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 tags              = ','.join(cd.tags) if getattr(cd, 'tags', None) else None,
                 description       = _sanitize_description(cd.description) if getattr(cd, 'description', None) else None,
                 number            = None,
+                provider_number   = cd.provider_number,
                 gracenote_id      = gracenote_id if gracenote_auto_fill else None,
                 gracenote_locked  = False,
                 gracenote_mode    = (getattr(cd, 'gracenote_mode', None) or 'auto'),

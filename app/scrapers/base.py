@@ -322,7 +322,7 @@ class ChannelData:
                  slug=None, category=None, language='en', country='US',
                  stream_type='hls', number=None, gracenote_id=None,
                  guide_key=None, tags=None, description=None,
-                 gracenote_mode=None):
+                 gracenote_mode=None, provider_number=None):
         self.source_channel_id = source_channel_id
         self.name        = name
         self.stream_url  = stream_url
@@ -333,6 +333,12 @@ class ChannelData:
         self.country     = country
         self.stream_type = stream_type
         self.number      = number
+        # Upstream's own channel number as text. Scrapers that synthesize
+        # sub-channels (e.g. DirecTV "305.2") pass it explicitly; everyone else
+        # gets their integer `number` carried over as-is.
+        if provider_number is None and number is not None:
+            provider_number = str(number)
+        self.provider_number = (str(provider_number).strip() or None) if provider_number is not None else None
         self.gracenote_id = gracenote_id
         # Initial gracenote routing mode for NEW channels only ('auto'|'manual'|
         # 'off'); None defaults to 'auto'. Existing channels keep their stored

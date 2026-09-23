@@ -385,6 +385,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN number_pinned BOOLEAN NOT NULL DEFAULT 0"
                 ))
+            if "provider_number" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN provider_number TEXT"
+                ))
             if "gracenote_locked" not in ch_cols:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN gracenote_locked BOOLEAN NOT NULL DEFAULT 0"
