@@ -267,6 +267,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_ah4c_url TEXT"))
             if "fc_player_device_settings_backup" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_device_settings_backup TEXT"))
+            if "debug_logging_enabled" not in cols:
+                # Default off — meant to be flipped on briefly while reproducing a
+                # specific issue (see app/debug_flag.py), not left running.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN debug_logging_enabled BOOLEAN NOT NULL DEFAULT 0"))
 
         if "sources" in tables:
             src_cols = {

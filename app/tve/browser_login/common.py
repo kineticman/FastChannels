@@ -551,10 +551,17 @@ def _try_autofill_credentials(
     page, username: str, password: str, wait_seconds: float = 12.0, r=None,
     stop_key: str | None = None, input_key: str | None = None,
     shot_key: str | None = None, hint_key: str | None = None,
-    navigation_already_settled: bool = False,
+    navigation_already_settled: bool = False, log_tag: str = 'mvpd-login',
 ) -> bool:
     """Best-effort, short-timeout sibling of _autofill_sling_credentials for
     run_mvpd_browser_login's single-network browser-assisted flow.
+
+    log_tag: purely cosmetic — every log line below defaults to the
+    "[mvpd-login]" prefix regardless of which flow actually called this
+    shared helper, which reads as if a different job is running when e.g.
+    Spectrum's own flow (which also uses this) calls it (confirmed live
+    2026-09-22, reading real logs). Pass e.g. "spectrum-signin" to make a
+    caller's own logs self-consistent instead.
 
     If r (a redis client) is given, this also relays screenshots/input and
     surfaces a "may need your input" hint the same way the poll loops after
@@ -588,6 +595,11 @@ def _try_autofill_credentials(
     """
     deadline = time.monotonic() + wait_seconds
     wait_started = time.monotonic()
+    # Hard ceiling regardless of how many redirects reset `deadline` below —
+    # without this, a genuine redirect LOOP (or a page that keeps navigating
+    # without ever settling on a real form) could wait indefinitely instead
+    # of eventually giving up.
+    absolute_deadline = wait_started + max(wait_seconds * 3, wait_seconds + 30)
     # This function is also called on its own after an F5-recovery reload, so
     # settling remains the safe default. NBC explicitly passes True after its
     # immediately preceding settle succeeds; repeating the settle there adds
@@ -596,13 +608,33 @@ def _try_autofill_credentials(
     if not navigation_already_settled:
         _settle_after_mvpd_navigation(page, max_seconds=min(8.0, wait_seconds))
     last_relay = time.monotonic()
+    # Confirmed live 2026-09-23: a genuinely fresh Spectrum profile (no prior
+    # mvpd_tve history) bounces watch.spectrum.net -> id.spectrum.net for its
+    # login form — a real cross-domain redirect a warmed profile skips
+    # entirely — and that hop can outrun the fixed wait_seconds budget on its
+    # own, timing this out before the real (post-redirect) form ever renders.
+    # A raw timeout bump doesn't generalize (any number of future hops, any
+    # amount of network jitter, could still outrun a bigger fixed number) —
+    # instead, track the page's own URL and extend the deadline every time a
+    # real navigation is observed, so the budget is "wait_seconds since the
+    # LAST redirect" rather than "wait_seconds since this function started".
+    # A page that never redirects behaves identically to before (deadline
+    # never gets extended, since the URL never changes).
+    last_seen_url = _safe_page_url(page)
     while time.monotonic() < deadline:
         try:
             if page.locator('input[type="password"]:visible').count() > 0:
                 break
         except Exception as exc:  # noqa: BLE001
-            logger.info('[mvpd-login] autofill: locator query failed: %s', exc)
+            logger.info('[%s] autofill: locator query failed: %s', log_tag, exc)
             return False
+        current_url = _safe_page_url(page)
+        if current_url != last_seen_url:
+            logger.debug(
+                '[%s] autofill: page navigated mid-wait (%s -> %s) — extending the wait window',
+                log_tag, last_seen_url, current_url)
+            last_seen_url = current_url
+            deadline = min(time.monotonic() + wait_seconds, absolute_deadline)
         if r is not None:
             now = time.monotonic()
             if now - last_relay >= 1.0:
@@ -611,11 +643,11 @@ def _try_autofill_credentials(
                     page, r, waiting_since=wait_started,
                     stop_key=stop_key, input_key=input_key, shot_key=shot_key, hint_key=hint_key,
                 ):
-                    logger.info('[mvpd-login] autofill: cancelled while waiting for a password field')
+                    logger.info('[%s] autofill: cancelled while waiting for a password field', log_tag)
                     return False
         page.wait_for_timeout(300)
     else:
-        logger.info('[mvpd-login] autofill: no visible password field after %.1fs (SSO already past login, a captcha-first page, or an unrecognized form) url=%s', wait_seconds, _safe_page_url(page))
+        logger.info('[%s] autofill: no visible password field after %.1fs (SSO already past login, a captcha-first page, or an unrecognized form) url=%s', log_tag, time.monotonic() - wait_started, _safe_page_url(page))
         return False
 
     page.wait_for_timeout(1200)  # the form animates in — let it become clickable/stable
@@ -644,7 +676,7 @@ def _try_autofill_credentials(
         for fill_attempt in (1, 2):
             pw_loc = page.locator('input[type="password"]:visible')
             if pw_loc.count() == 0:
-                logger.info('[mvpd-login] autofill: password field disappeared before fill (page likely mid-redirect) url=%s', _safe_page_url(page))
+                logger.info('[%s] autofill: password field disappeared before fill (page likely mid-redirect) url=%s', log_tag, _safe_page_url(page))
                 return False
             pw_field = pw_loc.first
 
@@ -659,7 +691,7 @@ def _try_autofill_credentials(
                     user_field = loc.first
                     break
             if user_field is None:
-                logger.info('[mvpd-login] autofill: password field present but no visible email/text input url=%s', _safe_page_url(page))
+                logger.info('[%s] autofill: password field present but no visible email/text input url=%s', log_tag, _safe_page_url(page))
                 return False
 
             _focus_and_type(user_field, username)
@@ -669,19 +701,19 @@ def _try_autofill_credentials(
             got_user = user_field.input_value(timeout=2000)
             got_pw = pw_field.input_value(timeout=2000)
             if got_user != username or got_pw != password:
-                logger.info('[mvpd-login] autofill: values did not stick (attempt %d): user %d/%d chars, password %d/%d chars — page likely re-rendered mid-fill',
-                            fill_attempt, len(got_user), len(username), len(got_pw), len(password))
+                logger.info('[%s] autofill: values did not stick (attempt %d): user %d/%d chars, password %d/%d chars — page likely re-rendered mid-fill',
+                            log_tag, fill_attempt, len(got_user), len(username), len(got_pw), len(password))
                 page.wait_for_timeout(700)
                 continue
 
             pw_field.press('Enter')
-            logger.info('[mvpd-login] autofill: filled and submitted credentials for %s (attempt %d)', username, fill_attempt)
+            logger.info('[%s] autofill: filled and submitted credentials for %s (attempt %d)', log_tag, username, fill_attempt)
             return True
 
-        logger.info('[mvpd-login] autofill: gave up — could not get a stable filled form url=%s', _safe_page_url(page))
+        logger.info('[%s] autofill: gave up — could not get a stable filled form url=%s', log_tag, _safe_page_url(page))
         return False
     except Exception as exc:  # noqa: BLE001
-        logger.info('[mvpd-login] autofill: exception mid-fill: %s', exc)
+        logger.info('[%s] autofill: exception mid-fill: %s', log_tag, exc)
         return False
 
 

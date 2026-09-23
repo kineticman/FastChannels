@@ -297,7 +297,7 @@ class VidaaScraper(BaseScraper):
             tile_ids_by_column[col_id] = ids
             for cid in ids:
                 column_title_by_channel_id.setdefault(cid, col_title)
-            logger.info("[vidaa] %s: %d channels", col_title, len(ids))
+            logger.debug("[vidaa] %s: %d channels", col_title, len(ids))
 
         all_ids = list(column_title_by_channel_id.keys())
         if not all_ids:
@@ -315,7 +315,13 @@ class VidaaScraper(BaseScraper):
                 if channel:
                     channels.append(channel)
 
-        logger.info("[vidaa] %d channels fetched across %d categories", len(channels), len(columns))
+        breakdown = ", ".join(
+            f"{col.get('title') or ''}={len(tile_ids_by_column.get(col.get('id'), []))}"
+            for col in columns
+            if col.get("id") is not None
+        )
+        logger.info("[vidaa] %d channels fetched across %d categories (%s)",
+                    len(channels), len(columns), breakdown)
         return channels
 
     # ── fetch_epg ────────────────────────────────────────────────────────────

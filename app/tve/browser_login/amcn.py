@@ -260,7 +260,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                     _try_autofill_credentials(
                         page, account.username, account.password, r=r,
                         stop_key=MVPD_BROWSER_LOGIN_STOP_KEY, input_key=MVPD_BROWSER_LOGIN_INPUT_KEY,
-                        navigation_already_settled=True,
+                        navigation_already_settled=True, log_tag='amcn-mvpd-login',
                     )
                 set_status('running', f'Signing in to {channel.name}…', landing_url)
 
