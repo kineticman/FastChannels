@@ -2,4 +2,18 @@
   <div class="stats-card">
     <div class="stats-card-title">📊 System Stats</div>
     <div id="system-stats-body"><span class="stats-loading">Loading…</span></div>
+    <div class="toggle-row" style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid var(--border);">
+      <div class="toggle-row-text">
+        <div class="toggle-row-label">Debug logging</div>
+        <div class="toggle-row-help">Adds extra diagnostic detail to the logs for modules that support it (currently: Spectrum sign-in). Off by default — turn this on only while reproducing a specific issue, since it's more verbose than normal; equivalent to setting the <code>FC_DEBUG</code> environment variable.</div>
+      </div>
+      <div class="toggle-row-control">
+        <label class="toggle-switch">
+          <input type="checkbox" id="debug-logging-enabled" {% if debug_logging_enabled %}checked{% endif %}
+                 onchange="saveSettings({debug_logging_enabled: this.checked}, 'debug-logging-status')">
+          <span class="toggle-slider"></span>
+        </label>
+        <span class="save-status" id="debug-logging-status"></span>
+      </div>
+    </div>
   </div>

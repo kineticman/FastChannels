@@ -51,7 +51,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import time
 
@@ -90,17 +89,22 @@ def _is_spectrum_own_cookie_domain(domain: str) -> bool:
     return any(bare == suf or bare.endswith('.' + suf) for suf in _SPECTRUM_OWN_COOKIE_SUFFIXES)
 
 
+_debug_state = {'settings_checked': False}  # populated once per run, while
+# the app context is still live — see _spectrum_debug_enabled's docstring.
+
+
 def _spectrum_debug_enabled() -> bool:
-    """The root logger is capped at INFO (app/logfile.py) — a plain
-    logger.debug() call anywhere in this app is silently dropped before it
-    reaches any handler, never mind actually landing in the log file. Same
-    env-flag-gated-at-INFO pattern as stream_detector.py's
-    _ytdlp_verbose_enabled (FC_YTDLP_VERBOSE) rather than true DEBUG level,
-    so an operator can turn on a full diagnostic trail for a specific
-    sign-in attempt (FC_SPECTRUM_DEBUG=1) without a code change, a redeploy,
-    or spamming every other module's logs the way actually lowering the
-    root level would."""
-    return (os.environ.get('FC_SPECTRUM_DEBUG') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+    """See app/debug_flag.py for the general mechanism (root logger is
+    hard-capped at INFO, so this is an opt-in-at-INFO pattern, not true
+    DEBUG level). Checks FC_SPECTRUM_DEBUG (safe from anywhere, including
+    inside the Camoufox browser session) OR AppSettings.debug_logging_enabled
+    — the latter via _debug_state, cached once near the top of
+    run_spectrum_signin while the app context is still live, since a DB
+    query isn't safe to make from inside the browser session (its caller
+    has already popped that context by then, same pattern
+    _prime_google_session's docstring describes elsewhere in this package)."""
+    from app.debug_flag import debug_logging_enabled
+    return debug_logging_enabled('FC_SPECTRUM_DEBUG', settings_checked=_debug_state['settings_checked'])
 
 
 def _debug_log(msg: str, *args) -> None:
@@ -274,6 +278,13 @@ def run_spectrum_signin():
         # denylist that has to be manually extended every time a new foreign
         # domain turns up.
         foreign_cookies_scrubbed = bool(saved_cfg.get('foreign_cookies_scrubbed'))
+        # Cached now, while the app context is still live (this function
+        # pops it below before launching Camoufox) — see
+        # _spectrum_debug_enabled's docstring and app/debug_flag.py's
+        # settings_flag_enabled for why a DB read isn't safe once inside
+        # the browser session.
+        from app.debug_flag import settings_flag_enabled as _settings_flag_enabled
+        _debug_state['settings_checked'] = _settings_flag_enabled()
         _debug_log(
             'starting run: username_set=%s password_set=%s force_fresh=%s '
             'foreign_cookies_scrubbed=%s',

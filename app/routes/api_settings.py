@@ -382,6 +382,8 @@ def app_settings():
             row.gracenote_map_url = (data['gracenote_map_url'] or '').strip() or None
         if 'gracenote_contribution_url' in data:
             row.gracenote_contribution_url = (data['gracenote_contribution_url'] or '').strip() or None
+        if 'debug_logging_enabled' in data:
+            row.debug_logging_enabled = bool(data['debug_logging_enabled'])
         db.session.commit()
         write_timezone_cache(row.timezone_name)
         _invalidate_and_refresh_xml()
@@ -416,6 +418,7 @@ def app_settings():
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
+        'debug_logging_enabled': bool(row.debug_logging_enabled),
     })
 
 
