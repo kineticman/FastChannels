@@ -117,6 +117,15 @@ def update_channel(channel_id):
     ch   = Channel.query.get_or_404(channel_id)
     data = request.get_json()
 
+    # Channel.number is an INTEGER column, but SQLite's type affinity will
+    # happily store 100.1 as REAL (or '100' as TEXT) — which then leaks into
+    # the chnum allocator's integer cursor/collision sets. bool is excluded
+    # explicitly since it's an int subclass.
+    if 'number' in data and data['number'] is not None:
+        n = data['number']
+        if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+            return jsonify({'error': 'number must be a positive integer or null'}), 422
+
     def _apply_changes():
         """Apply all field mutations to ch. Re-runnable after a rollback."""
         # Resolve the requested lock target from CURRENT (pre-mutation) state,
