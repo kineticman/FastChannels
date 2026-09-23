@@ -30,11 +30,29 @@ trust-score stability of a profile that only ever visits spectrum.net/cox.com
 going forward (vs. the broader cross-site history it inherited from having
 been part of the shared pool) is unconfirmed — watch for a THMX rejection
 resurfacing over time, same signature as above.
+
+UPDATE 2026-09-23, in tension with the above: a genuinely fresh Camoufox
+profile (no mvpd_tve to migrate from at all, real credentials, same trusted
+home network as every other test) completed a full real sign-in on its very
+first attempt — no THMX rejection whatsoever. A SECOND fresh-profile
+registration against the same account minutes later hit a completely
+different failure instead: Spectrum's own "Feature Unavailable... please try
+again from home" error (an IDID-XXXX code — 4000 seen live here, 4003 in a
+real public forum report). A bare retry ~60-90s later, same account/device/
+profile, succeeded outright — too fast to be a lasting account-level flag.
+Current best read: this looks more like a short-lived rate-limit or a plain
+transient backend condition tied to repeated new-device registrations in a
+short window, not a fixed "fresh device = rejected" rule. See
+_detect_spectrum_feature_unavailable's docstring for the retry logic this
+prompted, and set FC_SPECTRUM_DEBUG=1 for a fuller diagnostic trail if this
+resurfaces.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import time
 
 import redis
@@ -70,6 +88,53 @@ _SPECTRUM_OWN_COOKIE_SUFFIXES = ('spectrum.net',)
 def _is_spectrum_own_cookie_domain(domain: str) -> bool:
     bare = (domain or '').lstrip('.')
     return any(bare == suf or bare.endswith('.' + suf) for suf in _SPECTRUM_OWN_COOKIE_SUFFIXES)
+
+
+def _spectrum_debug_enabled() -> bool:
+    """The root logger is capped at INFO (app/logfile.py) — a plain
+    logger.debug() call anywhere in this app is silently dropped before it
+    reaches any handler, never mind actually landing in the log file. Same
+    env-flag-gated-at-INFO pattern as stream_detector.py's
+    _ytdlp_verbose_enabled (FC_YTDLP_VERBOSE) rather than true DEBUG level,
+    so an operator can turn on a full diagnostic trail for a specific
+    sign-in attempt (FC_SPECTRUM_DEBUG=1) without a code change, a redeploy,
+    or spamming every other module's logs the way actually lowering the
+    root level would."""
+    return (os.environ.get('FC_SPECTRUM_DEBUG') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _debug_log(msg: str, *args) -> None:
+    if _spectrum_debug_enabled():
+        logger.info('[spectrum-signin][debug] ' + msg, *args)
+
+
+_IDID_ERROR_RE = re.compile(r'IDID-\d+')
+
+
+def _detect_spectrum_feature_unavailable(page) -> str | None:
+    """Detects Spectrum's own "Feature Unavailable... please try again from
+    home or contact us for assistance" error page — a real Spectrum-side
+    condition, not one of its normal login/consent screens. Confirmed live
+    2026-09-23 twice: IDID-4000 on a fresh Camoufox profile from a trusted
+    home network (a SECOND fresh-device registration against the same
+    account within a few minutes of a first one that had succeeded cleanly),
+    and IDID-4003 in a real public forum report. In the one case watched
+    end-to-end, a bare retry roughly 60-90s later — same account, same
+    device, same profile, nothing else changed — succeeded outright, too
+    fast to be a lasting account-level block. Current best read: a
+    short-lived rate-limit or a plain transient backend condition tied to
+    repeated new-device registrations in a short window, not "fresh device
+    always rejected" — see module docstring's 2026-09-23 update. Returns the
+    specific IDID-XXXX code (for logging/diagnostics) if this page is
+    currently showing, else None.
+    """
+    try:
+        if page.get_by_text('Feature Unavailable').count() == 0:
+            return None
+        match = _IDID_ERROR_RE.search(page.inner_text('body'))
+        return match.group(0) if match else 'IDID-unknown'
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _dismiss_spectrum_tos_welcome(page) -> bool:
@@ -209,6 +274,10 @@ def run_spectrum_signin():
         # denylist that has to be manually extended every time a new foreign
         # domain turns up.
         foreign_cookies_scrubbed = bool(saved_cfg.get('foreign_cookies_scrubbed'))
+        _debug_log(
+            'starting run: username_set=%s password_set=%s force_fresh=%s '
+            'foreign_cookies_scrubbed=%s',
+            bool(username), bool(password), force_fresh, foreign_cookies_scrubbed)
 
         # Isolated from the mvpd_tve profile every Adobe-Pass TVE flow shares
         # — see module docstring for why, and the migration constraint (must
@@ -303,6 +372,7 @@ def run_spectrum_signin():
                             'foreign origin(s): %s', len(pruned_origins), ', '.join(sorted(pruned_origins)))
         except Exception as exc:  # noqa: BLE001
             logger.warning('[spectrum-signin] could not create profile dir %s: %s', profile_dir, exc)
+        _debug_log('profile_dir=%s just_migrated=%s', profile_dir, just_migrated)
 
         _ctx.pop()
         _ctx_popped['v'] = True
@@ -414,11 +484,15 @@ def run_spectrum_signin():
                 return False
             if candidate['oauth_token'] in _rejected:
                 return False
+            _debug_log('candidate token found (source=%s, len=%d) — validating',
+                       'response-interception' if captured.get('candidate') is candidate else 'localStorage',
+                       len(candidate['oauth_token']))
             try:
                 is_valid = page.evaluate(_VALIDATE_JS, candidate)
             except Exception as exc:  # noqa: BLE001
                 logger.debug('[spectrum-signin] validateSession check failed: %s', exc)
                 return False
+            _debug_log('validateSession result: %s', is_valid)
             if not is_valid:
                 logger.info('[spectrum-signin] captured token failed validateSession — discarding, still waiting')
                 _rejected.add(candidate['oauth_token'])
@@ -446,6 +520,7 @@ def run_spectrum_signin():
             captured_username = captured_username.strip()
             if captured_username:
                 _observed_username['value'] = captured_username
+            _debug_log('captured_username=%r configured_username=%r', captured_username, username)
             if username:
                 # Only reject on a CONFIRMED mismatch — an empty read means we
                 # can't tell (e.g. this build of the page doesn't set it) and
@@ -532,6 +607,26 @@ def run_spectrum_signin():
                 page.on('close', lambda p: logger.warning('[spectrum-signin] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[spectrum-signin] page JS error: %s', str(exc)[:500]))
                 page.on('response', _on_response)
+
+                def _dismiss_tos_and_autofill() -> None:
+                    """Shared between the initial attempt below and the
+                    IDID-error retry path inside the main loop, so they
+                    can't drift apart. Some accounts (confirmed live: a
+                    legacy Cox-migrated one, forum post #3180) land on a
+                    one-time "Welcome to Spectrum TV" Terms and Conditions
+                    consent screen instead of the login form — no password
+                    field on it at all, so _try_autofill_credentials' own
+                    wait would just time out without this."""
+                    _dismiss_spectrum_tos_welcome(page)
+                    if username and password:
+                        set_status('running', 'Auto-filling saved credentials…', page.url)
+                        _try_autofill_credentials(
+                            page, username, password, wait_seconds=12.0, r=r,
+                            stop_key=SPECTRUM_SIGNIN_STOP_KEY, input_key=SPECTRUM_SIGNIN_INPUT_KEY,
+                            shot_key=SPECTRUM_SIGNIN_SHOT_KEY, hint_key=SPECTRUM_SIGNIN_HINT_KEY,
+                            log_tag='spectrum-signin',
+                        )
+                        set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 if not foreign_cookies_scrubbed:
                     # This profile's non-spectrum.net cookies are
@@ -640,27 +735,13 @@ def run_spectrum_signin():
                         page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
                         set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
-                # Some accounts (confirmed live: a legacy Cox-migrated one,
-                # forum post #3180) land on a one-time "Welcome to Spectrum
-                # TV" Terms and Conditions consent screen instead of the
-                # login form — no password field on it at all, so
-                # _try_autofill_credentials' own wait would just time out
-                # without this. Never observed against this session's own
-                # test account (already accepted, presumably long ago).
-                _dismiss_spectrum_tos_welcome(page)
-
-                if username and password:
-                    set_status('running', 'Auto-filling saved credentials…', page.url)
-                    _try_autofill_credentials(
-                        page, username, password, wait_seconds=12.0, r=r,
-                        stop_key=SPECTRUM_SIGNIN_STOP_KEY, input_key=SPECTRUM_SIGNIN_INPUT_KEY,
-                        shot_key=SPECTRUM_SIGNIN_SHOT_KEY, hint_key=SPECTRUM_SIGNIN_HINT_KEY,
-                        log_tag='spectrum-signin',
-                    )
-                    set_status('running', 'Sign in below, including any captcha if shown.', page.url)
+                _dismiss_tos_and_autofill()
 
                 wait_started = time.monotonic()
                 last_shot = 0.0
+                last_debug_url_log = 0.0
+                last_seen_url = _safe_page_url(page)
+                _idid_retries_remaining = 2  # up to 3 total attempts at this error specifically
                 while time.monotonic() < deadline:
                     if r.exists(SPECTRUM_SIGNIN_STOP_KEY):
                         set_status('stopped', 'Cancelled')
@@ -675,6 +756,48 @@ def run_spectrum_signin():
                     # to check on every poll tick regardless.
                     _dismiss_spectrum_tos_welcome(page)
                     now = time.monotonic()
+                    if _spectrum_debug_enabled():
+                        current_url = _safe_page_url(page)
+                        if current_url != last_seen_url or now - last_debug_url_log > 5.0:
+                            if current_url != last_seen_url:
+                                _debug_log('page navigated: %s -> %s', last_seen_url, current_url)
+                                last_seen_url = current_url
+                            last_debug_url_log = now
+                    idid_code = _detect_spectrum_feature_unavailable(page)
+                    if idid_code:
+                        # Confirmed live 2026-09-23: Spectrum's own "Feature
+                        # Unavailable... try again from home" error — in the
+                        # one case watched end-to-end, a bare retry ~60-90s
+                        # later (same account/device/profile) succeeded
+                        # outright, too fast to be a lasting account-level
+                        # block. See module docstring's 2026-09-23 update and
+                        # _detect_spectrum_feature_unavailable's docstring.
+                        if _idid_retries_remaining > 0:
+                            _idid_retries_remaining -= 1
+                            logger.info(
+                                '[spectrum-signin] hit Spectrum\'s "%s" error — retrying '
+                                '(%d attempt(s) left after this one)', idid_code, _idid_retries_remaining)
+                            set_status('running', f'Spectrum returned "{idid_code}" — retrying…', page.url)
+                            # A real pause, not an instant hammer — if this
+                            # is any kind of rate limit, retrying instantly
+                            # would be exactly the wrong move.
+                            page.wait_for_timeout(5000)
+                            page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                            _dismiss_tos_and_autofill()
+                            wait_started = time.monotonic()
+                            last_seen_url = _safe_page_url(page)
+                            continue
+                        else:
+                            logger.warning(
+                                '[spectrum-signin] hit Spectrum\'s "%s" error again — retries '
+                                'exhausted, giving up', idid_code)
+                            set_status(
+                                'error',
+                                f'Spectrum returned "{idid_code}" ("Feature Unavailable... try '
+                                f'again from home") and retrying didn\'t help this time — this '
+                                f'looked transient in the one case seen live, so try again in a '
+                                f'minute or two.')
+                            return
                     if now - last_shot > 0.25:
                         last_shot = now
                         if _relay_input_and_screenshot(

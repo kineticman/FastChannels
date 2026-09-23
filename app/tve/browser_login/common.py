@@ -595,6 +595,11 @@ def _try_autofill_credentials(
     """
     deadline = time.monotonic() + wait_seconds
     wait_started = time.monotonic()
+    # Hard ceiling regardless of how many redirects reset `deadline` below —
+    # without this, a genuine redirect LOOP (or a page that keeps navigating
+    # without ever settling on a real form) could wait indefinitely instead
+    # of eventually giving up.
+    absolute_deadline = wait_started + max(wait_seconds * 3, wait_seconds + 30)
     # This function is also called on its own after an F5-recovery reload, so
     # settling remains the safe default. NBC explicitly passes True after its
     # immediately preceding settle succeeds; repeating the settle there adds
@@ -603,6 +608,19 @@ def _try_autofill_credentials(
     if not navigation_already_settled:
         _settle_after_mvpd_navigation(page, max_seconds=min(8.0, wait_seconds))
     last_relay = time.monotonic()
+    # Confirmed live 2026-09-23: a genuinely fresh Spectrum profile (no prior
+    # mvpd_tve history) bounces watch.spectrum.net -> id.spectrum.net for its
+    # login form — a real cross-domain redirect a warmed profile skips
+    # entirely — and that hop can outrun the fixed wait_seconds budget on its
+    # own, timing this out before the real (post-redirect) form ever renders.
+    # A raw timeout bump doesn't generalize (any number of future hops, any
+    # amount of network jitter, could still outrun a bigger fixed number) —
+    # instead, track the page's own URL and extend the deadline every time a
+    # real navigation is observed, so the budget is "wait_seconds since the
+    # LAST redirect" rather than "wait_seconds since this function started".
+    # A page that never redirects behaves identically to before (deadline
+    # never gets extended, since the URL never changes).
+    last_seen_url = _safe_page_url(page)
     while time.monotonic() < deadline:
         try:
             if page.locator('input[type="password"]:visible').count() > 0:
@@ -610,6 +628,13 @@ def _try_autofill_credentials(
         except Exception as exc:  # noqa: BLE001
             logger.info('[%s] autofill: locator query failed: %s', log_tag, exc)
             return False
+        current_url = _safe_page_url(page)
+        if current_url != last_seen_url:
+            logger.debug(
+                '[%s] autofill: page navigated mid-wait (%s -> %s) — extending the wait window',
+                log_tag, last_seen_url, current_url)
+            last_seen_url = current_url
+            deadline = min(time.monotonic() + wait_seconds, absolute_deadline)
         if r is not None:
             now = time.monotonic()
             if now - last_relay >= 1.0:
@@ -622,7 +647,7 @@ def _try_autofill_credentials(
                     return False
         page.wait_for_timeout(300)
     else:
-        logger.info('[%s] autofill: no visible password field after %.1fs (SSO already past login, a captcha-first page, or an unrecognized form) url=%s', log_tag, wait_seconds, _safe_page_url(page))
+        logger.info('[%s] autofill: no visible password field after %.1fs (SSO already past login, a captcha-first page, or an unrecognized form) url=%s', log_tag, time.monotonic() - wait_started, _safe_page_url(page))
         return False
 
     page.wait_for_timeout(1200)  # the form animates in — let it become clickable/stable
