@@ -1,4 +1,4 @@
-# HDMI Capture and ah4c Capture setup (experimental)
+# HDMI Capture and ah4c Capture setup
 
 FastChannels Player is the Android playback companion used by FastChannels'
 hardware capture paths. When
@@ -16,7 +16,7 @@ Playback uses Media3/ExoPlayer and the Android device's own Widevine CDM. It
 does not remove or bypass DRM: license and entitlement checks still go through
 the provider's license server, and only the device's HDMI output is captured.
 
-This is an experimental hardware-and-software setup with several parts. Choose
+This is a hardware-and-software setup with several parts. Choose
 one capture method below, then follow the numbered steps in order.
 
 ## Two ways to capture the picture

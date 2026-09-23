@@ -159,7 +159,7 @@ is the exception: its Live TV & DVR only ingests from HDHomeRun-style tuners, so
 officially support it** — if you have the choice, use one of the apps above instead. For power users
 who want to make Plex work anyway, **[docs/plex.md](docs/plex.md)** covers both bridge paths.
 
-### FastChannels Player (experimental)
+### FastChannels Player
 
 DRM channels that need real Widevine playback (Sling, PBS, Amazon Prime Free, Vidaa,
 Philo, Roku, NBCUniversal TVE, Warner Bros Discovery TVE, DirecTV Stream, Fubo) can be routed through a real Fire TV /
@@ -312,7 +312,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 
 A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, and Warner Bros Discovery all authenticate the same way: through your TV provider (MVPD), not a per-source login. Go to **Settings → TV Everywhere**, pick your provider, and sign in — a real browser session opens in an admin-UI modal for the provider's pairing flow. **Sign in to all** repeats that flow for every TVE-backed network in one pass, with a short pause between each to avoid tripping your provider's rate limiting.
 
-🧪 **Beta**: the sign-in dropdown lists every provider Adobe Pass supports, but it's only been verified working with **Cox**, **Sling TV**, and **Xfinity/Comcast**. Other providers may fail. All of these channels are DRM-only (Widevine CENC) and play back via the PrismCast browser bridge; NBCUniversal TVE and Warner Bros Discovery TVE are additionally eligible for the FastChannels Player bridge, the others currently are not (see [FastChannels Player](#fastchannels-player-experimental)).
+🧪 **Beta**: the sign-in dropdown lists every provider Adobe Pass supports, but it's only been verified working with **Cox**, **Sling TV**, and **Xfinity/Comcast**. Other providers may fail. All of these channels are DRM-only (Widevine CENC) and play back via the PrismCast browser bridge; NBCUniversal TVE and Warner Bros Discovery TVE are additionally eligible for the FastChannels Player bridge, the others currently are not (see [FastChannels Player](#fastchannels-player)).
 
 ## Advanced
 
