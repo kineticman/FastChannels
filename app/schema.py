@@ -154,6 +154,22 @@ def ensure_runtime_schema() -> None:
             ))
             tables.add("tve_accounts")
 
+        # bridge_devices: remembered FastChannels Player devices for the Bridge
+        # page's device list (see models.BridgeDevice).
+        if "bridge_devices" not in tables:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS bridge_devices ("
+                " id INTEGER PRIMARY KEY,"
+                " address VARCHAR(270) NOT NULL UNIQUE,"
+                " label VARCHAR(128),"
+                " added_manually BOOLEAN NOT NULL DEFAULT 0,"
+                " first_seen_at DATETIME,"
+                " last_tuned_at DATETIME,"
+                " last_channel_key VARCHAR(255)"
+                ")"
+            ))
+            tables.add("bridge_devices")
+
         if "app_settings" in tables:
             cols = {
                 row[1]

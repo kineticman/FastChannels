@@ -769,6 +769,84 @@ def install_fc_player():
     return jsonify({'ok': ok, 'message': message})
 
 
+@settings_bp.route('/settings/fc-player/devices', methods=['GET'])
+def list_fc_player_devices():
+    """Every known FastChannels Player device (no adb yet — see /devices/probe)."""
+    from .. import bridge_devices, fc_player_bridge
+    devices, ah4c_error = bridge_devices.known_devices()
+    bundled_version, _ = fc_player_bridge.bundled_player_version()
+    return jsonify({
+        'ok': True,
+        'devices': devices,
+        'ah4c_error': ah4c_error,
+        'bundled_version': bundled_version,
+    })
+
+
+@settings_bp.route('/settings/fc-player/devices/probe', methods=['POST'])
+def probe_fc_player_device():
+    """Live adb status for one device; the page probes each device in parallel."""
+    from .. import bridge_devices
+    address = bridge_devices.normalize_address((request.get_json(silent=True) or {}).get('address'))
+    if not address:
+        return jsonify({'ok': False, 'message': 'Invalid device address.'}), 400
+    return jsonify({'ok': True, 'device': bridge_devices.probe(address)})
+
+
+@settings_bp.route('/settings/fc-player/devices', methods=['POST'])
+def save_fc_player_device():
+    """Add a device by hand, or rename a known one."""
+    from .. import bridge_devices
+    data = request.get_json(silent=True) or {}
+    address = bridge_devices.normalize_address(data.get('address'))
+    if not address:
+        return jsonify({'ok': False, 'message': 'Enter an IP address or hostname (optionally :port).'}), 400
+    bridge_devices.save_label(address, data.get('label'), manual=bool(data.get('add')))
+    return jsonify({'ok': True, 'address': address})
+
+
+@settings_bp.route('/settings/fc-player/devices/forget', methods=['POST'])
+def forget_fc_player_device():
+    """Drop a remembered device. Devices named by settings or ah4c stay listed."""
+    from .. import bridge_devices
+    address = bridge_devices.normalize_address((request.get_json(silent=True) or {}).get('address'))
+    if not address or not bridge_devices.forget(address):
+        return jsonify({'ok': False, 'message': 'That device is not remembered.'}), 404
+    return jsonify({'ok': True})
+
+
+@settings_bp.route('/settings/fc-player/devices/install', methods=['POST'])
+def install_fc_player_on_device():
+    """Install/update the bundled FastChannels Player on one known device.
+
+    `adb install -r` kills the running app, so a device that is actively playing
+    (an ah4c tuner mid-recording, say) is refused with busy=True unless the
+    caller confirms with force=true."""
+    from .. import bridge_devices, fc_player_bridge
+    data = request.get_json(silent=True) or {}
+    address = bridge_devices.normalize_address(data.get('address'))
+    if not address or not bridge_devices.is_known(address):
+        return jsonify({'ok': False, 'message': 'Unknown device.'}), 404
+    apk_path = fc_player_bridge.bundled_apk_path()
+    if not apk_path:
+        return jsonify({
+            'ok': False,
+            'message': 'No FastChannels Player release is bundled in this build.',
+        }), 400
+    if not data.get('force'):
+        status = bridge_devices.probe(address)
+        if status.get('player_playing'):
+            what = status.get('now_playing') or 'a channel'
+            return jsonify({
+                'ok': False,
+                'busy': True,
+                'message': f'This device is playing {what} right now. Updating stops playback '
+                           '(and any recording using it).',
+            }), 409
+    ok, message = fc_player_bridge.install_app(apk_path, address=address)
+    return jsonify({'ok': ok, 'message': message})
+
+
 def _remember_fc_player_device_settings(previous: dict | None) -> None:
     """Save the pre-headless snapshot only once, so Restore stays meaningful."""
     if not previous:

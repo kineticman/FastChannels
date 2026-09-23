@@ -125,6 +125,24 @@ class SourceCache(db.Model):
         return f'<SourceCache source_id={self.source_id} key={self.cache_key}>'
 
 
+class BridgeDevice(db.Model):
+    """A Fire TV / Android TV device FastChannels Player runs on, remembered so the
+    Bridge page can list every stick — not just the one HDMI Capture address or the
+    tuners ah4c happens to report right now. Rows come from a manual add or from a
+    real tune (trigger_channel records the resolved adb address). Devices named by
+    settings or ah4c show up without a row; a row only adds a label/history."""
+    __tablename__ = 'bridge_devices'
+
+    id               = db.Column(db.Integer, primary_key=True)
+    address          = db.Column(db.String(270), unique=True, nullable=False)  # host:port
+    label            = db.Column(db.String(128), nullable=True)
+    added_manually   = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))
+    first_seen_at    = db.Column(db.DateTime(timezone=True),
+                                 default=lambda: datetime.now(timezone.utc))
+    last_tuned_at    = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_channel_key = db.Column(db.String(255), nullable=True)
+
+
 class TVEAccount(db.Model):
     __tablename__ = 'tve_accounts'
 

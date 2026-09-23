@@ -140,6 +140,7 @@
       </div>
     </div>
 
+    {% include 'admin/bridge/devices.html' %}
     {% include 'admin/bridge/single_encoder.html' %}
     {% include 'admin/bridge/ah4c.html' %}
     {% include 'admin/settings/prismcast.html' %}
@@ -156,6 +157,7 @@
   <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
   <script>window.FC_SETTINGS_BOOTSTRAP = {};</script>
   <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/bridge_devices.js') }}"></script>
   {% include 'admin/_update_modal.html' %}
 </body>
 </html>

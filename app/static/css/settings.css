@@ -368,6 +368,69 @@
       max-width: 32ch;
     }
 
+    /* ── FastChannels Player devices card ── */
+    .fc-devices-toolbar {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 0.6rem;
+      padding-top: 0.5rem;
+    }
+    .fc-devices-toolbar-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .fc-devices-add {
+      margin-top: 0.8rem; padding: 0.8rem;
+      border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);
+    }
+    .fc-devices-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+      gap: 0.8rem;
+      margin-top: 0.6rem;
+    }
+    .fc-devices-empty { color: var(--text-muted); font-size: 0.85rem; padding: 0.4rem 0; }
+    .fc-device {
+      --fc-dev-dot: var(--text-dim);
+      display: flex; flex-direction: column; gap: 0.6rem;
+      padding: 0.85rem;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface-2);
+      min-width: 0;
+    }
+    .fc-device.state-device { --fc-dev-dot: var(--success); }
+    .fc-device.state-unauthorized,
+    .fc-device.state-offline { --fc-dev-dot: var(--warning-soft); }
+    .fc-device.state-unreachable { --fc-dev-dot: var(--danger); }
+    .fc-device-head { display: flex; align-items: flex-start; gap: 0.6rem; }
+    .fc-device-dot {
+      flex: none; width: 9px; height: 9px; margin-top: 0.4rem;
+      border-radius: 50%; background: var(--fc-dev-dot);
+    }
+    .fc-device.state-checking .fc-device-dot { animation: fc-dev-pulse 1.2s ease-in-out infinite; }
+    @keyframes fc-dev-pulse { 50% { opacity: 0.3; } }
+    .fc-device-ident { flex: 1; min-width: 0; }
+    .fc-device-name { font-weight: 600; overflow-wrap: anywhere; }
+    .fc-device-sub {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.74rem; color: var(--text-muted); overflow-wrap: anywhere;
+    }
+    .fc-device-state {
+      flex: none; font-size: 0.72rem; font-weight: 600; color: var(--fc-dev-dot);
+      white-space: nowrap;
+    }
+    .fc-device-roles { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+    .fc-device-facts {
+      display: grid; grid-template-columns: max-content 1fr;
+      gap: 0.25rem 0.8rem; margin: 0; font-size: 0.8rem;
+    }
+    .fc-device-facts dt { color: var(--text-soft); }
+    .fc-device-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    .fc-dev-ok { color: var(--success-soft); }
+    .fc-dev-warn { color: var(--warning-soft); }
+    .fc-dev-muted { color: var(--text-muted); }
+    .fc-device-msg { font-size: 0.76rem; line-height: 1.4; color: var(--text-soft); }
+    .fc-device-msg.ok { color: var(--success-soft); }
+    .fc-device-msg.error { color: var(--danger); }
+    .fc-device-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: auto; }
+    .fc-device-actions .btn-sm { padding: 0.3rem 0.65rem; font-size: 0.76rem; }
+
     .bridge-method-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));

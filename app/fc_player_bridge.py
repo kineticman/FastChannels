@@ -408,8 +408,9 @@ def test_connection() -> tuple[bool, str]:
     return True, 'Device reachable, but FastChannels Player is not installed yet.'
 
 
-def install_app(apk_path: str, timeout: int = 90) -> tuple[bool, str]:
-    """adb-installs the FastChannels Player APK onto the configured device.
+def install_app(apk_path: str, timeout: int = 90, address: str | None = None) -> tuple[bool, str]:
+    """adb-installs the FastChannels Player APK onto `address`, or the configured
+    HDMI Capture device when omitted.
 
     Works without ever touching the device's "Apps from Unknown Sources" toggle —
     that setting only gates on-device tap-to-install of a downloaded APK file (the
@@ -422,7 +423,7 @@ def install_app(apk_path: str, timeout: int = 90) -> tuple[bool, str]:
     something's already installed, as long as it's signed with the same key — see
     project memory on release signing for why that matters.
     """
-    address = _adb_address()
+    address = address or _adb_address()
     try:
         subprocess.run(
             ['adb', 'connect', address],
@@ -739,6 +740,17 @@ def _setting_number(address: str, namespace: str, name: str) -> int | None:
         return None
 
 
+# FastChannels Player's media session PlaybackState in `dumpsys media_session`.
+# Accept both PlaybackState renderings: Fire OS prints "state=3", newer AOSP
+# (Google TV, onn., Chromecast) prints "state=PLAYING(3)". The optional
+# "[A-Z_]+(" swallows the state-name prefix so the capture is always the int
+# (3 == STATE_PLAYING).
+_PLAYER_SESSION_RE = re.compile(
+    r'package=com\.fastchannels\.player(?:(?!\n\s*package=).){0,1200}?'
+    r'state=PlaybackState \{state=(?:[A-Z_]+\()?(\d+)', re.S,
+)
+
+
 def device_controls_status() -> dict:
     """Return lightweight, user-facing diagnostics for the Device Controls modal.
 
@@ -762,13 +774,7 @@ def device_controls_status() -> dict:
     version_name = re.search(r'\bversionName=([^\s]+)', package_info)
     version_code = re.search(r'\bversionCode=(\d+)', package_info)
     focus_match = re.search(r'mCurrentFocus=([^\r\n]+)', focus)
-    # Accept both PlaybackState renderings: Fire OS prints "state=3", newer AOSP
-    # (Google TV, onn., Chromecast) prints "state=PLAYING(3)". The optional
-    # "[A-Z_]+(" swallows the state-name prefix so the capture is always the int.
-    player_session = re.search(
-        r'package=com\.fastchannels\.player(?:(?!\n\s*package=).){0,1200}?'
-        r'state=PlaybackState \{state=(?:[A-Z_]+\()?(\d+)', sessions, re.S,
-    )
+    player_session = _PLAYER_SESSION_RE.search(sessions)
 
     player_version_code = int(version_code.group(1)) if version_code else None
     result = {
@@ -1732,6 +1738,8 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
         if adb_address is None and idle_stop_enabled():
             note_trigger(channel_key)
         _note_active_channel_key(channel_key, address)
+    from .bridge_devices import remember_tune
+    remember_tune(address, channel_key)
 
     try:
         subprocess.run(
