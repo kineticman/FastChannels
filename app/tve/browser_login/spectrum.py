@@ -421,8 +421,30 @@ def run_spectrum_signin():
         # cookie-carried-over, network-auto-authed, or freshly typed) must match
         # it before a candidate is accepted, or we silently save someone else's
         # session under this install's config.
+        _AUTH_HOST_MARKERS = ('spectrum.net', 'cox.com')
+
         def _on_response(response):
             try:
+                if (
+                    _spectrum_debug_enabled()
+                    and not response.ok
+                    and response.status != 304  # cache revalidation, not an error
+                    and response.request.resource_type in ('xhr', 'fetch')
+                    and any(m in response.url for m in _AUTH_HOST_MARKERS)
+                ):
+                    # A wrong password, a WAF/ThreatMetrix block, or a rate
+                    # limit all currently look identical from the outside —
+                    # the poll loop just keeps waiting until the generic
+                    # "Timed out" message. This is the only place that can
+                    # tell them apart after the fact, from a user's report
+                    # alone, without needing a screenshot enabled.
+                    try:
+                        body = response.text()[:300]
+                    except Exception:  # noqa: BLE001
+                        body = '<unreadable>'
+                    _debug_log(
+                        'non-OK response: %s %s -> %d — body=%r',
+                        response.request.method, response.url, response.status, body)
                 if (
                     response.request.method == 'POST'
                     and response.ok
@@ -823,6 +845,19 @@ def run_spectrum_signin():
                     page.wait_for_timeout(200)
 
                 if 'verified' not in captured:
+                    if _spectrum_debug_enabled():
+                        # Neither the ToS-consent gate nor the IDID error
+                        # detector recognize this page — a snapshot is the
+                        # only way to tell a genuinely novel blocker (a
+                        # reCAPTCHA/ThreatMetrix challenge, a redesigned
+                        # screen, etc.) apart from a plain slow network,
+                        # from a user's report alone.
+                        try:
+                            title = page.title()
+                            text = re.sub(r'\s+', ' ', page.inner_text('body')).strip()[:300]
+                        except Exception as exc:  # noqa: BLE001
+                            title, text = '<unreadable>', str(exc)
+                        _debug_log('timed out — final page url=%s title=%r text=%r', page.url, title, text)
                     if _last_mismatch.get('account'):
                         set_status(
                             'error',
