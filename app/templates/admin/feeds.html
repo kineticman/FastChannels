@@ -761,7 +761,7 @@
       </details>
 
       <details class="native-endpoints">
-        <summary>FastChannels Android Bridge Channels (ah4c) <span class="badge-pill pill-beta">Beta</span>{% if fc_player_ah4c_configured and android_bridge_total %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ android_bridge_total }} channel{{ 's' if android_bridge_total != 1 else '' }}){% endif %}</span></summary>
+        <summary>FastChannels Android Bridge Channels (ah4c){% if fc_player_ah4c_configured and android_bridge_total %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ android_bridge_total }} channel{{ 's' if android_bridge_total != 1 else '' }}){% endif %}</span></summary>
         <div class="feed-urls" style="margin-top:0.5rem">
           {% if fc_player_ah4c_configured %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c')">
