@@ -14,6 +14,7 @@ from ..generators.m3u import (
     _build_feed_chnum_map,
     _build_source_chnum_map,
     _build_sticky_gn_chnum_map,
+    apply_provider_numbers,
     _drm_bridge_query_filters,
     _has_gracenote_claim,
     _selected_channel_stubs,
@@ -187,10 +188,13 @@ def _default_feed_chnum_map_full() -> dict[int, int]:
     return _source_scheme_chnum_map(std_channels, gn_channels)
 
 
-def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
+def _page_default_feed_chnum_map(page_items) -> dict[int, int | str]:
+    """Display numbers for one admin page -- includes provider-native numbers
+    (DirecTV "305.1"), unlike _default_feed_chnum_map_full(), which callers
+    persist or compare as integers."""
     if not page_items:
         return {}
-    full_map = _default_feed_chnum_map_full()
+    full_map = apply_provider_numbers(page_items, _default_feed_chnum_map_full())
     page_ids = {ch.id for ch in page_items}
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
 

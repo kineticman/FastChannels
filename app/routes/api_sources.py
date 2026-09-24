@@ -556,10 +556,11 @@ def save_source_config(source_id):
     )
     # DirecTV's FAST-exclusion toggle likewise changes the channel inventory
     # (filters out the 4xxx FAST channel-number range) rather than a playback
-    # preference, so it also needs an immediate rescrape below.
-    directv_lineup_changed = (
-        source.name == 'directv'
-        and _toggle_enabled(old, 'exclude_fast_channels') != _toggle_enabled(current, 'exclude_fast_channels')
+    # preference, so it also needs an immediate rescrape below. So does the
+    # DirecTV-numbering toggle: it collapses satellite HD/SD pairs at scrape time.
+    directv_lineup_changed = source.name == 'directv' and any(
+        _toggle_enabled(old, key) != _toggle_enabled(current, key)
+        for key in ('exclude_fast_channels', 'use_provider_numbers')
     )
     if creds_changed or sling_subscription_changed:
         for tk in _AUTH_STATE:
@@ -628,8 +629,8 @@ def save_source_config(source_id):
         trigger_scrape(source.name, force_full=True)
         full_scrape_queued = True
     elif source.name == 'directv' and directv_lineup_changed and source.is_enabled:
-        # Same rationale as Sling above — the FAST-exclusion toggle changes
-        # which channels come back from fetch_channels().
+        # Same rationale as Sling above — the FAST-exclusion and numbering
+        # toggles change which channels come back from fetch_channels().
         trigger_scrape(source.name, force_full=True)
         full_scrape_queued = True
     elif source.name == 'pbs' and old != current and source.is_enabled:

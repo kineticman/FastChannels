@@ -684,6 +684,14 @@ class BaseScraper(ABC):
         return raw_url
 
     @classmethod
+    def uses_provider_numbers(cls, config: dict | None) -> bool:
+        """True when this source's channels should be numbered with the
+        provider's own channel numbers (Channel.provider_number) in M3U
+        output instead of the app-assigned tvg-chno. Override in scrapers
+        that expose such a setting."""
+        return False
+
+    @classmethod
     def license_request_headers(cls, config: dict) -> dict:
         """Headers to attach when proxying a DRM license request to the license server.
         Override in scrapers that require auth on their license server."""

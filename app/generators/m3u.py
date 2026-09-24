@@ -92,6 +92,7 @@ class _MiniChannel:
     gracenote_mode: str | None
     slug: str | None
     source: _MiniSource
+    provider_number: str | None = None
 
 
 def _parse_gracenote_id(ch) -> str | None:
@@ -324,6 +325,7 @@ def _build_channel_stub_query(filters: dict):
         Channel.gracenote_id,
         Channel.gracenote_mode,
         Channel.slug,
+        Channel.provider_number,
         Source.name.label('source_name'),
         Source.display_name.label('source_display_name'),
         Source.chnum_start.label('source_chnum_start'),
@@ -391,6 +393,7 @@ def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | No
                 display_name=row.source_display_name,
                 chnum_start=row.source_chnum_start,
             ),
+            provider_number=row.provider_number,
         )
         for row in rows
     ]
@@ -502,6 +505,106 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
     if max_ch := feed_filters.get('max_channels'):
         f['max_channels'] = max_ch
     return f
+
+
+# ── Provider-native channel numbers ─────────────────────────────────────────
+#
+# A source can opt in (BaseScraper.uses_provider_numbers, e.g. DirecTV's "Use
+# DirecTV channel numbers" toggle) to have each channel's stored
+# Channel.provider_number ("213", "305.1") emitted as its tvg-chno instead of
+# the app-assigned number. Two rules keep that from producing duplicates:
+#   * the integer provider numbers are reserved in every allocator below, so no
+#     other channel is ever auto-assigned one of them (a pinned number is still
+#     honoured -- any clash then shows up in get_global_chnum_overlaps);
+#   * the override itself is applied in _resolve_chnum_map, i.e. only to output,
+#     never to the numbers the worker persists (Channel.number /
+#     FeedChannelNumber).
+
+def _provider_number_sources() -> set[str]:
+    """Names of enabled sources that opted into provider numbering. One small
+    query over the sources table -- never joined per channel row, since
+    Source.config can be large."""
+    names: set[str] = set()
+    try:
+        rows = db.session.query(Source.name, Source.config).filter(Source.is_enabled == True).all()
+    except Exception:
+        return names
+    for name, config in rows:
+        scraper_cls = _scraper_registry.get(name or '')
+        if not scraper_cls:
+            continue
+        try:
+            if scraper_cls.uses_provider_numbers(config or {}):
+                names.add(name)
+        except Exception:
+            continue
+    return names
+
+
+def _reserved_provider_numbers() -> set[int]:
+    """Integer provider numbers of every active, enabled, unpinned channel in an
+    opted-in source. Allocators treat these as taken. Sub-channels ("305.1")
+    can't collide with an integer tvg-chno, so only whole numbers are reserved."""
+    sources = _provider_number_sources()
+    if not sources:
+        return set()
+    rows = (
+        db.session.query(Channel.provider_number)
+        .join(Source)
+        .filter(
+            Source.name.in_(sources),
+            Channel.is_active == True,
+            Channel.is_enabled == True,
+            Channel.provider_number.isnot(None),
+            db.or_(Channel.number_pinned == False, Channel.number_pinned == None),
+        )
+        .all()
+    )
+    return {int(pn) for (pn,) in rows if pn and pn.strip().isdigit()}
+
+
+def apply_provider_numbers(channels, chnum_map: dict, sources: set[str] | None = None) -> dict:
+    """Overlay provider-native numbers onto a resolved chnum map (output only).
+    Channels of opted-in sources with a stored provider_number use it as their
+    tvg-chno; a pinned channel keeps its pin; everything else is untouched."""
+    if sources is None:
+        sources = _provider_number_sources()
+    if not sources:
+        return chnum_map
+    overrides: dict[int, str] = {}
+    claimed: dict[str, int] = {}
+    for ch in channels:
+        src = getattr(ch, 'source', None)
+        if src is None or getattr(src, 'name', None) not in sources:
+            continue
+        if getattr(ch, 'number_pinned', False) and getattr(ch, 'number', None) is not None:
+            continue
+        pn = (getattr(ch, 'provider_number', None) or '').strip()
+        if not pn:
+            continue
+        # Two channels claiming one provider number (e.g. an SD twin still in the
+        # DB until the refresh after turning the toggle on collapses it): the
+        # first keeps it, the other keeps its app-assigned number.
+        if pn in claimed:
+            log.warning('provider number %s claimed by channels %d and %d; keeping %d',
+                        pn, claimed[pn], ch.id, claimed[pn])
+            continue
+        claimed[pn] = ch.id
+        overrides[ch.id] = pn
+    if not overrides:
+        return chnum_map
+    return {**chnum_map, **overrides}
+
+
+def chnum_sort_key(value):
+    """Sort key for a resolved tvg-chno that may be an int (app-assigned) or a
+    provider string like "305.1" -- numeric order, unnumbered last."""
+    if value is None or value == '':
+        return (1, 0.0)
+    try:
+        return (0, float(value))
+    except (TypeError, ValueError):
+        return (0, float('inf'))
 
 
 def _is_usable_number(ch, candidate: int | None, *, min_value: int | None) -> bool:
@@ -633,7 +736,7 @@ def _build_source_chnum_map(channels):
     # sticky auto numbers: keep them when still valid and free, only allocate
     # fresh values for channels that are new, missing a number, or now conflict.
     chnum_map: dict[int, int] = {}
-    used_numbers: set[int] = set(pinned_numbers)
+    used_numbers: set[int] = set(pinned_numbers) | _reserved_provider_numbers()
     global_cursor = global_start  # tracks next number for ungrouped sources
     # Backstop cursor for the no-config-at-all branch below — only ever draws
     # from here for a channel with no number at all, never to reassign one
@@ -695,6 +798,7 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int,
     result: dict[int, int] = {}
     unassigned = []
     channel_ids = {ch.id for ch in channels}
+    reserved = _reserved_provider_numbers()
 
     # First pass: honour pinned channels and preserve valid stored assignments.
     for ch in channels:
@@ -703,7 +807,8 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int,
             used_numbers.add(ch.number)
         else:
             stored = stored_numbers.get(ch.id) if stored_numbers else None
-            if stored is not None and stored >= feed_chnum_start and stored not in used_numbers:
+            if (stored is not None and stored >= feed_chnum_start
+                    and stored not in used_numbers and stored not in reserved):
                 result[ch.id] = stored
                 used_numbers.add(stored)
             else:
@@ -717,6 +822,7 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int,
                 used_numbers.add(num)
 
     # Second pass: assign fresh sequential numbers to new/displaced channels.
+    used_numbers |= reserved
     _assign_sequential(unassigned, feed_chnum_start, used_numbers, result)
 
     return result
@@ -747,6 +853,7 @@ def build_manual_order_map(channels, order_ids: list[int], start: int) -> dict[i
         if getattr(ch, 'number_pinned', False) and ch.number is not None:
             result[ch.id] = ch.number
             used.add(ch.number)
+    used |= _reserved_provider_numbers()
     cursor = start
     for ch in ordered:
         if ch.id in result:
@@ -766,9 +873,7 @@ def _sort_by_assigned_chnum(channels, chnum_map: dict) -> None:
     (feed_chnum_start / namespace_start), where a manual reorder can make the
     assigned numbers diverge from master Channel.number order.
     """
-    channels.sort(key=lambda c: (chnum_map.get(c.id) is None,
-                                 chnum_map.get(c.id) or 0,
-                                 (c.name or '').lower()))
+    channels.sort(key=lambda c: chnum_sort_key(chnum_map.get(c.id)) + ((c.name or '').lower(),))
 
 
 def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) -> dict:
@@ -780,6 +885,7 @@ def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) ->
     """
     result = {}
     unassigned = []
+    used_numbers |= _reserved_provider_numbers()
     sorted_channels = sorted(
         gn_channels,
         key=lambda c: (c.number is None, c.number or 0, (c.name or '').lower()),
@@ -800,6 +906,16 @@ def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) ->
 
 def _resolve_chnum_map(channels, *, feed_chnum_start: int = None,
                        namespace_start: int = None, feed_id: int = None):
+    """Resolved tvg-chno for output, including provider-native numbers."""
+    chnum_map, warnings = _resolve_app_chnum_map(
+        channels, feed_chnum_start=feed_chnum_start,
+        namespace_start=namespace_start, feed_id=feed_id,
+    )
+    return apply_provider_numbers(channels, chnum_map), warnings
+
+
+def _resolve_app_chnum_map(channels, *, feed_chnum_start: int = None,
+                           namespace_start: int = None, feed_id: int = None):
     if namespace_start is not None:
         stored_numbers: dict[int, int] = {}
         if feed_id is not None:
@@ -889,12 +1005,15 @@ def get_global_chnum_overlaps() -> list[str]:
         # Same channel ID appearing in multiple feeds with the same pinned number
         # is not a real conflict — it's the same channel, just in multiple feeds.
         # Only warn when a genuinely different channel claims the same number.
-        seen: dict[int, tuple[str, str, int]] = {}
+        seen: dict[str, tuple[str, str, int]] = {}
         for output_name, channels, chnum_map in outputs:
             for ch in channels:
                 chnum = chnum_map.get(ch.id)
                 if not chnum:
                     continue
+                # Provider numbers are strings ("206", "305.1"); compare as text
+                # so a provider "206" and an app-assigned 206 are one number.
+                chnum = str(chnum)
                 previous = seen.get(chnum)
                 if previous and previous[2] != ch.id:
                     warnings.append(

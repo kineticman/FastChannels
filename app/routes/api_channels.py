@@ -170,6 +170,16 @@ def update_channel(channel_id):
                     f'"{holder.name if holder else holder_id}" in the Default feed. '
                     'Choose a different number.'
                 )
+            # Or a number a source emits as its own provider number (e.g. DirecTV
+            # with "Use DirecTV channel numbers" on) -- a pin there would clash.
+            from ..generators.m3u import _reserved_provider_numbers
+            if (str(target_number).strip() != (ch.provider_number or '').strip()
+                    and str(target_number).strip().isdigit()
+                    and int(str(target_number).strip()) in _reserved_provider_numbers()):
+                raise ValueError(
+                    f'Channel number {target_number} is used by a channel numbered by its '
+                    'provider (e.g. DirecTV channel numbers). Choose a different number.'
+                )
 
         for field in ('name', 'logo_url', 'logo_url_pinned', 'category', 'category_override', 'language', 'language_override', 'is_active', 'is_enabled', 'scrape_pinned', 'number', 'number_pinned', 'disable_reason', 'is_duplicate', 'user_note'):
             if field in data:

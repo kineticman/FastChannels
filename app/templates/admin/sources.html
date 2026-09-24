@@ -3141,6 +3141,8 @@
         <div class="fields-grid">
           ${toggleHtml('exclude_fast_channels', 'Exclude FAST channels',
             'On = leave out free, ad-supported channels (DirecTV Stream numbers these 4000-4999).')}
+          ${toggleHtml('use_provider_numbers', 'Use DirecTV channel numbers',
+            'On = use DirecTV\'s own channel numbers (ESPN 206, CNN 202). Channels that share a number get subchannels, like 213.1.')}
         </div>
 
         <details class="amazon-account-details" ${hasCreds ? '' : 'open'}>

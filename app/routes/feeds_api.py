@@ -146,6 +146,7 @@ def preview_order():
     """
     from ..generators.m3u import (
         _build_feed_chnum_map, build_manual_order_map, feed_namespace_start,
+        apply_provider_numbers, chnum_sort_key,
     )
     data = request.get_json() or {}
     filters = _clean_filters(data.get('filters') or {})
@@ -176,6 +177,7 @@ def preview_order():
                 for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
             }
         num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
+    num_map = apply_provider_numbers(stubs, num_map)
 
     feed_pinned_ids = set(filters.get('pinned_channel_ids') or [])
     rows = [{
@@ -187,7 +189,7 @@ def preview_order():
         'feed_pinned': ch.id in feed_pinned_ids,
         'gracenote':   ch.id in gn_ids,
     } for ch in stubs]
-    rows.sort(key=lambda r: (r['number'] is None, r['number'] or 0, r['name'].lower()))
+    rows.sort(key=lambda r: chnum_sort_key(r['number']) + (r['name'].lower(),))
     return jsonify({'start': start, 'channels': rows})
 
 
