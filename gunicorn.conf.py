@@ -76,6 +76,11 @@ _SUCCESS_SUPPRESS_PATTERNS = (
     '/play/philo/license',     # Philo DRM license — noisy during startup/key rotation
     'GET /api/settings/fc-player/devices HTTP',  # Bridge devices card list, on page load
     'POST /api/settings/fc-player/devices/probe',  # read-only adb probe, one per device per page load
+    # Feed editor: fired on every open and every filter/order change.
+    'POST /api/feeds/preview-order',       # read-only order/number preview (POST only for the big filters body)
+    'GET /api/feeds/channel-membership',   # which channels other feeds already include
+    'GET /api/channels?feed_eligible=1',   # channel picker list
+    'GET /api/stats?source=',              # per-source counts shown in the editor
 )
 _SUCCESS_SUPPRESS_RE = re.compile(r'(?:GET|HEAD) /play/directv/browser-asset\?url=')
 _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa|fubo)/[^/]+/dash\.mpd')
