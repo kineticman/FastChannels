@@ -1165,13 +1165,19 @@ def _detect_spectrum_feature_unavailable(page) -> str | None:
 
 
 _SPECTRUM_IDID_CHECK_INTERVAL_SECONDS = 1.0
+# Spectrum's own error-code shape on its login/IdP pages: IDID-4000,
+# IDID-4003, IDLI-4213 seen live.
+_SPECTRUM_ERROR_CODE_RE = _re.compile(r'\bID[A-Z]{2}-\d{3,5}\b')
 
 
-def _spectrum_feature_unavailable_message(page, label: str) -> str | None:
-    """TVE-flow wrapper around _detect_spectrum_feature_unavailable: returns
-    a user-facing error message if Spectrum's IDID "Feature Unavailable"
-    page is showing, else None. Call it every poll tick; it throttles
-    itself to one DOM query per second per page.
+def _spectrum_signin_error_message(page, label: str) -> str | None:
+    """Returns a user-facing error message if a Spectrum sign-in error that
+    no amount of waiting will fix is showing, else None: the IDID "Feature
+    Unavailable" page (via _detect_spectrum_feature_unavailable), or
+    IDLI-4213 (Cox-migrated account signing in under the Spectrum MVPD —
+    see below). Any other Spectrum error code on a spectrum.net page is
+    logged once but not treated as fatal. Call it every poll tick; it
+    throttles itself to one check per second per page.
 
     Confirmed live 2026-09-24 via a forum report (community thread post
     #3228): a Discovery TVE sign-in with Spectrum as the MVPD landed on this
@@ -1198,18 +1204,58 @@ def _spectrum_feature_unavailable_message(page, label: str) -> str | None:
         page._fc_idid_checked_at = now
     except Exception:  # noqa: BLE001
         pass
+    url = _safe_page_url(page)
     code = _detect_spectrum_feature_unavailable(page)
-    if not code:
+    if code and not (code == 'IDID-unknown' and 'spectrum.net' not in url):
+        logger.warning('[mvpd-login] %s: Spectrum returned its "Feature Unavailable" error (%s) url=%s',
+                       label, code, _url_for_log(url))
+        return (
+            f'{label}: Spectrum returned "{code}" ("Feature Unavailable... try again from home"). '
+            f'This has looked temporary — Spectrum seems to rate-limit several sign-ins in a short '
+            f'window. Wait a few minutes, then sign in to one network at a time.'
+        )
+    if 'spectrum.net' not in url:
         return None
-    if code == 'IDID-unknown' and 'spectrum.net' not in _safe_page_url(page):
+    try:
+        body = _re.sub(r'\s+', ' ', page.inner_text('body'))
+    except Exception:  # noqa: BLE001
         return None
-    logger.warning('[mvpd-login] %s: Spectrum returned its "Feature Unavailable" error (%s) url=%s',
-                   label, code, _url_for_log(_safe_page_url(page)))
-    return (
-        f'{label}: Spectrum returned "{code}" ("Feature Unavailable... try again from home"). '
-        f'This has looked temporary — Spectrum seems to rate-limit several sign-ins in a short '
-        f'window. Wait a few minutes, then sign in to one network at a time.'
-    )
+    match = _SPECTRUM_ERROR_CODE_RE.search(body)
+    if not match:
+        return None
+    code = match.group(0)
+    if code == 'IDLI-4213':
+        # Confirmed live 2026-09-24 with a real Cox account migrated to
+        # Spectrum, signing in under mso_id=Spectrum: Spectrum's login form
+        # shows "please return to the provider selection page and select
+        # 'Cox Spectrum' as your TV provider. IDLI-4213." right after the
+        # credentials are submitted. Adobe has no separate "Cox Spectrum"
+        # MVPD — it's Adobe's "Cox" (which now hands off to this same
+        # Spectrum login page), and the same account signed in fine that way.
+        logger.warning('[mvpd-login] %s: Spectrum refused a Cox-migrated account under the Spectrum '
+                       'provider (IDLI-4213) url=%s', label, _url_for_log(url))
+        return (
+            f'{label}: Spectrum says this account was moved over from Cox and must sign in as '
+            f'"Cox Spectrum" (IDLI-4213). In Settings → TVE, choose Cox as your TV provider — keep '
+            f'your Spectrum username and password — then sign in again.'
+        )
+    # Any other Spectrum error code (wrong password, locked account, ...):
+    # logged once so the activity feed shows Spectrum's own words, but not
+    # fatal — a human can still correct it in the streamed browser window.
+    try:
+        logged = getattr(page, '_fc_spectrum_codes_logged', None)
+        if logged is None:
+            logged = set()
+            page._fc_spectrum_codes_logged = logged
+        if code in logged:
+            return None
+        logged.add(code)
+    except Exception:  # noqa: BLE001
+        pass
+    context = body[max(0, match.start() - 250):match.end()].strip()
+    logger.warning('[mvpd-login] %s: Spectrum sign-in page shows error %s: %r url=%s',
+                   label, code, context, _url_for_log(url))
+    return None
 
 
 def _log_signin_timeout_snapshot(page, log_tag: str) -> None:

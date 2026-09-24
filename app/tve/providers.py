@@ -108,6 +108,13 @@ def ytdlp_adobe_mso_providers() -> list[dict]:
 
     if 'Cox' not in seen:
         providers.append({'id': 'Cox', 'name': 'Cox'})
+    # Spectrum's own error for a Cox account migrated to Spectrum tells the
+    # user to pick "Cox Spectrum" (IDLI-4213, confirmed live 2026-09-24).
+    # Adobe has no MVPD by that name — it's Adobe's "Cox", which now hands
+    # off to Spectrum's login page — so label it so users can find it.
+    for provider in providers:
+        if provider['id'] == 'Cox':
+            provider['name'] = 'Cox / Cox Spectrum'
     # yt-dlp has no Google/OAuth MSO support at all (confirmed 2026-06-15 —
     # its --ap-list-mso output never includes YouTubeTV, and its adobepass
     # extractor is a credential-POST login with no code path to consume a

@@ -20,7 +20,7 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _log_signin_timeout_snapshot,
-    _spectrum_feature_unavailable_message,
+    _spectrum_signin_error_message,
     _autofill_xfinity_credentials,
     _try_autofill_credentials,
     _harvest_and_save_xfinity_cookies,
@@ -287,7 +287,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                         if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
                             cancelled = True
                             break
-                    idid_message = _spectrum_feature_unavailable_message(page, 'AMC Networks TVE')
+                    idid_message = _spectrum_signin_error_message(page, 'AMC Networks TVE')
                     if idid_message:
                         break
 

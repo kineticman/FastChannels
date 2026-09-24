@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 import secrets
 import time
@@ -212,6 +213,41 @@ def _first_image_url(item: dict, images: dict[str, str]) -> str | None:
         if url:
             return url
     return None
+
+
+class DiscoverySpectrumUnsupportedError(TVENotAuthorizedError):
+    """Discovery TVE can't work through Spectrum's own login page — see
+    _raise_if_spectrum_routed. A TVENotAuthorizedError so the audit treats
+    it as definitive, same as the YouTubeTV case in _authenticate."""
+
+
+SPECTRUM_UNSUPPORTED_MESSAGE = (
+    'Discovery TVE can\'t stay signed in through Spectrum (this includes Cox accounts, which '
+    'Spectrum now signs in): Discovery\'s session lasts only ~90 seconds and every renewal '
+    'needs an unattended provider login, but Spectrum\'s login page requires a real browser.'
+)
+
+
+def _raise_if_spectrum_routed(mso_id: str, mso_login_url: str, response: requests.Response) -> None:
+    """Confirmed live 2026-09-24: Adobe's authenticate call now answers for
+    BOTH mso_id=Spectrum and mso_id=Cox with a 200 auto-submit SAML form
+    posting to Spectrum's own IdP (tve.spectrum.net/openam/.../charter/idp)
+    — Cox's accounts have moved to Spectrum's login, so the scripted
+    login.cox.com path can never be reached any more. A browser sign-in
+    through that page does complete (verified the same day), but Discovery's
+    session only lasts ~SESSION_TTL_SECONDS and resolve() re-runs this
+    whole unattended login on every renewal, which Spectrum's
+    reCAPTCHA/ThreatMetrix-gated page can't support — same dead end as
+    YouTubeTV below. Fail with a clear, definitive reason instead of a
+    confusing "did not return an MVPD login redirect"."""
+    if mso_id not in ('Cox', 'Spectrum') or mso_login_url:
+        return
+    try:
+        body = html.unescape(response.text or '')
+    except Exception:  # noqa: BLE001
+        return
+    if 'tve.spectrum.net' in body:
+        raise DiscoverySpectrumUnsupportedError(SPECTRUM_UNSUPPORTED_MESSAGE)
 
 
 def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str, password: str) -> str:
@@ -527,7 +563,10 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         if not self.config.get('device_id'):
             self._update_config('device_id', device_id)
 
-        mso_login_url, r = self._discovery_session_redirect(session, device_id, mso_id, mso_name)
+        mso_login_url, r = self._discovery_session_redirect(
+            session, device_id, mso_id, mso_name, allow_empty_redirect=mso_id in ('Cox', 'Spectrum'),
+        )
+        _raise_if_spectrum_routed(mso_id, mso_login_url, r)
 
         if mso_id == 'Cox':
             if 'login.cox.com' not in mso_login_url:

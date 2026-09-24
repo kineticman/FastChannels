@@ -676,7 +676,7 @@ function updateTveProviderFields() {
   if (password) password.placeholder = tvePasswordPlaceholder;
   if (hint) {
     hint.textContent = provider.id === 'Cox'
-      ? 'Used by all TVE sources, via a fast native sign-in.'
+      ? 'Used by all TVE sources. Tries a fast native Cox sign-in first; Cox accounts that have moved to Spectrum sign in on Spectrum\'s own page (browser-assisted) instead.'
       : `Used by all TVE sources — signs in through ${provider.name}'s own login (scripted where possible, browser-assisted sign-in below otherwise).`;
   }
   // "Test" is a fast, genuine credential check only for Cox (native scripted
@@ -764,59 +764,15 @@ async function saveTveMvpdSettings() {
 }
 
 async function testTveMvpd() {
-  const status = document.getElementById('tve-status');
-  const btn = document.getElementById('tve-test-btn');
-  const last = document.getElementById('tve-last-status');
   const saved = await saveTveMvpdSettings();
   if (!saved) return;
 
-  // Cox's native sign-in is a fast, genuine credential check (~2-3s), so it
-  // stays a quick synchronous request below. Every other provider has no
-  // scripted way to verify credentials at all — even Sling's own native
-  // login rejects scripted checks outright (see app/scrapers/sling.py) — so
-  // "Test" for those just IS the real browser-assisted sign-in; there's no
-  // lighter-weight check to fall back to.
-  if (selectedTveProvider().id !== 'Cox') {
-    openMvpdLoginModal('legacy', 'HISTORY');
-    return;
-  }
-
-  status.className = 'save-status';
-  status.textContent = 'Testing…';
-  btn.disabled = true;
-  try {
-    const r = await fetch('/api/settings/tve/mvpd/test', { method: 'POST' });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    status.className = 'save-status ok';
-    status.textContent = '✓ Authorized';
-    if (last) last.textContent = data.account?.last_auth_message || 'Authorized History via Adobe Pass.';
-  } catch (e) {
-    status.className = 'save-status error';
-    status.textContent = '✕ Auth failed';
-    if (last) last.textContent = e.message;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function foxOneSignIn(btn) {
-  // FOX One authenticates natively (scripted Cox OAuth, no browser) so unlike
-  // every other network's "Sign in" this is a plain synchronous call, not the
-  // streamed-screenshot modal — see api.foxone_signin.
-  const originalText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Signing in…';
-  try {
-    const r = await fetch('/api/settings/tve/foxone/signin', { method: 'POST' });
-    const data = await r.json();
-    if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    loadTveNetworkStatus();  // re-render picks up the fresh timestamp
-  } catch (e) {
-    btn.disabled = false;
-    btn.textContent = originalText;
-    btn.title = '✕ ' + e.message;
-  }
+  // "Test" is the real sign-in for every provider. Cox used to get a quick
+  // synchronous scripted check here instead, but Adobe's "Cox" MVPD now
+  // hands a Spectrum-migrated Cox account to Spectrum's own login page
+  // (confirmed live 2026-09-24), which only the browser-assisted flow can
+  // complete — and that flow already tries the scripted Cox login first.
+  openMvpdLoginModal('legacy', 'HISTORY');
 }
 
 async function resetTveState() {
@@ -980,11 +936,12 @@ async function loadTveNetworkStatus() {
         note = `<div style="color:var(--danger);font-size:0.72rem;margin:0.05rem 0 0.35rem">Last attempt failed ${errAge}: ${_escapeHtml(n.last_error_message)}</div>`;
       }
       const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
-      const bootstrap = window.FC_SETTINGS_BOOTSTRAP || {};
       let button = '';
-      if (n.family === 'foxone' && bootstrap.tveSelectedMsoId === 'Cox') {
-        button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Quick, no-browser native login — also doubles as a fast check that your saved TV provider credentials are still valid" onclick="foxOneSignIn(this)">Sign in</button>`;
-      } else if (n.family) {
+      // FOX One with Cox used to call a synchronous scripted-only sign-in
+      // here; the modal flow now tries that same scripted
+      // login first and falls back to the browser for Spectrum-migrated Cox
+      // accounts (2026-09-24), so every family uses the modal.
+      if (n.family) {
         button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`;
       }
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
@@ -1297,9 +1254,7 @@ async function signInToAllTve() {
   try {
     const r = await fetch('/api/settings/tve/status');
     const d = await r.json();
-    // 'foxone' authenticates through a different, always-native endpoint
-    // (foxOneSignIn's single synchronous POST, not the /start+/state polling
-    // every other family uses) — handled as a special case in the loop below.
+    // 'foxone' is routed through _mvpdLoginRunFoxOneForBatch in the loop below.
     networks = (d.networks || []).filter(n => n.family === 'foxone' || (n.family && MVPD_LOGIN_FAMILIES[n.family]));
   } catch (e) {
     _mvpdLoginDone = true;
@@ -1340,33 +1295,13 @@ async function signInToAllTve() {
   setTimeout(() => { window.location.reload(); }, 2200);
 }
 
-// FOX One's counterpart to _mvpdLoginRunOneForBatch below — a single
-// synchronous POST instead of /start+/state polling (see foxOneSignIn). The
-// server throttles the real Cox login regardless (app.tve.adobe_pass.
-// throttle_cox_login(), shared with fox_tve's _cox_saml_login which FOX One
-// also uses), so this just fires and waits for the response — no
-// client-side pacing needed.
-//
-// Only valid for mso_id === 'Cox' — foxOneSignIn's route always attempts
-// Cox's own scripted login no matter which MVPD is selected, so for any
-// other MSO (e.g. YouTubeTV) it just fails instantly with "no scripted
-// sign-in is wired up for this provider yet." Left uncaught, "Sign in to
-// all" silently skipped FOX One entirely for every non-Cox MVPD (confirmed
-// live 2026-08-17: a full YouTubeTV batch ran History through Discovery but
-// never even attempted FOX One's own real browser-assisted pairing, built
-// the same day this file gained a 'foxone' entry in MVPD_LOGIN_FAMILIES —
-// this call site was never updated to use it). The row-render logic above
-// already branches on bootstrap.tveSelectedMsoId the same way; mirror it
-// here instead of hardcoding the Cox-only path.
+// FOX One goes through the same /start+/state modal flow as every other
+// family, Cox included: that flow tries the scripted Cox login first and
+// falls back to the browser for Spectrum-migrated Cox accounts (confirmed
+// live 2026-09-24). It used to take a synchronous scripted-only POST for
+// Cox, which can't complete for those accounts.
 function _mvpdLoginRunFoxOneForBatch(label, status, hintEl) {
-  if (settingsBootstrap.tveSelectedMsoId !== 'Cox') {
-    return _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES.foxone, null, label, status, hintEl);
-  }
-  status.textContent = `Signing in to ${label}…`;
-  return fetch('/api/settings/tve/foxone/signin', { method: 'POST' })
-    .then(r => r.json().then(data => ({ ok: r.ok && !!data.ok, message: data.error })))
-    .then(({ ok, message }) => ({ ok, message: ok ? 'Signed in.' : (message || 'Sign-in failed.') }))
-    .catch((e) => ({ ok: false, message: e.message || 'Sign-in failed.' }));
+  return _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES.foxone, null, label, status, hintEl);
 }
 
 // Runs one network's sign-in (/start, poll /state to a terminal state) as

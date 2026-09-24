@@ -27,7 +27,7 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _log_signin_timeout_snapshot,
-    _spectrum_feature_unavailable_message,
+    _spectrum_signin_error_message,
     _sling_f5_recover,
     _url_for_log,
     _gateway_url_for_log,
@@ -163,8 +163,8 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             # shared with fox_tve.py) on every entitlement refresh — same
             # pattern as resolve()'s own normal playback path. No browser
             # needed; confirmed live 2026-08-11 (full authorize+preauthorize
-            # round trip with the real Cox account, zero Camoufox). Only
-            # non-Cox MSOs fall through to the browser-assisted flow below.
+            # round trip with the real Cox account, zero Camoufox). Falls
+            # through to the browser-assisted flow below when it fails.
             set_status('running', 'Signing in to NBC TVE…')
             source = Source.query.filter_by(name='nbc_tve').first()
             if not source:
@@ -188,22 +188,33 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             # ("NBC TVE: <mso_id> is not authorized: <reason>"), so running
             # them through that classifier too would double up the framing
             # instead of clarifying it. See that function's docstring.
-            except (TVENotAuthorizedError, TVEAuthError) as exc:
+            except TVENotAuthorizedError as exc:
                 persist_source_config_updates(source.id, scraper._pending_config_updates)
                 persist_source_cache_updates(source.id, scraper._pending_cache_updates)
                 _record_tve_login_error('nbc', str(exc))
                 set_status('error', f'NBC TVE: {exc}')
                 return
             except Exception as exc:  # noqa: BLE001
-                logger.exception('[nbc-mvpd-login] unexpected failure')
-                _record_tve_login_error('nbc', str(exc))
-                set_status('error', f'NBC TVE: {exc}')
+                # Confirmed live 2026-09-24: Adobe's "Cox" MVPD now
+                # auto-POSTs to Spectrum's own IdP for a Cox account migrated
+                # to Spectrum, so the scripted login fails ("did not return
+                # an MVPD login redirect") before reaching login.cox.com.
+                # Fall through to the browser-assisted flow below, which
+                # signs in on Spectrum's page with mso_id=Cox — same
+                # scripted-then-browser shape AMCN's Cox branch has.
+                persist_source_config_updates(source.id, scraper._pending_config_updates)
+                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                logger.info(
+                    '[nbc-mvpd-login] scripted Cox sign-in failed, falling back to browser '
+                    '(Spectrum-migrated Cox accounts sign in on Spectrum\'s page): %s', exc,
+                )
+                set_status('running', 'Scripted sign-in did not work — opening a browser…')
+            else:
+                persist_source_config_updates(source.id, scraper._pending_config_updates)
+                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                set_status('success', 'Signed in — NBC TVE authorized.')
+                logger.info('[nbc-mvpd-login] paired mso_id=Cox (scripted, no browser)')
                 return
-            persist_source_config_updates(source.id, scraper._pending_config_updates)
-            persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-            set_status('success', 'Signed in — NBC TVE authorized.')
-            logger.info('[nbc-mvpd-login] paired mso_id=Cox (scripted, no browser)')
-            return
 
         if mso_id == 'Comcast_SSO':
             # Same idea as the Cox branch above, but via a saved cookie jar
@@ -565,7 +576,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             return
                         raise _BrowserSessionDied('browser page closed and pairing did not complete')
 
-                    idid_message = _spectrum_feature_unavailable_message(page, 'NBC TVE')
+                    idid_message = _spectrum_signin_error_message(page, 'NBC TVE')
                     if idid_message:
                         _record_tve_login_error('nbc', idid_message)
                         set_status('error', idid_message)

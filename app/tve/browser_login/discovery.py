@@ -19,7 +19,7 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _log_signin_timeout_snapshot,
-    _spectrum_feature_unavailable_message,
+    _spectrum_signin_error_message,
     _autofill_xfinity_credentials,
     _try_autofill_credentials,
     _harvest_and_save_xfinity_cookies,
@@ -58,7 +58,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
     """
     import uuid as _uuid_login
     from urllib.parse import parse_qs as _parse_qs_login, urlsplit as _urlsplit_login
-    from app.scrapers.discovery_tve import AUTH_HOST, CALLBACK_BASE
+    from app.scrapers.discovery_tve import AUTH_HOST, CALLBACK_BASE, DiscoverySpectrumUnsupportedError, _raise_if_spectrum_routed
 
     try:
         from camoufox.sync_api import Camoufox
@@ -89,6 +89,15 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
         mso_login_url, page_response = scraper._discovery_session_redirect(
             session, device_id, mso_id, mso_name, allow_empty_redirect=True,
         )
+        # A browser sign-in through Spectrum's page does complete, but
+        # Discovery couldn't renew it ~90s later — see
+        # _raise_if_spectrum_routed. Say so up front instead of running a
+        # Spectrum login (and risking its IDID rate limit) for nothing.
+        _raise_if_spectrum_routed(mso_id, mso_login_url, page_response)
+    except DiscoverySpectrumUnsupportedError as exc:
+        _record_tve_login_error('discovery', str(exc))
+        set_status('error', str(exc))
+        return
     except TVENotAuthorizedError as exc:
         _record_tve_login_error('discovery', f'not entitled — {exc}')
         set_status('error', f'Discovery TVE: not entitled — {exc}')
@@ -302,7 +311,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                     if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
                         cancelled = True
                         break
-                idid_message = _spectrum_feature_unavailable_message(page, 'Discovery TVE')
+                idid_message = _spectrum_signin_error_message(page, 'Discovery TVE')
                 if idid_message:
                     break
                 if now - last_poll > _POLL_SECONDS:
@@ -462,7 +471,7 @@ def run_discovery_browser_login(mso_id: str):
         r.delete(MVPD_BROWSER_LOGIN_INPUT_KEY)
         set_status('running', 'Signing in to Discovery TVE…')
 
-        from app.scrapers.discovery_tve import DiscoveryTVEScraper
+        from app.scrapers.discovery_tve import DiscoverySpectrumUnsupportedError, DiscoveryTVEScraper
 
         source = Source.query.filter_by(name='discovery_tve').first()
         if not source:
@@ -518,6 +527,10 @@ def run_discovery_browser_login(mso_id: str):
 
         try:
             scraper._authenticate()
+        except DiscoverySpectrumUnsupportedError as exc:
+            _record_tve_login_error('discovery', str(exc))
+            set_status('error', str(exc))
+            return
         except TVENotAuthorizedError as exc:
             _record_tve_login_error('discovery', f'not entitled — {exc}')
             set_status('error', f'Discovery TVE: not entitled — {exc}')
