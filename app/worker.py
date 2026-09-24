@@ -2583,6 +2583,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 ch.description = _sanitize_description(cd.description)
             if getattr(cd, 'guide_key', None):
                 ch.guide_key = cd.guide_key
+            # Scraper-owned: always mirrors the latest scrape (None clears it).
+            ch.provider_number = getattr(cd, 'provider_number', None) or None
             # Don't resurrect channels the stream audit flagged as Dead, VOD, NotAuthorized, or DRM
             # unless the stream URL changed (source may have fixed the channel).
             _flagged = ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized') or (ch.disable_reason or '').startswith('DRM')
@@ -2634,6 +2636,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 gracenote_locked  = False,
                 gracenote_mode    = (getattr(cd, 'gracenote_mode', None) or 'auto'),
                 guide_key         = getattr(cd, 'guide_key', None),
+                provider_number   = getattr(cd, 'provider_number', None) or None,
                 last_seen_at      = seen_at,
                 first_seen_at     = seen_at,
                 is_enabled        = not _born_pending,

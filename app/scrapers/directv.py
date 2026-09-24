@@ -83,6 +83,7 @@ except ImportError:
     _cffi_requests = None
     _CFFI_IMPERSONATE = None
 
+from .directv_numbers import assign_provider_numbers
 from .base import (
     BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError,
     infer_language_from_metadata,
@@ -1375,6 +1376,19 @@ class DirectvScraper(BaseScraper):
                         'On = leave out free, ad-supported channels. '
                         'DirecTV Stream puts these in the 4000-4999 channel number range.'
                     )),
+        ConfigField('use_provider_numbers', 'Use DirecTV channel numbers',
+                    field_type='toggle', default='false',
+                    help_text=(
+                        'On = number these channels exactly as DirecTV does (ESPN = 206, '
+                        'CNN = 202) instead of the app-assigned block, so your DVR guide '
+                        'matches the DirecTV guide. Feeds that share a channel number get '
+                        'subchannel suffixes: MLB Network stays 213 and MLB Network '
+                        'Alternate becomes 213.1; WNBA on ION 1/2/3 become 305.1/.2/.3. '
+                        'On satellite lineups the SD copy of an HD channel is left out so '
+                        'the pair does not claim the same number (applies from the next '
+                        'channel refresh). DirecTV numbers can overlap other sources; '
+                        'the app does not renumber around them.'
+                    )),
     ]
 
     _FAST_CHANNEL_NUMBER_RANGE = range(4000, 5000)
@@ -1420,6 +1434,11 @@ class DirectvScraper(BaseScraper):
 
     def _exclude_fast_channels(self) -> bool:
         return str(self.config.get('exclude_fast_channels', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+    @classmethod
+    def uses_provider_numbers(cls, config: dict | None) -> bool:
+        # See the 'use_provider_numbers' ConfigField and app/scrapers/directv_numbers.py.
+        return str((config or {}).get('use_provider_numbers', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 
@@ -1532,10 +1551,12 @@ class DirectvScraper(BaseScraper):
 
         baseline_non_streamable = int((self.config.get('_eligibility_baseline') or {}).get('non_streamable', 0))
         exclude_fast = self._exclude_fast_channels()
+        use_provider_numbers = self.uses_provider_numbers(self.config)
 
         rows: list[dict] = []
         channels: list[ChannelData] = []
         non_streamable = 0
+        sd_collapsed = 0
 
         # Hard failures (auth, transport, malformed payload) raise immediately
         # from _fetch_allchannels_rows() and are not retried here -- only the
@@ -1544,8 +1565,14 @@ class DirectvScraper(BaseScraper):
             rows = self._fetch_allchannels_rows(params)
             self.excluded_channel_ids = set()
             non_streamable = 0
+            sd_collapsed = 0
             channels = []
 
+            # Pass 1: eligibility. Pass 2 numbers the survivors as a set,
+            # because DirecTV's own channel numbers (and the HD/SD pairing)
+            # can only be resolved by looking at every row that shares a
+            # number -- see app/scrapers/directv_numbers.py.
+            eligible: list[tuple[dict, str, str, str, int | None, bool]] = []
             for row in rows:
                 ccid = _pick(row, 'ccid', 'ccId', 'channelId', 'channel_id', 'id')
                 resource_id = _pick(row, 'resourceId', 'resourceID', 'resource_id', 'guid')
@@ -1573,6 +1600,21 @@ class DirectvScraper(BaseScraper):
                 if exclude_fast and is_fast:
                     self.excluded_channel_ids.add(ccid)
                     continue
+                eligible.append((row, ccid, resource_id, name, number, is_fast))
+
+            numbered = assign_provider_numbers([e[0] for e in eligible])
+
+            for row, ccid, resource_id, name, number, is_fast in eligible:
+                numbering = numbered.get(ccid)
+                # Satellite lineups list an SD row next to its HD row under one
+                # number. When the user asked for DirecTV's numbering, collapse
+                # the pair the way DirecTV's own guide does (the HD row keeps the
+                # number); the SD row is filtered like a FAST exclusion, not
+                # treated as missing upstream.
+                if use_provider_numbers and numbering is not None and numbering.sd_twin_of:
+                    self.excluded_channel_ids.add(ccid)
+                    sd_collapsed += 1
+                    continue
                 logo = _pick(row, 'logoUrl', 'logoURL', 'logo_url') or (
                     f"https://dfwfis.prod.dtvcdn.com/catalog/image/imageserver/v1/"
                     f"service/channel/{resource_id}/chlogo-clb-guide/120/90"
@@ -1581,10 +1623,16 @@ class DirectvScraper(BaseScraper):
                 category = category_for_channel(name, None) or infer_category_from_name(name) or 'Entertainment'
                 language = infer_language_from_metadata(name)
 
-                # Stream lineups can supply Gracenote IDs here. Satellite lineups
-                # also contain internal channel IDs; retain resolver validation and
-                # community-map fallback rather than accepting every value.
-                external_listing_id = _pick(row, 'externalListingId')
+                # DirecTV supplies the Gracenote/TMS station id per row as
+                # externalListingId (5+ digits). Rows without a real mapping just
+                # echo their own short ccid there; directv_numbers rejects those
+                # and, for an HD row, borrows the id from its SD twin when that
+                # twin has a real one. resolve_gracenote() still applies the
+                # exclusion list and falls back to the community map by ccid,
+                # then by name.
+                external_listing_id = (
+                    numbering.gracenote_id if numbering is not None else _pick(row, 'externalListingId')
+                )
 
                 channels.append(ChannelData(
                     source_channel_id=ccid,
@@ -1595,14 +1643,17 @@ class DirectvScraper(BaseScraper):
                     language=language,
                     stream_type='hls',
                     number=number,
+                    provider_number=numbering.provider_number if numbering is not None else None,
                     gracenote_id=(resolve_gracenote('directv', upstream_id=external_listing_id, lookup_key=ccid)
                                   or resolve_gracenote('directv', lookup_key=f'name:{_directv_gracenote_key(name)}')),
                     tags=[self.FAST_TAG] if is_fast else [],
                 ))
 
             logger.info(
-                '[directv] channel eligibility: upstream=%d included=%d non_streamable=%d excluded=%d',
+                '[directv] channel eligibility: upstream=%d included=%d non_streamable=%d excluded=%d '
+                'sd_collapsed=%d provider_numbers=%s',
                 len(rows), len(channels), non_streamable, len(self.excluded_channel_ids),
+                sd_collapsed, 'on' if use_provider_numbers else 'off',
             )
 
             # See _MIN_TRUSTED_NON_STREAMABLE above. The per-row augmentation/

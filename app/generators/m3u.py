@@ -79,6 +79,7 @@ class _MiniSource:
     name: str
     display_name: str | None
     chnum_start: int | None
+    config: dict | None = None
 
 
 @dataclass(slots=True)
@@ -92,6 +93,7 @@ class _MiniChannel:
     gracenote_mode: str | None
     slug: str | None
     source: _MiniSource
+    provider_number: str | None = None
 
 
 def _parse_gracenote_id(ch) -> str | None:
@@ -268,6 +270,7 @@ def _build_channel_query(filters: dict, *, activity: str = 'active'):
             Source.name,
             Source.display_name,
             Source.chnum_start,
+            Source.config,
         ),
     ).filter(
         *activity_predicates,
@@ -324,9 +327,11 @@ def _build_channel_stub_query(filters: dict):
         Channel.gracenote_id,
         Channel.gracenote_mode,
         Channel.slug,
+        Channel.provider_number,
         Source.name.label('source_name'),
         Source.display_name.label('source_display_name'),
         Source.chnum_start.label('source_chnum_start'),
+        Source.config.label('source_config'),
     ).join(Source).filter(
         Channel.is_active == True,
         Channel.is_enabled == True,
@@ -390,7 +395,9 @@ def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | No
                 name=row.source_name,
                 display_name=row.source_display_name,
                 chnum_start=row.source_chnum_start,
+                config=row.source_config,
             ),
+            provider_number=row.provider_number,
         )
         for row in rows
     ]
@@ -759,6 +766,60 @@ def build_manual_order_map(channels, order_ids: list[int], start: int) -> dict[i
     return result
 
 
+def chnum_sort_key(value):
+    """Sort key for a resolved tvg-chno that may be an int (app-assigned)
+    or a provider string like "305.1" — numeric order, unnumbered last."""
+    if value is None or value == '':
+        return (1, 0.0, '')
+    try:
+        return (0, float(value), '')
+    except (TypeError, ValueError):
+        return (0, float('inf'), str(value))
+
+
+def _source_uses_provider_numbers(source) -> bool:
+    scraper_cls = _scraper_registry.get(getattr(source, 'name', None) or '')
+    if not scraper_cls:
+        return False
+    try:
+        return bool(scraper_cls.uses_provider_numbers(getattr(source, 'config', None) or {}))
+    except Exception:
+        return False
+
+
+def apply_provider_numbers(channels, chnum_map: dict) -> dict:
+    """
+    Overlay provider-native channel numbers onto a resolved chnum map.
+
+    A source that opts in (BaseScraper.uses_provider_numbers, e.g. DirecTV's
+    'Use DirecTV channel numbers' toggle) has each channel's stored
+    Channel.provider_number ("213", "305.1") emitted as its tvg-chno in
+    place of the app-assigned number — in every numbering scheme (master,
+    source chnum_start, feed pool), since the whole point is to mirror the
+    provider's own guide. Channels without a stored provider number keep
+    their app-assigned number. Pinned numbers are not overridden.
+    """
+    opted_in: dict[str, bool] = {}
+    overrides: dict[int, str] = {}
+    for ch in channels:
+        src = getattr(ch, 'source', None)
+        if src is None:
+            continue
+        key = getattr(src, 'name', None) or ''
+        if key not in opted_in:
+            opted_in[key] = _source_uses_provider_numbers(src)
+        if not opted_in[key]:
+            continue
+        if getattr(ch, 'number_pinned', False) and getattr(ch, 'number', None) is not None:
+            continue
+        pn = (getattr(ch, 'provider_number', None) or '').strip()
+        if pn:
+            overrides[ch.id] = pn
+    if not overrides:
+        return chnum_map
+    return {**chnum_map, **overrides}
+
+
 def _sort_by_assigned_chnum(channels, chnum_map: dict) -> None:
     """
     Sort a channel list in place by its resolved tvg-chno so playlist line
@@ -766,9 +827,7 @@ def _sort_by_assigned_chnum(channels, chnum_map: dict) -> None:
     (feed_chnum_start / namespace_start), where a manual reorder can make the
     assigned numbers diverge from master Channel.number order.
     """
-    channels.sort(key=lambda c: (chnum_map.get(c.id) is None,
-                                 chnum_map.get(c.id) or 0,
-                                 (c.name or '').lower()))
+    channels.sort(key=lambda c: chnum_sort_key(chnum_map.get(c.id)) + ((c.name or '').lower(),))
 
 
 def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) -> dict:
@@ -996,6 +1055,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
         namespace_start=namespace_start,
         feed_id=feed_id if feed_chnum_start is not None else None,
     )
+    chnum_map = apply_provider_numbers(channels, chnum_map)
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap: %s', w)
@@ -1118,6 +1178,7 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
         namespace_start=namespace_start,
         feed_id=feed_id if feed_chnum_start is not None else None,
     )
+    chnum_map = apply_provider_numbers(channels, chnum_map)
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap (fc-player): %s', w)
@@ -1191,6 +1252,7 @@ def generate_native_m3u(filters: dict = None, base_url: str = None,
         namespace_start=namespace_start,
         feed_id=feed_id if feed_chnum_start is not None else None,
     )
+    chnum_map = apply_provider_numbers(channels, chnum_map)
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap (native): %s', w)
@@ -1259,6 +1321,7 @@ def generate_gracenote_m3u(filters: dict = None, base_url: str = None,
         namespace_start=namespace_start,
         feed_id=feed_id if feed_chnum_start is not None else None,
     )
+    chnum_map = apply_provider_numbers(channels, chnum_map)
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap (gracenote): %s', w)
@@ -1334,6 +1397,7 @@ def generate_mixed_m3u(filters: dict = None, base_url: str = None,
         namespace_start=namespace_start,
         feed_id=feed_id if feed_chnum_start is not None else None,
     )
+    chnum_map = apply_provider_numbers(channels, chnum_map)
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap (mixed): %s', w)
@@ -1528,6 +1592,7 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
         namespace_start=namespace_start,
         feed_id=feed_id if feed_chnum_start is not None else None,
     )
+    chnum_map = apply_provider_numbers(channels, chnum_map)
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
             log.warning('chnum overlap (prismcast): %s', w)

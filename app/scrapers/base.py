@@ -322,7 +322,7 @@ class ChannelData:
                  slug=None, category=None, language='en', country='US',
                  stream_type='hls', number=None, gracenote_id=None,
                  guide_key=None, tags=None, description=None,
-                 gracenote_mode=None):
+                 gracenote_mode=None, provider_number=None):
         self.source_channel_id = source_channel_id
         self.name        = name
         self.stream_url  = stream_url
@@ -342,6 +342,12 @@ class ChannelData:
         self.guide_key   = guide_key
         self.tags        = tags or []  # list of raw tag/group strings from source
         self.description = description  # optional long-form channel description
+        # The provider's own channel number as the subscriber sees it in the
+        # provider's guide ("213", "305.1"). Stored verbatim on the channel;
+        # only emitted as tvg-chno when the source opts in via
+        # uses_provider_numbers(). Distinct from `number`, which the app
+        # renumbers globally.
+        self.provider_number = provider_number
 
 
 class ProgramData:
@@ -676,6 +682,14 @@ class BaseScraper(ABC):
     def resolve(self, raw_url: str) -> str:
         """Override to resolve raw stored URLs to playable URLs at request time."""
         return raw_url
+
+    @classmethod
+    def uses_provider_numbers(cls, config: dict | None) -> bool:
+        """True when this source's channels should be numbered with the
+        provider's own channel numbers (ChannelData.provider_number) in
+        M3U output instead of the app-assigned tvg-chno. Override in
+        scrapers that expose such a setting."""
+        return False
 
     @classmethod
     def license_request_headers(cls, config: dict) -> dict:

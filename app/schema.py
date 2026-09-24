@@ -342,6 +342,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN tags TEXT"
                 ))
+            if "provider_number" not in ch_cols:
+                conn.execute(text(
+                    "ALTER TABLE channels ADD COLUMN provider_number VARCHAR(16)"
+                ))
             if "is_duplicate" not in ch_cols:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN is_duplicate BOOLEAN NOT NULL DEFAULT 0"

@@ -14,6 +14,7 @@ from ..generators.m3u import (
     _build_feed_chnum_map,
     _build_source_chnum_map,
     _build_sticky_gn_chnum_map,
+    apply_provider_numbers,
     _drm_bridge_query_filters,
     _has_gracenote_claim,
     _selected_channel_stubs,
@@ -152,7 +153,7 @@ def _source_scheme_chnum_map(std_channels, gn_channels) -> dict[int, int]:
     return full_map
 
 
-def _default_feed_chnum_map_full() -> dict[int, int]:
+def _default_feed_chnum_map_full() -> dict[int, int | str]:
     """The default feed's resolved chnum map for every channel, unfiltered.
 
     Number every enabled channel with the default feed's numbering scheme
@@ -175,16 +176,19 @@ def _default_feed_chnum_map_full() -> dict[int, int]:
             std_channels + gn_channels,
             key=lambda ch: (ch.number is None, ch.number or 0, (ch.name or '').lower()),
         )
-        return (
+        return apply_provider_numbers(all_stubs, (
             _build_feed_chnum_map(
                 all_stubs,
                 default_feed.chnum_start,
                 stored_numbers=stored_numbers,
             )
             if all_stubs else {}
-        )
+        ))
 
-    return _source_scheme_chnum_map(std_channels, gn_channels)
+    return apply_provider_numbers(
+        std_channels + gn_channels,
+        _source_scheme_chnum_map(std_channels, gn_channels),
+    )
 
 
 def _page_default_feed_chnum_map(page_items) -> dict[int, int]:

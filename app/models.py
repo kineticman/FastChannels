@@ -193,6 +193,7 @@ class Channel(db.Model):
     tags              = db.Column(db.Text, nullable=True)          # comma-separated raw tags/groups from source
     number            = db.Column(db.Integer)
     number_pinned     = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # True when user has manually set/locked this channel number
+    provider_number   = db.Column(db.String(16), nullable=True)   # provider's own channel number ("213", "305.1"); set by scraper, used as tvg-chno when the source opts in
     gracenote_id      = db.Column(db.String(32), nullable=True)   # e.g. EP012345678; set by scraper or user
     gracenote_locked  = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # True when user manually sets/locks Gracenote ID
     gracenote_mode    = db.Column(db.String(16), default='auto', nullable=False, server_default='auto')  # auto | manual | off
@@ -262,6 +263,7 @@ class Channel(db.Model):
             'country':          self.country,
             'number':           self.number,
             'number_pinned':    bool(self.number_pinned),
+            'provider_number':  self.provider_number,
             'gracenote_id':     self.gracenote_id,
             'gracenote_locked': self.gracenote_locked,
             'gracenote_mode':   self.gracenote_mode or 'auto',
