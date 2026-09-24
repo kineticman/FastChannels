@@ -177,7 +177,11 @@ def preview_order():
                 for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
             }
         num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
+    app_map = num_map
     num_map = apply_provider_numbers(stubs, num_map)
+    # Rows whose number is fixed outside this feed's ordering (a provider number
+    # like DirecTV "305.1", or a decimal lock) -- the dialog treats them as pinned.
+    fixed_ids = {cid for cid, num in num_map.items() if app_map.get(cid) != num}
 
     feed_pinned_ids = set(filters.get('pinned_channel_ids') or [])
     rows = [{
@@ -186,7 +190,9 @@ def preview_order():
         'source':      ch.source.display_name or ch.source.name,
         'number':      num_map.get(ch.id),
         'pinned':      bool((getattr(ch, 'number_pinned', False) and ch.number is not None)
-                            or getattr(ch, 'pinned_chno', None)),
+                            or ch.id in fixed_ids),
+        'number_source': ('lock' if getattr(ch, 'pinned_chno', None) else 'provider')
+                         if ch.id in fixed_ids else None,
         'feed_pinned': ch.id in feed_pinned_ids,
         'gracenote':   ch.id in gn_ids,
     } for ch in stubs]

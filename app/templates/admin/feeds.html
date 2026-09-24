@@ -1974,7 +1974,9 @@ function updateOrderNote() {
 // their true positions after every move.
 function renumberOrderRows() {
   const used = new Set();
-  for (const r of _orderRows) if (r.pinned && r.number != null) used.add(r.number);
+  // Provider / decimal-lock numbers arrive as text ("206", "305.1"); reserve
+  // whole ones as numbers so the cursor skips them.
+  for (const r of _orderRows) if (r.pinned && r.number != null) used.add(Number(r.number));
   let cursor = _orderStart ?? 1;
   for (const r of _orderRows) {
     if (r.pinned && r.number != null) continue;
@@ -2001,7 +2003,8 @@ function renderOrderList() {
     if (!r.pinned) row.draggable = true;
     row.innerHTML =
       `<span class="ord-grip">${r.pinned ? '📌' : '⋮⋮'}</span>` +
-      `<span class="ord-num" title="${r.pinned ? 'Pinned master number' : 'Click to type a channel number'}"></span>` +
+      `<span class="ord-num" title="${r.number_source === 'provider' ? 'Provider channel number (e.g. DirecTV) — set by the source, not this feed'
+                                    : r.pinned ? 'Pinned master number' : 'Click to type a channel number'}"></span>` +
       `<span class="ord-name"></span>` +
       (r.feed_pinned ? `<span class="ord-fpin" title="Manually pinned into this feed — included regardless of filters">PIN</span>` : '') +
       (r.gracenote ? `<span class="ord-gn" title="Served from this feed's Gracenote M3U">GN</span>` : '') +
