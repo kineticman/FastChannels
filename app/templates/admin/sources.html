@@ -3143,7 +3143,7 @@
             'On = leave out free, ad-supported channels (DirecTV Stream numbers these 4000-4999).')}
           ${toggleHtml('use_provider_numbers', 'Use DirecTV channel numbers',
             'On = number channels exactly as DirecTV does (ESPN 206, CNN 202); feeds that share a number get .1/.2/.3 subchannel suffixes. '
-            + 'IMPORTANT: changing this queues a channel refresh AND a stream audit — wait for both to finish (Sources page status) before tuning, or channels will not play.')}
+            + 'IMPORTANT: changing this queues a channel refresh, and a stream audit runs automatically once the refresh finishes — wait for both (Sources page status) before tuning, or channels will not play.')}
         </div>
 
         <details class="amazon-account-details" ${hasCreds ? '' : 'open'}>
@@ -3941,7 +3941,7 @@
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
         status.textContent = data.stream_audit_queued
-          ? '✓ Saved — full scrape + stream audit queued; wait for both before tuning'
+          ? '✓ Saved — full scrape queued; a stream audit follows it automatically. Wait for both before tuning'
           : (data.full_scrape_queued ? '✓ Saved — full scrape queued' : '✓ Saved');
         status.className = 'config-status ok';
         fields.forEach(field => {

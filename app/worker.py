@@ -588,6 +588,20 @@ def run_scraper(source_name: str, force_full: bool = False):
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
+                if (source.config or {}).get('_audit_after_scrape'):
+                    # One-shot request from a config save (DirecTV numbering
+                    # toggle, see api_sources.save_source_config): run a stream
+                    # audit only once this refresh has actually landed. Enqueued
+                    # here, after the commit above, so it can never race the
+                    # scrape or a token refresh that deferred it; a skipped
+                    # scrape leaves the flag set for the follow-up run.
+                    _cfg = dict(source.config or {})
+                    _cfg.pop('_audit_after_scrape', None)
+                    source.config = _cfg
+                    db.session.commit()
+                    from app.routes.tasks import trigger_stream_audit
+                    logger.info('[%s] refresh landed — queuing the stream audit requested at config save', source_name)
+                    trigger_stream_audit(source_name)
                 logo_urls = [ch.logo_url for ch in channels if ch.logo_url]
                 if logo_urls:
                     # Publish the phase change immediately so the UI does not sit

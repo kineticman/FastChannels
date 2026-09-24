@@ -565,7 +565,11 @@ def save_source_config(source_id):
     )
     # Switching DirecTV numbering on also needs a stream audit after the
     # refresh before the bridged channels tune reliably (confirmed live
-    # 2026-09-23), so queue one rather than leaving it as a manual step.
+    # 2026-09-23). It must run AFTER the refresh has landed, not alongside
+    # it: queued together, the audit ran while the scrape was deferred behind
+    # a token refresh, hit 20 'not authenticated' errors and aborted with
+    # nothing checked. So the save only sets a one-shot flag and the worker
+    # enqueues the audit from the scrape's completion path (run_scraper).
     directv_numbering_changed = source.name == 'directv' and (
         _toggle_enabled(old, 'use_provider_numbers') != _toggle_enabled(current, 'use_provider_numbers')
     )
@@ -642,8 +646,7 @@ def save_source_config(source_id):
         trigger_scrape(source.name, force_full=True)
         full_scrape_queued = True
         if directv_numbering_changed:
-            from .tasks import trigger_stream_audit
-            trigger_stream_audit(source.name)
+            source.config = {**(source.config or {}), '_audit_after_scrape': True}
             stream_audit_queued = True
     elif source.name == 'pbs' and old != current and source.is_enabled:
         # Any PBS config change (curated toggle, ZIP codes, or hand-editing

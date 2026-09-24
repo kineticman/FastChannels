@@ -1388,8 +1388,9 @@ class DirectvScraper(BaseScraper):
                         'the pair does not claim the same number (applies from the next '
                         'channel refresh). DirecTV numbers can overlap other sources; '
                         'the app does not renumber around them. IMPORTANT: changing this '
-                        'queues a channel refresh and then a stream audit; wait for both to '
-                        'finish before tuning, or channels will not play.'
+                        'queues a channel refresh, and a stream audit runs automatically once '
+                        'the refresh finishes; wait for both before tuning, or channels will '
+                        'not play.'
                     )),
     ]
 
