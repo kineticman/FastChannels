@@ -19,6 +19,8 @@ from app.tve.browser_login.common import (
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
+    _log_signin_timeout_snapshot,
+    _spectrum_feature_unavailable_message,
     _autofill_xfinity_credentials,
     _try_autofill_credentials,
     _harvest_and_save_xfinity_cookies,
@@ -272,6 +274,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                 paired = False
                 cancelled = False
                 denied_message: str | None = None
+                idid_message: str | None = None
                 session_poll_interval = _POLL_SECONDS
                 last_seen_page_url = landing_url
                 while time.monotonic() < deadline:
@@ -284,6 +287,9 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                         if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
                             cancelled = True
                             break
+                    idid_message = _spectrum_feature_unavailable_message(page, 'AMC Networks TVE')
+                    if idid_message:
+                        break
 
                     current_page_url = _safe_page_url(page)
                     if current_page_url != last_seen_page_url:
@@ -356,9 +362,15 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                 if cancelled:
                     failed.append(f'{channel.name}: cancelled')
                     break
+                if idid_message:
+                    # Every remaining channel would redo the same Spectrum
+                    # sign-in and hit the same wall — stop here instead.
+                    failed.append(idid_message)
+                    break
                 if denied_message is not None:
                     failed.append(denied_message)
                 elif not paired:
+                    _log_signin_timeout_snapshot(page, 'amcn-mvpd-login')
                     failed.append(f'{channel.name}: not entitled or timed out')
     except BaseException as exc:  # noqa: BLE001
         # Fresh, self-contained app_context — see _prime_google_session's

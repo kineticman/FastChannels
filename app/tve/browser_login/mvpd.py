@@ -26,6 +26,8 @@ from app.tve.browser_login.common import (
     _cox_login_error_detail,
     _autofill_google_account_chooser,
     _autofill_spectrum_sso_confirm,
+    _log_signin_timeout_snapshot,
+    _spectrum_feature_unavailable_message,
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
@@ -637,6 +639,12 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     # that hits Google's account-chooser most often tonight.
                     _autofill_google_account_chooser(page)
                     _autofill_spectrum_sso_confirm(page)
+                    idid_message = _spectrum_feature_unavailable_message(page, requestor_id)
+                    if idid_message:
+                        _step(requestor_id, 'failed', 'Spectrum "Feature Unavailable"')
+                        _record_tve_login_error(requestor_id, idid_message)
+                        set_status('error', idid_message)
+                        return
 
                     for _ in range(20):
                         raw = r.lpop(MVPD_BROWSER_LOGIN_INPUT_KEY)
@@ -744,6 +752,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
 
                     page.wait_for_timeout(80)
 
+                _log_signin_timeout_snapshot(page, 'mvpd-login')
                 _step(requestor_id, 'failed', 'timed out')
                 set_status('error', 'Timed out waiting for sign-in to complete.')
                 return

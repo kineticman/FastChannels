@@ -18,6 +18,8 @@ from app.tve.browser_login.common import (
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
+    _log_signin_timeout_snapshot,
+    _spectrum_feature_unavailable_message,
     _autofill_xfinity_credentials,
     _try_autofill_credentials,
     _harvest_and_save_xfinity_cookies,
@@ -287,6 +289,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
             last_poll = 0.0
             code = ''
             cancelled = False
+            idid_message = None
             gauth_sync_stalled_since = None
             gauth_sync_reloads = 0
             while time.monotonic() < deadline:
@@ -299,6 +302,9 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                     if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
                         cancelled = True
                         break
+                idid_message = _spectrum_feature_unavailable_message(page, 'Discovery TVE')
+                if idid_message:
+                    break
                 if now - last_poll > _POLL_SECONDS:
                     last_poll = now
                     current_url = _safe_page_url(page)
@@ -345,7 +351,12 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
             if cancelled:
                 set_status('stopped', 'Cancelled')
                 return
+            if idid_message:
+                _record_tve_login_error('discovery', idid_message)
+                set_status('error', idid_message)
+                return
             if not code:
+                _log_signin_timeout_snapshot(page, 'discovery-mvpd-login')
                 set_status('error', 'Discovery TVE: timed out waiting for sign-in to complete.')
                 return
             if mso_id == 'YouTubeTV':

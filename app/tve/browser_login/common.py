@@ -707,7 +707,7 @@ def _try_autofill_credentials(
                 continue
 
             pw_field.press('Enter')
-            logger.info('[%s] autofill: filled and submitted credentials for %s (attempt %d)', log_tag, username, fill_attempt)
+            logger.info('[%s] autofill: filled and submitted credentials for %s (attempt %d)', log_tag, _mask_username(username), fill_attempt)
             return True
 
         logger.info('[%s] autofill: gave up — could not get a stable filled form url=%s', log_tag, _safe_page_url(page))
@@ -787,7 +787,7 @@ def _autofill_xfinity_credentials(
             submit.click(force=True, timeout=5000)
         except Exception:  # noqa: BLE001
             page.keyboard.press('Enter')
-        logger.info('[mvpd-login] xfinity autofill: submitted username for %s%s', username, tag)
+        logger.info('[mvpd-login] xfinity autofill: submitted username for %s%s', _mask_username(username), tag)
 
     wait_started = time.monotonic()
     last_relay = wait_started
@@ -877,7 +877,7 @@ def _autofill_xfinity_credentials(
             submit.click(force=True, timeout=5000)
         except Exception:  # noqa: BLE001
             page.keyboard.press('Enter')
-        logger.info('[mvpd-login] xfinity autofill: filled and submitted password for %s', username)
+        logger.info('[mvpd-login] xfinity autofill: filled and submitted password for %s', _mask_username(username))
     except _XfinityAutofillCancelled:
         return False
     except Exception as exc:  # noqa: BLE001
@@ -1133,6 +1133,134 @@ def _autofill_spectrum_sso_confirm(page) -> bool:
     except Exception as exc:  # noqa: BLE001
         logger.debug('[mvpd-login] spectrum SSO-confirm autofill failed: %s', exc)
         return False
+
+
+_IDID_ERROR_RE = _re.compile(r'IDID-\d+')
+
+
+def _detect_spectrum_feature_unavailable(page) -> str | None:
+    """Detects Spectrum's own "Feature Unavailable... please try again from
+    home or contact us for assistance" error page — a real Spectrum-side
+    condition, not one of its normal login/consent screens. Confirmed live
+    2026-09-23 twice: IDID-4000 on a fresh Camoufox profile from a trusted
+    home network (a SECOND fresh-device registration against the same
+    account within a few minutes of a first one that had succeeded cleanly),
+    and IDID-4003 in a real public forum report. In the one case watched
+    end-to-end, a bare retry roughly 60-90s later — same account, same
+    device, same profile, nothing else changed — succeeded outright, too
+    fast to be a lasting account-level block. Current best read: a
+    short-lived rate-limit or a plain transient backend condition tied to
+    repeated new-device registrations in a short window, not "fresh device
+    always rejected" — see spectrum.py's module docstring. Returns the
+    specific IDID-XXXX code (for logging/diagnostics) if this page is
+    currently showing, else None.
+    """
+    try:
+        if page.get_by_text('Feature Unavailable').count() == 0:
+            return None
+        match = _IDID_ERROR_RE.search(page.inner_text('body'))
+        return match.group(0) if match else 'IDID-unknown'
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_SPECTRUM_IDID_CHECK_INTERVAL_SECONDS = 1.0
+
+
+def _spectrum_feature_unavailable_message(page, label: str) -> str | None:
+    """TVE-flow wrapper around _detect_spectrum_feature_unavailable: returns
+    a user-facing error message if Spectrum's IDID "Feature Unavailable"
+    page is showing, else None. Call it every poll tick; it throttles
+    itself to one DOM query per second per page.
+
+    Confirmed live 2026-09-24 via a forum report (community thread post
+    #3228): a Discovery TVE sign-in with Spectrum as the MVPD landed on this
+    exact IDID-4000 page right after autofill submitted credentials, and
+    the TVE wait loops — which never knew about it — sat there until their
+    own timeout and reported a generic "timed out waiting for sign-in".
+    Each TVE family does its own separate Spectrum SAML sign-in, so a user
+    retrying several families back to back is precisely the "repeated
+    sign-ins in a short window" shape that seems to trigger it.
+
+    Deliberately fails fast rather than retrying like the Spectrum scraper
+    does: the scraper's retry re-navigates a fixed start page, but here the
+    only thing to re-navigate is an Adobe/network SAML URL that may be
+    single-use, and hammering sign-ins is plausibly what trips this in the
+    first place. Outside spectrum.net pages, requires an actual IDID-NNNN
+    code alongside the "Feature Unavailable" heading so an unrelated
+    network page using the same phrase can't abort a sign-in.
+    """
+    now = time.monotonic()
+    try:
+        last = getattr(page, '_fc_idid_checked_at', 0.0)
+        if now - last < _SPECTRUM_IDID_CHECK_INTERVAL_SECONDS:
+            return None
+        page._fc_idid_checked_at = now
+    except Exception:  # noqa: BLE001
+        pass
+    code = _detect_spectrum_feature_unavailable(page)
+    if not code:
+        return None
+    if code == 'IDID-unknown' and 'spectrum.net' not in _safe_page_url(page):
+        return None
+    logger.warning('[mvpd-login] %s: Spectrum returned its "Feature Unavailable" error (%s) url=%s',
+                   label, code, _url_for_log(_safe_page_url(page)))
+    return (
+        f'{label}: Spectrum returned "{code}" ("Feature Unavailable... try again from home"). '
+        f'This has looked temporary — Spectrum seems to rate-limit several sign-ins in a short '
+        f'window. Wait a few minutes, then sign in to one network at a time.'
+    )
+
+
+def _log_signin_timeout_snapshot(page, log_tag: str) -> None:
+    """Record what the browser was actually showing when a TVE sign-in wait
+    timed out. Found 2026-09-24 via a forum report (community thread post
+    #3223): a Spectrum-as-MVPD sign-in autofilled, submitted, then logged
+    nothing at all for 150s before "timed out" — no way to tell a captcha
+    challenge from Spectrum's IDID error page from a plain slow network.
+
+    URL (query-stripped) and page title always — neither carries account
+    details. Visible page text only when debug logging is on (FC_DEBUG or
+    the Settings toggle, see app/debug_flag.py), since a login page can
+    show the account name ("You're signing in as: ...") and this log is
+    mirrored into the UI activity feed that users screenshot publicly.
+    Best-effort; never raises.
+    """
+    try:
+        title = page.title()
+    except Exception:  # noqa: BLE001
+        title = '<unreadable>'
+    logger.info('[%s] timed out — final page url=%s title=%r', log_tag, _url_for_log(_safe_page_url(page)), title)
+    try:
+        from app.debug_flag import env_flag_enabled, settings_flag_enabled
+        enabled = env_flag_enabled()
+        if not enabled:
+            # Short-lived context, popped before touching the page again —
+            # every caller runs with its own context already popped (see
+            # _prime_google_session's docstring on why).
+            with flask_app.app_context():
+                enabled = settings_flag_enabled()
+        if not enabled:
+            return
+        text =_re.sub(r'\s+', ' ', page.inner_text('body')).strip()[:300]
+        logger.info('[%s][debug] timed out — final page text=%r', log_tag, text)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _mask_username(username: str) -> str:
+    """Log-safe form of an account username/email: the browser-login
+    activity log is shown in the UI, and users paste screenshots of it
+    into public forum threads (confirmed 2026-09-24, post #3223 — a full
+    Spectrum username ended up public that way). Keeps just enough to
+    recognize which account was used."""
+    name = (username or '').strip()
+    local, sep, domain = name.partition('@')
+    if len(local) <= 4:
+        masked = local[:1] + '***'
+    else:
+        masked = f'{local[:2]}***{local[-2:]}'
+    return masked + (sep + domain if sep else '')
 
 
 _GOOGLE_SETUP_URL = 'https://accounts.google.com/embedded/setup/v2/android?ipt=&ipr=&flowName=EmbeddedSetupAndroid'

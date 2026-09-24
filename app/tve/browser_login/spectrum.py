@@ -58,6 +58,7 @@ import redis
 
 from app.worker import flask_app
 from app.tve.browser_login.common import (
+    _detect_spectrum_feature_unavailable,
     _safe_page_url,
     _relay_input_and_screenshot,
     _try_autofill_credentials,
@@ -110,35 +111,6 @@ def _spectrum_debug_enabled() -> bool:
 def _debug_log(msg: str, *args) -> None:
     if _spectrum_debug_enabled():
         logger.info('[spectrum-signin][debug] ' + msg, *args)
-
-
-_IDID_ERROR_RE = re.compile(r'IDID-\d+')
-
-
-def _detect_spectrum_feature_unavailable(page) -> str | None:
-    """Detects Spectrum's own "Feature Unavailable... please try again from
-    home or contact us for assistance" error page — a real Spectrum-side
-    condition, not one of its normal login/consent screens. Confirmed live
-    2026-09-23 twice: IDID-4000 on a fresh Camoufox profile from a trusted
-    home network (a SECOND fresh-device registration against the same
-    account within a few minutes of a first one that had succeeded cleanly),
-    and IDID-4003 in a real public forum report. In the one case watched
-    end-to-end, a bare retry roughly 60-90s later — same account, same
-    device, same profile, nothing else changed — succeeded outright, too
-    fast to be a lasting account-level block. Current best read: a
-    short-lived rate-limit or a plain transient backend condition tied to
-    repeated new-device registrations in a short window, not "fresh device
-    always rejected" — see module docstring's 2026-09-23 update. Returns the
-    specific IDID-XXXX code (for logging/diagnostics) if this page is
-    currently showing, else None.
-    """
-    try:
-        if page.get_by_text('Feature Unavailable').count() == 0:
-            return None
-        match = _IDID_ERROR_RE.search(page.inner_text('body'))
-        return match.group(0) if match else 'IDID-unknown'
-    except Exception:  # noqa: BLE001
-        return None
 
 
 def _dismiss_spectrum_tos_welcome(page) -> bool:

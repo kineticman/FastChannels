@@ -26,6 +26,8 @@ from app.tve.browser_login.common import (
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
+    _log_signin_timeout_snapshot,
+    _spectrum_feature_unavailable_message,
     _sling_f5_recover,
     _url_for_log,
     _gateway_url_for_log,
@@ -563,6 +565,12 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             return
                         raise _BrowserSessionDied('browser page closed and pairing did not complete')
 
+                    idid_message = _spectrum_feature_unavailable_message(page, 'NBC TVE')
+                    if idid_message:
+                        _record_tve_login_error('nbc', idid_message)
+                        set_status('error', idid_message)
+                        return
+
                     for _ in range(20):
                         raw = r.lpop(NBC_BROWSER_LOGIN_INPUT_KEY)
                         if raw is None:
@@ -645,6 +653,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
                     page.wait_for_timeout(80)
 
+                _log_signin_timeout_snapshot(page, 'nbc-mvpd-login')
                 set_status('error', 'Timed out waiting for sign-in to complete.')
                 return
         except BaseException as exc:  # noqa: BLE001

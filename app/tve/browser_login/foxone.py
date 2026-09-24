@@ -19,6 +19,8 @@ from app.tve.browser_login.common import (
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
+    _log_signin_timeout_snapshot,
+    _spectrum_feature_unavailable_message,
     _autofill_xfinity_credentials,
     _harvest_and_save_xfinity_cookies,
     _is_browser_death,
@@ -229,6 +231,7 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
             last_shot = 0.0
             last_poll = 0.0
             cancelled = False
+            idid_message = None
             while time.monotonic() < deadline:
                 if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
                     cancelled = True
@@ -239,6 +242,9 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
                     if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
                         cancelled = True
                         break
+                idid_message = _spectrum_feature_unavailable_message(page, 'FOX One')
+                if idid_message:
+                    break
                 if now - last_poll > _POLL_SECONDS:
                     last_poll = now
                     try:
@@ -252,7 +258,12 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
             if cancelled:
                 set_status('stopped', 'Cancelled')
                 return
+            if idid_message:
+                _record_tve_login_error('foxone', idid_message)
+                set_status('error', idid_message)
+                return
             if not access_token:
+                _log_signin_timeout_snapshot(page, 'foxone-mvpd-login')
                 set_status('error', 'FOX One: timed out waiting for sign-in to complete.')
                 return
             if mso_id == 'YouTubeTV':
