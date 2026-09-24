@@ -563,6 +563,12 @@ def save_source_config(source_id):
         _toggle_enabled(old, key) != _toggle_enabled(current, key)
         for key in ('exclude_fast_channels', 'use_provider_numbers')
     )
+    # Switching DirecTV numbering on also needs a stream audit after the
+    # refresh before the bridged channels tune reliably (confirmed live
+    # 2026-09-23), so queue one rather than leaving it as a manual step.
+    directv_numbering_changed = source.name == 'directv' and (
+        _toggle_enabled(old, 'use_provider_numbers') != _toggle_enabled(current, 'use_provider_numbers')
+    )
     if creds_changed or sling_subscription_changed:
         for tk in _AUTH_STATE:
             if data.get(tk) in (None, '', '••••••••'):  # skip values set in this save
@@ -623,6 +629,7 @@ def save_source_config(source_id):
     if pbs_deleted:
         _invalidate_and_refresh_xml()
     full_scrape_queued = False
+    stream_audit_queued = False
     if source.name == 'sling' and (creds_changed or sling_lineup_changed) and source.is_enabled:
         # Credentials and the subscription/FAST-exclusion toggles can add/remove
         # channels. A normal scheduled scrape may be EPG-only for other sources,
@@ -634,6 +641,10 @@ def save_source_config(source_id):
         # which channels come back from fetch_channels().
         trigger_scrape(source.name, force_full=True)
         full_scrape_queued = True
+        if directv_numbering_changed:
+            from .tasks import trigger_stream_audit
+            trigger_stream_audit(source.name)
+            stream_audit_queued = True
     elif source.name == 'pbs' and old != current and source.is_enabled:
         # Any PBS config change (curated toggle, ZIP codes, or hand-editing
         # manual_feeds directly) can change the channel set — same immediate-
@@ -653,6 +664,7 @@ def save_source_config(source_id):
         'is_enabled': source.is_enabled,
         'auto_enabled': auto_enabled,
         'full_scrape_queued': full_scrape_queued,
+        'stream_audit_queued': stream_audit_queued,
         'deleted_channels': pbs_deleted,
         'config_complete': config_complete,
         'config_status': config_status,

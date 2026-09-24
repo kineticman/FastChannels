@@ -1387,7 +1387,9 @@ class DirectvScraper(BaseScraper):
                         'On satellite lineups the SD copy of an HD channel is left out so '
                         'the pair does not claim the same number (applies from the next '
                         'channel refresh). DirecTV numbers can overlap other sources; '
-                        'the app does not renumber around them.'
+                        'the app does not renumber around them. IMPORTANT: changing this '
+                        'queues a channel refresh and then a stream audit; wait for both to '
+                        'finish before tuning, or channels will not play.'
                     )),
     ]
 
