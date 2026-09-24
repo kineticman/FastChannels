@@ -1019,6 +1019,19 @@ def _tracked_channel_address(r, channel_key: str) -> str | None:
     return address
 
 
+def block_boundary_ts(next_pointer: str | None) -> float | None:
+    """Epoch seconds embedded in a schedule.qvt-style "_next" pointer
+    (.../<guid>/20260915200000/schedule.qvt), or None if it doesn't parse."""
+    match = re.search(r'/(\d{14})/', next_pointer or '')
+    if not match:
+        return None
+    try:
+        from datetime import datetime, timezone
+        return datetime.strptime(match.group(1), '%Y%m%d%H%M%S').replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
 def note_block_boundary(channel_key: str, next_pointer: str) -> None:
     """Records when the content block currently playing on channel_key is due to end,
     parsed from a schedule.qvt-style "_next" pointer URL whose path embeds the
@@ -1034,13 +1047,10 @@ def note_block_boundary(channel_key: str, next_pointer: str) -> None:
     """
     if not channel_key or not next_pointer:
         return
-    match = re.search(r'/(\d{14})/', next_pointer)
-    if not match:
+    boundary_ts = block_boundary_ts(next_pointer)
+    if boundary_ts is None:
         return
     try:
-        from datetime import datetime, timezone
-        boundary_dt = datetime.strptime(match.group(1), '%Y%m%d%H%M%S').replace(tzinfo=timezone.utc)
-        boundary_ts = boundary_dt.timestamp()
         ttl = max(60, int(boundary_ts - time.time()) + 600)
         r = _redis()
         r.setex(_BLOCK_BOUNDARY_PREFIX + channel_key, ttl, str(boundary_ts))

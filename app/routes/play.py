@@ -2099,33 +2099,60 @@ def sling_dash_proxy(channel_id: str):
     if not channel:
         abort(404)
 
-    scraper_cls = registry.get('sling')
-    if not scraper_cls:
-        return _unavailable_response()
-    scraper = scraper_cls(config=channel.source.config or {})
-    try:
-        dash_url = scraper.resolve(channel.stream_url)
-    except Exception as e:
-        logger.warning('[sling-dash] resolve failed for %s: %s', raw_id[:40], e)
-        return _unavailable_response()
-    finally:
-        if getattr(scraper, '_pending_cache_updates', None):
-            try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
-            except Exception:
-                pass
-        if scraper._pending_config_updates:
-            try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
-            except Exception:
-                pass
-        next_boundary = getattr(scraper, 'last_schedule_next', None)
-        if next_boundary:
-            try:
-                from .. import fc_player_bridge
-                fc_player_bridge.note_block_boundary(f'sling:{raw_id}', next_boundary)
-            except Exception:
-                pass
+    # Players refresh this manifest every ~2s (minimumUpdatePeriod), and resolve() is a
+    # schedule.qvt call to Sling's API each time — ~1800/hour per viewer. The resolved
+    # clipslist URL is fixed for the whole block (.../<block start>/<block end>/
+    # spanning_ads.mpd, no token), so reuse it until shortly before the block ends.
+    # Expiring 5s early keeps every poll across a transition resolving fresh, as
+    # before; the 60s cap bounds staleness if Sling reschedules a block early.
+    rdb = _amazon_sht_redis()
+    dash_cache_key = f'sling:dash_url:{raw_id}'
+    dash_url = None
+    if rdb:
+        try:
+            dash_url = rdb.get(dash_cache_key)
+        except Exception:
+            pass
+
+    if not dash_url:
+        scraper_cls = registry.get('sling')
+        if not scraper_cls:
+            return _unavailable_response()
+        scraper = scraper_cls(config=channel.source.config or {})
+        next_boundary = None
+        try:
+            dash_url = scraper.resolve(channel.stream_url)
+        except Exception as e:
+            logger.warning('[sling-dash] resolve failed for %s: %s', raw_id[:40], e)
+            return _unavailable_response()
+        finally:
+            if getattr(scraper, '_pending_cache_updates', None):
+                try:
+                    persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                except Exception:
+                    pass
+            if scraper._pending_config_updates:
+                try:
+                    persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+                except Exception:
+                    pass
+            next_boundary = getattr(scraper, 'last_schedule_next', None)
+            if next_boundary:
+                try:
+                    from .. import fc_player_bridge
+                    fc_player_bridge.note_block_boundary(f'sling:{raw_id}', next_boundary)
+                except Exception:
+                    pass
+
+        if rdb and dash_url and dash_url.startswith('http') and next_boundary:
+            from .. import fc_player_bridge
+            boundary_ts = fc_player_bridge.block_boundary_ts(next_boundary)
+            ttl = int(min(boundary_ts - _time.time() - 5, 60)) if boundary_ts else 0
+            if ttl >= 5:
+                try:
+                    rdb.setex(dash_cache_key, ttl, dash_url)
+                except Exception:
+                    pass
 
     if not dash_url or not dash_url.startswith('http'):
         logger.warning('[sling-dash] no DASH URL for %s', raw_id[:40])
@@ -2157,6 +2184,34 @@ def sling_dash_proxy(channel_id: str):
     # movenetworks' own custom namespace attribute carrying the same raw proxy URL,
     # attached directly to the generic mp4protection ContentProtection element.
     mpd = re.sub(r'\s+\w+:widevineProxy="[^"]*"', '', mpd, flags=re.IGNORECASE)
+    # Each clipslist block is type="dynamic" but declares its full length up front
+    # (<Period duration="PT1680S">). A bounded period makes Media3 count every segment in
+    # the block as already available (its window comes out dynamic=false), so
+    # FastChannels Player buffers past what Sling has actually published (~6s ahead of
+    # wall clock), 404s at the edge, and excludes each rendition it tries in turn —
+    # sliding down the ladder to 288p. Confirmed live 2026-09-24 through a logging proxy
+    # on the bridge stick: ~1.6 segment 404s/s for the whole block, matching a forum
+    # report of endless ContainerMediaChunk 404s with a periodically soft picture.
+    # Without a declared duration the segment count is unbounded and Media3 limits
+    # availability to wall clock, playing suggestedPresentationDelay behind the edge.
+    # Block ends don't depend on the period length — the boundary swap/retune
+    # (fc_player_bridge) handles those.
+    if re.search(r'<(?:\w+:)?MPD\b[^>]*\btype="dynamic"', mpd):
+        mpd = re.sub(r'(<(?:\w+:)?Period\b[^>]*?)\s+duration="[^"]*"', r'\1', mpd)
+        mpd = re.sub(r'(<(?:\w+:)?MPD\b[^>]*?)\s+mediaPresentationDuration="[^"]*"', r'\1', mpd)
+        # That wall-clock bound is the player's own clock unless the MPD names a time
+        # source, and Sling's has no <UTCTiming>: a client running more than ~6s fast
+        # would request unpublished segments again. Stamp our (NTP-synced) server time
+        # in with the direct scheme — Media3 and Shaka both support it, and it costs no
+        # extra round trip.
+        if not re.search(r'<(?:\w+:)?UTCTiming\b', mpd):
+            now_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+            mpd = re.sub(
+                r'</((?:\w+:)?)MPD>',
+                lambda m: (f'<{m.group(1)}UTCTiming schemeIdUri="urn:mpeg:dash:utc:direct:2014" '
+                           f'value="{now_iso}"/></{m.group(1)}MPD>'),
+                mpd, count=1,
+            )
 
     return Response(
         mpd,
