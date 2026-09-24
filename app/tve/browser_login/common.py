@@ -1188,6 +1188,12 @@ def _spectrum_signin_error_message(page, label: str) -> str | None:
     retrying several families back to back is precisely the "repeated
     sign-ins in a short window" shape that seems to trigger it.
 
+    Not always transient, though: confirmed live 2026-09-24 that FOX One
+    through a Cox-migrated Spectrum account gets IDID-4000 on every attempt
+    across ~70 minutes, seconds after A&E signed in fine through the same
+    Spectrum page — i.e. Spectrum refusing that one network. The message
+    covers both readings.
+
     Deliberately fails fast rather than retrying like the Spectrum scraper
     does: the scraper's retry re-navigates a fixed start page, but here the
     only thing to re-navigate is an Adobe/network SAML URL that may be
@@ -1211,8 +1217,10 @@ def _spectrum_signin_error_message(page, label: str) -> str | None:
                        label, code, _url_for_log(url))
         return (
             f'{label}: Spectrum returned "{code}" ("Feature Unavailable... try again from home"). '
-            f'This has looked temporary — Spectrum seems to rate-limit several sign-ins in a short '
-            f'window. Wait a few minutes, then sign in to one network at a time.'
+            f'This can be temporary — Spectrum rate-limits several sign-ins in a short window, so '
+            f'wait a few minutes and sign in to one network at a time. If it keeps happening for '
+            f'just this network while others sign in fine, Spectrum likely doesn\'t offer it '
+            f'through TV Everywhere.'
         )
     if 'spectrum.net' not in url:
         return None
