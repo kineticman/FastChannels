@@ -2113,6 +2113,11 @@
 
     function _showResult(sourceId, lastError) {
       delete _scrapeStart[sourceId];
+      if (_auditAfterScrape[sourceId]) {
+        delete _auditAfterScrape[sourceId];
+        _auditGrace[sourceId] = Date.now() + 20000;
+        _startAuditPolling(sourceId, null);
+      }
       document.getElementById(`dash-row-${sourceId}`)?.classList.remove('scraping');
       const btn = _scrapeBtn[sourceId];
       if (btn) { btn.innerHTML = btn.dataset.label || 'Scrape<br>Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
@@ -2189,6 +2194,10 @@
 
     // ── Stream Audit progress polling ─────────────────────────────────────
     const _auditPollTimers = {};
+    // Sources whose config save promised a stream audit after the queued
+    // scrape (DirecTV numbering toggle): start audit polling when that scrape
+    // finishes, so the page shows both runs without a manual reload.
+    const _auditAfterScrape = {};
     const _auditRunBtns    = {};
     const _auditGrace      = {};
 
@@ -3950,6 +3959,12 @@
           }
         });
         setTimeout(() => { status.textContent = ''; }, 2500);
+        if (data.full_scrape_queued) {
+          if (data.stream_audit_queued) _auditAfterScrape[sourceId] = true;
+          _scrapeStart[sourceId] = Date.now();
+          document.getElementById(`dash-row-${sourceId}`)?.classList.add('scraping');
+          _startPolling(sourceId, null);
+        }
         loadSourceConfig(sourceId, getSourceName(sourceId));
         if (data.auto_enabled) {
           applySourceEnabledState(sourceId, true);

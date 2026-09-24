@@ -619,6 +619,12 @@ def save_source_config(source_id):
                         db.session.delete(ch)
                         pbs_deleted += 1
 
+    if directv_numbering_changed and source.is_enabled:
+        # One-shot flag consumed by run_scraper's completion path. It has to
+        # ride the commit below, BEFORE trigger_scrape() further down: set
+        # after that commit it was never persisted, and the worker (which
+        # starts the job within a second) never saw it.
+        current['_audit_after_scrape'] = True
     source.config = current
     auto_enabled = False
     if (
@@ -646,8 +652,7 @@ def save_source_config(source_id):
         trigger_scrape(source.name, force_full=True)
         full_scrape_queued = True
         if directv_numbering_changed:
-            source.config = {**(source.config or {}), '_audit_after_scrape': True}
-            stream_audit_queued = True
+            stream_audit_queued = True  # flag was committed with the config above
     elif source.name == 'pbs' and old != current and source.is_enabled:
         # Any PBS config change (curated toggle, ZIP codes, or hand-editing
         # manual_feeds directly) can change the channel set — same immediate-

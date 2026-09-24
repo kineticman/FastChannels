@@ -588,6 +588,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
+                db.session.refresh(source)  # the flag may have been committed by the API after this job loaded the row
                 if (source.config or {}).get('_audit_after_scrape'):
                     # One-shot request from a config save (DirecTV numbering
                     # toggle, see api_sources.save_source_config): run a stream
