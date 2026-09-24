@@ -193,6 +193,9 @@ def preview_order():
                             or ch.id in fixed_ids),
         'number_source': ('lock' if getattr(ch, 'pinned_chno', None) else 'provider')
                          if ch.id in fixed_ids else None,
+        # Channel-wide lock (whole or decimal number) the dialog can unlock.
+        'locked':      bool((getattr(ch, 'number_pinned', False) and ch.number is not None)
+                            or getattr(ch, 'pinned_chno', None)),
         'feed_pinned': ch.id in feed_pinned_ids,
         'gracenote':   ch.id in gn_ids,
     } for ch in stubs]
