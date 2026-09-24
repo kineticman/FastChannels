@@ -733,11 +733,23 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
         )
         decision.raise_for_status()
         decisions = decision.json().get('decisions') or []
-        authorized = next((item for item in decisions if item.get('authorized') is True), None)
-        token_obj = (authorized or {}).get('token') or {}
-        serialized = token_obj.get('serializedToken')
-        if not serialized:
+        # Match on the resource we actually asked for (Adobe echoes it back
+        # verbatim — `"resource":"AMC"` for `{"resources":["AMC"]}`, per
+        # dev/amc/amc.har) rather than taking any authorized item. Only an
+        # explicit authorized=false is a real denial; a missing decision or
+        # an allow with no token is a protocol/auth problem, not proof the
+        # subscription lacks the network — raising TVENotAuthorizedError for
+        # those made the browser loop give up and the audit treat it as a
+        # definitive "not entitled". Diagnosis from cstukane's closed PR #60.
+        result = next((item for item in decisions if item.get('resource') == channel.requestor_id), None)
+        if result is None:
+            raise TVEAuthError(f'{channel.name}: Adobe returned no decision for {channel.requestor_id}.')
+        if result.get('authorized') is False:
             raise TVENotAuthorizedError(f'{channel.name}: Adobe did not authorize {channel.requestor_id} for {mso_id}.')
+        token_obj = result.get('token') or {}
+        serialized = token_obj.get('serializedToken')
+        if result.get('authorized') is not True or not serialized:
+            raise TVEAuthError(f'{channel.name}: Adobe decision for {channel.requestor_id} had no media token.')
         return serialized, adobe_id, token_obj.get('notAfter')
 
     def _adobe_auth_cache_key(self, channel: AMCNChannel) -> str:

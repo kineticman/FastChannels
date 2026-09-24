@@ -361,6 +361,15 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
                     if (flow.get('external_partner_id') or '') == mso_id:
                         return p.get('id')
 
+        # Optimum TV (AlticeOne) and legacy Optimum (Cablevision) are
+        # separate Adobe integrations with confusable names — live list
+        # 2026-09-24: 'Optimum TV' -> AlticeOne, 'Optimum' -> Cablevision.
+        # The exact flow match above handles it today; if Discovery ever
+        # drops that flow id, the name fallback below would silently pick
+        # the wrong one, so refuse instead (via cstukane's closed PR #60).
+        if mso_id == 'AlticeOne':
+            raise TVEAuthError('Discovery TVE: partner list has no exact AlticeOne entry; not guessing between Optimum TV and legacy Optimum.')
+
         candidates = [c.strip().lower() for c in (mso_name, mso_id) if c]
         for candidate in candidates:
             for p in partners:
