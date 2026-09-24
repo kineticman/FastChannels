@@ -74,12 +74,15 @@ _SUPPRESS_WATCH_RE = re.compile(r'"(?:GET|HEAD) /watch/\d+')
 _SUCCESS_ACCESS_RE = re.compile(r'HTTP/\d(?:\.\d)?" [23]\d\d ')
 _SUCCESS_SUPPRESS_PATTERNS = (
     '/play/philo/license',     # Philo DRM license — noisy during startup/key rotation
+    'GET /api/settings/fc-player/devices HTTP',  # Bridge devices card list, on page load
+    'POST /api/settings/fc-player/devices/probe',  # read-only adb probe, one per device per page load
 )
 _SUCCESS_SUPPRESS_RE = re.compile(r'(?:GET|HEAD) /play/directv/browser-asset\?url=')
 _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa|fubo)/[^/]+/dash\.mpd')
-# DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo use
-# query-form URLs (/license?channel_id=<id>) — matched via the separator below.
-_LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo)/license(?:/|\?channel_id=)')
+# DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo/sling use
+# query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's
+# fire on every tune, block-boundary swap, and FC Player ad-gap rejoin.
+_LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling)/license(?:/|\?channel_id=)')
 
 
 class _AccessFilter(logging.Filter):
