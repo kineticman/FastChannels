@@ -59,7 +59,11 @@ function _bdActivityFact(entry) {
   const probe = entry.probe || {};
   const info = entry.info;
   if (probe.player_playing) {
-    return `<span class="fc-dev-ok">▶ Playing</span> ${_escapeHtml(probe.now_playing || '')}`;
+    // Below 720p is what a "soft picture" report looks like from here.
+    const res = probe.video_height
+      ? ` · <span class="${probe.video_height < 720 ? 'fc-dev-warn' : 'fc-dev-muted'}">${probe.video_height}p</span>`
+      : '';
+    return `<span class="fc-dev-ok">▶ Playing</span> ${_escapeHtml(probe.now_playing || '')}${res}`;
   }
   const idle = probe.authorized ? 'Idle' : '';
   if (info.last_tuned_at) {
@@ -67,6 +71,23 @@ function _bdActivityFact(entry) {
     return idle ? `${idle} · ${last}` : last;
   }
   return idle || '<span class="fc-dev-muted">Never tuned</span>';
+}
+
+function _bdNetworkFact(probe) {
+  if (probe.network === 'ethernet') return 'Ethernet';
+  if (probe.network !== 'wifi') return null;
+  const rssi = probe.wifi_rssi;
+  // -60 dBm and up holds a 1080p stream comfortably; below -70 brief quality dips are expected.
+  const [label, cls] = rssi >= -60 ? ['good', 'fc-dev-ok'] : rssi >= -70 ? ['fair', ''] : ['weak', 'fc-dev-warn'];
+  const link = probe.wifi_link_mbps > 0 ? ` · ${probe.wifi_link_mbps} Mbps` : '';
+  return `Wi-Fi <span class="${cls}">${rssi} dBm (${label})</span>${link}`;
+}
+
+function _bdRecoveryFact(probe) {
+  if (!probe.recoveries_last_hour) return null;
+  const n = probe.recoveries_last_hour;
+  const last = `last: ${_escapeHtml(probe.last_recovery || 'recovery')} ${_bdAgo(probe.last_recovery_at)}`;
+  return `<span class="${probe.last_recovery_gave_up ? 'fc-dev-warn' : ''}">${n} in the last hour · ${last}</span>`;
 }
 
 function _bdRender(address) {
@@ -89,6 +110,12 @@ function _bdRender(address) {
     }
   }
   facts.push(['Activity', _bdActivityFact(entry)]);
+  if (probe && probe.authorized) {
+    const network = _bdNetworkFact(probe);
+    if (network) facts.push(['Network', network]);
+    const recovery = _bdRecoveryFact(probe);
+    if (recovery) facts.push(['Recovery', recovery]);
+  }
 
   const subtitle = [info.host];
   if (probe && probe.model && _bdTitle(entry) !== probe.model) subtitle.push(probe.model);

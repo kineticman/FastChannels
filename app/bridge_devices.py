@@ -11,9 +11,11 @@ Listing is cheap (no adb). Probing is one device per call so the page can fire
 them in parallel and fill each card in as its answer lands — an unreachable stick
 costs a full adb timeout and shouldn't hold up the rest.
 """
+import json
 import logging
 import re
 import subprocess
+import time
 from datetime import datetime, timezone
 
 from . import fc_player_bridge as fcp
@@ -24,6 +26,19 @@ logger = logging.getLogger(__name__)
 
 _ADDRESS_RE = re.compile(r'^[A-Za-z0-9.\-]{1,255}(?::\d{1,5})?$')
 _SECTION = '__FC_SECTION__'
+# Printed by FastChannels Player 5.2.10+ from PlaybackActivity.dump(): what it's
+# rendering and what it recovered from lately. Older players print nothing, and
+# neither does a stick whose player Activity isn't running.
+_PLAYER_STATUS_CMD = ('dumpsys activity com.fastchannels.player/.PlaybackActivity 2>/dev/null'
+                      ' | grep -m1 FCPLAYER_STATUS')
+_STATUS_FRESH_S = 90
+_RECOVERY_WINDOW_S = 3600
+_RECOVERY_LABELS = {
+    'gap_rejoin': 'ad-gap rejoin',
+    'freeze_rebuild': 'frozen-picture rebuild',
+    'error_retry': 'error retry',
+    'gave_up': 'gave up',
+}
 
 
 def normalize_address(raw: str | None) -> str | None:
@@ -160,6 +175,9 @@ def _device_extras(address: str) -> dict:
         'dumpsys power | grep -m1 mWakefulness=',
         'dumpsys window | grep -m1 mCurrentFocus',
         'dumpsys media_session',
+        _PLAYER_STATUS_CMD,
+        'dumpsys wifi 2>/dev/null | grep -m1 mWifiInfo',
+        'ip -o -4 addr show eth0 2>/dev/null',
     ])
     try:
         res = subprocess.run(
@@ -169,8 +187,10 @@ def _device_extras(address: str) -> dict:
     except Exception:
         return out
     parts = [p.strip() for p in (res.stdout or '').split(_SECTION)]
-    parts += [''] * (5 - len(parts))
-    model, name, power, focus, sessions = parts[:5]
+    parts += [''] * (8 - len(parts))
+    model, name, power, focus, sessions, status, wifi, eth = parts[:8]
+    out.update(_player_status(status))
+    out.update(_network(wifi, eth))
 
     out['model'] = model or None
     out['device_name'] = name if name and name.lower() != 'null' else None
@@ -182,6 +202,50 @@ def _device_extras(address: str) -> dict:
         session = fcp._PLAYER_SESSION_RE.search(sessions)
         out['player_playing'] = bool(session and session.group(1) == '3')
     return out
+
+
+def _player_status(raw: str) -> dict:
+    """Current picture and last-hour recoveries from the player's FCPLAYER_STATUS dump
+    line. It's generated live, so the freshness check only guards against a clock-skewed
+    device; recoveries are timestamped individually."""
+    try:
+        status = json.loads(raw[raw.index('{'):]) if '{' in (raw or '') else None
+    except ValueError:
+        status = None
+    if not isinstance(status, dict):
+        return {}
+    now = time.time()
+    out = {}
+    updated = (status.get('updated_ms') or 0) / 1000
+    if now - updated <= _STATUS_FRESH_S and status.get('playing') and status.get('video_height'):
+        out['video_height'] = status['video_height']
+        out['video_width'] = status.get('video_width')
+        out['video_bitrate'] = status.get('video_bitrate')
+    recent = [e for e in status.get('events') or []
+              if isinstance(e, dict) and now - (e.get('t') or 0) / 1000 <= _RECOVERY_WINDOW_S]
+    if recent:
+        last = max(recent, key=lambda e: e.get('t') or 0)
+        out['recoveries_last_hour'] = len(recent)
+        out['last_recovery'] = _RECOVERY_LABELS.get(last.get('kind'), last.get('kind'))
+        out['last_recovery_gave_up'] = last.get('kind') == 'gave_up'
+        out['last_recovery_at'] = _iso_utc(datetime.fromtimestamp(last['t'] / 1000, timezone.utc))
+    return out
+
+
+def _network(wifi: str, eth: str) -> dict:
+    """Wired beats Wi-Fi when both show up. RSSI -127 / "<unknown ssid>" is how
+    Android reports a Wi-Fi radio that isn't associated."""
+    if re.search(r'\binet \d', eth or ''):
+        return {'network': 'ethernet'}
+    rssi = re.search(r'RSSI: (-?\d+)', wifi or '')
+    if not rssi or int(rssi.group(1)) <= -127 or '<unknown ssid>' in wifi:
+        return {}
+    link = re.search(r', Link speed: (\d+)', wifi)  # not the "Tx/Rx Link speed" fields
+    return {
+        'network': 'wifi',
+        'wifi_rssi': int(rssi.group(1)),
+        'wifi_link_mbps': int(link.group(1)) if link else None,
+    }
 
 
 def _active_channel_key(address: str) -> str | None:
