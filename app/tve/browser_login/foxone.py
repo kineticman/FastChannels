@@ -21,6 +21,8 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _log_signin_timeout_snapshot,
+    SpectrumWantsCoxProvider,
+    _spectrum_retry_as_cox,
     _spectrum_signin_error_message,
     _autofill_xfinity_credentials,
     _try_autofill_credentials,
@@ -289,6 +291,10 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
                 # other TVE families' cookie-jar fast path.
                 _harvest_and_save_xfinity_cookies(context)
     except BaseException as exc:  # noqa: BLE001
+        if isinstance(exc, SpectrumWantsCoxProvider):
+            if _spectrum_retry_as_cox(mso_id, 'FOX One', set_status):
+                return _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 'Cox')
+            return
         if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
             set_status('stopped', 'Cancelled')
             return

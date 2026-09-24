@@ -24,6 +24,8 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _log_signin_timeout_snapshot,
+    SpectrumWantsCoxProvider,
+    _spectrum_retry_as_cox,
     _spectrum_signin_error_message,
     _sling_f5_recover,
     _url_for_log,
@@ -648,6 +650,10 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         except BaseException as exc:  # noqa: BLE001
             if _terminal_status_set['v']:
                 logger.info('[fox-mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
+                return
+            if isinstance(exc, SpectrumWantsCoxProvider):
+                if _spectrum_retry_as_cox(mso_id, 'FOX TVE', set_status):
+                    return run_fox_browser_login('Cox', _attempt=_attempt, _deadline=deadline)
                 return
             if _is_browser_death(exc) and _grace_poll_pairing(str(exc)[:80]):
                 return

@@ -1164,6 +1164,58 @@ def _detect_spectrum_feature_unavailable(page) -> str | None:
         return None
 
 
+class SpectrumWantsCoxProvider(Exception):
+    """Spectrum showed IDLI-4213 ("select 'Cox Spectrum' as your TV
+    provider") — see _spectrum_signin_error_message. Raised out of a TVE
+    wait loop; str(exc) is the user-facing message for when the caller
+    can't retry."""
+
+
+def _spectrum_retry_as_cox(mso_id: str, label: str, set_status) -> bool:
+    """Handle SpectrumWantsCoxProvider in a TVE sign-in's error handler.
+
+    When the attempt used mso_id=Spectrum: switch the saved TV provider to
+    Cox (what Spectrum means by "Cox Spectrum") and return True — the
+    caller then reruns the same network with mso_id='Cox'. The provider is
+    switched for good, not just for this one attempt, so every other
+    network (and "Sign in to all"'s next steps, and play-time
+    re-authorization) uses it too; users can't tell us this in advance,
+    only Spectrum's own error does. Returns False (after setting an error
+    status) for any other mso_id, so a Cox attempt can never loop.
+    """
+    if mso_id != 'Spectrum':
+        set_status('error', f'{label}: Spectrum returned IDLI-4213 ("select Cox Spectrum") even '
+                            f'though the TV provider is already set to {mso_id}.')
+        return False
+    try:
+        with flask_app.app_context():
+            account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            if account is None:
+                set_status('error', f'{label}: TVE credentials are not configured in Settings.')
+                return False
+            cfg = dict(account.config or {})
+            cfg['selected_mso_id'] = 'Cox'
+            cfg['selected_mso_name'] = 'Cox / Cox Spectrum'
+            # Same keys the settings form writes on a provider change —
+            # every start route reads yt_dlp_mso_id before selected_mso_id,
+            # and play-time authorize_mvpd() falls back to adobe_mso_id.
+            for key in ('yt_dlp_mso_id', 'adobe_mso_id'):
+                if key in cfg:
+                    cfg[key] = 'Cox'
+            account.config = cfg
+            db.session.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[mvpd-login] %s: could not switch the TV provider to Cox: %s', label, exc)
+        set_status('error', f'{label}: Spectrum asked for "Cox Spectrum" (IDLI-4213) but switching '
+                            f'the TV provider failed ({exc}) — choose "Cox / Cox Spectrum" in Settings.')
+        return False
+    logger.info('[mvpd-login] %s: Spectrum asked for "Cox Spectrum" (IDLI-4213) — switched the TV '
+                'provider to Cox and retrying', label)
+    set_status('starting', 'Spectrum says this account signs in as "Cox Spectrum" — switched your '
+                           'TV provider and retrying…')
+    return True
+
+
 _SPECTRUM_IDID_CHECK_INTERVAL_SECONDS = 1.0
 # Spectrum's own error-code shape on its login/IdP pages: IDID-4000,
 # IDID-4003, IDLI-4213 seen live.
@@ -1236,16 +1288,20 @@ def _spectrum_signin_error_message(page, label: str) -> str | None:
         # Confirmed live 2026-09-24 with a real Cox account migrated to
         # Spectrum, signing in under mso_id=Spectrum: Spectrum's login form
         # shows "please return to the provider selection page and select
-        # 'Cox Spectrum' as your TV provider. IDLI-4213." right after the
-        # credentials are submitted. Adobe has no separate "Cox Spectrum"
-        # MVPD — it's Adobe's "Cox" (which now hands off to this same
-        # Spectrum login page), and the same account signed in fine that way.
-        logger.warning('[mvpd-login] %s: Spectrum refused a Cox-migrated account under the Spectrum '
-                       'provider (IDLI-4213) url=%s', label, _url_for_log(url))
-        return (
-            f'{label}: Spectrum says this account was moved over from Cox and must sign in as '
-            f'"Cox Spectrum" (IDLI-4213). In Settings → TVE, choose Cox as your TV provider — keep '
-            f'your Spectrum username and password — then sign in again.'
+        # 'Cox Spectrum' as your TV provider. IDLI-4213." — first on
+        # Discovery in our own flow, then on TNT's real site in a normal
+        # browser (dev/tnt/coxspectrum.har). "Cox Spectrum" is Adobe's `Cox`
+        # MVPD: same id/displayName, but its logoUrl is
+        # cox-spectrum-logo-RGB.jpg, which is the tile network pickers show.
+        # Picking it signed the same account in to TNT. Raised rather than
+        # returned so the caller closes the browser, switches the saved
+        # provider (see _spectrum_retry_as_cox) and reruns this network.
+        logger.warning('[mvpd-login] %s: Spectrum wants this account to sign in as "Cox Spectrum" '
+                       '(IDLI-4213) url=%s', label, _url_for_log(url))
+        raise SpectrumWantsCoxProvider(
+            f'{label}: Spectrum says this account must sign in as "Cox Spectrum" (IDLI-4213). '
+            f'In Settings → TVE, choose "Cox / Cox Spectrum" as your TV provider — keep your '
+            f'Spectrum username and password — then sign in again.'
         )
     # Any other Spectrum error code (wrong password, locked account, ...):
     # logged once so the activity feed shows Spectrum's own words, but not

@@ -20,6 +20,8 @@ from app.tve.browser_login.common import (
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
     _log_signin_timeout_snapshot,
+    SpectrumWantsCoxProvider,
+    _spectrum_retry_as_cox,
     _spectrum_signin_error_message,
     _autofill_xfinity_credentials,
     _try_autofill_credentials,
@@ -380,6 +382,10 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
         with flask_app.app_context():
             persist_source_config_updates(source.id, scraper._pending_config_updates)
             persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+        if isinstance(exc, SpectrumWantsCoxProvider):
+            if _spectrum_retry_as_cox(mso_id, 'AMC Networks TVE', set_status):
+                return _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id, 'Cox', channels)
+            return
         if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
             set_status('stopped', f'Cancelled — authorized: {", ".join(authorized)}.' if authorized else 'Cancelled.')
             return
