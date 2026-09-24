@@ -2079,6 +2079,54 @@ def sling_boundary_ack(channel_id: str):
     return ('', 204)
 
 
+_ISO_DURATION_RE = re.compile(
+    r'^P(?:(?P<d>[\d.]+)D)?(?:T(?:(?P<h>[\d.]+)H)?(?:(?P<m>[\d.]+)M)?(?:(?P<s>[\d.]+)S)?)?$')
+
+
+def _iso_duration_s(value: str | None) -> float | None:
+    m = _ISO_DURATION_RE.match(value or '')
+    if not m or not any(m.groupdict().values()):
+        return None
+    parts = {k: float(v) for k, v in m.groupdict().items() if v}
+    return (parts.get('d', 0) * 86400 + parts.get('h', 0) * 3600
+            + parts.get('m', 0) * 60 + parts.get('s', 0))
+
+
+def _sling_unbound_live_period(mpd: str) -> str:
+    """Let Media3 bound the live period by wall clock instead of its declared length.
+
+    Media3 applies MPD@mediaPresentationDuration (the whole block, e.g. PT7080S) to the
+    last period, and a last period with a known end has every segment counted as already
+    available. So it buffers past what Sling has published and 404s. mediaPresentationDuration
+    is always dropped; the last period's own duration is dropped only while its end is still
+    ahead. A block can be several periods with an ad gap between them (365BLK, confirmed
+    2026-09-24: period 1 ended at 5223.9s, period 2 started at 5282.0s), and once a period
+    has ended its bound is real. Keeping it stops the player at the actual end instead of
+    running into segments that will never exist. Earlier periods are left alone — Media3
+    bounds them by the next period's start.
+    """
+    mpd = re.sub(r'(<(?:\w+:)?MPD\b[^>]*?)\s+mediaPresentationDuration="[^"]*"', r'\1', mpd)
+    periods = list(re.finditer(r'<(?:\w+:)?Period\b[^>]*>', mpd))
+    if not periods:
+        return mpd
+    last = periods[-1]
+    tag = last.group(0)
+    dur_match = re.search(r'\sduration="([^"]*)"', tag)
+    if not dur_match:
+        return mpd
+    ast_match = re.search(r'availabilityStartTime="([^"]+)"', mpd)
+    start_match = re.search(r'\sstart="([^"]*)"', tag)
+    try:
+        ast = datetime.fromisoformat(ast_match.group(1).replace('Z', '+00:00')).timestamp()
+        end = ast + _iso_duration_s(start_match.group(1)) + _iso_duration_s(dur_match.group(1))
+    except (AttributeError, TypeError, ValueError):
+        end = None
+    # Sling publishes ~6s ahead of wall clock, so within 4s of the end every segment exists.
+    if end is None or end > _time.time() + 4:
+        mpd = mpd[:last.start()] + tag.replace(dur_match.group(0), '', 1) + mpd[last.end():]
+    return mpd
+
+
 @play_bp.route('/play/sling/<channel_id>/dash.mpd')
 def sling_dash_proxy(channel_id: str):
     """DASH (Widevine) manifest proxy for Sling bridge playback.
@@ -2197,8 +2245,7 @@ def sling_dash_proxy(channel_id: str):
     # Block ends don't depend on the period length — the boundary swap/retune
     # (fc_player_bridge) handles those.
     if re.search(r'<(?:\w+:)?MPD\b[^>]*\btype="dynamic"', mpd):
-        mpd = re.sub(r'(<(?:\w+:)?Period\b[^>]*?)\s+duration="[^"]*"', r'\1', mpd)
-        mpd = re.sub(r'(<(?:\w+:)?MPD\b[^>]*?)\s+mediaPresentationDuration="[^"]*"', r'\1', mpd)
+        mpd = _sling_unbound_live_period(mpd)
         # That wall-clock bound is the player's own clock unless the MPD names a time
         # source, and Sling's has no <UTCTiming>: a client running more than ~6s fast
         # would request unpublished segments again. Stamp our (NTP-synced) server time
