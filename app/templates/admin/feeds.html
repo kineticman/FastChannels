@@ -2087,8 +2087,23 @@ function beginNumEdit(id, chip) {
     if (!isNaN(target)) {
       // Take the slot nearest the typed number; the block then renumbers
       // sequentially, so the final value snaps into the feed's compact range.
-      const idx = _orderRows.filter(r => r.id !== id && r.number != null && r.number < target).length;
-      moveOrderRow(id, idx);
+      // Count against the numbers the others will have once this row is out
+      // of the way (counting against current numbers put a downward move one
+      // slot short).
+      const from = _orderRows.findIndex(r => r.id === id);
+      const [row] = _orderRows.splice(from, 1);
+      renumberOrderRows();
+      const idx = _orderRows.filter(r => r.number != null && Number(r.number) < target).length;
+      _orderRows.splice(idx, 0, row);
+      _orderDirty = true;
+      renumberOrderRows();
+      renderOrderList();
+      if (Number(row.number) !== target) {
+        document.getElementById('ord-note').textContent =
+          `Numbers in this feed run in order from ${(_orderStart ?? 0).toLocaleString()} — typing a number moves `
+          + `the channel to that spot. To use other numbers, set this feed's Starting Channel Number, `
+          + `or lock the channel on the Channels page.`;
+      }
     } else {
       renderOrderList();
     }
