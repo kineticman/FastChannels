@@ -31,6 +31,7 @@ from ..generators.m3u import (
     _parse_gracenote_id,
     _selected_channel_stubs,
     _resolve_chnum_map,
+    apply_provider_numbers,
     feed_gracenote_start,
     feed_namespace_start,
 )
@@ -85,6 +86,7 @@ def _channel_feed_summaries(ch: Channel) -> list[dict]:
                 selected,
                 namespace_start=feed_namespace_start(feed, gracenote=gracenote_output),
             )
+        chnum_map = apply_provider_numbers(selected, chnum_map)
 
         result.append({
             'feed_id': feed.id,

@@ -116,7 +116,8 @@ def _alt_number(row: dict, base_number: int) -> int | None:
     if not m:
         return None
     n = int(m.group(1))
-    if n == base_number:
+    # "... 0" is not an alternate index either; suffixes start at .1.
+    if n == base_number or n < 1:
         return None
     return n
 
