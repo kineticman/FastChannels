@@ -217,13 +217,60 @@ def _decimal_lock_conflict_ids(items) -> set[int]:
     return {ch.id for ch in items if ch.pinned_chno and ch.pinned_chno in shared}
 
 
-def _page_default_feed_chnum_map(page_items) -> dict[int, int | str]:
+def _sort_ids_by_shown_number(q, full_map: dict, *, descending: bool) -> list[int]:
+    """Channel ids matched by `q`, ordered by the number the Channels page
+    shows (see _page_default_feed_chnum_map), name as tiebreak, unnumbered last."""
+    from types import SimpleNamespace
+    from ..generators.m3u import chnum_sort_key
+    rows = q.with_entities(
+        Channel.id, Channel.name, Channel.number, Channel.number_pinned,
+        Channel.pinned_chno, Channel.provider_number, Source.name.label('source_name'),
+    ).all()
+    stubs = [
+        SimpleNamespace(id=r.id, name=r.name, number=r.number, number_pinned=r.number_pinned,
+                        pinned_chno=r.pinned_chno, provider_number=r.provider_number,
+                        source=SimpleNamespace(name=r.source_name))
+        for r in rows
+    ]
+    shown = apply_provider_numbers(stubs, full_map)
+
+    def name_key(name):
+        n = (name or '').lower()
+        for article in ('the ', 'an ', 'a '):
+            if n.startswith(article):
+                return n[len(article):]
+        return n
+
+    numbered = [st for st in stubs if shown.get(st.id) not in (None, '')]
+    unnumbered = [st for st in stubs if shown.get(st.id) in (None, '')]
+    numbered.sort(key=lambda st: (chnum_sort_key(shown.get(st.id)), name_key(st.name)), reverse=descending)
+    unnumbered.sort(key=lambda st: name_key(st.name))
+    return [st.id for st in numbered + unnumbered]
+
+
+class _IdListPagination:
+    """Minimal stand-in for Flask-SQLAlchemy's Pagination over a pre-ordered id list."""
+    def __init__(self, ids: list[int], *, page: int, per_page: int):
+        self.total = len(ids)
+        self.per_page = per_page
+        self.pages = max(1, math.ceil(self.total / per_page)) if self.total else 0
+        self.page = page
+        page_ids = ids[(page - 1) * per_page: page * per_page] if page >= 1 else []
+        by_id = {ch.id: ch for ch in Channel.query.filter(Channel.id.in_(page_ids)).all()} if page_ids else {}
+        self.items = [by_id[cid] for cid in page_ids if cid in by_id]
+        self.has_prev = page > 1
+        self.has_next = page < self.pages
+        self.prev_num = page - 1 if self.has_prev else None
+        self.next_num = page + 1 if self.has_next else None
+
+
+def _page_default_feed_chnum_map(page_items, full_map: dict | None = None) -> dict[int, int | str]:
     """Display numbers for one admin page -- includes provider-native numbers
     (DirecTV "305.1"), unlike _default_feed_chnum_map_full(), which callers
     persist or compare as integers."""
     if not page_items:
         return {}
-    full_map = apply_provider_numbers(page_items, _default_feed_chnum_map_full())
+    full_map = apply_provider_numbers(page_items, full_map if full_map is not None else _default_feed_chnum_map_full())
     page_ids = {ch.id for ch in page_items}
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
 
@@ -847,8 +894,8 @@ def channels():
         'name':     [sort_name, Channel.name],
         'source':   [Source.display_name, Channel.name],
         'category': [Channel.category, Channel.name],
-        # Approximate M3U order: sources with explicit chnum_start first, then by
-        # actual channel number within each source block, then name as tiebreak.
+        # SQL fallback only; sort=number is done below on the number the page
+        # actually shows (see _sort_ids_by_shown_number).
         'number':   [db.func.coalesce(Source.chnum_start, 999999), db.func.coalesce(Channel.number, 999999), Source.display_name, sort_name, Channel.name],
     }
     _cols = _sort_cols.get(sort_by, [Channel.name])
@@ -858,8 +905,17 @@ def channels():
         _order = [c.asc() for c in _cols]
 
     ordered_q = q.order_by(*_order)
-    all_channel_ids = [r[0] for r in ordered_q.with_entities(Channel.id).all()]
-    channels = ordered_q.paginate(page=page, per_page=50, error_out=False)
+    full_chnum_map = None
+    if sort_by == 'number':
+        # The column shows the default feed's resolved number (plus provider /
+        # decimal numbers), which follows a different scheme than the stored
+        # Channel.number -- so sort by exactly what's shown.
+        full_chnum_map = _default_feed_chnum_map_full()
+        all_channel_ids = _sort_ids_by_shown_number(q, full_chnum_map, descending=(sort_dir == 'desc'))
+        channels = _IdListPagination(all_channel_ids, page=page, per_page=50)
+    else:
+        all_channel_ids = [r[0] for r in ordered_q.with_entities(Channel.id).all()]
+        channels = ordered_q.paginate(page=page, per_page=50, error_out=False)
     feeds_q = Feed.query.filter(Feed.is_enabled == True)
     if feed_filter:
         feeds_q = feeds_q.union(Feed.query.filter(Feed.slug == feed_filter))
@@ -907,7 +963,7 @@ def channels():
     possible_duplicate_names = possible_duplicate_names & page_names
     gn_duplicate_page_ids = gn_duplicate_ids & page_ids
     duplicate_group_keys = {ch.id: _canonical_duplicate_name(ch.name or '') for ch in channels.items}
-    chnum_map = _page_default_feed_chnum_map(channels.items)
+    chnum_map = _page_default_feed_chnum_map(channels.items, full_map=full_chnum_map)
 
     # Pinned-number conflict detection for the current page.
     from sqlalchemy import func as _func
