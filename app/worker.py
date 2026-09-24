@@ -3827,27 +3827,38 @@ if __name__ == '__main__':
             except Exception as e:
                 logger.warning('[fc-player] block-boundary retune job failed for %s: %s', channel_key, e)
 
+        # channel_key -> boundary_ts already handed to the scheduler. A 'date' job leaves
+        # the jobstore the moment it starts running, so while fire_block_boundary_retune
+        # is still verifying (confirmed live 2026-09-24: 14 attempts, ~7s) a discovery
+        # tick would re-add it with a past run_date; it then fires at once and APScheduler
+        # logs "skipped: maximum number of running instances". Remembering what was
+        # scheduled makes the re-add a real no-op. In-process only — after a worker
+        # restart the lost job is re-added once, which is the recovery we want.
+        _boundary_jobs_scheduled: dict[str, float] = {}
+
         def _scheduled_fc_player_block_boundary_discovery():
             from app import fc_player_bridge
             try:
                 with flask_app.app_context():
                     pending_list = fc_player_bridge.pending_block_boundaries()
                 for channel_key, boundary_ts in pending_list:
+                    if _boundary_jobs_scheduled.get(channel_key) == boundary_ts:
+                        continue
                     # Small head start only — fire_block_boundary_retune does its own
                     # active verification polling from here rather than trusting a
                     # fixed buffer, so this just skips the guaranteed-miss
                     # instant-at-boundary check (see _BLOCK_BOUNDARY_INITIAL_DELAY_S).
                     run_date = datetime.fromtimestamp(
                         boundary_ts + fc_player_bridge._BLOCK_BOUNDARY_INITIAL_DELAY_S, tz=timezone.utc)
-                    # replace_existing + a channel-scoped id makes this idempotent and
-                    # self-correcting: re-registering with an unchanged run_date is a
-                    # harmless no-op, and a changed boundary (Sling rescheduling content)
-                    # just reschedules the same job to the new instant.
+                    # replace_existing + a channel-scoped id keeps this self-correcting: a
+                    # changed boundary (Sling rescheduling content) just reschedules the
+                    # same job to the new instant.
                     scheduler.add_job(
                         _fire_fc_player_boundary_retune, 'date', run_date=run_date,
                         id=f'fc_player_boundary_retune:{channel_key}', replace_existing=True,
                         misfire_grace_time=120, args=[channel_key, boundary_ts],
                     )
+                    _boundary_jobs_scheduled[channel_key] = boundary_ts
             except Exception as e:
                 logger.warning('[fc-player] block-boundary discovery tick failed: %s', e)
 
