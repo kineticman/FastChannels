@@ -188,6 +188,20 @@ def _default_feed_chnum_map_full() -> dict[int, int]:
     return _source_scheme_chnum_map(std_channels, gn_channels)
 
 
+def _decimal_lock_conflict_ids(items) -> set[int]:
+    """Channels in `items` whose decimal lock (pinned_chno) another channel shares."""
+    from sqlalchemy import func as _func
+    shared = {
+        row[0]
+        for row in db.session.query(Channel.pinned_chno)
+        .filter(Channel.pinned_chno.isnot(None))
+        .group_by(Channel.pinned_chno)
+        .having(_func.count(Channel.id) > 1)
+        .all()
+    }
+    return {ch.id for ch in items if ch.pinned_chno and ch.pinned_chno in shared}
+
+
 def _page_default_feed_chnum_map(page_items) -> dict[int, int | str]:
     """Display numbers for one admin page -- includes provider-native numbers
     (DirecTV "305.1"), unlike _default_feed_chnum_map_full(), which callers
@@ -893,7 +907,7 @@ def channels():
     chnum_conflicts = {
         ch.id for ch in channels.items
         if ch.number_pinned and ch.number in _conflict_numbers
-    }
+    } | _decimal_lock_conflict_ids(channels.items)
 
     # Compute which page channels appear in at least one non-default feed.
     in_any_feed_ids: set[int] = set()
@@ -1242,7 +1256,7 @@ def channels_chnum_map():
     chnum_map = _page_default_feed_chnum_map(page_items)
 
     # Pin state for each requested channel.
-    pinned = {ch.id: bool(ch.number_pinned) for ch in page_items}
+    pinned = {ch.id: bool(ch.number_pinned or ch.pinned_chno) for ch in page_items}
 
     # Conflict detection: find pinned numbers used by more than one channel.
     from sqlalchemy import func as _func
@@ -1257,7 +1271,7 @@ def channels_chnum_map():
     conflict_ids = {
         ch.id for ch in page_items
         if ch.number_pinned and ch.number in conflict_numbers
-    }
+    } | _decimal_lock_conflict_ids(page_items)
 
     return jsonify({
         'chnum_map':    chnum_map,

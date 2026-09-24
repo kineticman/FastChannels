@@ -185,7 +185,8 @@ def preview_order():
         'name':        ch.name,
         'source':      ch.source.display_name or ch.source.name,
         'number':      num_map.get(ch.id),
-        'pinned':      bool(getattr(ch, 'number_pinned', False) and ch.number is not None),
+        'pinned':      bool((getattr(ch, 'number_pinned', False) and ch.number is not None)
+                            or getattr(ch, 'pinned_chno', None)),
         'feed_pinned': ch.id in feed_pinned_ids,
         'gracenote':   ch.id in gn_ids,
     } for ch in stubs]
@@ -294,9 +295,19 @@ def chnum_lock_all(feed_id):
 
     unpinned = (
         Channel.query
-        .filter(Channel.id.in_(num_map.keys()), Channel.number_pinned == False)
+        .filter(Channel.id.in_(num_map.keys()), Channel.number_pinned == False,
+                Channel.pinned_chno.is_(None))  # decimal locks are locked already
         .all()
     )
+    # Channels numbered by their provider (e.g. DirecTV channel numbers) already
+    # have a fixed number; locking them to their hidden app number would replace it.
+    from ..generators.m3u import _provider_number_sources
+    provider_sources = _provider_number_sources()
+    if provider_sources:
+        unpinned = [
+            ch for ch in unpinned
+            if not (ch.provider_number and ch.source and ch.source.name in provider_sources)
+        ]
     for ch in unpinned:
         ch.number = num_map[ch.id]
         ch.number_pinned = True

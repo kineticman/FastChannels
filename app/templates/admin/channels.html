@@ -1806,12 +1806,12 @@
                     onclick="openLangModal({{ ch.id }})">{{ ch.language_override or ch.language or '—' }}</span>
             </td>
             <td style="color:var(--text-muted);font-size:0.8rem">{{ ch.country or '—' }}</td>
-            <td class="chnum-cell{% if ch.number_pinned %} chnum-pinned{% endif %}{% if ch.id in chnum_conflicts %} chnum-conflict{% endif %}"
+            <td class="chnum-cell{% if ch.number_pinned or ch.pinned_chno %} chnum-pinned{% endif %}{% if ch.id in chnum_conflicts %} chnum-conflict{% endif %}"
                 data-chnum-cell="1"
                 data-channel-id="{{ ch.id }}"
-                data-pinned="{{ 'true' if ch.number_pinned else 'false' }}">
+                data-pinned="{{ 'true' if (ch.number_pinned or ch.pinned_chno) else 'false' }}">
               <span class="chnum-display"{% if ch.id in chnum_conflicts %} title="Locked to the same number as another channel. This channel's shown number was reassigned to avoid a clash — unlock one of the two (🔒) or give it a different number."{% endif %}>{{ chnum_map.get(ch.id) or '—' }}</span>
-              {% if ch.number_pinned %}<button class="chnum-pin-btn" onclick="chnumUnpin(event,{{ ch.id }})" title="Unpin — let feed assign this number">🔒</button>{% endif %}
+              {% if ch.number_pinned or ch.pinned_chno %}<button class="chnum-pin-btn" onclick="chnumUnpin(event,{{ ch.id }})" title="Unpin — let feed assign this number">🔒</button>{% endif %}
             </td>
 
             {# ── Gracenote ID cell ── #}
@@ -2872,6 +2872,7 @@
       inp.value = (current === '—' || current === '') ? '' : current;
       inp.defaultValue = inp.value;
       inp.min = 1;
+      inp.step = 'any';   // decimal locks like 700.1
       span.replaceWith(inp);
       inp.focus();
       inp.select();
@@ -2888,14 +2889,32 @@
     });
 
     async function chnumSave(cell, cid, rawVal) {
-      if (String(rawVal).includes('.')) {
-        // Provider sub-channel numbers (DirecTV "305.1") can't be locked;
-        // parseInt would silently truncate them to a different channel's number.
-        alert('Sub-channel numbers like 305.1 come from the provider and can\'t be locked. Enter a whole number.');
+      const raw = String(rawVal).trim();
+      if (raw.includes('.')) {
+        // Decimal lock ("700.1") — stored separately; never parseInt it, which
+        // would silently lock a different (whole) number.
+        if (!/^\d{1,5}\.\d{1,3}$/.test(raw) || /\.0+$/.test(raw)) {
+          alert('Decimal channel numbers look like 700.1.');
+          await refreshVisibleChnums();
+          return;
+        }
+        try {
+          const r = await fetch(`/api/channels/${cid}`, {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({pinned_chno: raw}),
+          });
+          if (!r.ok) {
+            const body = await r.json().catch(() => ({}));
+            if (body.error) alert(body.error);
+          }
+        } catch (e) {
+          console.error('Chnum save failed:', e);
+        }
         await refreshVisibleChnums();
         return;
       }
-      const val = parseInt(rawVal);
+      const val = parseInt(raw);
       if (!rawVal || isNaN(val) || val < 1) {
         // Revert
         await refreshVisibleChnums();

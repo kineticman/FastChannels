@@ -93,6 +93,7 @@ class _MiniChannel:
     slug: str | None
     source: _MiniSource
     provider_number: str | None = None
+    pinned_chno: str | None = None
 
 
 def _parse_gracenote_id(ch) -> str | None:
@@ -326,6 +327,7 @@ def _build_channel_stub_query(filters: dict):
         Channel.gracenote_mode,
         Channel.slug,
         Channel.provider_number,
+        Channel.pinned_chno,
         Source.name.label('source_name'),
         Source.display_name.label('source_display_name'),
         Source.chnum_start.label('source_chnum_start'),
@@ -394,6 +396,7 @@ def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | No
                 chnum_start=row.source_chnum_start,
             ),
             provider_number=row.provider_number,
+            pinned_chno=row.pinned_chno,
         )
         for row in rows
     ]
@@ -557,6 +560,7 @@ def _reserved_provider_numbers() -> set[int]:
             Channel.is_enabled == True,
             Channel.provider_number.isnot(None),
             db.or_(Channel.number_pinned == False, Channel.number_pinned == None),
+            Channel.pinned_chno.is_(None),
         )
         .all()
     )
@@ -564,16 +568,24 @@ def _reserved_provider_numbers() -> set[int]:
 
 
 def apply_provider_numbers(channels, chnum_map: dict, sources: set[str] | None = None) -> dict:
-    """Overlay provider-native numbers onto a resolved chnum map (output only).
-    Channels of opted-in sources with a stored provider_number use it as their
-    tvg-chno; a pinned channel keeps its pin; everything else is untouched."""
+    """Overlay text channel numbers onto a resolved chnum map (output only):
+
+    * a decimal lock (Channel.pinned_chno, e.g. "700.1") always wins;
+    * then, for opted-in sources, the stored provider_number ("305.1"),
+      unless the channel has a whole-number lock;
+    * everything else keeps its app-assigned number.
+    """
+    pinned = {ch.id: (getattr(ch, 'pinned_chno', None) or '').strip() for ch in channels}
+    pinned = {cid: pc for cid, pc in pinned.items() if pc}
     if sources is None:
         sources = _provider_number_sources()
-    if not sources:
+    if not sources and not pinned:
         return chnum_map
-    overrides: dict[int, str] = {}
-    claimed: dict[str, int] = {}
+    overrides: dict[int, str] = dict(pinned)
+    claimed: dict[str, int] = {pc: cid for cid, pc in pinned.items()}
     for ch in channels:
+        if ch.id in overrides:
+            continue
         src = getattr(ch, 'source', None)
         if src is None or getattr(src, 'name', None) not in sources:
             continue
@@ -582,11 +594,12 @@ def apply_provider_numbers(channels, chnum_map: dict, sources: set[str] | None =
         pn = (getattr(ch, 'provider_number', None) or '').strip()
         if not pn:
             continue
-        # Two channels claiming one provider number (e.g. an SD twin still in the
-        # DB until the refresh after turning the toggle on collapses it): the
-        # first keeps it, the other keeps its app-assigned number.
+        # Two channels claiming one number (e.g. an SD twin still in the DB until
+        # the refresh after turning the toggle on collapses it, or a decimal lock
+        # on a provider's number): the first keeps it, the other keeps its
+        # app-assigned number.
         if pn in claimed:
-            log.warning('provider number %s claimed by channels %d and %d; keeping %d',
+            log.warning('channel number %s claimed by channels %d and %d; keeping %d',
                         pn, claimed[pn], ch.id, claimed[pn])
             continue
         claimed[pn] = ch.id
@@ -1049,6 +1062,20 @@ def get_global_chnum_overlaps() -> list[str]:
         .having(func.count(Channel.id) > 1)
         .all()
     ]
+    dupe_decimal = [
+        row[0] for row in
+        db.session.query(Channel.pinned_chno)
+        .filter(Channel.pinned_chno.isnot(None))
+        .group_by(Channel.pinned_chno)
+        .having(func.count(Channel.id) > 1)
+        .all()
+    ]
+    for number in dupe_decimal:
+        names = [ch.name for ch in Channel.query.filter_by(pinned_chno=number).order_by(Channel.name).all()]
+        warnings.append(
+            f"ch {number} is locked (🔒) by {len(names)} channels: {', '.join(names)}"
+        )
+
     for number in dupe_numbers:
         names = [
             ch.name for ch in
