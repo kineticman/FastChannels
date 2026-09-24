@@ -2870,6 +2870,7 @@
       inp.type = 'number';
       inp.className = 'chnum-input';
       inp.value = (current === '—' || current === '') ? '' : current;
+      inp.defaultValue = inp.value;
       inp.min = 1;
       span.replaceWith(inp);
       inp.focus();
@@ -2879,11 +2880,21 @@
         if (ev.key === 'Escape') { inp.replaceWith(span); }
       });
       inp.addEventListener('blur', function() {
-        if (document.contains(inp)) chnumSave(cell, cid, inp.value);
+        if (!document.contains(inp)) return;
+        // Clicking a number and then away shouldn't lock it (Enter still does).
+        if (inp.value.trim() === inp.defaultValue.trim()) { inp.replaceWith(span); return; }
+        chnumSave(cell, cid, inp.value);
       });
     });
 
     async function chnumSave(cell, cid, rawVal) {
+      if (String(rawVal).includes('.')) {
+        // Provider sub-channel numbers (DirecTV "305.1") can't be locked;
+        // parseInt would silently truncate them to a different channel's number.
+        alert('Sub-channel numbers like 305.1 come from the provider and can\'t be locked. Enter a whole number.');
+        await refreshVisibleChnums();
+        return;
+      }
       const val = parseInt(rawVal);
       if (!rawVal || isNaN(val) || val < 1) {
         // Revert
