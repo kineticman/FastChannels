@@ -2665,6 +2665,31 @@ def license_proxy(source_name: str, channel_id: str | None = None):
             r = _send_license()
         except Exception as e:
             logger.warning('[cox-license] channel refresh after HTTP 403 failed: %s', e)
+
+    # Spectrum rejects a license with 401 INVALID_TOKEN when the cached per-stream
+    # AST/streamSessionId is reused for a later tune or was minted under an access
+    # token that has since been refreshed. Mint a fresh stream session and retry
+    # once; the license URL carries streamSessionId, so it's rebuilt too.
+    if r.status_code == 401 and source_name == 'spectrum' and channel_id:
+        try:
+            fresh_cfg = {**(source.config or {}), **load_source_cache(source.id)}
+            fresh_scraper = scraper_cls(config=fresh_cfg)
+            fresh_scraper.expire_cached_stream(channel_id)
+            fresh_scraper.resolve(f'spectrum://{channel_id}')
+            if getattr(fresh_scraper, '_pending_cache_updates', None):
+                persist_source_cache_updates(source.id, fresh_scraper._pending_cache_updates)
+            if getattr(fresh_scraper, '_pending_config_updates', None):
+                persist_source_config_updates(source.id, fresh_scraper._pending_config_updates)
+            cfg = {**(source.config or {}), **load_source_cache(source.id)}
+            license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id) or license_url
+            body, headers = scraper_cls.prepare_license_request(
+                challenge, cfg, channel_id=channel_id, sht=sht)
+            headers.setdefault('Content-Type', 'application/octet-stream')
+            logger.info('[spectrum-license] minted a fresh stream session after HTTP 401 channel=%s: %s',
+                        channel_id, (r.content or b'')[:200])
+            r = _send_license()
+        except Exception as e:
+            logger.warning('[spectrum-license] channel refresh after HTTP 401 failed: %s', e)
     logger.debug('[license-proxy] %s channel=%s -> HTTP %s (%d bytes)',
                  source_name, channel_id or '-', r.status_code, len(r.content))
     if r.status_code >= 400:

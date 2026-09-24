@@ -544,6 +544,20 @@ class SpectrumScraper(BaseScraper):
                 self._release_aegis(aegis_token)
             return manifest_url
 
+    def expire_cached_stream(self, cid: str) -> None:
+        """Drop (and release) a channel's cached stream session so the next
+        resolve() mints a fresh one. The license proxy calls this + resolve()
+        on a license 401 INVALID_TOKEN: resolve() hands back the cached
+        AST/streamSessionId for up to _STREAM_CACHE_TTL, which Spectrum's own
+        player never reuses across tunes, and a cached AST also goes stale
+        when the access token is refreshed/re-logged-in underneath it."""
+        if not cid:
+            return
+        with self._stream_cache_transaction():
+            entry = self._stream_cache.get(cid)
+            if entry:
+                self._evict_cache_entry(cid, entry)
+
     def _release_aegis(self, aegis_token: str) -> None:
         try:
             self.session.delete(
