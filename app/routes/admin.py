@@ -188,6 +188,21 @@ def _default_feed_chnum_map_full() -> dict[int, int]:
     return _source_scheme_chnum_map(std_channels, gn_channels)
 
 
+def _provider_numbered_ids(items) -> set[int]:
+    """Channels in `items` whose number comes from their provider (e.g. DirecTV
+    channel numbers on) rather than a lock of the user's own -- shown as locked."""
+    from ..generators.m3u import _provider_number_sources
+    sources = _provider_number_sources()
+    if not sources:
+        return set()
+    return {
+        ch.id for ch in items
+        if ch.source is not None and ch.source.name in sources
+        and (ch.provider_number or '').strip()
+        and not ch.number_pinned and not ch.pinned_chno
+    }
+
+
 def _decimal_lock_conflict_ids(items) -> set[int]:
     """Channels in `items` whose decimal lock (pinned_chno) another channel shares."""
     from sqlalchemy import func as _func
@@ -967,6 +982,7 @@ def channels():
                            sort_by=sort_by, sort_dir=sort_dir,
                            chnum_map=chnum_map,
                            chnum_conflicts=chnum_conflicts,
+                           provider_numbered=_provider_numbered_ids(channels.items),
                            in_any_feed_ids=in_any_feed_ids,
                            filter_qs=filter_qs)
 
@@ -1277,6 +1293,7 @@ def channels_chnum_map():
         'chnum_map':    chnum_map,
         'pinned':       pinned,
         'conflict_ids': list(conflict_ids),
+        'provider_ids': list(_provider_numbered_ids(page_items)),
     })
 
 

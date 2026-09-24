@@ -912,7 +912,7 @@
         <div class="ord-hint">
           Drag rows to reorder — tvg-chno is reassigned sequentially from the starting number as you go.
           You can also hover a row for ⤒ / ⤓. Click a number to set that channel's number yourself — any number, e.g. 500 — which locks it in every feed.
-          📌 rows have a fixed number (locked, or the provider's own, e.g. DirecTV) and can't be dragged; ✕ unlocks. PIN-badged rows are pinned into this feed and reorder freely.
+          🔒 rows have a fixed number (locked, or the provider's own, e.g. DirecTV) and can't be dragged; ✕ unlocks your own locks. PIN-badged rows are pinned into this feed and reorder freely.
           Channels that match your filters later are appended to the end of the order.
         </div>
       </div>
@@ -2002,9 +2002,9 @@ function renderOrderList() {
     row.dataset.id = r.id;
     if (!r.pinned) row.draggable = true;
     row.innerHTML =
-      `<span class="ord-grip">${r.pinned ? '📌' : '⋮⋮'}</span>` +
+      `<span class="ord-grip">${r.pinned ? '🔒' : '⋮⋮'}</span>` +
       `<span class="ord-num" title="${r.locked ? 'Locked to this number in every feed. Click to change it, ✕ to unlock.'
-                                    : r.number_source === 'provider' ? 'Provider channel number (e.g. DirecTV). Click to lock it to a different number (applies in every feed).'
+                                    : r.number_source === 'provider' ? 'Set by DirecTV channel numbers. Click to lock a different number (applies in every feed).'
                                     : 'Click to set this channel\'s number (locks it in every feed). Drag to reorder the automatic numbers.'}"></span>` +
       `<span class="ord-name"></span>` +
       (r.feed_pinned ? `<span class="ord-fpin" title="Manually pinned into this feed — included regardless of filters">PIN</span>` : '') +

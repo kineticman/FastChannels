@@ -844,6 +844,8 @@
     .chnum-conflict .chnum-display { color: var(--danger-soft); }
     .chnum-pin-btn { background: none; border: none; cursor: pointer; padding: 0 0 0 3px; font-size: .8em; opacity: .7; vertical-align: middle; }
     .chnum-pin-btn:hover { opacity: 1; }
+    .chnum-provider .chnum-display { color: var(--success-soft); }
+    .chnum-provider-icon { padding: 0 0 0 3px; font-size: .8em; opacity: .7; vertical-align: middle; cursor: help; }
     .chnum-input { width: 54px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; font-size: inherit; }
 
     /* ── Gracenote ID input ─────────────────────────────────────────────── */
@@ -1806,12 +1808,12 @@
                     onclick="openLangModal({{ ch.id }})">{{ ch.language_override or ch.language or '—' }}</span>
             </td>
             <td style="color:var(--text-muted);font-size:0.8rem">{{ ch.country or '—' }}</td>
-            <td class="chnum-cell{% if ch.number_pinned or ch.pinned_chno %} chnum-pinned{% endif %}{% if ch.id in chnum_conflicts %} chnum-conflict{% endif %}"
+            <td class="chnum-cell{% if ch.number_pinned or ch.pinned_chno %} chnum-pinned{% endif %}{% if ch.id in chnum_conflicts %} chnum-conflict{% endif %}{% if ch.id in provider_numbered %} chnum-provider{% endif %}"
                 data-chnum-cell="1"
                 data-channel-id="{{ ch.id }}"
                 data-pinned="{{ 'true' if (ch.number_pinned or ch.pinned_chno) else 'false' }}">
               <span class="chnum-display"{% if ch.id in chnum_conflicts %} title="Locked to the same number as another channel. This channel's shown number was reassigned to avoid a clash — unlock one of the two (🔒) or give it a different number."{% endif %}>{{ chnum_map.get(ch.id) or '—' }}</span>
-              {% if ch.number_pinned or ch.pinned_chno %}<button class="chnum-pin-btn" onclick="chnumUnpin(event,{{ ch.id }})" title="Unpin — let feed assign this number">🔒</button>{% endif %}
+              {% if ch.number_pinned or ch.pinned_chno %}<button class="chnum-pin-btn" onclick="chnumUnpin(event,{{ ch.id }})" title="Unpin — let feed assign this number">🔒</button>{% elif ch.id in provider_numbered %}<span class="chnum-provider-icon" title="Set by DirecTV channel numbers. Click the number to lock a different one.">🔒</span>{% endif %}
             </td>
 
             {# ── Gracenote ID cell ── #}
@@ -2814,23 +2816,36 @@
         const chnumMap    = data.chnum_map    || {};
         const pinnedMap   = data.pinned       || {};
         const conflictSet = new Set((data.conflict_ids || []).map(String));
+        const providerSet = new Set((data.provider_ids || []).map(String));
         for (const row of rows) {
           const cid  = row.getAttribute('data-channel-id');
           const cell = row.querySelector('[data-chnum-cell]');
           if (!cell || !cid) continue;
           const value  = chnumMap[cid];
           const pinned = !!pinnedMap[cid];
-          _chnumRenderCell(cell, cid, value != null ? String(value) : '—', pinned, conflictSet.has(cid));
+          _chnumRenderCell(cell, cid, value != null ? String(value) : '—', pinned, conflictSet.has(cid), providerSet.has(cid));
         }
       } catch (e) {
         console.error('Chnum refresh failed:', e);
       }
     }
 
-    function _chnumRenderCell(cell, cid, displayVal, pinned, conflict) {
+    function _chnumRenderCell(cell, cid, displayVal, pinned, conflict, provider = false) {
       cell.dataset.pinned = pinned ? 'true' : 'false';
       cell.classList.toggle('chnum-pinned',   pinned);
       cell.classList.toggle('chnum-conflict', conflict);
+      cell.classList.toggle('chnum-provider', provider && !pinned);
+      // DirecTV-numbered: same lock icon as a user lock, but not an unlock button.
+      let pIcon = cell.querySelector('.chnum-provider-icon');
+      if (provider && !pinned && !pIcon) {
+        pIcon = document.createElement('span');
+        pIcon.className = 'chnum-provider-icon';
+        pIcon.title = 'Set by DirecTV channel numbers. Click the number to lock a different one.';
+        pIcon.textContent = '🔒';
+        cell.appendChild(pIcon);
+      } else if (!(provider && !pinned) && pIcon) {
+        pIcon.remove();
+      }
       const span = cell.querySelector('.chnum-display') || (() => {
         const s = document.createElement('span');
         s.className = 'chnum-display';
@@ -2877,7 +2892,14 @@
       inp.focus();
       inp.select();
       inp.addEventListener('keydown', function(ev) {
-        if (ev.key === 'Enter') { ev.preventDefault(); chnumSave(cell, cid, inp.value); }
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          // Enter on an unchanged DirecTV number would freeze it as a real lock.
+          if (cell.classList.contains('chnum-provider') && inp.value.trim() === inp.defaultValue.trim()) {
+            inp.replaceWith(span); return;
+          }
+          chnumSave(cell, cid, inp.value);
+        }
         if (ev.key === 'Escape') { inp.replaceWith(span); }
       });
       inp.addEventListener('blur', function() {
