@@ -593,6 +593,17 @@ def _try_autofill_credentials(
     fallbacks) and can re-render mid-fill, so both values are verified to
     have actually stuck before submitting, with one retry.
     """
+    # Remembered on the page so _spectrum_signin_error_message can resubmit
+    # once after reloading Spectrum's login page (ThreatMetrix first-attempt
+    # rejection — see _retry_spectrum_after_thmx_reject). Never logged.
+    try:
+        page._fc_autofill_args = dict(
+            username=username, password=password, wait_seconds=wait_seconds, r=r,
+            stop_key=stop_key, input_key=input_key, shot_key=shot_key, hint_key=hint_key,
+            log_tag=log_tag,
+        )
+    except Exception:  # noqa: BLE001
+        pass
     deadline = time.monotonic() + wait_seconds
     wait_started = time.monotonic()
     # Hard ceiling regardless of how many redirects reset `deadline` below —
@@ -1258,6 +1269,36 @@ def _watch_spectrum_auth_results(page, log_tag: str) -> None:
         pass
 
 
+def _retry_spectrum_after_thmx_reject(page, label: str) -> bool:
+    """Reload Spectrum's login page and resubmit the saved credentials once.
+
+    Confirmed 2026-09-25 in a user's own fresh Incognito Chrome (net-export
+    dev/tnt/4.json): the first credential submit on a never-seen device got
+    403 AUTH_REJECT_BY_RECAPTCHA_PASS_THMX_REJECT_STATUS (reCAPTCHA passed,
+    ThreatMetrix rejected — Spectrum's error page), the user reloaded the
+    login page and resubmitted, and the second password/auth answered 200
+    PROCESSED. The Spectrum scraper saw the same "bare retry succeeds" shape
+    earlier that week. Only for the ThreatMetrix code, only once per page:
+    a plain reCAPTCHA reject (AUTH_REJECT_BY_RECAPTCHA_REJECT_STATUS) is not
+    helped by retrying, and repeated attempts make it worse. Returns True
+    when a retry was submitted (the caller keeps waiting), else False.
+    """
+    args = getattr(page, '_fc_autofill_args', None)
+    if not args or getattr(page, '_fc_thmx_retried', False):
+        return False
+    try:
+        page._fc_thmx_retried = True
+        page._fc_spectrum_auth_result = None
+        logger.info('[%s] %s: Spectrum\'s device check (ThreatMetrix) rejected the first attempt — '
+                    'reloading the login page and signing in once more', args.get('log_tag') or 'mvpd-login', label)
+        page.reload(wait_until='domcontentloaded', timeout=30000)
+        page.wait_for_timeout(3000)
+        return bool(_try_autofill_credentials(page, **args))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[mvpd-login] %s: ThreatMetrix retry failed: %s', label, exc)
+        return False
+
+
 def _spectrum_signin_error_message(page, label: str) -> str | None:
     """Returns a user-facing error message if a Spectrum sign-in error that
     no amount of waiting will fix is showing, else None: the IDID "Feature
@@ -1298,6 +1339,13 @@ def _spectrum_signin_error_message(page, label: str) -> str | None:
         page._fc_idid_checked_at = now
     except Exception:  # noqa: BLE001
         pass
+    # Keyed on Spectrum's API answer, not the page text, since the
+    # ThreatMetrix rejection's error screen isn't guaranteed to be the
+    # "Feature Unavailable" layout detected below.
+    last_auth = getattr(page, '_fc_spectrum_auth_result', None) or {}
+    if last_auth.get('status') == 403 and 'THMX' in (last_auth.get('name') or '') \
+            and _retry_spectrum_after_thmx_reject(page, label):
+        return None
     url = _safe_page_url(page)
     code = _detect_spectrum_feature_unavailable(page)
     if code and not (code == 'IDID-unknown' and 'spectrum.net' not in url):
