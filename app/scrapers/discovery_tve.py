@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import html
 import json
+import logging
 import secrets
 import time
 import uuid
@@ -18,6 +19,8 @@ from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
 from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError, throttle_cox_login
 
+logger = logging.getLogger(__name__)
+
 
 SCHEME = 'discovery-tve://'
 API_BASE = 'https://us1-prod-direct.watch.hgtv.com'
@@ -28,20 +31,17 @@ BRAND_ID = '5af07ab86b66d16f0e095063'
 PARTNER_ID = '55e9d01a6b66d1244474bbe5'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
 SESSION_CACHE_KEY = 'discovery_tve_session'
-# The `st` cookie minted by /token is genuinely short-lived (it's requested
-# with shortlived=true and its own JWT carries no `exp` claim at all — this
-# used to be treated as "assume it's long-lived, default to 6h" instead,
-# which was wrong). Live-measured 2026-08-17: still valid at 113s old, dead
-# ("invalid.token") by 214s — and there's no refresh path around it either;
-# re-minting via /token using the same (still-fresh, <4min-old) session
-# cookies came back anonymous instead of re-authenticating, so once `st`
-# dies the ONLY way back is a brand new MSO login from scratch, full stop.
-# 90s keeps this comfortably under the observed ~113-214s floor. This mostly
-# matters for MSOs with no scripted re-login (YouTubeTV, Sling) — Cox/
-# Xfinity's own _authenticate() re-logs in from scratch in a couple seconds
-# regardless of whether the cache was ever going to hit, so a short real TTL
-# doesn't cost them anything they weren't already paying.
-SESSION_TTL_SECONDS = 90
+# How long to reuse a signed-in session before signing in again. The `st`
+# cookie from /login is a JWT with no `exp` claim, so there's nothing to read
+# a lifetime from. This used to be 90s, on a 2026-08-17 measurement of one
+# session dying at ~214s; re-measured live 2026-09-25 (Xfinity sign-in), the
+# login `st`, never refreshed, still played at 146 min and passed /users/me
+# at 176 min, and a later sign-in didn't invalidate it. /token doesn't rotate
+# `st` either. 23h is a deliberate bet past the measured floor (upper bound
+# not yet measured): _cached_session() checks /users/me before reuse and
+# resolve() signs in again once if the cached session is rejected, so one that
+# dies early costs a sign-in, not a failed play.
+SESSION_TTL_SECONDS = 23 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -99,6 +99,11 @@ class _FormParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag.lower() == 'form' and self.in_form:
             self.in_form = False
+
+
+def _session_rejected(r: requests.Response) -> bool:
+    """401 anywhere, or 400 from /token (how a dead `st` shows up there)."""
+    return r.status_code == 401 or (r.status_code == 400 and urlsplit(r.url).path == '/token')
 
 
 def _hidden_form(document: str, base_url: str) -> tuple[str, dict[str, str]]:
@@ -322,15 +327,8 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         cached = self.cache.get(SESSION_CACHE_KEY) or {}
         if not isinstance(cached, dict):
             return None
-        # This buffer used to be 300s, sized against the old (wrong) 6h TTL
-        # assumption — with SESSION_TTL_SECONDS now a realistic ~90s (see its
-        # definition), a 300s buffer would always exceed the entire real
-        # lifetime and make this cache permanently a no-op miss, forcing a
-        # full re-login (Cox's own throttle_cox_login() included) on every
-        # single resolve() instead of ever reusing a session that's still
-        # genuinely good. 15s leaves a real safety margin against an
-        # expiry-edge race while still allowing reuse within the actual
-        # short window.
+        # 15s margin against an expiry-edge race; /users/me below is the
+        # real validity check.
         if int(cached.get('expires_at') or 0) <= int(time.time()) + 15:
             return None
         cookies = cached.get('cookies') or {}
@@ -655,6 +653,22 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         )
         r.raise_for_status()
 
+    def _post_playback(self, session: requests.Session, channel: DiscoveryTVEChannel, payload: dict) -> requests.Response:
+        self._prime_playback_context(session, channel)
+        try:
+            self._refresh_short_token(session)
+        except requests.HTTPError as exc:
+            # A dead `st` fails here first (400), before playback is tried.
+            if exc.response is not None and exc.response.status_code in {400, 401}:
+                return exc.response
+            raise
+        return session.post(
+            f'{API_BASE}/playback/v3/channelPlaybackInfo',
+            data=json.dumps(payload, separators=(',', ':')),
+            headers={**_browser_headers(), 'Content-Type': 'application/json'},
+            timeout=30,
+        )
+
     def _prime_playback_context(self, session: requests.Session, channel: DiscoveryTVEChannel) -> None:
         for url, params in (
             (f'{API_BASE}/users/me', None),
@@ -778,9 +792,10 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         if not channel:
             raise ValueError(f'Unsupported Discovery TVE stream URL: {raw_url}')
 
-        session = self._authorized_session()
-        self._prime_playback_context(session, channel)
-        self._refresh_short_token(session)
+        session = self._cached_session()
+        from_cache = session is not None
+        if session is None:
+            session = self._authenticate()
         device_id = self.config.get('device_id') or str(uuid.uuid4())
         payload = {
             'channelId': channel.channel_id,
@@ -826,13 +841,23 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
                 'streamProvider': {'suspendBeaconing': 1, 'hlsVersion': 7, 'pingConfig': 1, 'version': '1.0.0'},
             },
         }
-        r = session.post(
-            f'{API_BASE}/playback/v3/channelPlaybackInfo',
-            data=json.dumps(payload, separators=(',', ':')),
-            headers={**_browser_headers(), 'Content-Type': 'application/json'},
-            timeout=30,
-        )
-        if r.status_code in {401, 403}:
+        r = self._post_playback(session, channel, payload)
+        # With a multi-hour SESSION_TTL_SECONDS, a cached session can die
+        # upstream before our TTL does. /users/me in _cached_session() catches
+        # most of that, but a rejection here (401, or 400 from /token) from a
+        # cached session means the same thing: sign in again once and retry, rather than reporting a
+        # definitive "not authorized" that would disable the channel.
+        if _session_rejected(r) and from_cache:
+            logger.info('[discovery-tve] cached session rejected (HTTP %s %s); signing in again', r.status_code, urlsplit(r.url).path)
+            self._update_cache(SESSION_CACHE_KEY, {})
+            session = self._authenticate()
+            r = self._post_playback(session, channel, payload)
+        if _session_rejected(r):
+            # A freshly signed-in session being refused is not an entitlement
+            # answer (that's 403) -- keep it retryable.
+            self._update_cache(SESSION_CACHE_KEY, {})
+            raise TVEAuthError(f'{channel.name}: Discovery rejected a fresh session (HTTP {r.status_code} {urlsplit(r.url).path}): {r.text[:300]}')
+        if r.status_code == 403:
             # 401 (unauthenticated — the session itself is bad) and 403
             # (authenticated, but forbidden for THIS resource) were treated
             # identically here, both wiping the shared session cache. That's
@@ -844,9 +869,7 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             # denied channel in any multi-channel run (audit, or this sweep),
             # forcing every channel checked after it to fall through to a
             # full re-authenticate — for YouTubeTV, an instant failure with
-            # no scripted fallback at all. Only wipe on 401.
-            if r.status_code == 401:
-                self._update_cache(SESSION_CACHE_KEY, {})
+            # no scripted fallback at all. 401 is handled above.
             raise TVENotAuthorizedError(f'{channel.name}: Discovery denied playback entitlement HTTP {r.status_code}: {r.text[:300]}')
         r.raise_for_status()
         data = r.json()
