@@ -463,6 +463,13 @@ def get_source_config(source_id):
         # credentials stored (it used to be mandatory) — reflect the mode
         # that's actually in effect rather than the field's schema default.
         values['auth_mode'] = 'login' if (saved.get('username') and saved.get('password')) else 'anonymous'
+    if source.name == 'fox_one' and not values.get('home_zip_code'):
+        # Older installs kept FOX One's home ZIP on the shared TV-provider
+        # account (Settings > TV Everywhere); the scraper still falls back to
+        # it, so show it here until it's saved on the source.
+        from ..models import TVEAccount
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        values['home_zip_code'] = ((account.config or {}).get('home_zip_code') or '').strip() if account else ''
     config_complete = bool(scraper_cls and is_source_config_complete(source.name, scraper_cls, saved))
     config_status = (
         'configured'

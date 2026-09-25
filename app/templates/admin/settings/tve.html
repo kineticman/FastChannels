@@ -32,11 +32,6 @@
             <input type="text" id="tve-username" autocomplete="username" placeholder="TV provider username" value="{{ tve_account.username }}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
             <input type="password" id="tve-password" autocomplete="current-password" placeholder="{% if tve_account.password_configured %}Password saved - leave blank to keep{% else %}TV provider password{% endif %}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
           </div>
-          <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem;margin-top:0.6rem;max-width:260px">
-            Home ZIP code
-            <input type="text" id="tve-home-zip" inputmode="numeric" autocomplete="postal-code" placeholder="10001" value="{{ tve_account.home_zip_code }}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
-          </label>
-          <div style="margin-top:0.3rem;color:var(--text-muted);font-size:0.78rem">Optional. Shared by any TVE source that needs a home market — currently just FOX One, where it drives both regional entitlement/blackout scoping and which local FOX affiliate shows up as a channel. Enter it once here rather than per source.</div>
           <div id="tve-provider-hint" style="margin-top:0.45rem;color:var(--text-muted);font-size:0.82rem">Used by TVE sources such as A+E Networks TVE.</div>
           <div id="tve-cox-retiring-notice" style="display:none;margin-top:0.45rem;color:var(--warning-soft,#b8860b);background:var(--warning-bg-2,rgba(184,134,11,0.12));border:1px solid var(--warning-border,rgba(184,134,11,0.3));border-radius:4px;padding:0.5rem 0.7rem;font-size:0.82rem;line-height:1.4">
             ⚠️ Cox is being folded into Spectrum. If your Cox account has moved to Spectrum, use your Spectrum username/password: sign-in then happens on Spectrum's own login page in the browser window. If Spectrum says to select "Cox Spectrum" (error IDLI-4213), that's this Cox option — FastChannels switches to it automatically and retries. Discovery TVE can't work through Spectrum's login.

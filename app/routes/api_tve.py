@@ -66,10 +66,8 @@ def tve_mvpd_settings():
             statement = (data.get('software_statement') or '').strip()
             if statement:
                 cfg['software_statement'] = statement
-        # Shared across every TVE source that needs a home market — currently
-        # only fox_one (regional entitlement scoping), but this is where a
-        # future zip-driven local-affiliate lookup (e.g. for nbc_tve) would
-        # read from too, instead of each source collecting its own copy.
+        # Legacy: FOX One's home ZIP now lives on the fox_one source itself;
+        # this shared value is only its fallback for older installs.
         if 'home_zip_code' in data:
             cfg['home_zip_code'] = (data.get('home_zip_code') or '').strip()
         account.config = cfg
@@ -105,11 +103,9 @@ def tve_reset():
     import shutil
 
     account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-    # home_zip_code is a user preference (shared across every TVE source that
-    # needs a home market — see /api/settings/tve/mvpd), not a credential or
-    # cached sign-in artifact — a reset shouldn't make the user re-enter it
-    # (code review, 2026-08-10, originally scoped to fox_one's own config
-    # before home_zip_code moved onto the shared account).
+    # home_zip_code is a user preference (FOX One's legacy fallback — see
+    # FoxOneScraper._home_zip_code), not a credential or cached sign-in
+    # artifact — a reset shouldn't make the user re-enter it.
     preserved_zip = ((account.config or {}).get('home_zip_code') or '').strip() if account else ''
     if account:
         db.session.delete(account)

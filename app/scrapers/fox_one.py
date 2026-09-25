@@ -172,15 +172,17 @@ def _now_utc() -> datetime:
 class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'fox_one'
     display_name = 'FOX One'
-    source_category = 'tve'
+    source_category = 'premium'
     is_premium = True
     scrape_interval = 720
     stream_audit_enabled = True
-    # home_zip_code is NOT here — it moved to the shared TVEAccount config
-    # (Settings > TV Everywhere) so it's entered once and available to any
-    # TVE source that needs a home market, not just FOX One. See
-    # _shared_home_zip_code()/_persist_shared_home_zip_code().
     config_schema = [
+        ConfigField(
+            'home_zip_code',
+            'Home ZIP code',
+            placeholder='10001',
+            help_text='Optional. Sets your home market for regional blackouts and which local FOX station shows up. Left blank, FOX guesses from this server\'s location.',
+        ),
         ConfigField(
             'refresh_token',
             'FOX One refresh token (fallback)',
@@ -221,7 +223,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         (x-fox-userauth, not x-access-token).
 
         x-fox-zipcode/x-fox-dma must be the ACCOUNT'S HOME location (the
-        home_zip_code config, via TVEAccount), not the caller's IP-geolocated
+        home_zip_code config), not the caller's IP-geolocated
         "current" location — confirmed live 2026-08-12: sending the IP-geo
         zip/DMA there populated whichever market this server's own outbound
         IP happens to geolocate to (Ohio, in this box's case) and left the
@@ -469,31 +471,17 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         cfg = account.config or {}
         return (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
 
-    def _shared_home_zip_code(self) -> str:
-        """Home ZIP lives on the shared TVEAccount config (Settings > TV
-        Everywhere), not per-source — it's a household fact, not something
-        specific to FOX One, and living there means any future TVE source
-        that needs a home market (e.g. an nbc_tve local-affiliate lookup)
-        can read the same value instead of collecting its own copy."""
+    def _home_zip_code(self) -> str:
+        """The FOX One source's own home ZIP, falling back to the value
+        older installs saved on the shared TV-provider account (Settings >
+        TV Everywhere) before FOX One moved to Premium Sources."""
+        own = (self.config.get('home_zip_code') or '').strip()
+        if own:
+            return own
         from ..models import TVEAccount
 
         account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         return ((account.config or {}).get('home_zip_code') or '').strip() if account else ''
-
-    def _persist_shared_home_zip_code(self, zip_code: str) -> None:
-        from .. import db
-        from ..models import TVEAccount
-
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-        if not account:
-            account = TVEAccount(provider_id='mvpd', display_name='TV Provider', is_enabled=False, config={})
-            db.session.add(account)
-        if (account.config or {}).get('home_zip_code'):
-            return
-        cfg = dict(account.config or {})
-        cfg['home_zip_code'] = zip_code
-        account.config = cfg
-        db.session.commit()
 
     @staticmethod
     def _foxone_auth_headers() -> dict[str, str]:
@@ -773,7 +761,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             raise RuntimeError('FOX locator response did not include x-platform-location')
 
         location_data = (locator_data.get('data') or {}).get('location') or {}
-        home_zip = (self._shared_home_zip_code() or location_data.get('zip_code') or '').strip()
+        home_zip = (self._home_zip_code() or location_data.get('zip_code') or '').strip()
         home_location = None
         home_headers = self._ent_headers(access_token, include_device=False)
         home = self.session.get(
@@ -795,8 +783,6 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         combined = ','.join(part for part in (platform_location, home_location) if part)
         self._update_config('platform_location', combined)
         self._update_config('platform_location_cached_at', time.time())
-        if home_zip:
-            self._persist_shared_home_zip_code(home_zip)
         return combined
 
     def _ensure_entitlements(self, access_token: str) -> str:
