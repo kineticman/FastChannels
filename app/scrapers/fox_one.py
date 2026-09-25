@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
-from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS, _cox_saml_login, _jwt_exp
+from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS, _jwt_exp
 from ..gracenote_map import resolve_gracenote
 from ..tve.adobe_pass import MvpdCooldownMixin, TVENotAuthorizedError
 
@@ -576,8 +576,8 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         """The requests/complete + checkauthn tail — split out of
         _authenticate_via_mvpd() (2026-08-17) so a browser-assisted pairing
         (app.worker.run_foxone_browser_login) can call it once a human has
-        completed the MVPD's own login, same as the Cox branch below calls
-        it right after _cox_saml_login() completes synchronously. `session`
+        completed the MVPD's own login, same as _authenticate_via_mvpd()
+        calls it right after a scripted login completes. `session`
         must be the SAME one _foxone_mvpd_register() returned (FOX binds the
         completed login server-side to `request_id`/`device_id`, not to a
         particular session, but this endpoint still expects the session that
@@ -617,26 +617,21 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         Tokens from the two are not interchangeable (different OAuth
         client_id), so FOX One needs its own pass at this.
 
-        Cox gets a fast scripted native login (_cox_saml_login, same Okta
-        API fox_tve.py's legacy path uses) — every other MVPD's actual
-        sign-in mechanics live in app/tve/mvpd/ via login_to_mvpd(), which
-        raises a clear error for any MSO with no scripted backend wired up
-        (Google/YouTubeTV, Sling) rather than silently posting credentials
-        into Cox's login form. Those MSOs can only complete via the
-        browser-assisted pairing flow (app.worker.run_foxone_browser_login),
-        which calls _foxone_mvpd_register()/_foxone_mvpd_finish() directly
-        instead of this synchronous wrapper.
+        The MVPD's actual sign-in mechanics live in app/tve/mvpd/ via
+        login_to_mvpd(), which raises a clear error for any MSO with no
+        scripted backend (Cox/Spectrum, YouTubeTV, Sling) rather than
+        posting credentials into the wrong login form. Those MSOs can only
+        complete via the browser-assisted pairing flow
+        (app.worker.run_foxone_browser_login), which calls
+        _foxone_mvpd_register()/_foxone_mvpd_finish() directly instead of
+        this synchronous wrapper.
         """
-        session, request_id, device_id, mso_login_url, r3 = self._foxone_mvpd_register(mso_id)
+        from ..tve.mvpd import login_to_mvpd, require_scripted_mvpd_login
 
-        if mso_id == 'Cox':
-            if 'login.cox.com' not in mso_login_url:
-                raise RuntimeError(f'Unexpected FOX One Adobe redirect host: {urlparse(mso_login_url).netloc}')
-            _cox_saml_login(session, mso_login_url, username, password)
-        else:
-            from ..tve.mvpd import login_to_mvpd
-            page_html, page_url = (r3.text, str(r3.url)) if not mso_login_url else ('', mso_login_url)
-            login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+        require_scripted_mvpd_login(mso_id)
+        session, request_id, device_id, mso_login_url, r3 = self._foxone_mvpd_register(mso_id)
+        page_html, page_url = (r3.text, str(r3.url)) if not mso_login_url else ('', mso_login_url)
+        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
 
         return self._foxone_mvpd_finish(session, request_id, device_id, mso_id)
 
@@ -671,7 +666,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
                 # Surface this on the TVE settings page's per-network status
                 # line — see fox_tve.py's _fox_sports_access_token() for why:
                 # a provider with no scripted refresh path (anything but
-                # Cox/Comcast_SSO/DTV, see login_to_mvpd()) fails silently
+                # Comcast_SSO/DTV, see login_to_mvpd()) fails silently
                 # here on every resolve/audit once its token expires,
                 # otherwise with nothing pointing the admin at re-signing-in.
                 try:

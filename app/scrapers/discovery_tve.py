@@ -9,15 +9,14 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from html.parser import HTMLParser
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlsplit
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
-from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError, throttle_cox_login
+from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
 
 logger = logging.getLogger(__name__)
 
@@ -78,40 +77,9 @@ CHANNELS: dict[str, DiscoveryTVEChannel] = {
 }
 
 
-class _FormParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.in_form = False
-        self.action = ''
-        self.inputs: dict[str, str] = {}
-
-    def handle_starttag(self, tag: str, attrs) -> None:
-        attrs = dict(attrs)
-        if tag.lower() == 'form' and not self.in_form:
-            self.in_form = True
-            self.action = attrs.get('action') or ''
-            return
-        if self.in_form and tag.lower() == 'input':
-            name = attrs.get('name')
-            if name:
-                self.inputs[name] = attrs.get('value') or ''
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.lower() == 'form' and self.in_form:
-            self.in_form = False
-
-
 def _session_rejected(r: requests.Response) -> bool:
     """401 anywhere, or 400 from /token (how a dead `st` shows up there)."""
     return r.status_code == 401 or (r.status_code == 400 and urlsplit(r.url).path == '/token')
-
-
-def _hidden_form(document: str, base_url: str) -> tuple[str, dict[str, str]]:
-    parser = _FormParser()
-    parser.feed(document)
-    if not parser.action and not parser.inputs:
-        raise TVEAuthError('Expected Cox SAML form but none was found.')
-    return urljoin(base_url, parser.action or base_url), parser.inputs
 
 
 def channel_for_url(raw_url: str) -> DiscoveryTVEChannel | None:
@@ -260,60 +228,6 @@ def _raise_if_spectrum_routed(mso_id: str, mso_login_url: str, response: request
         return
     if 'tve.spectrum.net' in body:
         raise _browser_signin_required('Spectrum (including Cox)')
-
-
-def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str, password: str) -> str:
-    session.get(cox_saml_url, allow_redirects=True, timeout=30)
-    throttle_cox_login()
-    login_user = username.split('@', 1)[0] if username.lower().endswith('@cox.net') else username
-    r = session.post(
-        'https://login.cox.com/api/v1/authn',
-        json={
-            'username': login_user,
-            'password': password,
-            'options': {'warnBeforePasswordExpired': True, 'multiOptionalFactorEnroll': True},
-        },
-        headers={
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'Origin': 'https://login.cox.com',
-            'Referer': cox_saml_url,
-            'x-okta-user-agent-extended': 'okta-signin-widget-3.8.2',
-            'User-Agent': UA,
-        },
-        timeout=30,
-    )
-    r.raise_for_status()
-    auth = r.json()
-    if auth.get('status') != 'SUCCESS' or not auth.get('sessionToken'):
-        raise TVEAuthError(f'Cox authn did not succeed: {auth.get("status") or "unknown"}')
-
-    redirect_url = 'https://login.cox.com/login/sessionCookieRedirect?' + urlencode({
-        'checkAccountSetupComplete': 'true',
-        'token': auth['sessionToken'],
-        'redirectUrl': cox_saml_url,
-    })
-    r = session.get(redirect_url, allow_redirects=True, timeout=30)
-    r.raise_for_status()
-    action, form = _hidden_form(r.text, str(r.url))
-    if 'SAMLResponse' not in form:
-        raise TVEAuthError('Cox SAML page did not include SAMLResponse')
-
-    r = session.post(
-        action,
-        data=form,
-        headers={
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': 'https://login.cox.com',
-            'Referer': 'https://login.cox.com/',
-            'User-Agent': UA,
-        },
-        allow_redirects=False,
-        timeout=30,
-    )
-    if r.status_code not in {200, 301, 302, 303, 307, 308}:
-        raise TVEAuthError(f'Adobe SAML consumer returned HTTP {r.status_code}')
-    return r.headers.get('location') or str(r.url)
 
 
 class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
@@ -573,57 +487,46 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         )
         _raise_if_spectrum_routed(mso_id, mso_login_url, r)
 
-        if mso_id == 'Cox':
-            if 'login.cox.com' not in mso_login_url:
-                raise TVEAuthError(f'Unexpected Adobe authenticate redirect host: {urlsplit(mso_login_url).netloc}.')
-            callback_url = _cox_saml_login(session, mso_login_url, account.username or '', account.password or '')
-            if CALLBACK_BASE not in callback_url:
-                raise TVEAuthError(f'Unexpected Discovery callback host: {urlsplit(callback_url).netloc}.')
-            r = session.get(callback_url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*'}, allow_redirects=False, timeout=30)
-            if r.status_code not in {301, 302, 303, 307, 308}:
-                raise TVEAuthError(f'Discovery callback returned HTTP {r.status_code}.')
-            code_url = r.headers.get('location') or ''
-        else:
-            # Every other MVPD's actual sign-in mechanics live in
-            # app/tve/mvpd/ — add one there (not here) to support a new
-            # provider everywhere at once. Unlike _cox_saml_login (which
-            # deliberately stops at the FIRST post-login redirect, so the
-            # Cox branch above does one more explicit hop to reach
-            # code_url), every login_to_mvpd() backend follows redirects
-            # all the way through and returns that landed URL directly —
-            # confirmed live 2026-08-14 for Xfinity (lands on
-            # auth.watch.hgtv.com/gauth-sync?code=..., the same URL Cox's
-            # extra hop above extracts `code` from) — so it's used as
-            # code_url directly here, no extra hop needed.
-            if mso_id == 'YouTubeTV':
-                # yt-dlp/login_to_mvpd() has no Google sign-in at all, so a
-                # YouTube TV session can only come from the browser flow.
-                # (This used to be a definitive "not usable", on the belief
-                # that Discovery's session died in ~90-200s; it doesn't, see
-                # SESSION_TTL_SECONDS.)
-                raise _browser_signin_required('YouTube TV')
-            from ..tve.mvpd import login_to_mvpd
-            cookie_jar = cfg.get('xfinity_cookie_jar')
-            page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
+        # Every MVPD's actual sign-in mechanics live in app/tve/mvpd/ —
+        # add one there (not here) to support a new provider everywhere
+        # at once. Every login_to_mvpd() backend follows redirects all the
+        # way through and returns that landed URL directly — confirmed
+        # live 2026-08-14 for Xfinity (lands on
+        # auth.watch.hgtv.com/gauth-sync?code=...) — so it's used as
+        # code_url directly here, no extra hop needed.
+        if mso_id == 'YouTubeTV':
+            # yt-dlp/login_to_mvpd() has no Google sign-in at all, so a
+            # YouTube TV session can only come from the browser flow.
+            # (This used to be a definitive "not usable", on the belief
+            # that Discovery's session died in ~90-200s; it doesn't, see
+            # SESSION_TTL_SECONDS.)
+            raise _browser_signin_required('YouTube TV')
+        if mso_id in ('Cox', 'Spectrum'):
+            # Normally caught by _raise_if_spectrum_routed() above; this
+            # covers an Adobe response that didn't name Spectrum's IdP.
+            raise _browser_signin_required('Spectrum (including Cox)')
+        from ..tve.mvpd import login_to_mvpd
+        cookie_jar = cfg.get('xfinity_cookie_jar')
+        page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
+        try:
+            code_url = login_to_mvpd(
+                mso_id, page_html, page_url, account.username or '', account.password or '',
+                cookie_jar=cookie_jar,
+            )
+        except TVENotAuthorizedError:
+            raise
+        except TVEAuthError as exc:
+            # See fox_tve.py's _fox_sports_access_token() for why this
+            # also needs the per-network status — Discovery doesn't even
+            # track this in TVEAccount.last_auth_message (no try/except
+            # existed here at all before), so without this the failure
+            # would otherwise be invisible everywhere.
             try:
-                code_url = login_to_mvpd(
-                    mso_id, page_html, page_url, account.username or '', account.password or '',
-                    cookie_jar=cookie_jar,
-                )
-            except TVENotAuthorizedError:
-                raise
-            except TVEAuthError as exc:
-                # See fox_tve.py's _fox_sports_access_token() for why this
-                # also needs the per-network status — Discovery doesn't even
-                # track this in TVEAccount.last_auth_message (no try/except
-                # existed here at all before), so without this the failure
-                # would otherwise be invisible everywhere.
-                try:
-                    from ..tve.browser_login.common import _record_tve_login_error
-                    _record_tve_login_error('discovery', str(exc)[:300])
-                except Exception:  # noqa: BLE001
-                    pass
-                raise
+                from ..tve.browser_login.common import _record_tve_login_error
+                _record_tve_login_error('discovery', str(exc)[:300])
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
         code = (parse_qs(urlsplit(code_url).query).get('code') or [''])[0]
         if not code:

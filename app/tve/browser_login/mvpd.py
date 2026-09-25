@@ -24,7 +24,6 @@ from app.tve.browser_login.common import (
     _apply_sling_browser_login_input,
     _harvest_and_save_xfinity_cookies,
     _record_tve_login_error,
-    _cox_login_error_detail,
     _autofill_google_account_chooser,
     _autofill_spectrum_sso_confirm,
     _log_signin_timeout_snapshot,
@@ -215,50 +214,6 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
             )
 
         client = _new_client()
-
-        if mso_id == 'Cox':
-            # Cox's login step is scripted:
-            # AdobePassCoxClient.authorize_with_cox() does the whole thing —
-            # register, regcode, direct login.cox.com/api/v1/authn POST
-            # (authenticate_with_cox), fetch_session_token, authorize — exactly
-            # what authorize_mvpd() already does automatically at play time for
-            # this same "legacy" family (History/A&E/Warner). Confirmed live
-            # 2026-08-11 (History TVE authorized in a few seconds, zero
-            # Camoufox).
-            #
-            # Confirmed live 2026-09-24: Adobe's "Cox" MVPD now auto-POSTs to
-            # Spectrum's own IdP (tve.spectrum.net/openam/.../charter/idp) for
-            # a Cox account migrated to Spectrum, so the scripted login fails
-            # before ever reaching login.cox.com — fall through to the
-            # browser-assisted flow below on anything but a definitive "not
-            # entitled", which signs in on Spectrum's page with mso_id=Cox
-            # (the same account under mso_id=Spectrum is refused with
-            # IDLI-4213 "select Cox Spectrum"). Same scripted-then-browser
-            # shape AMCN's Cox branch has.
-            set_status('running', f'Signing in to {requestor_id}…')
-            try:
-                client.authorize_with_cox(mvpd_username, mvpd_password)
-            except TVENotAuthorizedError as exc:
-                detail = _cox_login_error_detail(exc, requestor_id)
-                _step(requestor_id, 'failed', detail[:120])
-                _record_tve_login_error(requestor_id, detail)
-                set_status('error', f'{requestor_id}: {detail}')
-                return
-            except Exception as exc:  # noqa: BLE001
-                logger.info(
-                    '[mvpd-login] %s: scripted Cox sign-in failed, falling back to browser '
-                    '(Spectrum-migrated Cox accounts sign in on Spectrum\'s page): %s', requestor_id, exc,
-                )
-                client = _new_client()
-                set_status('running', 'Scripted sign-in did not work — opening a browser…')
-            else:
-                if not client_creds and account_row:
-                    save_adobe_client_creds(account_row, requestor_id, client.ctx.client_id, client.ctx.client_secret, client.ctx.access_token)
-                _save_mvpd_authn_token(requestor_id, client.ctx.authn_token)
-                _step(requestor_id, 'done', 'authorized')
-                set_status('success', f'Signed in — {requestor_id} authorized.')
-                logger.info('[mvpd-login] paired requestor_id=%s mso_id=Cox (scripted, no browser)', requestor_id)
-                return
 
         if mso_id == 'Comcast_SSO':
             # Try a saved cookie jar (harvested from a previous successful

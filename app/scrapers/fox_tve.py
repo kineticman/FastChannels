@@ -693,58 +693,13 @@ def _fox_json_headers(token: str | None = None) -> dict:
     return headers
 
 
-def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str, password: str) -> None:
-    from ..tve.adobe_pass import _hidden_form, throttle_cox_login
-
-    login_user = username.split('@', 1)[0] if username.lower().endswith('@cox.net') else username
-    session.get(cox_saml_url, allow_redirects=True, timeout=30)
-    throttle_cox_login()
-    r = session.post(
-        'https://login.cox.com/api/v1/authn',
-        json={
-            'username': login_user,
-            'password': password,
-            'options': {'warnBeforePasswordExpired': True, 'multiOptionalFactorEnroll': True},
-        },
-        headers={
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'Origin': 'https://login.cox.com',
-            'Referer': cox_saml_url,
-            'x-okta-user-agent-extended': 'okta-signin-widget-5.16.1',
-        },
-        timeout=30,
-    )
-    r.raise_for_status()
-    auth = r.json()
-    if auth.get('status') != 'SUCCESS' or not auth.get('sessionToken'):
-        raise ValueError(f'Cox authn did not succeed: {auth.get("status") or "unknown"}')
-
-    redirect_url = 'https://login.cox.com/login/sessionCookieRedirect?' + urlencode({
-        'checkAccountSetupComplete': 'true',
-        'token': auth['sessionToken'],
-        'redirectUrl': cox_saml_url,
-    })
-    r = session.get(redirect_url, allow_redirects=True, timeout=30)
-    r.raise_for_status()
-    action, form = _hidden_form(r.text, str(r.url))
-    if 'SAMLResponse' not in form:
-        raise ValueError('Cox SAML page did not include SAMLResponse')
-
-    r = session.post(
-        action,
-        data=form,
-        headers={'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': UA},
-        allow_redirects=True,
-        timeout=30,
-    )
-    r.raise_for_status()
-
-
 def _fox_sports_mvpd_token(
     session: requests.Session, device_id: str, mso_id: str, username: str, password: str,
     cookie_jar: dict | None = None,
 ) -> str:
+    from ..tve.mvpd import require_scripted_mvpd_login
+    require_scripted_mvpd_login(mso_id)
+
     anon = session.post(
         'https://api3.fox.com/v2.0/login',
         headers=_fox_json_headers(),
@@ -788,21 +743,15 @@ def _fox_sports_mvpd_token(
     if not mso_login_url and mso_id != 'DTV':
         raise ValueError('FOX Adobe authenticate call did not return an MVPD login redirect.')
 
-    if mso_id == 'Cox':
-        if 'login.cox.com' not in mso_login_url:
-            raise ValueError(f'Unexpected FOX Adobe redirect host: {urlsplit(mso_login_url).netloc}')
-        _cox_saml_login(session, mso_login_url, username, password)
-    else:
-        # Every other MVPD's actual sign-in mechanics live in app/tve/mvpd/
-        # — add one there (not here) to support a new provider everywhere
-        # at once.
-        from ..tve.mvpd import login_to_mvpd
-        from ..tve.adobe_pass import TVEAuthError as _TVEAuthError
-        page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
-        try:
-            login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
-        except _TVEAuthError as exc:
-            raise ValueError(str(exc)) from exc
+    # Every MVPD's actual sign-in mechanics live in app/tve/mvpd/ — add one
+    # there (not here) to support a new provider everywhere at once.
+    from ..tve.mvpd import login_to_mvpd
+    from ..tve.adobe_pass import TVEAuthError as _TVEAuthError
+    page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
+    try:
+        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+    except _TVEAuthError as exc:
+        raise ValueError(str(exc)) from exc
 
     check = session.get(
         'https://api3.fox.com/v2.0/checkadobeauthn/v2',
@@ -860,7 +809,7 @@ def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
             # (same mechanism the browser-assisted sign-in flows use), not
             # just the easily-overwritten account-wide last_auth_message —
             # without this, a provider whose token can't be silently
-            # refreshed (anything other than Cox/Comcast_SSO/DTV — see
+            # refreshed (anything other than Comcast_SSO/DTV — see
             # app/tve/mvpd/__init__.py's login_to_mvpd()) fails this way on
             # every resolve/audit with no visible signal that re-signing-in
             # would fix it; the caller only ever sees an unentitled preview
@@ -979,8 +928,8 @@ class FoxTVEScraper(MvpdCooldownMixin, BaseScraper):
             # embedded asset can be a frozen/looping Uplynk decoy (byte-identical segments across
             # fetches) unrelated to what Fox's own web player actually shows. fox_one's 'fwx'
             # channel covers Fox Weather properly through the authenticated DTC ticket system
-            # (same one used for LiveNOW/FS1/etc.) when a native FOX One playback config (Cox
-            # account or refresh_token) is present, and CHANNELS['fox_weather'] here is kept
+            # (same one used for LiveNOW/FS1/etc.) when a native FOX One playback config (TV
+            # provider account or refresh_token) is present, and CHANNELS['fox_weather'] here is kept
             # around only as fox_one's delegate fallback for installs without native config.
             if channel.channel_id != 'fox_weather'
         ]

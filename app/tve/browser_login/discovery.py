@@ -53,17 +53,17 @@ _AFFILIATE_NOT_FOUND = 'Affiliate partner not found'
 
 
 def _run_discovery_browser_assisted_login(r, set_status, source, account, scraper, mso_id: str, mso_name: str) -> None:
-    """Browser-assisted counterpart to run_discovery_browser_login's scripted
-    Cox fast path, for any MSO whose login page blocks scripted clients
-    outright (YouTubeTV/Google, Sling, etc.) — same "second screen" idea as
+    """Browser-assisted counterpart to DiscoveryTVEScraper._authenticate()'s
+    scripted login, for any MSO whose login page blocks scripted clients
+    outright (Cox/Spectrum, YouTubeTV/Google, Sling, etc.) — same "second screen" idea as
     _run_amcn_browser_assisted_login, adapted to Discovery's single shared
     session (all 14 channels ride ONE gauth session/cookie jar, unlike
     AMCN's 4 independent per-channel logins — see SESSION_CACHE_KEY), and to
     Discovery's own completion shape: rather than an independent
     /profiles/code/{code} poll API (NBC/AMCN), a Discovery login completes
     when the BROWSER's own redirect chain lands on a URL carrying a `code`
-    query param (see DiscoveryTVEScraper._authenticate()'s Cox/Xfinity
-    branches — the code is extracted from wherever redirect_url's own chain
+    query param (see DiscoveryTVEScraper._authenticate() — the code is
+    extracted from wherever redirect_url's own chain
     lands, not fetched independently), so this watches page.url directly
     instead of polling a separate endpoint.
 
@@ -455,26 +455,10 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
 def run_discovery_browser_login(mso_id: str):
     """Standalone "Sign in" for Discovery TVE.
 
-    Unlike AMC/NBC/FOX, Discovery's Cox login never actually needs a
-    browser: DiscoveryTVEScraper._authenticate() already does the whole
-    thing scripted (register, gauth authorize, _cox_saml_login's direct
-    POST to login.cox.com/api/v1/authn, code exchange, entitlement check)
-    on every session refresh during normal scraping. Confirmed live
-    2026-08-11: a full authenticate+entitlement round trip in ~3s with the
-    real Cox account, zero Camoufox involved. The old page.goto()+autofill
-    version routed this same login through a full Firefox launch for no
-    reason, which is almost certainly why Discovery was one of the networks
-    reported stuck/timing out in the community thread — Camoufox
-    render/timeout budgets, not anything about Discovery's actual auth
-    requirements. This only supports Cox (the only
-    MSO _authenticate() has wired up); non-Cox reports back as an error
-    same as before.
-
-    No stop-key check here (unlike run_amcn_browser_login's per-channel
-    loop, code review 2026-08-11) — _authenticate() is one ~3s scripted call
-    with no natural interruption point partway through, so there's nothing
-    meaningful to cancel into; worst case is bounded by its own per-request
-    timeouts (30s each) rather than the old ~30min browser session.
+    Comcast_SSO tries a saved cookie jar through the scripted
+    DiscoveryTVEScraper._authenticate() first; everything else (including
+    Cox, which signs in on Spectrum's page now) goes through the
+    browser-assisted flow.
     """
     # Manual push/pop instead of `with flask_app.app_context():` — see
     # _prime_google_session's docstring: Camoufox's own rendering breaks
@@ -482,8 +466,7 @@ def run_discovery_browser_login(mso_id: str):
     # Popped right before handing off to _run_discovery_browser_assisted_login
     # (which launches Camoufox and pushes its own fresh, short-lived
     # contexts for the DB writes it still needs) and never re-pushed — the
-    # Cox scripted path below is the only other branch, and it never
-    # reaches the pop.
+    # cookie-jar path below returns before the pop on success.
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
@@ -512,40 +495,13 @@ def run_discovery_browser_login(mso_id: str):
         r.delete(MVPD_BROWSER_LOGIN_INPUT_KEY)
         set_status('running', 'Signing in to Discovery TVE…')
 
-        from app.scrapers.discovery_tve import DiscoveryBrowserSignInRequired, DiscoveryTVEScraper
+        from app.scrapers.discovery_tve import DiscoveryTVEScraper
 
         source = Source.query.filter_by(name='discovery_tve').first()
         if not source:
             set_status('error', 'Discovery TVE source not found.')
             return
         scraper = DiscoveryTVEScraper(config=dict(source.config or {}))
-
-        if mso_id == 'Cox':
-            # Adobe's Cox MVPD now signs in on Spectrum's page, which only
-            # the browser flow can do; try scripted first (the old
-            # login.cox.com path), then fall through to the browser.
-            try:
-                scraper._authenticate()
-            except DiscoveryBrowserSignInRequired:
-                set_status('running', 'Cox signs in on Spectrum\'s page — opening a browser…')
-            except TVENotAuthorizedError as exc:
-                _record_tve_login_error('discovery', f'not entitled — {exc}')
-                set_status('error', f'Discovery TVE: not entitled — {exc}')
-                return
-            except TVEAuthError as exc:
-                _record_tve_login_error('discovery', str(exc))
-                set_status('error', f'Discovery TVE: {exc}')
-                return
-            except Exception as exc:  # noqa: BLE001
-                logger.exception('[discovery-mvpd-login] unexpected failure')
-                _record_tve_login_error('discovery', str(exc))
-                set_status('error', f'Discovery TVE: {exc}')
-                return
-            else:
-                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-                set_status('success', 'Signed in — Discovery TVE authorized.')
-                logger.info('[discovery-mvpd-login] paired mso_id=%s (scripted, no browser)', mso_id)
-                return
 
         account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         if not account or not account.is_enabled or not account.has_credentials():
@@ -559,8 +515,7 @@ def run_discovery_browser_login(mso_id: str):
             # — see _harvest_and_save_xfinity_cookies) BEFORE ever
             # opening a browser, same as mvpd.py/nbc.py/fox.py already
             # do. Confirmed live 2026-08-28: scraper._authenticate()
-            # (already used by the Cox branch above, and by every
-            # scheduled session refresh) works unmodified for
+            # (used by every scheduled session refresh) works unmodified for
             # Comcast_SSO too once a jar exists — the interactive
             # browser flow was what was actually tripping Comcast's own
             # fraud/step-up check on a password-hydration retry, not

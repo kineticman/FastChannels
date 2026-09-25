@@ -836,24 +836,6 @@ let _mvpdLoginFamily = 'legacy';
 // requestors share one status key).
 let _mvpdLoginRequestorId = null;
 
-// Every network's Cox sign-in is now a real, fast scripted login (no
-// browser) instead of a human-paced browser flow — clicking through several
-// networks within a minute was firing that many real Okta logins back to
-// back and tripping Cox's own rate-limiting (observed live 2026-08-11: the
-// 6th rapid-fire login suddenly took ~25s instead of ~2-3s). Originally
-// throttled from here via a localStorage-tracked client-side cooldown, but
-// that only protected clicks within one browser tab — a second tab, a
-// different device, or a direct API call bypassed it entirely, and it also
-// raced the server's own job-completion timing (a slow login, e.g. AMC's 4
-// sequential channel logins, could finish AFTER this cooldown had already
-// elapsed, so the next batch step's /start hit "already_running" and got
-// wrongly marked failed). Moved to the real enforcement point instead —
-// app.tve.adobe_pass.throttle_cox_login() sleeps server-side, inside the
-// actual login.cox.com POST, covering every entry point including FOX One's
-// own button and any direct API call — see its docstring (code review,
-// 2026-08-11). Nothing client-side needed anymore: a "Sign in" click just
-// takes longer to respond if another login happened moments ago.
-
 // What to retry with after a force-stop — set by openMvpdLoginModal itself so
 // forceStopMvpdLogin never needs family/requestorId embedded in an inline
 // onclick (JSON.stringify()'d values inside a double-quoted HTML attribute
@@ -1312,18 +1294,15 @@ function _mvpdLoginRunFoxOneForBatch(label, status, hintEl) {
 // Runs one network's sign-in (/start, poll /state to a terminal state) as
 // part of signInToAllTve()'s loop. Resolves rather than rejects on failure —
 // one network being not-entitled/erroring shouldn't abort the rest of the
-// batch. No client-side cooldown — the server throttles the actual Cox
-// login (app.tve.adobe_pass.throttle_cox_login()) regardless of how fast
-// this loop fires /start calls.
+// batch.
 function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
   return new Promise((resolve) => {
     let startAttempts = 0;
     // ~90s of retrying a stuck lock before giving up on this network. AMCN
     // (which shares this same lock, see MVPD_LOGIN_FAMILIES/app/routes/
-    // tasks.py's _mvpd_tve_profile_busy) runs 4 Cox logins each spaced
-    // 8s apart by throttle_cox_login(), so its own worst case is already
-    // ~30s+ — a 30-attempt/1s budget left the next step in line (Discovery)
-    // one bad throttle roll from spuriously failing with "another sign-in
+    // tasks.py's _mvpd_tve_profile_busy) runs 4 channel logins, so its own
+    // worst case is already ~30s+ — a 30-attempt/1s budget left the next step in line (Discovery)
+    // one slow login from spuriously failing with "another sign-in
     // stayed busy too long" purely from sequencing, nothing actually wrong
     // (observed live 2026-08-14: Discovery retried the full 30s while AMCN
     // was still legitimately running). 2s between attempts instead of 1s

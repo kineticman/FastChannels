@@ -159,68 +159,8 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         )
         logger.info('[nbc-mvpd-login] starting attempt=%d mso_id=%s; cleared prior modal state', _attempt, mso_id)
 
-        if mso_id == 'Cox':
-            # Cox's login step is already fully scripted: NbcTveScraper.
-            # _ensure_entitled() calls AdobePassV2Client.authorize(), which
-            # does the direct login.cox.com/api/v1/authn POST (_cox_saml_login,
-            # shared with fox_tve.py) on every entitlement refresh — same
-            # pattern as resolve()'s own normal playback path. No browser
-            # needed; confirmed live 2026-08-11 (full authorize+preauthorize
-            # round trip with the real Cox account, zero Camoufox). Falls
-            # through to the browser-assisted flow below when it fails.
-            set_status('running', 'Signing in to NBC TVE…')
-            source = Source.query.filter_by(name='nbc_tve').first()
-            if not source:
-                set_status('error', 'NBC TVE source not found.')
-                return
-            scraper = NbcTveScraper(config=dict(source.config or {}))
-            try:
-                guide = scraper._fetch_guide()
-                if not guide:
-                    set_status('error', 'NBC TVE: could not load channel guide.')
-                    return
-                resource_id = next(iter(guide.values())).resource_id
-                # Force a fresh entitlement check — _ensure_entitled() short-
-                # circuits on a still-fresh cached decision, which would make
-                # a deliberate "Sign in" click silently no-op.
-                scraper._update_cache('nbc_entitlements', {})
-                scraper._ensure_entitled(resource_id)
-            # Deliberately NOT using _cox_login_error_detail() here (unlike
-            # the legacy/FOX Cox branches, code review 2026-08-11) —
-            # _ensure_entitled()'s own exceptions already carry full context
-            # ("NBC TVE: <mso_id> is not authorized: <reason>"), so running
-            # them through that classifier too would double up the framing
-            # instead of clarifying it. See that function's docstring.
-            except TVENotAuthorizedError as exc:
-                persist_source_config_updates(source.id, scraper._pending_config_updates)
-                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-                _record_tve_login_error('nbc', str(exc))
-                set_status('error', f'NBC TVE: {exc}')
-                return
-            except Exception as exc:  # noqa: BLE001
-                # Confirmed live 2026-09-24: Adobe's "Cox" MVPD now
-                # auto-POSTs to Spectrum's own IdP for a Cox account migrated
-                # to Spectrum, so the scripted login fails ("did not return
-                # an MVPD login redirect") before reaching login.cox.com.
-                # Fall through to the browser-assisted flow below, which
-                # signs in on Spectrum's page with mso_id=Cox — same
-                # scripted-then-browser shape AMCN's Cox branch has.
-                persist_source_config_updates(source.id, scraper._pending_config_updates)
-                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-                logger.info(
-                    '[nbc-mvpd-login] scripted Cox sign-in failed, falling back to browser '
-                    '(Spectrum-migrated Cox accounts sign in on Spectrum\'s page): %s', exc,
-                )
-                set_status('running', 'Scripted sign-in did not work — opening a browser…')
-            else:
-                persist_source_config_updates(source.id, scraper._pending_config_updates)
-                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-                set_status('success', 'Signed in — NBC TVE authorized.')
-                logger.info('[nbc-mvpd-login] paired mso_id=Cox (scripted, no browser)')
-                return
-
         if mso_id == 'Comcast_SSO':
-            # Same idea as the Cox branch above, but via a saved cookie jar
+            # Try a saved cookie jar
             # (harvested from a previous successful Comcast_SSO browser
             # pairing — see _harvest_and_save_xfinity_cookies and
             # app/tve/adobe_pass.py's xfinity_cookie_jar_login()) instead of

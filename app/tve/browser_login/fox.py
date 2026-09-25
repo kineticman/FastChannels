@@ -9,7 +9,6 @@ import redis
 from app.worker import flask_app
 from app.extensions import db
 from app.models import TVEAccount
-from app.tve.adobe_pass import TVENotAuthorizedError
 from app.tve.browser_login.common import (
     _watch_spectrum_auth_results,
     _safe_page_url,
@@ -20,7 +19,6 @@ from app.tve.browser_login.common import (
     _apply_sling_browser_login_input,
     _harvest_and_save_xfinity_cookies,
     _record_tve_login_error,
-    _cox_login_error_detail,
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
@@ -120,77 +118,8 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         r.delete(FOX_BROWSER_LOGIN_STOP_KEY)
         r.delete(FOX_BROWSER_LOGIN_INPUT_KEY)
 
-        if mso_id == 'Cox':
-            # Cox's login step is already fully scripted via
-            # fox_tve._fox_sports_mvpd_token() (the direct login.cox.com/
-            # api/v1/authn POST, same _cox_saml_login used elsewhere). No
-            # browser needed; confirmed live 2026-08-11. Falls through to
-            # the browser-assisted flow below when it fails.
-            #
-            # Calls _fox_sports_mvpd_token() directly rather than going
-            # through _fox_sports_access_token()'s cache-first path — same
-            # reasoning as foxone_signin()'s own docstring: a "Sign in"
-            # click should always exercise a live Cox login, not silently
-            # return a still-valid cached token untested. That cache-first
-            # wrapper also swallows its own exceptions and falls back to an
-            # anonymous preview token instead of raising (the right call at
-            # play time, wrong for this button — code review, 2026-08-11:
-            # this button was reading the account-wide last_auth_status
-            # afterward instead of the actual outcome, which a DIFFERENT
-            # network's more recent attempt could have overwritten, and the
-            # cache-hit path never touched that field at all).
-            set_status('running', 'Signing in to FOX TVE…')
-            import uuid as _uuid
-            from app.scrapers.fox_tve import _fox_sports_mvpd_token
-            account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
-            if not account_row or not account_row.is_enabled or not account_row.has_credentials():
-                set_status('error', 'TVE credentials are not configured in Settings.')
-                return
-            fox_session = requests.Session()
-            try:
-                token = _fox_sports_mvpd_token(fox_session, str(_uuid.uuid4()), mso_id, account_row.username or '', account_row.password or '')
-            except TVENotAuthorizedError as exc:
-                detail = _cox_login_error_detail(exc, 'FOX TVE')
-                message = f'FOX Sports {mso_id} auth failed: {detail}'
-                account_row.last_auth_status = 'error'
-                account_row.last_auth_message = message[:500]
-                account_row.last_auth_at = datetime.now(timezone.utc)
-                db.session.commit()
-                _record_tve_login_error('fox', detail)
-                set_status('error', f'FOX TVE: {detail}')
-                return
-            except Exception as exc:  # noqa: BLE001
-                # Confirmed live 2026-09-24: Adobe's "Cox" MVPD now
-                # auto-POSTs to Spectrum's own IdP for a Cox account migrated
-                # to Spectrum, so the scripted login fails ("did not return
-                # an MVPD login redirect") before reaching login.cox.com.
-                # Fall through to the browser-assisted flow below, which
-                # signs in on Spectrum's page with mso_id=Cox — same
-                # scripted-then-browser shape AMCN's Cox branch has.
-                logger.info(
-                    '[fox-mvpd-login] scripted Cox sign-in failed, falling back to browser '
-                    '(Spectrum-migrated Cox accounts sign in on Spectrum\'s page): %s', exc,
-                )
-                set_status('running', 'Scripted sign-in did not work — opening a browser…')
-            else:
-                now = int(time.time())
-                cfg = dict(account_row.config or {})
-                cfg['fox_sports_access_token'] = token
-                cfg['fox_sports_access_token_exp'] = _jwt_exp(token) or (now + 3600)
-                cfg['fox_sports_access_token_mso'] = mso_id
-                cfg['fox_sports_access_token_captured_at'] = now
-                account_row.config = cfg
-                account_row.last_auth_status = 'ok'
-                account_row.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id}.'
-                account_row.last_auth_at = datetime.now(timezone.utc)
-                db.session.commit()
-                set_status('success', 'Signed in — FOX TVE authorized.')
-                logger.info('[fox-mvpd-login] paired mso_id=Cox (scripted, no browser)')
-                return
-
         if mso_id == 'Comcast_SSO':
-            # Same idea as the Cox branch above, but via a saved cookie jar
-            # instead of a scripted credential POST — see
+            # Try a saved cookie jar before opening a browser — see
             # run_nbc_browser_login's identical block for the full
             # reasoning. Falls through to the browser-assisted flow below
             # only when there's no jar yet or the saved one has gone stale.

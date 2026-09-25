@@ -3,15 +3,11 @@
 Every TVE scraper (nbc_tve, fox_tve, fox_one, amcn_tve, discovery_tve, and
 the legacy Cox-native client in app/tve/adobe_pass.py) needs to sign the
 shared TVEAccount into whichever MVPD it's configured for once its own
-family-specific REST call has reached the login step. Cox has a fast native
-login (still hand-rolled per file — see each scraper's own _cox_saml_login;
-deliberately NOT centralized here, since those are already proven in
-production with small per-family differences and unifying them risks
-regressing something that currently works for no real benefit). Every other
-MVPD's actual login mechanics are protocol/vendor-specific but otherwise
-interchangeable from a caller's point of view, so they're centralized here
-behind one dispatcher — add a new provider by writing one function in its
-own module and registering it below; no scraper needs to change.
+family-specific REST call has reached the login step. Each MVPD's actual
+login mechanics are protocol/vendor-specific but otherwise interchangeable
+from a caller's point of view, so they're centralized here behind one
+dispatcher — add a new provider by writing one function in its own module
+and registering it below; no scraper needs to change.
 """
 from __future__ import annotations
 
@@ -35,6 +31,28 @@ from ..adobe_pass import TVEAuthError, TVENotAuthorizedError, directv_login_cool
 # The no-cookie-jar case is separately guarded below regardless of page_url.
 _EXPECTED_HOST_SUBSTRING = {}
 
+# MSOs whose login page only a real browser can get through. Adobe's "Cox"
+# MVPD now hands off to Spectrum's own IdP (tve.spectrum.net) for every
+# account — re-probed with no account at all 2026-09-25, for both FOX One and
+# FOX Sports — so the old scripted login.cox.com sign-in is unreachable.
+# Spectrum's page is reCAPTCHA/ThreatMetrix-gated. Unattended renewal for
+# these can only reuse a still-valid Adobe session; otherwise the user has
+# to click "Sign in" again.
+_BROWSER_ONLY_MSOS = {'Cox': 'Cox / Cox Spectrum', 'Spectrum': 'Spectrum'}
+
+
+def require_scripted_mvpd_login(mso_id: str) -> None:
+    """Raise a clear "sign in again" TVEAuthError for an MSO only a browser
+    can sign in to. Call it at the point a scripted flow would otherwise
+    start a fresh MVPD login — after any Adobe session reuse has had its
+    chance, never before."""
+    name = _BROWSER_ONLY_MSOS.get(mso_id)
+    if name:
+        raise TVEAuthError(
+            f'{name} sign-in needs a browser. Click "Sign in" for this network '
+            'in Settings > TV Everywhere to sign in again.'
+        )
+
 
 def login_to_mvpd(
     mso_id: str, page_html: str, page_url: str, username: str, password: str,
@@ -51,9 +69,10 @@ def login_to_mvpd(
     to extract a `code` query param from wherever their own redirect chain
     lands (Discovery TVE) use it directly.
 
-    Raises TVEAuthError for any MSO with no backend registered here yet
-    (Cox is intentionally excluded — see module docstring).
+    Raises TVEAuthError for any MSO with no backend registered here yet,
+    or that only a browser can sign in to (see require_scripted_mvpd_login).
     """
+    require_scripted_mvpd_login(mso_id)
     expected_host = _EXPECTED_HOST_SUBSTRING.get(mso_id)
     if expected_host and expected_host not in page_url:
         raise TVEAuthError(f'Unexpected {mso_id} login host: {urlsplit(page_url).netloc}.')

@@ -97,9 +97,8 @@ def directv_login(start_html: str, start_url: str, username: str, password: str)
     History request and FOX One's own v2 REST request), whose response is
     itself one more auto-submit form — this time a SAMLResponse posting to
     Adobe's own https://sp.auth.adobe.com/sp/saml/SAMLAssertionConsumer,
-    completing the round trip exactly like Cox's SAML flow ends (see
-    _cox_saml_login in fox_tve.py/discovery_tve.py/amcn_tve.py) — DIRECTV
-    just gets there via ForgeRock+PKCE instead of Okta.
+    completing the round trip exactly like any SAML MVPD login ends —
+    DIRECTV just gets there via ForgeRock+PKCE.
 
     Confirmed live 2026-08-17 end-to-end against real DIRECTV Stream
     credentials: produces a real Adobe authnToken/session (fetch_session_token

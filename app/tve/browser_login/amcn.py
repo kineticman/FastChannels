@@ -43,19 +43,19 @@ logger = logging.getLogger(__name__)
 
 
 def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id: str, mso_id: str, channels: dict) -> None:
-    """Browser-assisted counterpart to run_amcn_browser_login's scripted Cox
-    fast path, for any MSO whose login page blocks scripted clients outright
-    (YouTubeTV/Google, Sling, etc.) — same "second screen" idea as
+    """Browser-assisted counterpart to AMCNetworksTVEScraper's scripted
+    login, for any MSO whose login page blocks scripted clients outright
+    (Cox/Spectrum, YouTubeTV/Google, Sling, etc.) — same "second screen" idea as
     run_nbc_browser_login, adapted to AMCNetworksTVEScraper's own v2 REST
     API (_adobe_session_redirect/_adobe_decision_finish, already MSO-generic
-    since today's DIRECTV wiring routed non-Cox logins through the shared
+    since the DIRECTV wiring routed MVPD logins through the shared
     login_to_mvpd() dispatcher — this function is what was still missing: a
     real browser to drive that dispatcher's browser-only MSOs through).
 
-    Unlike the Cox path, the 4 channels are done ONE AT A TIME through a
-    single shared page/profile — each needs its own live MSO login
-    (independent requestor_id/session), so there's no equivalent of Cox's
-    "parallelize since nothing shares state" shortcut. In practice this is
+    Unlike the scripted cookie-jar path, the 4 channels are done ONE AT A
+    TIME through a single shared page/profile — each needs its own live MSO
+    login (independent requestor_id/session), so there's no equivalent of
+    that path's "parallelize since nothing shares state" shortcut. In practice this is
     fast after the first channel: the persistent profile
     (/data/browser_profiles/mvpd_tve, same one NBC/FOX/legacy use) keeps
     Google/Adobe's SSO session warm, so channels 2-4 usually just need an
@@ -413,15 +413,14 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
 def run_amcn_browser_login(mso_id: str):
     """Standalone "Sign in" for AMC Networks TVE.
 
-    Same reasoning as run_discovery_browser_login: resolve() already does a
-    fully scripted Cox login per channel family via
-    AMCNetworksTVEScraper._adobe_decision_token() (register session, follow
-    the Adobe redirect, then _cox_saml_login()'s direct POST to
-    login.cox.com/api/v1/authn) — no browser needed. Unlike Discovery, AMCN
-    caches auth separately per requestor_id (AMC/BBCA/IFC/WETV each has its
-    own adobe_auth:<requestor_id> cache entry, see _adobe_auth_cache_key),
-    so "Sign in" here warms all four instead of just one. Passes force=True
-    to _adobe_decision_token so a click always exercises a live Cox login
+    Comcast_SSO tries a saved cookie jar through the scripted
+    AMCNetworksTVEScraper._adobe_decision_token() first; everything else
+    (including Cox, which signs in on Spectrum's page now) goes through the
+    browser. AMCN caches auth separately per requestor_id (AMC/BBCA/IFC/WETV
+    each has its own adobe_auth:<requestor_id> cache entry, see
+    _adobe_auth_cache_key), so "Sign in" here warms all four instead of just
+    one. Passes force=True to _adobe_decision_token so a click always
+    exercises a live MVPD login
     instead of silently returning a still-valid cached token untested — same
     "Sign in should be real" reasoning as FOX's and FOX One's own buttons
     (see run_fox_browser_login's docstring); without it, re-clicking within
@@ -435,8 +434,7 @@ def run_amcn_browser_login(mso_id: str):
     # Popped right before handing off to _run_amcn_browser_assisted_login
     # (which launches Camoufox and pushes its own fresh, short-lived
     # contexts for the DB writes it still needs) and never re-pushed — the
-    # Cox scripted path below is the only other branch, and it never
-    # reaches the pop.
+    # cookie-jar path below returns before the pop on success.
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
@@ -495,17 +493,10 @@ def run_amcn_browser_login(mso_id: str):
         # AdobePassCoxClient/requests.Session — nothing shared but this one
         # scraper instance, and each writes to its own distinct dict key,
         # safe under the GIL) — running them one at a time was ~4x slower
-        # than necessary. throttle_cox_login() still serializes the actual
-        # Cox POSTs to the same safe spacing either way, so this doesn't
-        # change how fast real credential attempts hit Cox/Okta — it only
-        # overlaps the OTHER three Adobe API calls each channel makes,
-        # which don't touch Cox at all (code review, 2026-08-11; measured
-        # live: 4 sequential cold-cache logins took ~30s, ~16s of which was
-        # pure serial throttle waiting). Shared by the Cox branch below and
-        # the Comcast_SSO cookie-jar-first attempt above it — both just need
-        # "run _adobe_decision_token for every channel, bucket the results";
-        # _adobe_decision_token's own login_to_mvpd() call already knows how
-        # to use mso_id/cookie_jar correctly either way.
+        # than necessary (code review, 2026-08-11). Used by the Comcast_SSO
+        # cookie-jar-first attempt below: "run _adobe_decision_token for
+        # every channel, bucket the results"; _adobe_decision_token's own
+        # login_to_mvpd() call already knows how to use mso_id/cookie_jar.
         def _scripted_channel_pass():
             stopped = r.exists(MVPD_BROWSER_LOGIN_STOP_KEY)
             authorized, failed = [], []
@@ -571,38 +562,7 @@ def run_amcn_browser_login(mso_id: str):
                     failed,
                 )
             set_status('running', 'No usable saved sign-in — opening a browser…')
-        elif mso_id == 'Cox':
-            # Try the fast scripted Cox login first — still correct for a
-            # genuinely native (non-Spectrum-migrated) Cox account. Falls
-            # through to the browser on ANY failure (zero channels
-            # authorized), same tolerance the Comcast_SSO branch above
-            # uses. Confirmed live 2026-09-18: this test account's Cox
-            # identity now routes through Spectrum's real login page (a
-            # 200 auto-submit SAML form, not login.cox.com) — the scripted
-            # path has no browser to hand that form to, so it always fails
-            # here for an account in that state, and only the browser can
-            # actually complete it.
-            set_status('running', 'Trying scripted sign-in (no browser needed)…')
-            stopped, authorized, failed = _scripted_channel_pass()
-            persist_source_config_updates(source.id, scraper._pending_config_updates)
-            persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-            if stopped:
-                set_status('stopped', f'Cancelled — authorized: {", ".join(authorized)}.' if authorized else 'Cancelled.')
-                return
-            if authorized:
-                message = f'Signed in — authorized: {", ".join(authorized)} (no browser needed).'
-                if failed:
-                    message += ' Not authorized: ' + '; '.join(failed) + '.'
-                set_status('success', message)
-                logger.info(
-                    '[amcn-mvpd-login] paired mso_id=Cox authorized=%s failed=%s via scripted login (no browser)',
-                    authorized, failed,
-                )
-                return
-            logger.info('[amcn-mvpd-login] scripted Cox login authorized nothing, falling back to browser: %s', failed)
-            set_status('running', 'No usable saved sign-in — opening a browser…')
-
-        # The Cox/Comcast_SSO branches above commit via persist_source_*,
+        # The Comcast_SSO branch above commits via persist_source_*,
         # which expires every loaded ORM row; the browser flow then read an
         # attribute after _ctx.pop() and died with DetachedInstanceError
         # (confirmed live 2026-09-25, Cox → Spectrum fallback). Reload both

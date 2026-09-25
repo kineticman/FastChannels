@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode, urljoin, urlparse, urlsplit
+from urllib.parse import urljoin, urlparse
 from zoneinfo import ZoneInfo
 
 import requests
@@ -23,8 +23,6 @@ from ..tve.adobe_pass import (
     MvpdCooldownMixin,
     TVEAuthError,
     TVENotAuthorizedError,
-    _hidden_form,
-    throttle_cox_login,
 )
 
 logger = logging.getLogger(__name__)
@@ -408,60 +406,6 @@ def _extract_user_token(response: requests.Response) -> str:
     return ''
 
 
-def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str, password: str) -> str:
-    session.get(cox_saml_url, allow_redirects=True, timeout=30)
-    throttle_cox_login()
-    login_user = username.split('@', 1)[0] if username.lower().endswith('@cox.net') else username
-    r = session.post(
-        'https://login.cox.com/api/v1/authn',
-        json={
-            'username': login_user,
-            'password': password,
-            'options': {'warnBeforePasswordExpired': True, 'multiOptionalFactorEnroll': True},
-        },
-        headers={
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'Origin': 'https://login.cox.com',
-            'Referer': cox_saml_url,
-            'x-okta-user-agent-extended': 'okta-signin-widget-5.16.1',
-            'User-Agent': UA,
-        },
-        timeout=30,
-    )
-    r.raise_for_status()
-    auth = r.json()
-    if auth.get('status') != 'SUCCESS' or not auth.get('sessionToken'):
-        raise TVEAuthError(f'Cox authn did not succeed: {auth.get("status") or "unknown"}.')
-
-    redirect_url = 'https://login.cox.com/login/sessionCookieRedirect?' + urlencode({
-        'checkAccountSetupComplete': 'true',
-        'token': auth['sessionToken'],
-        'redirectUrl': cox_saml_url,
-    })
-    r = session.get(redirect_url, allow_redirects=True, timeout=30)
-    r.raise_for_status()
-    action, form = _hidden_form(r.text, str(r.url))
-    if 'SAMLResponse' not in form:
-        raise TVEAuthError('Cox SAML page did not include SAMLResponse.')
-
-    r = session.post(
-        action,
-        data=form,
-        headers={
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': 'https://login.cox.com',
-            'Referer': 'https://login.cox.com/',
-            'User-Agent': UA,
-        },
-        allow_redirects=False,
-        timeout=30,
-    )
-    if r.status_code not in {200, 301, 302, 303, 307, 308}:
-        raise TVEAuthError(f'Adobe SAML consumer returned HTTP {r.status_code}.')
-    return r.headers.get('location') or str(r.url)
-
-
 class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'amcn_tve'
     source_aliases = ('amc_tve', 'amcnetworks_tve')
@@ -777,7 +721,7 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
         # would pass this bogus-still-valid cached token to AMCN's playback
         # API, get a fast HTTP 400 "TOKEN_EXPIRED", and only THEN fall
         # through to a full MVPD re-login inside the request (~13-19s for
-        # Xfinity's cookie-jar login / Cox SAML) — long enough that real
+        # Xfinity's cookie-jar login) — long enough that real
         # players gave up before the 302 ever arrived, even though resolve()
         # itself eventually succeeded. Pass the decision response's own
         # notAfter (ms) so the cache reflects the token's real ~5min life;
@@ -825,19 +769,19 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
         cfg = account.config or {}
         # AMCN's own v2 REST API, not the legacy XML protocol yt-dlp's generic
         # MVPD login flows speak — so unlike warner_tve.py/aenetworks_tve.py,
-        # non-Cox MSOs here can't fall back to authorize_mvpd()/yt-dlp. Native
-        # scripted login exists for Cox, Comcast_SSO, and DIRECTV (below); any
+        # MSOs here can't fall back to authorize_mvpd()/yt-dlp. Native
+        # scripted login exists for Comcast_SSO and DIRECTV (below); any
         # other mso_id raises below instead of silently misfiring.
         mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
 
         # force=True skips a still-valid cached token — used by the admin
         # "Sign in" button (app.worker.run_amcn_browser_login), which must
-        # always exercise a live Cox login so the attempt is real and
+        # always exercise a live MVPD login so the attempt is real and
         # last_signed_in_at actually advances, not silently return an
         # untested cached token (same reasoning as FOX's and FOX One's own
         # "Sign in" buttons — see run_fox_browser_login's docstring, code
         # review 2026-08-12: this button was reporting "paired" and logging
-        # a success message off a pure cache hit, with no Cox request made
+        # a success message off a pure cache hit, with no MVPD request made
         # and no timestamp movement to show for it).
         if not force:
             cached = self._cached_adobe_auth(channel, mso_id)
@@ -865,16 +809,23 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
                 except Exception:
                     self._update_cache(self._adobe_session_cache_key(channel), {})
 
+        from ..tve.mvpd import require_scripted_mvpd_login
+        try:
+            require_scripted_mvpd_login(mso_id)
+        except TVEAuthError as exc:
+            try:
+                from ..tve.browser_login.common import _record_tve_login_error
+                _record_tve_login_error('amcn', str(exc)[:300])
+            except Exception:  # noqa: BLE001
+                pass
+            raise TVEAuthError(f'{channel.name}: {exc}') from exc
+
         statement = self._amcn_software_statement(channel, account)
         client, code, mso_login_url, auth_headers, mso_login_response = self._adobe_session_redirect(
             channel, statement, device_id, mso_id,
         )
 
-        if mso_id == 'Cox':
-            if 'login.cox.com' not in mso_login_url:
-                raise TVEAuthError(f'{channel.name}: unexpected Adobe redirect host {urlsplit(mso_login_url).netloc}.')
-            _cox_saml_login(client.session, mso_login_url, account.username or '', account.password or '')
-        elif mso_id == 'YouTubeTV':
+        if mso_id == 'YouTubeTV':
             # Not login_to_mvpd()'s generic "no scripted sign-in is wired up
             # for this provider yet" (which wrongly implies this could just
             # be built later, and — being a plain TVEAuthError — gets
@@ -1045,8 +996,8 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
         except (requests.HTTPError, TVEAuthError):
             # Cached token rejected (expired server-side before our TTL guess
             # expected, or Adobe revoked it) — clear it and fall through to a
-            # fresh decision token (Cox: re-logs in; others: raises the clear
-            # "no cached sign-in" error) rather than silently looping forever
+            # fresh decision token (scripted MVPDs re-log in; others raise the
+            # clear "sign in again" error) rather than silently looping forever
             # on a dead cached token.
             self._update_cache(self._adobe_auth_cache_key(channel), {})
             adobe_token, adobe_id = self._adobe_decision_token(channel, account, device_id)

@@ -16,16 +16,10 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-_COX_LOGIN_THROTTLE_KEY = 'tve:cox-login:last-at'
-_COX_LOGIN_THROTTLE_SECONDS = 8.0
-
-# Separate key/interval from Cox's — a different MVPD's rate limiting is a
-# different budget, so a Cox login shouldn't delay a DIRECTV one or vice
-# versa. Interval is longer than Cox's: confirmed live 2026-08-17 that
-# Akamai Bot Manager on identity.directv.com starts 403ing DIRECTV login
-# attempts fired within ~15s of each other even with proper curl_cffi
-# impersonation (see directv.py's directv_login docstring) — an 8s gap
-# (Cox's own interval) was not enough headroom when observed back-to-back.
+# Confirmed live 2026-08-17 that Akamai Bot Manager on identity.directv.com
+# starts 403ing DIRECTV login attempts fired within ~15s of each other even
+# with proper curl_cffi impersonation (see directv.py's directv_login
+# docstring) — an 8s gap was not enough headroom when observed back-to-back.
 _DIRECTV_LOGIN_THROTTLE_KEY = 'tve:directv-login:last-at'
 _DIRECTV_LOGIN_THROTTLE_SECONDS = 20.0
 
@@ -43,13 +37,14 @@ return tostring(slot)
 
 
 def _throttle_login(key: str, interval_seconds: float, label: str) -> None:
-    """Shared slot-reservation mechanics behind throttle_cox_login() and
-    throttle_directv_login() — see throttle_cox_login()'s docstring for the
-    full reasoning (Redis-backed so it works across processes/routes,
-    sleep-based so callers don't need special handling, fails open if Redis
-    is unavailable, and uses a single atomic Lua script so concurrent
-    callers get distinct monotonically-spaced slots instead of racing a
-    plain GET-then-SET).
+    """Slot-reservation mechanics behind throttle_directv_login(): a plain
+    wall-clock timestamp in Redis, so the gap between real credential POSTs
+    holds across every process, route and entry point (a client-side
+    cooldown only ever covered clicks within one browser tab). Sleep-based
+    so callers don't need special handling, fails open if Redis is
+    unavailable, and uses a single atomic Lua script so concurrent callers
+    get distinct monotonically-spaced slots instead of racing a plain
+    GET-then-SET.
     """
     try:
         import redis
@@ -64,29 +59,9 @@ def _throttle_login(key: str, interval_seconds: float, label: str) -> None:
         time.sleep(remaining)
 
 
-def throttle_cox_login() -> None:
-    """Enforces a minimum gap between real Cox credential POSTs across every
-    TVE network and entry point — legacy/AMC/Discovery's _cox_saml_login,
-    FOX Sports, and FOX One (a different Cox endpoint, identityhydra rather
-    than Okta, but the same account and the same "don't hammer it" concern).
-
-    Code review, 2026-08-11: the client-side cooldown built into the admin
-    settings modal (settings.js's localStorage-based wait) only throttles
-    clicks within one browser tab — a second tab, a different device, or a
-    direct API/script call bypassed it completely, leaving the actual
-    invariant ("don't trigger Cox/Okta's rate limiting") unenforced where
-    the real risk lives. This is a plain wall-clock timestamp in Redis
-    (not app.worker's job-id locks, which don't cover FOX One's route at
-    all — that one isn't an RQ job) so it works the same regardless of
-    which process or route the login came through.
-    """
-    _throttle_login(_COX_LOGIN_THROTTLE_KEY, _COX_LOGIN_THROTTLE_SECONDS, 'Cox')
-
-
 def throttle_directv_login() -> None:
     """Enforces a minimum gap between real DIRECTV credential POSTs across
-    every TVE network and entry point — see throttle_cox_login()'s docstring
-    for the shared reasoning; this exists because DIRECTV needed its own
+    every TVE network and entry point — see _throttle_login()'s docstring
     (confirmed live 2026-08-17 — see _DIRECTV_LOGIN_THROTTLE_SECONDS)."""
     _throttle_login(_DIRECTV_LOGIN_THROTTLE_KEY, _DIRECTV_LOGIN_THROTTLE_SECONDS, 'DIRECTV')
 
@@ -544,84 +519,6 @@ class AdobePassCoxClient:
             'reg_code': self.ctx.reg_code,
         })
 
-    def authenticate_with_cox(self, username: str, password: str) -> None:
-        try:
-            r = self.session.get(
-                AUTHENTICATE_URL,
-                params={
-                    'noflash': 'true',
-                    'mso_id': 'Cox',
-                    'requestor_id': self.requestor_id,
-                    'no_iframe': 'false',
-                    'domain_name': 'adobe.com',
-                    'redirect_url': self.redirect_url,
-                    'reg_code': self.ctx.reg_code,
-                },
-                allow_redirects=False,
-                timeout=30,
-            )
-        except requests.RequestException as exc:
-            raise TVEAuthError(str(exc)) from exc
-        if r.status_code not in {301, 302, 303, 307, 308}:
-            raise TVEAuthError(f'Adobe authenticate did not redirect to Cox: HTTP {r.status_code}.')
-        cox_saml_url = r.headers.get('location') or ''
-        if 'login.cox.com' not in cox_saml_url:
-            raise TVEAuthError(f'Unexpected Adobe authenticate redirect host: {urlsplit(cox_saml_url).netloc}.')
-
-        try:
-            self.session.get(cox_saml_url, allow_redirects=True, timeout=30)
-            throttle_cox_login()
-            login_user = username.split('@', 1)[0] if username.lower().endswith('@cox.net') else username
-            r = self.session.post(
-                'https://login.cox.com/api/v1/authn',
-                json={
-                    'username': login_user,
-                    'password': password,
-                    'options': {'warnBeforePasswordExpired': True, 'multiOptionalFactorEnroll': True},
-                },
-                headers={
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                    'Origin': 'https://login.cox.com',
-                    'Referer': cox_saml_url,
-                    'x-okta-user-agent-extended': 'okta-signin-widget-5.16.1',
-                },
-                timeout=30,
-            )
-            r.raise_for_status()
-        except requests.RequestException as exc:
-            raise TVEAuthError(str(exc)) from exc
-        auth = r.json()
-        if auth.get('status') != 'SUCCESS' or not auth.get('sessionToken'):
-            raise TVEAuthError(f'Cox authn did not succeed: {auth.get("status") or "unknown"}.')
-
-        redirect = 'https://login.cox.com/login/sessionCookieRedirect?' + urlencode({
-            'checkAccountSetupComplete': 'true',
-            'token': auth['sessionToken'],
-            'redirectUrl': cox_saml_url,
-        })
-        try:
-            r = self.session.get(redirect, allow_redirects=True, timeout=30)
-            r.raise_for_status()
-        except requests.RequestException as exc:
-            raise TVEAuthError(str(exc)) from exc
-        action, form = _hidden_form(r.text, str(r.url))
-        if 'SAMLResponse' not in form:
-            raise TVEAuthError('Cox SAML page did not include SAMLResponse.')
-
-        try:
-            r = self.session.post(
-                action,
-                data=form,
-                headers={'Content-Type': 'application/x-www-form-urlencoded'},
-                allow_redirects=False,
-                timeout=30,
-            )
-        except requests.RequestException as exc:
-            raise TVEAuthError(str(exc)) from exc
-        if r.status_code not in {200, 301, 302, 303, 307, 308}:
-            raise TVEAuthError(f'Adobe SAML consumer returned HTTP {r.status_code}.')
-
     def fetch_session_token(self) -> None:
         try:
             r = self.session.post(
@@ -639,9 +536,8 @@ class AdobePassCoxClient:
         # authenticated yet), but both mean the same thing to a caller: the
         # human hasn't finished signing in at the MSO. Only surfaced during
         # browser-assisted pairing polling (app.worker.run_mvpd_browser_login)
-        # — the scripted Cox flow never observes this, since it only calls
-        # fetch_session_token() after authenticate_with_cox() has already
-        # completed the round-trip synchronously.
+        # — the scripted flows only call fetch_session_token() after their
+        # MVPD login has already completed the round-trip synchronously.
         if r.status_code == 401:
             raise TVEPendingAuthError('Adobe has no session yet for this reg_code.')
         if r.status_code >= 400:
@@ -731,14 +627,6 @@ class AdobePassCoxClient:
         self.session.headers.update({'ap_19': guid, 'ap_23': session_index})
         self.ctx.authz_token = authz_token
         return self._short_authorize(session_guid)
-
-    def authorize_with_cox(self, username: str, password: str) -> str:
-        self.setup_client()
-        self.register_device()
-        self.create_regcode()
-        self.authenticate_with_cox(username, password)
-        self.fetch_session_token()
-        return self.authorize()
 
     def authenticate_with_xfinity_cookies(self, username: str, password: str, cookie_jar: dict) -> None:
         """Login via Comcast_SSO using a transplanted cookie jar harvested
@@ -1050,9 +938,10 @@ def authorize_mvpd(
 ) -> tuple[str, requests.Session]:
     """Authenticate a TVEAccount against whichever MSO it's configured for.
 
-    Uses the fast native Cox client when the account is Cox + native backend
-    (the validated, proven-working path). Any other MSO goes through yt-dlp's
-    generic per-provider Adobe Pass login flows (app/tve/ytdlp_mvpd.py) — the
+    Resumes a cached Adobe authn_token first. Otherwise Comcast_SSO (saved
+    cookie jar) and DIRECTV have native clients, Cox raises a "sign in again"
+    error (its login page is browser-only now), and any other MSO goes
+    through yt-dlp's generic per-provider Adobe Pass login flows (app/tve/ytdlp_mvpd.py) — the
     same legacy sp.auth.adobe.com protocol, just with that MSO's login handled
     by yt-dlp instead of a hand-rolled client. Returns (token, session); the
     session is a plain requests.Session for the yt-dlp path since downstream
@@ -1061,7 +950,6 @@ def authorize_mvpd(
     """
     cfg = account.config or {}
     selected_mso_id = (cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
-    auth_backend = (cfg.get('auth_backend') or 'native').strip()
     username = account.username or ''
     password = account.password or ''
 
@@ -1069,12 +957,10 @@ def authorize_mvpd(
     # one-time browser-assisted sign-in (app/worker.py's run_mvpd_browser_login,
     # for MSOs whose login page blocks scripted clients outright, e.g. Sling)
     # — may have already produced a long-lived authn_token for this
-    # requestor_id. Try resuming it before ever doing a full fresh login.
-    # This applies to Cox too: confirmed live (2026-08-05) that without this,
-    # the Cox native path did a REAL POST to login.cox.com with live account
-    # credentials on every single resolve() call — the same login-retry-storm
-    # risk already fixed once for fubo, just not previously caught here since
-    # Cox itself never errors, it just silently re-authenticates every time.
+    # requestor_id. Try resuming it before ever doing a full fresh login —
+    # without this, a scripted MSO does a REAL credential POST on every single
+    # resolve() call (confirmed live 2026-08-05), the same login-retry-storm
+    # risk already fixed once for fubo.
     device_fingerprint = _ensure_cox_device_fingerprint(account)
     client_creds = load_cached_adobe_client_creds(account, requestor_id)
     cached_authn = ((cfg.get('mvpd_authn') or {}).get(requestor_id) or {}).get('authn_token')
@@ -1131,21 +1017,11 @@ def authorize_mvpd(
         except TVEAuthError as exc:
             logger.info('[adobe-pass] cached authn_token for %s rejected, re-authenticating: %s', requestor_id, exc)
 
-    if selected_mso_id == 'Cox' and auth_backend == 'native':
-        client = AdobePassCoxClient(
-            requestor_id=requestor_id,
-            resource=resource,
-            software_statement=software_statement,
-            redirect_url=redirect_url,
-            device_fingerprint=device_fingerprint,
-            client_creds=client_creds,
-        )
-        token = client.authorize_with_cox(username, password)
-        if not client_creds:
-            save_adobe_client_creds(account, requestor_id, client.ctx.client_id, client.ctx.client_secret, client.ctx.access_token)
-        _save_mvpd_authn_token(account, requestor_id, client.ctx.authn_token)
-        _save_mvpd_authz_token(account, requestor_id, client.ctx.authz_token)
-        return token, client.session
+    if selected_mso_id == 'Cox':
+        # Adobe's "Cox" hands off to Spectrum's browser-only login page now,
+        # and yt-dlp's Cox handler can't get there either.
+        from .mvpd import require_scripted_mvpd_login
+        require_scripted_mvpd_login(selected_mso_id)
 
     if selected_mso_id == 'Comcast_SSO':
         # login.xfinity.com's credential POST is blocked by Akamai Bot
@@ -1231,29 +1107,12 @@ def authorize_mvpd(
     return token, session
 
 
-def verify_cox_history(username: str, password: str, software_statement: Optional[str] = None) -> dict:
-    statement = software_statement or discover_aenetworks_software_statement('history')
-    client = AdobePassCoxClient(
-        requestor_id='HISTORY',
-        resource=HISTORY_RESOURCE,
-        software_statement=statement,
-        redirect_url=DEFAULT_HISTORY_REDIRECT_URL,
-    )
-    token = client.authorize_with_cox(username, password)
-    return {
-        'requestor_id': 'HISTORY',
-        'mso_id': 'Cox',
-        'short_authorize_obtained': bool(token),
-        'short_authorize_len': len(token or ''),
-    }
-
-
 def verify_mvpd_history(account, software_statement: Optional[str] = None) -> dict:
-    """Same validation as verify_cox_history, but MSO-aware via authorize_mvpd.
+    """Validate the account against HISTORY via authorize_mvpd.
 
-    Works for Cox (native) and any other MSO yt-dlp supports (Sling, Spectrum,
-    Fubo, etc.) since it exercises whichever backend the account is configured
-    for. Used by the Settings TVE test button.
+    Works for any MSO authorize_mvpd supports since it exercises whichever
+    backend the account is configured for. Used by the Settings TVE test
+    button.
     """
     cfg = account.config or {}
     selected_mso_id = (cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()

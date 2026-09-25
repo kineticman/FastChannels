@@ -17,10 +17,9 @@ verified byte-for-byte against a real captured license request):
 - NBC.com uses **Adobe Pass API v2** (`sp.auth.adobe.com/api/v2/...`), a JSON
   REST flavor distinct from the legacy XML flow in app/tve/adobe_pass.py's
   AdobePassCoxClient. The underlying OAuth2 client-credentials exchange
-  (`/o/client/register` + `/o/client/token`) and the actual Cox SAML login
-  (`login.cox.com/api/v1/authn` + hidden-form POST) are identical between v1
-  and v2, so this file reuses `_cox_saml_login()` from fox_tve.py for the
-  login step and only implements the v2-specific session/profile/preauthorize
+  (`/o/client/register` + `/o/client/token`) is identical between v1 and v2,
+  and the MVPD login step goes through app/tve/mvpd's shared login_to_mvpd(),
+  so this file only implements the v2-specific session/profile/preauthorize
   calls itself.
 - The v2 API's `software_statement` (needed to register a client) is a
   static JWT baked into NBC's own JS bundle — not fetched from any API. It
@@ -109,12 +108,11 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 import requests
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
-from .fox_tve import _cox_saml_login
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
 from ..tve.adobe_pass import (
@@ -380,6 +378,9 @@ class AdobePassV2Client:
         if session_data.get('reasonType') == 'authenticated':
             return {}
 
+        from ..tve.mvpd import login_to_mvpd, require_scripted_mvpd_login
+        require_scripted_mvpd_login(mso_id)
+
         try:
             r = self.session.get(
                 f'{ADOBE_BASE}{auth_path}', headers=self._bearer_headers(),
@@ -395,28 +396,16 @@ class AdobePassV2Client:
         if not mso_login_url and mso_id != 'DTV':
             raise TVEAuthError('Adobe Pass v2: sessions authenticate call did not return an MVPD login redirect.')
 
-        if mso_id == 'Cox':
-            if 'login.cox.com' not in mso_login_url:
-                raise TVEAuthError(f'Adobe Pass v2: unexpected authenticate redirect host {urlsplit(mso_login_url).netloc!r}.')
-            try:
-                _cox_saml_login(self.session, mso_login_url, username, password)
-            except ValueError as exc:
-                raise TVENotAuthorizedError(str(exc)) from exc
-            except requests.RequestException as exc:
-                raise TVEAuthError(str(exc)) from exc
-        else:
-            # Every other MVPD's actual sign-in mechanics live in
-            # app/tve/mvpd/ — add one there (not here) to support a new
-            # provider everywhere at once. Uses its own dedicated session
-            # internally, entirely separate from self.session — Adobe binds
-            # the completed login server-side to THIS session's
-            # access_token/device fingerprint (embedded in mso_login_url via
-            # the /sessions call above) rather than to any particular HTTP
-            # session, same as the existing browser-assisted pairing's
-            # cross-session polling already relies on.
-            from ..tve.mvpd import login_to_mvpd
-            page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
-            login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+        # Every MVPD's actual sign-in mechanics live in app/tve/mvpd/ — add
+        # one there (not here) to support a new provider everywhere at once.
+        # Uses its own dedicated session internally, entirely separate from
+        # self.session — Adobe binds the completed login server-side to THIS
+        # session's access_token/device fingerprint (embedded in
+        # mso_login_url via the /sessions call above) rather than to any
+        # particular HTTP session, same as the existing browser-assisted
+        # pairing's cross-session polling already relies on.
+        page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
+        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
 
         r = self._get(f'{ADOBE_BASE}/api/v2/{self.requestor_id}/profiles/{mso_id}', headers=self._bearer_headers())
         profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)

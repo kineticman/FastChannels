@@ -9,7 +9,6 @@ from app.worker import flask_app
 from app.extensions import db
 from app.models import Source, TVEAccount
 from app.config_store import persist_source_config_updates
-from app.tve.adobe_pass import TVENotAuthorizedError
 from app.tve.browser_login.common import (
     _watch_spectrum_auth_results,
     MVPD_BROWSER_LOGIN_STATUS_KEY,
@@ -44,9 +43,9 @@ logger = logging.getLogger(__name__)
 
 
 def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, mso_id: str) -> None:
-    """Browser-assisted counterpart to FOX One's scripted Cox fast path
-    (api.foxone_signin / _authenticate_via_mvpd's Cox branch), for any MSO
-    whose login page blocks scripted clients outright (YouTubeTV/Google,
+    """Browser-assisted counterpart to FOX One's scripted MVPD sign-in
+    (api.foxone_signin / _authenticate_via_mvpd), for any MSO whose login
+    page blocks scripted clients outright (Cox/Spectrum, YouTubeTV/Google,
     Sling, etc.) — same "second screen" idea as _run_amcn_browser_assisted_login
     and _run_discovery_browser_assisted_login, adapted to FOX One's own
     adobeauthn/regcode API (_foxone_mvpd_register/_foxone_mvpd_finish).
@@ -327,11 +326,9 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
 def run_foxone_browser_login(mso_id: str):
     """Standalone "Sign in" for FOX One.
 
-    Mirrors run_amcn_browser_login/run_discovery_browser_login: Cox keeps
-    its existing fast scripted path (mirroring api.foxone_signin exactly,
-    since that route is what "Sign in" called before this function existed
-    for FOX One at all — this is the FIRST browser-assisted entry point FOX
-    One has ever had); any other MSO goes through the real browser-assisted
+    Mirrors run_amcn_browser_login/run_discovery_browser_login: Comcast_SSO
+    tries a saved cookie jar first; everything else (including Cox, which
+    signs in on Spectrum's page now) goes through the real browser-assisted
     flow below instead of erroring out with "no scripted sign-in wired up".
     """
     # Manual push/pop instead of `with flask_app.app_context():` — see
@@ -340,8 +337,7 @@ def run_foxone_browser_login(mso_id: str):
     # Popped right before handing off to _run_foxone_browser_assisted_login
     # (which launches Camoufox and pushes its own fresh, short-lived context
     # for the one DB write it still needs afterward) and never re-pushed —
-    # the Cox scripted path below is the only other branch, and it never
-    # reaches the pop.
+    # the cookie-jar path below returns before the pop on success.
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
@@ -387,10 +383,9 @@ def run_foxone_browser_login(mso_id: str):
             # Comcast_SSO browser pairing for ANY TVE family — see
             # _harvest_and_save_xfinity_cookies) BEFORE ever opening a
             # browser, same as mvpd.py/nbc.py/fox.py already do. Confirmed
-            # live 2026-08-28: _authenticate_via_mvpd (already used by the
-            # Cox branch below) works unmodified for Comcast_SSO too once a
-            # jar exists — it's the same login_to_mvpd() dispatcher, just
-            # gated to Cox-only here before this fix.
+            # live 2026-08-28: _authenticate_via_mvpd works unmodified for
+            # Comcast_SSO once a jar exists — it's the same login_to_mvpd()
+            # dispatcher.
             cookie_jar = (account.config or {}).get('xfinity_cookie_jar')
             if cookie_jar:
                 set_status('running', 'Trying saved sign-in (no browser needed)…')
@@ -415,54 +410,6 @@ def run_foxone_browser_login(mso_id: str):
                     logger.info('[foxone-mvpd-login] paired mso_id=%s via saved cookie jar (no browser)', mso_id)
                     return
             set_status('running', 'No usable saved sign-in — opening a browser…')
-
-        if mso_id == 'Cox':
-            # Scripted first — still right for a native Cox account.
-            # Confirmed live 2026-09-24: Adobe's "Cox" MVPD now auto-POSTs to
-            # Spectrum's own IdP for a Cox account migrated to Spectrum, so
-            # the scripted login fails before reaching login.cox.com. Fall
-            # through to the browser-assisted flow, which signs in on
-            # Spectrum's page with mso_id=Cox — same scripted-then-browser
-            # shape AMCN's Cox branch has.
-            try:
-                access_token, expires_at = scraper._authenticate_via_mvpd(
-                    mso_id, account.username or '', account.password or '', (account.config or {}).get('xfinity_cookie_jar'),
-                )
-            except TVENotAuthorizedError as exc:
-                account.last_auth_status = 'error'
-                account.last_auth_message = f'FOX One {mso_id} MVPD auth failed: {exc}'[:500]
-                account.last_auth_at = datetime.now(timezone.utc)
-                _record_tve_login_error('foxone', str(exc))
-                db.session.commit()
-                persist_source_config_updates(source.id, scraper._pending_config_updates)
-                set_status('error', f'FOX One: {exc}')
-                return
-            except Exception as exc:  # noqa: BLE001
-                logger.info(
-                    '[foxone-mvpd-login] scripted Cox sign-in failed, falling back to browser '
-                    '(Spectrum-migrated Cox accounts sign in on Spectrum\'s page): %s', exc,
-                )
-                persist_source_config_updates(source.id, scraper._pending_config_updates)
-                # That commit expires every loaded ORM row; reload both before
-                # _ctx.pop() below, or the browser flow's first attribute
-                # read raises DetachedInstanceError.
-                source = Source.query.filter_by(name='fox_one').first()
-                account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-                _ = (account.username, account.password, account.config)
-                scraper = FoxOneScraper(config=dict(source.config or {}))
-                set_status('running', 'Scripted sign-in did not work — opening a browser…')
-            else:
-                scraper._update_config('access_token', access_token)
-                scraper._update_config('access_expires_at', expires_at)
-                scraper._update_config('access_token_captured_at', int(time.time()))
-                persist_source_config_updates(source.id, scraper._pending_config_updates)
-                account.last_auth_status = 'ok'
-                account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD.'
-                account.last_auth_at = datetime.now(timezone.utc)
-                db.session.commit()
-                set_status('success', 'Signed in — FOX One authorized.')
-                logger.info('[foxone-mvpd-login] paired mso_id=%s (scripted, no browser)', mso_id)
-                return
 
         _ctx.pop()
         _ctx_popped['v'] = True
