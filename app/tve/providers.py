@@ -11,8 +11,6 @@ _FALLBACK_ADOBE_MSO_PROVIDERS = [
     {"id": "Cox", "name": "Cox"},
     {"id": "Comcast_SSO", "name": "Comcast XFINITY"},
     {"id": "Spectrum", "name": "Spectrum"},
-    {"id": "TWC", "name": "Time Warner Cable | Spectrum"},
-    {"id": "Charter_Direct", "name": "Charter Spectrum"},
     {"id": "DTV", "name": "DIRECTV"},
     {"id": "ATT", "name": "AT&T U-verse"},
     {"id": "Verizon", "name": "Verizon FiOS"},
@@ -22,6 +20,11 @@ _FALLBACK_ADOBE_MSO_PROVIDERS = [
     {"id": "slingtv", "name": "Sling TV"},
     {"id": "YouTubeTV", "name": "YouTube TV"},
 ]
+
+# Legacy Charter/TWC MVPDs still in yt-dlp's bundled list, but no network we
+# support accepts them (Adobe's per-requestor MVPD config + Discovery's partner
+# list, checked 2026-09-25); Spectrum customers must use 'Spectrum'.
+_RETIRED_MSO_IDS = frozenset({'TWC', 'Charter_Direct'})
 
 _PROVIDER_LINE_RE = re.compile(r'^(?P<id>\S+)\s+(?P<name>.+?)\s*$')
 
@@ -54,16 +57,14 @@ def _friendly_sort_key(provider: dict) -> tuple[int, str]:
         'Cox': 0,
         'Comcast_SSO': 1,
         'Spectrum': 2,
-        'TWC': 3,
-        'Charter_Direct': 4,
-        'DTV': 5,
-        'ATT': 6,
-        'Verizon': 7,
-        'Cablevision': 8,
-        'Philo': 9,
-        'Fubo': 10,
-        'slingtv': 11,
-        'YouTubeTV': 12,
+        'DTV': 3,
+        'ATT': 4,
+        'Verizon': 5,
+        'Cablevision': 6,
+        'Philo': 7,
+        'Fubo': 8,
+        'slingtv': 9,
+        'YouTubeTV': 10,
     }
     return preferred.get(provider['id'], 1000), provider['name'].casefold()
 
@@ -125,6 +126,7 @@ def ytdlp_adobe_mso_providers() -> list[dict]:
     # backstop just above.
     if 'YouTubeTV' not in seen:
         providers.append({'id': 'YouTubeTV', 'name': 'YouTube TV'})
+    providers = [p for p in providers if p['id'] not in _RETIRED_MSO_IDS]
     return sorted(providers, key=_friendly_sort_key)
 
 
