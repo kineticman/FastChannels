@@ -91,34 +91,6 @@ def tve_network_status(account) -> list[dict]:
         'last_error_at': fox_error_at,
     })
 
-    # FOX One authenticates natively (username/password OAuth against Cox's
-    # own identityhydra endpoints, not Adobe Pass) — it also happens
-    # unprompted the first time a channel needs a token, but since it's a
-    # fast scripted request/response (no browser), it doubles as a good,
-    # low-friction way to check the raw Cox credentials are actually still
-    # valid — see api.foxone_signin. family='foxone' routes its "Sign in"
-    # button to that plain endpoint instead of the streamed-screenshot modal
-    # every other family uses. The timestamp lives on the fox_one source's
-    # own config, not the shared account config the other entries read from.
-    fox_one_captured_at = None
-    try:
-        from ..models import Source
-        fox_one_source = Source.query.filter_by(name='fox_one').first()
-        if fox_one_source:
-            fox_one_captured_at = (fox_one_source.config or {}).get('access_token_captured_at')
-    except Exception:  # noqa: BLE001
-        pass
-    foxone_error_message, foxone_error_at = _last_error('foxone', fox_one_captured_at)
-    entries.append({
-        'label': 'FOX One',
-        'last_signed_in_at': fox_one_captured_at,
-        'note': None,
-        'family': 'foxone',
-        'requestor_id': None,
-        'last_error_message': foxone_error_message,
-        'last_error_at': foxone_error_at,
-    })
-
     amcn_cached_at = None
     try:
         from ..config_store import load_source_cache_by_name

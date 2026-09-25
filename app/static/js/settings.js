@@ -810,19 +810,16 @@ async function resetTveState() {
 // Six networks share this one streamed-browser modal, each with its own
 // backend flow and endpoint prefix (see app/tve/status.py's 'family' field):
 // 'legacy' (A+E/Warner, needs a requestor_id) and 'nbc'/'fox'/'amcn'/
-// 'discovery'/'foxone' (each a single fixed target, no requestor_id).
-// amcn/discovery/foxone sign in with a fast scripted Cox login when that's
-// the selected MVPD (foxone's own quick native button still handles that
-// case directly, see loadTveNetworkStatus — this modal is only reached for
-// other MSOs), but report through the same status/redis keys as the legacy
-// family's modal either way, so this same polling code works unchanged.
+// 'discovery' (each a single fixed target, no requestor_id). They all
+// report through the same status/redis keys as the legacy family's modal,
+// so this same polling code works unchanged. (FOX One signs in from its
+// own card on the Sources page.)
 const MVPD_LOGIN_FAMILIES = {
   legacy:    { base: '/api/settings/tve/browser-login', needsRequestor: true },
   nbc:       { base: '/api/settings/tve/nbc/browser-login', needsRequestor: false },
   fox:       { base: '/api/settings/tve/fox/browser-login', needsRequestor: false },
   amcn:      { base: '/api/settings/tve/amcn/browser-login', needsRequestor: false },
   discovery: { base: '/api/settings/tve/discovery/browser-login', needsRequestor: false },
-  foxone:    { base: '/api/settings/tve/foxone/browser-login', needsRequestor: false },
   google:    { base: '/api/settings/tve/google/browser-login', needsRequestor: false },
 };
 let _mvpdLoginActive = false;
@@ -921,10 +918,6 @@ async function loadTveNetworkStatus() {
       }
       const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
       let button = '';
-      // FOX One with Cox used to call a synchronous scripted-only sign-in
-      // here; the modal flow now tries that same scripted
-      // login first and falls back to the browser for Spectrum-migrated Cox
-      // accounts (2026-09-24), so every family uses the modal.
       if (n.family && !n.unsupported) {
         button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`;
       }
@@ -1064,8 +1057,6 @@ function _closeMvpdLoginModal(cancel) {
   if (_mvpdLoginPollTimer) { clearTimeout(_mvpdLoginPollTimer); _mvpdLoginPollTimer = null; }
   const wasActive = _mvpdLoginActive;
   _mvpdLoginActive = false;
-  // FOX One (batch mode only, see signInToAllTve) has no /stop endpoint —
-  // it's one direct synchronous POST, nothing to interrupt server-side.
   if (cancel && !_mvpdLoginDone && wasActive && MVPD_LOGIN_FAMILIES[_mvpdLoginFamily]) {
     fetch(`${MVPD_LOGIN_FAMILIES[_mvpdLoginFamily].base}/stop`, { method: 'POST' }).catch(() => {});
   }
@@ -1238,10 +1229,9 @@ async function signInToAllTve() {
   try {
     const r = await fetch('/api/settings/tve/status');
     const d = await r.json();
-    // 'foxone' is routed through _mvpdLoginRunFoxOneForBatch in the loop below.
     // Networks that can't work with the selected TV provider (see
     // UNSUPPORTED_NETWORK_PROVIDERS in app/tve/providers.py) are skipped.
-    networks = (d.networks || []).filter(n => !n.unsupported && (n.family === 'foxone' || (n.family && MVPD_LOGIN_FAMILIES[n.family])));
+    networks = (d.networks || []).filter(n => !n.unsupported && n.family && MVPD_LOGIN_FAMILIES[n.family]);
   } catch (e) {
     _mvpdLoginDone = true;
     status.style.color = 'var(--danger)';
@@ -1264,9 +1254,7 @@ async function signInToAllTve() {
     _mvpdLoginFamily = n.family;  // so a mid-batch cancel/force-stop hits the right endpoint
     steps[i].state = 'running';
     _renderMvpdLoginSteps(steps);
-    const result = n.family === 'foxone'
-      ? await _mvpdLoginRunFoxOneForBatch(n.label, status, hintEl)
-      : await _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES[n.family], n.requestor_id, n.label, status, hintEl);
+    const result = await _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES[n.family], n.requestor_id, n.label, status, hintEl);
     if (!_mvpdLoginActive) return;
     steps[i].state = result.ok ? 'done' : 'failed';
     steps[i].message = result.message;
@@ -1279,15 +1267,6 @@ async function signInToAllTve() {
   status.textContent = `✓ Signed in to ${okCount}/${steps.length} networks.`;
   loadTveNetworkStatus();
   setTimeout(() => { window.location.reload(); }, 2200);
-}
-
-// FOX One goes through the same /start+/state modal flow as every other
-// family, Cox included: that flow tries the scripted Cox login first and
-// falls back to the browser for Spectrum-migrated Cox accounts (confirmed
-// live 2026-09-24). It used to take a synchronous scripted-only POST for
-// Cox, which can't complete for those accounts.
-function _mvpdLoginRunFoxOneForBatch(label, status, hintEl) {
-  return _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES.foxone, null, label, status, hintEl);
 }
 
 // Runs one network's sign-in (/start, poll /state to a terminal state) as

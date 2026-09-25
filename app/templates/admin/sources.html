@@ -55,16 +55,16 @@
     .needs-config-banner li.item-configured { color: var(--success-soft); }
     .needs-config-banner li.item-configured a { color: var(--success-soft); }
 
-    #sling-login-status {
+    #sling-login-status, #foxone-login-status {
       padding: 0.6rem 0.9rem; border-radius: 6px; font-size: 0.88rem; color: var(--text-dim);
       border: 1px solid transparent; transition: background 0.2s, border-color 0.2s, color 0.2s;
     }
-    #sling-login-status.success {
+    #sling-login-status.success, #foxone-login-status.success {
       background: color-mix(in srgb, var(--success-bg-2) 20%, transparent);
       border-color: color-mix(in srgb, var(--success-fill) 28%, transparent);
       color: var(--success-soft); font-weight: 600;
     }
-    #sling-login-status.error {
+    #sling-login-status.error, #foxone-login-status.error {
       background: color-mix(in srgb, var(--danger) 12%, transparent);
       border-color: color-mix(in srgb, var(--danger) 30%, transparent);
       color: var(--danger); font-weight: 600;
@@ -1094,6 +1094,21 @@
            style="max-width:100%;width:1280px;border:1px solid var(--border);border-radius:4px;cursor:text;outline-offset:2px;background:#111;user-select:none;">
       <div class="modal-actions">
         <button class="btn btn-cancel" type="button" onclick="_closeSlingLoginModal(true)">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOX One interactive browser sign-in (TV-provider login) -->
+  <div class="modal-overlay" id="foxone-login-modal" onclick="closeFoxOneLoginModal(event)">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:1340px;">
+      <h2>Sign in to FOX One</h2>
+      <p id="foxone-login-status" style="margin-bottom:0.75rem;">Launching browser…</p>
+      <img id="foxone-login-frame" alt="FOX One TV provider sign-in" tabindex="0" draggable="false"
+           onmousedown="foxOneLoginFrameMouse(event, 'mousedown')" onkeydown="foxOneLoginFrameKeydown(event)"
+           onmousemove="foxOneLoginFrameMousemove(event)" ondragstart="return false;"
+           style="max-width:100%;width:1280px;border:1px solid var(--border);border-radius:4px;cursor:text;outline-offset:2px;background:#111;user-select:none;">
+      <div class="modal-actions">
+        <button class="btn btn-cancel" type="button" onclick="_closeFoxOneLoginModal(true)">Cancel</button>
       </div>
     </div>
   </div>
@@ -3464,6 +3479,241 @@
         </div>`;
     }
 
+    // ── FOX One ─────────────────────────────────────────────────────────────
+    // Signs in through a TV provider: either the shared one from Settings >
+    // TV Everywhere, or a separate login just for FOX One (own browser
+    // profile, so another account's saved provider session can't carry over).
+    function renderFoxOneConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.fox_one) || {};
+      const byKey = Object.fromEntries(schema.map(f => [f.key, f]));
+      const val = (k) => values[k] ?? (byKey[k] && byKey[k].default) ?? '';
+      const own = val('signin_method') === 'own';
+      const input = (k, type = 'text') => {
+        const f = byKey[k] || {};
+        const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : '';
+        return `
+          <div class="field">
+            <label for="cfg-${sourceId}-${k}">${escapeHtml(f.label || k)}</label>
+            <input type="${type}" id="cfg-${sourceId}-${k}" data-key="${k}" data-secret="${!!f.secret}"
+                   value="${escapeHtml(String(val(k)))}" ${placeholder} autocomplete="off">
+            ${f.help_text ? `<div class="help">${escapeHtml(f.help_text)}</div>` : ''}
+          </div>`;
+      };
+      const methodOpts = (byKey.signin_method?.options || []).map(o =>
+        `<option value="${escapeHtml(o.value)}" ${o.value === val('signin_method') ? 'selected' : ''}>${escapeHtml(o.label)}</option>`
+      ).join('');
+      const providerOpts = ['<option value="">Choose your TV provider…</option>'].concat(
+        (info.providers || []).map(p =>
+          `<option value="${escapeHtml(p.id)}" ${p.id === val('mvpd_provider_id') ? 'selected' : ''}>${escapeHtml(p.name)}</option>`)
+      ).join('');
+
+      const sharedNote = info.shared_ready
+        ? `Uses your ${escapeHtml(info.shared_provider_name || 'TV provider')} login from <a href="/admin/settings#settings-card-tve">Settings → TV Everywhere</a>.`
+        : `No TV provider is set up under <a href="/admin/settings#settings-card-tve">Settings → TV Everywhere</a> yet — add one there, or choose a separate login here.`;
+
+      const lastSignIn = _epochAgo(info.last_signed_in_at);
+      const errorAt = _epochAgo(info.signin_error_at);
+      let statusHtml = lastSignIn
+        ? `<div class="help" style="color:var(--success-soft);">✓ Last signed in: ${lastSignIn}</div>`
+        : `<div class="help">Not signed in yet.</div>`;
+      if (info.signin_error) {
+        statusHtml += `<div class="help" style="color:var(--danger);">Last sign-in problem${errorAt ? ` (${errorAt})` : ''}: ${escapeHtml(info.signin_error)}</div>`;
+      }
+      const blocked = info.unsupported
+        ? `<div class="help" style="color:var(--warning-soft,#b8860b);">${escapeHtml(info.unsupported)}</div>` : '';
+
+      return `
+        <div class="config-title">FOX One Settings</div>
+        <div class="config-note">FOX One signs in through a TV provider. Most providers' login pages need a real browser, so after the first sign-in you may occasionally need to click "Sign in to FOX One" again.</div>
+        <div class="fields-grid">
+          ${input('home_zip_code')}
+          <div class="field">
+            <label for="cfg-${sourceId}-signin_method">${escapeHtml(byKey.signin_method?.label || 'Sign in with')}</label>
+            <select id="cfg-${sourceId}-signin_method" data-key="signin_method"
+                    onchange="foxOneMethodChanged(${sourceId}, this.value)">${methodOpts}</select>
+            <div class="help" id="foxone-shared-note-${sourceId}" ${own ? 'style="display:none"' : ''}>${sharedNote}</div>
+          </div>
+        </div>
+        <div id="foxone-own-${sourceId}" style="margin-top:0.75rem;${own ? '' : 'display:none'}">
+          <div class="config-note">A separate login just for FOX One. It signs in in its own browser profile, so it never mixes with the TV provider under Settings → TV Everywhere. The username and password only fill in the provider's sign-in page — you can leave them blank and type into the sign-in window instead.</div>
+          <div class="fields-grid">
+            <div class="field">
+              <label for="cfg-${sourceId}-mvpd_provider_id">TV provider</label>
+              <select id="cfg-${sourceId}-mvpd_provider_id" data-key="mvpd_provider_id">${providerOpts}</select>
+            </div>
+            ${input('mvpd_username')}
+            ${input('mvpd_password', 'password')}
+          </div>
+        </div>
+        <div class="fields-grid">
+          <div class="field field-full" style="margin:0.25rem 0 0.5rem;">
+            <button class="btn btn-run" type="button" onclick="openFoxOneLoginModal(${sourceId})">Sign in to FOX One</button>
+            <button class="btn btn-cancel" type="button" onclick="foxOneClearSignin(${sourceId})" ${lastSignIn ? '' : 'disabled'}>Clear sign-in</button>
+            <div class="help">Saves these settings, then opens the TV provider's real sign-in page right here. Solve a captcha yourself if one is shown.</div>
+            ${blocked}
+            <div id="foxone-clear-status-${sourceId}"></div>
+            ${statusHtml}
+          </div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
+    }
+
+    function foxOneMethodChanged(sourceId, method) {
+      document.getElementById(`foxone-own-${sourceId}`).style.display = method === 'own' ? '' : 'none';
+      document.getElementById(`foxone-shared-note-${sourceId}`).style.display = method === 'own' ? 'none' : '';
+    }
+
+    async function foxOneClearSignin(sourceId) {
+      if (!confirm('Clear FOX One\'s saved sign-in? Your settings stay; you\'ll need to sign in again before FOX One can play.')) return;
+      const statusEl = document.getElementById(`foxone-clear-status-${sourceId}`);
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/fox-one-auth`, {method: 'DELETE'});
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'Could not clear sign-in');
+        loadSourceConfig(sourceId, 'fox_one');
+      } catch (e) {
+        if (statusEl) statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(e.message)}</span>`;
+      }
+    }
+
+    let _foxOneLoginSourceId = null;
+    let _foxOneLoginPollTimer = null;
+    let _foxOneLoginDone = false;
+    let _foxOneLoginDragging = false;
+    let _foxOneLoginLastMoveSent = 0;
+
+    async function openFoxOneLoginModal(sourceId) {
+      _foxOneLoginSourceId = sourceId;
+      _foxOneLoginDone = false;
+      if (_foxOneLoginPollTimer) { clearTimeout(_foxOneLoginPollTimer); _foxOneLoginPollTimer = null; }
+      const frame = document.getElementById('foxone-login-frame');
+      const status = document.getElementById('foxone-login-status');
+      frame.removeAttribute('src');
+      frame.style.visibility = 'hidden';
+      status.className = '';
+      status.textContent = 'Saving…';
+      document.getElementById('foxone-login-modal').classList.add('open');
+      // The sign-in job reads the saved config, not these inputs.
+      try { await saveSourceConfig(sourceId); } catch (e) { /* fall through with what's saved */ }
+      status.textContent = 'Launching browser…';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/fox-one-browser-login/start`, { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          _foxOneLoginDone = true;
+          status.className = 'error';
+          status.textContent = '✗ ' + (d.error || 'Could not start sign-in.');
+          return;
+        }
+        if (d.status === 'already_running') {
+          status.textContent = 'Another TV-provider sign-in is still running — showing it here.';
+        }
+      } catch (e) {
+        // transient — polling shows the real state
+      }
+      _pollFoxOneLoginModal();
+    }
+
+    function closeFoxOneLoginModal(event) {
+      if (event && event.target !== document.getElementById('foxone-login-modal')) return;
+      _closeFoxOneLoginModal(true);
+    }
+
+    function _closeFoxOneLoginModal(cancel) {
+      document.getElementById('foxone-login-modal').classList.remove('open');
+      if (_foxOneLoginPollTimer) { clearTimeout(_foxOneLoginPollTimer); _foxOneLoginPollTimer = null; }
+      const sourceId = _foxOneLoginSourceId;
+      _foxOneLoginSourceId = null;
+      if (cancel && !_foxOneLoginDone && sourceId) {
+        fetch(`/api/sources/${sourceId}/fox-one-browser-login/stop`, { method: 'POST' }).catch(() => {});
+      }
+      if (sourceId) loadSourceConfig(sourceId, 'fox_one');
+    }
+
+    async function _pollFoxOneLoginModal() {
+      if (!_foxOneLoginSourceId) return;
+      const sourceId = _foxOneLoginSourceId;
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/fox-one-browser-login/state`);
+        const d = await r.json();
+        if (_foxOneLoginSourceId !== sourceId) return;
+        const status = document.getElementById('foxone-login-status');
+        const frame = document.getElementById('foxone-login-frame');
+        if (d.screenshot) {
+          frame.src = `data:image/jpeg;base64,${d.screenshot}`;
+          frame.style.visibility = 'visible';
+        }
+        if (d.state === 'success') {
+          _foxOneLoginDone = true;
+          status.className = 'success';
+          status.textContent = '✓ ' + (d.message || 'Signed in.');
+          setTimeout(() => _closeFoxOneLoginModal(false), 1800);
+          return;
+        }
+        if (d.state === 'error' || d.state === 'stopped') {
+          _foxOneLoginDone = true;
+          status.className = d.state === 'error' ? 'error' : '';
+          status.textContent = (d.state === 'error' ? '✗ ' : '') + (d.message || 'Sign-in stopped.');
+          return;  // leave the message up; the user closes the window
+        }
+        status.className = '';
+        status.textContent = d.message || 'Signing in…';
+      } catch (e) {
+        // transient — keep polling
+      }
+      _foxOneLoginPollTimer = setTimeout(_pollFoxOneLoginModal, 400);
+    }
+
+    function _foxOneLoginSend(payload) {
+      if (!_foxOneLoginSourceId) return;
+      fetch(`/api/sources/${_foxOneLoginSourceId}/fox-one-browser-login/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+    }
+
+    function _foxOneLoginPoint(event, frame) {
+      const rect = frame.getBoundingClientRect();
+      return {
+        x: (event.clientX - rect.left) * (frame.naturalWidth || rect.width) / rect.width,
+        y: (event.clientY - rect.top) * (frame.naturalHeight || rect.height) / rect.height,
+      };
+    }
+
+    function foxOneLoginFrameMouse(event, type) {
+      if (!_foxOneLoginSourceId) return;
+      const frame = event.currentTarget;
+      frame.focus();
+      _foxOneLoginDragging = true;
+      _foxOneLoginSend({ type, ..._foxOneLoginPoint(event, frame) });
+    }
+
+    // On document, so a drag released outside the image still lets go.
+    document.addEventListener('mouseup', function (event) {
+      if (!_foxOneLoginDragging) return;
+      _foxOneLoginDragging = false;
+      const frame = document.getElementById('foxone-login-frame');
+      if (frame) _foxOneLoginSend({ type: 'mouseup', ..._foxOneLoginPoint(event, frame) });
+    });
+
+    function foxOneLoginFrameMousemove(event) {
+      if (!_foxOneLoginSourceId) return;
+      const now = performance.now();
+      if (now - _foxOneLoginLastMoveSent < 60) return;  // ~16/s
+      _foxOneLoginLastMoveSent = now;
+      _foxOneLoginSend({ type: 'mousemove', ..._foxOneLoginPoint(event, event.currentTarget) });
+    }
+
+    function foxOneLoginFrameKeydown(event) {
+      if (!_foxOneLoginSourceId) return;
+      event.preventDefault();
+      _foxOneLoginSend({ type: 'key', key: event.key });
+    }
+
     async function spectrumClearSignin(sourceId) {
       if (!confirm('Clear the saved Spectrum sign-in — tokens, device id, and the cached cox.com cookies? You\'ll need to sign in again before this source can scrape.')) return;
       const btn = document.getElementById(`spectrum-clear-btn-${sourceId}`);
@@ -3802,6 +4052,8 @@
         return renderSlingConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'spectrum') {
         return renderSpectrumConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'fox_one') {
+        return renderFoxOneConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'pbs') {
         return renderPbsConfig(sourceId, schema, values);
       }
