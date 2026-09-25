@@ -20,8 +20,8 @@ _SUPPRESS_PATTERNS = (
     'tve/amcn/browser-login/input',
     'tve/discovery/browser-login/state',
     'tve/discovery/browser-login/input',
-    'tve/foxone/browser-login/state',   # gap: 'foxone/' breaks the generic 'tve/browser-login/' substring match above
-    'tve/foxone/browser-login/input',
+    'fox-one-browser-login/state',  # FOX One card polls every ~400ms during sign-in
+    'fox-one-browser-login/input',  # mousemove/click/key forwarding — up to ~16/s while dragging
     'tve/google/browser-login/state',   # admin UI polls every ~250ms during the standalone Google sign-in
     'tve/google/browser-login/input',   # mousemove/click/key forwarding — up to ~16/s while dragging
     'spectrum-browser-login/state', # admin UI polls every ~400ms during Spectrum sign-in
