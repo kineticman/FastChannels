@@ -343,7 +343,7 @@ class SpectrumScraper(BaseScraper):
 
         self.excluded_channel_ids = set()
         channels: list[ChannelData] = []
-        number_by_network: dict[str, int] = {}
+        home_by_network: dict[str, dict] = {}
         for row in rows:
             # Excludes VOD/non-linear catalog rows (e.g. "Video On Demand") —
             # every real tunable channel in a live sample had online=true.
@@ -353,7 +353,7 @@ class SpectrumScraper(BaseScraper):
             tms_guide_id = row.get('tmsGuideId')
             numbers = row.get('channelNumbers') or []
             if numbers and row.get('networkId') is not None:
-                number_by_network.setdefault(str(row['networkId']), numbers[0])
+                home_by_network.setdefault(str(row['networkId']), row)
             # Spectrum's own per-row playability, the same test its web player
             # uses to grey out a channel: onlineEntitled (account package) plus
             # availableInMarket/availableOutOfMarket for where the server is
@@ -378,15 +378,7 @@ class SpectrumScraper(BaseScraper):
             if not entitlement_id or not tms_guide_id or not name:
                 continue
             logo_uri = row.get('logoUri')
-            # ~8% of channels carry more than one raw genre (e.g. AMC HD West:
-            # ['Entertainment', 'Movies']) — try each individually in order
-            # rather than joining them, which would never match any alias.
-            category = None
-            for raw_genre in (row.get('genres') or [None]):
-                category = category_for_channel(name, raw_genre, source_name='spectrum')
-                if category:
-                    break
-            category = category or infer_category_from_name(name)
+            category = self._category(name, row.get('genres'))
             channels.append(ChannelData(
                 source_channel_id=str(entitlement_id),
                 name=name,
@@ -402,12 +394,23 @@ class SpectrumScraper(BaseScraper):
                 # fetch_epg() via each ChannelData's own .guide_key.
                 guide_key=tms_guide_id,
             ))
-        travel = self._fetch_travel_channels(location, channels, number_by_network)
+        travel = self._fetch_travel_channels(location, channels, home_by_network)
         logger.info('[spectrum] %d channels fetched (%d travel), %d excluded as unavailable '
                     'for this account/location (%s)',
                     len(channels) + len(travel), len(travel), len(self.excluded_channel_ids),
                     availability_flag or 'location unknown, entitlement only')
         return channels + travel
+
+    @staticmethod
+    def _category(name: str, genres: list | None) -> str | None:
+        # ~8% of channels carry more than one raw genre (e.g. AMC HD West:
+        # ['Entertainment', 'Movies']) — try each individually in order
+        # rather than joining them, which would never match any alias.
+        for raw_genre in (genres or [None]):
+            category = category_for_channel(name, raw_genre, source_name='spectrum')
+            if category:
+                return category
+        return infer_category_from_name(name)
 
     def _fetch_location(self) -> dict | None:
         """Spectrum's own view of where this server is (geoDMA, inMarket,
@@ -432,7 +435,7 @@ class SpectrumScraper(BaseScraper):
         return 'availableInMarket' if location.get('inMarket') else 'availableOutOfMarket'
 
     def _fetch_travel_channels(self, location: dict | None, channels: list[ChannelData],
-                               number_by_network: dict[str, int]) -> list[ChannelData]:
+                               home_by_network: dict[str, dict]) -> list[ChannelData]:
         """Spectrum "Travel Channels": a streamable stand-in for a local
         station that can't be streamed from here (e.g. home-market CBS when
         away, or an in-market affiliate without streaming rights). Not in
@@ -481,19 +484,25 @@ class SpectrumScraper(BaseScraper):
             # Same service already in the regular lineup — nothing to add.
             if ncs_id in taken_ids or tms_id in taken_guide_keys:
                 continue
-            callsign = re.sub(r'DT\d*$', '', (network.get('callsign') or '').strip())
-            name = f'{base_name} ({callsign})' if callsign and callsign not in base_name else base_name
+            # Named and categorized after the home row it stands in for, so it
+            # reads "CW (WWHO)" and lands in the same category — the travel
+            # feed's own callsign is network-level ("CWTV") and it has no genre.
+            home = home_by_network.get(str(network.get('id'))) or {}
+            name = (home.get('networkName') or '').strip()
+            if not name:
+                callsign = re.sub(r'DT\d*$', '', (network.get('callsign') or '').strip())
+                name = f'{base_name} ({callsign})' if callsign and callsign not in base_name else base_name
             image_uri = (network.get('image_uri') or '').lstrip('/')
             travel.append(ChannelData(
                 source_channel_id=ncs_id,
                 name=name,
                 stream_url=f'spectrum://travel/{ncs_id}',
                 logo_url=f'{_IMG_BASE}/{image_uri}' if image_uri else None,
-                category=category_for_channel(name, None, source_name='spectrum') or infer_category_from_name(name),
+                category=self._category(name, home.get('genres')),
                 language=infer_language_from_metadata(name),
                 country='US',
                 stream_type='dash',
-                number=number_by_network.get(str(network.get('id'))),
+                number=(home.get('channelNumbers') or [None])[0],
                 guide_key=tms_id,
             ))
             taken_ids.add(ncs_id)
