@@ -49,6 +49,14 @@ def _record_foxone_result(source_id: int, scraper, login, error: str | None, *, 
         persist_source_config_updates(source_id, scraper._pending_config_updates)
 
 
+def _is_fox_callback(parts) -> bool:
+    """FOX's post-login callback pages — see _POLL_SECONDS below."""
+    return (
+        (parts.netloc == 'auth.fox.com' and parts.path.startswith('/foxone/mvpd/callback'))
+        or (parts.netloc == 'www.fox.com' and parts.path.startswith('/callback'))
+    )
+
+
 def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) -> None:
     """Browser-assisted counterpart to FOX One's scripted MVPD sign-in
     (api.foxone_signin / _authenticate_via_mvpd), for any MSO whose login
@@ -63,11 +71,10 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
     requests/complete claiming "status: authenticated" and then asks
     checkauthn for a token, trusting Adobe's own server-side binding to
     reject that claim if the human hasn't actually finished yet. So this
-    polls _foxone_mvpd_finish() itself (repeating the POST+GET) rather than
-    a separate read-only check — unconfirmed until tested live whether FOX's
-    backend tolerates repeated "authenticated" claims before the real login
-    completes; logged verbosely so a live run makes that obvious immediately
-    if not.
+    calls _foxone_mvpd_finish() itself, like FOX's site does, once the
+    browser reaches FOX's callback page (retrying every few seconds there),
+    with a slow fallback poll before that. Early calls just get a 404
+    ("no completed request yet") — confirmed harmless live 2026-09-25.
 
     Reuses the shared legacy 'mvpd:browser-login:*' redis keys (via
     set_status and _relay_input_and_screenshot's defaults), same as AMCN/
@@ -115,7 +122,13 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
     nav_url = mso_login_url or str(page_response.url)
 
     _PER_LOGIN_TIMEOUT_SECONDS = 150
+    # FOX's own site calls requests/complete once, after the browser lands
+    # on its callback page (auth.fox.com/foxone/mvpd/callback, then
+    # www.fox.com/callback). Until then FOX answers 404 ("no completed
+    # request yet"), so poll every few seconds only once that page has been
+    # reached; before that, a slow fallback poll covers a missed callback.
     _POLL_SECONDS = 3.0
+    _FALLBACK_POLL_SECONDS = 15.0
     access_token = ''
     expires_at = 0.0
 
@@ -139,6 +152,7 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
             page.on('pageerror', lambda exc: logger.warning('[foxone-mvpd-login] page JS error: %s', str(exc)[:500]))
 
             youtube_gateway_responses = []
+            reached_fox_callback = {'v': False}
 
             def _log_navigation_response(response):
                 try:
@@ -146,6 +160,8 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
                         return
                     response_url = response.url
                     response_parts = _urlsplit(response_url)
+                    if _is_fox_callback(response_parts):
+                        reached_fox_callback['v'] = True
                     is_gateway_bookend = (
                         mso_id == 'YouTubeTV'
                         and response_parts.netloc == 'youtube.auth-gateway.net'
@@ -280,12 +296,16 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
                 idid_message = _spectrum_signin_error_message(page, 'FOX One', mso_id)
                 if idid_message:
                     break
-                if now - last_poll > _POLL_SECONDS:
+                at_callback = reached_fox_callback['v'] or _is_fox_callback(_urlsplit(_safe_page_url(page)))
+                if now - last_poll > (_POLL_SECONDS if at_callback else _FALLBACK_POLL_SECONDS):
                     last_poll = now
                     try:
                         access_token, expires_at = scraper._foxone_mvpd_finish(session, request_id, device_id, mso_id)
                     except Exception as exc:  # noqa: BLE001
-                        logger.info('[foxone-mvpd-login] poll not-yet/error: %s', exc)
+                        if at_callback:
+                            logger.info('[foxone-mvpd-login] completion check after FOX callback failed: %s', exc)
+                        else:
+                            logger.debug('[foxone-mvpd-login] completion not ready yet: %s', exc)
                         continue
                     break
                 page.wait_for_timeout(80)
