@@ -62,6 +62,7 @@ from app.tve.browser_login.common import (
     _detect_spectrum_feature_unavailable,
     _safe_page_url,
     _relay_input_and_screenshot,
+    _set_expected_spectrum_username,
     _try_autofill_credentials,
     _BrowserSessionDied,
     install_browser_login_activity_log,
@@ -609,6 +610,10 @@ def run_spectrum_signin():
                 user_data_dir=profile_dir, window=(1280, 800), block_images=True,
             ) as context:
                 page = context.pages[0] if context.pages else context.new_page()
+                # Before any navigation: a "You're signing in as" screen for
+                # another account (e.g. the one tied to this home network)
+                # must get "Change account", not the usual auto-Continue.
+                _set_expected_spectrum_username(page, username)
                 _watch_spectrum_auth_results(page, 'spectrum-signin')
                 page.on('crash', lambda p: logger.warning('[spectrum-signin] page CRASH event fired (url was %s)', _safe_page_url(p)))
                 page.on('close', lambda p: logger.warning('[spectrum-signin] page CLOSE event fired'))
@@ -762,6 +767,13 @@ def run_spectrum_signin():
                     # right after entering a password), and this is cheap
                     # to check on every poll tick regardless.
                     _dismiss_spectrum_tos_welcome(page)
+                    if getattr(page, '_fc_spectrum_changed_account', False):
+                        # "Change account" was clicked on a signing-in-as
+                        # screen for another account (see
+                        # _autofill_spectrum_sso_confirm) — fill the real
+                        # login form it leads to.
+                        page._fc_spectrum_changed_account = False
+                        _dismiss_tos_and_autofill()
                     now = time.monotonic()
                     if _spectrum_debug_enabled():
                         current_url = _safe_page_url(page)

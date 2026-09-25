@@ -593,6 +593,9 @@ def _try_autofill_credentials(
     fallbacks) and can re-render mid-fill, so both values are verified to
     have actually stuck before submitting, with one retry.
     """
+    # Any Spectrum "You're signing in as" screen this login hits should be
+    # for this account — see _autofill_spectrum_sso_confirm.
+    _set_expected_spectrum_username(page, username)
     # Remembered on the page so _spectrum_signin_error_message can resubmit
     # once after reloading Spectrum's login page (ThreatMetrix first-attempt
     # rejection — see _retry_spectrum_after_thmx_reject). Never logged.
@@ -1079,6 +1082,47 @@ def _autofill_google_account_chooser(page) -> bool:
         return False
 
 
+def _set_expected_spectrum_username(page, username: str) -> None:
+    """Record which Spectrum account this sign-in is FOR, so
+    _autofill_spectrum_sso_confirm can tell a "You're signing in as: <user>"
+    screen for the right account (click Continue) from one for some other
+    account (click Change account instead). Stored on the browser context,
+    not the page, so popups opened during the same login inherit it. A
+    blank username leaves any earlier value alone. Never raises."""
+    username = (username or '').strip()
+    if not username:
+        return
+    try:
+        page.context._fc_expected_spectrum_username = username
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _spectrum_identity_matches(shown: str, expected: str) -> bool:
+    """Loose comparison between the identity Spectrum's confirmation screen
+    shows and the configured username. Case-insensitive; tolerates the
+    screen showing only an email's local part (or the reverse) and a masked
+    value like "jo****82". Deliberately loose: a false MISMATCH only costs
+    a click on Change account followed by a normal credential autofill,
+    while a false MATCH signs in as the wrong account."""
+    shown = shown.strip().strip('"\'.,').lower()
+    expected = expected.strip().lower()
+    if not shown or not expected:
+        return True  # can't tell — keep the old Continue behavior
+    if shown == expected:
+        return True
+    if shown.split('@')[0] == expected.split('@')[0] and ('@' in shown) != ('@' in expected):
+        return True
+    if '*' in shown:
+        pattern = '^' + '.*'.join(_re.escape(part) for part in shown.split('*')) + '$'
+        if _re.match(pattern, expected) or _re.match(pattern, expected.split('@')[0]):
+            return True
+    return False
+
+
+_SPECTRUM_SIGNING_IN_AS_RE = _re.compile(r"signing in as:?\s*(\S+)", _re.IGNORECASE)
+
+
 def _autofill_spectrum_sso_confirm(page) -> bool:
     """Click through Spectrum/Charter's "You're signing in as: <user>" SSO
     identity-confirmation screen automatically instead of waiting on a human.
@@ -1115,6 +1159,62 @@ def _autofill_spectrum_sso_confirm(page) -> bool:
         already = page.evaluate("() => !!window.__fcSpectrumContinueClicked")
         if already:
             return False
+        # Forum report (post 3146, 2026-09-21): a user on Spectrum
+        # internet-only at home, signing in with a DIFFERENT Spectrum
+        # account that has TV, got this screen for their home internet
+        # account — Spectrum identifies them by their home network, so
+        # clearing cookies doesn't make it go away — and this helper clicked
+        # Continue before they could reach "Change account", signing them in
+        # as the internet-only account. When we know which account this
+        # login is for and the screen names a different one, click Change
+        # account instead so the normal credential autofill takes over.
+        expected = getattr(page.context, '_fc_expected_spectrum_username', '') or ''
+        if expected:
+            try:
+                body_text = page.inner_text('body', timeout=1000)
+            except Exception:  # noqa: BLE001
+                body_text = ''
+            match = _SPECTRUM_SIGNING_IN_AS_RE.search(body_text or '')
+            shown = match.group(1) if match else ''
+            if shown and not _spectrum_identity_matches(shown, expected):
+                change = None
+                for locator in (
+                    page.get_by_role('button', name=_re.compile(r'change account|not you|different account|switch account', _re.I)),
+                    page.get_by_role('link', name=_re.compile(r'change account|not you|different account|switch account', _re.I)),
+                    page.get_by_text(_re.compile(r'change account|not you\??|use a different account|switch account', _re.I)),
+                ):
+                    try:
+                        if locator.count() > 0:
+                            change = locator.first
+                            break
+                    except Exception:  # noqa: BLE001
+                        continue
+                if change is None:
+                    # Never fall through to Continue here — that would sign
+                    # in as the wrong account. Leave the screen up so the
+                    # human can pick in the remote view.
+                    logger.warning(
+                        '[mvpd-login] Spectrum SSO-confirm shows account %r but %r is configured, '
+                        'and no "Change account" control was found — not clicking Continue url=%s',
+                        shown, expected, _safe_page_url(page))
+                    return False
+                change.click(timeout=2000)
+                page.evaluate("() => { window.__fcSpectrumContinueClicked = true; }")
+                try:
+                    # Lets a caller whose one-shot autofill already ran
+                    # re-run it on the login form this leads to.
+                    page._fc_spectrum_changed_account = True
+                except Exception:  # noqa: BLE001
+                    pass
+                logger.info(
+                    '[mvpd-login] Spectrum SSO-confirm showed account %r but %r is configured — '
+                    'clicked "Change account" instead of Continue url=%s',
+                    shown, expected, _safe_page_url(page))
+                deadline = time.monotonic() + 5
+                start_url = page.url
+                while time.monotonic() < deadline and page.url == start_url:
+                    page.wait_for_timeout(150)
+                return True
         # Not assumed to be a native <button> — try several shapes rather
         # than guessing one exact element type/role.
         btn = None
