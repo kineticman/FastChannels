@@ -135,16 +135,9 @@ def ytdlp_adobe_mso_providers() -> list[dict]:
 # reason. The settings page shows the reason in place of that network's
 # "Sign in" button, "Sign in to all" skips it, and its start route refuses.
 UNSUPPORTED_NETWORK_PROVIDERS: dict[str, dict[str, str]] = {
-    # Cox only: our sign-in window failed every time for a legacy Cox account
-    # migrated to Spectrum (remembered device refused, then password
-    # rejected), 2026-09-24/25. A later capture from a real browser did
-    # sign FOX One in through "Cox / Cox Spectrum" on fox.com, so this is
-    # our browser being turned away, not FOX One refusing Cox. A native
-    # Spectrum account hasn't been tested, so it isn't blocked.
-    'foxone': {'Cox': (
-        'FOX One sign-in through "Cox / Cox Spectrum" has so far been turned away in '
-        'FastChannels\' sign-in window, so it isn\'t offered with this TV provider for now.'
-    )},
+    # (empty) FOX One + Cox was listed here until 2026-09-25; lifted once a
+    # real browser capture showed FOX One signing in through "Cox / Cox
+    # Spectrum" on fox.com.
 }
 
 
