@@ -11,6 +11,7 @@ from app.extensions import db
 from app.models import TVEAccount
 from app.tve.adobe_pass import TVENotAuthorizedError
 from app.tve.browser_login.common import (
+    _watch_spectrum_auth_results,
     _safe_page_url,
     _same_page_url,
     _settle_after_mvpd_navigation,
@@ -363,6 +364,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         try:
             with Camoufox(**camoufox_options) as context:
                 page = context.pages[0] if context.pages else context.new_page()
+                _watch_spectrum_auth_results(page, 'fox-mvpd-login')
                 _prime_google_session(context, mso_id)
                 page.on('crash', lambda p: logger.warning('[fox-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
                 page.on('close', lambda p: logger.warning('[fox-mvpd-login] page CLOSE event fired'))

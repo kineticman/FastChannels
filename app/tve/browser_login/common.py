@@ -1222,6 +1222,42 @@ _SPECTRUM_IDID_CHECK_INTERVAL_SECONDS = 1.0
 _SPECTRUM_ERROR_CODE_RE = _re.compile(r'\bID[A-Z]{2}-\d{3,5}\b')
 
 
+def _watch_spectrum_auth_results(page, log_tag: str) -> None:
+    """Log the result of every Spectrum login API call this page makes.
+
+    Spectrum's IDM front end turns its API answers into generic pages like
+    "Feature Unavailable ... IDID-4000", but the API responses carry the
+    real reason in plain headers (result_code / result_code_name) — e.g.
+    confirmed live 2026-09-24: password/auth → 403 result_code 4000
+    AUTH_REJECT_BY_RECAPTCHA_REJECT_STATUS behind IDID-4000, and 200
+    PROCESSED on a good login. Logged (never tokens or bodies) and kept on
+    the page so _spectrum_signin_error_message can name the actual gate.
+    aa-network/auth is skipped: its 401 is the normal "not on Spectrum home
+    internet, show the login form" answer. Best-effort; never raises.
+    """
+    def _on_response(resp):
+        try:
+            url = resp.url
+            if 'apis.spectrum.net/auth/' not in url or resp.request.method != 'POST' or '/aa-network/' in url:
+                return
+            headers = resp.headers
+            result = {
+                'status': resp.status,
+                'code': headers.get('result_code') or '',
+                'name': headers.get('result_code_name') or '',
+            }
+            page._fc_spectrum_auth_result = result
+            logger.info('[%s] Spectrum %s -> HTTP %s %s (result_code %s)', log_tag,
+                        _urlsplit(url).path.rsplit('/consumer/', 1)[-1], result['status'],
+                        result['name'] or '-', result['code'] or '-')
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        page.on('response', _on_response)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _spectrum_signin_error_message(page, label: str) -> str | None:
     """Returns a user-facing error message if a Spectrum sign-in error that
     no amount of waiting will fix is showing, else None: the IDID "Feature
@@ -1265,14 +1301,25 @@ def _spectrum_signin_error_message(page, label: str) -> str | None:
     url = _safe_page_url(page)
     code = _detect_spectrum_feature_unavailable(page)
     if code and not (code == 'IDID-unknown' and 'spectrum.net' not in url):
-        logger.warning('[mvpd-login] %s: Spectrum returned its "Feature Unavailable" error (%s) url=%s',
-                       label, code, _url_for_log(url))
+        auth = getattr(page, '_fc_spectrum_auth_result', None) or {}
+        reason = auth.get('name') or ''
+        logger.warning('[mvpd-login] %s: Spectrum returned its "Feature Unavailable" error (%s, auth result %s) url=%s',
+                       label, code, reason or 'not seen', _url_for_log(url))
+        if 'THMX' in reason:
+            gate = 'Spectrum\'s device check (ThreatMetrix)'
+        else:
+            # IDID-4000 is Spectrum's reCAPTCHA Enterprise rejection even
+            # when the result header wasn't caught — confirmed live
+            # 2026-09-24: password/auth answered 403 result_code 4000
+            # AUTH_REJECT_BY_RECAPTCHA_REJECT_STATUS ("Login rejected since
+            # the resolved action matrix is block") and the page rendered
+            # IDID-4000. Not a per-network refusal: FOX/TNT/AMC all hit it
+            # the same way once the score dropped.
+            gate = 'Spectrum\'s bot check (reCAPTCHA)'
         return (
-            f'{label}: Spectrum returned "{code}" ("Feature Unavailable... try again from home"). '
-            f'This can be temporary — Spectrum rate-limits several sign-ins in a short window, so '
-            f'wait a few minutes and sign in to one network at a time. If it keeps happening for '
-            f'just this network while others sign in fine, Spectrum likely doesn\'t offer it '
-            f'through TV Everywhere.'
+            f'{label}: {gate} rejected this sign-in ({code}, "Feature Unavailable... try again '
+            f'from home"). It tends to follow many sign-ins in a short time. Wait a few hours before '
+            f'trying again — repeated attempts make it worse.'
         )
     if 'spectrum.net' not in url:
         return None

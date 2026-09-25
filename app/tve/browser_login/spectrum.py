@@ -58,6 +58,7 @@ import redis
 
 from app.worker import flask_app
 from app.tve.browser_login.common import (
+    _watch_spectrum_auth_results,
     _detect_spectrum_feature_unavailable,
     _safe_page_url,
     _relay_input_and_screenshot,
@@ -608,6 +609,7 @@ def run_spectrum_signin():
                 user_data_dir=profile_dir, window=(1280, 800), block_images=True,
             ) as context:
                 page = context.pages[0] if context.pages else context.new_page()
+                _watch_spectrum_auth_results(page, 'spectrum-signin')
                 page.on('crash', lambda p: logger.warning('[spectrum-signin] page CRASH event fired (url was %s)', _safe_page_url(p)))
                 page.on('close', lambda p: logger.warning('[spectrum-signin] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[spectrum-signin] page JS error: %s', str(exc)[:500]))

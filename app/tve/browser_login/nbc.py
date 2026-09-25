@@ -15,6 +15,7 @@ from app.tve.adobe_pass import (
     TVENotAuthorizedError,
 )
 from app.tve.browser_login.common import (
+    _watch_spectrum_auth_results,
     _safe_page_url,
     _same_page_url,
     _settle_after_mvpd_navigation,
@@ -410,6 +411,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         try:
             with Camoufox(**camoufox_options) as context:
                 page = context.pages[0] if context.pages else context.new_page()
+                _watch_spectrum_auth_results(page, 'nbc-mvpd-login')
                 google_session_primed = _prime_google_session(context, mso_id)
                 if mso_id == 'YouTubeTV':
                     logger.info('[nbc-mvpd-login] Google session priming result=%s', 'primed' if google_session_primed else 'not-available')

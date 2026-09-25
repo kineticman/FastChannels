@@ -9,6 +9,7 @@ from app.config_store import persist_source_cache_updates
 from app.tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
 from urllib.parse import urlsplit as _urlsplit
 from app.tve.browser_login.common import (
+    _watch_spectrum_auth_results,
     MVPD_BROWSER_LOGIN_STATUS_KEY,
     MVPD_BROWSER_LOGIN_INPUT_KEY,
     MVPD_BROWSER_LOGIN_STOP_KEY,
@@ -150,6 +151,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
             logger.info('[discovery-mvpd-login] using isolated YouTubeTV profile with cross-site cookies enabled')
         with Camoufox(**camoufox_options) as context:
             page = context.pages[0] if context.pages else context.new_page()
+            _watch_spectrum_auth_results(page, 'discovery-mvpd-login')
             _prime_google_session(context, mso_id)
             page.on('crash', lambda p: logger.warning('[discovery-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
             page.on('close', lambda p: logger.warning('[discovery-mvpd-login] page CLOSE event fired'))

@@ -11,6 +11,7 @@ from app.models import Source, TVEAccount
 from app.config_store import persist_source_config_updates
 from app.tve.adobe_pass import TVENotAuthorizedError
 from app.tve.browser_login.common import (
+    _watch_spectrum_auth_results,
     MVPD_BROWSER_LOGIN_STATUS_KEY,
     MVPD_BROWSER_LOGIN_INPUT_KEY,
     MVPD_BROWSER_LOGIN_STOP_KEY,
@@ -112,6 +113,7 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
     try:
         with Camoufox(**camoufox_options) as context:
             page = context.pages[0] if context.pages else context.new_page()
+            _watch_spectrum_auth_results(page, 'foxone-mvpd-login')
             _prime_google_session(context, mso_id)
             page.on('crash', lambda p: logger.warning('[foxone-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
             page.on('close', lambda p: logger.warning('[foxone-mvpd-login] page CLOSE event fired'))
