@@ -220,17 +220,27 @@ def _first_image_url(item: dict, images: dict[str, str]) -> str | None:
     return None
 
 
-class DiscoverySpectrumUnsupportedError(TVENotAuthorizedError):
-    """Discovery TVE can't work through Spectrum's own login page — see
-    _raise_if_spectrum_routed. A TVENotAuthorizedError so the audit treats
-    it as definitive, same as the YouTubeTV case in _authenticate."""
+class DiscoveryBrowserSignInRequired(TVEAuthError):
+    """This provider can only be signed in with the browser flow, so an
+    unattended (scripted) sign-in can't renew Discovery's session. A plain
+    TVEAuthError, i.e. retryable: the channels aren't disabled, and a fresh
+    browser sign-in in Settings fixes it."""
 
 
-SPECTRUM_UNSUPPORTED_MESSAGE = (
-    'Discovery TVE can\'t stay signed in through Spectrum (this includes Cox accounts, which '
-    'Spectrum now signs in): Discovery\'s session lasts only ~90 seconds and every renewal '
-    'needs an unattended provider login, but Spectrum\'s login page requires a real browser.'
-)
+def _browser_signin_required(provider: str) -> DiscoveryBrowserSignInRequired:
+    """Builds the error and records it for the settings page, so an expired
+    session shows "sign in again" instead of just silently failing to play.
+    A later successful sign-in supersedes the recorded error."""
+    message = (
+        f'Discovery TVE needs you to sign in again: {provider} sign-in only works in a browser, '
+        'so it can\'t be renewed automatically. Use Sign in under Settings → TVE.'
+    )
+    try:
+        from ..tve.browser_login.common import _record_tve_login_error
+        _record_tve_login_error('discovery', message)
+    except Exception:  # noqa: BLE001
+        pass
+    return DiscoveryBrowserSignInRequired(message)
 
 
 def _raise_if_spectrum_routed(mso_id: str, mso_login_url: str, response: requests.Response) -> None:
@@ -238,13 +248,10 @@ def _raise_if_spectrum_routed(mso_id: str, mso_login_url: str, response: request
     BOTH mso_id=Spectrum and mso_id=Cox with a 200 auto-submit SAML form
     posting to Spectrum's own IdP (tve.spectrum.net/openam/.../charter/idp)
     — Cox's accounts have moved to Spectrum's login, so the scripted
-    login.cox.com path can never be reached any more. A browser sign-in
-    through that page does complete (verified the same day), but Discovery's
-    session only lasts ~SESSION_TTL_SECONDS and resolve() re-runs this
-    whole unattended login on every renewal, which Spectrum's
-    reCAPTCHA/ThreatMetrix-gated page can't support — same dead end as
-    YouTubeTV below. Fail with a clear, definitive reason instead of a
-    confusing "did not return an MVPD login redirect"."""
+    login.cox.com path can never be reached any more. Spectrum's page is
+    reCAPTCHA/ThreatMetrix-gated, so only the browser flow can sign in there
+    (verified the same day). Raise a clear "sign in with the browser" error
+    instead of a confusing "did not return an MVPD login redirect"."""
     if mso_id not in ('Cox', 'Spectrum') or mso_login_url:
         return
     try:
@@ -252,7 +259,7 @@ def _raise_if_spectrum_routed(mso_id: str, mso_login_url: str, response: request
     except Exception:  # noqa: BLE001
         return
     if 'tve.spectrum.net' in body:
-        raise DiscoverySpectrumUnsupportedError(SPECTRUM_UNSUPPORTED_MESSAGE)
+        raise _browser_signin_required('Spectrum (including Cox)')
 
 
 def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str, password: str) -> str:
@@ -589,25 +596,12 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             # extra hop above extracts `code` from) — so it's used as
             # code_url directly here, no extra hop needed.
             if mso_id == 'YouTubeTV':
-                # Not "not wired up yet" (login_to_mvpd()'s generic message
-                # for any unimplemented MSO, which wrongly implies this
-                # could just be built later) -- live-confirmed 2026-08-17
-                # this is permanently unworkable for Discovery specifically:
-                # its session token dies in ~90-200s with no refresh path at
-                # all (not even via a fresh Google OAuth token), so every
-                # resolve()/audit call would need a real browser + human-
-                # equivalent Google click every couple minutes. Separately,
-                # and independently, this account isn't entitled to any of
-                # Discovery's 15 channels via YouTube TV anyway (confirmed
-                # per-channel, all access.denied.missingpackage). A
-                # definitive answer either way, so TVENotAuthorizedError
-                # (disables the channel) rather than the generic TVEAuthError
-                # login_to_mvpd() would raise (treated as possibly transient).
-                raise TVENotAuthorizedError(
-                    'Discovery TVE is not usable with YouTube TV: its session expires in '
-                    '~90-200s with no refresh, and this account is not entitled to any '
-                    'Discovery channel through it.'
-                )
+                # yt-dlp/login_to_mvpd() has no Google sign-in at all, so a
+                # YouTube TV session can only come from the browser flow.
+                # (This used to be a definitive "not usable", on the belief
+                # that Discovery's session died in ~90-200s; it doesn't, see
+                # SESSION_TTL_SECONDS.)
+                raise _browser_signin_required('YouTube TV')
             from ..tve.mvpd import login_to_mvpd
             cookie_jar = cfg.get('xfinity_cookie_jar')
             page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)

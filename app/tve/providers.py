@@ -134,8 +134,6 @@ def ytdlp_adobe_mso_providers() -> list[dict]:
 # UI's sign-in family (see app/tve/status.py) then mso_id -> user-facing
 # reason. The settings page shows the reason in place of that network's
 # "Sign in" button, "Sign in to all" skips it, and its start route refuses.
-# "Cox" is listed next to "Spectrum" because Adobe's Cox MVPD now signs in
-# on Spectrum's own login page (confirmed live 2026-09-24).
 UNSUPPORTED_NETWORK_PROVIDERS: dict[str, dict[str, str]] = {
     # Cox only: the evidence (FOX One's own website failing, and ours) all
     # came from a legacy Cox account migrated to Spectrum. A native Spectrum
@@ -144,11 +142,6 @@ UNSUPPORTED_NETWORK_PROVIDERS: dict[str, dict[str, str]] = {
         'FOX One sign-in with a Cox account is broken on FOX One\'s own website too '
         '(confirmed 2026-09-25), so it isn\'t available with this TV provider for now.'
     )},
-    'discovery': dict.fromkeys(('Spectrum', 'Cox'), (
-        'Discovery TVE can\'t stay signed in through Spectrum (including Cox accounts): its '
-        'session lasts ~90 seconds and every renewal needs an unattended login, which '
-        'Spectrum\'s login page doesn\'t allow.'
-    )),
 }
 
 

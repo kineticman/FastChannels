@@ -60,7 +60,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
     """
     import uuid as _uuid_login
     from urllib.parse import parse_qs as _parse_qs_login, urlsplit as _urlsplit_login
-    from app.scrapers.discovery_tve import AUTH_HOST, CALLBACK_BASE, DiscoverySpectrumUnsupportedError, _raise_if_spectrum_routed
+    from app.scrapers.discovery_tve import AUTH_HOST, CALLBACK_BASE
 
     try:
         from camoufox.sync_api import Camoufox
@@ -91,15 +91,6 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
         mso_login_url, page_response = scraper._discovery_session_redirect(
             session, device_id, mso_id, mso_name, allow_empty_redirect=True,
         )
-        # A browser sign-in through Spectrum's page does complete, but
-        # Discovery couldn't renew it ~90s later — see
-        # _raise_if_spectrum_routed. Say so up front instead of running a
-        # Spectrum login (and risking its IDID rate limit) for nothing.
-        _raise_if_spectrum_routed(mso_id, mso_login_url, page_response)
-    except DiscoverySpectrumUnsupportedError as exc:
-        _record_tve_login_error('discovery', str(exc))
-        set_status('error', str(exc))
-        return
     except TVENotAuthorizedError as exc:
         _record_tve_login_error('discovery', f'not entitled — {exc}')
         set_status('error', f'Discovery TVE: not entitled — {exc}')
@@ -383,8 +374,8 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                 _harvest_and_save_xfinity_cookies(context)
     except BaseException as exc:  # noqa: BLE001
         if isinstance(exc, SpectrumWantsCoxProvider):
-            # Not reachable today (Cox/Spectrum stop before a browser, see
-            # _raise_if_spectrum_routed), but never report it as a crash.
+            # Spectrum's IDLI-4213 "pick Cox Spectrum": a user-facing
+            # answer, never report it as a crash.
             _record_tve_login_error('discovery', str(exc))
             set_status('error', str(exc))
             return
@@ -480,7 +471,7 @@ def run_discovery_browser_login(mso_id: str):
         r.delete(MVPD_BROWSER_LOGIN_INPUT_KEY)
         set_status('running', 'Signing in to Discovery TVE…')
 
-        from app.scrapers.discovery_tve import DiscoverySpectrumUnsupportedError, DiscoveryTVEScraper
+        from app.scrapers.discovery_tve import DiscoveryBrowserSignInRequired, DiscoveryTVEScraper
 
         source = Source.query.filter_by(name='discovery_tve').first()
         if not source:
@@ -488,74 +479,78 @@ def run_discovery_browser_login(mso_id: str):
             return
         scraper = DiscoveryTVEScraper(config=dict(source.config or {}))
 
-        if mso_id != 'Cox':
-            account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-            if not account or not account.is_enabled or not account.has_credentials():
-                set_status('error', 'TVE credentials are not configured in Settings.')
+        if mso_id == 'Cox':
+            # Adobe's Cox MVPD now signs in on Spectrum's page, which only
+            # the browser flow can do; try scripted first (the old
+            # login.cox.com path), then fall through to the browser.
+            try:
+                scraper._authenticate()
+            except DiscoveryBrowserSignInRequired:
+                set_status('running', 'Cox signs in on Spectrum\'s page — opening a browser…')
+            except TVENotAuthorizedError as exc:
+                _record_tve_login_error('discovery', f'not entitled — {exc}')
+                set_status('error', f'Discovery TVE: not entitled — {exc}')
                 return
-            mso_name = ((account.config or {}).get('selected_mso_name') or mso_id).strip()
+            except TVEAuthError as exc:
+                _record_tve_login_error('discovery', str(exc))
+                set_status('error', f'Discovery TVE: {exc}')
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.exception('[discovery-mvpd-login] unexpected failure')
+                _record_tve_login_error('discovery', str(exc))
+                set_status('error', f'Discovery TVE: {exc}')
+                return
+            else:
+                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                set_status('success', 'Signed in — Discovery TVE authorized.')
+                logger.info('[discovery-mvpd-login] paired mso_id=%s (scripted, no browser)', mso_id)
+                return
 
-            if mso_id == 'Comcast_SSO':
-                # Try a saved cookie jar (harvested from a previous
-                # successful Comcast_SSO browser pairing for ANY TVE family
-                # — see _harvest_and_save_xfinity_cookies) BEFORE ever
-                # opening a browser, same as mvpd.py/nbc.py/fox.py already
-                # do. Confirmed live 2026-08-28: scraper._authenticate()
-                # (already used by the Cox branch below, and by every
-                # scheduled session refresh) works unmodified for
-                # Comcast_SSO too once a jar exists — the interactive
-                # browser flow was what was actually tripping Comcast's own
-                # fraud/step-up check on a password-hydration retry, not
-                # anything about Discovery itself (see gauth-sync stall
-                # investigation in _run_discovery_browser_assisted_login).
-                cookie_jar = (account.config or {}).get('xfinity_cookie_jar')
-                if cookie_jar:
-                    set_status('running', 'Trying saved sign-in (no browser needed)…')
-                    try:
-                        scraper._authenticate()
-                    except TVENotAuthorizedError as exc:
-                        _record_tve_login_error('discovery', f'not entitled — {exc}')
-                        set_status('error', f'Discovery TVE: not entitled — {exc}')
-                        return
-                    except Exception as exc:  # noqa: BLE001
-                        logger.info(
-                            '[discovery-mvpd-login] saved xfinity cookie jar did not work, falling back to browser: %s',
-                            exc,
-                        )
-                    else:
-                        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-                        set_status('success', 'Signed in — Discovery TVE authorized (no browser needed).')
-                        logger.info('[discovery-mvpd-login] paired mso_id=Comcast_SSO via saved cookie jar (no browser)')
-                        return
-                set_status('running', 'No usable saved sign-in — opening a browser…')
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        if not account or not account.is_enabled or not account.has_credentials():
+            set_status('error', 'TVE credentials are not configured in Settings.')
+            return
+        mso_name = ((account.config or {}).get('selected_mso_name') or mso_id).strip()
 
-            _ctx.pop()
-            _ctx_popped['v'] = True
-            _run_discovery_browser_assisted_login(r, set_status, source, account, scraper, mso_id, mso_name)
-            return
+        if mso_id == 'Comcast_SSO':
+            # Try a saved cookie jar (harvested from a previous
+            # successful Comcast_SSO browser pairing for ANY TVE family
+            # — see _harvest_and_save_xfinity_cookies) BEFORE ever
+            # opening a browser, same as mvpd.py/nbc.py/fox.py already
+            # do. Confirmed live 2026-08-28: scraper._authenticate()
+            # (already used by the Cox branch above, and by every
+            # scheduled session refresh) works unmodified for
+            # Comcast_SSO too once a jar exists — the interactive
+            # browser flow was what was actually tripping Comcast's own
+            # fraud/step-up check on a password-hydration retry, not
+            # anything about Discovery itself (see gauth-sync stall
+            # investigation in _run_discovery_browser_assisted_login).
+            cookie_jar = (account.config or {}).get('xfinity_cookie_jar')
+            if cookie_jar:
+                set_status('running', 'Trying saved sign-in (no browser needed)…')
+                try:
+                    scraper._authenticate()
+                except TVENotAuthorizedError as exc:
+                    _record_tve_login_error('discovery', f'not entitled — {exc}')
+                    set_status('error', f'Discovery TVE: not entitled — {exc}')
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    logger.info(
+                        '[discovery-mvpd-login] saved xfinity cookie jar did not work, falling back to browser: %s',
+                        exc,
+                    )
+                else:
+                    persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                    set_status('success', 'Signed in — Discovery TVE authorized (no browser needed).')
+                    logger.info('[discovery-mvpd-login] paired mso_id=Comcast_SSO via saved cookie jar (no browser)')
+                    return
+            set_status('running', 'No usable saved sign-in — opening a browser…')
 
-        try:
-            scraper._authenticate()
-        except DiscoverySpectrumUnsupportedError as exc:
-            _record_tve_login_error('discovery', str(exc))
-            set_status('error', str(exc))
-            return
-        except TVENotAuthorizedError as exc:
-            _record_tve_login_error('discovery', f'not entitled — {exc}')
-            set_status('error', f'Discovery TVE: not entitled — {exc}')
-            return
-        except TVEAuthError as exc:
-            _record_tve_login_error('discovery', str(exc))
-            set_status('error', f'Discovery TVE: {exc}')
-            return
-        except Exception as exc:  # noqa: BLE001
-            logger.exception('[discovery-mvpd-login] unexpected failure')
-            _record_tve_login_error('discovery', str(exc))
-            set_status('error', f'Discovery TVE: {exc}')
-            return
-        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-        set_status('success', 'Signed in — Discovery TVE authorized.')
-        logger.info('[discovery-mvpd-login] paired mso_id=%s (scripted, no browser)', mso_id)
+        _ctx.pop()
+        _ctx_popped['v'] = True
+        _run_discovery_browser_assisted_login(r, set_status, source, account, scraper, mso_id, mso_name)
+        return
+
     finally:
         uninstall_browser_login_activity_log(_activity_handler)
         if not _ctx_popped['v']:
