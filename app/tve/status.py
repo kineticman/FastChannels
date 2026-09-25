@@ -157,4 +157,8 @@ def tve_network_status(account) -> list[dict]:
         'last_error_at': disco_error_at,
     })
 
+    from .providers import tve_account_mso_id, unsupported_network_reason
+    mso_id = tve_account_mso_id(account)
+    for entry in entries:
+        entry['unsupported'] = unsupported_network_reason(entry.get('family') or '', mso_id)
     return entries

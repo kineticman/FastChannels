@@ -931,6 +931,9 @@ async function loadTveNetworkStatus() {
       // on an otherwise-working Cox account) — see app/tve/status.py's
       // tve_network_status, which only sets this when the failure is newer
       // than the last success.
+      if (n.unsupported) {
+        note = `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${_escapeHtml(n.unsupported)}</div>`;
+      }
       if (!note && n.last_error_message) {
         const errAge = _tveRelativeTime(n.last_error_at);
         note = `<div style="color:var(--danger);font-size:0.72rem;margin:0.05rem 0 0.35rem">Last attempt failed ${errAge}: ${_escapeHtml(n.last_error_message)}</div>`;
@@ -941,7 +944,7 @@ async function loadTveNetworkStatus() {
       // here; the modal flow now tries that same scripted
       // login first and falls back to the browser for Spectrum-migrated Cox
       // accounts (2026-09-24), so every family uses the modal.
-      if (n.family) {
+      if (n.family && !n.unsupported) {
         button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`;
       }
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
@@ -1255,7 +1258,9 @@ async function signInToAllTve() {
     const r = await fetch('/api/settings/tve/status');
     const d = await r.json();
     // 'foxone' is routed through _mvpdLoginRunFoxOneForBatch in the loop below.
-    networks = (d.networks || []).filter(n => n.family === 'foxone' || (n.family && MVPD_LOGIN_FAMILIES[n.family]));
+    // Networks that can't work with the selected TV provider (see
+    // UNSUPPORTED_NETWORK_PROVIDERS in app/tve/providers.py) are skipped.
+    networks = (d.networks || []).filter(n => !n.unsupported && (n.family === 'foxone' || (n.family && MVPD_LOGIN_FAMILIES[n.family])));
   } catch (e) {
     _mvpdLoginDone = true;
     status.style.color = 'var(--danger)';

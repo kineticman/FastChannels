@@ -10,7 +10,7 @@ from flask import Blueprint, jsonify, request, current_app
 from ..extensions import db
 from ..models import Source, TVEAccount, SourceCache
 from ..tve.adobe_pass import TVEAuthError, verify_mvpd_history
-from ..tve.providers import ytdlp_adobe_mso_providers
+from ..tve.providers import unsupported_network_reason, ytdlp_adobe_mso_providers
 
 tve_bp = Blueprint('api_tve', __name__)
 
@@ -373,6 +373,9 @@ def discovery_browser_login_start():
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     cfg = account.config or {}
     mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
+    reason = unsupported_network_reason('discovery', mso_id)
+    if reason:
+        return jsonify({'error': reason}), 400
     started = trigger_discovery_browser_login(mso_id)
     return jsonify({'status': 'started' if started else 'already_running'})
 
@@ -398,6 +401,9 @@ def foxone_browser_login_start():
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     cfg = account.config or {}
     mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
+    reason = unsupported_network_reason('foxone', mso_id)
+    if reason:
+        return jsonify({'error': reason}), 400
     started = trigger_foxone_browser_login(mso_id)
     return jsonify({'status': 'started' if started else 'already_running'})
 

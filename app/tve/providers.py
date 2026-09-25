@@ -126,3 +126,36 @@ def ytdlp_adobe_mso_providers() -> list[dict]:
     if 'YouTubeTV' not in seen:
         providers.append({'id': 'YouTubeTV', 'name': 'YouTube TV'})
     return sorted(providers, key=_friendly_sort_key)
+
+
+# TVE networks that can't work with a given TV provider, keyed by the admin
+# UI's sign-in family (see app/tve/status.py) then mso_id -> user-facing
+# reason. The settings page shows the reason in place of that network's
+# "Sign in" button, "Sign in to all" skips it, and its start route refuses.
+# "Cox" is listed next to "Spectrum" because Adobe's Cox MVPD now signs in
+# on Spectrum's own login page (confirmed live 2026-09-24).
+UNSUPPORTED_NETWORK_PROVIDERS: dict[str, dict[str, str]] = {
+    # Cox only: the evidence (FOX One's own website failing, and ours) all
+    # came from a legacy Cox account migrated to Spectrum. A native Spectrum
+    # account hasn't been tested, so it isn't blocked.
+    'foxone': {'Cox': (
+        'FOX One sign-in with a Cox account is broken on FOX One\'s own website too '
+        '(confirmed 2026-09-25), so it isn\'t available with this TV provider for now.'
+    )},
+    'discovery': dict.fromkeys(('Spectrum', 'Cox'), (
+        'Discovery TVE can\'t stay signed in through Spectrum (including Cox accounts): its '
+        'session lasts ~90 seconds and every renewal needs an unattended login, which '
+        'Spectrum\'s login page doesn\'t allow.'
+    )),
+}
+
+
+def tve_account_mso_id(account) -> str:
+    """The MVPD id the TVE sign-in start routes actually use (same order)."""
+    cfg = (account.config or {}) if account else {}
+    return (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
+
+
+def unsupported_network_reason(family: str, mso_id: str) -> str | None:
+    return (UNSUPPORTED_NETWORK_PROVIDERS.get(family) or {}).get(mso_id)
+
