@@ -520,7 +520,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             return
                         raise _BrowserSessionDied('browser page closed and pairing did not complete')
 
-                    idid_message = _spectrum_signin_error_message(page, 'NBC TVE')
+                    idid_message = _spectrum_signin_error_message(page, 'NBC TVE', mso_id)
                     if idid_message:
                         _record_tve_login_error('nbc', idid_message)
                         set_status('error', idid_message)

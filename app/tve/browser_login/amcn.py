@@ -291,7 +291,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                         if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
                             cancelled = True
                             break
-                    idid_message = _spectrum_signin_error_message(page, 'AMC Networks TVE')
+                    idid_message = _spectrum_signin_error_message(page, 'AMC Networks TVE', mso_id)
                     if idid_message:
                         break
 

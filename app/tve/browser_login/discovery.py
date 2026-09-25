@@ -325,7 +325,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                     if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
                         cancelled = True
                         break
-                idid_message = _spectrum_signin_error_message(page, 'Discovery TVE')
+                idid_message = _spectrum_signin_error_message(page, 'Discovery TVE', mso_id)
                 if idid_message:
                     break
                 if now - last_poll > _POLL_SECONDS:

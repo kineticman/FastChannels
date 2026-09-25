@@ -603,7 +603,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     # that hits Google's account-chooser most often tonight.
                     _autofill_google_account_chooser(page)
                     _autofill_spectrum_sso_confirm(page)
-                    idid_message = _spectrum_signin_error_message(page, requestor_id)
+                    idid_message = _spectrum_signin_error_message(page, requestor_id, mso_id)
                     if idid_message:
                         _step(requestor_id, 'failed', 'Spectrum "Feature Unavailable"')
                         _record_tve_login_error(requestor_id, idid_message)

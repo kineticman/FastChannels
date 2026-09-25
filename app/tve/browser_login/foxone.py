@@ -108,6 +108,10 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
         set_status('error', f'FOX One: {exc}')
         return
 
+    logger.info(
+        '[foxone-mvpd-login] starting sign-in: provider=%s, %s login, profile=%s',
+        mso_id, 'shared TV-provider' if login.shared else 'separate FOX One', profile_dir,
+    )
     nav_url = mso_login_url or str(page_response.url)
 
     _PER_LOGIN_TIMEOUT_SECONDS = 150
@@ -273,7 +277,7 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
                     if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
                         cancelled = True
                         break
-                idid_message = _spectrum_signin_error_message(page, 'FOX One')
+                idid_message = _spectrum_signin_error_message(page, 'FOX One', mso_id)
                 if idid_message:
                     break
                 if now - last_poll > _POLL_SECONDS:

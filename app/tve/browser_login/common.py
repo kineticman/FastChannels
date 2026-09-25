@@ -1309,7 +1309,7 @@ def _retry_spectrum_after_thmx_reject(page, label: str) -> bool:
         return False
 
 
-def _spectrum_signin_error_message(page, label: str) -> str | None:
+def _spectrum_signin_error_message(page, label: str, mso_id: str | None = None) -> str | None:
     """Returns a user-facing error message if a Spectrum sign-in error that
     no amount of waiting will fix is showing, else None: the IDID "Feature
     Unavailable" page (via _detect_spectrum_feature_unavailable), or
@@ -1377,13 +1377,22 @@ def _spectrum_signin_error_message(page, label: str) -> str | None:
         # under both "Spectrum" and "Cox Spectrum"; a Cox-migrated account
         # signing in as plain "Spectrum" also gets it (and sometimes
         # IDLI-4213 instead). A remembered device (dla-token + "Continue")
-        # signed in every time. Hence the Cox hint, and no automatic retry.
+        # signed in every time. Hence the Cox hint (skipped when the
+        # provider is already Cox), and no automatic retry.
+        bot_check = (
+            'Spectrum\'s bot check (reCAPTCHA), which tends to follow many sign-ins in a short '
+            'time: wait a few hours before trying again.'
+        )
+        if mso_id == 'Cox':
+            return (
+                f'{label}: Spectrum rejected this sign-in ({code}, "Feature Unavailable... try again '
+                f'from home"). This is {bot_check}'
+            )
         return (
             f'{label}: Spectrum rejected this sign-in ({code}, "Feature Unavailable... try again '
             f'from home"). If your account used to be Cox and your TV provider is set to '
             f'"Spectrum", choose "Cox / Cox Spectrum" instead — Spectrum answers Cox accounts '
-            f'this way. Otherwise it\'s Spectrum\'s bot check (reCAPTCHA), which tends to follow '
-            f'many sign-ins in a short time: wait a few hours before trying again.'
+            f'this way. Otherwise it\'s {bot_check}'
         )
     if 'spectrum.net' not in url:
         return None
