@@ -602,6 +602,14 @@ def run_amcn_browser_login(mso_id: str):
             logger.info('[amcn-mvpd-login] scripted Cox login authorized nothing, falling back to browser: %s', failed)
             set_status('running', 'No usable saved sign-in — opening a browser…')
 
+        # The Cox/Comcast_SSO branches above commit via persist_source_*,
+        # which expires every loaded ORM row; the browser flow then read an
+        # attribute after _ctx.pop() and died with DetachedInstanceError
+        # (confirmed live 2026-09-25, Cox → Spectrum fallback). Reload both
+        # and touch the attributes it reads before popping the context.
+        source = Source.query.filter_by(name='amcn_tve').first()
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        _ = (source.id, source.config, account.username, account.password, account.config)
         _ctx.pop()
         _ctx_popped['v'] = True
         _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id, mso_id, CHANNELS)
