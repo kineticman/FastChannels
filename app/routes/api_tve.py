@@ -1,7 +1,6 @@
 import json
 import logging
 import os as _os
-import time as _time
 
 logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
@@ -84,7 +83,14 @@ def tve_network_status_route():
 
 # Sources whose auth identity is TVE/Adobe-Pass-tied. Kept as one list so
 # reset and any future TVE-wide admin action stay in sync automatically.
-_TVE_SOURCE_NAMES = ('aenetworks_tve', 'fox_tve', 'fox_one', 'discovery_tve', 'amcn_tve', 'warner_tve', 'nbc_tve')
+_TVE_SOURCE_NAMES = ('aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'warner_tve', 'nbc_tve')
+
+# FOX One is a Premium source with its own settings (sign-in method,
+# separate login, home ZIP); a TVE reset only drops the sign-in it got from
+# the shared account.
+_FOX_ONE_SIGNIN_KEYS = ('access_token', 'access_expires_at', 'access_token_captured_at',
+                        'platform_location', 'platform_location_cached_at', 'device_id',
+                        'signin_error', 'signin_error_at')
 
 
 @tve_bp.route('/settings/tve/reset', methods=['POST'])
@@ -120,6 +126,9 @@ def tve_reset():
     source_ids = [s.id for s in sources]
     for s in sources:
         s.config = {}
+    fox_one = Source.query.filter_by(name='fox_one').first()
+    if fox_one and (fox_one.config or {}).get('signin_method') != 'own':
+        fox_one.config = {k: v for k, v in (fox_one.config or {}).items() if k not in _FOX_ONE_SIGNIN_KEYS}
 
     if source_ids:
         SourceCache.query.filter(
@@ -179,66 +188,6 @@ def test_tve_mvpd_settings():
         account.last_auth_at = datetime.now(timezone.utc)
         db.session.commit()
         return jsonify({'ok': False, 'error': str(exc), 'account': account.to_safe_dict()}), 502
-
-
-@tve_bp.route('/settings/tve/foxone/signin', methods=['POST'])
-def foxone_signin():
-    """FOX One authenticates natively (a scripted Adobe Pass MVPD OAuth
-    dance, see FoxOneScraper._authenticate_via_mvpd) rather than through
-    Adobe Pass "second screen" pairing like every other TVE network — no
-    browser needed, so unlike the rest of the "Sign in" buttons this is a
-    plain synchronous request/response, not the streamed-screenshot modal.
-    Only Cox has a scripted login wired up right now — other MVPDs fail
-    with a clear error instead of silently trying Cox's login form.
-
-    Deliberately calls _authenticate_via_mvpd directly instead of going
-    through _ensure_access_token's cache-first path — a "Sign in" click
-    should always exercise a live MVPD login, not silently short-circuit on
-    a still-valid cached token (which would report success without actually
-    testing anything, undermining the whole point of a manual sign-in).
-    """
-    from ..models import Source
-    from ..scrapers.fox_one import FoxOneScraper
-    from ..config_store import persist_source_config_updates
-
-    account = _get_tve_account('mvpd', 'TV Provider')
-    if not account.has_credentials():
-        return jsonify({'error': 'TV provider username and password are required.'}), 400
-
-    source = Source.query.filter_by(name='fox_one').first()
-    scraper = FoxOneScraper(config=dict((source.config if source else {}) or {}))
-    mso_id = scraper._account_mso_id(account)
-    try:
-        access_token, expires_at = scraper._authenticate_via_mvpd(
-            mso_id, account.username, account.password, (account.config or {}).get('xfinity_cookie_jar'),
-        )
-    except Exception as exc:  # noqa: BLE001
-        account.last_auth_status = 'error'
-        account.last_auth_message = f'FOX One {mso_id} MVPD auth failed: {exc}'[:500]
-        account.last_auth_at = datetime.now(timezone.utc)
-        # Same 'tve_last_error' shape app.worker._record_tve_login_error writes
-        # for the other networks — app.tve.status.tve_network_status() reads
-        # this so a network that's never succeeded shows why, not just "Never".
-        cfg = dict(account.config or {})
-        errors = dict(cfg.get('tve_last_error') or {})
-        errors['foxone'] = {'message': str(exc)[:300], 'at': int(_time.time())}
-        cfg['tve_last_error'] = errors
-        account.config = cfg
-        db.session.commit()
-        if source and scraper._pending_config_updates:
-            persist_source_config_updates(source.id, scraper._pending_config_updates)
-        return jsonify({'ok': False, 'error': str(exc)}), 502
-
-    scraper._update_config('access_token', access_token)
-    scraper._update_config('access_expires_at', expires_at)
-    scraper._update_config('access_token_captured_at', int(_time.time()))
-    if source:
-        persist_source_config_updates(source.id, scraper._pending_config_updates)
-    account.last_auth_status = 'ok'
-    account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD.'
-    account.last_auth_at = datetime.now(timezone.utc)
-    db.session.commit()
-    return jsonify({'ok': True})
 
 
 # ── MVPD interactive browser sign-in (Adobe Pass "second screen" pairing) ──
@@ -400,7 +349,7 @@ def foxone_browser_login_start():
     reason = unsupported_network_reason('foxone', mso_id)
     if reason:
         return jsonify({'error': reason}), 400
-    started = trigger_foxone_browser_login(mso_id)
+    started = trigger_foxone_browser_login()
     return jsonify({'status': 'started' if started else 'already_running'})
 
 

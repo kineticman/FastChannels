@@ -41,17 +41,14 @@ _EXPECTED_HOST_SUBSTRING = {}
 _BROWSER_ONLY_MSOS = {'Cox': 'Cox / Cox Spectrum', 'Spectrum': 'Spectrum'}
 
 
-def require_scripted_mvpd_login(mso_id: str) -> None:
+def require_scripted_mvpd_login(mso_id: str, *, where: str = 'for this network in Settings > TV Everywhere') -> None:
     """Raise a clear "sign in again" TVEAuthError for an MSO only a browser
     can sign in to. Call it at the point a scripted flow would otherwise
     start a fresh MVPD login — after any Adobe session reuse has had its
-    chance, never before."""
+    chance, never before. `where` says where the Sign in button is."""
     name = _BROWSER_ONLY_MSOS.get(mso_id)
     if name:
-        raise TVEAuthError(
-            f'{name} sign-in needs a browser. Click "Sign in" for this network '
-            'in Settings > TV Everywhere to sign in again.'
-        )
+        raise TVEAuthError(f'{name} sign-in needs a browser. Click "Sign in" {where} to sign in again.')
 
 
 def login_to_mvpd(

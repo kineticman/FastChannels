@@ -1,13 +1,12 @@
 """FOX One browser-assisted login."""
 import logging
 import time
-from datetime import datetime, timezone
+from dataclasses import replace
 from urllib.parse import urlsplit as _urlsplit
 import redis
 
 from app.worker import flask_app
-from app.extensions import db
-from app.models import Source, TVEAccount
+from app.models import Source
 from app.config_store import persist_source_config_updates
 from app.tve.browser_login.common import (
     _watch_spectrum_auth_results,
@@ -16,7 +15,6 @@ from app.tve.browser_login.common import (
     MVPD_BROWSER_LOGIN_STOP_KEY,
     _safe_page_url,
     _settle_after_mvpd_navigation,
-    _record_tve_login_error,
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
@@ -42,7 +40,16 @@ from app.tve.browser_login.common import (
 logger = logging.getLogger(__name__)
 
 
-def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, mso_id: str) -> None:
+def _record_foxone_result(source_id: int, scraper, login, error: str | None, *, how: str = '') -> None:
+    """Persist a sign-in outcome (FoxOneScraper.record_signin_result) plus any
+    config the scraper queued. Pushes its own app context — the browser flow
+    runs without one (see run_foxone_browser_login)."""
+    with flask_app.app_context():
+        scraper.record_signin_result(login, error, how=how)
+        persist_source_config_updates(source_id, scraper._pending_config_updates)
+
+
+def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) -> None:
     """Browser-assisted counterpart to FOX One's scripted MVPD sign-in
     (api.foxone_signin / _authenticate_via_mvpd), for any MSO whose login
     page blocks scripted clients outright (Cox/Spectrum, YouTubeTV/Google,
@@ -64,8 +71,13 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
 
     Reuses the shared legacy 'mvpd:browser-login:*' redis keys (via
     set_status and _relay_input_and_screenshot's defaults), same as AMCN/
-    Discovery.
+    Discovery. `login` is the FoxOneMvpdLogin to use; a separate FOX One
+    login (login.shared False) gets its own browser profile and never
+    reads or writes the shared TV-provider account.
     """
+    from app.scrapers.fox_one import OWN_PROFILE_DIR, SHARED_PROFILE_DIR
+
+    mso_id = login.mso_id
     try:
         from camoufox.sync_api import Camoufox
     except ImportError:
@@ -73,14 +85,16 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
         return
 
     import os as _os_login
-    # Isolated, cookie-permissive profile for YouTubeTV — shared with the
-    # other browser-login flows (see _YOUTUBETV_ISOLATED_PROFILE_DIR's
-    # docstring in common.py).
-    profile_dir = (
-        _YOUTUBETV_ISOLATED_PROFILE_DIR
-        if mso_id == 'YouTubeTV'
-        else '/data/browser_profiles/mvpd_tve'
-    )
+    # A separate FOX One login gets its own profile (see OWN_PROFILE_DIR).
+    # Otherwise: the isolated, cookie-permissive profile for YouTubeTV —
+    # shared with the other browser-login flows (see
+    # _YOUTUBETV_ISOLATED_PROFILE_DIR's docstring in common.py).
+    if not login.shared:
+        profile_dir = OWN_PROFILE_DIR
+    elif mso_id == 'YouTubeTV':
+        profile_dir = _YOUTUBETV_ISOLATED_PROFILE_DIR
+    else:
+        profile_dir = SHARED_PROFILE_DIR
     try:
         _os_login.makedirs(profile_dir, exist_ok=True)
     except Exception as exc:  # noqa: BLE001
@@ -90,7 +104,7 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
         session, request_id, device_id, mso_login_url, page_response = scraper._foxone_mvpd_register(mso_id)
     except Exception as exc:  # noqa: BLE001
         logger.exception('[foxone-mvpd-login] unexpected failure registering session')
-        _record_tve_login_error('foxone', str(exc))
+        _record_foxone_result(source.id, scraper, login, str(exc))
         set_status('error', f'FOX One: {exc}')
         return
 
@@ -113,7 +127,9 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
         with Camoufox(**camoufox_options) as context:
             page = context.pages[0] if context.pages else context.new_page()
             _watch_spectrum_auth_results(page, 'foxone-mvpd-login')
-            _prime_google_session(context, mso_id)
+            if login.shared:
+                # The saved Google session belongs to the shared account.
+                _prime_google_session(context, mso_id)
             page.on('crash', lambda p: logger.warning('[foxone-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
             page.on('close', lambda p: logger.warning('[foxone-mvpd-login] page CLOSE event fired'))
             page.on('pageerror', lambda exc: logger.warning('[foxone-mvpd-login] page JS error: %s', str(exc)[:500]))
@@ -224,18 +240,18 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
                     'Google rejected the saved browser session. Use “Sign in with Google” again, then retry.',
                 )
                 return
-            if account.username and account.password and mso_id == 'Comcast_SSO':
+            if login.username and login.password and mso_id == 'Comcast_SSO':
                 _autofill_xfinity_credentials(
-                    page, account.username, account.password, r=r,
+                    page, login.username, login.password, r=r,
                     stop_key=MVPD_BROWSER_LOGIN_STOP_KEY, input_key=MVPD_BROWSER_LOGIN_INPUT_KEY,
                 )
-            elif account.username and account.password and mso_id != 'YouTubeTV':
+            elif login.username and login.password and mso_id != 'YouTubeTV':
                 # Every other generic MSO needs the same credential-form
                 # autofill Discovery/AMCN got 2026-09-18 — confirmed live
                 # 2026-09-24 this copy never had it: a Cox account routed to
                 # Spectrum's login page sat on the empty form until timeout.
                 _try_autofill_credentials(
-                    page, account.username, account.password, r=r,
+                    page, login.username, login.password, r=r,
                     stop_key=MVPD_BROWSER_LOGIN_STOP_KEY, input_key=MVPD_BROWSER_LOGIN_INPUT_KEY,
                     navigation_already_settled=True, log_tag='foxone-mvpd-login',
                 )
@@ -274,14 +290,18 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
                 set_status('stopped', 'Cancelled')
                 return
             if idid_message:
-                _record_tve_login_error('foxone', idid_message)
+                _record_foxone_result(source.id, scraper, login, idid_message)
                 set_status('error', idid_message)
                 return
             if not access_token:
                 _log_signin_timeout_snapshot(page, 'foxone-mvpd-login')
                 set_status('error', 'FOX One: timed out waiting for sign-in to complete.')
                 return
-            if mso_id == 'YouTubeTV':
+            if not login.shared:
+                # The Google token / Xfinity cookie jar below are saved onto
+                # the shared account, so a separate login keeps them out.
+                pass
+            elif mso_id == 'YouTubeTV':
                 _maybe_capture_google_master_token(context, mso_id)
             elif mso_id == 'Comcast_SSO':
                 # Same idea as the YouTubeTV branch above, for the Xfinity
@@ -293,9 +313,22 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
                 _harvest_and_save_xfinity_cookies(context)
     except BaseException as exc:  # noqa: BLE001
         if isinstance(exc, SpectrumWantsCoxProvider):
-            if _spectrum_retry_as_cox(exc, mso_id, 'FOX One', set_status):
-                return _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 'Cox')
-            return
+            if login.shared:
+                if _spectrum_retry_as_cox(exc, mso_id, 'FOX One', set_status):
+                    return _run_foxone_browser_assisted_login(r, set_status, source, replace(login, mso_id='Cox'), scraper)
+                return
+            if mso_id != 'Spectrum':
+                set_status('error', f'FOX One: Spectrum returned IDLI-4213 ("select Cox Spectrum") even '
+                                    f'though the TV provider is already set to {mso_id}.')
+                return
+            # Same switch as _spectrum_retry_as_cox, but saved on FOX One's
+            # own login instead of the shared account.
+            scraper._update_config('mvpd_provider_id', 'Cox')
+            with flask_app.app_context():
+                persist_source_config_updates(source.id, scraper._pending_config_updates)
+            set_status('starting', 'Spectrum says this account signs in as "Cox Spectrum" — switched '
+                                   'FOX One\'s TV provider and retrying…')
+            return _run_foxone_browser_assisted_login(r, set_status, source, replace(login, mso_id='Cox'), scraper)
         if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
             set_status('stopped', 'Cancelled')
             return
@@ -306,37 +339,27 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
     scraper._update_config('access_token', access_token)
     scraper._update_config('access_expires_at', expires_at)
     scraper._update_config('access_token_captured_at', int(time.time()))
-    # Fresh, self-contained app_context — see _prime_google_session's
-    # docstring: the caller (run_foxone_browser_login) pops its own before
-    # calling this function, since everything above runs the actual browser
-    # session, so nothing can be assumed pushed by the time execution
-    # reaches here.
-    with flask_app.app_context():
-        persist_source_config_updates(source.id, scraper._pending_config_updates)
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-        if account:
-            account.last_auth_status = 'ok'
-            account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD (browser-assisted).'
-            account.last_auth_at = datetime.now(timezone.utc)
-            db.session.commit()
+    _record_foxone_result(source.id, scraper, login, None, how=' (browser-assisted)')
     set_status('success', f'Signed in — FOX One authorized via {mso_id}.')
     logger.info('[foxone-mvpd-login] paired mso_id=%s (browser-assisted)', mso_id)
 
 
-def run_foxone_browser_login(mso_id: str):
-    """Standalone "Sign in" for FOX One.
+def run_foxone_browser_login(*_legacy_args):
+    """Standalone "Sign in" for FOX One (from its card on the Sources page).
 
-    Mirrors run_amcn_browser_login/run_discovery_browser_login: Comcast_SSO
-    tries a saved cookie jar first; everything else (including Cox, which
-    signs in on Spectrum's page now) goes through the real browser-assisted
-    flow below instead of erroring out with "no scripted sign-in wired up".
+    Signs in with whichever TV-provider login FOX One is set up for (see
+    FoxOneScraper._mvpd_login). Comcast_SSO on the shared account tries a
+    saved cookie jar first; everything else (including Cox, which signs in
+    on Spectrum's page now) goes through the browser-assisted flow.
+
+    _legacy_args swallows the mso_id older queued jobs were enqueued with.
     """
     # Manual push/pop instead of `with flask_app.app_context():` — see
     # _prime_google_session's docstring: Camoufox's own rendering breaks
     # intermittently while a Flask app_context is active on this thread.
     # Popped right before handing off to _run_foxone_browser_assisted_login
     # (which launches Camoufox and pushes its own fresh, short-lived context
-    # for the one DB write it still needs afterward) and never re-pushed —
+    # for the DB writes it still needs afterward) and never re-pushed —
     # the cookie-jar path below returns before the pop on success.
     _ctx = flask_app.app_context()
     _ctx.push()
@@ -366,19 +389,38 @@ def run_foxone_browser_login(mso_id: str):
         r.delete(MVPD_BROWSER_LOGIN_INPUT_KEY)
         set_status('running', 'Signing in to FOX One…')
 
-        from app.scrapers.fox_one import FoxOneScraper
+        from app.scrapers.fox_one import OWN_PROFILE_DIR, FoxOneScraper
+        from app.tve.providers import unsupported_network_reason
 
         source = Source.query.filter_by(name='fox_one').first()
         if not source:
             set_status('error', 'FOX One source not found.')
             return
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-        if not account or not account.is_enabled or not account.has_credentials():
-            set_status('error', 'TVE credentials are not configured in Settings.')
-            return
         scraper = FoxOneScraper(config=dict(source.config or {}))
+        login = scraper._mvpd_login()
+        if not login:
+            set_status('error', (
+                'FOX One: choose a TV provider for its separate login first.'
+                if scraper._signin_method() == 'own'
+                else 'FOX One: set up your TV provider under Settings > TV Everywhere first.'
+            ))
+            return
+        reason = unsupported_network_reason('foxone', login.mso_id)
+        if reason:
+            set_status('error', reason)
+            return
 
-        if mso_id == 'Comcast_SSO':
+        if not login.shared and scraper.config.get('reset_browser_profile'):
+            # The separate login's credentials/provider changed since the
+            # last sign-in — start from an empty profile so the old account's
+            # remembered session can't carry over.
+            import shutil
+            shutil.rmtree(OWN_PROFILE_DIR, ignore_errors=True)
+            scraper._update_config('reset_browser_profile', False)
+            persist_source_config_updates(source.id, scraper._pending_config_updates)
+            logger.info('[foxone-mvpd-login] cleared FOX One browser profile after a login change')
+
+        if login.mso_id == 'Comcast_SSO' and login.cookie_jar:
             # Try a saved cookie jar (harvested from a previous successful
             # Comcast_SSO browser pairing for ANY TVE family — see
             # _harvest_and_save_xfinity_cookies) BEFORE ever opening a
@@ -386,34 +428,32 @@ def run_foxone_browser_login(mso_id: str):
             # live 2026-08-28: _authenticate_via_mvpd works unmodified for
             # Comcast_SSO once a jar exists — it's the same login_to_mvpd()
             # dispatcher.
-            cookie_jar = (account.config or {}).get('xfinity_cookie_jar')
-            if cookie_jar:
-                set_status('running', 'Trying saved sign-in (no browser needed)…')
-                try:
-                    access_token, expires_at = scraper._authenticate_via_mvpd(
-                        mso_id, account.username or '', account.password or '', cookie_jar,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.info(
-                        '[foxone-mvpd-login] saved xfinity cookie jar did not work, falling back to browser: %s', exc,
-                    )
-                else:
-                    scraper._update_config('access_token', access_token)
-                    scraper._update_config('access_expires_at', expires_at)
-                    scraper._update_config('access_token_captured_at', int(time.time()))
-                    persist_source_config_updates(source.id, scraper._pending_config_updates)
-                    account.last_auth_status = 'ok'
-                    account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD (no browser needed).'
-                    account.last_auth_at = datetime.now(timezone.utc)
-                    db.session.commit()
-                    set_status('success', 'Signed in — FOX One authorized (no browser needed).')
-                    logger.info('[foxone-mvpd-login] paired mso_id=%s via saved cookie jar (no browser)', mso_id)
-                    return
+            set_status('running', 'Trying saved sign-in (no browser needed)…')
+            try:
+                access_token, expires_at = scraper._authenticate_via_mvpd(
+                    login.mso_id, login.username, login.password, login.cookie_jar,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.info(
+                    '[foxone-mvpd-login] saved xfinity cookie jar did not work, falling back to browser: %s', exc,
+                )
+            else:
+                scraper._update_config('access_token', access_token)
+                scraper._update_config('access_expires_at', expires_at)
+                scraper._update_config('access_token_captured_at', int(time.time()))
+                scraper.record_signin_result(login, None, how=' (no browser needed)')
+                persist_source_config_updates(source.id, scraper._pending_config_updates)
+                set_status('success', 'Signed in — FOX One authorized (no browser needed).')
+                logger.info('[foxone-mvpd-login] paired mso_id=%s via saved cookie jar (no browser)', login.mso_id)
+                return
             set_status('running', 'No usable saved sign-in — opening a browser…')
 
+        # persist_source_config_updates commits, expiring loaded ORM rows;
+        # touch what the browser flow reads before popping the context.
+        _ = (source.id,)
         _ctx.pop()
         _ctx_popped['v'] = True
-        _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, mso_id)
+        _run_foxone_browser_assisted_login(r, set_status, source, login, scraper)
     finally:
         uninstall_browser_login_activity_log(_activity_handler)
         if not _ctx_popped['v']:

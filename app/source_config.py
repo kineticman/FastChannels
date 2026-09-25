@@ -78,6 +78,11 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
     if source_name == 'philo':
         return bool(saved.get('session_cookies'))
 
+    # FOX One — "configured" means it has signed in at least once (through
+    # either sign-in method, or the hidden refresh_token fallback).
+    if source_name == 'fox_one':
+        return bool(saved.get('access_token_captured_at') or saved.get('refresh_token'))
+
     # Pluto works fully anonymously — only "incomplete" if the user opted
     # into login mode but hasn't supplied both credentials yet. Installs
     # from before 'auth_mode' existed (username/password used to be

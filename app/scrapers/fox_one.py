@@ -51,6 +51,26 @@ class FoxOneChannel:
         return f'{_SCHEME}{self.source_channel_id}/{target}/{self.container_id}'
 
 
+# Browser profile for a separate FOX One TV-provider login. Kept apart from
+# the shared TVE profile (/data/browser_profiles/mvpd_tve): a provider's
+# remembered-device cookies and single sign-on there belong to the shared
+# account and would otherwise sign FOX One in as that account without ever
+# showing a password prompt.
+OWN_PROFILE_DIR = '/data/browser_profiles/fox_one'
+SHARED_PROFILE_DIR = '/data/browser_profiles/mvpd_tve'
+
+
+@dataclass(frozen=True)
+class FoxOneMvpdLogin:
+    """Which TV-provider (MVPD) account FOX One signs in with — the shared
+    one from Settings > TV Everywhere, or FOX One's own separate login."""
+    mso_id: str
+    username: str
+    password: str
+    cookie_jar: dict | None
+    shared: bool
+
+
 _SUPPORTED_BY_CALL_SIGN: dict[str, tuple[str, str, str]] = {
     'FOX': ('fox_sports_fox', 'FOX', 'Sports'),
     'FS1': ('fox_sports_fs1', 'FS1', 'Sports'),
@@ -183,6 +203,19 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             placeholder='10001',
             help_text='Optional. Sets your home market for regional blackouts and which local FOX station shows up. Left blank, FOX guesses from this server\'s location.',
         ),
+        ConfigField(
+            'signin_method',
+            'Sign in with',
+            field_type='select',
+            default='shared',
+            options=[
+                {'value': 'shared', 'label': 'My TV provider from Settings > TV Everywhere'},
+                {'value': 'own', 'label': 'A separate TV provider login for FOX One'},
+            ],
+        ),
+        ConfigField('mvpd_provider_id', 'TV provider'),
+        ConfigField('mvpd_username', 'TV provider username', placeholder='username or email'),
+        ConfigField('mvpd_password', 'TV provider password', field_type='password', secret=True),
         ConfigField(
             'refresh_token',
             'FOX One refresh token (fallback)',
@@ -458,18 +491,62 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
                 return expires
         return 0
 
-    def _mvpd_account(self):
+    def _signin_method(self) -> str:
+        return 'own' if (self.config.get('signin_method') or '').strip() == 'own' else 'shared'
+
+    def _mvpd_login(self) -> FoxOneMvpdLogin | None:
+        """The TV-provider login FOX One is set up to use, or None if it has
+        none (then only the hidden refresh_token fallback can sign in)."""
+        if self._signin_method() == 'own':
+            mso_id = (self.config.get('mvpd_provider_id') or '').strip()
+            if not mso_id:
+                return None
+            return FoxOneMvpdLogin(
+                mso_id=mso_id,
+                username=(self.config.get('mvpd_username') or '').strip(),
+                password=self.config.get('mvpd_password') or '',
+                cookie_jar=None,
+                shared=False,
+            )
+
         from ..models import TVEAccount
 
         account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-        if account and account.is_enabled and account.has_credentials():
-            return account
-        return None
-
-    @staticmethod
-    def _account_mso_id(account) -> str:
+        if not (account and account.is_enabled and account.has_credentials()):
+            return None
         cfg = account.config or {}
-        return (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+        return FoxOneMvpdLogin(
+            mso_id=(cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip(),
+            username=account.username or '',
+            password=account.password or '',
+            cookie_jar=cfg.get('xfinity_cookie_jar'),
+            shared=True,
+        )
+
+    def record_signin_result(self, login: FoxOneMvpdLogin, error: str | None, *, how: str = '') -> None:
+        """Record a sign-in outcome on the FOX One source (shown on its card),
+        and on the shared TV-provider account when that's the one used."""
+        from .. import db
+        from ..models import TVEAccount
+
+        if error:
+            self._update_config('signin_error', error[:300])
+            self._update_config('signin_error_at', int(time.time()))
+        else:
+            self._update_config('signin_error', '')
+            self._update_config('signin_error_at', 0)
+        if not login.shared:
+            return
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        if not account:
+            return
+        account.last_auth_status = 'error' if error else 'ok'
+        account.last_auth_message = (
+            f'FOX One {login.mso_id} MVPD auth failed: {error}' if error
+            else f'FOX One access token obtained through {login.mso_id} MVPD{how}.'
+        )[:500]
+        account.last_auth_at = datetime.now(timezone.utc)
+        db.session.commit()
 
     def _home_zip_code(self) -> str:
         """The FOX One source's own home ZIP, falling back to the value
@@ -616,7 +693,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         """
         from ..tve.mvpd import login_to_mvpd, require_scripted_mvpd_login
 
-        require_scripted_mvpd_login(mso_id)
+        require_scripted_mvpd_login(mso_id, where="on FOX One's card under Sources")
         session, request_id, device_id, mso_login_url, r3 = self._foxone_mvpd_register(mso_id)
         page_html, page_url = (r3.text, str(r3.url)) if not mso_login_url else ('', mso_login_url)
         login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
@@ -624,47 +701,32 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         return self._foxone_mvpd_finish(session, request_id, device_id, mso_id)
 
     def _ensure_access_token(self) -> str:
-        from .. import db
-
         access_token = self._clean_token(self.config.get('access_token'))
         if access_token and self._token_expires_at() > time.time() + _TOKEN_REFRESH_SKEW:
             return access_token
 
-        account = self._mvpd_account()
+        login = self._mvpd_login()
         mvpd_exc: Exception | None = None
-        if account:
-            mso_id = self._account_mso_id(account)
+        if login:
             try:
                 access_token, expires_at = self._authenticate_via_mvpd(
-                    mso_id, account.username, account.password, (account.config or {}).get('xfinity_cookie_jar'),
+                    login.mso_id, login.username, login.password, login.cookie_jar,
                 )
-                account.last_auth_status = 'ok'
-                account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD.'
-                account.last_auth_at = datetime.now(timezone.utc)
-                db.session.commit()
+            except Exception as exc:
+                # A provider with no scripted sign-in (anything but
+                # Comcast_SSO/DTV, see login_to_mvpd()) fails here on every
+                # resolve/audit once its token expires — recorded so the
+                # FOX One card tells the admin to sign in again.
+                self.record_signin_result(login, str(exc))
+                mvpd_exc = exc
+                if not access_token:
+                    raise
+            else:
+                self.record_signin_result(login, None)
                 self._update_config('access_token', access_token)
                 self._update_config('access_expires_at', expires_at)
                 self._update_config('access_token_captured_at', int(time.time()))
                 return access_token
-            except Exception as exc:
-                account.last_auth_status = 'error'
-                account.last_auth_message = f'FOX One {mso_id} MVPD auth failed: {exc}'[:500]
-                account.last_auth_at = datetime.now(timezone.utc)
-                db.session.commit()
-                # Surface this on the TVE settings page's per-network status
-                # line — see fox_tve.py's _fox_sports_access_token() for why:
-                # a provider with no scripted refresh path (anything but
-                # Comcast_SSO/DTV, see login_to_mvpd()) fails silently
-                # here on every resolve/audit once its token expires,
-                # otherwise with nothing pointing the admin at re-signing-in.
-                try:
-                    from ..tve.browser_login.common import _record_tve_login_error
-                    _record_tve_login_error('foxone', str(exc)[:300])
-                except Exception:  # noqa: BLE001
-                    pass
-                mvpd_exc = exc
-                if not access_token:
-                    raise
 
         refresh_token = self._clean_token(self.config.get('refresh_token') or self.config.get('fox_one_refresh_token'))
         if not refresh_token:
@@ -745,7 +807,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             cached_at = float(self.config.get('platform_location_cached_at') or 0)
         except (TypeError, ValueError):
             cached_at = 0
-        has_dynamic_auth = bool(self.config.get('refresh_token')) or bool(self._mvpd_account())
+        has_dynamic_auth = bool(self.config.get('refresh_token')) or self._mvpd_login() is not None
         if configured and (not has_dynamic_auth or cached_at > time.time() - _LOCATION_TTL):
             return configured
 
@@ -839,7 +901,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         return bool(
             self.config.get('refresh_token')
             or (self.config.get('access_token') and self.config.get('platform_location'))
-            or self._mvpd_account()
+            or self._mvpd_login() is not None
         )
 
     def _resolve_dtc(self, container_id: str | None) -> str:

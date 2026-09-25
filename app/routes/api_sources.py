@@ -476,11 +476,41 @@ def get_source_config(source_id):
         if config_complete else
         ('required' if scraper_cls and getattr(scraper_cls, 'config_required', False) else 'optional')
     )
+    extra = {}
+    if source.name == 'fox_one':
+        extra['fox_one'] = _fox_one_signin_info(saved)
     return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
                     'config_status': config_status,
                     'oauth_token_time': saved.get('oauth_token_time'),
                     'token_captured_at': saved.get('token_captured_at'),
-                    'retired': retired})
+                    'retired': retired, **extra})
+
+
+def _fox_one_signin_info(saved: dict) -> dict:
+    """What FOX One's card needs to render its sign-in section."""
+    from ..models import TVEAccount
+    from ..scrapers.fox_one import FoxOneScraper
+    from ..tve.providers import unsupported_network_reason, ytdlp_adobe_mso_providers
+
+    providers = ytdlp_adobe_mso_providers()
+    names = {p['id']: p['name'] for p in providers}
+    login = FoxOneScraper(config=dict(saved))._mvpd_login()
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    shared_ready = bool(account and account.is_enabled and account.has_credentials())
+    shared_mso = ''
+    if account:
+        cfg = account.config or {}
+        shared_mso = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or '').strip()
+    return {
+        'providers': [{'id': p['id'], 'name': p['name']} for p in providers],
+        'shared_ready': shared_ready,
+        'shared_provider_name': names.get(shared_mso, shared_mso),
+        'mso_id': login.mso_id if login else '',
+        'unsupported': unsupported_network_reason('foxone', login.mso_id) if login else None,
+        'last_signed_in_at': saved.get('access_token_captured_at'),
+        'signin_error': saved.get('signin_error') or '',
+        'signin_error_at': saved.get('signin_error_at') or 0,
+    }
 
 
 @sources_bp.route('/sources/<int:source_id>/config', methods=['POST'])
@@ -526,6 +556,10 @@ def save_source_config(source_id):
     # Editing them shouldn't purge a working session or force a rescrape.
     if source.name == 'sling':
         _CRED_KEYS = _CRED_KEYS - {'username', 'password'}
+    # FOX One's own-login fields are handled by its own block below, which
+    # knows whether they're actually in use.
+    if source.name == 'fox_one':
+        _CRED_KEYS = _CRED_KEYS - {'mvpd_username', 'mvpd_password'}
     _AUTH_STATE  = ('access_token', 'refresh_token', 'token_time',
                     'bearer_token', 'activation_token', 'token_captured_at',
                     'client_context', 'cookies', 'identity_cookie',
@@ -586,6 +620,26 @@ def save_source_config(source_id):
     # of an immediate real login form).
     if source.name == 'spectrum' and creds_changed:
         current['force_fresh_signin'] = True
+    # FOX One: switching sign-in method, or changing the separate login while
+    # it's in use, means the saved token belongs to a different account —
+    # drop it so the next play signs in again. A changed separate login also
+    # gets an empty browser profile on its next sign-in, so the old account's
+    # remembered session can't carry over.
+    if source.name == 'fox_one':
+        def _method(cfg):
+            return 'own' if (cfg.get('signin_method') or '').strip() == 'own' else 'shared'
+        own_login_changed = any(
+            _norm_cred(k, old.get(k)) != _norm_cred(k, current.get(k))
+            for k in ('mvpd_provider_id', 'mvpd_username', 'mvpd_password')
+        )
+        method_changed = _method(old) != _method(current)
+        if method_changed or (_method(current) == 'own' and own_login_changed):
+            for k in ('access_token', 'access_expires_at', 'access_token_captured_at',
+                      'platform_location', 'platform_location_cached_at',
+                      'signin_error', 'signin_error_at'):
+                current.pop(k, None)
+            if _method(current) == 'own':
+                current['reset_browser_profile'] = True
     # Turning off PBS's curated station set drops those stations from the next
     # scrape's fetch_channels() result, but the normal reconcile path only marks
     # missed channels — it waits out a miss-threshold grace period before deleting,
@@ -1022,6 +1076,87 @@ def clear_spectrum_auth(source_id):
                        source_id, exc)
 
     logger.info('[spectrum-auth] cleared saved session for source_id=%s', source_id)
+    return jsonify({'status': 'cleared'})
+
+
+# ── FOX One sign-in ─────────────────────────────────────────────────────────
+# Runs the same browser-assisted TV-provider sign-in the TVE settings page
+# uses (app.tve.browser_login.foxone), with the same job lock and redis
+# status keys — so /state, /input and /stop are the TVE page's own views.
+
+def _fox_one_source_or_400(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'fox_one':
+        return None, (jsonify({'error': 'not a FOX One source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/fox-one-browser-login/start', methods=['POST'])
+def fox_one_browser_login_start(source_id):
+    from ..scrapers.fox_one import FoxOneScraper
+    from ..tve.providers import unsupported_network_reason
+    from .tasks import trigger_foxone_browser_login
+
+    source, err = _fox_one_source_or_400(source_id)
+    if err:
+        return err
+    scraper = FoxOneScraper(config=dict(source.config or {}))
+    login = scraper._mvpd_login()
+    if not login:
+        if scraper._signin_method() == 'own':
+            return jsonify({'error': 'Choose a TV provider for FOX One\'s separate login and save first.'}), 400
+        return jsonify({'error': 'Set up your TV provider under Settings > TV Everywhere first, '
+                                 'or give FOX One a separate login.'}), 400
+    reason = unsupported_network_reason('foxone', login.mso_id)
+    if reason:
+        return jsonify({'error': reason}), 400
+    started = trigger_foxone_browser_login()
+    return jsonify({'status': 'started' if started else 'already_running'})
+
+
+@sources_bp.route('/sources/<int:source_id>/fox-one-browser-login/state')
+def fox_one_browser_login_state(source_id):
+    from .api_tve import mvpd_browser_login_state
+
+    _, err = _fox_one_source_or_400(source_id)
+    return err or mvpd_browser_login_state()
+
+
+@sources_bp.route('/sources/<int:source_id>/fox-one-browser-login/input', methods=['POST'])
+def fox_one_browser_login_input(source_id):
+    from .api_tve import mvpd_browser_login_input
+
+    _, err = _fox_one_source_or_400(source_id)
+    return err or mvpd_browser_login_input()
+
+
+@sources_bp.route('/sources/<int:source_id>/fox-one-browser-login/stop', methods=['POST'])
+def fox_one_browser_login_stop(source_id):
+    from .api_tve import mvpd_browser_login_stop
+
+    _, err = _fox_one_source_or_400(source_id)
+    return err or mvpd_browser_login_stop()
+
+
+@sources_bp.route('/sources/<int:source_id>/fox-one-auth', methods=['DELETE'])
+def clear_fox_one_auth(source_id):
+    """Forget FOX One's saved sign-in (tokens, device id, cached location)
+    but keep its settings — sign-in method, separate login, home ZIP. A
+    separate login's browser profile is emptied on the next sign-in; the
+    shared TVE profile is left alone, since other networks use it."""
+    source, err = _fox_one_source_or_400(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    for k in ('access_token', 'access_expires_at', 'access_token_captured_at', 'refresh_token',
+              'platform_location', 'platform_location_cached_at', 'device_id',
+              'signin_error', 'signin_error_at'):
+        cfg.pop(k, None)
+    if (cfg.get('signin_method') or '').strip() == 'own':
+        cfg['reset_browser_profile'] = True
+    source.config = cfg
+    db.session.commit()
+    logger.info('[fox-one-auth] cleared saved sign-in for source_id=%s', source_id)
     return jsonify({'status': 'cleared'})
 
 
