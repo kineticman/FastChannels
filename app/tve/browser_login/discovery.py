@@ -39,6 +39,18 @@ from app.tve.browser_login.common import (
 
 logger = logging.getLogger(__name__)
 
+# Spectrum's remembered-device cookies. With them present Spectrum signs in
+# with one "Continue" click instead of a password, and Discovery's gauth
+# callback rejects that reused session: it redirects to gauth-sync with no
+# code and the page reads "Affiliate partner not found". Every failure seen
+# live 2026-09-25 went through the remembered device; every success (ours and
+# discovery.com's own site in a real Chrome) was a password sign-in, and
+# clearing just these three turned a failing run into a pairing. Discovery's
+# partners all carry force_authn_expire=true, which fits. The password
+# sign-in issues fresh ones, so other networks keep their one-click sign-in.
+_SPECTRUM_REMEMBERED_DEVICE_COOKIES = ('dla_session', 'dla_device', 'dla_marker')
+_AFFILIATE_NOT_FOUND = 'Affiliate partner not found'
+
 
 def _run_discovery_browser_assisted_login(r, set_status, source, account, scraper, mso_id: str, mso_name: str) -> None:
     """Browser-assisted counterpart to run_discovery_browser_login's scripted
@@ -174,6 +186,13 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
 
             page.on('response', _log_navigation_response)
 
+            # Cox signs in on Spectrum's page too (see run_discovery_browser_login).
+            if mso_id in ('Spectrum', 'Cox'):
+                for cookie_name in _SPECTRUM_REMEMBERED_DEVICE_COOKIES:
+                    context.clear_cookies(name=cookie_name)
+                logger.info('[discovery-mvpd-login] cleared Spectrum remembered-device cookies '
+                            'so Discovery gets a password sign-in')
+
             set_status('running', 'Signing in to Discovery TVE…')
             try:
                 if mso_id == 'Comcast_SSO':
@@ -293,6 +312,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
             code = ''
             cancelled = False
             idid_message = None
+            affiliate_rejected = False
             gauth_sync_stalled_since = None
             gauth_sync_reloads = 0
             while time.monotonic() < deadline:
@@ -315,6 +335,15 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                     if code:
                         break
                     if current_url.startswith(f'{AUTH_HOST}/gauth-sync'):
+                        # Discovery's definitive "no" — reloading and waiting
+                        # out the timeout never changes it.
+                        try:
+                            if _AFFILIATE_NOT_FOUND in (page.inner_text('body', timeout=1000) or ''):
+                                affiliate_rejected = True
+                                break
+                        except Exception as exc:  # noqa: BLE001
+                            if _is_browser_death(exc):
+                                raise
                         if gauth_sync_stalled_since is None:
                             gauth_sync_stalled_since = now
                             # Param NAMES only (never values — these can
@@ -357,6 +386,18 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
             if idid_message:
                 _record_tve_login_error('discovery', idid_message)
                 set_status('error', idid_message)
+                return
+            if affiliate_rejected:
+                logger.warning('[discovery-mvpd-login] Discovery answered "%s" (mso_id=%s)',
+                               _AFFILIATE_NOT_FOUND, mso_id)
+                message = (
+                    f'Discovery TVE: Discovery didn\'t accept the sign-in from {mso_name} '
+                    f'("{_AFFILIATE_NOT_FOUND}"). Try again in a few minutes; if it keeps '
+                    'happening, check the TV provider matches your account (former Cox '
+                    'accounts: "Cox / Cox Spectrum").'
+                )
+                _record_tve_login_error('discovery', message)
+                set_status('error', message)
                 return
             if not code:
                 _log_signin_timeout_snapshot(page, 'discovery-mvpd-login')
