@@ -2675,7 +2675,15 @@ def license_proxy(source_name: str, channel_id: str | None = None):
             fresh_cfg = {**(source.config or {}), **load_source_cache(source.id)}
             fresh_scraper = scraper_cls(config=fresh_cfg)
             fresh_scraper.expire_cached_stream(channel_id)
-            fresh_scraper.resolve(f'spectrum://{channel_id}')
+            # Stored stream_url, not rebuilt from channel_id: a Travel Channel
+            # is spectrum://travel/<id> and must re-mint with travelChannel=true.
+            channel = (
+                Channel.query.join(Source)
+                .filter(Source.name == 'spectrum', Channel.source_channel_id == channel_id)
+                .first()
+            )
+            fresh_scraper.resolve(channel.stream_url if channel and channel.stream_url
+                                  else f'spectrum://{channel_id}')
             if getattr(fresh_scraper, '_pending_cache_updates', None):
                 persist_source_cache_updates(source.id, fresh_scraper._pending_cache_updates)
             if getattr(fresh_scraper, '_pending_config_updates', None):
