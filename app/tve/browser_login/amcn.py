@@ -385,7 +385,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
             persist_source_config_updates(source.id, scraper._pending_config_updates)
             persist_source_cache_updates(source.id, scraper._pending_cache_updates)
         if isinstance(exc, SpectrumWantsCoxProvider):
-            if _spectrum_retry_as_cox(mso_id, 'AMC Networks TVE', set_status):
+            if _spectrum_retry_as_cox(exc, mso_id, 'AMC Networks TVE', set_status):
                 return _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id, 'Cox', channels)
             return
         if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):

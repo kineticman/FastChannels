@@ -1182,27 +1182,12 @@ class SpectrumWantsCoxProvider(Exception):
     can't retry."""
 
 
-def _spectrum_retry_as_cox(mso_id: str, label: str, set_status) -> bool:
-    """Handle SpectrumWantsCoxProvider in a TVE sign-in's error handler.
-
-    When the attempt used mso_id=Spectrum: switch the saved TV provider to
-    Cox (what Spectrum means by "Cox Spectrum") and return True — the
-    caller then reruns the same network with mso_id='Cox'. The provider is
-    switched for good, not just for this one attempt, so every other
-    network (and "Sign in to all"'s next steps, and play-time
-    re-authorization) uses it too; users can't tell us this in advance,
-    only Spectrum's own error does. Returns False (after setting an error
-    status) for any other mso_id, so a Cox attempt can never loop.
-    """
-    if mso_id != 'Spectrum':
-        set_status('error', f'{label}: Spectrum returned IDLI-4213 ("select Cox Spectrum") even '
-                            f'though the TV provider is already set to {mso_id}.')
-        return False
+def _save_tve_provider_as_cox(label: str) -> bool:
+    """Persist Cox ("Cox / Cox Spectrum") as the TVE account's provider."""
     try:
         with flask_app.app_context():
             account = TVEAccount.query.filter_by(provider_id='mvpd').first()
             if account is None:
-                set_status('error', f'{label}: TVE credentials are not configured in Settings.')
                 return False
             cfg = dict(account.config or {})
             cfg['selected_mso_id'] = 'Cox'
@@ -1216,12 +1201,37 @@ def _spectrum_retry_as_cox(mso_id: str, label: str, set_status) -> bool:
             account.config = cfg
             db.session.commit()
     except Exception as exc:  # noqa: BLE001
-        logger.warning('[mvpd-login] %s: could not switch the TV provider to Cox: %s', label, exc)
-        set_status('error', f'{label}: Spectrum asked for "Cox Spectrum" (IDLI-4213) but switching '
-                            f'the TV provider failed ({exc}) — choose "Cox / Cox Spectrum" in Settings.')
+        logger.warning('[mvpd-login] %s: could not save Cox as the TV provider: %s', label, exc)
         return False
-    logger.info('[mvpd-login] %s: Spectrum asked for "Cox Spectrum" (IDLI-4213) — switched the TV '
-                'provider to Cox and retrying', label)
+    logger.info('[mvpd-login] %s: saved "Cox / Cox Spectrum" as the TV provider', label)
+    return True
+
+
+def _spectrum_retry_as_cox(exc: SpectrumWantsCoxProvider, mso_id: str, label: str, set_status) -> bool:
+    """Handle SpectrumWantsCoxProvider in a TVE sign-in's error handler.
+
+    When the attempt used mso_id=Spectrum: save Cox ("Cox / Cox Spectrum")
+    as the TV provider and return True — the caller then reruns the same
+    network with mso_id='Cox'. Saved for good, so the rest of a "Sign in to
+    all" batch and play-time re-authorization use it too; users can't tell
+    us this in advance, only Spectrum's own error does. Returns False
+    (after setting an error status) for any other mso_id, so a Cox attempt
+    can never loop.
+
+    Only IDLI-4213 lands here. Deliberately NOT extended to the
+    reCAPTCHA-style reject (IDID-4000): tried live 2026-09-25 as a
+    "retry once as Cox, save only on success" — the Cox attempt from a
+    fresh device was rejected too, and it added a second password attempt
+    seconds after a reject. That case gets a message suggesting Cox instead.
+    """
+    if mso_id != 'Spectrum':
+        set_status('error', f'{label}: Spectrum returned IDLI-4213 ("select Cox Spectrum") even '
+                            f'though the TV provider is already set to {mso_id}.')
+        return False
+    if not _save_tve_provider_as_cox(label):
+        set_status('error', f'{label}: Spectrum asked for "Cox Spectrum" (IDLI-4213) but switching '
+                            f'the TV provider failed — choose "Cox / Cox Spectrum" in Settings.')
+        return False
     set_status('starting', 'Spectrum says this account signs in as "Cox Spectrum" — switched your '
                            'TV provider and retrying…')
     return True
@@ -1354,20 +1364,26 @@ def _spectrum_signin_error_message(page, label: str) -> str | None:
         logger.warning('[mvpd-login] %s: Spectrum returned its "Feature Unavailable" error (%s, auth result %s) url=%s',
                        label, code, reason or 'not seen', _url_for_log(url))
         if 'THMX' in reason:
-            gate = 'Spectrum\'s device check (ThreatMetrix)'
-        else:
-            # IDID-4000 is Spectrum's reCAPTCHA Enterprise rejection even
-            # when the result header wasn't caught — confirmed live
-            # 2026-09-24: password/auth answered 403 result_code 4000
-            # AUTH_REJECT_BY_RECAPTCHA_REJECT_STATUS ("Login rejected since
-            # the resolved action matrix is block") and the page rendered
-            # IDID-4000. Not a per-network refusal: FOX/TNT/AMC all hit it
-            # the same way once the score dropped.
-            gate = 'Spectrum\'s bot check (reCAPTCHA)'
+            # The one-time reload-and-resubmit above already ran.
+            return (
+                f'{label}: Spectrum\'s device check (ThreatMetrix) rejected this sign-in ({code}, '
+                f'"Feature Unavailable... try again from home") even after a retry. Wait a few hours '
+                f'before trying again — repeated attempts make it worse.'
+            )
+        # password/auth answering 403 result_code 4000
+        # AUTH_REJECT_BY_RECAPTCHA_REJECT_STATUS renders as IDID-4000 —
+        # Spectrum's reCAPTCHA reject. Seen live 2026-09-24/25 on nearly
+        # every password login from a browser Spectrum didn't remember,
+        # under both "Spectrum" and "Cox Spectrum"; a Cox-migrated account
+        # signing in as plain "Spectrum" also gets it (and sometimes
+        # IDLI-4213 instead). A remembered device (dla-token + "Continue")
+        # signed in every time. Hence the Cox hint, and no automatic retry.
         return (
-            f'{label}: {gate} rejected this sign-in ({code}, "Feature Unavailable... try again '
-            f'from home"). It tends to follow many sign-ins in a short time. Wait a few hours before '
-            f'trying again — repeated attempts make it worse.'
+            f'{label}: Spectrum rejected this sign-in ({code}, "Feature Unavailable... try again '
+            f'from home"). If your account used to be Cox and your TV provider is set to '
+            f'"Spectrum", choose "Cox / Cox Spectrum" instead — Spectrum answers Cox accounts '
+            f'this way. Otherwise it\'s Spectrum\'s bot check (reCAPTCHA), which tends to follow '
+            f'many sign-ins in a short time: wait a few hours before trying again.'
         )
     if 'spectrum.net' not in url:
         return None

@@ -9,6 +9,7 @@ from app.config_store import persist_source_cache_updates
 from app.tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
 from urllib.parse import urlsplit as _urlsplit
 from app.tve.browser_login.common import (
+    SpectrumWantsCoxProvider,
     _watch_spectrum_auth_results,
     MVPD_BROWSER_LOGIN_STATUS_KEY,
     MVPD_BROWSER_LOGIN_INPUT_KEY,
@@ -381,6 +382,12 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                 # anything for other TVE families' cookie-jar fast path.
                 _harvest_and_save_xfinity_cookies(context)
     except BaseException as exc:  # noqa: BLE001
+        if isinstance(exc, SpectrumWantsCoxProvider):
+            # Not reachable today (Cox/Spectrum stop before a browser, see
+            # _raise_if_spectrum_routed), but never report it as a crash.
+            _record_tve_login_error('discovery', str(exc))
+            set_status('error', str(exc))
+            return
         if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
             set_status('stopped', 'Cancelled')
             return

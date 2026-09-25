@@ -294,7 +294,7 @@ def _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 
                 _harvest_and_save_xfinity_cookies(context)
     except BaseException as exc:  # noqa: BLE001
         if isinstance(exc, SpectrumWantsCoxProvider):
-            if _spectrum_retry_as_cox(mso_id, 'FOX One', set_status):
+            if _spectrum_retry_as_cox(exc, mso_id, 'FOX One', set_status):
                 return _run_foxone_browser_assisted_login(r, set_status, source, account, scraper, 'Cox')
             return
         if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):

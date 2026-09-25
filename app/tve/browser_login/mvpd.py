@@ -788,9 +788,9 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 logger.info('[mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
                 return
             if isinstance(exc, SpectrumWantsCoxProvider):
-                if _spectrum_retry_as_cox(mso_id, requestor_id, set_status):
+                if _spectrum_retry_as_cox(exc, mso_id, requestor_id, set_status):
                     return run_mvpd_browser_login(requestor_id, resource, software_statement, redirect_url, 'Cox', _attempt=_attempt, _deadline=deadline)
-                _step(requestor_id, 'failed', 'IDLI-4213')
+                _step(requestor_id, 'failed', 'Spectrum rejected sign-in')
                 return
             if _is_browser_death(exc) and _grace_poll_pairing(str(exc)[:80]):
                 return

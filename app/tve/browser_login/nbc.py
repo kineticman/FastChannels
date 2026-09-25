@@ -676,7 +676,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 logger.info('[nbc-mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
                 return
             if isinstance(exc, SpectrumWantsCoxProvider):
-                if _spectrum_retry_as_cox(mso_id, 'NBC TVE', set_status):
+                if _spectrum_retry_as_cox(exc, mso_id, 'NBC TVE', set_status):
                     return run_nbc_browser_login('Cox', _attempt=_attempt, _deadline=deadline)
                 return
             if _is_browser_death(exc) and _grace_poll_pairing(str(exc)[:80]):
