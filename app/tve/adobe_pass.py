@@ -991,6 +991,25 @@ def _same_redirect_target(actual: str, expected: str) -> bool:
     return (a.scheme, a.netloc, a.path.rstrip('/')) == (e.scheme, e.netloc, e.path.rstrip('/'))
 
 
+def is_retired_fyi_callback(actual: str, expected: str, requestor_id: str) -> bool:
+    """FYI retired its ``www.fyi.tv/mvpd-auth`` handler in late August 2026;
+    it now redirects to A+E's FYI schedule page. A bounce back to FYI's
+    redirect_url therefore lands there instead, so treat that destination as
+    the same callback. Deliberately FYI-specific, not any A+E schedule page."""
+    if requestor_id.upper() != 'FYI':
+        return False
+    try:
+        a, e = urlsplit(actual), urlsplit(expected)
+        return (
+            e.netloc.lower() == 'www.fyi.tv'
+            and e.path.rstrip('/') == '/mvpd-auth'
+            and a.netloc.lower() == 'www.aetv.com'
+            and a.path.rstrip('/') == '/fyi/schedule'
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _bounced_back_without_mso(requestor_id: str, resource: str, software_statement: str, redirect_url: str, mso_id: str) -> bool:
     """Scripted pre-check for "MSO isn't registered for this content owner at
     all" — mirrors app.worker's browser-flow bounce-back detection, confirmed
@@ -1015,7 +1034,7 @@ def _bounced_back_without_mso(requestor_id: str, resource: str, software_stateme
         client.create_regcode()
         auth_url = client.authenticate_redirect_url(mso_id)
         r = client.session.get(auth_url, allow_redirects=True, timeout=20)
-        return _same_redirect_target(r.url, redirect_url)
+        return _same_redirect_target(r.url, redirect_url) or is_retired_fyi_callback(r.url, redirect_url, requestor_id)
     except Exception as exc:  # noqa: BLE001
         logger.info('[adobe-pass] bounce-back pre-check for %s/%s inconclusive: %s', requestor_id, mso_id, exc)
         return False

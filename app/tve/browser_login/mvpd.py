@@ -9,7 +9,7 @@ import redis
 from app.worker import flask_app
 from app.extensions import db
 from app.models import TVEAccount
-from app.tve.adobe_pass import AdobePassCoxClient, TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
+from app.tve.adobe_pass import AdobePassCoxClient, TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError, is_retired_fyi_callback
 from app.tve.browser_login.common import (
     _watch_spectrum_auth_results,
     MVPD_BROWSER_LOGIN_STATUS_KEY,
@@ -80,21 +80,7 @@ def _is_redirected_callback_page(actual_url: str, expected_url: str, requestor_i
     warm Adobe SSO can also land on a callback; callers still grace-poll
     Adobe before reporting this as an unsupported provider.
     """
-    if _same_page_url(actual_url, expected_url):
-        return True
-    if requestor_id.upper() != 'FYI':
-        return False
-    try:
-        actual = _urlsplit(actual_url)
-        expected = _urlsplit(expected_url)
-        return (
-            expected.netloc.lower() == 'www.fyi.tv'
-            and expected.path.rstrip('/') == '/mvpd-auth'
-            and actual.netloc.lower() == 'www.aetv.com'
-            and actual.path.rstrip('/') == '/fyi/schedule'
-        )
-    except Exception:  # noqa: BLE001
-        return False
+    return _same_page_url(actual_url, expected_url) or is_retired_fyi_callback(actual_url, expected_url, requestor_id)
 
 
 def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
