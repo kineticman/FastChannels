@@ -366,7 +366,7 @@ function renderAh4cTuners(tuners) {
   const table = document.createElement('table');
   table.className = 'ah4c-tuners-table';
   const head = table.createTHead().insertRow();
-  ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels', 'Android / Fire OS', 'Sleep disabled', 'FC Player'].forEach((label) => {
+  ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels', 'Android / Fire OS', 'Sleep disabled', 'FC Player', 'Scripts'].forEach((label) => {
     const th = document.createElement('th');
     th.textContent = label;
     // Keep the literal env-var name as-is; the other headers get uppercased by CSS.
@@ -437,6 +437,17 @@ function renderAh4cTuners(tuners) {
       addBadge(playerCell, '✕ Not installed', 'warn');
     } else {
       addBadge(playerCell, '? Unknown', 'warn');
+    }
+
+    // Reported by bmitune.sh on each tune — independent of adb reachability.
+    const scriptsCell = row.insertCell();
+    if (t.scripts_status === 'current') {
+      addBadge(scriptsCell, '✓ ' + t.scripts_version, 'ok');
+    } else if (t.scripts_status === 'outdated') {
+      addBadge(scriptsCell, '⬆ ' + (t.scripts_version || 'Older'), 'warn',
+        `Re-export (current ${t.scripts_current_version})`);
+    } else {
+      addBadge(scriptsCell, '? Not seen yet', '', 'Known after its next ah4c tune');
     }
   });
   box.appendChild(table);
@@ -630,7 +641,34 @@ function openAh4cScriptsModal() {
   // than whoever is loading this settings page, so this is a starting point for
   // the user to confirm or override, never submitted as-is without their eyes on it.
   document.getElementById('ah4c-scripts-url').value = window.location.origin;
+  updateAh4cScriptsCommand();
   document.getElementById('ah4c-scripts-modal').classList.add('open');
+}
+
+function _ah4cScriptsExportUrl(serverUrl) {
+  return serverUrl.replace(/\/+$/, '') + '/api/settings/fc-player/ah4c-scripts?url=' + encodeURIComponent(serverUrl);
+}
+
+function updateAh4cScriptsCommand() {
+  const box = document.getElementById('ah4c-scripts-command');
+  if (!box) return;
+  const url = document.getElementById('ah4c-scripts-url').value.trim();
+  // $STREAMER_APP is expanded inside the ah4c container, relative to its /opt
+  // working directory — i.e. exactly the directory ah4c loads scripts from.
+  box.value = url
+    ? `docker exec ah4c sh -c 'cd /opt && curl -fsS "${_ah4cScriptsExportUrl(url)}" | tar xz -C "$STREAMER_APP"'`
+    : '';
+}
+
+async function copyAh4cScriptsCommand() {
+  const box = document.getElementById('ah4c-scripts-command');
+  if (!box || !box.value) return;
+  try {
+    await navigator.clipboard.writeText(box.value);
+  } catch (e) {
+    box.select();
+    document.execCommand('copy');
+  }
 }
 
 function closeAh4cScriptsModal() {

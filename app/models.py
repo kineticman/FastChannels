@@ -141,6 +141,9 @@ class BridgeDevice(db.Model):
                                  default=lambda: datetime.now(timezone.utc))
     last_tuned_at    = db.Column(db.DateTime(timezone=True), nullable=True)
     last_channel_key = db.Column(db.String(255), nullable=True)
+    # Script-set version bmitune.sh reported on its last ah4c tune ('' = scripts
+    # too old to report one; NULL = no ah4c tune seen since this was added).
+    ah4c_scripts_version = db.Column(db.String(16), nullable=True)
 
 
 class TVEAccount(db.Model):

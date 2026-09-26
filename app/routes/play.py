@@ -3105,6 +3105,13 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
         channel_key=f'{source_name}:{channel_id}',
         adb_address=adb_override,
     )
+    if adb_override:
+        # ?adb= means ah4c's bmitune.sh made this call; remember which script set
+        # it's running so the Bridge page can flag tuners that need a re-export.
+        from ..ah4c_export import SCRIPTS_VERSION_RE
+        from ..bridge_devices import note_ah4c_scripts_version
+        reported = (request.args.get('scripts') or '').strip()
+        note_ah4c_scripts_version(adb_override, reported if SCRIPTS_VERSION_RE.match(reported) else '')
     logger.info(
         '[fc-player] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s adb=%s triggered=%s -> %s',
         getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name,

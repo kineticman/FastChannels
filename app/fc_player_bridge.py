@@ -695,6 +695,8 @@ def verify_ah4c_tuners() -> list[dict]:
         }
         if state == 'device':
             row.update(_device_os_and_sleep(address))
+        from .bridge_devices import ah4c_scripts_status
+        row.update(ah4c_scripts_status(address))
         results.append(row)
     return results
 

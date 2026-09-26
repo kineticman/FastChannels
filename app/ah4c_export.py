@@ -15,17 +15,34 @@ environment overrides it at runtime.
 
 When you change any script in data/ah4c_scripts/, bump the ``# YYYY.MM.DD`` date
 line in that script's header (line 3) so a re-exported copy is visibly newer than
-whatever a user already has deployed in their STREAMER_APP directory.
+whatever a user already has deployed in their STREAMER_APP directory. The newest
+of those dates is the set's version: bmitune.sh reports it on every tune
+(``&scripts=``) so the Bridge page can flag tuners still running an older set.
 """
 
 import io
 import os
+import re
 import tarfile
 import time
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), 'data', 'ah4c_scripts')
 _SCRIPT_NAMES = ('prebmitune.sh', 'bmitune.sh', 'stopbmitune.sh', 'reboot.sh')
 _URL_PLACEHOLDER = '__FASTCHANNELS_URL__'
+_VERSION_PLACEHOLDER = '__SCRIPTS_VERSION__'
+_HEADER_DATE_RE = re.compile(r'^# (\d{4}\.\d{2}\.\d{2})$', re.MULTILINE)
+SCRIPTS_VERSION_RE = re.compile(r'^\d{4}\.\d{2}\.\d{2}$')
+
+
+def scripts_version() -> str:
+    """The newest ``# YYYY.MM.DD`` header date across the script set."""
+    dates = []
+    for name in _SCRIPT_NAMES:
+        with open(os.path.join(_TEMPLATE_DIR, name), 'r') as f:
+            match = _HEADER_DATE_RE.search(f.read(512))
+        if match:
+            dates.append(match.group(1))
+    return max(dates)
 
 
 def build_ah4c_scripts_tarball(fastchannels_url: str) -> bytes:
@@ -34,12 +51,14 @@ def build_ah4c_scripts_tarball(fastchannels_url: str) -> bytes:
     normalizing fastchannels_url first (a bare host, a stray trailing slash, or
     a scheme-less value would silently break the generated bmitune.sh's curl
     call) — see api_settings._normalize_server_url."""
+    version = scripts_version()
     buf = io.BytesIO()
     mtime = int(time.time())
     with tarfile.open(fileobj=buf, mode='w:gz') as tar:
         for name in _SCRIPT_NAMES:
             with open(os.path.join(_TEMPLATE_DIR, name), 'r') as f:
-                content = f.read().replace(_URL_PLACEHOLDER, fastchannels_url)
+                content = (f.read().replace(_URL_PLACEHOLDER, fastchannels_url)
+                           .replace(_VERSION_PLACEHOLDER, version))
             data = content.encode('utf-8')
             info = tarfile.TarInfo(name=name)
             info.size = len(data)

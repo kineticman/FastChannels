@@ -165,10 +165,15 @@ def ensure_runtime_schema() -> None:
                 " added_manually BOOLEAN NOT NULL DEFAULT 0,"
                 " first_seen_at DATETIME,"
                 " last_tuned_at DATETIME,"
-                " last_channel_key VARCHAR(255)"
+                " last_channel_key VARCHAR(255),"
+                " ah4c_scripts_version VARCHAR(16)"
                 ")"
             ))
             tables.add("bridge_devices")
+        else:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bridge_devices)"))}
+            if "ah4c_scripts_version" not in cols:
+                conn.execute(text("ALTER TABLE bridge_devices ADD COLUMN ah4c_scripts_version VARCHAR(16)"))
 
         if "app_settings" in tables:
             cols = {

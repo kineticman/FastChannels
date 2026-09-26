@@ -72,6 +72,49 @@ def remember_tune(address: str, channel_key: str | None) -> None:
             pass
 
 
+def note_ah4c_scripts_version(address: str, version: str) -> None:
+    """Record the script-set version bmitune.sh sent with an ah4c tune ('' when it
+    sent none — scripts exported before versioning). Best-effort, like remember_tune."""
+    address = normalize_address(address) or address
+    try:
+        row = BridgeDevice.query.filter_by(address=address).first()
+        if row is None:
+            row = BridgeDevice(address=address)
+            db.session.add(row)
+        row.ah4c_scripts_version = version
+        db.session.commit()
+    except Exception as e:
+        logger.debug('[bridge-devices] note_ah4c_scripts_version(%s) failed: %s', address, e)
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+
+def ah4c_scripts_status(address: str) -> dict:
+    """{'scripts_version', 'scripts_current_version', 'scripts_status'} for one tuner.
+    Status is 'current', 'outdated', or 'unknown' (no ah4c tune recorded yet)."""
+    from .ah4c_export import scripts_version
+    current = scripts_version()
+    address = normalize_address(address) or address
+    try:
+        row = BridgeDevice.query.filter_by(address=address).first()
+    except Exception:
+        row = None
+    reported = row.ah4c_scripts_version if row else None
+    if reported is None:
+        status = 'unknown'
+    elif reported and reported >= current:
+        status = 'current'
+    else:
+        status = 'outdated'
+    return {
+        'scripts_version': reported or None,
+        'scripts_current_version': current,
+        'scripts_status': status,
+    }
+
+
 def known_devices() -> tuple[list[dict], str | None]:
     """(devices, ah4c_error). Ordered HDMI Capture device first, then ah4c tuners
     in ah4c's order, then remembered devices by most recent tune."""

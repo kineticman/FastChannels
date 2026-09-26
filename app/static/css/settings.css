@@ -272,7 +272,8 @@
     .field input[type=text],
     .field input[type=password],
     .field input[type=number],
-    .field input[type=url] {
+    .field input[type=url],
+    .field textarea {
       width: 100%;
       background: var(--accent-bg-deep);
       border: 1px solid var(--surface-5);
@@ -283,7 +284,8 @@
       outline: none;
       transition: border-color 0.15s;
     }
-    .field input:focus { border-color: var(--focus-accent); }
+    .field input:focus,
+    .field textarea:focus { border-color: var(--focus-accent); }
     .field input::placeholder { color: var(--text-dim); }
 
     /* Not scoped to .field on purpose — several cards (fc_player, prismcast,

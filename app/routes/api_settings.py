@@ -713,6 +713,26 @@ def bridge_healthcheck():
                         'Reinstall FastChannels Player on those devices, or rebuild this image to bundle the latest release.')
                 elif installed:
                     add('ok', 'ah4c player versions', 'All ah4c tuner devices are running the current bundled FastChannels Player build.')
+
+                # Known only from bmitune.sh's own report on a real tune (ah4c has no
+                # API to read its script files), so an untuned tuner stays unknown.
+                current = tuners[0]['scripts_current_version']
+                old_scripts = [t for t in tuners if t['scripts_status'] == 'outdated']
+                unseen = [t for t in tuners if t['scripts_status'] == 'unknown']
+                if old_scripts:
+                    add('warn', 'ah4c scripts',
+                        f'{len(old_scripts)}/{len(tuners)} tuner(s) last tuned with an older ah4c script set '
+                        f"(tuner #{', #'.join(str(t['index']) for t in old_scripts)}; current is {current}).",
+                        'Click "Export ah4c scripts" and replace the files in ah4c\'s STREAMER_APP directory.')
+                elif len(unseen) == len(tuners):
+                    add('info', 'ah4c scripts',
+                        f'No ah4c tunes recorded yet, so the deployed script version is unknown (current is {current}).')
+                elif unseen:
+                    add('ok', 'ah4c scripts',
+                        f'Tuners seen tuning are on the current script set ({current}); '
+                        f"tuner #{', #'.join(str(t['index']) for t in unseen)} not seen yet.")
+                else:
+                    add('ok', 'ah4c scripts', f'All ah4c tuners are running the current script set ({current}).')
         except fc_player_bridge.FcPlayerNotConfigured:
             add('warn', 'ah4c tuners', 'ah4c is not fully configured.', 'Save the ah4c server URL and retry.')
         except (ValueError, _req.RequestException):
