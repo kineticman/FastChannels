@@ -2965,6 +2965,7 @@ def play(source_name: str, channel_id: str):
         _channel_id = channel.id
         _source_name = source_name
         _source_id = channel.source_id
+        _already_bridged = bool(channel.requires_drm_bridge)
         def _bg_check():
             import requests
             # Use a plain session without retry adapters — this is a one-shot
@@ -3013,6 +3014,15 @@ def play(source_name: str, channel_id: str):
                         logger.warning('[play] failed to clear osm_session: %s', e)
                 return
             with _app.app_context():
+                # A bridged channel is SUPPOSED to be DRM — run_channel_auto_disable
+                # would just return "already bridged". Skip enqueuing that no-op
+                # job (and its alarming "auto-disable" log line) on every tune. Same
+                # condition as the job's, so a setup with no bridge still disables.
+                if (reason.startswith('DRM') and _already_bridged
+                        and getattr(registry.get(_source_name), 'license_url', None)):
+                    from ..drm_bridge import drm_bridge_mode_for
+                    if drm_bridge_mode_for(_source_name):
+                        return
                 trigger_channel_auto_disable(_channel_id, reason)
 
         threading.Thread(target=_bg_check, daemon=True).start()
