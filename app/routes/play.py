@@ -14,7 +14,6 @@ import secrets
 import threading
 import time as _time
 from datetime import datetime, timedelta, timezone
-import xml.etree.ElementTree as ET
 from urllib.parse import quote as _url_quote, urljoin, urlsplit, urlunsplit, parse_qs as _parse_qs
 
 import requests as _requests
@@ -1847,116 +1846,6 @@ def fubo_dash_proxy(channel_id: str):
 
 
 
-@play_bp.route('/play/cox/<channel_id>/dash.mpd')
-def cox_dash_proxy(channel_id: str):
-    """DASH (Widevine) manifest proxy for Cox Contour TVE channels.
-
-    Cox exposes TVE channel URLs as .m3u8 in channelmap, but the matching
-    .mpd?trred=false endpoint returns a Widevine DASH manifest. Proxy the MPD
-    with permissive CORS and inject a BaseURL so Shaka resolves relative
-    segment templates against the Cox CDN, not this FastChannels route.
-    """
-    from urllib.parse import unquote as _unquote, urljoin as _urljoin
-
-    raw_id = _unquote(channel_id)
-    channel = (
-        Channel.query
-        .join(Source)
-        .filter(Source.name == 'cox', Channel.source_channel_id == raw_id)
-        .first()
-    )
-    if not channel:
-        abort(404)
-
-    scraper_cls = registry.get('cox')
-    if not scraper_cls:
-        return _unavailable_response()
-    scraper_config = dict(channel.source.config or {})
-    scraper = scraper_cls(config=scraper_config)
-    try:
-        dash_url = scraper.resolve(channel.stream_url)
-    except Exception as e:
-        logger.warning('[cox-dash] resolve failed for %s: %s', raw_id[:40], e)
-        return _unavailable_response()
-    finally:
-        if getattr(scraper, '_pending_cache_updates', None):
-            try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
-            except Exception:
-                pass
-        if scraper._pending_config_updates:
-            try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
-            except Exception:
-                pass
-
-    if not dash_url or not dash_url.startswith('http'):
-        logger.warning('[cox-dash] no DASH URL for %s', raw_id[:40])
-        return _unavailable_response()
-
-    try:
-        r = _requests.get(dash_url, timeout=10, headers={
-            'Origin': 'https://watchtv.cox.com',
-            'Referer': 'https://watchtv.cox.com/',
-            'Accept': '*/*',
-        })
-        r.raise_for_status()
-    except Exception as e:
-        logger.warning('[cox-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
-        return _unavailable_response()
-
-    mpd = _cox_strip_empty_mpd_periods(r.text, raw_id)
-    if not re.search(r'<BaseURL\b', mpd):
-        cdn_base = _urljoin(dash_url, '.')
-        mpd = mpd.replace('<Period ', f'<BaseURL>{cdn_base}</BaseURL>\n  <Period ', 1)
-
-    return Response(
-        mpd,
-        mimetype='application/dash+xml',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Access-Control-Allow-Origin': '*',
-        },
-    )
-
-
-def _cox_strip_empty_mpd_periods(mpd: str, channel_id: str) -> str:
-    """Remove Cox event-only/empty periods that Shaka rejects before playback."""
-    if '<Period' not in mpd:
-        return mpd
-
-    try:
-        root = ET.fromstring(mpd.encode('utf-8'))
-    except ET.ParseError:
-        logger.debug('[cox-dash] MPD parse failed for %s; returning original manifest', channel_id[:40])
-        return mpd
-
-    namespace = ''
-    if root.tag.startswith('{'):
-        namespace = root.tag[1:].split('}', 1)[0]
-        ET.register_namespace('', namespace)
-
-    period_tag = f'{{{namespace}}}Period' if namespace else 'Period'
-    adaptation_tag = f'{{{namespace}}}AdaptationSet' if namespace else 'AdaptationSet'
-    periods = list(root.findall(period_tag))
-    if not periods:
-        return mpd
-
-    empty_periods = [period for period in periods if not list(period.iter(adaptation_tag))]
-    if not empty_periods or len(empty_periods) == len(periods):
-        return mpd
-
-    for period in empty_periods:
-        root.remove(period)
-
-    logger.info(
-        '[cox-dash] stripped %d empty MPD period(s) for channel=%s',
-        len(empty_periods),
-        channel_id[:40],
-    )
-    return ET.tostring(root, encoding='unicode', xml_declaration=True)
-
-
 @play_bp.route('/play/philo/<channel_id>/dash.mpd')
 def philo_dash_proxy(channel_id: str):
     """DASH (Widevine) manifest proxy for a Philo channel — the browser/EME path
@@ -2637,35 +2526,6 @@ def license_proxy(source_name: str, channel_id: str | None = None):
         except Exception as e:
             logger.warning('[philo-license] channel refresh after HTTP 403 failed: %s', e)
 
-    # Cox's MDS license server appears to grant only one license per
-    # content_metadata/xsct session; Kodi's inputstream.adaptive routinely opens a
-    # second CDM session (even though every track shares the same default_KID) and
-    # that second request gets a bare 403. Mint a fresh session and retry once.
-    if r.status_code == 403 and source_name == 'cox' and channel_id:
-        try:
-            fresh_cfg = {**(source.config or {}), **load_source_cache(source.id)}
-            fresh_scraper = scraper_cls(config=fresh_cfg)
-            fresh_scraper.expire_cached_dash(channel_id)
-            channel = (
-                Channel.query.join(Source)
-                .filter(Source.name == 'cox', Channel.source_channel_id == channel_id)
-                .first()
-            )
-            if channel and channel.stream_url:
-                fresh_scraper.resolve(channel.stream_url)
-            if getattr(fresh_scraper, '_pending_cache_updates', None):
-                persist_source_cache_updates(source.id, fresh_scraper._pending_cache_updates)
-            if getattr(fresh_scraper, '_pending_config_updates', None):
-                persist_source_config_updates(source.id, fresh_scraper._pending_config_updates)
-            cfg = {**(source.config or {}), **load_source_cache(source.id)}
-            body, headers = scraper_cls.prepare_license_request(
-                challenge, cfg, channel_id=channel_id, sht=sht)
-            headers.setdefault('Content-Type', 'application/octet-stream')
-            logger.info('[cox-license] refreshed playback session after HTTP 403 channel=%s', channel_id)
-            r = _send_license()
-        except Exception as e:
-            logger.warning('[cox-license] channel refresh after HTTP 403 failed: %s', e)
-
     # Spectrum rejects a license with 401 INVALID_TOKEN when the cached per-stream
     # AST/streamSessionId is reused for a later tune or was minted under an access
     # token that has since been refreshed. Mint a fresh stream session and retry
@@ -2783,9 +2643,9 @@ def license_certificate(source_name: str):
             pass
     cfg = {**(source.config or {}), **load_source_cache(source.id)}
 
-    # Prefer a source-native certificate endpoint. Cox's response contains the inner signed
-    # certificate expected by EME/MediaDrm; its normal /license endpoint instead returns an
-    # outer Widevine SignedMessage wrapper that Android correctly refuses to install.
+    # Prefer a source-native certificate endpoint when the scraper has one (Cox Contour
+    # did: its /license endpoint returned an outer SignedMessage wrapper that Android
+    # refuses to install as a service certificate).
     fetch_service_certificate = getattr(scraper_cls, 'fetch_service_certificate', None)
     if callable(fetch_service_certificate):
         try:

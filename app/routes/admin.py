@@ -1458,8 +1458,9 @@ def _bridge_supported_sources() -> dict:
     license handling at all. FastChannels Player's list is the narrower
     DRM_BRIDGE_TRUSTED_SOURCES — sources individually re-tested against its native
     adb-triggered device bridge, since a license_url alone doesn't mean a native
-    Widevine client can reach it (Cox's app-identity wall is the standing example: it
-    has a license_url and works over PrismCast, but is deliberately excluded here)."""
+    Widevine client can reach it (the retired Cox Contour source was the standing
+    example: it had a license_url and worked over PrismCast, but its license server
+    rejected native clients by app identity)."""
     scrapers = _scraper_registry.get_all()
 
     def _label(name: str) -> str:

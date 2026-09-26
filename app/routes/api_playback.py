@@ -708,17 +708,6 @@ def _get_playback_info(ch, fast_mode=True):
         from urllib.parse import quote as _quote
         preview_url = f'/play/spectrum/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
-    # Cox TVE uses XCal/CENC-protected DASH+Widevine for browser playback.
-    # The HLS-shaped TVE playlists remain available through /proxy.m3u8 for
-    # inspection, but observed segments are not clear MPEG-TS.
-    if ch.source and ch.source.name == 'cox' and ch.source_channel_id:
-        from urllib.parse import quote as _quote
-        _enc = _quote(ch.source_channel_id, safe='')
-        preview_url = f'/play/cox/{_enc}/dash.mpd'
-        license_url = f'{request.host_url.rstrip("/")}/play/cox/license/{_enc}'
-        playback_mode = 'dash'
-        stream_type = 'dash'
-
     # Philo → DASH+Widevine. Philo's MPD CDN locks CORS to philo.com, so the
     # route proxies the manifest body with permissive CORS (segments are CORS-*
     # so Shaka fetches them direct).

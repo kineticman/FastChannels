@@ -14,7 +14,7 @@ from . import fc_player_bridge
 # Sources confirmed (dev/kodi/README.md; also re-validated live against FastChannels
 # Player 2026-08-25) to actually decrypt through an adb-triggered device bridge.
 #
-# Cox is excluded — confirmed root cause (2026-08-28, full trail in
+# Cox Contour (source retired 2026-09-25, code kept in dev/cox/) was excluded — root cause (2026-08-28, full trail in
 # dev/comcast/COX_FC_PLAYER_BRIDGE_INVESTIGATION.md): Cox's TVE license server rejects
 # every native-Android Widevine client by app identity, not session count, privacy
 # mode, security level, or device/platform class. Ruled out each of those in turn via

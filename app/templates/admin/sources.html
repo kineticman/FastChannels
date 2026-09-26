@@ -268,11 +268,6 @@
       color: var(--danger-soft, var(--danger));
       border-color: color-mix(in srgb, var(--danger) 30%, transparent);
     }
-    .config-badge.sunsetting {
-      background: color-mix(in srgb, var(--warning-bg) 60%, transparent);
-      color: var(--warning-soft);
-      border-color: var(--warning-border);
-    }
 
     /* Scrape / audit status in dashboard row */
     .scrape-status { font-size: 0.75rem; margin-top: 0.2rem; display: flex; align-items: center; gap: 0.35rem; min-height: 0; }
@@ -819,9 +814,6 @@
                   {% endif %}
                   {% if under_development.get(source.name) %}
                     <span class="config-badge development" title="This source is under development and disabled by default">Under development</span>
-                  {% endif %}
-                  {% if source.name == 'cox' and not retired %}
-                    <span class="config-badge sunsetting" title="Cox is being folded into Spectrum and sign-ins have already started breaking as a result. This source is likely to be retired soon.">Sunsetting</span>
                   {% endif %}
                   {% if retired %}
                     <span class="config-badge retired" id="config-badge-{{ source.id }}"

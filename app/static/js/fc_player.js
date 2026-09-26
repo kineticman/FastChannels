@@ -27,12 +27,6 @@
     return (/Safari/.test(ua) && !/Chrome/.test(ua)) || /iPad|iPhone|iPod/.test(ua);
   }
 
-  function widevineCertificateUri(license) {
-    const match = String(license || '').match(/^(.*\/play\/cox)\/license\/([^?#/]+)/);
-    if (!match) return '';
-    return `${match[1]}/certificate?channel_id=${encodeURIComponent(match[2])}`;
-  }
-
   function formatErrorData(data) {
     if (!Array.isArray(data) || !data.length) return '';
     try {
@@ -236,18 +230,12 @@
       // (6001), verified on Chrome/Windows against NBC's dual-codec manifest.
       const shakaConfig = { preferredAudioCodecs: ['mp4a.40.2', 'mp4a.40.5', 'aac'] };
       if (license) {
-        const certificateUri = widevineCertificateUri(license);
         shakaConfig.drm = {
           servers: {
             'com.widevine.alpha':      license,
             'com.microsoft.playready': license,
           },
         };
-        if (certificateUri) {
-          shakaConfig.drm.advanced = {
-            'com.widevine.alpha': { serverCertificateUri: certificateUri },
-          };
-        }
         if (liveEdgeSync) {
           shakaConfig.streaming = {
             bufferingGoal: 20,

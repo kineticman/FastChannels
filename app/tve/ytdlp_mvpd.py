@@ -72,7 +72,7 @@ def authorize_via_ytdlp(
         'logger': _NullLogger(),
         # MSO login pages (e.g. identity.sling.com) WAF-block yt-dlp's default
         # HTTP client as a bot (HTTP 417) — impersonate a real browser's TLS/HTTP
-        # fingerprint via curl_cffi, same as app/scrapers/cox.py does directly.
+        # fingerprint via curl_cffi.
         'impersonate': ImpersonateTarget.from_str('chrome'),
     }
     resource = _resource_with_guid(resource, requestor_id)

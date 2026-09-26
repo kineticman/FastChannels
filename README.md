@@ -1,6 +1,6 @@
 # FastChannels
 
-FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, cable-network channels via TV Everywhere (NBCUniversal, FOX, FOX One, Discovery, AMC Networks, A+E Networks, Warner Bros Discovery), your own HDHomeRun tuner, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.). DRM-protected sources play back through a real Widevine bridge (browser-based PrismCast, or FastChannels' own Fire TV / Android TV player app) rather than being dropped.
+FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, DirecTV Stream, Philo, PBS, C-SPAN, cable-network channels via TV Everywhere (NBCUniversal, FOX, FOX One, Discovery, AMC Networks, A+E Networks, Warner Bros Discovery), your own HDHomeRun tuner, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.). DRM-protected sources play back through a real Widevine bridge (browser-based PrismCast, or FastChannels' own Fire TV / Android TV player app) rather than being dropped.
 
 ## Deploy with Portainer
 
@@ -65,7 +65,7 @@ Go to **Admin → Settings** and set two things:
 **3. Configure Sources.**
 Go to **Admin → Sources**. Enable or disable sources to taste, and expand any source card to enter credentials. Changes take effect on the next scrape.
 
-Most sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Tubi TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, Vidaa Free TV, DirecTV Stream, Cox Contour, Philo, PBS, C-SPAN, every TV Everywhere source (A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, Warner Bros Discovery), and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), **Tubi TV also requires a free account** (its anonymous channel list stopped working), Frndly/Fubo/FreeCast/DirecTV Stream/Cox Contour require account credentials, Philo signs in with a passwordless emailed code, and the TV Everywhere sources authenticate once via **Settings → TV Everywhere** rather than per-source. See [Source Notes](#source-notes) for per-source details.
+Most sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Tubi TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, Vidaa Free TV, DirecTV Stream, Philo, PBS, C-SPAN, every TV Everywhere source (A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, Warner Bros Discovery), and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), **Tubi TV also requires a free account** (its anonymous channel list stopped working), Frndly/Fubo/FreeCast/DirecTV Stream require account credentials, Philo signs in with a passwordless emailed code, and the TV Everywhere sources authenticate once via **Settings → TV Everywhere** rather than per-source. See [Source Notes](#source-notes) for per-source details.
 
 **4. Run Stream Audits.**
 Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
@@ -167,8 +167,7 @@ Android TV device running FastChannels' own player app, captured back off its HD
 output and re-published as a normal channel — no browser/PrismCast bridge needed for
 these sources. An alternate HDMI-capture front end, [ah4c](https://github.com/sullrich/ah4c),
 is also supported for installs that already have that hardware in place. Not every
-DRM source can ride this bridge — Cox is Widevine-only via PrismCast, blocked from
-FastChannels Player by an app-attestation check on Cox's end. Hardware-and-software
+DRM source can ride this bridge. Hardware-and-software
 setup, not a toggle: **[docs/fc-player-setup.md](docs/fc-player-setup.md)** is the
 full walkthrough.
 
@@ -286,7 +285,6 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Fubo TV | Email/password required | **Default off.** Mostly clear FAST channels; a paid account unlocks ~835 subscription channels, some of which are Widevine DRM and play via the PrismCast/FastChannels Player bridge |
 | FreeCast | Email/password required | **Default off.** Free account at watch.freecast.com required for playback |
 | DirecTV Stream | Email/password required | **Default off.** Paid subscription required; streams are DRM-only, with browser playback via Widevine and M3U playback via PrismCast bridge |
-| Cox Contour | Email/password required | **Default off.** Cox Contour account required; streams are DRM-only (Widevine CENC) via the PrismCast bridge — not supported through the FastChannels Player bridge (blocked by a Widevine app-attestation check on Cox's end). Also usable as your TV-provider identity for the TV Everywhere sources below |
 | Philo | Email (passwordless code) | **Default off.** Requires a Philo subscription; sign-in sends a one-time code by email/text, no password. Streams are DRM-only, via PrismCast or FastChannels Player |
 | PBS | None (ZIP code optional) | **Default off.** Auto-locates your local station plus a curated set of national/secondary feeds (World, Create, NHK, FNX); add more ZIP codes for additional clear feeds. Stations that require DRM are served through an opt-in bridge feed |
 | C-SPAN | None | **Default off.** Free, unauthenticated congressional/public-affairs event streams (floor sessions, hearings, Washington Journal). The 24/7 C-SPAN 1/2/3 linear networks sit behind a separate TV-provider login and aren't scraped |
