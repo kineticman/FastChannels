@@ -1756,6 +1756,12 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
             ['adb', 'connect', address],
             capture_output=True, timeout=_ADB_TIMEOUT, check=False,
         )
+        # A sleeping device (e.g. ah4c's "sleep all" button) accepts the am start below
+        # but never plays. KEYCODE_WAKEUP is a no-op when already awake — unlike
+        # KEYCODE_POWER, which toggles. Best-effort: a failed wake shouldn't block the tune.
+        woke, wake_output = _adb_shell(address, 'input', 'keyevent', 'KEYCODE_WAKEUP')
+        if not woke:
+            logger.debug('[fc-player] trigger_channel wake failed: %s', wake_output)
         # `adb shell` reconstructs everything after "shell" into a single string that gets
         # handed to the DEVICE's own shell for interpretation — passing each arg as a separate
         # Python list element does NOT preserve argv boundaries the way a local subprocess.run
