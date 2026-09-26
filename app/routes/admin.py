@@ -644,6 +644,9 @@ def sources():
                 # to "0 days" — reading as "due today" a full day early.
                 'days_left': max(0, math.ceil((purge_at - _now).total_seconds() / 86400)),
             }
+            # No scraper class left to read source_category from, so group all
+            # retired sources together at the bottom instead of falling into FAST.
+            source_categories[s.name] = 'retired'
 
     # Channel-fetch freshness: only meaningful for sources that fetch the channel
     # list on a slower cadence than EPG (channel_refresh_hours > 0). NULL means
@@ -671,7 +674,7 @@ def sources():
         if source_config_status.get(s.id) == 'required' and s.is_enabled
     ]
 
-    _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'drm': 4}
+    _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'drm': 4, 'retired': 5}
 
     def _cat_for(s):
         return source_categories.get(s.name, 'fast') if s.name != 'custom' else 'specialty'

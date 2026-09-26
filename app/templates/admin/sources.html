@@ -166,6 +166,10 @@
       --cat-color: var(--danger-soft);
       --cat-border: var(--danger-border);
     }
+    .source-category-header.cat-retired {
+      --cat-color: var(--text-muted);
+      --cat-border: var(--border);
+    }
     .cat-chevron { display: inline-block; width: 0.9em; margin-right: 0.3em; }
     .cat-count { font-weight: 600; opacity: 0.75; margin-left: 0.3em; letter-spacing: normal; }
 
@@ -755,8 +759,8 @@
     </div>
     {% endif %}
 
-    {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'tve': 'TVE Sources', 'specialty': 'Specialty Sources', 'drm': 'DRM Sources'} %}
-    {% set _CAT_ORDER = ['fast', 'premium', 'tve', 'specialty', 'drm'] %}
+    {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'tve': 'TVE Sources', 'specialty': 'Specialty Sources', 'drm': 'DRM Sources', 'retired': 'Retired Sources'} %}
+    {% set _CAT_ORDER = ['fast', 'premium', 'tve', 'specialty', 'drm', 'retired'] %}
     <div class="sources-quicknav">
       <input type="text" id="source-filter-input" class="source-filter-input"
              placeholder="Filter sources by name…" oninput="filterSources(this.value)">
