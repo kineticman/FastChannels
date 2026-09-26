@@ -479,6 +479,9 @@ def get_source_config(source_id):
     extra = {}
     if source.name == 'fox_one':
         extra['fox_one'] = _fox_one_signin_info(saved)
+    if source.name == 'espn':
+        extra['espn'] = {'signed_in': bool(saved.get('refresh_token')),
+                         'signed_in_at': saved.get('signed_in_at')}
     return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
                     'config_status': config_status,
                     'oauth_token_time': saved.get('oauth_token_time'),
@@ -1288,6 +1291,70 @@ def philo_login_verify(source_id):
     r.delete(f'philo:login:ctx:{source_id}')
     config_complete = bool(is_source_config_complete('philo', registry.get('philo'), cfg))
     return jsonify({'status': 'signed_in', 'config_complete': config_complete})
+
+
+# ── ESPN TV activation code ──────────────────────────────────────────────────
+# ESPN's password login is reCAPTCHA-gated, so sign-in uses the same code flow
+# as ESPN's TV apps: show a code, the user enters it at espn.com/activate, and a
+# fast-queue job waits on ESPN's websocket for the result — see app.scrapers.espn.
+
+@sources_bp.route('/sources/<int:source_id>/espn-activation/start', methods=['POST'])
+def espn_activation_start(source_id):
+    import redis as _redis
+    import requests as _requests
+    from ..scrapers.espn import ACTIVATION_STATUS_KEY, ACTIVATE_URL, ESPNAuthError, request_activation_code
+    from .tasks import get_fast_queue
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'espn':
+        return jsonify({'error': 'not an espn source'}), 400
+    try:
+        plate = request_activation_code()
+    except (ESPNAuthError, _requests.RequestException) as e:
+        return jsonify({'error': str(e)}), 502
+    # Overwriting the status with the new code is also what retires any job
+    # still waiting on an older code (run_activation watches this key).
+    _redis.from_url(current_app.config['REDIS_URL']).setex(ACTIVATION_STATUS_KEY, 720, json.dumps(
+        {'state': 'waiting', 'code': plate['pairingCode'], 'url': ACTIVATE_URL}))
+    get_fast_queue().enqueue('app.scrapers.espn.run_activation', plate, job_timeout=660)
+    return jsonify({'status': 'waiting', 'code': plate['pairingCode'], 'url': ACTIVATE_URL})
+
+
+@sources_bp.route('/sources/<int:source_id>/espn-activation/state')
+def espn_activation_state(source_id):
+    import redis as _redis
+    from ..scrapers.espn import ACTIVATION_STATUS_KEY
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'espn':
+        return jsonify({'error': 'not an espn source'}), 400
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(ACTIVATION_STATUS_KEY)
+    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+
+
+@sources_bp.route('/sources/<int:source_id>/espn-activation/stop', methods=['POST'])
+def espn_activation_stop(source_id):
+    import redis as _redis
+    from ..scrapers.espn import ACTIVATION_STATUS_KEY
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'espn':
+        return jsonify({'error': 'not an espn source'}), 400
+    _redis.from_url(current_app.config['REDIS_URL']).delete(ACTIVATION_STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
+@sources_bp.route('/sources/<int:source_id>/espn-auth', methods=['DELETE'])
+def clear_espn_auth(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'espn':
+        return jsonify({'error': 'not an espn source'}), 400
+    cfg = dict(source.config or {})
+    for key in ('access_token', 'refresh_token', 'access_expires_at', 'signed_in_at'):
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    return jsonify({'status': 'cleared'})
 
 
 @sources_bp.route('/sources/<int:source_id>/amazon-auth-status')

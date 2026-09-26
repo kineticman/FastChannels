@@ -2884,7 +2884,9 @@
           return;
         }
 
-        if (!schema.length) {
+        // ESPN's only setting is its activation-code panel — its schema reaches the
+        // UI empty (the one field is hidden) but it still needs renderEspnConfig.
+        if (!schema.length && sourceName !== 'espn') {
           if (badge) {
             badge.textContent = 'Auto';
             badge.className = 'config-badge auto';
@@ -3324,6 +3326,89 @@
       }
     }
     // ── end Philo sign-in ─────────────────────────────────────────────────────
+
+    // ── ESPN activation-code sign-in (same flow as ESPN's TV apps) ───────────
+    const _espnPollTimers = {};
+
+    function renderEspnConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.espn) || {};
+      return `
+        <div class="config-title">ESPN Settings</div>
+        <div class="config-note">
+          Sign in the same way as ESPN's TV apps: get a code here, then enter it at espn.com/activate
+          on any device where you're signed in to ESPN. Streams NFL Network and MLB Network with an
+          ESPN+ subscription; playback goes through the DRM bridge.
+        </div>
+        <div class="amazon-autologin-panel" id="espn-login-${sourceId}">
+          <div class="amazon-autologin-header">
+            <button class="btn btn-run" type="button" id="espn-code-btn-${sourceId}"
+                    onclick="espnStartActivation(${sourceId})">${info.signed_in ? 'Sign in again' : 'Get code'}</button>
+            ${info.signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
+                    onclick="espnClearAuth(${sourceId})">Sign out</button>` : ''}
+          </div>
+          <span class="amazon-status-text" id="espn-status-${sourceId}">
+            ${info.signed_in ? `<span style="color:var(--success-soft)">&#10003; Signed in</span>` : ''}
+          </span>
+        </div>`;
+    }
+
+    async function espnStartActivation(sourceId) {
+      const btn      = document.getElementById(`espn-code-btn-${sourceId}`);
+      const statusEl = document.getElementById(`espn-status-${sourceId}`);
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Getting a code…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/espn-activation/start`, { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a code.')}</span>`;
+          return;
+        }
+        espnShowCode(statusEl, d.code, d.url);
+        espnPoll(sourceId);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error getting a code.</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function espnShowCode(statusEl, code, url) {
+      statusEl.innerHTML = `
+        Go to <a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url.replace(/^https?:\/\/(www\.)?/, ''))}</a>
+        and enter <b style="font-size:1.4em;letter-spacing:.15em;font-family:monospace">${escapeHtml(code)}</b>
+        <span style="color:var(--text-muted)">— waiting…</span>`;
+    }
+
+    function espnPoll(sourceId) {
+      clearTimeout(_espnPollTimers[sourceId]);
+      _espnPollTimers[sourceId] = setTimeout(async () => {
+        const statusEl = document.getElementById(`espn-status-${sourceId}`);
+        if (!statusEl) return;  // panel closed
+        let d = {};
+        try {
+          d = await (await fetch(`/api/sources/${sourceId}/espn-activation/state`)).json();
+        } catch (e) {
+          espnPoll(sourceId);
+          return;
+        }
+        if (d.state === 'waiting') {
+          espnPoll(sourceId);
+        } else if (d.state === 'success') {
+          statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
+          setTimeout(() => loadSourceConfig(sourceId, 'espn'), 600);
+        } else if (d.state === 'expired' || d.state === 'error') {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.message || 'Sign-in failed.')} Get a new code to try again.</span>`;
+        }
+      }, 3000);
+    }
+
+    async function espnClearAuth(sourceId) {
+      if (!confirm('Sign out of ESPN? Playback stops until you sign in again.')) return;
+      await fetch(`/api/sources/${sourceId}/espn-auth`, { method: 'DELETE' }).catch(() => {});
+      loadSourceConfig(sourceId, 'espn');
+    }
+    // ── end ESPN sign-in ──────────────────────────────────────────────────────
 
     function renderFuboConfig(sourceId, schema, values) {
       const fastOnly = values.fast_only !== 'false';
@@ -4044,6 +4129,8 @@
         return renderDirectvConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'philo') {
         return renderPhiloConfig(sourceId, schema, values);
+      } else if (sourceName === 'espn') {
+        return renderEspnConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'spectrum') {

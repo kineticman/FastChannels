@@ -78,6 +78,11 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
     if source_name == 'philo':
         return bool(saved.get('session_cookies'))
 
+    # ESPN signs in with a TV activation code — "configured" means that
+    # left an account session behind.
+    if source_name == 'espn':
+        return bool(saved.get('refresh_token'))
+
     # FOX One — "configured" means it has signed in at least once (through
     # either sign-in method, or the hidden refresh_token fallback).
     if source_name == 'fox_one':
