@@ -227,42 +227,6 @@ def _license_content_id_from_stream_url(stream_url: str, fallback: str) -> str:
     return fallback
 
 
-def _jwt_payload(token: str) -> dict:
-    """Decode a JWT's payload segment (no signature verification — we only read
-    claims from a token DirecTV already issued to us). Returns {} on any error."""
-    try:
-        seg = token.split('.')[1]
-        seg += '=' * (-len(seg) % 4)  # restore base64url padding
-        return json.loads(base64.urlsafe_b64decode(seg))
-    except Exception:
-        return {}
-
-
-def _log_account_schema(bearer: str, token_data: dict) -> None:
-    """One-time discovery aid for the DAI feature: log the FIELD NAMES (and value
-    types) DirecTV returns at login, so we can map real per-account values onto
-    the ad-session request WITHOUT hardcoding anyone's account. Deliberately logs
-    keys/types only — never a value — so nothing account-identifying is written,
-    even to the operator's own log."""
-    def _shape(d: dict) -> str:
-        out = []
-        for k, v in sorted(d.items()):
-            if isinstance(v, dict):
-                out.append(f'{k}:{{{",".join(sorted(v.keys()))}}}')
-            else:
-                out.append(f'{k}:{type(v).__name__}')
-        return ', '.join(out)
-
-    claims = _jwt_payload(bearer)
-    if claims:
-        logger.info('[directv-schema] bearer JWT claim keys: %s', _shape(claims))
-    vp = token_data.get('valuePairs')
-    if isinstance(vp, dict):
-        logger.info('[directv-schema] token valuePairs keys: %s', _shape(vp))
-    top = {k: v for k, v in token_data.items() if k != 'valuePairs'}
-    logger.info('[directv-schema] token top-level keys: %s', _shape(top))
-
-
 # Platform flags the desktop web client puts on its Yospace DAI session request
 # (from a real stream.directv.com capture). None are account- or device-specific
 # — identical for every desktop session — so they carry no personal data.
@@ -432,11 +396,16 @@ def _fetch_channel_playback(
     # have are sent; nothing is invented.
     if fallback_url and dai and dai_extra and 'yospace.com' in fallback_url:
         from urllib.parse import quote as _q
-        existing = fallback_url.split('?', 1)[1] if '?' in fallback_url else ''
+        # Match on exact param keys, not a substring (a naive `'e=' in query`
+        # would false-positive against the tail of cdncpDevice=/cdncpCtime= and
+        # silently drop e=prod).
+        query = fallback_url.split('?', 1)[1] if '?' in fallback_url else ''
+        existing_keys = {pair.split('=', 1)[0] for pair in query.split('&') if pair}
         for k, v in dai_extra.items():
-            if v in (None, '') or (k + '=') in existing:
+            if v in (None, '') or k in existing_keys:
                 continue
             fallback_url += f'&{_q(str(k), safe="")}={_q(str(v), safe="")}'
+            existing_keys.add(k)
     play_token = (data.get('dRights') or {}).get('playToken')
     if not fallback_url or not play_token:
         return None
@@ -1075,8 +1044,6 @@ def capture_directv_auth_cffi(
     if verify.status_code < 200 or verify.status_code >= 300:
         raise DirectvAuthError(f'DirecTV token verify failed HTTP {verify.status_code}')
 
-    _log_account_schema(bearer, token_data)
-
     # DAI ad-context: the household/profile ids the web client sends on its
     # ad-insertion request. hhid == u == partnerProfileId in real captures.
     vp = token_data.get('valuePairs') if isinstance(token_data.get('valuePairs'), dict) else {}
@@ -1648,9 +1615,14 @@ class DirectvScraper(BaseScraper):
             q['dma_billing'] = config['dai_dma_id']
         if config.get('dai_gpp'):
             q['gpp'] = config['dai_gpp']
-            opt_out = _gpp_targeted_ad_opt_out(config['dai_gpp'])
-            if opt_out is not None:
-                q['is_lat'] = '1' if opt_out else '0'
+            # is_lat is decoded from the US-National (GPP section 7) bit layout,
+            # so only derive it when the account's consent string is actually
+            # that section. For any other section, pass gpp through untouched and
+            # omit is_lat rather than risk misreporting consent from a wrong layout.
+            if str(config.get('dai_gpp_sid')) == '7':
+                opt_out = _gpp_targeted_ad_opt_out(config['dai_gpp'])
+                if opt_out is not None:
+                    q['is_lat'] = '1' if opt_out else '0'
         if config.get('dai_gpp_sid'):
             q['gpp_sid'] = config['dai_gpp_sid']
         if config.get('dai_adid'):
