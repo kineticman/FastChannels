@@ -30,17 +30,20 @@ BRAND_ID = '5af07ab86b66d16f0e095063'
 PARTNER_ID = '55e9d01a6b66d1244474bbe5'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
 SESSION_CACHE_KEY = 'discovery_tve_session'
-# How long to reuse a signed-in session before signing in again. The `st`
-# cookie from /login is a JWT with no `exp` claim, so there's nothing to read
-# a lifetime from. This used to be 90s, on a 2026-08-17 measurement of one
-# session dying at ~214s; re-measured live 2026-09-25 (Xfinity sign-in), the
-# login `st`, never refreshed, still played at 146 min and passed /users/me
-# at 176 min, and a later sign-in didn't invalidate it. /token doesn't rotate
-# `st` either. 23h is a deliberate bet past the measured floor (upper bound
-# not yet measured): _cached_session() checks /users/me before reuse and
-# resolve() signs in again once if the cached session is rejected, so one that
-# dies early costs a sign-in, not a failed play.
-SESSION_TTL_SECONDS = 23 * 60 * 60
+# A signed-in session is reused until Discovery itself rejects it — there is
+# no local TTL. The `st` cookie from /login is a JWT with no `exp` claim, so
+# there's nothing to read a lifetime from. This used to be 90s (a 2026-08-17
+# measurement of one session dying at ~214s), then 23h after a 2026-09-25
+# re-measure (Xfinity sign-in: the login `st`, never refreshed, still played
+# at 146 min and passed /users/me at 176 min; a later sign-in didn't
+# invalidate it; /token doesn't rotate `st`). The 23h cap was itself the
+# failure on 2026-09-26: a Spectrum session that had served 8 scrapes was
+# discarded at 23h without ever asking Discovery, and since Spectrum can only
+# be signed in with the browser, every scrape after that failed with "sign in
+# again". _cached_session() checks /users/me before every reuse and resolve()
+# signs in again once if playback rejects the cached session, so a dead
+# session costs one sign-in, not a failed play. Both log the session's age
+# when it's rejected, which is how the real upper bound gets measured.
 
 
 @dataclass(frozen=True)
@@ -142,6 +145,13 @@ def _jwt_exp(token: str) -> int | None:
         return int(data.get('exp')) if data.get('exp') else None
     except Exception:
         return None
+
+
+def _session_age(cached) -> str:
+    cached_at = int((cached or {}).get('cached_at') or 0) if isinstance(cached, dict) else 0
+    if not cached_at:
+        return 'unknown age'
+    return f'{(int(time.time()) - cached_at) / 3600:.1f}h'
 
 
 def _cookie_dict(session: requests.Session) -> dict[str, str]:
@@ -248,9 +258,11 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         cached = self.cache.get(SESSION_CACHE_KEY) or {}
         if not isinstance(cached, dict):
             return None
-        # 15s margin against an expiry-edge race; /users/me below is the
-        # real validity check.
-        if int(cached.get('expires_at') or 0) <= int(time.time()) + 15:
+        # Only a real `exp` from Discovery's login token ends a session early
+        # (see the comment by SESSION_CACHE_KEY). The old `expires_at` key
+        # held our own 23h guess and is ignored.
+        jwt_expires_at = int(cached.get('jwt_expires_at') or 0)
+        if jwt_expires_at and jwt_expires_at <= int(time.time()) + 15:
             return None
         cookies = cached.get('cookies') or {}
         if not isinstance(cookies, dict) or not cookies.get('st'):
@@ -263,6 +275,8 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
                 return session
         except Exception:
             return None
+        logger.info('[discovery-tve] cached session rejected by /users/me (HTTP %s) after %s',
+                    r.status_code, _session_age(cached))
         return None
 
     def _discovery_partner_id(self, session: requests.Session, device_id: str, mso_name: str, mso_id: str) -> str | None:
@@ -462,10 +476,9 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         )
         if r.status_code >= 400:
             raise TVEAuthError(f'Discovery entitlement check returned HTTP {r.status_code}: {r.text[:300]}')
-        expires_at = _jwt_exp(login_token) or int(time.time()) + SESSION_TTL_SECONDS
         self._update_cache(SESSION_CACHE_KEY, {
             'cookies': _cookie_dict(session),
-            'expires_at': min(expires_at, int(time.time()) + SESSION_TTL_SECONDS),
+            'jwt_expires_at': _jwt_exp(login_token) or 0,
             'cached_at': int(time.time()),
         })
 
@@ -499,7 +512,7 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             # YouTube TV session can only come from the browser flow.
             # (This used to be a definitive "not usable", on the belief
             # that Discovery's session died in ~90-200s; it doesn't, see
-            # SESSION_TTL_SECONDS.)
+            # SESSION_CACHE_KEY.)
             raise _browser_signin_required('YouTube TV')
         if mso_id in ('Cox', 'Spectrum'):
             # Normally caught by _raise_if_spectrum_routed() above; this
@@ -739,13 +752,13 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             },
         }
         r = self._post_playback(session, channel, payload)
-        # With a multi-hour SESSION_TTL_SECONDS, a cached session can die
-        # upstream before our TTL does. /users/me in _cached_session() catches
-        # most of that, but a rejection here (401, or 400 from /token) from a
+        # With no local TTL, a cached session is only retired when Discovery
+        # rejects it. /users/me in _cached_session() catches most of that, but a rejection here (401, or 400 from /token) from a
         # cached session means the same thing: sign in again once and retry, rather than reporting a
         # definitive "not authorized" that would disable the channel.
         if _session_rejected(r) and from_cache:
-            logger.info('[discovery-tve] cached session rejected (HTTP %s %s); signing in again', r.status_code, urlsplit(r.url).path)
+            logger.info('[discovery-tve] cached session rejected (HTTP %s %s) after %s; signing in again',
+                        r.status_code, urlsplit(r.url).path, _session_age(self.cache.get(SESSION_CACHE_KEY)))
             self._update_cache(SESSION_CACHE_KEY, {})
             session = self._authenticate()
             r = self._post_playback(session, channel, payload)
