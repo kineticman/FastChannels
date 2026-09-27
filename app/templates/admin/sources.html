@@ -1931,7 +1931,7 @@
         } else {
           const ok  = Math.max(0, (result.checked || 0) - (result.vod || 0) - (result.flagged || 0) - (result.bridged || 0));
           const bits = [
-            result.total       ? (result.aborted_reason && result.channel_count ? `${result.total} of ${result.channel_count} scanned` : `${result.total} scanned`) : null,
+            result.total       ? (result.aborted_reason && result.channel_count ? `${result.total} of ${result.channel_count} scanned` : `${result.total} scanned`) + (result.not_in_output ? ` (${result.not_in_output} not in output)` : '') : null,
             `<span class="aud-ok">${ok} ok</span>`,
             result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`               : null,
             result.vod         ? `<span class="aud-vod">${result.vod} VOD</span>`                  : null,
@@ -2230,7 +2230,8 @@
         return;
       }
       const bits  = [];
-      if (r.total)            bits.push(r.aborted_reason && r.channel_count ? `${r.total} of ${r.channel_count} scanned` : `${r.total} scanned`);
+      if (r.total)            bits.push((r.aborted_reason && r.channel_count ? `${r.total} of ${r.channel_count} scanned` : `${r.total} scanned`)
+                                + (r.not_in_output ? ` (${r.not_in_output} not in output)` : ''));
       if (r.checked != null)  bits.push(`<span class="aud-ok">${ok} ok</span>`);
       if (r.dead)             bits.push(`<span class="aud-dead">${r.dead} dead</span>`);
       if (r.vod)              bits.push(`<span class="aud-vod">${r.vod} VOD</span>`);

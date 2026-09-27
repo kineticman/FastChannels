@@ -818,6 +818,7 @@ def run_stream_audit(source_name: str):
             )
         ).all()
         total    = len(channels)
+        _audit_ids = [ch.id for ch in channels]
         checked  = 0
         flagged  = 0
         bridged  = 0   # DRM channels kept active and routed via the PrismCast bridge
@@ -1417,6 +1418,15 @@ def run_stream_audit(source_name: str):
 
                 _time.sleep(0.3)
 
+        # The source card's channel badge counts only channels in output (active,
+        # enabled, with a stream URL), but the audit also re-checks dead and
+        # user-disabled ones. Record the difference so the two numbers reconcile.
+        not_in_output = Channel.query.filter(
+            Channel.id.in_(_audit_ids),
+            db.not_(db.and_(Channel.is_active == True, Channel.is_enabled == True,
+                            Channel.stream_url != None)),
+        ).count() if _audit_ids else 0
+
         source.last_audited_at = datetime.now(timezone.utc)
         db.session.commit()
         persist_source_cache_updates(source.id, {
@@ -1425,6 +1435,7 @@ def run_stream_audit(source_name: str):
                 # channel count — so the UI doesn't claim channels were checked.
                 'total': scanned if aborted_reason else total,
                 'channel_count': total, 'aborted_reason': aborted_reason,
+                'not_in_output': not_in_output,
                 'checked': checked, 'flagged': flagged, 'bridged': bridged,
                 'dead': dead, 'vod': vod, 'not_authorized': not_authorized, 'errors': errors, 'skipped_403': skipped_403,
                 'ts': datetime.now(timezone.utc).isoformat(),
