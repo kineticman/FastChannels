@@ -3090,7 +3090,7 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
         return Response('Hardware capture is not enabled or configured.\n', status=503, mimetype='text/plain')
 
     info = _get_playback_info(channel, fast_mode=False)
-    manifest_url = info.get('preview_url') or info.get('play_url') or ''
+    manifest_url = (info.get('play_url') if source_name == 'directv' else info.get('preview_url')) or info.get('play_url') or ''
     if manifest_url.startswith('/'):
         manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
     license_url = info.get('license_url') or None
