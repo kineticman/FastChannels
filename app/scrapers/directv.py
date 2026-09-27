@@ -227,6 +227,7 @@ def _license_content_id_from_stream_url(stream_url: str, fallback: str) -> str:
 
 def _fetch_channel_playback(
     bearer_token: str, cookies: list[dict], client_context: str | None, ccid: str,
+    dai: bool = False,
 ) -> dict | None:
     """GET /right/authorization/channel/v1 for one channel — the manifest +
     playToken resolve. Used both by resolve() (via the scraper's live
@@ -286,7 +287,15 @@ def _fetch_channel_playback(
         return None
 
     pb = data.get('playbackData') or {}
-    fallback_url = pb.get('fallbackStreamUrl') or pb.get('streamURL')
+    if dai:
+        fallback_url = pb.get('streamURL') or pb.get('fallbackStreamUrl')
+    else:
+        fallback_url = pb.get('fallbackStreamUrl') or pb.get('streamURL')
+    # streamURL is a Yospace ad-insertion session URL. Yospace answers it with
+    # 503 "Content not found" unless it names a session pool; livepause is the
+    # one DirecTV's own apps use.
+    if fallback_url and 'yospace.com' in fallback_url and 'yospace.pool=' not in fallback_url:
+        fallback_url += ('&' if '?' in fallback_url else '?') + 'yospace.pool=livepause'
     play_token = (data.get('dRights') or {}).get('playToken')
     if not fallback_url or not play_token:
         return None
@@ -295,6 +304,7 @@ def _fetch_channel_playback(
         'play_token': play_token,
         'license_content_id': _license_content_id_from_stream_url(fallback_url, ccid),
         'cached_at': time.time(),
+        'dai': dai,
     }
 
 
@@ -1382,6 +1392,14 @@ class DirectvScraper(BaseScraper):
                         'On = use DirecTV\'s own channel numbers (ESPN 206, CNN 202). '
                         'Channels that share a number get subchannels, like 213.1.'
                     )),
+        ConfigField('use_dai', 'Use DirecTV ad insertion (DAI)',
+                    field_type='toggle', default='false',
+                    help_text=(
+                        'On = play the stream DirecTV\'s own apps use, with DirecTV\'s '
+                        'local and targeted ads in commercial breaks. Off = the '
+                        'national feed without DirecTV\'s inserted ads. Picture quality '
+                        'is the same either way.'
+                    )),
     ]
 
     _FAST_CHANNEL_NUMBER_RANGE = range(4000, 5000)
@@ -1432,6 +1450,11 @@ class DirectvScraper(BaseScraper):
     def uses_provider_numbers(cls, config: dict | None) -> bool:
         # See the 'use_provider_numbers' ConfigField and app/scrapers/directv_numbers.py.
         return str((config or {}).get('use_provider_numbers', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+    @classmethod
+    def uses_dai(cls, config: dict | None) -> bool:
+        # See the 'use_dai' ConfigField and _fetch_channel_playback().
+        return str((config or {}).get('use_dai', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 
@@ -1896,9 +1919,18 @@ class DirectvScraper(BaseScraper):
         if not ccid:
             raise RuntimeError(f'DirecTV Stream: malformed stream_url: {raw_url}')
 
+        dai = self.uses_dai(self.config)
         cached = (self.cache.get('directv_playback') or {}).get(ccid)
-        if cached and (time.time() - float(cached.get('cached_at', 0))) < _PLAYBACK_CACHE_TTL:
-            return cached['fallback_url']
+        # A URL cached under the other DAI setting (or a bare Yospace URL cached
+        # before the pool fix) must not be served after the toggle changes.
+        cached_url = (cached or {}).get('fallback_url') or ''
+        cache_usable = (
+            bool(cached)
+            and bool(cached.get('dai')) == dai
+            and not ('yospace.com' in cached_url and 'yospace.pool=' not in cached_url)
+        )
+        if cache_usable and (time.time() - float(cached.get('cached_at', 0))) < _PLAYBACK_CACHE_TTL:
+            return cached_url
 
         bearer = self.config.get('bearer_token')
         if not bearer:
@@ -1910,6 +1942,7 @@ class DirectvScraper(BaseScraper):
         try:
             result = _fetch_channel_playback(
                 bearer, self.config.get('cookies') or [], self.config.get('client_context'), ccid,
+                dai=dai,
             )
         except DirectvAuthExpiredError as exc:
             self._mark_auth_stale_and_reauth(f'channel/v1 expired token for ccid={ccid}')
@@ -2020,6 +2053,7 @@ class DirectvScraper(BaseScraper):
             try:
                 fresh = _fetch_channel_playback(
                     bearer, config.get('cookies') or [], config.get('client_context'), channel_id,
+                    dai=cls.uses_dai(config),
                 )
             except DirectvAuthExpiredError as exc:
                 logger.warning(
