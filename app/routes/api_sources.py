@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 _APP_START = _time.time()
 from flask import Blueprint, jsonify, request, current_app
 from sqlalchemy.orm import defer
-from app.config_store import load_source_cache
+from app.config_store import load_source_cache, persist_source_cache_updates
 from ..extensions import db
 from ..models import Source, Channel, SourceCache
 from ..scrapers import registry
@@ -682,6 +682,10 @@ def save_source_config(source_id):
     db.session.commit()
     if pbs_deleted:
         _invalidate_and_refresh_xml()
+    # The DAI toggle picks which stream URL resolve() caches (for 55 minutes),
+    # so drop every cached one; the next tune fetches under the new setting.
+    if source.name == 'directv' and _toggle_enabled(old, 'use_dai') != _toggle_enabled(current, 'use_dai'):
+        persist_source_cache_updates(source.id, {'directv_playback': {}})
     full_scrape_queued = False
     if source.name == 'sling' and (creds_changed or sling_lineup_changed) and source.is_enabled:
         # Credentials and the subscription/FAST-exclusion toggles can add/remove
