@@ -55,6 +55,7 @@ _BAM_DEVICE_GRAPH = 'https://espn.api.edge.bamgrid.com/graph/v1/device/graphql'
 _BAM_PUBLIC_GRAPH = 'https://espn.api.edge.bamgrid.com/v1/public/graphql'
 _PLAYBACK_URL = 'https://espn.playback.edge.bamgrid.com/v7/playback/ctr-regular'
 _LICENSE_URL = 'https://playback.svcs.plus.espn.com/widevine/v1/channel/obtain-license'
+_EVENT_LICENSE_URL = 'https://playback.svcs.plus.espn.com/widevine/v1/obtain-license'
 _ONEID_TV_BASE = 'https://registerdisney.go.com/jgc/v6/client/ESPN-OTT.GC.ANDTV-PROD'
 ACTIVATE_URL = 'https://www.espn.com/activate'
 
@@ -421,9 +422,40 @@ class ESPNScraper(BaseScraper):
         raise RuntimeError(f'ESPN: no airing found for {network_id}')
 
     def _mint(self, network_id: str) -> dict:
+        return self._mint_playback(self._current_playback_id(network_id), network_id)
+
+    # Groundwork for ESPN+ events played on behalf of an external lane planner
+    # (FruitDeepLinks / ESPN4CC4C): nothing routes here yet. The stream is
+    # cached under 'airing:<id>' so /play/espn/license?channel_id=airing:<id>
+    # finds its rights context and license route. At the real end of an event
+    # ESPN appends #EXT-X-ENDLIST (often well after the scheduled endDateTime),
+    # so whatever tunes lanes has to re-tune on that, not on the schedule.
+    def resolve_airing(self, airing_id: str) -> str:
+        r = self.session.post(_WATCH_API, params={'apiKey': _WATCH_API_KEY, 'features': 'pbov7'},
+                              headers={'User-Agent': _UA, 'Origin': 'https://www.espn.com'},
+                              json={'query': 'query($id:ID!){ airing(id:$id, countryCode:"us", deviceType:SETTOP, tz:"UTC"){ source{ playbackId } } }',
+                                    'variables': {'id': airing_id}}, timeout=20)
+        pid = ((((r.json().get('data') or {}).get('airing') or {}).get('source')) or {}).get('playbackId')
+        if not pid:
+            raise RuntimeError(f'ESPN: no playbackId for airing {airing_id}')
+        # Events use the non-channel license route; /channel/ 400s with
+        # content-key.invalid-linear-key for them (confirmed 2026-09-26).
+        entry = self._mint_playback(pid, f'airing {airing_id}')
+        entry['license_url'] = _EVENT_LICENSE_URL
+        streams = dict(self.cache.get('espn_streams') or {})
+        streams[f'airing:{airing_id}'] = entry
+        self._update_cache('espn_streams', streams)
+        return entry['manifest_url']
+
+    @classmethod
+    def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
+        entry = (config.get('espn_streams') or {}).get(channel_id or '') or {}
+        return entry.get('license_url') or cls.license_url
+
+    def _mint_playback(self, playback_id: str, label: str) -> dict:
         access_token = self._access_token()
         body = {
-            'playbackId': self._current_playback_id(network_id),
+            'playbackId': playback_id,
             'playback': {
                 'attributes': {
                     'resolution': {'max': ['1920x1080']}, 'protocol': 'HTTPS',
@@ -455,9 +487,9 @@ class ESPNScraper(BaseScraper):
         ctx = (stream.get('playbackRights') or {}).get('playbackRightsContext')
         err = (data.get('errors') or [{}])[0]
         if r.status_code == 403 and err.get('code') == 'not-entitled':
-            raise TVENotAuthorizedError(f'ESPN: this account is not entitled to {NETWORKS[network_id]["name"]}')
+            raise TVENotAuthorizedError(f'ESPN: this account is not entitled to {NETWORKS.get(label, {}).get("name", label)}')
         if not r.ok or not manifest_url or not ctx:
-            raise RuntimeError(f'ESPN playback {network_id}: HTTP {r.status_code} '
+            raise RuntimeError(f'ESPN playback {label}: HTTP {r.status_code} '
                                f'{err.get("code", "")} {err.get("description", "")}'.strip())
         return {'manifest_url': manifest_url, 'rights_ctx': ctx, 'cached_at': time.time()}
 
