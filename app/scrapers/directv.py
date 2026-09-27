@@ -1570,9 +1570,8 @@ class DirectvScraper(BaseScraper):
                     field_type='toggle', default='false',
                     help_text=(
                         'On = play the stream DirecTV\'s own apps use, with DirecTV\'s '
-                        'local and targeted ads in commercial breaks. Off = the '
-                        'national feed without DirecTV\'s inserted ads. Picture quality '
-                        'is the same either way.'
+                        'local ads in commercial breaks. Off = the national feed '
+                        'without DirecTV\'s inserted ads.'
                     )),
     ]
 
