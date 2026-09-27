@@ -1378,6 +1378,31 @@ def capture_directv_auth(
 
 # ── Manual admin-UI entry point ─────────────────────────────────────────────
 
+def _ids_from_bearer_jwt(bearer: str) -> tuple[str | None, str | None]:
+    """Best-effort (partnerProfileId, profileId) read from the bearer JWT's own
+    claims, for auth paths that don't surface the token-exchange valuePairs (the
+    Playwright fallback). No signature verification — we only read claims from a
+    token DirecTV issued to us, never trusting it for authorization — and no value
+    is logged. Returns (None, None) if the token can't be parsed or lacks them."""
+    try:
+        seg = bearer.split('.')[1]
+        seg += '=' * (-len(seg) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(seg))
+    except Exception:
+        return None, None
+    flat = {k.lower(): v for k, v in claims.items() if isinstance(v, (str, int))}
+
+    def pick(*names: str) -> str | None:
+        for n in names:
+            v = flat.get(n.lower())
+            if v is not None and str(v).strip():
+                return str(v).strip()
+        return None
+
+    return (pick('partnerProfileId', 'partnerprofileid', 'ppid'),
+            pick('profileId', 'profileid', 'pid'))
+
+
 def _ensure_dai_device_ids(cfg: dict) -> dict:
     """Mint this device's own persistent advertising/device ids once, if absent.
     These identify OUR playback device (they are not tied to any real ad profile);
@@ -1463,10 +1488,19 @@ def run_directv_auth(
                     # DAI ad-context (all the account's OWN values; used only when
                     # the Use-DAI toggle is on). Store what we captured; mint our
                     # device's own persistent ad ids once.
-                    if result.get('partner_profile_id'):
-                        cfg['dai_partner_profile_id'] = result['partner_profile_id']
-                    if result.get('profile_id'):
-                        cfg['dai_profile_id'] = result['profile_id']
+                    partner_profile_id = result.get('partner_profile_id')
+                    profile_id = result.get('profile_id')
+                    # The Playwright path has no token-exchange valuePairs, so fall
+                    # back to the same ids from the bearer JWT's own claims. Also a
+                    # safety net for the cffi path.
+                    if not partner_profile_id or not profile_id:
+                        jwt_pp, jwt_pf = _ids_from_bearer_jwt(result.get('bearer_token') or '')
+                        partner_profile_id = partner_profile_id or jwt_pp
+                        profile_id = profile_id or jwt_pf
+                    if partner_profile_id:
+                        cfg['dai_partner_profile_id'] = partner_profile_id
+                    if profile_id:
+                        cfg['dai_profile_id'] = profile_id
                     for k, v in (result.get('dai_context') or {}).items():
                         cfg[f'dai_{k}'] = v
                     cfg.update(_ensure_dai_device_ids(cfg))
