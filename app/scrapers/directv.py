@@ -1349,6 +1349,27 @@ def capture_directv_auth(
                 for c in context.cookies()
             ]
             captured['captured_at'] = time.time()
+
+            # DAI ad-context: fetch the account's DMA + GPP consent here too, so the
+            # browser-fallback path isn't left without them (the cffi path does this
+            # inline). Uses the captured bearer/cookies in a throwaway requests
+            # session; best-effort (returns {} on failure). hhid/u/profid still
+            # aren't available on this path — they come from the cffi token
+            # exchange's valuePairs, which Playwright never sees.
+            if captured.get('bearer_token'):
+                _ctx_session = requests.Session()
+                for _c in captured.get('cookies') or []:
+                    try:
+                        _ctx_session.cookies.set(
+                            _c['name'], _c['value'],
+                            domain=_c.get('domain') or None, path=_c.get('path') or '/',
+                        )
+                    except Exception:
+                        continue
+                captured['dai_context'] = _fetch_dai_account_context(
+                    _ctx_session, captured['bearer_token'],
+                )
+
             _status('success', 'Captured DirecTV session.')
             return captured
         finally:
