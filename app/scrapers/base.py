@@ -673,6 +673,12 @@ class BaseScraper(ABC):
         (e.g. capturing tokens) so they can be persisted before the long scrape."""
         pass
 
+    def audit_preflight(self) -> None:
+        """Called once before a stream audit starts. Raise to skip the audit
+        with a clear reason when something source-wide (e.g. sign-in) would
+        make every channel fail. Default: no check."""
+        pass
+
     @abstractmethod
     def fetch_channels(self) -> list[ChannelData]: ...
 

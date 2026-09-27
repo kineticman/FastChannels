@@ -773,6 +773,20 @@ def run_stream_audit(source_name: str):
         except Exception as _pre_exc:
             logger.debug('[audit] pre_run_setup failed (non-fatal): %s', _pre_exc)
 
+        # Fail fast on a source-wide problem (e.g. bad credentials) instead of
+        # letting every channel's resolve() hit it and tripping the 20-error
+        # abort with a vague "20 errors" summary.
+        try:
+            scraper.audit_preflight()
+        except Exception as _pf_exc:
+            _skip_msg = f'Sign-in failed — {str(_pf_exc).strip() or type(_pf_exc).__name__}'
+            logger.warning('[audit] %s: %s — skipping audit', source_name, _skip_msg)
+            persist_source_cache_updates(source.id, {'last_audit_result': {
+                'skipped_reason': _skip_msg,
+                'ts': datetime.now(timezone.utc).isoformat(),
+            }})
+            return
+
         # Some scrapers (e.g. Tubi) need a full channel fetch before auditing
         # to warm their URL cache and establish the correct session cookies.
         # Without this, per-channel resolve() calls lack session context and
@@ -834,6 +848,8 @@ def run_stream_audit(source_name: str):
         consecutive_errors = 0
         consecutive_skipped_403 = 0  # geo-block detector
         consecutive_transient_errors = 0  # resolve-timeout detector
+        aborted_reason = None  # set just before any early-abort break below
+        scanned = 0
         report_channels = []
         _audit_ignore_4xx = getattr(scraper_cls, 'audit_ignore_4xx', False)
         _audit_ignore_vod = getattr(scraper_cls, 'audit_ignore_vod', False)
@@ -902,6 +918,7 @@ def run_stream_audit(source_name: str):
         sess = scraper.session
         _audit_channel_timeout = int(getattr(scraper_cls, "audit_channel_timeout_seconds", 20 if source_name == "plex" else 0) or 0)
         for i, ch in enumerate(channels, 1):
+            scanned = i
             try:
                 _audit_item_t0 = _time.monotonic()
                 _audit_verbose = source_name == 'plex'
@@ -962,6 +979,7 @@ def run_stream_audit(source_name: str):
                             logger.warning('[audit] %s: %d consecutive transient resolve failures — '
                                            'source API may be unreachable, aborting audit.',
                                            source_name, consecutive_transient_errors)
+                            aborted_reason = '%d consecutive transient resolve failures (source API unreachable)' % consecutive_transient_errors
                             break
                         continue
                     # If the scraper entered a rate-limit cooldown, wait it out rather
@@ -1021,6 +1039,7 @@ def run_stream_audit(source_name: str):
                             logger.warning('[audit] %s: %d consecutive 403/skip responses — '
                                            'source appears geo-blocked, aborting audit.',
                                            source_name, consecutive_skipped_403)
+                            aborted_reason = '%d consecutive 403/blocked responses (source appears geo-blocked)' % consecutive_skipped_403
                             break
                         continue
                     logger.warning('[audit] resolve failed for %s: %s', ch.name, re_exc)
@@ -1034,6 +1053,7 @@ def run_stream_audit(source_name: str):
                     })
                     if consecutive_errors >= 20:
                         logger.error('[audit] %s: 20 consecutive errors — aborting.', source_name)
+                        aborted_reason = '20 consecutive errors — last: ' + _audit_reason_from_exception(re_exc)
                         break
                     continue
 
@@ -1046,6 +1066,7 @@ def run_stream_audit(source_name: str):
                     logger.warning('[audit] %s: resolve() returned None for %s', source_name, ch.name)
                     if consecutive_errors >= 20:
                         logger.error('[audit] %s: 20 consecutive errors — aborting.', source_name)
+                        aborted_reason = '20 consecutive errors — last: resolve returned nothing'
                         break
                     continue
                 if not resolved_url.startswith('http'):
@@ -1186,6 +1207,7 @@ def run_stream_audit(source_name: str):
                         logger.warning('[audit] %s: %d consecutive 403/skip responses — '
                                        'source appears geo-blocked, aborting audit.',
                                        source_name, consecutive_skipped_403)
+                        aborted_reason = '%d consecutive 403/blocked responses (source appears geo-blocked)' % consecutive_skipped_403
                         break
                     continue
 
@@ -1199,6 +1221,7 @@ def run_stream_audit(source_name: str):
                     if consecutive_errors >= 20:
                         logger.error('[audit] %s: 20 consecutive errors — aborting. '
                                      'Source may be rate-limiting or down.', source_name)
+                        aborted_reason = '20 consecutive errors — last: HTTP %d' % r.status_code
                         break
                     continue
 
@@ -1398,7 +1421,11 @@ def run_stream_audit(source_name: str):
         db.session.commit()
         persist_source_cache_updates(source.id, {
             'last_audit_result': {
-                'total': total, 'checked': checked, 'flagged': flagged, 'bridged': bridged,
+                # On an early abort, 'total' is what was actually scanned — not the
+                # channel count — so the UI doesn't claim channels were checked.
+                'total': scanned if aborted_reason else total,
+                'channel_count': total, 'aborted_reason': aborted_reason,
+                'checked': checked, 'flagged': flagged, 'bridged': bridged,
                 'dead': dead, 'vod': vod, 'not_authorized': not_authorized, 'errors': errors, 'skipped_403': skipped_403,
                 'ts': datetime.now(timezone.utc).isoformat(),
             },
@@ -1410,6 +1437,8 @@ def run_stream_audit(source_name: str):
         _audit_progress(0, 0, phase='done')
         logger.info('[audit] %s: done — total=%d checked=%d flagged=%d bridged=%d dead=%d vod=%d not_authorized=%d errors=%d skipped_403=%d',
                     source_name, total, checked, flagged, bridged, dead, vod, not_authorized, errors, skipped_403)
+        if aborted_reason:
+            logger.warning('[audit] %s: aborted after %d/%d channels — %s', source_name, scanned, total, aborted_reason)
 
 
 def run_stream_audit_recheck(source_name: str, channel_ids: list):

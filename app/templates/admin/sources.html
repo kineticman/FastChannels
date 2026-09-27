@@ -1931,7 +1931,7 @@
         } else {
           const ok  = Math.max(0, (result.checked || 0) - (result.vod || 0) - (result.flagged || 0) - (result.bridged || 0));
           const bits = [
-            result.total       ? `${result.total} scanned`                                         : null,
+            result.total       ? (result.aborted_reason && result.channel_count ? `${result.total} of ${result.channel_count} scanned` : `${result.total} scanned`) : null,
             `<span class="aud-ok">${ok} ok</span>`,
             result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`               : null,
             result.vod         ? `<span class="aud-vod">${result.vod} VOD</span>`                  : null,
@@ -1943,7 +1943,7 @@
           ].filter(Boolean);
           html += `
             <div class="audit-summary">
-              <div class="audit-summary-counts">${bits.join(' · ')}${result.partial ? ' <span class="aud-partial">(partial)</span>' : ''}</div>
+              <div class="audit-summary-counts">${bits.join(' · ')}${result.aborted_reason ? ' <span class="aud-partial">(aborted — ' + escapeHtml(result.aborted_reason) + ')</span>' : result.partial ? ' <span class="aud-partial">(partial)</span>' : ''}</div>
               ${ts ? `<div class="audit-summary-ts">${escapeHtml(ts)}</div>` : ''}
             </div>`;
         }
@@ -2225,8 +2225,12 @@
       if (!el || !r) return;
       const ok    = (r.checked || 0) - (r.flagged || 0) - (r.vod || 0) - (r.bridged || 0);
       const ts    = r.ts ? new Date(r.ts).toLocaleString() : '';
+      if (r.skipped_reason) {
+        el.innerHTML = `Last audit: <span class="aud-partial">skipped — ${escapeHtml(r.skipped_reason)}</span>${ts ? ' <span style="opacity:.5">· ' + ts + '</span>' : ''}`;
+        return;
+      }
       const bits  = [];
-      if (r.total)            bits.push(`${r.total} scanned`);
+      if (r.total)            bits.push(r.aborted_reason && r.channel_count ? `${r.total} of ${r.channel_count} scanned` : `${r.total} scanned`);
       if (r.checked != null)  bits.push(`<span class="aud-ok">${ok} ok</span>`);
       if (r.dead)             bits.push(`<span class="aud-dead">${r.dead} dead</span>`);
       if (r.vod)              bits.push(`<span class="aud-vod">${r.vod} VOD</span>`);
@@ -2235,7 +2239,9 @@
       if (r.bridged)          bits.push(`<span class="aud-bridge">${r.bridged} bridged (DRM)</span>`);
       if (r.skipped_403)      bits.push(`<span class="aud-403">${r.skipped_403} blocked</span>`);
       if (r.errors)           bits.push(`${r.errors} errors`);
-      el.innerHTML = `Last audit: ${bits.join(' · ')}${r.partial ? ' <span class="aud-partial">(partial)</span>' : ''}${ts ? ' <span style="opacity:.5">· ' + ts + '</span>' : ''}`;
+      const tag   = r.aborted_reason ? ` <span class="aud-partial">(aborted — ${escapeHtml(r.aborted_reason)})</span>`
+                  : r.partial ? ' <span class="aud-partial">(partial)</span>' : '';
+      el.innerHTML = `Last audit: ${bits.join(' · ')}${tag}${ts ? ' <span style="opacity:.5">· ' + ts + '</span>' : ''}`;
     }
 
     function _renderAuditStatus(sourceId, data) {
