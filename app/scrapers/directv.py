@@ -225,6 +225,42 @@ def _license_content_id_from_stream_url(stream_url: str, fallback: str) -> str:
     return fallback
 
 
+def _jwt_payload(token: str) -> dict:
+    """Decode a JWT's payload segment (no signature verification — we only read
+    claims from a token DirecTV already issued to us). Returns {} on any error."""
+    try:
+        seg = token.split('.')[1]
+        seg += '=' * (-len(seg) % 4)  # restore base64url padding
+        return json.loads(base64.urlsafe_b64decode(seg))
+    except Exception:
+        return {}
+
+
+def _log_account_schema(bearer: str, token_data: dict) -> None:
+    """One-time discovery aid for the DAI feature: log the FIELD NAMES (and value
+    types) DirecTV returns at login, so we can map real per-account values onto
+    the ad-session request WITHOUT hardcoding anyone's account. Deliberately logs
+    keys/types only — never a value — so nothing account-identifying is written,
+    even to the operator's own log."""
+    def _shape(d: dict) -> str:
+        out = []
+        for k, v in sorted(d.items()):
+            if isinstance(v, dict):
+                out.append(f'{k}:{{{",".join(sorted(v.keys()))}}}')
+            else:
+                out.append(f'{k}:{type(v).__name__}')
+        return ', '.join(out)
+
+    claims = _jwt_payload(bearer)
+    if claims:
+        logger.info('[directv-schema] bearer JWT claim keys: %s', _shape(claims))
+    vp = token_data.get('valuePairs')
+    if isinstance(vp, dict):
+        logger.info('[directv-schema] token valuePairs keys: %s', _shape(vp))
+    top = {k: v for k, v in token_data.items() if k != 'valuePairs'}
+    logger.info('[directv-schema] token top-level keys: %s', _shape(top))
+
+
 def _fetch_channel_playback(
     bearer_token: str, cookies: list[dict], client_context: str | None, ccid: str,
     dai: bool = False,
@@ -934,6 +970,7 @@ def capture_directv_auth_cffi(
     if verify.status_code < 200 or verify.status_code >= 300:
         raise DirectvAuthError(f'DirecTV token verify failed HTTP {verify.status_code}')
 
+    _log_account_schema(bearer, token_data)
     _status('success', 'Captured DirecTV session.')
     return {
         'bearer_token': bearer,
