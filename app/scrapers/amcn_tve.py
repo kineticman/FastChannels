@@ -659,6 +659,20 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             headers={**auth_headers, 'Content-Type': 'application/json'},
             timeout=30,
         )
+        # The authentication-session `code` dies within hours of sign-in (400
+        # invalid_authentication_session), but the MVPD profile behind it
+        # lasts far longer — confirmed live 2026-09-28: a Spectrum sign-in
+        # from that morning had a dead code by evening while
+        # /profiles/Spectrum, for the same client with a refreshed bearer,
+        # still answered with a userID and notAfter a year out. Look the
+        # profile up by MVPD instead of treating the dead code as a lost
+        # sign-in (which sent Spectrum to a scripted login it can't do).
+        if profile.status_code == 400 and 'invalid_authentication_session' in profile.text:
+            profile = session.get(
+                f'{ADOBE_BASE}/api/v2/{channel.requestor_id}/profiles/{mso_id}',
+                headers={**auth_headers, 'Content-Type': 'application/json'},
+                timeout=30,
+            )
         profile.raise_for_status()
         profile_json = profile.json()
         mso_profile = ((profile_json.get('profiles') or {}).get(mso_id) or {})
