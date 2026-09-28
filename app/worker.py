@@ -1054,10 +1054,10 @@ def run_stream_audit(source_name: str):
                         logger.info('[audit] %s: resolve hit a geo/legal block for %s, skipping: %s',
                                     source_name, ch.name, re_exc)
                         if consecutive_skipped_403 >= 30:
-                            logger.warning('[audit] %s: %d consecutive 403/skip responses — '
-                                           'source appears geo-blocked, aborting audit.',
+                            logger.warning('[audit] %s: %d consecutive geo-blocked responses (HTTP 403/451/452) — '
+                                           'aborting audit.',
                                            source_name, consecutive_skipped_403)
-                            aborted_reason = '%d consecutive 403/blocked responses (source appears geo-blocked)' % consecutive_skipped_403
+                            aborted_reason = '%d consecutive geo-blocked responses (HTTP 403/451/452)' % consecutive_skipped_403
                             break
                         continue
                     logger.warning('[audit] resolve failed for %s: %s', ch.name, re_exc)
@@ -1222,10 +1222,10 @@ def run_stream_audit(source_name: str):
                     logger.info('[audit] %s transient error (%d) after backoff, skipping',
                                 ch.name, r.status_code)
                     if consecutive_skipped_403 >= 30:
-                        logger.warning('[audit] %s: %d consecutive 403/skip responses — '
-                                       'source appears geo-blocked, aborting audit.',
+                        logger.warning('[audit] %s: %d consecutive geo-blocked responses (HTTP 403/451/452) — '
+                                       'aborting audit.',
                                        source_name, consecutive_skipped_403)
-                        aborted_reason = '%d consecutive 403/blocked responses (source appears geo-blocked)' % consecutive_skipped_403
+                        aborted_reason = '%d consecutive geo-blocked responses (HTTP 403/451/452)' % consecutive_skipped_403
                         break
                     continue
 
