@@ -717,22 +717,39 @@ def bridge_healthcheck():
                 # Known only from bmitune.sh's own report on a real tune (ah4c has no
                 # API to read its script files), so an untuned tuner stays unknown.
                 current = tuners[0]['scripts_current_version']
-                old_scripts = [t for t in tuners if t['scripts_status'] == 'outdated']
-                unseen = [t for t in tuners if t['scripts_status'] == 'unknown']
-                if old_scripts:
+                by_status = {}
+                for t in tuners:
+                    by_status.setdefault(t['scripts_status'], []).append(t)
+
+                def _nums(rows):
+                    return '#' + ', #'.join(str(t['index']) for t in rows)
+
+                update_hint = ('Update ah4c and restart it with UPDATE_SCRIPTS=true so it refreshes '
+                               'scripts/firetv/fastchannels, or click "Export ah4c scripts".')
+                outdated = by_status.get('outdated', [])
+                unversioned = by_status.get('unversioned', [])
+                unseen = by_status.get('unknown', [])
+                if outdated:
                     add('warn', 'ah4c scripts',
-                        f'{len(old_scripts)}/{len(tuners)} tuner(s) last tuned with an older ah4c script set '
-                        f"(tuner #{', #'.join(str(t['index']) for t in old_scripts)}; current is {current}).",
-                        'Click "Export ah4c scripts" and replace the files in ah4c\'s STREAMER_APP directory.')
-                elif len(unseen) == len(tuners):
+                        f'{len(outdated)}/{len(tuners)} tuner(s) last tuned with an older ah4c script set '
+                        f'(tuner {_nums(outdated)}; current is {current}).', update_hint)
+                if unversioned:
+                    # What every ah4c image from before the upstream versioning ships,
+                    # so it's not a misconfiguration; the tunes still work.
                     add('info', 'ah4c scripts',
-                        f'No ah4c tunes recorded yet, so the deployed script version is unknown (current is {current}).')
-                elif unseen:
-                    add('ok', 'ah4c scripts',
-                        f'Tuners seen tuning are on the current script set ({current}); '
-                        f"tuner #{', #'.join(str(t['index']) for t in unseen)} not seen yet.")
-                else:
-                    add('ok', 'ah4c scripts', f'All ah4c tuners are running the current script set ({current}).')
+                        f'{len(unversioned)}/{len(tuners)} tuner(s) last tuned with ah4c scripts from before '
+                        f'script versioning (tuner {_nums(unversioned)}). They work, but lack fixes in {current}.',
+                        update_hint)
+                if not outdated and not unversioned:
+                    if len(unseen) == len(tuners):
+                        add('info', 'ah4c scripts',
+                            f'No ah4c tunes recorded yet, so the deployed script version is unknown (current is {current}).')
+                    elif unseen:
+                        add('ok', 'ah4c scripts',
+                            f'Tuners seen tuning are on script set {current} or newer; '
+                            f'tuner {_nums(unseen)} not seen yet.')
+                    else:
+                        add('ok', 'ah4c scripts', f'All ah4c tuners are on script set {current} or newer.')
         except fc_player_bridge.FcPlayerNotConfigured:
             add('warn', 'ah4c tuners', 'ah4c is not fully configured.', 'Save the ah4c server URL and retry.')
         except (ValueError, _req.RequestException):
@@ -956,7 +973,10 @@ def export_ah4c_scripts():
     if not fastchannels_url:
         return jsonify({'ok': False, 'message': 'A valid FastChannels URL is required.'}), 400
 
-    tarball = build_ah4c_scripts_tarball(fastchannels_url)
+    try:
+        tarball = build_ah4c_scripts_tarball(fastchannels_url)
+    except ValueError as e:
+        return jsonify({'ok': False, 'message': str(e)}), 400
     return Response(
         tarball,
         mimetype='application/gzip',

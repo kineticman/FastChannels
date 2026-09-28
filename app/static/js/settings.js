@@ -444,8 +444,11 @@ function renderAh4cTuners(tuners) {
     if (t.scripts_status === 'current') {
       addBadge(scriptsCell, '✓ ' + t.scripts_version, 'ok');
     } else if (t.scripts_status === 'outdated') {
-      addBadge(scriptsCell, '⬆ ' + (t.scripts_version || 'Older'), 'warn',
-        `Re-export (current ${t.scripts_current_version})`);
+      addBadge(scriptsCell, '⬆ ' + t.scripts_version, 'warn',
+        `Update ah4c's scripts or re-export (current ${t.scripts_current_version})`);
+    } else if (t.scripts_status === 'unversioned') {
+      addBadge(scriptsCell, 'No version', '',
+        `Older set; update ah4c's scripts or re-export (current ${t.scripts_current_version})`);
     } else {
       addBadge(scriptsCell, '? Not seen yet', '', 'Known after its next ah4c tune');
     }

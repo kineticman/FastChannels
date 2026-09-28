@@ -74,7 +74,7 @@ def remember_tune(address: str, channel_key: str | None) -> None:
 
 def note_ah4c_scripts_version(address: str, version: str) -> None:
     """Record the script-set version bmitune.sh sent with an ah4c tune ('' when it
-    sent none — scripts exported before versioning). Best-effort, like remember_tune."""
+    sent none — a script set from before versioning). Best-effort, like remember_tune."""
     address = normalize_address(address) or address
     try:
         row = BridgeDevice.query.filter_by(address=address).first()
@@ -93,7 +93,10 @@ def note_ah4c_scripts_version(address: str, version: str) -> None:
 
 def ah4c_scripts_status(address: str) -> dict:
     """{'scripts_version', 'scripts_current_version', 'scripts_status'} for one tuner.
-    Status is 'current', 'outdated', or 'unknown' (no ah4c tune recorded yet)."""
+    Status is 'current'; 'outdated' (reports an older version); 'unversioned'
+    (reports none: a set from before versioning, which is what ah4c images that
+    predate UPSTREAM_COMMIT ship, so it's informational rather than a warning);
+    or 'unknown' (no ah4c tune recorded yet)."""
     from .ah4c_export import scripts_version
     current = scripts_version()
     address = normalize_address(address) or address
@@ -104,7 +107,9 @@ def ah4c_scripts_status(address: str) -> dict:
     reported = row.ah4c_scripts_version if row else None
     if reported is None:
         status = 'unknown'
-    elif reported and reported >= current:
+    elif not reported:
+        status = 'unversioned'
+    elif reported >= current:
         status = 'current'
     else:
         status = 'outdated'
