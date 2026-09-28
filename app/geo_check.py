@@ -26,7 +26,12 @@ import requests
 log = logging.getLogger(__name__)
 
 _CACHE_PATH = Path(os.environ.get('FASTCHANNELS_GEO_CACHE_FILE', '/data/cache/server_geo.json'))
-_TTL_SECONDS = 3600
+# The server's country almost never changes, so the dashboard banner re-checks
+# once a day. An audit that just failed re-checks sooner (AUDIT_MAX_AGE_SECONDS)
+# — that's when a VPN was most likely switched on/off and a stale answer would
+# put a misleading reason on the source card.
+_TTL_SECONDS = 24 * 3600
+AUDIT_MAX_AGE_SECONDS = 3600
 _FAILURE_RETRY_SECONDS = 600
 _REFRESH_LOCK = threading.Lock()
 _REFRESH_IN_PROGRESS = False
@@ -82,14 +87,15 @@ def _refresh() -> dict:
         prev = _read_cache().get('country')
         if prev and prev != payload['country']:
             log.warning('[geo-check] server country changed %s → %s', prev, payload['country'])
-        elif not prev and payload['country'] != 'US':
+        if payload['country'] != 'US':
+            # Every lookup (~daily), not just the first — the cache survives
+            # restarts, and this is the line that matters in pasted support logs.
             log.warning('[geo-check] server appears to be outside the US (%s) — '
                         'most sources are US-only and will fail', payload['country'])
     except Exception as exc:
         log.warning('[geo-check] lookup failed: %s', exc)
-        # Keep the last known country; retry sooner than the normal TTL.
-        payload = {**_read_cache(), 'error': str(exc),
-                   'checked_at': time.time() - _TTL_SECONDS + _FAILURE_RETRY_SECONDS}
+        # Keep the last known country; _is_stale() retries sooner after an error.
+        payload = {**_read_cache(), 'error': str(exc), 'checked_at': time.time()}
     _write_cache(payload)
     return payload
 
@@ -112,19 +118,21 @@ def _refresh_async() -> None:
     threading.Thread(target=_run, name='geo-check', daemon=True).start()
 
 
-def _is_stale(cache: dict) -> bool:
+def _is_stale(cache: dict, max_age: float) -> bool:
     checked_at = cache.get('checked_at')
-    return not checked_at or (time.time() - float(checked_at)) >= _TTL_SECONDS
+    if cache.get('error'):
+        max_age = min(max_age, _FAILURE_RETRY_SECONDS)
+    return not checked_at or (time.time() - float(checked_at)) >= max_age
 
 
-def get_server_country(*, blocking: bool = False) -> str | None:
+def get_server_country(*, blocking: bool = False, max_age: float = _TTL_SECONDS) -> str | None:
     """Two-letter country code of the server's public IP, or None if unknown or
     disabled. Non-blocking by default (web requests): a stale cache is returned
     as-is and refreshed in the background. Workers pass blocking=True."""
     if not geo_check_enabled():
         return None
     cache = _read_cache()
-    if _is_stale(cache):
+    if _is_stale(cache, max_age):
         if blocking:
             cache = _refresh()
         else:
@@ -138,7 +146,7 @@ def outside_us_hint(source_countries) -> str | None:
     countries = {(c or 'US').upper() for c in source_countries}
     if countries and countries != {'US'}:
         return None
-    country = get_server_country(blocking=True)
+    country = get_server_country(blocking=True, max_age=AUDIT_MAX_AGE_SECONDS)
     if not country or country == 'US':
         return None
     return (f'this server appears to be in {country}, and this source only works '
