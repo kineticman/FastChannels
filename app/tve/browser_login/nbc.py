@@ -66,7 +66,7 @@ _NBC_SESSION_POLL_MAX_SECONDS = 20.0
 _NBC_SESSION_POLL_BACKOFF = 1.5
 
 
-def _save_nbc_mvpd_auth(mso_id: str, access_token: str, device_fingerprint: str) -> None:
+def _save_nbc_mvpd_auth(mso_id: str, client, device_fingerprint: str) -> None:
     """Pushes its own app_context — see _prime_google_session's docstring.
     Called mid-browser-session, after run_nbc_browser_login has already
     popped its outer one before launching Camoufox."""
@@ -77,7 +77,11 @@ def _save_nbc_mvpd_auth(mso_id: str, access_token: str, device_fingerprint: str)
         cfg = dict(account.config or {})
         cfg['nbc_mvpd_auth'] = {
             'mso_id': mso_id,
-            'access_token': access_token,
+            'access_token': client.access_token,
+            # So nbc_tve can mint a fresh access_token for this same client
+            # once this one expires — the sign-in itself outlives it.
+            'client_id': client.client_id,
+            'client_secret': client.client_secret,
             'device_fingerprint': device_fingerprint,
             'captured_at': int(time.time()),
         }
@@ -299,7 +303,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 except Exception:  # noqa: BLE001
                     profile = None
                 if profile:
-                    _save_nbc_mvpd_auth(mso_id, client.access_token, device_fingerprint)
+                    _save_nbc_mvpd_auth(mso_id, client, device_fingerprint)
                     if mso_id == 'Comcast_SSO':
                         _harvest_and_save_xfinity_cookies(context)
                     elif mso_id == 'YouTubeTV':
@@ -597,7 +601,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                                 )
                                 last_progress_log = now
                             continue  # human hasn't finished the MSO login yet
-                        _save_nbc_mvpd_auth(mso_id, client.access_token, device_fingerprint)
+                        _save_nbc_mvpd_auth(mso_id, client, device_fingerprint)
                         if mso_id == 'Comcast_SSO':
                             _harvest_and_save_xfinity_cookies(context)
                         elif mso_id == 'YouTubeTV':

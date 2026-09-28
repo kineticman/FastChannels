@@ -16,7 +16,7 @@ import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
-from ..tve.adobe_pass import MvpdCooldownMixin, TVENotAuthorizedError
+from ..tve.adobe_pass import MvpdCooldownMixin, TVENotAuthorizedError, is_transient_error
 
 logger = logging.getLogger(__name__)
 
@@ -770,6 +770,36 @@ def _fox_sports_mvpd_token(
     return token
 
 
+def _fox_sports_recheck_token(session: requests.Session, device_id: str, mso_id: str) -> str | None:
+    """A fresh MVPD token for a device that already signed in, or None if FOX
+    no longer has it signed in. The token only lasts 24h, but the sign-in
+    behind it is tied to `device_id` and lasts far longer (its own
+    authn_expire claim was ~90 days out, checked 2026-09-28) — this is the
+    same checkadobeauthn call a sign-in ends with. Network errors, 429 and
+    5xx raise instead of returning None."""
+    anon = session.post(
+        'https://api3.fox.com/v2.0/login',
+        headers=_fox_json_headers(),
+        json={'deviceId': device_id},
+        timeout=30,
+    )
+    anon.raise_for_status()
+    check = session.get(
+        'https://api3.fox.com/v2.0/checkadobeauthn/v2',
+        headers=_fox_json_headers(anon.json()['accessToken']),
+        params={'device_id': device_id, 'requestor': 'fbc-fox'},
+        timeout=30,
+    )
+    if check.status_code == 429 or check.status_code >= 500:
+        check.raise_for_status()
+    if not check.ok:
+        return None
+    token = (check.json() or {}).get('accessToken') or ''
+    # An anonymous token comes back from the same call when the device isn't
+    # signed in; only a token naming our MVPD counts.
+    return token if (_jwt_payload(token) or {}).get('mvpdid') == mso_id else None
+
+
 def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
     from .. import db
     from ..models import TVEAccount
@@ -784,6 +814,26 @@ def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
         cached_mso = cfg.get('fox_sports_access_token_mso') or 'Cox'
         if cached_token and cached_exp > now + 300 and cached_mso == mso_id:
             return cached_token
+        saved_device_id = cfg.get('fox_sports_device_id')
+        if saved_device_id and cached_mso == mso_id:
+            try:
+                token = _fox_sports_recheck_token(session, saved_device_id, mso_id)
+            except Exception as exc:  # noqa: BLE001
+                if is_transient_error(exc):
+                    # Says nothing about the sign-in — don't mark it failed
+                    # or try a fresh MVPD login over a FOX/Adobe blip.
+                    logger.warning('[fox-tve] could not re-check saved %s sign-in, using preview for now: %s', mso_id, exc)
+                    return _fox_sports_preview_token(session, device_id)
+                logger.warning('[fox-tve] re-checking saved %s sign-in failed: %s', mso_id, exc)
+                token = None
+            if token:
+                cfg['fox_sports_access_token'] = token
+                cfg['fox_sports_access_token_exp'] = _jwt_exp(token) or (now + 3600)
+                account.config = cfg
+                db.session.commit()
+                logger.info('[fox-tve] refreshed expired FOX Sports token for saved %s sign-in', mso_id)
+                return token
+            logger.warning('[fox-tve] saved %s sign-in no longer recognized by FOX', mso_id)
         try:
             token = _fox_sports_mvpd_token(
                 session, device_id, mso_id, account.username or '', account.password or '',
@@ -794,6 +844,7 @@ def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
             cfg['fox_sports_access_token_exp'] = exp
             cfg['fox_sports_access_token_mso'] = mso_id
             cfg['fox_sports_access_token_captured_at'] = now
+            cfg['fox_sports_device_id'] = device_id
             account.config = cfg
             account.last_auth_status = 'ok'
             account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id}.'

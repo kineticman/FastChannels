@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import logging
 import re
 import time
 import uuid
@@ -10,10 +11,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+import requests
+
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
-from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS, _jwt_exp
+from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS, _jwt_exp, _jwt_payload
 from ..gracenote_map import resolve_gracenote
-from ..tve.adobe_pass import MvpdCooldownMixin, TVENotAuthorizedError
+from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
+
+logger = logging.getLogger(__name__)
 
 _SCHEME = 'fox-one://'
 _API_BASE = 'https://api.fox.com/dtc'
@@ -700,6 +705,39 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
 
         return self._foxone_mvpd_finish(session, request_id, device_id, mso_id)
 
+    def _recheck_mvpd_token(self, mso_id: str) -> tuple[str, float] | None:
+        """A fresh token for this device's existing MVPD sign-in, or None if
+        FOX no longer has it signed in. The token lasts 24h but the sign-in
+        behind it far longer — confirmed live 2026-09-28: checkauthn from a
+        brand-new session with just the saved device_id returned a new token
+        whose authn_expire was ~90 days out. Network errors, 429 and 5xx
+        raise instead: they say nothing about the sign-in, and falling
+        through to a fresh login from there fails for Cox/Spectrum."""
+        device_id = (self.config.get('device_id') or '').strip()
+        if not device_id:
+            return None
+        try:
+            check = self.session.get(
+                f'{_ID_BASE}/adobeauthn/v3/checkauthn',
+                params={'device_id': device_id, 'requestor': 'foxone', 'client_id': _HYDRA_CLIENT_ID},
+                headers=self._foxone_auth_headers(),
+                timeout=20,
+            )
+        except requests.RequestException as exc:
+            raise TVEAuthError(f'FOX One: could not reach FOX to check the saved {mso_id} sign-in; will retry: {exc}') from exc
+        if check.status_code == 429 or check.status_code >= 500:
+            raise TVEAuthError(f'FOX One: FOX returned HTTP {check.status_code} checking the saved {mso_id} sign-in; will retry.')
+        try:
+            token = self._clean_token(check.json().get('accessToken')) if check.ok else ''
+        except ValueError:
+            token = ''
+        claims = _jwt_payload(token) if token else None
+        if not claims or claims.get('mvpdid') != mso_id:
+            logger.warning('[fox-one] saved %s sign-in not recognized by FOX (HTTP %s)', mso_id, check.status_code)
+            return None
+        logger.info('[fox-one] refreshed expired token for saved %s sign-in', mso_id)
+        return token, float(claims.get('exp') or (time.time() + 3600))
+
     def _ensure_access_token(self) -> str:
         access_token = self._clean_token(self.config.get('access_token'))
         if access_token and self._token_expires_at() > time.time() + _TOKEN_REFRESH_SKEW:
@@ -708,6 +746,17 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         login = self._mvpd_login()
         mvpd_exc: Exception | None = None
         if login:
+            try:
+                rechecked = self._recheck_mvpd_token(login.mso_id)
+            except TVEAuthError:
+                if access_token and self._token_expires_at() > time.time():
+                    return access_token
+                raise
+            if rechecked:
+                access_token, expires_at = rechecked
+                self._update_config('access_token', access_token)
+                self._update_config('access_expires_at', expires_at)
+                return access_token
             try:
                 access_token, expires_at = self._authenticate_via_mvpd(
                     login.mso_id, login.username, login.password, login.cookie_jar,

@@ -341,7 +341,10 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                                 )
                                 last_progress_log = now
                             continue
-                        scraper._save_adobe_session_cache(channel, mso_id, code, client.ctx.access_token)
+                        scraper._save_adobe_session_cache(
+                            channel, mso_id, code, client.ctx.access_token,
+                            client.ctx.client_id, client.ctx.client_secret,
+                        )
                         scraper._save_adobe_auth_cache(channel, mso_id, adobe_token, adobe_id, notafter_ms)
                         authorized.append(channel.name)
                         paired = True

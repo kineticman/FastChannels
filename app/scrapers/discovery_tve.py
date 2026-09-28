@@ -269,12 +269,20 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             return None
         session = self._session()
         _restore_cookies(session, cookies)
+        # A network error, 429 or 5xx says nothing about the session — raise a
+        # retryable error rather than dropping it for a fresh sign-in, which
+        # Spectrum/Cox can't do without a browser.
         try:
             r = session.get(f'{API_BASE}/users/me', headers=_browser_headers(), timeout=15)
+        except requests.RequestException as exc:
+            raise TVEAuthError(f'Discovery TVE: could not reach Discovery to check the saved sign-in; will retry: {exc}') from exc
+        if r.status_code == 429 or r.status_code >= 500:
+            raise TVEAuthError(f'Discovery TVE: Discovery returned HTTP {r.status_code} checking the saved sign-in; will retry.')
+        try:
             if r.status_code == 200 and not (((r.json().get('data') or {}).get('attributes') or {}).get('anonymous')):
                 return session
-        except Exception:
-            return None
+        except ValueError:
+            pass
         logger.info('[discovery-tve] cached session rejected by /users/me (HTTP %s) after %s',
                     r.status_code, _session_age(cached))
         return None

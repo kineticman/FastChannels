@@ -102,6 +102,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import re
 import struct
 import time
@@ -127,6 +128,8 @@ try:
     from Cryptodome.Cipher import AES as _AES
 except ImportError:  # pragma: no cover
     from Crypto.Cipher import AES as _AES  # type: ignore[no-redef]
+
+logger = logging.getLogger(__name__)
 
 SCHEME = 'nbc-tve://'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
@@ -332,9 +335,16 @@ class AdobePassV2Client:
             raise TVEAuthError('Adobe Pass v2: client registration did not return credentials.')
         self.client_id, self.client_secret = client_id, client_secret
 
+        self.refresh_access_token()
+
+    def refresh_access_token(self) -> None:
+        """Mint a new access_token for the already-registered client_id/secret.
+        The token is short-lived, but the MVPD sign-in Adobe holds for this
+        device fingerprint is not (a Spectrum profile's notAfter was ~90 days
+        out when checked 2026-09-28, while its 65h-old token got a 401)."""
         r = self._post(
             f'{ADOBE_BASE}/o/client/token',
-            data={'grant_type': 'client_credentials', 'client_id': client_id, 'client_secret': client_secret},
+            data={'grant_type': 'client_credentials', 'client_id': self.client_id, 'client_secret': self.client_secret},
             headers={'Content-Type': 'application/x-www-form-urlencoded'},
         )
         access_token = r.json().get('access_token')
@@ -723,6 +733,57 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             self._update_config('device_fingerprint', fingerprint)
         return fingerprint
 
+    def _cached_nbc_profile(self, client: AdobePassV2Client, mso_id: str, cached_auth: dict, cfg: dict, account) -> dict | None:
+        """Adobe's profile for a saved sign-in, or None if Adobe says it's gone.
+
+        A 401 usually just means the saved access_token expired while the
+        sign-in itself is still valid, so mint a new token for the same client
+        and ask again before giving up on it. A network error, 429 or 5xx
+        raises instead: falling through to a scripted login from there reports
+        a working sign-in as signed out (and Spectrum etc. can't script one)."""
+        from .. import db
+
+        age_h = (time.time() - float(cached_auth.get('captured_at') or 0)) / 3600
+        url = f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{mso_id}'
+
+        def fetch():
+            try:
+                r = client.session.get(url, headers=client._bearer_headers(), timeout=20)
+            except requests.RequestException as exc:
+                raise TVEAuthError(f'NBC TVE: could not reach Adobe to check the saved {mso_id} sign-in: {exc}') from exc
+            if r.status_code == 429 or r.status_code >= 500:
+                raise TVEAuthError(f'NBC TVE: Adobe returned HTTP {r.status_code} checking the saved {mso_id} sign-in; will retry.')
+            return r
+
+        r = fetch()
+        if r.status_code == 401:
+            creds = cached_auth if cached_auth.get('client_id') else (cfg.get('adobe_client_creds') or {}).get(REQUESTOR_ID) or {}
+            if creds.get('client_id') and creds.get('client_secret'):
+                client.client_id, client.client_secret = creds['client_id'], creds['client_secret']
+                client.refresh_access_token()
+                r = fetch()
+                if r.ok:
+                    logger.info('[nbc_tve] refreshed expired Adobe access token for saved %s sign-in (%.1fh old)', mso_id, age_h)
+                    new_cfg = dict(account.config or {})
+                    new_cfg['nbc_mvpd_auth'] = {
+                        **(new_cfg.get('nbc_mvpd_auth') or {}),
+                        'access_token': client.access_token,
+                        'client_id': client.client_id,
+                        'client_secret': client.client_secret,
+                    }
+                    account.config = new_cfg
+                    db.session.commit()
+        if not r.ok:
+            logger.warning('[nbc_tve] saved %s sign-in rejected by Adobe: HTTP %s (%.1fh old)', mso_id, r.status_code, age_h)
+            return None
+        try:
+            profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)
+        except ValueError:
+            profile = None
+        if not profile:
+            logger.warning('[nbc_tve] saved %s sign-in has no Adobe profile (%.1fh old)', mso_id, age_h)
+        return profile
+
     def _ensure_entitled(self, resource_id: str) -> None:
         from .. import db
 
@@ -761,11 +822,7 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
                 cached_auth.get('device_fingerprint') or self._ensure_device_fingerprint(),
             )
             cached_client.access_token = cached_auth['access_token']
-            try:
-                r = cached_client._get(f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{mso_id}', headers=cached_client._bearer_headers())
-                profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)
-            except TVEAuthError:
-                profile = None
+            profile = self._cached_nbc_profile(cached_client, mso_id, cached_auth, cfg, account)
             if profile:
                 resource_ids = sorted({e.resource_id for e in self._fetch_guide().values()} | {resource_id})
                 decisions = cached_client.preauthorize(mso_id, resource_ids)
@@ -820,6 +877,8 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             new_cfg['nbc_mvpd_auth'] = {
                 'mso_id': mso_id,
                 'access_token': client.access_token,
+                'client_id': client.client_id,
+                'client_secret': client.client_secret,
                 'device_fingerprint': self._ensure_device_fingerprint(),
                 'captured_at': int(time.time()),
             }

@@ -130,9 +130,10 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 import uuid as _uuid
                 from app.scrapers.fox_tve import _fox_sports_mvpd_token
                 fox_session = requests.Session()
+                fox_device_id = str(_uuid.uuid4())
                 try:
                     token = _fox_sports_mvpd_token(
-                        fox_session, str(_uuid.uuid4()), mso_id,
+                        fox_session, fox_device_id, mso_id,
                         cookie_jar_account.username or '', cookie_jar_account.password or '',
                         cookie_jar=cookie_jar,
                     )
@@ -145,6 +146,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     cfg['fox_sports_access_token_exp'] = _jwt_exp(token) or (now + 3600)
                     cfg['fox_sports_access_token_mso'] = mso_id
                     cfg['fox_sports_access_token_captured_at'] = now
+                    cfg['fox_sports_device_id'] = fox_device_id
                     cookie_jar_account.config = cfg
                     cookie_jar_account.last_auth_status = 'ok'
                     cookie_jar_account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (no browser needed).'
@@ -242,6 +244,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             acct_cfg['fox_sports_access_token_exp'] = exp
                             acct_cfg['fox_sports_access_token_mso'] = mso_id
                             acct_cfg['fox_sports_access_token_captured_at'] = int(time.time())
+                            acct_cfg['fox_sports_device_id'] = device_id
                             account.config = acct_cfg
                             account.last_auth_status = 'ok'
                             account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (browser-assisted).'
@@ -560,6 +563,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                                 acct_cfg['fox_sports_access_token_exp'] = exp
                                 acct_cfg['fox_sports_access_token_mso'] = mso_id
                                 acct_cfg['fox_sports_access_token_captured_at'] = int(time.time())
+                                acct_cfg['fox_sports_device_id'] = device_id
                                 account.config = acct_cfg
                                 account.last_auth_status = 'ok'
                                 account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (browser-assisted).'

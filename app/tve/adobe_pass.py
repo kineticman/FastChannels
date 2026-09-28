@@ -741,6 +741,49 @@ def save_adobe_client_creds(account, requestor_id: str, client_id: str, client_s
     db.session.commit()
 
 
+def refresh_adobe_client_token(client_id: str, client_secret: str) -> str:
+    """Mint a new access_token for an already-registered Adobe client.
+
+    Adobe Pass v2 binds an MVPD sign-in to the client (and device) that did
+    it — confirmed live 2026-09-28: a newly registered client couldn't see an
+    AMC sign-in by code or by MVPD, while a fresh token for the ORIGINAL
+    client still saw NBC's 65h-old one (good for ~90 days). So once the ~6h
+    token expires, refresh it for the same client rather than registering a
+    new one, or the sign-in is lost with it."""
+    try:
+        r = requests.post(
+            f'{ADOBE_BASE}/o/client/token',
+            data={'grant_type': 'client_credentials', 'client_id': client_id, 'client_secret': client_secret},
+            headers={'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+            timeout=30,
+        )
+        r.raise_for_status()
+        token = r.json().get('access_token')
+    except (requests.RequestException, ValueError) as exc:
+        raise TVEAuthError(f'Adobe client token refresh failed: {exc}') from exc
+    if not token:
+        raise TVEAuthError('Adobe client token refresh did not return an access_token.')
+    return token
+
+
+def is_transient_error(exc: BaseException) -> bool:
+    """True for failures that say nothing about whether a saved sign-in is
+    still good — network errors, timeouts, 429 and 5xx. A saved sign-in
+    should only be written off on a real answer from upstream, never on
+    these (that turned an Adobe blip into "sign in again" for providers
+    like Spectrum that can't be signed in without a browser)."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
+            return True
+        response = getattr(exc, 'response', None)
+        if isinstance(exc, requests.HTTPError) and response is not None:
+            return response.status_code == 429 or response.status_code >= 500
+        exc = exc.__cause__
+    return False
+
+
 def _save_mvpd_authn_token(account, requestor_id: str, authn_token: str) -> None:
     if not authn_token:
         return
@@ -1015,13 +1058,18 @@ def authorize_mvpd(
         except TVENotAuthorizedError:
             raise  # definitive answer from Adobe — retrying won't change it
         except TVEAuthError as exc:
+            if is_transient_error(exc):
+                # Not a rejection — don't throw away a working sign-in and
+                # start a real MVPD login over an Adobe blip.
+                raise TVEAuthError(f'{requestor_id}: Adobe unreachable reusing the saved sign-in; will retry: {exc}') from exc
             logger.info('[adobe-pass] cached authn_token for %s rejected, re-authenticating: %s', requestor_id, exc)
 
-    if selected_mso_id == 'Cox':
-        # Adobe's "Cox" hands off to Spectrum's browser-only login page now,
-        # and yt-dlp's Cox handler can't get there either.
-        from .mvpd import require_scripted_mvpd_login
-        require_scripted_mvpd_login(selected_mso_id)
+    # Adobe's "Cox" hands off to Spectrum's browser-only login page now, and
+    # Spectrum's is reCAPTCHA-gated — yt-dlp's handlers can't get through
+    # either, and repeated scripted attempts only invite the bot check.
+    from .mvpd import require_scripted_mvpd_login
+    require_scripted_mvpd_login(selected_mso_id)
+    require_scripted_mvpd_login((cfg.get('yt_dlp_mso_id') or selected_mso_id).strip())
 
     if selected_mso_id == 'Comcast_SSO':
         # login.xfinity.com's credential POST is blocked by Akamai Bot

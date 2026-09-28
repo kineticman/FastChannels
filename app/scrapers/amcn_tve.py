@@ -23,6 +23,8 @@ from ..tve.adobe_pass import (
     MvpdCooldownMixin,
     TVEAuthError,
     TVENotAuthorizedError,
+    is_transient_error,
+    refresh_adobe_client_token,
 )
 
 logger = logging.getLogger(__name__)
@@ -746,11 +748,28 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             return None
         if cached.get('mso_id') != mso_id or not cached.get('code') or not cached.get('client_bearer'):
             return None
-        if int(cached.get('expires_at') or 0) <= int(time.time()) + TOKEN_SKEW_SECONDS:
+        # An expired bearer is still usable when we can refresh it for the
+        # same client (see refresh_adobe_client_token) — the sign-in behind
+        # `code` outlives it. Sessions saved before client creds were kept
+        # can't be refreshed and still expire with their bearer.
+        if int(cached.get('expires_at') or 0) <= int(time.time()) + TOKEN_SKEW_SECONDS and not (
+            cached.get('client_id') and cached.get('client_secret')
+        ):
             return None
         return cached
 
-    def _save_adobe_session_cache(self, channel: AMCNChannel, mso_id: str, code: str, client_bearer: str) -> None:
+    def _refresh_adobe_session_bearer(self, channel: AMCNChannel, cached: dict) -> str:
+        bearer = refresh_adobe_client_token(cached['client_id'], cached['client_secret'])
+        self._update_cache(self._adobe_session_cache_key(channel), {
+            **cached, 'client_bearer': bearer,
+            'expires_at': _jwt_exp(bearer) or (int(time.time()) + 3600),
+        })
+        return bearer
+
+    def _save_adobe_session_cache(
+        self, channel: AMCNChannel, mso_id: str, code: str, client_bearer: str,
+        client_id: str | None = None, client_secret: str | None = None,
+    ) -> None:
         # client_bearer (the Adobe "api:client:v2" client token minted by
         # setup_client(), distinct from the short-lived playback token above)
         # is a real JWT good for ~6h (confirmed live 2026-08-14). Reusing it
@@ -760,6 +779,7 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
         # of paying a full re-login on every play request more than ~5min apart.
         self._update_cache(self._adobe_session_cache_key(channel), {
             'mso_id': mso_id, 'code': code, 'client_bearer': client_bearer,
+            'client_id': client_id, 'client_secret': client_secret,
             'expires_at': _jwt_exp(client_bearer) or (int(time.time()) + 3600),
         })
 
@@ -797,17 +817,37 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             # gone stale/been revoked.
             session_cached = self._cached_adobe_session(channel, mso_id)
             if session_cached:
-                try:
-                    redo_session = requests.Session()
-                    self._configure_session(redo_session)
-                    headers = _adobe_bearer_headers(session_cached['client_bearer'], channel, device_id)
-                    adobe_token, adobe_id, notafter_ms = self._adobe_decision_finish(
-                        redo_session, channel, session_cached['code'], mso_id, headers,
-                    )
-                    self._save_adobe_auth_cache(channel, mso_id, adobe_token, adobe_id, notafter_ms)
-                    return adobe_token, adobe_id
-                except Exception:
-                    self._update_cache(self._adobe_session_cache_key(channel), {})
+                can_refresh = bool(session_cached.get('client_id') and session_cached.get('client_secret'))
+                bearer = session_cached['client_bearer']
+                refreshed = False
+                expired = int(session_cached.get('expires_at') or 0) <= int(time.time()) + TOKEN_SKEW_SECONDS
+                while True:
+                    try:
+                        if expired and not refreshed:
+                            bearer = self._refresh_adobe_session_bearer(channel, session_cached)
+                            refreshed = True
+                        redo_session = requests.Session()
+                        self._configure_session(redo_session)
+                        headers = _adobe_bearer_headers(bearer, channel, device_id)
+                        adobe_token, adobe_id, notafter_ms = self._adobe_decision_finish(
+                            redo_session, channel, session_cached['code'], mso_id, headers,
+                        )
+                        if refreshed:
+                            logger.info('[amcn-tve] %s: refreshed expired Adobe bearer for saved %s sign-in', channel.name, mso_id)
+                        self._save_adobe_auth_cache(channel, mso_id, adobe_token, adobe_id, notafter_ms)
+                        return adobe_token, adobe_id
+                    except TVENotAuthorizedError:
+                        raise
+                    except Exception as exc:
+                        if is_transient_error(exc):
+                            raise TVEAuthError(f'{channel.name}: Adobe unreachable checking the saved {mso_id} sign-in; will retry: {exc}') from exc
+                        status = getattr(getattr(exc, 'response', None), 'status_code', None)
+                        if status == 401 and can_refresh and not refreshed:
+                            expired = True
+                            continue
+                        logger.warning('[amcn-tve] %s: saved %s sign-in rejected by Adobe: %s', channel.name, mso_id, exc)
+                        self._update_cache(self._adobe_session_cache_key(channel), {})
+                        break
 
         from ..tve.mvpd import require_scripted_mvpd_login
         try:
@@ -874,7 +914,9 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
                 raise TVEAuthError(f'{channel.name}: {exc}') from exc
 
         adobe_token, adobe_id, notafter_ms = self._adobe_decision_finish(client.session, channel, code, mso_id, auth_headers)
-        self._save_adobe_session_cache(channel, mso_id, code, client.ctx.access_token)
+        self._save_adobe_session_cache(
+            channel, mso_id, code, client.ctx.access_token, client.ctx.client_id, client.ctx.client_secret,
+        )
         self._save_adobe_auth_cache(channel, mso_id, adobe_token, adobe_id, notafter_ms)
         return adobe_token, adobe_id
 
