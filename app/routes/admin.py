@@ -560,6 +560,10 @@ def dashboard():
         scheduler_health = {'ok': False, 'minutes': int(_hb['age_seconds'] // 60)}
     elif not _hb['present'] and enabled_sources:
         scheduler_health = {'ok': False, 'minutes': None}
+    # Nearly every source is US-only; from outside the US they fail in confusing
+    # ways (GH #64). Non-blocking — first load kicks off the lookup in background.
+    from app.geo_check import get_server_country
+    server_country = get_server_country()
     return render_template('admin/dashboard.html', sources=sources,
                            enabled_sources=enabled_sources, disabled_sources=disabled_sources,
                            total_channels=total_channels, base_url=base_url,
@@ -573,6 +577,7 @@ def dashboard():
                            setup_total_count=5,
                            tz_health=timezone_health(app_settings.timezone_name),
                            scheduler_health=scheduler_health,
+                           server_country=server_country,
                            now=_now)
 
 

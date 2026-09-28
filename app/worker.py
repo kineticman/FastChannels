@@ -110,7 +110,8 @@ def _run_with_signal_timeout(label: str, timeout_seconds: int | None, fn):
 
 
 _STATUS_CODE_RE = re.compile(r'\b(?:HTTP\s+|returned\s+|status\s+)(\d{3})\b')
-_GEO_BLOCK_STATUS_CODES = (403, 451)
+# 452 is Roku's playback response for every channel from outside the US (GH #64).
+_GEO_BLOCK_STATUS_CODES = (403, 451, 452)
 
 
 def _http_status_from_exception(exc: Exception) -> int | None:
@@ -121,11 +122,24 @@ def _http_status_from_exception(exc: Exception) -> int | None:
 
 def _is_geo_block_error(exc: Exception) -> bool:
     """True for a resolve()-time exception signalling an IP-level geo/legal
-    block (403/451). Covers scrapers that embed the status in the message
+    block (403/451/452). Covers scrapers that embed the status in the message
     (e.g. Roku's raw RuntimeError) as well as ones that raise ScrapeSkipError
     with a static message and no status code at all (e.g. LocalNow's shared
     403/451 homepage-bootstrap check)."""
     return isinstance(exc, ScrapeSkipError) or _http_status_from_exception(exc) in _GEO_BLOCK_STATUS_CODES
+
+
+def _outside_us_hint_for(source) -> str | None:
+    """Geo explanation for a failed/aborted audit of a US-only source when the
+    server itself is outside the US. Best-effort — never raises."""
+    try:
+        from app.geo_check import outside_us_hint
+        countries = [c for (c,) in db.session.query(Channel.country)
+                     .filter(Channel.source_id == source.id).distinct()]
+        return outside_us_hint(countries)
+    except Exception as exc:
+        logger.debug('[audit] geo hint failed: %s', exc)
+        return None
 
 
 def _audit_reason_from_exception(exc: Exception) -> str:
@@ -780,6 +794,9 @@ def run_stream_audit(source_name: str):
             scraper.audit_preflight()
         except Exception as _pf_exc:
             _skip_msg = f'Sign-in failed — {str(_pf_exc).strip() or type(_pf_exc).__name__}'
+            _geo_hint = _outside_us_hint_for(source)
+            if _geo_hint:
+                _skip_msg += f' ({_geo_hint})'
             logger.warning('[audit] %s: %s — skipping audit', source_name, _skip_msg)
             persist_source_cache_updates(source.id, {'last_audit_result': {
                 'skipped_reason': _skip_msg,
@@ -1421,6 +1438,11 @@ def run_stream_audit(source_name: str):
         # The source card's channel badge counts only channels in output (active,
         # enabled, with a stream URL), but the audit also re-checks dead and
         # user-disabled ones. Record the difference so the two numbers reconcile.
+        if aborted_reason:
+            _geo_hint = _outside_us_hint_for(source)
+            if _geo_hint:
+                aborted_reason += f' — {_geo_hint}'
+
         not_in_output = Channel.query.filter(
             Channel.id.in_(_audit_ids),
             db.not_(db.and_(Channel.is_active == True, Channel.is_enabled == True,
