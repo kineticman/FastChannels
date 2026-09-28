@@ -860,6 +860,32 @@ def ensure_runtime_schema() -> None:
                     [{"cat": cat, "id": row_id} for cat, row_id in updates],
                 )
 
+        # Spectrum's promo barkers ("Spectrum", "Spectrum1".."Spectrum14" — looped
+        # upsell ads, see _PROMO_CALLSIGN_RE in scrapers/spectrum.py) are now
+        # excluded at scrape time, but reconcile deliberately keeps excluded rows
+        # as inactive forever, so installs that scraped before that need them
+        # deleted. callSign isn't stored; these exact names are Spectrum's own
+        # (GLOB needs a digit right after, so "Spectrum News/SportsNet" can't match).
+        if "channels" in tables:
+            promo_ids = [r[0] for r in conn.execute(text(
+                "SELECT c.id FROM channels c JOIN sources s ON c.source_id = s.id "
+                "WHERE s.name = 'spectrum' "
+                "AND (c.name = 'Spectrum' OR c.name GLOB 'Spectrum[0-9]*')"
+            )).fetchall()]
+            if promo_ids:
+                for table in ("programs", "feed_channel_numbers"):
+                    if table in tables:
+                        conn.execute(text(
+                            f"DELETE FROM {table} WHERE channel_id IN ({','.join(map(str, promo_ids))})"
+                        ))
+                conn.execute(text(
+                    f"DELETE FROM channels WHERE id IN ({','.join(map(str, promo_ids))})"
+                ))
+                import logging as _log
+                _log.getLogger(__name__).info(
+                    "Removed %d Spectrum promo channel(s)", len(promo_ids),
+                )
+
         # Clear known-bad Gracenote IDs (github.com/kineticman/FastChannels/issues/58)
         # from any channel that picked one up via the community CSV. Runs every boot,
         # not gated by a one-time migration flag, since the exclusion list itself can

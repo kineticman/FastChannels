@@ -80,6 +80,12 @@ _RELOGIN_COOLDOWN = 45 * 60      # don't re-trigger more than once per 45min if 
 
 _MC_NAME_RE = re.compile(r'^~mc(\d+):?$')
 
+# Spectrum's in-house promo barkers ("Spectrum", "Spectrum1".."Spectrum14",
+# callSign SPCTRM / SPCTRM<n>, channels 2410-2496): every guide slot is a
+# looped upsell ("Get Disney+ and Hulu", "Get HBO Max", "Special Offer"),
+# confirmed from the live EPG 2026-09-28. Not real channels, so never listed.
+_PROMO_CALLSIGN_RE = re.compile(r'^SPCTRM\d*$')
+
 # Spectrum's own channels/v3 networkName is genuinely garbage for every Music
 # Choice channel — literally "~MC05:", nothing after the colon — confirmed
 # live 2026-09-17 by checking the raw API response directly (not a scraper
@@ -350,6 +356,12 @@ class SpectrumScraper(BaseScraper):
             if not row.get('online'):
                 continue
             entitlement_id = row.get('entitlementId')
+            # Excluded (not just skipped) so reconcile deactivates them now
+            # instead of waiting out the missed-scrape grace period.
+            if _PROMO_CALLSIGN_RE.match((row.get('callSign') or '').strip()):
+                if entitlement_id:
+                    self.excluded_channel_ids.add(str(entitlement_id))
+                continue
             tms_guide_id = row.get('tmsGuideId')
             numbers = row.get('channelNumbers') or []
             if numbers and row.get('networkId') is not None:
@@ -396,7 +408,7 @@ class SpectrumScraper(BaseScraper):
             ))
         travel = self._fetch_travel_channels(location, channels, home_by_network)
         logger.info('[spectrum] %d channels fetched (%d travel), %d excluded as unavailable '
-                    'for this account/location (%s)',
+                    'for this account/location or promo-only (%s)',
                     len(channels) + len(travel), len(travel), len(self.excluded_channel_ids),
                     availability_flag or 'location unknown, entitlement only')
         return channels + travel

@@ -1917,6 +1917,17 @@ _NATIONAL_NETWORK_NEWS = {
     'fox news talk',
     'nbc news now',
 }
+# National cable networks that share a "fox " prefix with local affiliates
+# ("FOX 5 News DC"), so the network_city_news check below would otherwise send
+# them to Local News — as it did for every source carrying Fox News Channel.
+_NATIONAL_FOX_PREFIXES = ('fox news', 'fox business')
+
+# Spectrum's own regional news networks (Spectrum News 1 <city>, NY1, Bay News
+# 9, News 13, the Spanish Spectrum Noticias feeds). The raw genre is just
+# "News & Info", and "Spectrum New 1 - …" is Spectrum's own typo, not ours.
+_SPECTRUM_LOCAL_NEWS_RE = re.compile(
+    r'^(spectrum new(s)? |spectrum noticias|bay news 9|news 13 central)'
+)
 
 # Telemundo's regional news feeds, which sources name in three different word
 # orders: "Telemundo Noticias Texas", "Telemundo Texas", "Noticias Telemundo
@@ -1941,8 +1952,11 @@ def _local_news_rule(name_lower: str, name: str) -> str | None:
     if name_lower.startswith(('abc ', 'cbs ', 'fox ', 'nbc ')):
         if _LOCAL_CALL_SIGN_RE.search(name_lower):
             return 'network_call_sign'
-        if ' news' in name_lower and name_lower not in _NATIONAL_NETWORK_NEWS:
+        if (' news' in name_lower and name_lower not in _NATIONAL_NETWORK_NEWS
+                and not name_lower.startswith(_NATIONAL_FOX_PREFIXES)):
             return 'network_city_news'
+    if _SPECTRUM_LOCAL_NEWS_RE.match(name_lower):
+        return 'spectrum_regional_news'
     if name_lower.startswith('telemundo noticias ') and name_lower != 'telemundo noticias ahora':
         return 'telemundo_regional_news'
     for prefix in ('telemundo ', 'noticias telemundo '):
@@ -1980,6 +1994,9 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
         return 'Music'
     if name_lower.startswith('xite '):
         return 'Music'
+    # Some sources' raw genre for it is "Entertainment" (DirecTV).
+    if name_lower.startswith('fox business'):
+        return 'News'
     if 'k-drama' in name_lower or 'kdrama' in name_lower:
         return 'Drama'
     if name_lower.endswith(' westerns') or name_lower.endswith(' western'):
@@ -2029,13 +2046,6 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
     # Numbered local affiliates: "10 NBC ...", "6 NEWS NBC ...", "News 12 ..."
     if name_lower.startswith(('news 12', 'news10', 'news channel', 'newsday')):
         return 'Local News'
-    # Spectrum's own regional news feeds sit in two naming styles: "Spectrum
-    # News 1 - <City>" (already caught above via the bare 'news' keyword) and
-    # a handful of placeholder-numbered ones with no city label yet, e.g.
-    # "Spectrum1", "Spectrum7 HD" — same channel-number block as the named
-    # ones (confirmed live 2026-09-17), just missing "News" in the name.
-    if re.match(r'^spectrum\d', name_lower):
-        return 'Local News'
 
     # 3. Scraper-provided category, normalized
     normalized = normalize_category(raw_category)
@@ -2072,6 +2082,8 @@ def explain_category(name: str, raw_category: str | None, source_name: str | Non
     # 2. High-confidence name patterns
     if name_lower.startswith('xite '):
         return {'source': 'name_pattern', 'rule': 'xite_prefix', 'detail': 'Name starts with "XITE" → Music.'}
+    if name_lower.startswith('fox business'):
+        return {'source': 'name_pattern', 'rule': 'fox_business', 'detail': 'Name starts with "Fox Business" → News.'}
     if 'k-drama' in name_lower or 'kdrama' in name_lower:
         return {'source': 'name_pattern', 'rule': 'kdrama', 'detail': 'Name contains "K-Drama" or "KDrama" → Drama.'}
     if (name_lower.endswith(' westerns') or name_lower.endswith(' western')
