@@ -288,7 +288,6 @@ class ESPNScraper(BaseScraper):
     source_category = 'premium'
     is_premium = True
     config_required = True
-    under_development = True
     scrape_interval = 360
     # The audit is what drops networks this account's plan doesn't include
     # (e.g. MLB Network on plain ESPN+): resolve() raises TVENotAuthorizedError
