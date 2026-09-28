@@ -810,6 +810,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'bosch':                                'Drama',
     'designated survivor':                  'Drama',
     'heartland':                            'Drama',
+    'pulse':                                'Drama',        # PULSE by Lionsgate, medical dramas (Plex)
     'great':                                'Drama',
     'ion':                                  'Drama',
     'ion plus':                             'Drama',
@@ -1005,6 +1006,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'beyond belief':                        'Horror',
     'beyond paranormal':                    'Horror',
     'paranormal files':                     'Horror',
+    'paranormal chronicles':                'Horror',       # Plex has no genre; LG says Reality TV
     'screams tv':                           'Horror',
     'universal monsters':                   'Horror',
     'van helsing':                          'Horror',
@@ -1113,6 +1115,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'the nest':                             'Lifestyle',
     'fyi':                                  'Lifestyle',
     'latv':                                 'Latino',
+    'pluto tv hispanic favorites':          'Latino',       # English-language, Hispanic Heritage Month
     'wwe superstar central':               'Sports',
     'journy tv':                            'Travel',
     'amazon live':                          'Shopping',
