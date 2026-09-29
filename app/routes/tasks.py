@@ -469,6 +469,18 @@ def trigger_channel_auto_disable(channel_id: int, reason: str):
         threading.Thread(target=run_channel_auto_disable, args=(channel_id, reason), daemon=True).start()
 
 
+def trigger_new_channel_drm_probe(source_name: str, channel_ids: list):
+    try:
+        q = get_fast_queue()
+        q.enqueue('app.worker.run_new_channel_drm_probe', source_name, channel_ids, job_timeout=900)
+        logger.info('Enqueued new-channel DRM probe for %s (%d channel(s))', source_name, len(channel_ids))
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for new-channel DRM probe {source_name}')
+        import threading
+        from app.worker import run_new_channel_drm_probe
+        threading.Thread(target=run_new_channel_drm_probe, args=(source_name, channel_ids), daemon=True).start()
+
+
 def trigger_sling_browser_login():
     """Returns True if a job was enqueued, False if one is already running."""
     try:
