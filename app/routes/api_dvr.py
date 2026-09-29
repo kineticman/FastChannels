@@ -1029,14 +1029,6 @@ def test_prismcast():
     candidate_report = _prismcast_candidate_report()
     diagnostics['candidates'] = candidate_report
     test_channels = _prismcast_test_channels(limit=None)
-    if _runtime_os.lower() == 'linux':
-        cox_candidate = next((item for item in candidate_report if item.get('source') == 'cox' and item.get('source_enabled')), None)
-        if cox_candidate:
-            cox_skip = 'Skipped on Linux: Cox browser DRM playback is not supported by Cox. This is an upstream platform limitation, not a FastChannels or PrismCast failure.'
-            cox_candidate['test_skipped_reason'] = cox_skip
-            test_channels = [tc for tc in test_channels if not (tc.source and tc.source.name == 'cox')]
-            add('Cox Linux compatibility', 'info', cox_skip,
-                'Run the Cox PrismCast test on a supported non-Linux browser/runtime if Cox support is required.')
     selected_by_source = {tc.source.name: tc for tc in test_channels if tc.source}
     selected_names = ', '.join(
         f"{source} ({selected_by_source[source].name})"

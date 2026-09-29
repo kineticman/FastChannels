@@ -162,6 +162,15 @@
       <code>TZ</code> is a common cause). Channel guide and streams will go stale until it recovers.
     </div>
     {% endif %}
+    {% if server_country and server_country != 'US' %}
+    <div style="background:color-mix(in srgb, var(--warning-bg) 70%, var(--surface));border:1px solid var(--warning-border);border-radius:8px;padding:0.85rem 1.25rem;margin:0 0 1rem;color:var(--warning-soft)">
+      <strong>⚠ This server appears to be outside the US ({{ server_country }}).</strong>
+      Most sources only work from a US internet connection. From elsewhere, expect sign-in failures,
+      channels that won't play, and stream audits that stop early without disabling anything.
+      If you're using a US VPN that doesn't cover this server's traffic, route FastChannels through it.
+      Wrong? This is a GeoIP lookup of the server's public IP; set <code>GEO_CHECK_ENABLED=0</code> to turn it off.
+    </div>
+    {% endif %}
     {% if tz_health and tz_health.level == 'warning' %}
     <div style="background:color-mix(in srgb, var(--warning-bg) 70%, var(--surface));border:1px solid var(--warning-border);border-radius:8px;padding:0.85rem 1.25rem;margin:0 0 1rem;color:var(--warning-soft)">
       <strong>⚠ Timezone is falling back to UTC.</strong>

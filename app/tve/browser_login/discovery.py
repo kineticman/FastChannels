@@ -9,6 +9,8 @@ from app.config_store import persist_source_cache_updates
 from app.tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
 from urllib.parse import urlsplit as _urlsplit
 from app.tve.browser_login.common import (
+    SpectrumWantsCoxProvider,
+    _watch_spectrum_auth_results,
     MVPD_BROWSER_LOGIN_STATUS_KEY,
     MVPD_BROWSER_LOGIN_INPUT_KEY,
     MVPD_BROWSER_LOGIN_STOP_KEY,
@@ -18,6 +20,8 @@ from app.tve.browser_login.common import (
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
+    _log_signin_timeout_snapshot,
+    _spectrum_signin_error_message,
     _autofill_xfinity_credentials,
     _try_autofill_credentials,
     _harvest_and_save_xfinity_cookies,
@@ -35,19 +39,31 @@ from app.tve.browser_login.common import (
 
 logger = logging.getLogger(__name__)
 
+# Spectrum's remembered-device cookies. With them present Spectrum signs in
+# with one "Continue" click instead of a password, and Discovery's gauth
+# callback rejects that reused session: it redirects to gauth-sync with no
+# code and the page reads "Affiliate partner not found". Every failure seen
+# live 2026-09-25 went through the remembered device; every success (ours and
+# discovery.com's own site in a real Chrome) was a password sign-in, and
+# clearing just these three turned a failing run into a pairing. Discovery's
+# partners all carry force_authn_expire=true, which fits. The password
+# sign-in issues fresh ones, so other networks keep their one-click sign-in.
+_SPECTRUM_REMEMBERED_DEVICE_COOKIES = ('dla_session', 'dla_device', 'dla_marker')
+_AFFILIATE_NOT_FOUND = 'Affiliate partner not found'
+
 
 def _run_discovery_browser_assisted_login(r, set_status, source, account, scraper, mso_id: str, mso_name: str) -> None:
-    """Browser-assisted counterpart to run_discovery_browser_login's scripted
-    Cox fast path, for any MSO whose login page blocks scripted clients
-    outright (YouTubeTV/Google, Sling, etc.) — same "second screen" idea as
+    """Browser-assisted counterpart to DiscoveryTVEScraper._authenticate()'s
+    scripted login, for any MSO whose login page blocks scripted clients
+    outright (Cox/Spectrum, YouTubeTV/Google, Sling, etc.) — same "second screen" idea as
     _run_amcn_browser_assisted_login, adapted to Discovery's single shared
     session (all 14 channels ride ONE gauth session/cookie jar, unlike
     AMCN's 4 independent per-channel logins — see SESSION_CACHE_KEY), and to
     Discovery's own completion shape: rather than an independent
     /profiles/code/{code} poll API (NBC/AMCN), a Discovery login completes
     when the BROWSER's own redirect chain lands on a URL carrying a `code`
-    query param (see DiscoveryTVEScraper._authenticate()'s Cox/Xfinity
-    branches — the code is extracted from wherever redirect_url's own chain
+    query param (see DiscoveryTVEScraper._authenticate() — the code is
+    extracted from wherever redirect_url's own chain
     lands, not fetched independently), so this watches page.url directly
     instead of polling a separate endpoint.
 
@@ -139,6 +155,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
             logger.info('[discovery-mvpd-login] using isolated YouTubeTV profile with cross-site cookies enabled')
         with Camoufox(**camoufox_options) as context:
             page = context.pages[0] if context.pages else context.new_page()
+            _watch_spectrum_auth_results(page, 'discovery-mvpd-login')
             _prime_google_session(context, mso_id)
             page.on('crash', lambda p: logger.warning('[discovery-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
             page.on('close', lambda p: logger.warning('[discovery-mvpd-login] page CLOSE event fired'))
@@ -168,6 +185,13 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                     pass
 
             page.on('response', _log_navigation_response)
+
+            # Cox signs in on Spectrum's page too (see run_discovery_browser_login).
+            if mso_id in ('Spectrum', 'Cox'):
+                for cookie_name in _SPECTRUM_REMEMBERED_DEVICE_COOKIES:
+                    context.clear_cookies(name=cookie_name)
+                logger.info('[discovery-mvpd-login] cleared Spectrum remembered-device cookies '
+                            'so Discovery gets a password sign-in')
 
             set_status('running', 'Signing in to Discovery TVE…')
             try:
@@ -287,6 +311,8 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
             last_poll = 0.0
             code = ''
             cancelled = False
+            idid_message = None
+            affiliate_rejected = False
             gauth_sync_stalled_since = None
             gauth_sync_reloads = 0
             while time.monotonic() < deadline:
@@ -299,6 +325,9 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                     if _relay_input_and_screenshot(page, r, waiting_since=wait_started):
                         cancelled = True
                         break
+                idid_message = _spectrum_signin_error_message(page, 'Discovery TVE', mso_id)
+                if idid_message:
+                    break
                 if now - last_poll > _POLL_SECONDS:
                     last_poll = now
                     current_url = _safe_page_url(page)
@@ -306,6 +335,15 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                     if code:
                         break
                     if current_url.startswith(f'{AUTH_HOST}/gauth-sync'):
+                        # Discovery's definitive "no" — reloading and waiting
+                        # out the timeout never changes it.
+                        try:
+                            if _AFFILIATE_NOT_FOUND in (page.inner_text('body', timeout=1000) or ''):
+                                affiliate_rejected = True
+                                break
+                        except Exception as exc:  # noqa: BLE001
+                            if _is_browser_death(exc):
+                                raise
                         if gauth_sync_stalled_since is None:
                             gauth_sync_stalled_since = now
                             # Param NAMES only (never values — these can
@@ -345,7 +383,24 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
             if cancelled:
                 set_status('stopped', 'Cancelled')
                 return
+            if idid_message:
+                _record_tve_login_error('discovery', idid_message)
+                set_status('error', idid_message)
+                return
+            if affiliate_rejected:
+                logger.warning('[discovery-mvpd-login] Discovery answered "%s" (mso_id=%s)',
+                               _AFFILIATE_NOT_FOUND, mso_id)
+                message = (
+                    f'Discovery TVE: Discovery didn\'t accept the sign-in from {mso_name} '
+                    f'("{_AFFILIATE_NOT_FOUND}"). Try again in a few minutes; if it keeps '
+                    'happening, check the TV provider matches your account (former Cox '
+                    'accounts: "Cox / Cox Spectrum").'
+                )
+                _record_tve_login_error('discovery', message)
+                set_status('error', message)
+                return
             if not code:
+                _log_signin_timeout_snapshot(page, 'discovery-mvpd-login')
                 set_status('error', 'Discovery TVE: timed out waiting for sign-in to complete.')
                 return
             if mso_id == 'YouTubeTV':
@@ -359,6 +414,12 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                 # anything for other TVE families' cookie-jar fast path.
                 _harvest_and_save_xfinity_cookies(context)
     except BaseException as exc:  # noqa: BLE001
+        if isinstance(exc, SpectrumWantsCoxProvider):
+            # Spectrum's IDLI-4213 "pick Cox Spectrum": a user-facing
+            # answer, never report it as a crash.
+            _record_tve_login_error('discovery', str(exc))
+            set_status('error', str(exc))
+            return
         if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
             set_status('stopped', 'Cancelled')
             return
@@ -394,26 +455,10 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
 def run_discovery_browser_login(mso_id: str):
     """Standalone "Sign in" for Discovery TVE.
 
-    Unlike AMC/NBC/FOX, Discovery's Cox login never actually needs a
-    browser: DiscoveryTVEScraper._authenticate() already does the whole
-    thing scripted (register, gauth authorize, _cox_saml_login's direct
-    POST to login.cox.com/api/v1/authn, code exchange, entitlement check)
-    on every session refresh during normal scraping. Confirmed live
-    2026-08-11: a full authenticate+entitlement round trip in ~3s with the
-    real Cox account, zero Camoufox involved. The old page.goto()+autofill
-    version routed this same login through a full Firefox launch for no
-    reason, which is almost certainly why Discovery was one of the networks
-    reported stuck/timing out in the community thread — Camoufox
-    render/timeout budgets, not anything about Discovery's actual auth
-    requirements. This only supports Cox (the only
-    MSO _authenticate() has wired up); non-Cox reports back as an error
-    same as before.
-
-    No stop-key check here (unlike run_amcn_browser_login's per-channel
-    loop, code review 2026-08-11) — _authenticate() is one ~3s scripted call
-    with no natural interruption point partway through, so there's nothing
-    meaningful to cancel into; worst case is bounded by its own per-request
-    timeouts (30s each) rather than the old ~30min browser session.
+    Comcast_SSO tries a saved cookie jar through the scripted
+    DiscoveryTVEScraper._authenticate() first; everything else (including
+    Cox, which signs in on Spectrum's page now) goes through the
+    browser-assisted flow.
     """
     # Manual push/pop instead of `with flask_app.app_context():` — see
     # _prime_google_session's docstring: Camoufox's own rendering breaks
@@ -421,8 +466,7 @@ def run_discovery_browser_login(mso_id: str):
     # Popped right before handing off to _run_discovery_browser_assisted_login
     # (which launches Camoufox and pushes its own fresh, short-lived
     # contexts for the DB writes it still needs) and never re-pushed — the
-    # Cox scripted path below is the only other branch, and it never
-    # reaches the pop.
+    # cookie-jar path below returns before the pop on success.
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
@@ -459,70 +503,50 @@ def run_discovery_browser_login(mso_id: str):
             return
         scraper = DiscoveryTVEScraper(config=dict(source.config or {}))
 
-        if mso_id != 'Cox':
-            account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-            if not account or not account.is_enabled or not account.has_credentials():
-                set_status('error', 'TVE credentials are not configured in Settings.')
-                return
-            mso_name = ((account.config or {}).get('selected_mso_name') or mso_id).strip()
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        if not account or not account.is_enabled or not account.has_credentials():
+            set_status('error', 'TVE credentials are not configured in Settings.')
+            return
+        mso_name = ((account.config or {}).get('selected_mso_name') or mso_id).strip()
 
-            if mso_id == 'Comcast_SSO':
-                # Try a saved cookie jar (harvested from a previous
-                # successful Comcast_SSO browser pairing for ANY TVE family
-                # — see _harvest_and_save_xfinity_cookies) BEFORE ever
-                # opening a browser, same as mvpd.py/nbc.py/fox.py already
-                # do. Confirmed live 2026-08-28: scraper._authenticate()
-                # (already used by the Cox branch below, and by every
-                # scheduled session refresh) works unmodified for
-                # Comcast_SSO too once a jar exists — the interactive
-                # browser flow was what was actually tripping Comcast's own
-                # fraud/step-up check on a password-hydration retry, not
-                # anything about Discovery itself (see gauth-sync stall
-                # investigation in _run_discovery_browser_assisted_login).
-                cookie_jar = (account.config or {}).get('xfinity_cookie_jar')
-                if cookie_jar:
-                    set_status('running', 'Trying saved sign-in (no browser needed)…')
-                    try:
-                        scraper._authenticate()
-                    except TVENotAuthorizedError as exc:
-                        _record_tve_login_error('discovery', f'not entitled — {exc}')
-                        set_status('error', f'Discovery TVE: not entitled — {exc}')
-                        return
-                    except Exception as exc:  # noqa: BLE001
-                        logger.info(
-                            '[discovery-mvpd-login] saved xfinity cookie jar did not work, falling back to browser: %s',
-                            exc,
-                        )
-                    else:
-                        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-                        set_status('success', 'Signed in — Discovery TVE authorized (no browser needed).')
-                        logger.info('[discovery-mvpd-login] paired mso_id=Comcast_SSO via saved cookie jar (no browser)')
-                        return
-                set_status('running', 'No usable saved sign-in — opening a browser…')
+        if mso_id == 'Comcast_SSO':
+            # Try a saved cookie jar (harvested from a previous
+            # successful Comcast_SSO browser pairing for ANY TVE family
+            # — see _harvest_and_save_xfinity_cookies) BEFORE ever
+            # opening a browser, same as mvpd.py/nbc.py/fox.py already
+            # do. Confirmed live 2026-08-28: scraper._authenticate()
+            # (used by every scheduled session refresh) works unmodified for
+            # Comcast_SSO too once a jar exists — the interactive
+            # browser flow was what was actually tripping Comcast's own
+            # fraud/step-up check on a password-hydration retry, not
+            # anything about Discovery itself (see gauth-sync stall
+            # investigation in _run_discovery_browser_assisted_login).
+            cookie_jar = (account.config or {}).get('xfinity_cookie_jar')
+            if cookie_jar:
+                set_status('running', 'Trying saved sign-in (no browser needed)…')
+                try:
+                    scraper._authenticate()
+                except TVENotAuthorizedError as exc:
+                    _record_tve_login_error('discovery', f'not entitled — {exc}')
+                    set_status('error', f'Discovery TVE: not entitled — {exc}')
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    logger.info(
+                        '[discovery-mvpd-login] saved xfinity cookie jar did not work, falling back to browser: %s',
+                        exc,
+                    )
+                else:
+                    persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                    set_status('success', 'Signed in — Discovery TVE authorized (no browser needed).')
+                    logger.info('[discovery-mvpd-login] paired mso_id=Comcast_SSO via saved cookie jar (no browser)')
+                    return
+            set_status('running', 'No usable saved sign-in — opening a browser…')
 
-            _ctx.pop()
-            _ctx_popped['v'] = True
-            _run_discovery_browser_assisted_login(r, set_status, source, account, scraper, mso_id, mso_name)
-            return
+        _ctx.pop()
+        _ctx_popped['v'] = True
+        _run_discovery_browser_assisted_login(r, set_status, source, account, scraper, mso_id, mso_name)
+        return
 
-        try:
-            scraper._authenticate()
-        except TVENotAuthorizedError as exc:
-            _record_tve_login_error('discovery', f'not entitled — {exc}')
-            set_status('error', f'Discovery TVE: not entitled — {exc}')
-            return
-        except TVEAuthError as exc:
-            _record_tve_login_error('discovery', str(exc))
-            set_status('error', f'Discovery TVE: {exc}')
-            return
-        except Exception as exc:  # noqa: BLE001
-            logger.exception('[discovery-mvpd-login] unexpected failure')
-            _record_tve_login_error('discovery', str(exc))
-            set_status('error', f'Discovery TVE: {exc}')
-            return
-        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-        set_status('success', 'Signed in — Discovery TVE authorized.')
-        logger.info('[discovery-mvpd-login] paired mso_id=%s (scripted, no browser)', mso_id)
     finally:
         uninstall_browser_login_activity_log(_activity_handler)
         if not _ctx_popped['v']:

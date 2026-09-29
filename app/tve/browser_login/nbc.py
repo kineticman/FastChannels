@@ -15,6 +15,7 @@ from app.tve.adobe_pass import (
     TVENotAuthorizedError,
 )
 from app.tve.browser_login.common import (
+    _watch_spectrum_auth_results,
     _safe_page_url,
     _same_page_url,
     _settle_after_mvpd_navigation,
@@ -26,6 +27,10 @@ from app.tve.browser_login.common import (
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
+    _log_signin_timeout_snapshot,
+    SpectrumWantsCoxProvider,
+    _spectrum_retry_as_cox,
+    _spectrum_signin_error_message,
     _sling_f5_recover,
     _url_for_log,
     _gateway_url_for_log,
@@ -61,7 +66,7 @@ _NBC_SESSION_POLL_MAX_SECONDS = 20.0
 _NBC_SESSION_POLL_BACKOFF = 1.5
 
 
-def _save_nbc_mvpd_auth(mso_id: str, access_token: str, device_fingerprint: str) -> None:
+def _save_nbc_mvpd_auth(mso_id: str, client, device_fingerprint: str) -> None:
     """Pushes its own app_context — see _prime_google_session's docstring.
     Called mid-browser-session, after run_nbc_browser_login has already
     popped its outer one before launching Camoufox."""
@@ -72,7 +77,11 @@ def _save_nbc_mvpd_auth(mso_id: str, access_token: str, device_fingerprint: str)
         cfg = dict(account.config or {})
         cfg['nbc_mvpd_auth'] = {
             'mso_id': mso_id,
-            'access_token': access_token,
+            'access_token': client.access_token,
+            # So nbc_tve can mint a fresh access_token for this same client
+            # once this one expires — the sign-in itself outlives it.
+            'client_id': client.client_id,
+            'client_secret': client.client_secret,
             'device_fingerprint': device_fingerprint,
             'captured_at': int(time.time()),
         }
@@ -154,57 +163,8 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         )
         logger.info('[nbc-mvpd-login] starting attempt=%d mso_id=%s; cleared prior modal state', _attempt, mso_id)
 
-        if mso_id == 'Cox':
-            # Cox's login step is already fully scripted: NbcTveScraper.
-            # _ensure_entitled() calls AdobePassV2Client.authorize(), which
-            # does the direct login.cox.com/api/v1/authn POST (_cox_saml_login,
-            # shared with fox_tve.py) on every entitlement refresh — same
-            # pattern as resolve()'s own normal playback path. No browser
-            # needed; confirmed live 2026-08-11 (full authorize+preauthorize
-            # round trip with the real Cox account, zero Camoufox). Only
-            # non-Cox MSOs fall through to the browser-assisted flow below.
-            set_status('running', 'Signing in to NBC TVE…')
-            source = Source.query.filter_by(name='nbc_tve').first()
-            if not source:
-                set_status('error', 'NBC TVE source not found.')
-                return
-            scraper = NbcTveScraper(config=dict(source.config or {}))
-            try:
-                guide = scraper._fetch_guide()
-                if not guide:
-                    set_status('error', 'NBC TVE: could not load channel guide.')
-                    return
-                resource_id = next(iter(guide.values())).resource_id
-                # Force a fresh entitlement check — _ensure_entitled() short-
-                # circuits on a still-fresh cached decision, which would make
-                # a deliberate "Sign in" click silently no-op.
-                scraper._update_cache('nbc_entitlements', {})
-                scraper._ensure_entitled(resource_id)
-            # Deliberately NOT using _cox_login_error_detail() here (unlike
-            # the legacy/FOX Cox branches, code review 2026-08-11) —
-            # _ensure_entitled()'s own exceptions already carry full context
-            # ("NBC TVE: <mso_id> is not authorized: <reason>"), so running
-            # them through that classifier too would double up the framing
-            # instead of clarifying it. See that function's docstring.
-            except (TVENotAuthorizedError, TVEAuthError) as exc:
-                persist_source_config_updates(source.id, scraper._pending_config_updates)
-                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-                _record_tve_login_error('nbc', str(exc))
-                set_status('error', f'NBC TVE: {exc}')
-                return
-            except Exception as exc:  # noqa: BLE001
-                logger.exception('[nbc-mvpd-login] unexpected failure')
-                _record_tve_login_error('nbc', str(exc))
-                set_status('error', f'NBC TVE: {exc}')
-                return
-            persist_source_config_updates(source.id, scraper._pending_config_updates)
-            persist_source_cache_updates(source.id, scraper._pending_cache_updates)
-            set_status('success', 'Signed in — NBC TVE authorized.')
-            logger.info('[nbc-mvpd-login] paired mso_id=Cox (scripted, no browser)')
-            return
-
         if mso_id == 'Comcast_SSO':
-            # Same idea as the Cox branch above, but via a saved cookie jar
+            # Try a saved cookie jar
             # (harvested from a previous successful Comcast_SSO browser
             # pairing — see _harvest_and_save_xfinity_cookies and
             # app/tve/adobe_pass.py's xfinity_cookie_jar_login()) instead of
@@ -343,7 +303,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 except Exception:  # noqa: BLE001
                     profile = None
                 if profile:
-                    _save_nbc_mvpd_auth(mso_id, client.access_token, device_fingerprint)
+                    _save_nbc_mvpd_auth(mso_id, client, device_fingerprint)
                     if mso_id == 'Comcast_SSO':
                         _harvest_and_save_xfinity_cookies(context)
                     elif mso_id == 'YouTubeTV':
@@ -395,6 +355,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         try:
             with Camoufox(**camoufox_options) as context:
                 page = context.pages[0] if context.pages else context.new_page()
+                _watch_spectrum_auth_results(page, 'nbc-mvpd-login')
                 google_session_primed = _prime_google_session(context, mso_id)
                 if mso_id == 'YouTubeTV':
                     logger.info('[nbc-mvpd-login] Google session priming result=%s', 'primed' if google_session_primed else 'not-available')
@@ -563,6 +524,12 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             return
                         raise _BrowserSessionDied('browser page closed and pairing did not complete')
 
+                    idid_message = _spectrum_signin_error_message(page, 'NBC TVE', mso_id)
+                    if idid_message:
+                        _record_tve_login_error('nbc', idid_message)
+                        set_status('error', idid_message)
+                        return
+
                     for _ in range(20):
                         raw = r.lpop(NBC_BROWSER_LOGIN_INPUT_KEY)
                         if raw is None:
@@ -634,7 +601,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                                 )
                                 last_progress_log = now
                             continue  # human hasn't finished the MSO login yet
-                        _save_nbc_mvpd_auth(mso_id, client.access_token, device_fingerprint)
+                        _save_nbc_mvpd_auth(mso_id, client, device_fingerprint)
                         if mso_id == 'Comcast_SSO':
                             _harvest_and_save_xfinity_cookies(context)
                         elif mso_id == 'YouTubeTV':
@@ -645,11 +612,16 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
                     page.wait_for_timeout(80)
 
+                _log_signin_timeout_snapshot(page, 'nbc-mvpd-login')
                 set_status('error', 'Timed out waiting for sign-in to complete.')
                 return
         except BaseException as exc:  # noqa: BLE001
             if _terminal_status_set['v']:
                 logger.info('[nbc-mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
+                return
+            if isinstance(exc, SpectrumWantsCoxProvider):
+                if _spectrum_retry_as_cox(exc, mso_id, 'NBC TVE', set_status):
+                    return run_nbc_browser_login('Cox', _attempt=_attempt, _deadline=deadline)
                 return
             if _is_browser_death(exc) and _grace_poll_pairing(str(exc)[:80]):
                 return

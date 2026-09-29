@@ -11,8 +11,6 @@ _FALLBACK_ADOBE_MSO_PROVIDERS = [
     {"id": "Cox", "name": "Cox"},
     {"id": "Comcast_SSO", "name": "Comcast XFINITY"},
     {"id": "Spectrum", "name": "Spectrum"},
-    {"id": "TWC", "name": "Time Warner Cable | Spectrum"},
-    {"id": "Charter_Direct", "name": "Charter Spectrum"},
     {"id": "DTV", "name": "DIRECTV"},
     {"id": "ATT", "name": "AT&T U-verse"},
     {"id": "Verizon", "name": "Verizon FiOS"},
@@ -22,6 +20,11 @@ _FALLBACK_ADOBE_MSO_PROVIDERS = [
     {"id": "slingtv", "name": "Sling TV"},
     {"id": "YouTubeTV", "name": "YouTube TV"},
 ]
+
+# Legacy Charter/TWC MVPDs still in yt-dlp's bundled list, but no network we
+# support accepts them (Adobe's per-requestor MVPD config + Discovery's partner
+# list, checked 2026-09-25); Spectrum customers must use 'Spectrum'.
+_RETIRED_MSO_IDS = frozenset({'TWC', 'Charter_Direct'})
 
 _PROVIDER_LINE_RE = re.compile(r'^(?P<id>\S+)\s+(?P<name>.+?)\s*$')
 
@@ -54,16 +57,14 @@ def _friendly_sort_key(provider: dict) -> tuple[int, str]:
         'Cox': 0,
         'Comcast_SSO': 1,
         'Spectrum': 2,
-        'TWC': 3,
-        'Charter_Direct': 4,
-        'DTV': 5,
-        'ATT': 6,
-        'Verizon': 7,
-        'Cablevision': 8,
-        'Philo': 9,
-        'Fubo': 10,
-        'slingtv': 11,
-        'YouTubeTV': 12,
+        'DTV': 3,
+        'ATT': 4,
+        'Verizon': 5,
+        'Cablevision': 6,
+        'Philo': 7,
+        'Fubo': 8,
+        'slingtv': 9,
+        'YouTubeTV': 10,
     }
     return preferred.get(provider['id'], 1000), provider['name'].casefold()
 
@@ -108,6 +109,13 @@ def ytdlp_adobe_mso_providers() -> list[dict]:
 
     if 'Cox' not in seen:
         providers.append({'id': 'Cox', 'name': 'Cox'})
+    # Spectrum's own error for a Cox account migrated to Spectrum tells the
+    # user to pick "Cox Spectrum" (IDLI-4213, confirmed live 2026-09-24).
+    # Adobe has no MVPD by that name — it's Adobe's "Cox", which now hands
+    # off to Spectrum's login page — so label it so users can find it.
+    for provider in providers:
+        if provider['id'] == 'Cox':
+            provider['name'] = 'Cox / Cox Spectrum'
     # yt-dlp has no Google/OAuth MSO support at all (confirmed 2026-06-15 —
     # its --ap-list-mso output never includes YouTubeTV, and its adobepass
     # extractor is a credential-POST login with no code path to consume a
@@ -118,4 +126,27 @@ def ytdlp_adobe_mso_providers() -> list[dict]:
     # backstop just above.
     if 'YouTubeTV' not in seen:
         providers.append({'id': 'YouTubeTV', 'name': 'YouTube TV'})
+    providers = [p for p in providers if p['id'] not in _RETIRED_MSO_IDS]
     return sorted(providers, key=_friendly_sort_key)
+
+
+# TVE networks that can't work with a given TV provider, keyed by the admin
+# UI's sign-in family (see app/tve/status.py) then mso_id -> user-facing
+# reason. The settings page shows the reason in place of that network's
+# "Sign in" button, "Sign in to all" skips it, and its start route refuses.
+UNSUPPORTED_NETWORK_PROVIDERS: dict[str, dict[str, str]] = {
+    # (empty) FOX One + Cox was listed here until 2026-09-25; lifted once a
+    # real browser capture showed FOX One signing in through "Cox / Cox
+    # Spectrum" on fox.com.
+}
+
+
+def tve_account_mso_id(account) -> str:
+    """The MVPD id the TVE sign-in start routes actually use (same order)."""
+    cfg = (account.config or {}) if account else {}
+    return (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
+
+
+def unsupported_network_reason(family: str, mso_id: str) -> str | None:
+    return (UNSUPPORTED_NETWORK_PROVIDERS.get(family) or {}).get(mso_id)
+

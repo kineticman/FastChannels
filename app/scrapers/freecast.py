@@ -221,6 +221,11 @@ class FreecastScraper(BaseScraper):
         except Exception as exc:
             logger.warning('[freecast] auth setup failed (continuing anonymously for catalog): %s', exc)
 
+    def audit_preflight(self) -> None:
+        # Every resolve() needs a signed-in token; a bad login would otherwise
+        # fail 20 channels in a row and abort with no clear cause (issue #64).
+        self._ensure_auth()
+
     # ── API helpers ──────────────────────────────────────────────────────────
 
     def _get_json(self, url: str, params: dict | None = None) -> Any:

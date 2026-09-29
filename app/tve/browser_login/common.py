@@ -593,6 +593,20 @@ def _try_autofill_credentials(
     fallbacks) and can re-render mid-fill, so both values are verified to
     have actually stuck before submitting, with one retry.
     """
+    # Any Spectrum "You're signing in as" screen this login hits should be
+    # for this account — see _autofill_spectrum_sso_confirm.
+    _set_expected_spectrum_username(page, username)
+    # Remembered on the page so _spectrum_signin_error_message can resubmit
+    # once after reloading Spectrum's login page (ThreatMetrix first-attempt
+    # rejection — see _retry_spectrum_after_thmx_reject). Never logged.
+    try:
+        page._fc_autofill_args = dict(
+            username=username, password=password, wait_seconds=wait_seconds, r=r,
+            stop_key=stop_key, input_key=input_key, shot_key=shot_key, hint_key=hint_key,
+            log_tag=log_tag,
+        )
+    except Exception:  # noqa: BLE001
+        pass
     deadline = time.monotonic() + wait_seconds
     wait_started = time.monotonic()
     # Hard ceiling regardless of how many redirects reset `deadline` below —
@@ -707,7 +721,7 @@ def _try_autofill_credentials(
                 continue
 
             pw_field.press('Enter')
-            logger.info('[%s] autofill: filled and submitted credentials for %s (attempt %d)', log_tag, username, fill_attempt)
+            logger.info('[%s] autofill: filled and submitted credentials for %s (attempt %d)', log_tag, _mask_username(username), fill_attempt)
             return True
 
         logger.info('[%s] autofill: gave up — could not get a stable filled form url=%s', log_tag, _safe_page_url(page))
@@ -787,7 +801,7 @@ def _autofill_xfinity_credentials(
             submit.click(force=True, timeout=5000)
         except Exception:  # noqa: BLE001
             page.keyboard.press('Enter')
-        logger.info('[mvpd-login] xfinity autofill: submitted username for %s%s', username, tag)
+        logger.info('[mvpd-login] xfinity autofill: submitted username for %s%s', _mask_username(username), tag)
 
     wait_started = time.monotonic()
     last_relay = wait_started
@@ -877,7 +891,7 @@ def _autofill_xfinity_credentials(
             submit.click(force=True, timeout=5000)
         except Exception:  # noqa: BLE001
             page.keyboard.press('Enter')
-        logger.info('[mvpd-login] xfinity autofill: filled and submitted password for %s', username)
+        logger.info('[mvpd-login] xfinity autofill: filled and submitted password for %s', _mask_username(username))
     except _XfinityAutofillCancelled:
         return False
     except Exception as exc:  # noqa: BLE001
@@ -1068,6 +1082,47 @@ def _autofill_google_account_chooser(page) -> bool:
         return False
 
 
+def _set_expected_spectrum_username(page, username: str) -> None:
+    """Record which Spectrum account this sign-in is FOR, so
+    _autofill_spectrum_sso_confirm can tell a "You're signing in as: <user>"
+    screen for the right account (click Continue) from one for some other
+    account (click Change account instead). Stored on the browser context,
+    not the page, so popups opened during the same login inherit it. A
+    blank username leaves any earlier value alone. Never raises."""
+    username = (username or '').strip()
+    if not username:
+        return
+    try:
+        page.context._fc_expected_spectrum_username = username
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _spectrum_identity_matches(shown: str, expected: str) -> bool:
+    """Loose comparison between the identity Spectrum's confirmation screen
+    shows and the configured username. Case-insensitive; tolerates the
+    screen showing only an email's local part (or the reverse) and a masked
+    value like "jo****82". Deliberately loose: a false MISMATCH only costs
+    a click on Change account followed by a normal credential autofill,
+    while a false MATCH signs in as the wrong account."""
+    shown = shown.strip().strip('"\'.,').lower()
+    expected = expected.strip().lower()
+    if not shown or not expected:
+        return True  # can't tell — keep the old Continue behavior
+    if shown == expected:
+        return True
+    if shown.split('@')[0] == expected.split('@')[0] and ('@' in shown) != ('@' in expected):
+        return True
+    if '*' in shown:
+        pattern = '^' + '.*'.join(_re.escape(part) for part in shown.split('*')) + '$'
+        if _re.match(pattern, expected) or _re.match(pattern, expected.split('@')[0]):
+            return True
+    return False
+
+
+_SPECTRUM_SIGNING_IN_AS_RE = _re.compile(r"signing in as:?\s*(\S+)", _re.IGNORECASE)
+
+
 def _autofill_spectrum_sso_confirm(page) -> bool:
     """Click through Spectrum/Charter's "You're signing in as: <user>" SSO
     identity-confirmation screen automatically instead of waiting on a human.
@@ -1104,6 +1159,62 @@ def _autofill_spectrum_sso_confirm(page) -> bool:
         already = page.evaluate("() => !!window.__fcSpectrumContinueClicked")
         if already:
             return False
+        # Forum report (post 3146, 2026-09-21): a user on Spectrum
+        # internet-only at home, signing in with a DIFFERENT Spectrum
+        # account that has TV, got this screen for their home internet
+        # account — Spectrum identifies them by their home network, so
+        # clearing cookies doesn't make it go away — and this helper clicked
+        # Continue before they could reach "Change account", signing them in
+        # as the internet-only account. When we know which account this
+        # login is for and the screen names a different one, click Change
+        # account instead so the normal credential autofill takes over.
+        expected = getattr(page.context, '_fc_expected_spectrum_username', '') or ''
+        if expected:
+            try:
+                body_text = page.inner_text('body', timeout=1000)
+            except Exception:  # noqa: BLE001
+                body_text = ''
+            match = _SPECTRUM_SIGNING_IN_AS_RE.search(body_text or '')
+            shown = match.group(1) if match else ''
+            if shown and not _spectrum_identity_matches(shown, expected):
+                change = None
+                for locator in (
+                    page.get_by_role('button', name=_re.compile(r'change account|not you|different account|switch account', _re.I)),
+                    page.get_by_role('link', name=_re.compile(r'change account|not you|different account|switch account', _re.I)),
+                    page.get_by_text(_re.compile(r'change account|not you\??|use a different account|switch account', _re.I)),
+                ):
+                    try:
+                        if locator.count() > 0:
+                            change = locator.first
+                            break
+                    except Exception:  # noqa: BLE001
+                        continue
+                if change is None:
+                    # Never fall through to Continue here — that would sign
+                    # in as the wrong account. Leave the screen up so the
+                    # human can pick in the remote view.
+                    logger.warning(
+                        '[mvpd-login] Spectrum SSO-confirm shows account %r but %r is configured, '
+                        'and no "Change account" control was found — not clicking Continue url=%s',
+                        shown, expected, _safe_page_url(page))
+                    return False
+                change.click(timeout=2000)
+                page.evaluate("() => { window.__fcSpectrumContinueClicked = true; }")
+                try:
+                    # Lets a caller whose one-shot autofill already ran
+                    # re-run it on the login form this leads to.
+                    page._fc_spectrum_changed_account = True
+                except Exception:  # noqa: BLE001
+                    pass
+                logger.info(
+                    '[mvpd-login] Spectrum SSO-confirm showed account %r but %r is configured — '
+                    'clicked "Change account" instead of Continue url=%s',
+                    shown, expected, _safe_page_url(page))
+                deadline = time.monotonic() + 5
+                start_url = page.url
+                while time.monotonic() < deadline and page.url == start_url:
+                    page.wait_for_timeout(150)
+                return True
         # Not assumed to be a native <button> — try several shapes rather
         # than guessing one exact element type/role.
         btn = None
@@ -1133,6 +1244,353 @@ def _autofill_spectrum_sso_confirm(page) -> bool:
     except Exception as exc:  # noqa: BLE001
         logger.debug('[mvpd-login] spectrum SSO-confirm autofill failed: %s', exc)
         return False
+
+
+_IDID_ERROR_RE = _re.compile(r'IDID-\d+')
+
+
+def _detect_spectrum_feature_unavailable(page) -> str | None:
+    """Detects Spectrum's own "Feature Unavailable... please try again from
+    home or contact us for assistance" error page — a real Spectrum-side
+    condition, not one of its normal login/consent screens. Confirmed live
+    2026-09-23 twice: IDID-4000 on a fresh Camoufox profile from a trusted
+    home network (a SECOND fresh-device registration against the same
+    account within a few minutes of a first one that had succeeded cleanly),
+    and IDID-4003 in a real public forum report. In the one case watched
+    end-to-end, a bare retry roughly 60-90s later — same account, same
+    device, same profile, nothing else changed — succeeded outright, too
+    fast to be a lasting account-level block. Current best read: a
+    short-lived rate-limit or a plain transient backend condition tied to
+    repeated new-device registrations in a short window, not "fresh device
+    always rejected" — see spectrum.py's module docstring. Returns the
+    specific IDID-XXXX code (for logging/diagnostics) if this page is
+    currently showing, else None.
+    """
+    try:
+        if page.get_by_text('Feature Unavailable').count() == 0:
+            return None
+        match = _IDID_ERROR_RE.search(page.inner_text('body'))
+        return match.group(0) if match else 'IDID-unknown'
+    except Exception:  # noqa: BLE001
+        return None
+
+
+class SpectrumWantsCoxProvider(Exception):
+    """Spectrum showed IDLI-4213 ("select 'Cox Spectrum' as your TV
+    provider") — see _spectrum_signin_error_message. Raised out of a TVE
+    wait loop; str(exc) is the user-facing message for when the caller
+    can't retry."""
+
+
+def _save_tve_provider_as_cox(label: str) -> bool:
+    """Persist Cox ("Cox / Cox Spectrum") as the TVE account's provider."""
+    try:
+        with flask_app.app_context():
+            account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            if account is None:
+                return False
+            cfg = dict(account.config or {})
+            cfg['selected_mso_id'] = 'Cox'
+            cfg['selected_mso_name'] = 'Cox / Cox Spectrum'
+            # Same keys the settings form writes on a provider change —
+            # every start route reads yt_dlp_mso_id before selected_mso_id,
+            # and play-time authorize_mvpd() falls back to adobe_mso_id.
+            for key in ('yt_dlp_mso_id', 'adobe_mso_id'):
+                if key in cfg:
+                    cfg[key] = 'Cox'
+            account.config = cfg
+            db.session.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[mvpd-login] %s: could not save Cox as the TV provider: %s', label, exc)
+        return False
+    logger.info('[mvpd-login] %s: saved "Cox / Cox Spectrum" as the TV provider', label)
+    return True
+
+
+def _spectrum_retry_as_cox(exc: SpectrumWantsCoxProvider, mso_id: str, label: str, set_status) -> bool:
+    """Handle SpectrumWantsCoxProvider in a TVE sign-in's error handler.
+
+    When the attempt used mso_id=Spectrum: save Cox ("Cox / Cox Spectrum")
+    as the TV provider and return True — the caller then reruns the same
+    network with mso_id='Cox'. Saved for good, so the rest of a "Sign in to
+    all" batch and play-time re-authorization use it too; users can't tell
+    us this in advance, only Spectrum's own error does. Returns False
+    (after setting an error status) for any other mso_id, so a Cox attempt
+    can never loop.
+
+    Only IDLI-4213 lands here. Deliberately NOT extended to the
+    reCAPTCHA-style reject (IDID-4000): tried live 2026-09-25 as a
+    "retry once as Cox, save only on success" — the Cox attempt from a
+    fresh device was rejected too, and it added a second password attempt
+    seconds after a reject. That case gets a message suggesting Cox instead.
+    """
+    if mso_id != 'Spectrum':
+        set_status('error', f'{label}: Spectrum returned IDLI-4213 ("select Cox Spectrum") even '
+                            f'though the TV provider is already set to {mso_id}.')
+        return False
+    if not _save_tve_provider_as_cox(label):
+        set_status('error', f'{label}: Spectrum asked for "Cox Spectrum" (IDLI-4213) but switching '
+                            f'the TV provider failed — choose "Cox / Cox Spectrum" in Settings.')
+        return False
+    set_status('starting', 'Spectrum says this account signs in as "Cox Spectrum" — switched your '
+                           'TV provider and retrying…')
+    return True
+
+
+_SPECTRUM_IDID_CHECK_INTERVAL_SECONDS = 1.0
+# Spectrum's own error-code shape on its login/IdP pages: IDID-4000,
+# IDID-4003, IDLI-4213 seen live.
+_SPECTRUM_ERROR_CODE_RE = _re.compile(r'\bID[A-Z]{2}-\d{3,5}\b')
+
+
+def _watch_spectrum_auth_results(page, log_tag: str) -> None:
+    """Log the result of every Spectrum login API call this page makes.
+
+    Spectrum's IDM front end turns its API answers into generic pages like
+    "Feature Unavailable ... IDID-4000", but the API responses carry the
+    real reason in plain headers (result_code / result_code_name) — e.g.
+    confirmed live 2026-09-24: password/auth → 403 result_code 4000
+    AUTH_REJECT_BY_RECAPTCHA_REJECT_STATUS behind IDID-4000, and 200
+    PROCESSED on a good login. Logged (never tokens or bodies) and kept on
+    the page so _spectrum_signin_error_message can name the actual gate.
+    aa-network/auth is skipped: its 401 is the normal "not on Spectrum home
+    internet, show the login form" answer. Best-effort; never raises.
+    """
+    def _on_response(resp):
+        try:
+            url = resp.url
+            if 'apis.spectrum.net/auth/' not in url or resp.request.method != 'POST' or '/aa-network/' in url:
+                return
+            headers = resp.headers
+            result = {
+                'status': resp.status,
+                'code': headers.get('result_code') or '',
+                'name': headers.get('result_code_name') or '',
+            }
+            page._fc_spectrum_auth_result = result
+            logger.info('[%s] Spectrum %s -> HTTP %s %s (result_code %s)', log_tag,
+                        _urlsplit(url).path.rsplit('/consumer/', 1)[-1], result['status'],
+                        result['name'] or '-', result['code'] or '-')
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        page.on('response', _on_response)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _retry_spectrum_after_thmx_reject(page, label: str) -> bool:
+    """Reload Spectrum's login page and resubmit the saved credentials once.
+
+    Confirmed 2026-09-25 in a user's own fresh Incognito Chrome (net-export
+    dev/tnt/4.json): the first credential submit on a never-seen device got
+    403 AUTH_REJECT_BY_RECAPTCHA_PASS_THMX_REJECT_STATUS (reCAPTCHA passed,
+    ThreatMetrix rejected — Spectrum's error page), the user reloaded the
+    login page and resubmitted, and the second password/auth answered 200
+    PROCESSED. The Spectrum scraper saw the same "bare retry succeeds" shape
+    earlier that week. Only for the ThreatMetrix code, only once per page:
+    a plain reCAPTCHA reject (AUTH_REJECT_BY_RECAPTCHA_REJECT_STATUS) is not
+    helped by retrying, and repeated attempts make it worse. Returns True
+    when a retry was submitted (the caller keeps waiting), else False.
+    """
+    args = getattr(page, '_fc_autofill_args', None)
+    if not args or getattr(page, '_fc_thmx_retried', False):
+        return False
+    try:
+        page._fc_thmx_retried = True
+        page._fc_spectrum_auth_result = None
+        logger.info('[%s] %s: Spectrum\'s device check (ThreatMetrix) rejected the first attempt — '
+                    'reloading the login page and signing in once more', args.get('log_tag') or 'mvpd-login', label)
+        page.reload(wait_until='domcontentloaded', timeout=30000)
+        page.wait_for_timeout(3000)
+        return bool(_try_autofill_credentials(page, **args))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[mvpd-login] %s: ThreatMetrix retry failed: %s', label, exc)
+        return False
+
+
+def _spectrum_signin_error_message(page, label: str, mso_id: str | None = None) -> str | None:
+    """Returns a user-facing error message if a Spectrum sign-in error that
+    no amount of waiting will fix is showing, else None: the IDID "Feature
+    Unavailable" page (via _detect_spectrum_feature_unavailable), or
+    IDLI-4213 (Cox-migrated account signing in under the Spectrum MVPD —
+    see below). Any other Spectrum error code on a spectrum.net page is
+    logged once but not treated as fatal. Call it every poll tick; it
+    throttles itself to one check per second per page.
+
+    Confirmed live 2026-09-24 via a forum report (community thread post
+    #3228): a Discovery TVE sign-in with Spectrum as the MVPD landed on this
+    exact IDID-4000 page right after autofill submitted credentials, and
+    the TVE wait loops — which never knew about it — sat there until their
+    own timeout and reported a generic "timed out waiting for sign-in".
+    Each TVE family does its own separate Spectrum SAML sign-in, so a user
+    retrying several families back to back is precisely the "repeated
+    sign-ins in a short window" shape that seems to trigger it.
+
+    Not always transient, though: confirmed live 2026-09-24 that FOX One
+    through a Cox-migrated Spectrum account gets IDID-4000 on every attempt
+    across ~70 minutes, seconds after A&E signed in fine through the same
+    Spectrum page — i.e. Spectrum refusing that one network. The message
+    covers both readings.
+
+    Deliberately fails fast rather than retrying like the Spectrum scraper
+    does: the scraper's retry re-navigates a fixed start page, but here the
+    only thing to re-navigate is an Adobe/network SAML URL that may be
+    single-use, and hammering sign-ins is plausibly what trips this in the
+    first place. Outside spectrum.net pages, requires an actual IDID-NNNN
+    code alongside the "Feature Unavailable" heading so an unrelated
+    network page using the same phrase can't abort a sign-in.
+    """
+    now = time.monotonic()
+    try:
+        last = getattr(page, '_fc_idid_checked_at', 0.0)
+        if now - last < _SPECTRUM_IDID_CHECK_INTERVAL_SECONDS:
+            return None
+        page._fc_idid_checked_at = now
+    except Exception:  # noqa: BLE001
+        pass
+    # Keyed on Spectrum's API answer, not the page text, since the
+    # ThreatMetrix rejection's error screen isn't guaranteed to be the
+    # "Feature Unavailable" layout detected below.
+    last_auth = getattr(page, '_fc_spectrum_auth_result', None) or {}
+    if last_auth.get('status') == 403 and 'THMX' in (last_auth.get('name') or '') \
+            and _retry_spectrum_after_thmx_reject(page, label):
+        return None
+    url = _safe_page_url(page)
+    code = _detect_spectrum_feature_unavailable(page)
+    if code and not (code == 'IDID-unknown' and 'spectrum.net' not in url):
+        auth = getattr(page, '_fc_spectrum_auth_result', None) or {}
+        reason = auth.get('name') or ''
+        logger.warning('[mvpd-login] %s: Spectrum returned its "Feature Unavailable" error (%s, auth result %s) url=%s',
+                       label, code, reason or 'not seen', _url_for_log(url))
+        if 'THMX' in reason:
+            # The one-time reload-and-resubmit above already ran.
+            return (
+                f'{label}: Spectrum\'s device check (ThreatMetrix) rejected this sign-in ({code}, '
+                f'"Feature Unavailable... try again from home") even after a retry. Wait a few hours '
+                f'before trying again — repeated attempts make it worse.'
+            )
+        # password/auth answering 403 result_code 4000
+        # AUTH_REJECT_BY_RECAPTCHA_REJECT_STATUS renders as IDID-4000 —
+        # Spectrum's reCAPTCHA reject. Seen live 2026-09-24/25 on nearly
+        # every password login from a browser Spectrum didn't remember,
+        # under both "Spectrum" and "Cox Spectrum"; a Cox-migrated account
+        # signing in as plain "Spectrum" also gets it (and sometimes
+        # IDLI-4213 instead). A remembered device (dla-token + "Continue")
+        # signed in every time. Hence the Cox hint (skipped when the
+        # provider is already Cox), and no automatic retry.
+        bot_check = (
+            'Spectrum\'s bot check (reCAPTCHA), which tends to follow many sign-ins in a short '
+            'time: wait a few hours before trying again.'
+        )
+        if mso_id == 'Cox':
+            return (
+                f'{label}: Spectrum rejected this sign-in ({code}, "Feature Unavailable... try again '
+                f'from home"). This is {bot_check}'
+            )
+        return (
+            f'{label}: Spectrum rejected this sign-in ({code}, "Feature Unavailable... try again '
+            f'from home"). If your account used to be Cox and your TV provider is set to '
+            f'"Spectrum", choose "Cox / Cox Spectrum" instead — Spectrum answers Cox accounts '
+            f'this way. Otherwise it\'s {bot_check}'
+        )
+    if 'spectrum.net' not in url:
+        return None
+    try:
+        body = _re.sub(r'\s+', ' ', page.inner_text('body'))
+    except Exception:  # noqa: BLE001
+        return None
+    match = _SPECTRUM_ERROR_CODE_RE.search(body)
+    if not match:
+        return None
+    code = match.group(0)
+    if code == 'IDLI-4213':
+        # Confirmed live 2026-09-24 with a real Cox account migrated to
+        # Spectrum, signing in under mso_id=Spectrum: Spectrum's login form
+        # shows "please return to the provider selection page and select
+        # 'Cox Spectrum' as your TV provider. IDLI-4213." — first on
+        # Discovery in our own flow, then on TNT's real site in a normal
+        # browser (dev/tnt/coxspectrum.har). "Cox Spectrum" is Adobe's `Cox`
+        # MVPD: same id/displayName, but its logoUrl is
+        # cox-spectrum-logo-RGB.jpg, which is the tile network pickers show.
+        # Picking it signed the same account in to TNT. Raised rather than
+        # returned so the caller closes the browser, switches the saved
+        # provider (see _spectrum_retry_as_cox) and reruns this network.
+        logger.warning('[mvpd-login] %s: Spectrum wants this account to sign in as "Cox Spectrum" '
+                       '(IDLI-4213) url=%s', label, _url_for_log(url))
+        raise SpectrumWantsCoxProvider(
+            f'{label}: Spectrum says this account must sign in as "Cox Spectrum" (IDLI-4213). '
+            f'In Settings → TVE, choose "Cox / Cox Spectrum" as your TV provider — keep your '
+            f'Spectrum username and password — then sign in again.'
+        )
+    # Any other Spectrum error code (wrong password, locked account, ...):
+    # logged once so the activity feed shows Spectrum's own words, but not
+    # fatal — a human can still correct it in the streamed browser window.
+    try:
+        logged = getattr(page, '_fc_spectrum_codes_logged', None)
+        if logged is None:
+            logged = set()
+            page._fc_spectrum_codes_logged = logged
+        if code in logged:
+            return None
+        logged.add(code)
+    except Exception:  # noqa: BLE001
+        pass
+    context = body[max(0, match.start() - 250):match.end()].strip()
+    logger.warning('[mvpd-login] %s: Spectrum sign-in page shows error %s: %r url=%s',
+                   label, code, context, _url_for_log(url))
+    return None
+
+
+def _log_signin_timeout_snapshot(page, log_tag: str) -> None:
+    """Record what the browser was actually showing when a TVE sign-in wait
+    timed out. Found 2026-09-24 via a forum report (community thread post
+    #3223): a Spectrum-as-MVPD sign-in autofilled, submitted, then logged
+    nothing at all for 150s before "timed out" — no way to tell a captcha
+    challenge from Spectrum's IDID error page from a plain slow network.
+
+    URL (query-stripped) and page title always — neither carries account
+    details. Visible page text only when debug logging is on (FC_DEBUG or
+    the Settings toggle, see app/debug_flag.py), since a login page can
+    show the account name ("You're signing in as: ...") and this log is
+    mirrored into the UI activity feed that users screenshot publicly.
+    Best-effort; never raises.
+    """
+    try:
+        title = page.title()
+    except Exception:  # noqa: BLE001
+        title = '<unreadable>'
+    logger.info('[%s] timed out — final page url=%s title=%r', log_tag, _url_for_log(_safe_page_url(page)), title)
+    try:
+        from app.debug_flag import env_flag_enabled, settings_flag_enabled
+        enabled = env_flag_enabled()
+        if not enabled:
+            # Short-lived context, popped before touching the page again —
+            # every caller runs with its own context already popped (see
+            # _prime_google_session's docstring on why).
+            with flask_app.app_context():
+                enabled = settings_flag_enabled()
+        if not enabled:
+            return
+        text =_re.sub(r'\s+', ' ', page.inner_text('body')).strip()[:300]
+        logger.info('[%s][debug] timed out — final page text=%r', log_tag, text)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _mask_username(username: str) -> str:
+    """Log-safe form of an account username/email: the browser-login
+    activity log is shown in the UI, and users paste screenshots of it
+    into public forum threads (confirmed 2026-09-24, post #3223 — a full
+    Spectrum username ended up public that way). Keeps just enough to
+    recognize which account was used."""
+    name = (username or '').strip()
+    local, sep, domain = name.partition('@')
+    if len(local) <= 4:
+        masked = local[:1] + '***'
+    else:
+        masked = f'{local[:2]}***{local[-2:]}'
+    return masked + (sep + domain if sep else '')
 
 
 _GOOGLE_SETUP_URL = 'https://accounts.google.com/embedded/setup/v2/android?ipt=&ipr=&flowName=EmbeddedSetupAndroid'

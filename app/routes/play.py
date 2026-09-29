@@ -14,7 +14,6 @@ import secrets
 import threading
 import time as _time
 from datetime import datetime, timedelta, timezone
-import xml.etree.ElementTree as ET
 from urllib.parse import quote as _url_quote, urljoin, urlsplit, urlunsplit, parse_qs as _parse_qs
 
 import requests as _requests
@@ -1847,116 +1846,6 @@ def fubo_dash_proxy(channel_id: str):
 
 
 
-@play_bp.route('/play/cox/<channel_id>/dash.mpd')
-def cox_dash_proxy(channel_id: str):
-    """DASH (Widevine) manifest proxy for Cox Contour TVE channels.
-
-    Cox exposes TVE channel URLs as .m3u8 in channelmap, but the matching
-    .mpd?trred=false endpoint returns a Widevine DASH manifest. Proxy the MPD
-    with permissive CORS and inject a BaseURL so Shaka resolves relative
-    segment templates against the Cox CDN, not this FastChannels route.
-    """
-    from urllib.parse import unquote as _unquote, urljoin as _urljoin
-
-    raw_id = _unquote(channel_id)
-    channel = (
-        Channel.query
-        .join(Source)
-        .filter(Source.name == 'cox', Channel.source_channel_id == raw_id)
-        .first()
-    )
-    if not channel:
-        abort(404)
-
-    scraper_cls = registry.get('cox')
-    if not scraper_cls:
-        return _unavailable_response()
-    scraper_config = dict(channel.source.config or {})
-    scraper = scraper_cls(config=scraper_config)
-    try:
-        dash_url = scraper.resolve(channel.stream_url)
-    except Exception as e:
-        logger.warning('[cox-dash] resolve failed for %s: %s', raw_id[:40], e)
-        return _unavailable_response()
-    finally:
-        if getattr(scraper, '_pending_cache_updates', None):
-            try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
-            except Exception:
-                pass
-        if scraper._pending_config_updates:
-            try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
-            except Exception:
-                pass
-
-    if not dash_url or not dash_url.startswith('http'):
-        logger.warning('[cox-dash] no DASH URL for %s', raw_id[:40])
-        return _unavailable_response()
-
-    try:
-        r = _requests.get(dash_url, timeout=10, headers={
-            'Origin': 'https://watchtv.cox.com',
-            'Referer': 'https://watchtv.cox.com/',
-            'Accept': '*/*',
-        })
-        r.raise_for_status()
-    except Exception as e:
-        logger.warning('[cox-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
-        return _unavailable_response()
-
-    mpd = _cox_strip_empty_mpd_periods(r.text, raw_id)
-    if not re.search(r'<BaseURL\b', mpd):
-        cdn_base = _urljoin(dash_url, '.')
-        mpd = mpd.replace('<Period ', f'<BaseURL>{cdn_base}</BaseURL>\n  <Period ', 1)
-
-    return Response(
-        mpd,
-        mimetype='application/dash+xml',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Access-Control-Allow-Origin': '*',
-        },
-    )
-
-
-def _cox_strip_empty_mpd_periods(mpd: str, channel_id: str) -> str:
-    """Remove Cox event-only/empty periods that Shaka rejects before playback."""
-    if '<Period' not in mpd:
-        return mpd
-
-    try:
-        root = ET.fromstring(mpd.encode('utf-8'))
-    except ET.ParseError:
-        logger.debug('[cox-dash] MPD parse failed for %s; returning original manifest', channel_id[:40])
-        return mpd
-
-    namespace = ''
-    if root.tag.startswith('{'):
-        namespace = root.tag[1:].split('}', 1)[0]
-        ET.register_namespace('', namespace)
-
-    period_tag = f'{{{namespace}}}Period' if namespace else 'Period'
-    adaptation_tag = f'{{{namespace}}}AdaptationSet' if namespace else 'AdaptationSet'
-    periods = list(root.findall(period_tag))
-    if not periods:
-        return mpd
-
-    empty_periods = [period for period in periods if not list(period.iter(adaptation_tag))]
-    if not empty_periods or len(empty_periods) == len(periods):
-        return mpd
-
-    for period in empty_periods:
-        root.remove(period)
-
-    logger.info(
-        '[cox-dash] stripped %d empty MPD period(s) for channel=%s',
-        len(empty_periods),
-        channel_id[:40],
-    )
-    return ET.tostring(root, encoding='unicode', xml_declaration=True)
-
-
 @play_bp.route('/play/philo/<channel_id>/dash.mpd')
 def philo_dash_proxy(channel_id: str):
     """DASH (Widevine) manifest proxy for a Philo channel — the browser/EME path
@@ -2079,6 +1968,54 @@ def sling_boundary_ack(channel_id: str):
     return ('', 204)
 
 
+_ISO_DURATION_RE = re.compile(
+    r'^P(?:(?P<d>[\d.]+)D)?(?:T(?:(?P<h>[\d.]+)H)?(?:(?P<m>[\d.]+)M)?(?:(?P<s>[\d.]+)S)?)?$')
+
+
+def _iso_duration_s(value: str | None) -> float | None:
+    m = _ISO_DURATION_RE.match(value or '')
+    if not m or not any(m.groupdict().values()):
+        return None
+    parts = {k: float(v) for k, v in m.groupdict().items() if v}
+    return (parts.get('d', 0) * 86400 + parts.get('h', 0) * 3600
+            + parts.get('m', 0) * 60 + parts.get('s', 0))
+
+
+def _sling_unbound_live_period(mpd: str) -> str:
+    """Let Media3 bound the live period by wall clock instead of its declared length.
+
+    Media3 applies MPD@mediaPresentationDuration (the whole block, e.g. PT7080S) to the
+    last period, and a last period with a known end has every segment counted as already
+    available. So it buffers past what Sling has published and 404s. mediaPresentationDuration
+    is always dropped; the last period's own duration is dropped only while its end is still
+    ahead. A block can be several periods with an ad gap between them (365BLK, confirmed
+    2026-09-24: period 1 ended at 5223.9s, period 2 started at 5282.0s), and once a period
+    has ended its bound is real. Keeping it stops the player at the actual end instead of
+    running into segments that will never exist. Earlier periods are left alone — Media3
+    bounds them by the next period's start.
+    """
+    mpd = re.sub(r'(<(?:\w+:)?MPD\b[^>]*?)\s+mediaPresentationDuration="[^"]*"', r'\1', mpd)
+    periods = list(re.finditer(r'<(?:\w+:)?Period\b[^>]*>', mpd))
+    if not periods:
+        return mpd
+    last = periods[-1]
+    tag = last.group(0)
+    dur_match = re.search(r'\sduration="([^"]*)"', tag)
+    if not dur_match:
+        return mpd
+    ast_match = re.search(r'availabilityStartTime="([^"]+)"', mpd)
+    start_match = re.search(r'\sstart="([^"]*)"', tag)
+    try:
+        ast = datetime.fromisoformat(ast_match.group(1).replace('Z', '+00:00')).timestamp()
+        end = ast + _iso_duration_s(start_match.group(1)) + _iso_duration_s(dur_match.group(1))
+    except (AttributeError, TypeError, ValueError):
+        end = None
+    # Sling publishes ~6s ahead of wall clock, so within 4s of the end every segment exists.
+    if end is None or end > _time.time() + 4:
+        mpd = mpd[:last.start()] + tag.replace(dur_match.group(0), '', 1) + mpd[last.end():]
+    return mpd
+
+
 @play_bp.route('/play/sling/<channel_id>/dash.mpd')
 def sling_dash_proxy(channel_id: str):
     """DASH (Widevine) manifest proxy for Sling bridge playback.
@@ -2099,33 +2036,60 @@ def sling_dash_proxy(channel_id: str):
     if not channel:
         abort(404)
 
-    scraper_cls = registry.get('sling')
-    if not scraper_cls:
-        return _unavailable_response()
-    scraper = scraper_cls(config=channel.source.config or {})
-    try:
-        dash_url = scraper.resolve(channel.stream_url)
-    except Exception as e:
-        logger.warning('[sling-dash] resolve failed for %s: %s', raw_id[:40], e)
-        return _unavailable_response()
-    finally:
-        if getattr(scraper, '_pending_cache_updates', None):
-            try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
-            except Exception:
-                pass
-        if scraper._pending_config_updates:
-            try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
-            except Exception:
-                pass
-        next_boundary = getattr(scraper, 'last_schedule_next', None)
-        if next_boundary:
-            try:
-                from .. import fc_player_bridge
-                fc_player_bridge.note_block_boundary(f'sling:{raw_id}', next_boundary)
-            except Exception:
-                pass
+    # Players refresh this manifest every ~2s (minimumUpdatePeriod), and resolve() is a
+    # schedule.qvt call to Sling's API each time — ~1800/hour per viewer. The resolved
+    # clipslist URL is fixed for the whole block (.../<block start>/<block end>/
+    # spanning_ads.mpd, no token), so reuse it until shortly before the block ends.
+    # Expiring 5s early keeps every poll across a transition resolving fresh, as
+    # before; the 60s cap bounds staleness if Sling reschedules a block early.
+    rdb = _amazon_sht_redis()
+    dash_cache_key = f'sling:dash_url:{raw_id}'
+    dash_url = None
+    if rdb:
+        try:
+            dash_url = rdb.get(dash_cache_key)
+        except Exception:
+            pass
+
+    if not dash_url:
+        scraper_cls = registry.get('sling')
+        if not scraper_cls:
+            return _unavailable_response()
+        scraper = scraper_cls(config=channel.source.config or {})
+        next_boundary = None
+        try:
+            dash_url = scraper.resolve(channel.stream_url)
+        except Exception as e:
+            logger.warning('[sling-dash] resolve failed for %s: %s', raw_id[:40], e)
+            return _unavailable_response()
+        finally:
+            if getattr(scraper, '_pending_cache_updates', None):
+                try:
+                    persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                except Exception:
+                    pass
+            if scraper._pending_config_updates:
+                try:
+                    persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+                except Exception:
+                    pass
+            next_boundary = getattr(scraper, 'last_schedule_next', None)
+            if next_boundary:
+                try:
+                    from .. import fc_player_bridge
+                    fc_player_bridge.note_block_boundary(f'sling:{raw_id}', next_boundary)
+                except Exception:
+                    pass
+
+        if rdb and dash_url and dash_url.startswith('http') and next_boundary:
+            from .. import fc_player_bridge
+            boundary_ts = fc_player_bridge.block_boundary_ts(next_boundary)
+            ttl = int(min(boundary_ts - _time.time() - 5, 60)) if boundary_ts else 0
+            if ttl >= 5:
+                try:
+                    rdb.setex(dash_cache_key, ttl, dash_url)
+                except Exception:
+                    pass
 
     if not dash_url or not dash_url.startswith('http'):
         logger.warning('[sling-dash] no DASH URL for %s', raw_id[:40])
@@ -2157,6 +2121,33 @@ def sling_dash_proxy(channel_id: str):
     # movenetworks' own custom namespace attribute carrying the same raw proxy URL,
     # attached directly to the generic mp4protection ContentProtection element.
     mpd = re.sub(r'\s+\w+:widevineProxy="[^"]*"', '', mpd, flags=re.IGNORECASE)
+    # Each clipslist block is type="dynamic" but declares its full length up front
+    # (<Period duration="PT1680S">). A bounded period makes Media3 count every segment in
+    # the block as already available (its window comes out dynamic=false), so
+    # FastChannels Player buffers past what Sling has actually published (~6s ahead of
+    # wall clock), 404s at the edge, and excludes each rendition it tries in turn —
+    # sliding down the ladder to 288p. Confirmed live 2026-09-24 through a logging proxy
+    # on the bridge stick: ~1.6 segment 404s/s for the whole block, matching a forum
+    # report of endless ContainerMediaChunk 404s with a periodically soft picture.
+    # Without a declared duration the segment count is unbounded and Media3 limits
+    # availability to wall clock, playing suggestedPresentationDelay behind the edge.
+    # Block ends don't depend on the period length — the boundary swap/retune
+    # (fc_player_bridge) handles those.
+    if re.search(r'<(?:\w+:)?MPD\b[^>]*\btype="dynamic"', mpd):
+        mpd = _sling_unbound_live_period(mpd)
+        # That wall-clock bound is the player's own clock unless the MPD names a time
+        # source, and Sling's has no <UTCTiming>: a client running more than ~6s fast
+        # would request unpublished segments again. Stamp our (NTP-synced) server time
+        # in with the direct scheme — Media3 and Shaka both support it, and it costs no
+        # extra round trip.
+        if not re.search(r'<(?:\w+:)?UTCTiming\b', mpd):
+            now_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+            mpd = re.sub(
+                r'</((?:\w+:)?)MPD>',
+                lambda m: (f'<{m.group(1)}UTCTiming schemeIdUri="urn:mpeg:dash:utc:direct:2014" '
+                           f'value="{now_iso}"/></{m.group(1)}MPD>'),
+                mpd, count=1,
+            )
 
     return Response(
         mpd,
@@ -2535,34 +2526,38 @@ def license_proxy(source_name: str, channel_id: str | None = None):
         except Exception as e:
             logger.warning('[philo-license] channel refresh after HTTP 403 failed: %s', e)
 
-    # Cox's MDS license server appears to grant only one license per
-    # content_metadata/xsct session; Kodi's inputstream.adaptive routinely opens a
-    # second CDM session (even though every track shares the same default_KID) and
-    # that second request gets a bare 403. Mint a fresh session and retry once.
-    if r.status_code == 403 and source_name == 'cox' and channel_id:
+    # Spectrum rejects a license with 401 INVALID_TOKEN when the cached per-stream
+    # AST/streamSessionId is reused for a later tune or was minted under an access
+    # token that has since been refreshed. Mint a fresh stream session and retry
+    # once; the license URL carries streamSessionId, so it's rebuilt too.
+    if r.status_code == 401 and source_name == 'spectrum' and channel_id:
         try:
             fresh_cfg = {**(source.config or {}), **load_source_cache(source.id)}
             fresh_scraper = scraper_cls(config=fresh_cfg)
-            fresh_scraper.expire_cached_dash(channel_id)
+            fresh_scraper.expire_cached_stream(channel_id)
+            # Stored stream_url, not rebuilt from channel_id: a Travel Channel
+            # is spectrum://travel/<id> and must re-mint with travelChannel=true.
             channel = (
                 Channel.query.join(Source)
-                .filter(Source.name == 'cox', Channel.source_channel_id == channel_id)
+                .filter(Source.name == 'spectrum', Channel.source_channel_id == channel_id)
                 .first()
             )
-            if channel and channel.stream_url:
-                fresh_scraper.resolve(channel.stream_url)
+            fresh_scraper.resolve(channel.stream_url if channel and channel.stream_url
+                                  else f'spectrum://{channel_id}')
             if getattr(fresh_scraper, '_pending_cache_updates', None):
                 persist_source_cache_updates(source.id, fresh_scraper._pending_cache_updates)
             if getattr(fresh_scraper, '_pending_config_updates', None):
                 persist_source_config_updates(source.id, fresh_scraper._pending_config_updates)
             cfg = {**(source.config or {}), **load_source_cache(source.id)}
+            license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id) or license_url
             body, headers = scraper_cls.prepare_license_request(
                 challenge, cfg, channel_id=channel_id, sht=sht)
             headers.setdefault('Content-Type', 'application/octet-stream')
-            logger.info('[cox-license] refreshed playback session after HTTP 403 channel=%s', channel_id)
+            logger.info('[spectrum-license] minted a fresh stream session after HTTP 401 channel=%s: %s',
+                        channel_id, (r.content or b'')[:200])
             r = _send_license()
         except Exception as e:
-            logger.warning('[cox-license] channel refresh after HTTP 403 failed: %s', e)
+            logger.warning('[spectrum-license] channel refresh after HTTP 401 failed: %s', e)
     logger.debug('[license-proxy] %s channel=%s -> HTTP %s (%d bytes)',
                  source_name, channel_id or '-', r.status_code, len(r.content))
     if r.status_code >= 400:
@@ -2648,9 +2643,9 @@ def license_certificate(source_name: str):
             pass
     cfg = {**(source.config or {}), **load_source_cache(source.id)}
 
-    # Prefer a source-native certificate endpoint. Cox's response contains the inner signed
-    # certificate expected by EME/MediaDrm; its normal /license endpoint instead returns an
-    # outer Widevine SignedMessage wrapper that Android correctly refuses to install.
+    # Prefer a source-native certificate endpoint when the scraper has one (Cox Contour
+    # did: its /license endpoint returned an outer SignedMessage wrapper that Android
+    # refuses to install as a service certificate).
     fetch_service_certificate = getattr(scraper_cls, 'fetch_service_certificate', None)
     if callable(fetch_service_certificate):
         try:
@@ -2970,6 +2965,7 @@ def play(source_name: str, channel_id: str):
         _channel_id = channel.id
         _source_name = source_name
         _source_id = channel.source_id
+        _already_bridged = bool(channel.requires_drm_bridge)
         def _bg_check():
             import requests
             # Use a plain session without retry adapters — this is a one-shot
@@ -3018,6 +3014,15 @@ def play(source_name: str, channel_id: str):
                         logger.warning('[play] failed to clear osm_session: %s', e)
                 return
             with _app.app_context():
+                # A bridged channel is SUPPOSED to be DRM — run_channel_auto_disable
+                # would just return "already bridged". Skip enqueuing that no-op
+                # job (and its alarming "auto-disable" log line) on every tune. Same
+                # condition as the job's, so a setup with no bridge still disables.
+                if (reason.startswith('DRM') and _already_bridged
+                        and getattr(registry.get(_source_name), 'license_url', None)):
+                    from ..drm_bridge import drm_bridge_mode_for
+                    if drm_bridge_mode_for(_source_name):
+                        return
                 trigger_channel_auto_disable(_channel_id, reason)
 
         threading.Thread(target=_bg_check, daemon=True).start()
@@ -3110,6 +3115,13 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
         channel_key=f'{source_name}:{channel_id}',
         adb_address=adb_override,
     )
+    if adb_override:
+        # ?adb= means ah4c's bmitune.sh made this call; remember which script set
+        # it's running so the Bridge page can flag tuners that need a re-export.
+        from ..ah4c_export import SCRIPTS_VERSION_RE
+        from ..bridge_devices import note_ah4c_scripts_version
+        reported = (request.args.get('scripts') or '').strip()
+        note_ah4c_scripts_version(adb_override, reported if SCRIPTS_VERSION_RE.match(reported) else '')
     logger.info(
         '[fc-player] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s adb=%s triggered=%s -> %s',
         getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name,

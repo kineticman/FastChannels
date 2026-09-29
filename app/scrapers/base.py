@@ -322,7 +322,7 @@ class ChannelData:
                  slug=None, category=None, language='en', country='US',
                  stream_type='hls', number=None, gracenote_id=None,
                  guide_key=None, tags=None, description=None,
-                 gracenote_mode=None):
+                 gracenote_mode=None, provider_number=None):
         self.source_channel_id = source_channel_id
         self.name        = name
         self.stream_url  = stream_url
@@ -333,6 +333,12 @@ class ChannelData:
         self.country     = country
         self.stream_type = stream_type
         self.number      = number
+        # Upstream's own channel number as text. Scrapers that synthesize
+        # sub-channels (e.g. DirecTV "305.2") pass it explicitly; everyone else
+        # gets their integer `number` carried over as-is.
+        if provider_number is None and number is not None:
+            provider_number = str(number)
+        self.provider_number = (str(provider_number).strip() or None) if provider_number is not None else None
         self.gracenote_id = gracenote_id
         # Initial gracenote routing mode for NEW channels only ('auto'|'manual'|
         # 'off'); None defaults to 'auto'. Existing channels keep their stored
@@ -667,6 +673,12 @@ class BaseScraper(ABC):
         (e.g. capturing tokens) so they can be persisted before the long scrape."""
         pass
 
+    def audit_preflight(self) -> None:
+        """Called once before a stream audit starts. Raise to skip the audit
+        with a clear reason when something source-wide (e.g. sign-in) would
+        make every channel fail. Default: no check."""
+        pass
+
     @abstractmethod
     def fetch_channels(self) -> list[ChannelData]: ...
 
@@ -676,6 +688,14 @@ class BaseScraper(ABC):
     def resolve(self, raw_url: str) -> str:
         """Override to resolve raw stored URLs to playable URLs at request time."""
         return raw_url
+
+    @classmethod
+    def uses_provider_numbers(cls, config: dict | None) -> bool:
+        """True when this source's channels should be numbered with the
+        provider's own channel numbers (Channel.provider_number) in M3U
+        output instead of the app-assigned tvg-chno. Override in scrapers
+        that expose such a setting."""
+        return False
 
     @classmethod
     def license_request_headers(cls, config: dict) -> dict:

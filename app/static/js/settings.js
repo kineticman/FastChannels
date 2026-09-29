@@ -366,7 +366,7 @@ function renderAh4cTuners(tuners) {
   const table = document.createElement('table');
   table.className = 'ah4c-tuners-table';
   const head = table.createTHead().insertRow();
-  ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels', 'Android / Fire OS', 'Sleep disabled', 'FC Player'].forEach((label) => {
+  ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels', 'Android / Fire OS', 'Sleep disabled', 'FC Player', 'Scripts'].forEach((label) => {
     const th = document.createElement('th');
     th.textContent = label;
     // Keep the literal env-var name as-is; the other headers get uppercased by CSS.
@@ -437,6 +437,20 @@ function renderAh4cTuners(tuners) {
       addBadge(playerCell, '✕ Not installed', 'warn');
     } else {
       addBadge(playerCell, '? Unknown', 'warn');
+    }
+
+    // Reported by bmitune.sh on each tune — independent of adb reachability.
+    const scriptsCell = row.insertCell();
+    if (t.scripts_status === 'current') {
+      addBadge(scriptsCell, '✓ ' + t.scripts_version, 'ok');
+    } else if (t.scripts_status === 'outdated') {
+      addBadge(scriptsCell, '⬆ ' + t.scripts_version, 'warn',
+        `Update ah4c's scripts or re-export (current ${t.scripts_current_version})`);
+    } else if (t.scripts_status === 'unversioned') {
+      addBadge(scriptsCell, 'No version', '',
+        `Older set; update ah4c's scripts or re-export (current ${t.scripts_current_version})`);
+    } else {
+      addBadge(scriptsCell, '? Not seen yet', '', 'Known after its next ah4c tune');
     }
   });
   box.appendChild(table);
@@ -630,7 +644,34 @@ function openAh4cScriptsModal() {
   // than whoever is loading this settings page, so this is a starting point for
   // the user to confirm or override, never submitted as-is without their eyes on it.
   document.getElementById('ah4c-scripts-url').value = window.location.origin;
+  updateAh4cScriptsCommand();
   document.getElementById('ah4c-scripts-modal').classList.add('open');
+}
+
+function _ah4cScriptsExportUrl(serverUrl) {
+  return serverUrl.replace(/\/+$/, '') + '/api/settings/fc-player/ah4c-scripts?url=' + encodeURIComponent(serverUrl);
+}
+
+function updateAh4cScriptsCommand() {
+  const box = document.getElementById('ah4c-scripts-command');
+  if (!box) return;
+  const url = document.getElementById('ah4c-scripts-url').value.trim();
+  // $STREAMER_APP is expanded inside the ah4c container, relative to its /opt
+  // working directory — i.e. exactly the directory ah4c loads scripts from.
+  box.value = url
+    ? `docker exec ah4c sh -c 'cd /opt && curl -fsS "${_ah4cScriptsExportUrl(url)}" | tar xz -C "$STREAMER_APP"'`
+    : '';
+}
+
+async function copyAh4cScriptsCommand() {
+  const box = document.getElementById('ah4c-scripts-command');
+  if (!box || !box.value) return;
+  try {
+    await navigator.clipboard.writeText(box.value);
+  } catch (e) {
+    box.select();
+    document.execCommand('copy');
+  }
 }
 
 function closeAh4cScriptsModal() {
@@ -676,7 +717,7 @@ function updateTveProviderFields() {
   if (password) password.placeholder = tvePasswordPlaceholder;
   if (hint) {
     hint.textContent = provider.id === 'Cox'
-      ? 'Used by all TVE sources, via a fast native sign-in.'
+      ? 'Used by all TVE sources. Tries a fast native Cox sign-in first; Cox accounts that have moved to Spectrum sign in on Spectrum\'s own page (browser-assisted) instead.'
       : `Used by all TVE sources — signs in through ${provider.name}'s own login (scripted where possible, browser-assisted sign-in below otherwise).`;
   }
   // "Test" is a fast, genuine credential check only for Cox (native scripted
@@ -733,7 +774,6 @@ async function saveTveMvpdSettings() {
     is_enabled: enabledCheckbox.checked,
     username: usernameField.value.trim(),
     password: passwordField.value,
-    home_zip_code: (document.getElementById('tve-home-zip')?.value || '').trim(),
   };
   status.className = 'save-status';
   status.textContent = 'Saving…';
@@ -764,59 +804,15 @@ async function saveTveMvpdSettings() {
 }
 
 async function testTveMvpd() {
-  const status = document.getElementById('tve-status');
-  const btn = document.getElementById('tve-test-btn');
-  const last = document.getElementById('tve-last-status');
   const saved = await saveTveMvpdSettings();
   if (!saved) return;
 
-  // Cox's native sign-in is a fast, genuine credential check (~2-3s), so it
-  // stays a quick synchronous request below. Every other provider has no
-  // scripted way to verify credentials at all — even Sling's own native
-  // login rejects scripted checks outright (see app/scrapers/sling.py) — so
-  // "Test" for those just IS the real browser-assisted sign-in; there's no
-  // lighter-weight check to fall back to.
-  if (selectedTveProvider().id !== 'Cox') {
-    openMvpdLoginModal('legacy', 'HISTORY');
-    return;
-  }
-
-  status.className = 'save-status';
-  status.textContent = 'Testing…';
-  btn.disabled = true;
-  try {
-    const r = await fetch('/api/settings/tve/mvpd/test', { method: 'POST' });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    status.className = 'save-status ok';
-    status.textContent = '✓ Authorized';
-    if (last) last.textContent = data.account?.last_auth_message || 'Authorized History via Adobe Pass.';
-  } catch (e) {
-    status.className = 'save-status error';
-    status.textContent = '✕ Auth failed';
-    if (last) last.textContent = e.message;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function foxOneSignIn(btn) {
-  // FOX One authenticates natively (scripted Cox OAuth, no browser) so unlike
-  // every other network's "Sign in" this is a plain synchronous call, not the
-  // streamed-screenshot modal — see api.foxone_signin.
-  const originalText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Signing in…';
-  try {
-    const r = await fetch('/api/settings/tve/foxone/signin', { method: 'POST' });
-    const data = await r.json();
-    if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    loadTveNetworkStatus();  // re-render picks up the fresh timestamp
-  } catch (e) {
-    btn.disabled = false;
-    btn.textContent = originalText;
-    btn.title = '✕ ' + e.message;
-  }
+  // "Test" is the real sign-in for every provider. Cox used to get a quick
+  // synchronous scripted check here instead, but Adobe's "Cox" MVPD now
+  // hands a Spectrum-migrated Cox account to Spectrum's own login page
+  // (confirmed live 2026-09-24), which only the browser-assisted flow can
+  // complete — and that flow already tries the scripted Cox login first.
+  openMvpdLoginModal('legacy', 'HISTORY');
 }
 
 async function resetTveState() {
@@ -855,19 +851,16 @@ async function resetTveState() {
 // Six networks share this one streamed-browser modal, each with its own
 // backend flow and endpoint prefix (see app/tve/status.py's 'family' field):
 // 'legacy' (A+E/Warner, needs a requestor_id) and 'nbc'/'fox'/'amcn'/
-// 'discovery'/'foxone' (each a single fixed target, no requestor_id).
-// amcn/discovery/foxone sign in with a fast scripted Cox login when that's
-// the selected MVPD (foxone's own quick native button still handles that
-// case directly, see loadTveNetworkStatus — this modal is only reached for
-// other MSOs), but report through the same status/redis keys as the legacy
-// family's modal either way, so this same polling code works unchanged.
+// 'discovery' (each a single fixed target, no requestor_id). They all
+// report through the same status/redis keys as the legacy family's modal,
+// so this same polling code works unchanged. (FOX One signs in from its
+// own card on the Sources page.)
 const MVPD_LOGIN_FAMILIES = {
   legacy:    { base: '/api/settings/tve/browser-login', needsRequestor: true },
   nbc:       { base: '/api/settings/tve/nbc/browser-login', needsRequestor: false },
   fox:       { base: '/api/settings/tve/fox/browser-login', needsRequestor: false },
   amcn:      { base: '/api/settings/tve/amcn/browser-login', needsRequestor: false },
   discovery: { base: '/api/settings/tve/discovery/browser-login', needsRequestor: false },
-  foxone:    { base: '/api/settings/tve/foxone/browser-login', needsRequestor: false },
   google:    { base: '/api/settings/tve/google/browser-login', needsRequestor: false },
 };
 let _mvpdLoginActive = false;
@@ -879,24 +872,6 @@ let _mvpdLoginFamily = 'legacy';
 // requestor_id check for why this matters (the legacy family's 7
 // requestors share one status key).
 let _mvpdLoginRequestorId = null;
-
-// Every network's Cox sign-in is now a real, fast scripted login (no
-// browser) instead of a human-paced browser flow — clicking through several
-// networks within a minute was firing that many real Okta logins back to
-// back and tripping Cox's own rate-limiting (observed live 2026-08-11: the
-// 6th rapid-fire login suddenly took ~25s instead of ~2-3s). Originally
-// throttled from here via a localStorage-tracked client-side cooldown, but
-// that only protected clicks within one browser tab — a second tab, a
-// different device, or a direct API call bypassed it entirely, and it also
-// raced the server's own job-completion timing (a slow login, e.g. AMC's 4
-// sequential channel logins, could finish AFTER this cooldown had already
-// elapsed, so the next batch step's /start hit "already_running" and got
-// wrongly marked failed). Moved to the real enforcement point instead —
-// app.tve.adobe_pass.throttle_cox_login() sleeps server-side, inside the
-// actual login.cox.com POST, covering every entry point including FOX One's
-// own button and any direct API call — see its docstring (code review,
-// 2026-08-11). Nothing client-side needed anymore: a "Sign in" click just
-// takes longer to respond if another login happened moments ago.
 
 // What to retry with after a force-stop — set by openMvpdLoginModal itself so
 // forceStopMvpdLogin never needs family/requestorId embedded in an inline
@@ -975,16 +950,16 @@ async function loadTveNetworkStatus() {
       // on an otherwise-working Cox account) — see app/tve/status.py's
       // tve_network_status, which only sets this when the failure is newer
       // than the last success.
+      if (n.unsupported) {
+        note = `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${_escapeHtml(n.unsupported)}</div>`;
+      }
       if (!note && n.last_error_message) {
         const errAge = _tveRelativeTime(n.last_error_at);
         note = `<div style="color:var(--danger);font-size:0.72rem;margin:0.05rem 0 0.35rem">Last attempt failed ${errAge}: ${_escapeHtml(n.last_error_message)}</div>`;
       }
       const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
-      const bootstrap = window.FC_SETTINGS_BOOTSTRAP || {};
       let button = '';
-      if (n.family === 'foxone' && bootstrap.tveSelectedMsoId === 'Cox') {
-        button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Quick, no-browser native login — also doubles as a fast check that your saved TV provider credentials are still valid" onclick="foxOneSignIn(this)">Sign in</button>`;
-      } else if (n.family) {
+      if (n.family && !n.unsupported) {
         button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`;
       }
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
@@ -1123,8 +1098,6 @@ function _closeMvpdLoginModal(cancel) {
   if (_mvpdLoginPollTimer) { clearTimeout(_mvpdLoginPollTimer); _mvpdLoginPollTimer = null; }
   const wasActive = _mvpdLoginActive;
   _mvpdLoginActive = false;
-  // FOX One (batch mode only, see signInToAllTve) has no /stop endpoint —
-  // it's one direct synchronous POST, nothing to interrupt server-side.
   if (cancel && !_mvpdLoginDone && wasActive && MVPD_LOGIN_FAMILIES[_mvpdLoginFamily]) {
     fetch(`${MVPD_LOGIN_FAMILIES[_mvpdLoginFamily].base}/stop`, { method: 'POST' }).catch(() => {});
   }
@@ -1297,10 +1270,9 @@ async function signInToAllTve() {
   try {
     const r = await fetch('/api/settings/tve/status');
     const d = await r.json();
-    // 'foxone' authenticates through a different, always-native endpoint
-    // (foxOneSignIn's single synchronous POST, not the /start+/state polling
-    // every other family uses) — handled as a special case in the loop below.
-    networks = (d.networks || []).filter(n => n.family === 'foxone' || (n.family && MVPD_LOGIN_FAMILIES[n.family]));
+    // Networks that can't work with the selected TV provider (see
+    // UNSUPPORTED_NETWORK_PROVIDERS in app/tve/providers.py) are skipped.
+    networks = (d.networks || []).filter(n => !n.unsupported && n.family && MVPD_LOGIN_FAMILIES[n.family]);
   } catch (e) {
     _mvpdLoginDone = true;
     status.style.color = 'var(--danger)';
@@ -1323,9 +1295,7 @@ async function signInToAllTve() {
     _mvpdLoginFamily = n.family;  // so a mid-batch cancel/force-stop hits the right endpoint
     steps[i].state = 'running';
     _renderMvpdLoginSteps(steps);
-    const result = n.family === 'foxone'
-      ? await _mvpdLoginRunFoxOneForBatch(n.label, status, hintEl)
-      : await _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES[n.family], n.requestor_id, n.label, status, hintEl);
+    const result = await _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES[n.family], n.requestor_id, n.label, status, hintEl);
     if (!_mvpdLoginActive) return;
     steps[i].state = result.ok ? 'done' : 'failed';
     steps[i].message = result.message;
@@ -1340,50 +1310,18 @@ async function signInToAllTve() {
   setTimeout(() => { window.location.reload(); }, 2200);
 }
 
-// FOX One's counterpart to _mvpdLoginRunOneForBatch below — a single
-// synchronous POST instead of /start+/state polling (see foxOneSignIn). The
-// server throttles the real Cox login regardless (app.tve.adobe_pass.
-// throttle_cox_login(), shared with fox_tve's _cox_saml_login which FOX One
-// also uses), so this just fires and waits for the response — no
-// client-side pacing needed.
-//
-// Only valid for mso_id === 'Cox' — foxOneSignIn's route always attempts
-// Cox's own scripted login no matter which MVPD is selected, so for any
-// other MSO (e.g. YouTubeTV) it just fails instantly with "no scripted
-// sign-in is wired up for this provider yet." Left uncaught, "Sign in to
-// all" silently skipped FOX One entirely for every non-Cox MVPD (confirmed
-// live 2026-08-17: a full YouTubeTV batch ran History through Discovery but
-// never even attempted FOX One's own real browser-assisted pairing, built
-// the same day this file gained a 'foxone' entry in MVPD_LOGIN_FAMILIES —
-// this call site was never updated to use it). The row-render logic above
-// already branches on bootstrap.tveSelectedMsoId the same way; mirror it
-// here instead of hardcoding the Cox-only path.
-function _mvpdLoginRunFoxOneForBatch(label, status, hintEl) {
-  if (settingsBootstrap.tveSelectedMsoId !== 'Cox') {
-    return _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES.foxone, null, label, status, hintEl);
-  }
-  status.textContent = `Signing in to ${label}…`;
-  return fetch('/api/settings/tve/foxone/signin', { method: 'POST' })
-    .then(r => r.json().then(data => ({ ok: r.ok && !!data.ok, message: data.error })))
-    .then(({ ok, message }) => ({ ok, message: ok ? 'Signed in.' : (message || 'Sign-in failed.') }))
-    .catch((e) => ({ ok: false, message: e.message || 'Sign-in failed.' }));
-}
-
 // Runs one network's sign-in (/start, poll /state to a terminal state) as
 // part of signInToAllTve()'s loop. Resolves rather than rejects on failure —
 // one network being not-entitled/erroring shouldn't abort the rest of the
-// batch. No client-side cooldown — the server throttles the actual Cox
-// login (app.tve.adobe_pass.throttle_cox_login()) regardless of how fast
-// this loop fires /start calls.
+// batch.
 function _mvpdLoginRunOneForBatch(cfg, requestorId, label, status, hintEl) {
   return new Promise((resolve) => {
     let startAttempts = 0;
     // ~90s of retrying a stuck lock before giving up on this network. AMCN
     // (which shares this same lock, see MVPD_LOGIN_FAMILIES/app/routes/
-    // tasks.py's _mvpd_tve_profile_busy) runs 4 Cox logins each spaced
-    // 8s apart by throttle_cox_login(), so its own worst case is already
-    // ~30s+ — a 30-attempt/1s budget left the next step in line (Discovery)
-    // one bad throttle roll from spuriously failing with "another sign-in
+    // tasks.py's _mvpd_tve_profile_busy) runs 4 channel logins, so its own
+    // worst case is already ~30s+ — a 30-attempt/1s budget left the next step in line (Discovery)
+    // one slow login from spuriously failing with "another sign-in
     // stayed busy too long" purely from sequencing, nothing actually wrong
     // (observed live 2026-08-14: Discovery retried the full 30s while AMCN
     // was still legitimately running). 2s between attempts instead of 1s

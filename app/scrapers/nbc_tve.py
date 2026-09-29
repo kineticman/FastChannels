@@ -17,10 +17,9 @@ verified byte-for-byte against a real captured license request):
 - NBC.com uses **Adobe Pass API v2** (`sp.auth.adobe.com/api/v2/...`), a JSON
   REST flavor distinct from the legacy XML flow in app/tve/adobe_pass.py's
   AdobePassCoxClient. The underlying OAuth2 client-credentials exchange
-  (`/o/client/register` + `/o/client/token`) and the actual Cox SAML login
-  (`login.cox.com/api/v1/authn` + hidden-form POST) are identical between v1
-  and v2, so this file reuses `_cox_saml_login()` from fox_tve.py for the
-  login step and only implements the v2-specific session/profile/preauthorize
+  (`/o/client/register` + `/o/client/token`) is identical between v1 and v2,
+  and the MVPD login step goes through app/tve/mvpd's shared login_to_mvpd(),
+  so this file only implements the v2-specific session/profile/preauthorize
   calls itself.
 - The v2 API's `software_statement` (needed to register a client) is a
   static JWT baked into NBC's own JS bundle — not fetched from any API. It
@@ -103,18 +102,18 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import re
 import struct
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 import requests
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
-from .fox_tve import _cox_saml_login
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
 from ..tve.adobe_pass import (
@@ -129,6 +128,8 @@ try:
     from Cryptodome.Cipher import AES as _AES
 except ImportError:  # pragma: no cover
     from Crypto.Cipher import AES as _AES  # type: ignore[no-redef]
+
+logger = logging.getLogger(__name__)
 
 SCHEME = 'nbc-tve://'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
@@ -334,9 +335,16 @@ class AdobePassV2Client:
             raise TVEAuthError('Adobe Pass v2: client registration did not return credentials.')
         self.client_id, self.client_secret = client_id, client_secret
 
+        self.refresh_access_token()
+
+    def refresh_access_token(self) -> None:
+        """Mint a new access_token for the already-registered client_id/secret.
+        The token is short-lived, but the MVPD sign-in Adobe holds for this
+        device fingerprint is not (a Spectrum profile's notAfter was ~90 days
+        out when checked 2026-09-28, while its 65h-old token got a 401)."""
         r = self._post(
             f'{ADOBE_BASE}/o/client/token',
-            data={'grant_type': 'client_credentials', 'client_id': client_id, 'client_secret': client_secret},
+            data={'grant_type': 'client_credentials', 'client_id': self.client_id, 'client_secret': self.client_secret},
             headers={'Content-Type': 'application/x-www-form-urlencoded'},
         )
         access_token = r.json().get('access_token')
@@ -380,6 +388,9 @@ class AdobePassV2Client:
         if session_data.get('reasonType') == 'authenticated':
             return {}
 
+        from ..tve.mvpd import login_to_mvpd, require_scripted_mvpd_login
+        require_scripted_mvpd_login(mso_id)
+
         try:
             r = self.session.get(
                 f'{ADOBE_BASE}{auth_path}', headers=self._bearer_headers(),
@@ -395,28 +406,16 @@ class AdobePassV2Client:
         if not mso_login_url and mso_id != 'DTV':
             raise TVEAuthError('Adobe Pass v2: sessions authenticate call did not return an MVPD login redirect.')
 
-        if mso_id == 'Cox':
-            if 'login.cox.com' not in mso_login_url:
-                raise TVEAuthError(f'Adobe Pass v2: unexpected authenticate redirect host {urlsplit(mso_login_url).netloc!r}.')
-            try:
-                _cox_saml_login(self.session, mso_login_url, username, password)
-            except ValueError as exc:
-                raise TVENotAuthorizedError(str(exc)) from exc
-            except requests.RequestException as exc:
-                raise TVEAuthError(str(exc)) from exc
-        else:
-            # Every other MVPD's actual sign-in mechanics live in
-            # app/tve/mvpd/ — add one there (not here) to support a new
-            # provider everywhere at once. Uses its own dedicated session
-            # internally, entirely separate from self.session — Adobe binds
-            # the completed login server-side to THIS session's
-            # access_token/device fingerprint (embedded in mso_login_url via
-            # the /sessions call above) rather than to any particular HTTP
-            # session, same as the existing browser-assisted pairing's
-            # cross-session polling already relies on.
-            from ..tve.mvpd import login_to_mvpd
-            page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
-            login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+        # Every MVPD's actual sign-in mechanics live in app/tve/mvpd/ — add
+        # one there (not here) to support a new provider everywhere at once.
+        # Uses its own dedicated session internally, entirely separate from
+        # self.session — Adobe binds the completed login server-side to THIS
+        # session's access_token/device fingerprint (embedded in
+        # mso_login_url via the /sessions call above) rather than to any
+        # particular HTTP session, same as the existing browser-assisted
+        # pairing's cross-session polling already relies on.
+        page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
+        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
 
         r = self._get(f'{ADOBE_BASE}/api/v2/{self.requestor_id}/profiles/{mso_id}', headers=self._bearer_headers())
         profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)
@@ -734,6 +733,57 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             self._update_config('device_fingerprint', fingerprint)
         return fingerprint
 
+    def _cached_nbc_profile(self, client: AdobePassV2Client, mso_id: str, cached_auth: dict, cfg: dict, account) -> dict | None:
+        """Adobe's profile for a saved sign-in, or None if Adobe says it's gone.
+
+        A 401 usually just means the saved access_token expired while the
+        sign-in itself is still valid, so mint a new token for the same client
+        and ask again before giving up on it. A network error, 429 or 5xx
+        raises instead: falling through to a scripted login from there reports
+        a working sign-in as signed out (and Spectrum etc. can't script one)."""
+        from .. import db
+
+        age_h = (time.time() - float(cached_auth.get('captured_at') or 0)) / 3600
+        url = f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{mso_id}'
+
+        def fetch():
+            try:
+                r = client.session.get(url, headers=client._bearer_headers(), timeout=20)
+            except requests.RequestException as exc:
+                raise TVEAuthError(f'NBC TVE: could not reach Adobe to check the saved {mso_id} sign-in: {exc}') from exc
+            if r.status_code == 429 or r.status_code >= 500:
+                raise TVEAuthError(f'NBC TVE: Adobe returned HTTP {r.status_code} checking the saved {mso_id} sign-in; will retry.')
+            return r
+
+        r = fetch()
+        if r.status_code == 401:
+            creds = cached_auth if cached_auth.get('client_id') else (cfg.get('adobe_client_creds') or {}).get(REQUESTOR_ID) or {}
+            if creds.get('client_id') and creds.get('client_secret'):
+                client.client_id, client.client_secret = creds['client_id'], creds['client_secret']
+                client.refresh_access_token()
+                r = fetch()
+                if r.ok:
+                    logger.info('[nbc_tve] refreshed expired Adobe access token for saved %s sign-in (%.1fh old)', mso_id, age_h)
+                    new_cfg = dict(account.config or {})
+                    new_cfg['nbc_mvpd_auth'] = {
+                        **(new_cfg.get('nbc_mvpd_auth') or {}),
+                        'access_token': client.access_token,
+                        'client_id': client.client_id,
+                        'client_secret': client.client_secret,
+                    }
+                    account.config = new_cfg
+                    db.session.commit()
+        if not r.ok:
+            logger.warning('[nbc_tve] saved %s sign-in rejected by Adobe: HTTP %s (%.1fh old)', mso_id, r.status_code, age_h)
+            return None
+        try:
+            profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)
+        except ValueError:
+            profile = None
+        if not profile:
+            logger.warning('[nbc_tve] saved %s sign-in has no Adobe profile (%.1fh old)', mso_id, age_h)
+        return profile
+
     def _ensure_entitled(self, resource_id: str) -> None:
         from .. import db
 
@@ -772,11 +822,7 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
                 cached_auth.get('device_fingerprint') or self._ensure_device_fingerprint(),
             )
             cached_client.access_token = cached_auth['access_token']
-            try:
-                r = cached_client._get(f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{mso_id}', headers=cached_client._bearer_headers())
-                profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)
-            except TVEAuthError:
-                profile = None
+            profile = self._cached_nbc_profile(cached_client, mso_id, cached_auth, cfg, account)
             if profile:
                 resource_ids = sorted({e.resource_id for e in self._fetch_guide().values()} | {resource_id})
                 decisions = cached_client.preauthorize(mso_id, resource_ids)
@@ -831,6 +877,8 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             new_cfg['nbc_mvpd_auth'] = {
                 'mso_id': mso_id,
                 'access_token': client.access_token,
+                'client_id': client.client_id,
+                'client_secret': client.client_secret,
                 'device_fingerprint': self._ensure_device_fingerprint(),
                 'captured_at': int(time.time()),
             }

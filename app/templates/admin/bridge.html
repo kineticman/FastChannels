@@ -116,8 +116,7 @@
           Sources the project has individually verified over each method — not just sources you've
           already added. PrismCast's browser/EME capture works for any source exposing DRM license
           handling, so it covers more than FastChannels Player's native adb bridge, which is
-          re-tested one source at a time (e.g. Cox's app-identity wall blocks native clients but not
-          the browser path, so it's PrismCast-only).
+          re-tested one source at a time.
         </div>
         <div class="bridge-supported-columns">
           <div class="bridge-supported-column">
@@ -140,6 +139,7 @@
       </div>
     </div>
 
+    {% include 'admin/bridge/devices.html' %}
     {% include 'admin/bridge/single_encoder.html' %}
     {% include 'admin/bridge/ah4c.html' %}
     {% include 'admin/settings/prismcast.html' %}
@@ -156,6 +156,7 @@
   <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
   <script>window.FC_SETTINGS_BOOTSTRAP = {};</script>
   <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/bridge_devices.js') }}"></script>
   {% include 'admin/_update_modal.html' %}
 </body>
 </html>

@@ -125,6 +125,27 @@ class SourceCache(db.Model):
         return f'<SourceCache source_id={self.source_id} key={self.cache_key}>'
 
 
+class BridgeDevice(db.Model):
+    """A Fire TV / Android TV device FastChannels Player runs on, remembered so the
+    Bridge page can list every stick — not just the one HDMI Capture address or the
+    tuners ah4c happens to report right now. Rows come from a manual add or from a
+    real tune (trigger_channel records the resolved adb address). Devices named by
+    settings or ah4c show up without a row; a row only adds a label/history."""
+    __tablename__ = 'bridge_devices'
+
+    id               = db.Column(db.Integer, primary_key=True)
+    address          = db.Column(db.String(270), unique=True, nullable=False)  # host:port
+    label            = db.Column(db.String(128), nullable=True)
+    added_manually   = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))
+    first_seen_at    = db.Column(db.DateTime(timezone=True),
+                                 default=lambda: datetime.now(timezone.utc))
+    last_tuned_at    = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_channel_key = db.Column(db.String(255), nullable=True)
+    # Script-set version bmitune.sh reported on its last ah4c tune ('' = scripts
+    # too old to report one; NULL = no ah4c tune seen since this was added).
+    ah4c_scripts_version = db.Column(db.String(16), nullable=True)
+
+
 class TVEAccount(db.Model):
     __tablename__ = 'tve_accounts'
 
@@ -193,6 +214,8 @@ class Channel(db.Model):
     tags              = db.Column(db.Text, nullable=True)          # comma-separated raw tags/groups from source
     number            = db.Column(db.Integer)
     number_pinned     = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # True when user has manually set/locked this channel number
+    provider_number   = db.Column(db.String(16), nullable=True)   # upstream's own channel number as text (may be a sub-channel, e.g. "305.2"); refreshed every scrape, never used by the integer allocator
+    pinned_chno       = db.Column(db.String(16), nullable=True)   # user lock to a decimal number ("700.1"); output-only, wins over every other number; whole-number locks use number/number_pinned
     gracenote_id      = db.Column(db.String(32), nullable=True)   # e.g. EP012345678; set by scraper or user
     gracenote_locked  = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # True when user manually sets/locks Gracenote ID
     gracenote_mode    = db.Column(db.String(16), default='auto', nullable=False, server_default='auto')  # auto | manual | off
@@ -262,6 +285,8 @@ class Channel(db.Model):
             'country':          self.country,
             'number':           self.number,
             'number_pinned':    bool(self.number_pinned),
+            'provider_number':  self.provider_number,
+            'pinned_chno':      self.pinned_chno,
             'gracenote_id':     self.gracenote_id,
             'gracenote_locked': self.gracenote_locked,
             'gracenote_mode':   self.gracenote_mode or 'auto',

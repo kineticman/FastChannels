@@ -778,16 +778,17 @@ def trigger_discovery_browser_login(mso_id: str):
         return True
 
 
-def trigger_foxone_browser_login(mso_id: str):
-    """Returns True if a job was enqueued, False if one is already running."""
+def trigger_foxone_browser_login():
+    """Returns True if a job was enqueued, False if one is already running.
+    Shares the TVE sign-in job lock: both use the same redis status keys."""
     try:
         q = get_fast_queue()
         job_id = 'mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
             logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
             return False
-        q.enqueue('app.tve.browser_login.foxone.run_foxone_browser_login', mso_id, job_timeout=1830, job_id=job_id)
-        logger.info('Enqueued FOX One browser login for mso_id=%s', mso_id)
+        q.enqueue('app.tve.browser_login.foxone.run_foxone_browser_login', job_timeout=1830, job_id=job_id)
+        logger.info('Enqueued FOX One browser login')
         return True
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for FOX One browser login')
@@ -797,7 +798,7 @@ def trigger_foxone_browser_login(mso_id: str):
         if _mvpd_tve_profile_busy_fallback():
             logger.info('MVPD browser login fallback thread already running')
             return False
-        threading.Thread(target=run_foxone_browser_login, args=(mso_id,), daemon=True, name=thread_name).start()
+        threading.Thread(target=run_foxone_browser_login, daemon=True, name=thread_name).start()
         return True
 
 

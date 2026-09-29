@@ -80,6 +80,12 @@ _RELOGIN_COOLDOWN = 45 * 60      # don't re-trigger more than once per 45min if 
 
 _MC_NAME_RE = re.compile(r'^~mc(\d+):?$')
 
+# Spectrum's in-house promo barkers ("Spectrum", "Spectrum1".."Spectrum14",
+# callSign SPCTRM / SPCTRM<n>, channels 2410-2496): every guide slot is a
+# looped upsell ("Get Disney+ and Hulu", "Get HBO Max", "Special Offer"),
+# confirmed from the live EPG 2026-09-28. Not real channels, so never listed.
+_PROMO_CALLSIGN_RE = re.compile(r'^SPCTRM\d*$')
+
 # Spectrum's own channels/v3 networkName is genuinely garbage for every Music
 # Choice channel — literally "~MC05:", nothing after the colon — confirmed
 # live 2026-09-17 by checking the raw API response directly (not a scraper
@@ -338,15 +344,42 @@ class SpectrumScraper(BaseScraper):
         )
         self._raise_for_auth(r)
         rows = r.json()
+        location = self._fetch_location()
+        availability_flag = self._availability_flag(location)
 
+        self.excluded_channel_ids = set()
         channels: list[ChannelData] = []
+        home_by_network: dict[str, dict] = {}
         for row in rows:
             # Excludes VOD/non-linear catalog rows (e.g. "Video On Demand") —
             # every real tunable channel in a live sample had online=true.
             if not row.get('online'):
                 continue
             entitlement_id = row.get('entitlementId')
+            # Excluded (not just skipped) so reconcile deactivates them now
+            # instead of waiting out the missed-scrape grace period.
+            if _PROMO_CALLSIGN_RE.match((row.get('callSign') or '').strip()):
+                if entitlement_id:
+                    self.excluded_channel_ids.add(str(entitlement_id))
+                continue
             tms_guide_id = row.get('tmsGuideId')
+            numbers = row.get('channelNumbers') or []
+            if numbers and row.get('networkId') is not None:
+                home_by_network.setdefault(str(row['networkId']), row)
+            # Spectrum's own per-row playability, the same test its web player
+            # uses to grey out a channel: onlineEntitled (account package) plus
+            # availableInMarket/availableOutOfMarket for where the server is
+            # right now. Checked live 2026-09-25 against real mints: flagged
+            # rows fail exactly as the audit would (unentitled → Dead,
+            # blockedOOH/dmaMismatch → NotAuthorized), so filter here instead
+            # of waiting on an audit. Rows come back on their own if the
+            # server moves or the package changes.
+            if entitlement_id and (
+                row.get('onlineEntitled') is False
+                or (availability_flag and row.get(availability_flag) is False)
+            ):
+                self.excluded_channel_ids.add(str(entitlement_id))
+                continue
             # ~6% of raw names carry stray leading/trailing whitespace straight
             # from Spectrum (e.g. " MeTV (KMEE) HD", "CW (KAZT) ") — confirmed
             # live 2026-09-17 across 30/502 channels.
@@ -356,17 +389,8 @@ class SpectrumScraper(BaseScraper):
                 name = _MUSIC_CHOICE_NAMES.get(int(mc_match.group(1)), name)
             if not entitlement_id or not tms_guide_id or not name:
                 continue
-            numbers = row.get('channelNumbers') or []
             logo_uri = row.get('logoUri')
-            # ~8% of channels carry more than one raw genre (e.g. AMC HD West:
-            # ['Entertainment', 'Movies']) — try each individually in order
-            # rather than joining them, which would never match any alias.
-            category = None
-            for raw_genre in (row.get('genres') or [None]):
-                category = category_for_channel(name, raw_genre, source_name='spectrum')
-                if category:
-                    break
-            category = category or infer_category_from_name(name)
+            category = self._category(name, row.get('genres'))
             channels.append(ChannelData(
                 source_channel_id=str(entitlement_id),
                 name=name,
@@ -382,8 +406,120 @@ class SpectrumScraper(BaseScraper):
                 # fetch_epg() via each ChannelData's own .guide_key.
                 guide_key=tms_guide_id,
             ))
-        logger.info('[spectrum] %d channels fetched', len(channels))
-        return channels
+        travel = self._fetch_travel_channels(location, channels, home_by_network)
+        logger.info('[spectrum] %d channels fetched (%d travel), %d excluded as unavailable '
+                    'for this account/location or promo-only (%s)',
+                    len(channels) + len(travel), len(travel), len(self.excluded_channel_ids),
+                    availability_flag or 'location unknown, entitlement only')
+        return channels + travel
+
+    @staticmethod
+    def _category(name: str, genres: list | None) -> str | None:
+        # ~8% of channels carry more than one raw genre (e.g. AMC HD West:
+        # ['Entertainment', 'Movies']) — try each individually in order
+        # rather than joining them, which would never match any alias.
+        for raw_genre in (genres or [None]):
+            category = category_for_channel(name, raw_genre, source_name='spectrum')
+            if category:
+                return category
+        return infer_category_from_name(name)
+
+    def _fetch_location(self) -> dict | None:
+        """Spectrum's own view of where this server is (geoDMA, inMarket,
+        behindOwnModem) — the same call its web player makes. Non-fatal: a
+        failure only skips the market filter and travel channels."""
+        try:
+            r = self.session.get(f'{_AUTH_BASE}/pinxt/customer/location/v1',
+                                 headers=self._headers(), timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, dict) else None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[spectrum] location lookup failed (skipping market filter/travel channels): %s', exc)
+            return None
+
+    @staticmethod
+    def _availability_flag(location: dict | None) -> str | None:
+        """Which channels/v3 flag decides playability from here. Behind the
+        account's own modem everything entitled plays, so no market flag."""
+        if not location or location.get('behindOwnModem'):
+            return None
+        return 'availableInMarket' if location.get('inMarket') else 'availableOutOfMarket'
+
+    def _fetch_travel_channels(self, location: dict | None, channels: list[ChannelData],
+                               home_by_network: dict[str, dict]) -> list[ChannelData]:
+        """Spectrum "Travel Channels": a streamable stand-in for a local
+        station that can't be streamed from here (e.g. home-market CBS when
+        away, or an in-market affiliate without streaming rights). Not in
+        channels/v3 at all — the web player fetches them from nns/V1/
+        travelchannels for Spectrum's detected geoDMA and slots each next to
+        the home row with the same networkId (confirmed from a real capture
+        2026-09-25: CW WWHO availableInMarket=false → travel CW 145484). Only
+        ever the DMA Spectrum itself reports — the server ignores a different
+        one anyway. Tuned via stream/live/v6 with travelChannel=true."""
+        if not location or not location.get('geoDMA'):
+            return []
+        try:
+            lu = self.session.get(f'{_API_BASE}/lantern/api/smarttv/lineup/v1',
+                                  headers=self._headers(), timeout=15)
+            lu.raise_for_status()
+            lineup = lu.json() or {}
+            if location.get('behindOwnModem'):
+                device_location = 'In_Home'
+            elif location.get('inMarket'):
+                device_location = 'In_Market'
+            else:
+                device_location = 'Out_Of_Market'
+            params = {'geoDMA': location['geoDMA'], 'deviceLocation': device_location,
+                      'watchLive': 'true'}
+            for key, param in (('market', 'division'), ('lineupId', 'lineup'), ('vodId', 'vodId')):
+                if lineup.get(key):
+                    params[param] = lineup[key]
+            r = self.session.get(f'{_API_BASE}/nns/V1/travelchannels', params=params,
+                                 headers=self._headers(), timeout=15)
+            r.raise_for_status()
+            media = (r.json() or {}).get('media') or []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[spectrum] travel channel lookup failed (non-fatal): %s', exc)
+            return []
+
+        taken_ids = {ch.source_channel_id for ch in channels}
+        taken_guide_keys = {ch.guide_key for ch in channels}
+        travel: list[ChannelData] = []
+        for item in media:
+            ncs_id = str(item.get('ncsServiceId') or '')
+            tms_id = str(item.get('tmsGuideServiceId') or '')
+            network = item.get('network') or {}
+            base_name = (network.get('name') or '').strip()
+            if not ncs_id or not tms_id or not base_name or item.get('entitled') is False:
+                continue
+            # Same service already in the regular lineup — nothing to add.
+            if ncs_id in taken_ids or tms_id in taken_guide_keys:
+                continue
+            # Named and categorized after the home row it stands in for, so it
+            # reads "CW (WWHO)" and lands in the same category — the travel
+            # feed's own callsign is network-level ("CWTV") and it has no genre.
+            home = home_by_network.get(str(network.get('id'))) or {}
+            name = (home.get('networkName') or '').strip()
+            if not name:
+                callsign = re.sub(r'DT\d*$', '', (network.get('callsign') or '').strip())
+                name = f'{base_name} ({callsign})' if callsign and callsign not in base_name else base_name
+            image_uri = (network.get('image_uri') or '').lstrip('/')
+            travel.append(ChannelData(
+                source_channel_id=ncs_id,
+                name=name,
+                stream_url=f'spectrum://travel/{ncs_id}',
+                logo_url=f'{_IMG_BASE}/{image_uri}' if image_uri else None,
+                category=self._category(name, home.get('genres')),
+                language=infer_language_from_metadata(name),
+                country='US',
+                stream_type='dash',
+                number=(home.get('channelNumbers') or [None])[0],
+                guide_key=tms_id,
+            ))
+            taken_ids.add(ncs_id)
+            taken_guide_keys.add(tms_id)
+        return travel
 
     # ── EPG ──────────────────────────────────────────────────────────────────
 
@@ -505,15 +641,25 @@ class SpectrumScraper(BaseScraper):
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
+    @staticmethod
+    def _parse_stream_url(raw_url: str) -> tuple[str, bool]:
+        """spectrum://<entitlementId> or spectrum://travel/<ncsServiceId> →
+        (cid, is_travel). cid is also the source_channel_id and stream_cache
+        key, so the license proxy's lookups don't need to know the difference."""
+        cid = raw_url.removeprefix('spectrum://')
+        if cid.startswith('travel/'):
+            return cid.removeprefix('travel/'), True
+        return cid, False
+
     def resolve(self, raw_url: str) -> str:
         self._ensure_session()
-        cid = raw_url.removeprefix('spectrum://')
+        cid, travel = self._parse_stream_url(raw_url)
         with self._stream_cache_transaction():
             cached = self._cached_stream(cid)
             if cached:
                 return cached['manifest_url']
             self._evict_lru_sessions(cid)
-            manifest_url, ast, stream_session_id, aegis_token = self._mint_stream(cid)
+            manifest_url, ast, stream_session_id, aegis_token = self._mint_stream(cid, travel=travel)
             self._cache_stream(cid, manifest_url, ast, stream_session_id, aegis_token)
             return manifest_url
 
@@ -532,17 +678,31 @@ class SpectrumScraper(BaseScraper):
         least-recently-minted eviction, never the channel actually being
         resolved for the current request."""
         self._ensure_session()
-        cid = raw_url.removeprefix('spectrum://')
+        cid, travel = self._parse_stream_url(raw_url)
         with self._stream_cache_transaction():
             # Reuse an active playback session without replacing its credentials
             # or releasing it. Audit-only sessions need no persisted license data.
             cached = self._cached_stream(cid)
             if cached:
                 return cached['manifest_url']
-            manifest_url, ast, stream_session_id, aegis_token = self._mint_stream(cid)
+            manifest_url, ast, stream_session_id, aegis_token = self._mint_stream(cid, travel=travel)
             if aegis_token:
                 self._release_aegis(aegis_token)
             return manifest_url
+
+    def expire_cached_stream(self, cid: str) -> None:
+        """Drop (and release) a channel's cached stream session so the next
+        resolve() mints a fresh one. The license proxy calls this + resolve()
+        on a license 401 INVALID_TOKEN: resolve() hands back the cached
+        AST/streamSessionId for up to _STREAM_CACHE_TTL, which Spectrum's own
+        player never reuses across tunes, and a cached AST also goes stale
+        when the access token is refreshed/re-logged-in underneath it."""
+        if not cid:
+            return
+        with self._stream_cache_transaction():
+            entry = self._stream_cache.get(cid)
+            if entry:
+                self._evict_cache_entry(cid, entry)
 
     def _release_aegis(self, aegis_token: str) -> None:
         try:
@@ -610,15 +770,20 @@ class SpectrumScraper(BaseScraper):
         }
         self._update_cache('stream_cache', self._stream_cache)
 
-    def _mint_stream(self, cid: str) -> tuple[str, str | None, str, str | None]:
+    def _mint_stream(self, cid: str, travel: bool = False) -> tuple[str, str | None, str, str | None]:
         device_id = self.config.get('client_device_id', '')
+        params = {
+            'csid': 'stva_ovp_pc_live', 'dai-supported': 'true', 'drm-supported': 'true',
+            'vast-supported': 'true', 'adID': device_id, 'secureTransport': 'true',
+            'use_token': 'true', 'OTT': 'false', 'parentalControlsEnabled': 'false',
+        }
+        if travel:
+            # What the web player adds for a Travel Channel (see
+            # _fetch_travel_channels); cid is then its ncsServiceId.
+            params['travelChannel'] = 'true'
         r = self.session.post(
             f'{_API_BASE}/lantern/foc-ipvs/api/smarttv/stream/live/v6/{cid}',
-            params={
-                'csid': 'stva_ovp_pc_live', 'dai-supported': 'true', 'drm-supported': 'true',
-                'vast-supported': 'true', 'adID': device_id, 'secureTransport': 'true',
-                'use_token': 'true', 'OTT': 'false', 'parentalControlsEnabled': 'false',
-            },
+            params=params,
             json={'deviceCapabilities': {
                 'packaging': 'dash', 'drm': 'cenc',
                 'videoCodecs': ['avc'], 'audioCodecs': ['aac', 'ac3', 'eac3'],

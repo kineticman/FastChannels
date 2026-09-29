@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import logging
 import re
 import time
 import uuid
@@ -10,10 +11,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+import requests
+
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
-from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS, _cox_saml_login, _jwt_exp
+from .fox_tve import FoxTVEScraper, CHANNELS as FOX_TVE_CHANNELS, _jwt_exp, _jwt_payload
 from ..gracenote_map import resolve_gracenote
-from ..tve.adobe_pass import MvpdCooldownMixin, TVENotAuthorizedError
+from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
+
+logger = logging.getLogger(__name__)
 
 _SCHEME = 'fox-one://'
 _API_BASE = 'https://api.fox.com/dtc'
@@ -49,6 +54,26 @@ class FoxOneChannel:
     def stream_url(self) -> str:
         target = self.target_fox_tve_id or '-'
         return f'{_SCHEME}{self.source_channel_id}/{target}/{self.container_id}'
+
+
+# Browser profile for a separate FOX One TV-provider login. Kept apart from
+# the shared TVE profile (/data/browser_profiles/mvpd_tve): a provider's
+# remembered-device cookies and single sign-on there belong to the shared
+# account and would otherwise sign FOX One in as that account without ever
+# showing a password prompt.
+OWN_PROFILE_DIR = '/data/browser_profiles/fox_one'
+SHARED_PROFILE_DIR = '/data/browser_profiles/mvpd_tve'
+
+
+@dataclass(frozen=True)
+class FoxOneMvpdLogin:
+    """Which TV-provider (MVPD) account FOX One signs in with — the shared
+    one from Settings > TV Everywhere, or FOX One's own separate login."""
+    mso_id: str
+    username: str
+    password: str
+    cookie_jar: dict | None
+    shared: bool
 
 
 _SUPPORTED_BY_CALL_SIGN: dict[str, tuple[str, str, str]] = {
@@ -172,15 +197,30 @@ def _now_utc() -> datetime:
 class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'fox_one'
     display_name = 'FOX One'
-    source_category = 'tve'
+    source_category = 'premium'
     is_premium = True
     scrape_interval = 720
     stream_audit_enabled = True
-    # home_zip_code is NOT here — it moved to the shared TVEAccount config
-    # (Settings > TV Everywhere) so it's entered once and available to any
-    # TVE source that needs a home market, not just FOX One. See
-    # _shared_home_zip_code()/_persist_shared_home_zip_code().
     config_schema = [
+        ConfigField(
+            'home_zip_code',
+            'Home ZIP code',
+            placeholder='10001',
+            help_text='Optional. Sets your home market for regional blackouts and which local FOX station shows up. Left blank, FOX guesses from this server\'s location.',
+        ),
+        ConfigField(
+            'signin_method',
+            'Sign in with',
+            field_type='select',
+            default='shared',
+            options=[
+                {'value': 'shared', 'label': 'My TV provider from Settings > TV Everywhere'},
+                {'value': 'own', 'label': 'A separate TV provider login for FOX One'},
+            ],
+        ),
+        ConfigField('mvpd_provider_id', 'TV provider'),
+        ConfigField('mvpd_username', 'TV provider username', placeholder='username or email'),
+        ConfigField('mvpd_password', 'TV provider password', field_type='password', secret=True),
         ConfigField(
             'refresh_token',
             'FOX One refresh token (fallback)',
@@ -221,7 +261,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         (x-fox-userauth, not x-access-token).
 
         x-fox-zipcode/x-fox-dma must be the ACCOUNT'S HOME location (the
-        home_zip_code config, via TVEAccount), not the caller's IP-geolocated
+        home_zip_code config), not the caller's IP-geolocated
         "current" location — confirmed live 2026-08-12: sending the IP-geo
         zip/DMA there populated whichever market this server's own outbound
         IP happens to geolocate to (Ohio, in this box's case) and left the
@@ -456,44 +496,74 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
                 return expires
         return 0
 
-    def _mvpd_account(self):
+    def _signin_method(self) -> str:
+        return 'own' if (self.config.get('signin_method') or '').strip() == 'own' else 'shared'
+
+    def _mvpd_login(self) -> FoxOneMvpdLogin | None:
+        """The TV-provider login FOX One is set up to use, or None if it has
+        none (then only the hidden refresh_token fallback can sign in)."""
+        if self._signin_method() == 'own':
+            mso_id = (self.config.get('mvpd_provider_id') or '').strip()
+            if not mso_id:
+                return None
+            return FoxOneMvpdLogin(
+                mso_id=mso_id,
+                username=(self.config.get('mvpd_username') or '').strip(),
+                password=self.config.get('mvpd_password') or '',
+                cookie_jar=None,
+                shared=False,
+            )
+
         from ..models import TVEAccount
 
         account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-        if account and account.is_enabled and account.has_credentials():
-            return account
-        return None
-
-    @staticmethod
-    def _account_mso_id(account) -> str:
+        if not (account and account.is_enabled and account.has_credentials()):
+            return None
         cfg = account.config or {}
-        return (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
+        return FoxOneMvpdLogin(
+            mso_id=(cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip(),
+            username=account.username or '',
+            password=account.password or '',
+            cookie_jar=cfg.get('xfinity_cookie_jar'),
+            shared=True,
+        )
 
-    def _shared_home_zip_code(self) -> str:
-        """Home ZIP lives on the shared TVEAccount config (Settings > TV
-        Everywhere), not per-source — it's a household fact, not something
-        specific to FOX One, and living there means any future TVE source
-        that needs a home market (e.g. an nbc_tve local-affiliate lookup)
-        can read the same value instead of collecting its own copy."""
+    def record_signin_result(self, login: FoxOneMvpdLogin, error: str | None, *, how: str = '') -> None:
+        """Record a sign-in outcome on the FOX One source (shown on its card),
+        and on the shared TV-provider account when that's the one used."""
+        from .. import db
+        from ..models import TVEAccount
+
+        if error:
+            self._update_config('signin_error', error[:300])
+            self._update_config('signin_error_at', int(time.time()))
+        else:
+            self._update_config('signin_error', '')
+            self._update_config('signin_error_at', 0)
+        if not login.shared:
+            return
+        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        if not account:
+            return
+        account.last_auth_status = 'error' if error else 'ok'
+        account.last_auth_message = (
+            f'FOX One {login.mso_id} MVPD auth failed: {error}' if error
+            else f'FOX One access token obtained through {login.mso_id} MVPD{how}.'
+        )[:500]
+        account.last_auth_at = datetime.now(timezone.utc)
+        db.session.commit()
+
+    def _home_zip_code(self) -> str:
+        """The FOX One source's own home ZIP, falling back to the value
+        older installs saved on the shared TV-provider account (Settings >
+        TV Everywhere) before FOX One moved to Premium Sources."""
+        own = (self.config.get('home_zip_code') or '').strip()
+        if own:
+            return own
         from ..models import TVEAccount
 
         account = TVEAccount.query.filter_by(provider_id='mvpd').first()
         return ((account.config or {}).get('home_zip_code') or '').strip() if account else ''
-
-    def _persist_shared_home_zip_code(self, zip_code: str) -> None:
-        from .. import db
-        from ..models import TVEAccount
-
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-        if not account:
-            account = TVEAccount(provider_id='mvpd', display_name='TV Provider', is_enabled=False, config={})
-            db.session.add(account)
-        if (account.config or {}).get('home_zip_code'):
-            return
-        cfg = dict(account.config or {})
-        cfg['home_zip_code'] = zip_code
-        account.config = cfg
-        db.session.commit()
 
     @staticmethod
     def _foxone_auth_headers() -> dict[str, str]:
@@ -576,8 +646,8 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         """The requests/complete + checkauthn tail — split out of
         _authenticate_via_mvpd() (2026-08-17) so a browser-assisted pairing
         (app.worker.run_foxone_browser_login) can call it once a human has
-        completed the MVPD's own login, same as the Cox branch below calls
-        it right after _cox_saml_login() completes synchronously. `session`
+        completed the MVPD's own login, same as _authenticate_via_mvpd()
+        calls it right after a scripted login completes. `session`
         must be the SAME one _foxone_mvpd_register() returned (FOX binds the
         completed login server-side to `request_id`/`device_id`, not to a
         particular session, but this endpoint still expects the session that
@@ -617,71 +687,95 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         Tokens from the two are not interchangeable (different OAuth
         client_id), so FOX One needs its own pass at this.
 
-        Cox gets a fast scripted native login (_cox_saml_login, same Okta
-        API fox_tve.py's legacy path uses) — every other MVPD's actual
-        sign-in mechanics live in app/tve/mvpd/ via login_to_mvpd(), which
-        raises a clear error for any MSO with no scripted backend wired up
-        (Google/YouTubeTV, Sling) rather than silently posting credentials
-        into Cox's login form. Those MSOs can only complete via the
-        browser-assisted pairing flow (app.worker.run_foxone_browser_login),
-        which calls _foxone_mvpd_register()/_foxone_mvpd_finish() directly
-        instead of this synchronous wrapper.
+        The MVPD's actual sign-in mechanics live in app/tve/mvpd/ via
+        login_to_mvpd(), which raises a clear error for any MSO with no
+        scripted backend (Cox/Spectrum, YouTubeTV, Sling) rather than
+        posting credentials into the wrong login form. Those MSOs can only
+        complete via the browser-assisted pairing flow
+        (app.worker.run_foxone_browser_login), which calls
+        _foxone_mvpd_register()/_foxone_mvpd_finish() directly instead of
+        this synchronous wrapper.
         """
-        session, request_id, device_id, mso_login_url, r3 = self._foxone_mvpd_register(mso_id)
+        from ..tve.mvpd import login_to_mvpd, require_scripted_mvpd_login
 
-        if mso_id == 'Cox':
-            if 'login.cox.com' not in mso_login_url:
-                raise RuntimeError(f'Unexpected FOX One Adobe redirect host: {urlparse(mso_login_url).netloc}')
-            _cox_saml_login(session, mso_login_url, username, password)
-        else:
-            from ..tve.mvpd import login_to_mvpd
-            page_html, page_url = (r3.text, str(r3.url)) if not mso_login_url else ('', mso_login_url)
-            login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+        require_scripted_mvpd_login(mso_id, where="on FOX One's card under Sources")
+        session, request_id, device_id, mso_login_url, r3 = self._foxone_mvpd_register(mso_id)
+        page_html, page_url = (r3.text, str(r3.url)) if not mso_login_url else ('', mso_login_url)
+        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
 
         return self._foxone_mvpd_finish(session, request_id, device_id, mso_id)
 
-    def _ensure_access_token(self) -> str:
-        from .. import db
+    def _recheck_mvpd_token(self, mso_id: str) -> tuple[str, float] | None:
+        """A fresh token for this device's existing MVPD sign-in, or None if
+        FOX no longer has it signed in. The token lasts 24h but the sign-in
+        behind it far longer — confirmed live 2026-09-28: checkauthn from a
+        brand-new session with just the saved device_id returned a new token
+        whose authn_expire was ~90 days out. Network errors, 429 and 5xx
+        raise instead: they say nothing about the sign-in, and falling
+        through to a fresh login from there fails for Cox/Spectrum."""
+        device_id = (self.config.get('device_id') or '').strip()
+        if not device_id:
+            return None
+        try:
+            check = self.session.get(
+                f'{_ID_BASE}/adobeauthn/v3/checkauthn',
+                params={'device_id': device_id, 'requestor': 'foxone', 'client_id': _HYDRA_CLIENT_ID},
+                headers=self._foxone_auth_headers(),
+                timeout=20,
+            )
+        except requests.RequestException as exc:
+            raise TVEAuthError(f'FOX One: could not reach FOX to check the saved {mso_id} sign-in; will retry: {exc}') from exc
+        if check.status_code == 429 or check.status_code >= 500:
+            raise TVEAuthError(f'FOX One: FOX returned HTTP {check.status_code} checking the saved {mso_id} sign-in; will retry.')
+        try:
+            token = self._clean_token(check.json().get('accessToken')) if check.ok else ''
+        except ValueError:
+            token = ''
+        claims = _jwt_payload(token) if token else None
+        if not claims or claims.get('mvpdid') != mso_id:
+            logger.warning('[fox-one] saved %s sign-in not recognized by FOX (HTTP %s)', mso_id, check.status_code)
+            return None
+        logger.info('[fox-one] refreshed expired token for saved %s sign-in', mso_id)
+        return token, float(claims.get('exp') or (time.time() + 3600))
 
+    def _ensure_access_token(self) -> str:
         access_token = self._clean_token(self.config.get('access_token'))
         if access_token and self._token_expires_at() > time.time() + _TOKEN_REFRESH_SKEW:
             return access_token
 
-        account = self._mvpd_account()
+        login = self._mvpd_login()
         mvpd_exc: Exception | None = None
-        if account:
-            mso_id = self._account_mso_id(account)
+        if login:
+            try:
+                rechecked = self._recheck_mvpd_token(login.mso_id)
+            except TVEAuthError:
+                if access_token and self._token_expires_at() > time.time():
+                    return access_token
+                raise
+            if rechecked:
+                access_token, expires_at = rechecked
+                self._update_config('access_token', access_token)
+                self._update_config('access_expires_at', expires_at)
+                return access_token
             try:
                 access_token, expires_at = self._authenticate_via_mvpd(
-                    mso_id, account.username, account.password, (account.config or {}).get('xfinity_cookie_jar'),
+                    login.mso_id, login.username, login.password, login.cookie_jar,
                 )
-                account.last_auth_status = 'ok'
-                account.last_auth_message = f'FOX One access token obtained through {mso_id} MVPD.'
-                account.last_auth_at = datetime.now(timezone.utc)
-                db.session.commit()
+            except Exception as exc:
+                # A provider with no scripted sign-in (anything but
+                # Comcast_SSO/DTV, see login_to_mvpd()) fails here on every
+                # resolve/audit once its token expires — recorded so the
+                # FOX One card tells the admin to sign in again.
+                self.record_signin_result(login, str(exc))
+                mvpd_exc = exc
+                if not access_token:
+                    raise
+            else:
+                self.record_signin_result(login, None)
                 self._update_config('access_token', access_token)
                 self._update_config('access_expires_at', expires_at)
                 self._update_config('access_token_captured_at', int(time.time()))
                 return access_token
-            except Exception as exc:
-                account.last_auth_status = 'error'
-                account.last_auth_message = f'FOX One {mso_id} MVPD auth failed: {exc}'[:500]
-                account.last_auth_at = datetime.now(timezone.utc)
-                db.session.commit()
-                # Surface this on the TVE settings page's per-network status
-                # line — see fox_tve.py's _fox_sports_access_token() for why:
-                # a provider with no scripted refresh path (anything but
-                # Cox/Comcast_SSO/DTV, see login_to_mvpd()) fails silently
-                # here on every resolve/audit once its token expires,
-                # otherwise with nothing pointing the admin at re-signing-in.
-                try:
-                    from ..tve.browser_login.common import _record_tve_login_error
-                    _record_tve_login_error('foxone', str(exc)[:300])
-                except Exception:  # noqa: BLE001
-                    pass
-                mvpd_exc = exc
-                if not access_token:
-                    raise
 
         refresh_token = self._clean_token(self.config.get('refresh_token') or self.config.get('fox_one_refresh_token'))
         if not refresh_token:
@@ -762,7 +856,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             cached_at = float(self.config.get('platform_location_cached_at') or 0)
         except (TypeError, ValueError):
             cached_at = 0
-        has_dynamic_auth = bool(self.config.get('refresh_token')) or bool(self._mvpd_account())
+        has_dynamic_auth = bool(self.config.get('refresh_token')) or self._mvpd_login() is not None
         if configured and (not has_dynamic_auth or cached_at > time.time() - _LOCATION_TTL):
             return configured
 
@@ -778,7 +872,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             raise RuntimeError('FOX locator response did not include x-platform-location')
 
         location_data = (locator_data.get('data') or {}).get('location') or {}
-        home_zip = (self._shared_home_zip_code() or location_data.get('zip_code') or '').strip()
+        home_zip = (self._home_zip_code() or location_data.get('zip_code') or '').strip()
         home_location = None
         home_headers = self._ent_headers(access_token, include_device=False)
         home = self.session.get(
@@ -800,8 +894,6 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         combined = ','.join(part for part in (platform_location, home_location) if part)
         self._update_config('platform_location', combined)
         self._update_config('platform_location_cached_at', time.time())
-        if home_zip:
-            self._persist_shared_home_zip_code(home_zip)
         return combined
 
     def _ensure_entitlements(self, access_token: str) -> str:
@@ -858,7 +950,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         return bool(
             self.config.get('refresh_token')
             or (self.config.get('access_token') and self.config.get('platform_location'))
-            or self._mvpd_account()
+            or self._mvpd_login() is not None
         )
 
     def _resolve_dtc(self, container_id: str | None) -> str:

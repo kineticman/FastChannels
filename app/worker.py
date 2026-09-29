@@ -110,7 +110,8 @@ def _run_with_signal_timeout(label: str, timeout_seconds: int | None, fn):
 
 
 _STATUS_CODE_RE = re.compile(r'\b(?:HTTP\s+|returned\s+|status\s+)(\d{3})\b')
-_GEO_BLOCK_STATUS_CODES = (403, 451)
+# 452 is Roku's playback response for every channel from outside the US (GH #64).
+_GEO_BLOCK_STATUS_CODES = (403, 451, 452)
 
 
 def _http_status_from_exception(exc: Exception) -> int | None:
@@ -121,11 +122,24 @@ def _http_status_from_exception(exc: Exception) -> int | None:
 
 def _is_geo_block_error(exc: Exception) -> bool:
     """True for a resolve()-time exception signalling an IP-level geo/legal
-    block (403/451). Covers scrapers that embed the status in the message
+    block (403/451/452). Covers scrapers that embed the status in the message
     (e.g. Roku's raw RuntimeError) as well as ones that raise ScrapeSkipError
     with a static message and no status code at all (e.g. LocalNow's shared
     403/451 homepage-bootstrap check)."""
     return isinstance(exc, ScrapeSkipError) or _http_status_from_exception(exc) in _GEO_BLOCK_STATUS_CODES
+
+
+def _outside_us_hint_for(source) -> str | None:
+    """Geo explanation for a failed/aborted audit of a US-only source when the
+    server itself is outside the US. Best-effort — never raises."""
+    try:
+        from app.geo_check import outside_us_hint
+        countries = [c for (c,) in db.session.query(Channel.country)
+                     .filter(Channel.source_id == source.id).distinct()]
+        return outside_us_hint(countries)
+    except Exception as exc:
+        logger.debug('[audit] geo hint failed: %s', exc)
+        return None
 
 
 def _audit_reason_from_exception(exc: Exception) -> str:
@@ -773,6 +787,23 @@ def run_stream_audit(source_name: str):
         except Exception as _pre_exc:
             logger.debug('[audit] pre_run_setup failed (non-fatal): %s', _pre_exc)
 
+        # Fail fast on a source-wide problem (e.g. bad credentials) instead of
+        # letting every channel's resolve() hit it and tripping the 20-error
+        # abort with a vague "20 errors" summary.
+        try:
+            scraper.audit_preflight()
+        except Exception as _pf_exc:
+            _skip_msg = f'Sign-in failed — {str(_pf_exc).strip() or type(_pf_exc).__name__}'
+            _geo_hint = _outside_us_hint_for(source)
+            if _geo_hint:
+                _skip_msg += f' ({_geo_hint})'
+            logger.warning('[audit] %s: %s — skipping audit', source_name, _skip_msg)
+            persist_source_cache_updates(source.id, {'last_audit_result': {
+                'skipped_reason': _skip_msg,
+                'ts': datetime.now(timezone.utc).isoformat(),
+            }})
+            return
+
         # Some scrapers (e.g. Tubi) need a full channel fetch before auditing
         # to warm their URL cache and establish the correct session cookies.
         # Without this, per-channel resolve() calls lack session context and
@@ -804,6 +835,7 @@ def run_stream_audit(source_name: str):
             )
         ).all()
         total    = len(channels)
+        _audit_ids = [ch.id for ch in channels]
         checked  = 0
         flagged  = 0
         bridged  = 0   # DRM channels kept active and routed via the PrismCast bridge
@@ -834,6 +866,8 @@ def run_stream_audit(source_name: str):
         consecutive_errors = 0
         consecutive_skipped_403 = 0  # geo-block detector
         consecutive_transient_errors = 0  # resolve-timeout detector
+        aborted_reason = None  # set just before any early-abort break below
+        scanned = 0
         report_channels = []
         _audit_ignore_4xx = getattr(scraper_cls, 'audit_ignore_4xx', False)
         _audit_ignore_vod = getattr(scraper_cls, 'audit_ignore_vod', False)
@@ -902,6 +936,7 @@ def run_stream_audit(source_name: str):
         sess = scraper.session
         _audit_channel_timeout = int(getattr(scraper_cls, "audit_channel_timeout_seconds", 20 if source_name == "plex" else 0) or 0)
         for i, ch in enumerate(channels, 1):
+            scanned = i
             try:
                 _audit_item_t0 = _time.monotonic()
                 _audit_verbose = source_name == 'plex'
@@ -962,6 +997,7 @@ def run_stream_audit(source_name: str):
                             logger.warning('[audit] %s: %d consecutive transient resolve failures — '
                                            'source API may be unreachable, aborting audit.',
                                            source_name, consecutive_transient_errors)
+                            aborted_reason = '%d consecutive transient resolve failures (source API unreachable)' % consecutive_transient_errors
                             break
                         continue
                     # If the scraper entered a rate-limit cooldown, wait it out rather
@@ -1018,9 +1054,10 @@ def run_stream_audit(source_name: str):
                         logger.info('[audit] %s: resolve hit a geo/legal block for %s, skipping: %s',
                                     source_name, ch.name, re_exc)
                         if consecutive_skipped_403 >= 30:
-                            logger.warning('[audit] %s: %d consecutive 403/skip responses — '
-                                           'source appears geo-blocked, aborting audit.',
+                            logger.warning('[audit] %s: %d consecutive geo-blocked responses (HTTP 403/451/452) — '
+                                           'aborting audit.',
                                            source_name, consecutive_skipped_403)
+                            aborted_reason = '%d consecutive geo-blocked responses (HTTP 403/451/452)' % consecutive_skipped_403
                             break
                         continue
                     logger.warning('[audit] resolve failed for %s: %s', ch.name, re_exc)
@@ -1034,6 +1071,7 @@ def run_stream_audit(source_name: str):
                     })
                     if consecutive_errors >= 20:
                         logger.error('[audit] %s: 20 consecutive errors — aborting.', source_name)
+                        aborted_reason = '20 consecutive errors — last: ' + _audit_reason_from_exception(re_exc)
                         break
                     continue
 
@@ -1046,6 +1084,7 @@ def run_stream_audit(source_name: str):
                     logger.warning('[audit] %s: resolve() returned None for %s', source_name, ch.name)
                     if consecutive_errors >= 20:
                         logger.error('[audit] %s: 20 consecutive errors — aborting.', source_name)
+                        aborted_reason = '20 consecutive errors — last: resolve returned nothing'
                         break
                     continue
                 if not resolved_url.startswith('http'):
@@ -1183,9 +1222,10 @@ def run_stream_audit(source_name: str):
                     logger.info('[audit] %s transient error (%d) after backoff, skipping',
                                 ch.name, r.status_code)
                     if consecutive_skipped_403 >= 30:
-                        logger.warning('[audit] %s: %d consecutive 403/skip responses — '
-                                       'source appears geo-blocked, aborting audit.',
+                        logger.warning('[audit] %s: %d consecutive geo-blocked responses (HTTP 403/451/452) — '
+                                       'aborting audit.',
                                        source_name, consecutive_skipped_403)
+                        aborted_reason = '%d consecutive geo-blocked responses (HTTP 403/451/452)' % consecutive_skipped_403
                         break
                     continue
 
@@ -1199,6 +1239,7 @@ def run_stream_audit(source_name: str):
                     if consecutive_errors >= 20:
                         logger.error('[audit] %s: 20 consecutive errors — aborting. '
                                      'Source may be rate-limiting or down.', source_name)
+                        aborted_reason = '20 consecutive errors — last: HTTP %d' % r.status_code
                         break
                     continue
 
@@ -1394,11 +1435,30 @@ def run_stream_audit(source_name: str):
 
                 _time.sleep(0.3)
 
+        # The source card's channel badge counts only channels in output (active,
+        # enabled, with a stream URL), but the audit also re-checks dead and
+        # user-disabled ones. Record the difference so the two numbers reconcile.
+        if aborted_reason:
+            _geo_hint = _outside_us_hint_for(source)
+            if _geo_hint:
+                aborted_reason += f' — {_geo_hint}'
+
+        not_in_output = Channel.query.filter(
+            Channel.id.in_(_audit_ids),
+            db.not_(db.and_(Channel.is_active == True, Channel.is_enabled == True,
+                            Channel.stream_url != None)),
+        ).count() if _audit_ids else 0
+
         source.last_audited_at = datetime.now(timezone.utc)
         db.session.commit()
         persist_source_cache_updates(source.id, {
             'last_audit_result': {
-                'total': total, 'checked': checked, 'flagged': flagged, 'bridged': bridged,
+                # On an early abort, 'total' is what was actually scanned — not the
+                # channel count — so the UI doesn't claim channels were checked.
+                'total': scanned if aborted_reason else total,
+                'channel_count': total, 'aborted_reason': aborted_reason,
+                'not_in_output': not_in_output,
+                'checked': checked, 'flagged': flagged, 'bridged': bridged,
                 'dead': dead, 'vod': vod, 'not_authorized': not_authorized, 'errors': errors, 'skipped_403': skipped_403,
                 'ts': datetime.now(timezone.utc).isoformat(),
             },
@@ -1410,6 +1470,8 @@ def run_stream_audit(source_name: str):
         _audit_progress(0, 0, phase='done')
         logger.info('[audit] %s: done — total=%d checked=%d flagged=%d bridged=%d dead=%d vod=%d not_authorized=%d errors=%d skipped_403=%d',
                     source_name, total, checked, flagged, bridged, dead, vod, not_authorized, errors, skipped_403)
+        if aborted_reason:
+            logger.warning('[audit] %s: aborted after %d/%d channels — %s', source_name, scanned, total, aborted_reason)
 
 
 def run_stream_audit_recheck(source_name: str, channel_ids: list):
@@ -2564,6 +2626,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             ch.name          = cd.name
             ch.stream_url    = cd.stream_url
             ch.stream_type   = cd.stream_type
+            ch.provider_number = cd.provider_number
             old_logo_url = ch.logo_url
             if not getattr(ch, 'logo_url_pinned', False):
                 next_logo = _resolved_logo_url(ch.logo_url, cd.logo_url, logo_validation_cache)
@@ -2630,6 +2693,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 tags              = ','.join(cd.tags) if getattr(cd, 'tags', None) else None,
                 description       = _sanitize_description(cd.description) if getattr(cd, 'description', None) else None,
                 number            = None,
+                provider_number   = cd.provider_number,
                 gracenote_id      = gracenote_id if gracenote_auto_fill else None,
                 gracenote_locked  = False,
                 gracenote_mode    = (getattr(cd, 'gracenote_mode', None) or 'auto'),
@@ -3185,7 +3249,7 @@ def _schedule_due_scrapes():
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
-        default_disabled_sources = {'amazon_prime_free', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cox', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum'}
+        default_disabled_sources = {'amazon_prime_free', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum', 'espn'}
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():
             db.session.add(Source(
@@ -3825,27 +3889,38 @@ if __name__ == '__main__':
             except Exception as e:
                 logger.warning('[fc-player] block-boundary retune job failed for %s: %s', channel_key, e)
 
+        # channel_key -> boundary_ts already handed to the scheduler. A 'date' job leaves
+        # the jobstore the moment it starts running, so while fire_block_boundary_retune
+        # is still verifying (confirmed live 2026-09-24: 14 attempts, ~7s) a discovery
+        # tick would re-add it with a past run_date; it then fires at once and APScheduler
+        # logs "skipped: maximum number of running instances". Remembering what was
+        # scheduled makes the re-add a real no-op. In-process only — after a worker
+        # restart the lost job is re-added once, which is the recovery we want.
+        _boundary_jobs_scheduled: dict[str, float] = {}
+
         def _scheduled_fc_player_block_boundary_discovery():
             from app import fc_player_bridge
             try:
                 with flask_app.app_context():
                     pending_list = fc_player_bridge.pending_block_boundaries()
                 for channel_key, boundary_ts in pending_list:
+                    if _boundary_jobs_scheduled.get(channel_key) == boundary_ts:
+                        continue
                     # Small head start only — fire_block_boundary_retune does its own
                     # active verification polling from here rather than trusting a
                     # fixed buffer, so this just skips the guaranteed-miss
                     # instant-at-boundary check (see _BLOCK_BOUNDARY_INITIAL_DELAY_S).
                     run_date = datetime.fromtimestamp(
                         boundary_ts + fc_player_bridge._BLOCK_BOUNDARY_INITIAL_DELAY_S, tz=timezone.utc)
-                    # replace_existing + a channel-scoped id makes this idempotent and
-                    # self-correcting: re-registering with an unchanged run_date is a
-                    # harmless no-op, and a changed boundary (Sling rescheduling content)
-                    # just reschedules the same job to the new instant.
+                    # replace_existing + a channel-scoped id keeps this self-correcting: a
+                    # changed boundary (Sling rescheduling content) just reschedules the
+                    # same job to the new instant.
                     scheduler.add_job(
                         _fire_fc_player_boundary_retune, 'date', run_date=run_date,
                         id=f'fc_player_boundary_retune:{channel_key}', replace_existing=True,
                         misfire_grace_time=120, args=[channel_key, boundary_ts],
                     )
+                    _boundary_jobs_scheduled[channel_key] = boundary_ts
             except Exception as e:
                 logger.warning('[fc-player] block-boundary discovery tick failed: %s', e)
 

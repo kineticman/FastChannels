@@ -14,6 +14,7 @@ from ..generators.m3u import (
     _build_feed_chnum_map,
     _build_source_chnum_map,
     _build_sticky_gn_chnum_map,
+    apply_provider_numbers,
     _drm_bridge_query_filters,
     _has_gracenote_claim,
     _selected_channel_stubs,
@@ -187,10 +188,89 @@ def _default_feed_chnum_map_full() -> dict[int, int]:
     return _source_scheme_chnum_map(std_channels, gn_channels)
 
 
-def _page_default_feed_chnum_map(page_items) -> dict[int, int]:
+def _provider_numbered_ids(items) -> set[int]:
+    """Channels in `items` whose number comes from their provider (e.g. DirecTV
+    channel numbers on) rather than a lock of the user's own -- shown as locked."""
+    from ..generators.m3u import _provider_number_sources
+    sources = _provider_number_sources()
+    if not sources:
+        return set()
+    return {
+        ch.id for ch in items
+        if ch.source is not None and ch.source.name in sources
+        and (ch.provider_number or '').strip()
+        and not ch.number_pinned and not ch.pinned_chno
+    }
+
+
+def _decimal_lock_conflict_ids(items) -> set[int]:
+    """Channels in `items` whose decimal lock (pinned_chno) another channel shares."""
+    from sqlalchemy import func as _func
+    shared = {
+        row[0]
+        for row in db.session.query(Channel.pinned_chno)
+        .filter(Channel.pinned_chno.isnot(None))
+        .group_by(Channel.pinned_chno)
+        .having(_func.count(Channel.id) > 1)
+        .all()
+    }
+    return {ch.id for ch in items if ch.pinned_chno and ch.pinned_chno in shared}
+
+
+def _sort_ids_by_shown_number(q, full_map: dict, *, descending: bool) -> list[int]:
+    """Channel ids matched by `q`, ordered by the number the Channels page
+    shows (see _page_default_feed_chnum_map), name as tiebreak, unnumbered last."""
+    from types import SimpleNamespace
+    from ..generators.m3u import chnum_sort_key
+    rows = q.with_entities(
+        Channel.id, Channel.name, Channel.number, Channel.number_pinned,
+        Channel.pinned_chno, Channel.provider_number, Source.name.label('source_name'),
+    ).all()
+    stubs = [
+        SimpleNamespace(id=r.id, name=r.name, number=r.number, number_pinned=r.number_pinned,
+                        pinned_chno=r.pinned_chno, provider_number=r.provider_number,
+                        source=SimpleNamespace(name=r.source_name))
+        for r in rows
+    ]
+    shown = apply_provider_numbers(stubs, full_map)
+
+    def name_key(name):
+        n = (name or '').lower()
+        for article in ('the ', 'an ', 'a '):
+            if n.startswith(article):
+                return n[len(article):]
+        return n
+
+    numbered = [st for st in stubs if shown.get(st.id) not in (None, '')]
+    unnumbered = [st for st in stubs if shown.get(st.id) in (None, '')]
+    numbered.sort(key=lambda st: (chnum_sort_key(shown.get(st.id)), name_key(st.name)), reverse=descending)
+    unnumbered.sort(key=lambda st: name_key(st.name))
+    return [st.id for st in numbered + unnumbered]
+
+
+class _IdListPagination:
+    """Minimal stand-in for Flask-SQLAlchemy's Pagination over a pre-ordered id list."""
+    def __init__(self, ids: list[int], *, page: int, per_page: int):
+        self.total = len(ids)
+        self.per_page = per_page
+        self.pages = max(1, math.ceil(self.total / per_page)) if self.total else 0
+        self.page = page
+        page_ids = ids[(page - 1) * per_page: page * per_page] if page >= 1 else []
+        by_id = {ch.id: ch for ch in Channel.query.filter(Channel.id.in_(page_ids)).all()} if page_ids else {}
+        self.items = [by_id[cid] for cid in page_ids if cid in by_id]
+        self.has_prev = page > 1
+        self.has_next = page < self.pages
+        self.prev_num = page - 1 if self.has_prev else None
+        self.next_num = page + 1 if self.has_next else None
+
+
+def _page_default_feed_chnum_map(page_items, full_map: dict | None = None) -> dict[int, int | str]:
+    """Display numbers for one admin page -- includes provider-native numbers
+    (DirecTV "305.1"), unlike _default_feed_chnum_map_full(), which callers
+    persist or compare as integers."""
     if not page_items:
         return {}
-    full_map = _default_feed_chnum_map_full()
+    full_map = apply_provider_numbers(page_items, full_map if full_map is not None else _default_feed_chnum_map_full())
     page_ids = {ch.id for ch in page_items}
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
 
@@ -480,6 +560,10 @@ def dashboard():
         scheduler_health = {'ok': False, 'minutes': int(_hb['age_seconds'] // 60)}
     elif not _hb['present'] and enabled_sources:
         scheduler_health = {'ok': False, 'minutes': None}
+    # Nearly every source is US-only; from outside the US they fail in confusing
+    # ways (GH #64). Non-blocking — first load kicks off the lookup in background.
+    from app.geo_check import get_server_country
+    server_country = get_server_country()
     return render_template('admin/dashboard.html', sources=sources,
                            enabled_sources=enabled_sources, disabled_sources=disabled_sources,
                            total_channels=total_channels, base_url=base_url,
@@ -493,6 +577,7 @@ def dashboard():
                            setup_total_count=5,
                            tz_health=timezone_health(app_settings.timezone_name),
                            scheduler_health=scheduler_health,
+                           server_country=server_country,
                            now=_now)
 
 
@@ -564,6 +649,9 @@ def sources():
                 # to "0 days" — reading as "due today" a full day early.
                 'days_left': max(0, math.ceil((purge_at - _now).total_seconds() / 86400)),
             }
+            # No scraper class left to read source_category from, so group all
+            # retired sources together at the bottom instead of falling into FAST.
+            source_categories[s.name] = 'retired'
 
     # Channel-fetch freshness: only meaningful for sources that fetch the channel
     # list on a slower cadence than EPG (channel_refresh_hours > 0). NULL means
@@ -591,7 +679,7 @@ def sources():
         if source_config_status.get(s.id) == 'required' and s.is_enabled
     ]
 
-    _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'drm': 4}
+    _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'drm': 4, 'retired': 5}
 
     def _cat_for(s):
         return source_categories.get(s.name, 'fast') if s.name != 'custom' else 'specialty'
@@ -814,8 +902,8 @@ def channels():
         'name':     [sort_name, Channel.name],
         'source':   [Source.display_name, Channel.name],
         'category': [Channel.category, Channel.name],
-        # Approximate M3U order: sources with explicit chnum_start first, then by
-        # actual channel number within each source block, then name as tiebreak.
+        # SQL fallback only; sort=number is done below on the number the page
+        # actually shows (see _sort_ids_by_shown_number).
         'number':   [db.func.coalesce(Source.chnum_start, 999999), db.func.coalesce(Channel.number, 999999), Source.display_name, sort_name, Channel.name],
     }
     _cols = _sort_cols.get(sort_by, [Channel.name])
@@ -825,8 +913,17 @@ def channels():
         _order = [c.asc() for c in _cols]
 
     ordered_q = q.order_by(*_order)
-    all_channel_ids = [r[0] for r in ordered_q.with_entities(Channel.id).all()]
-    channels = ordered_q.paginate(page=page, per_page=50, error_out=False)
+    full_chnum_map = None
+    if sort_by == 'number':
+        # The column shows the default feed's resolved number (plus provider /
+        # decimal numbers), which follows a different scheme than the stored
+        # Channel.number -- so sort by exactly what's shown.
+        full_chnum_map = _default_feed_chnum_map_full()
+        all_channel_ids = _sort_ids_by_shown_number(q, full_chnum_map, descending=(sort_dir == 'desc'))
+        channels = _IdListPagination(all_channel_ids, page=page, per_page=50)
+    else:
+        all_channel_ids = [r[0] for r in ordered_q.with_entities(Channel.id).all()]
+        channels = ordered_q.paginate(page=page, per_page=50, error_out=False)
     feeds_q = Feed.query.filter(Feed.is_enabled == True)
     if feed_filter:
         feeds_q = feeds_q.union(Feed.query.filter(Feed.slug == feed_filter))
@@ -874,7 +971,7 @@ def channels():
     possible_duplicate_names = possible_duplicate_names & page_names
     gn_duplicate_page_ids = gn_duplicate_ids & page_ids
     duplicate_group_keys = {ch.id: _canonical_duplicate_name(ch.name or '') for ch in channels.items}
-    chnum_map = _page_default_feed_chnum_map(channels.items)
+    chnum_map = _page_default_feed_chnum_map(channels.items, full_map=full_chnum_map)
 
     # Pinned-number conflict detection for the current page.
     from sqlalchemy import func as _func
@@ -889,7 +986,7 @@ def channels():
     chnum_conflicts = {
         ch.id for ch in channels.items
         if ch.number_pinned and ch.number in _conflict_numbers
-    }
+    } | _decimal_lock_conflict_ids(channels.items)
 
     # Compute which page channels appear in at least one non-default feed.
     in_any_feed_ids: set[int] = set()
@@ -949,6 +1046,7 @@ def channels():
                            sort_by=sort_by, sort_dir=sort_dir,
                            chnum_map=chnum_map,
                            chnum_conflicts=chnum_conflicts,
+                           provider_numbered=_provider_numbered_ids(channels.items),
                            in_any_feed_ids=in_any_feed_ids,
                            filter_qs=filter_qs)
 
@@ -1238,7 +1336,7 @@ def channels_chnum_map():
     chnum_map = _page_default_feed_chnum_map(page_items)
 
     # Pin state for each requested channel.
-    pinned = {ch.id: bool(ch.number_pinned) for ch in page_items}
+    pinned = {ch.id: bool(ch.number_pinned or ch.pinned_chno) for ch in page_items}
 
     # Conflict detection: find pinned numbers used by more than one channel.
     from sqlalchemy import func as _func
@@ -1253,12 +1351,13 @@ def channels_chnum_map():
     conflict_ids = {
         ch.id for ch in page_items
         if ch.number_pinned and ch.number in conflict_numbers
-    }
+    } | _decimal_lock_conflict_ids(page_items)
 
     return jsonify({
         'chnum_map':    chnum_map,
         'pinned':       pinned,
         'conflict_ids': list(conflict_ids),
+        'provider_ids': list(_provider_numbered_ids(page_items)),
     })
 
 
@@ -1367,8 +1466,9 @@ def _bridge_supported_sources() -> dict:
     license handling at all. FastChannels Player's list is the narrower
     DRM_BRIDGE_TRUSTED_SOURCES — sources individually re-tested against its native
     adb-triggered device bridge, since a license_url alone doesn't mean a native
-    Widevine client can reach it (Cox's app-identity wall is the standing example: it
-    has a license_url and works over PrismCast, but is deliberately excluded here)."""
+    Widevine client can reach it (the retired Cox Contour source was the standing
+    example: it had a license_url and worked over PrismCast, but its license server
+    rejected native clients by app identity)."""
     scrapers = _scraper_registry.get_all()
 
     def _label(name: str) -> str:

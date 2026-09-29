@@ -58,8 +58,11 @@ import redis
 
 from app.worker import flask_app
 from app.tve.browser_login.common import (
+    _watch_spectrum_auth_results,
+    _detect_spectrum_feature_unavailable,
     _safe_page_url,
     _relay_input_and_screenshot,
+    _set_expected_spectrum_username,
     _try_autofill_credentials,
     _BrowserSessionDied,
     install_browser_login_activity_log,
@@ -110,35 +113,6 @@ def _spectrum_debug_enabled() -> bool:
 def _debug_log(msg: str, *args) -> None:
     if _spectrum_debug_enabled():
         logger.info('[spectrum-signin][debug] ' + msg, *args)
-
-
-_IDID_ERROR_RE = re.compile(r'IDID-\d+')
-
-
-def _detect_spectrum_feature_unavailable(page) -> str | None:
-    """Detects Spectrum's own "Feature Unavailable... please try again from
-    home or contact us for assistance" error page — a real Spectrum-side
-    condition, not one of its normal login/consent screens. Confirmed live
-    2026-09-23 twice: IDID-4000 on a fresh Camoufox profile from a trusted
-    home network (a SECOND fresh-device registration against the same
-    account within a few minutes of a first one that had succeeded cleanly),
-    and IDID-4003 in a real public forum report. In the one case watched
-    end-to-end, a bare retry roughly 60-90s later — same account, same
-    device, same profile, nothing else changed — succeeded outright, too
-    fast to be a lasting account-level block. Current best read: a
-    short-lived rate-limit or a plain transient backend condition tied to
-    repeated new-device registrations in a short window, not "fresh device
-    always rejected" — see module docstring's 2026-09-23 update. Returns the
-    specific IDID-XXXX code (for logging/diagnostics) if this page is
-    currently showing, else None.
-    """
-    try:
-        if page.get_by_text('Feature Unavailable').count() == 0:
-            return None
-        match = _IDID_ERROR_RE.search(page.inner_text('body'))
-        return match.group(0) if match else 'IDID-unknown'
-    except Exception:  # noqa: BLE001
-        return None
 
 
 def _dismiss_spectrum_tos_welcome(page) -> bool:
@@ -636,6 +610,11 @@ def run_spectrum_signin():
                 user_data_dir=profile_dir, window=(1280, 800), block_images=True,
             ) as context:
                 page = context.pages[0] if context.pages else context.new_page()
+                # Before any navigation: a "You're signing in as" screen for
+                # another account (e.g. the one tied to this home network)
+                # must get "Change account", not the usual auto-Continue.
+                _set_expected_spectrum_username(page, username)
+                _watch_spectrum_auth_results(page, 'spectrum-signin')
                 page.on('crash', lambda p: logger.warning('[spectrum-signin] page CRASH event fired (url was %s)', _safe_page_url(p)))
                 page.on('close', lambda p: logger.warning('[spectrum-signin] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[spectrum-signin] page JS error: %s', str(exc)[:500]))
@@ -788,6 +767,13 @@ def run_spectrum_signin():
                     # right after entering a password), and this is cheap
                     # to check on every poll tick regardless.
                     _dismiss_spectrum_tos_welcome(page)
+                    if getattr(page, '_fc_spectrum_changed_account', False):
+                        # "Change account" was clicked on a signing-in-as
+                        # screen for another account (see
+                        # _autofill_spectrum_sso_confirm) — fill the real
+                        # login form it leads to.
+                        page._fc_spectrum_changed_account = False
+                        _dismiss_tos_and_autofill()
                     now = time.monotonic()
                     if _spectrum_debug_enabled():
                         current_url = _safe_page_url(page)

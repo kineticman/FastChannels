@@ -408,8 +408,9 @@ def test_connection() -> tuple[bool, str]:
     return True, 'Device reachable, but FastChannels Player is not installed yet.'
 
 
-def install_app(apk_path: str, timeout: int = 90) -> tuple[bool, str]:
-    """adb-installs the FastChannels Player APK onto the configured device.
+def install_app(apk_path: str, timeout: int = 90, address: str | None = None) -> tuple[bool, str]:
+    """adb-installs the FastChannels Player APK onto `address`, or the configured
+    HDMI Capture device when omitted.
 
     Works without ever touching the device's "Apps from Unknown Sources" toggle —
     that setting only gates on-device tap-to-install of a downloaded APK file (the
@@ -422,7 +423,7 @@ def install_app(apk_path: str, timeout: int = 90) -> tuple[bool, str]:
     something's already installed, as long as it's signed with the same key — see
     project memory on release signing for why that matters.
     """
-    address = _adb_address()
+    address = address or _adb_address()
     try:
         subprocess.run(
             ['adb', 'connect', address],
@@ -694,6 +695,8 @@ def verify_ah4c_tuners() -> list[dict]:
         }
         if state == 'device':
             row.update(_device_os_and_sleep(address))
+        from .bridge_devices import ah4c_scripts_status
+        row.update(ah4c_scripts_status(address))
         results.append(row)
     return results
 
@@ -739,6 +742,17 @@ def _setting_number(address: str, namespace: str, name: str) -> int | None:
         return None
 
 
+# FastChannels Player's media session PlaybackState in `dumpsys media_session`.
+# Accept both PlaybackState renderings: Fire OS prints "state=3", newer AOSP
+# (Google TV, onn., Chromecast) prints "state=PLAYING(3)". The optional
+# "[A-Z_]+(" swallows the state-name prefix so the capture is always the int
+# (3 == STATE_PLAYING).
+_PLAYER_SESSION_RE = re.compile(
+    r'package=com\.fastchannels\.player(?:(?!\n\s*package=).){0,1200}?'
+    r'state=PlaybackState \{state=(?:[A-Z_]+\()?(\d+)', re.S,
+)
+
+
 def device_controls_status() -> dict:
     """Return lightweight, user-facing diagnostics for the Device Controls modal.
 
@@ -762,13 +776,7 @@ def device_controls_status() -> dict:
     version_name = re.search(r'\bversionName=([^\s]+)', package_info)
     version_code = re.search(r'\bversionCode=(\d+)', package_info)
     focus_match = re.search(r'mCurrentFocus=([^\r\n]+)', focus)
-    # Accept both PlaybackState renderings: Fire OS prints "state=3", newer AOSP
-    # (Google TV, onn., Chromecast) prints "state=PLAYING(3)". The optional
-    # "[A-Z_]+(" swallows the state-name prefix so the capture is always the int.
-    player_session = re.search(
-        r'package=com\.fastchannels\.player(?:(?!\n\s*package=).){0,1200}?'
-        r'state=PlaybackState \{state=(?:[A-Z_]+\()?(\d+)', sessions, re.S,
-    )
+    player_session = _PLAYER_SESSION_RE.search(sessions)
 
     player_version_code = int(version_code.group(1)) if version_code else None
     result = {
@@ -1013,6 +1021,19 @@ def _tracked_channel_address(r, channel_key: str) -> str | None:
     return address
 
 
+def block_boundary_ts(next_pointer: str | None) -> float | None:
+    """Epoch seconds embedded in a schedule.qvt-style "_next" pointer
+    (.../<guid>/20260915200000/schedule.qvt), or None if it doesn't parse."""
+    match = re.search(r'/(\d{14})/', next_pointer or '')
+    if not match:
+        return None
+    try:
+        from datetime import datetime, timezone
+        return datetime.strptime(match.group(1), '%Y%m%d%H%M%S').replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
 def note_block_boundary(channel_key: str, next_pointer: str) -> None:
     """Records when the content block currently playing on channel_key is due to end,
     parsed from a schedule.qvt-style "_next" pointer URL whose path embeds the
@@ -1028,13 +1049,10 @@ def note_block_boundary(channel_key: str, next_pointer: str) -> None:
     """
     if not channel_key or not next_pointer:
         return
-    match = re.search(r'/(\d{14})/', next_pointer)
-    if not match:
+    boundary_ts = block_boundary_ts(next_pointer)
+    if boundary_ts is None:
         return
     try:
-        from datetime import datetime, timezone
-        boundary_dt = datetime.strptime(match.group(1), '%Y%m%d%H%M%S').replace(tzinfo=timezone.utc)
-        boundary_ts = boundary_dt.timestamp()
         ttl = max(60, int(boundary_ts - time.time()) + 600)
         r = _redis()
         r.setex(_BLOCK_BOUNDARY_PREFIX + channel_key, ttl, str(boundary_ts))
@@ -1732,12 +1750,20 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
         if adb_address is None and idle_stop_enabled():
             note_trigger(channel_key)
         _note_active_channel_key(channel_key, address)
+    from .bridge_devices import remember_tune
+    remember_tune(address, channel_key)
 
     try:
         subprocess.run(
             ['adb', 'connect', address],
             capture_output=True, timeout=_ADB_TIMEOUT, check=False,
         )
+        # A sleeping device (e.g. ah4c's "sleep all" button) accepts the am start below
+        # but never plays. KEYCODE_WAKEUP is a no-op when already awake — unlike
+        # KEYCODE_POWER, which toggles. Best-effort: a failed wake shouldn't block the tune.
+        woke, wake_output = _adb_shell(address, 'input', 'keyevent', 'KEYCODE_WAKEUP')
+        if not woke:
+            logger.debug('[fc-player] trigger_channel wake failed: %s', wake_output)
         # `adb shell` reconstructs everything after "shell" into a single string that gets
         # handed to the DEVICE's own shell for interpretation — passing each arg as a separate
         # Python list element does NOT preserve argv boundaries the way a local subprocess.run

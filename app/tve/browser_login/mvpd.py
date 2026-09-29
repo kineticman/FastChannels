@@ -9,8 +9,9 @@ import redis
 from app.worker import flask_app
 from app.extensions import db
 from app.models import TVEAccount
-from app.tve.adobe_pass import AdobePassCoxClient, TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
+from app.tve.adobe_pass import AdobePassCoxClient, TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError, is_retired_fyi_callback
 from app.tve.browser_login.common import (
+    _watch_spectrum_auth_results,
     MVPD_BROWSER_LOGIN_STATUS_KEY,
     MVPD_BROWSER_LOGIN_SHOT_KEY,
     MVPD_BROWSER_LOGIN_INPUT_KEY,
@@ -23,9 +24,12 @@ from app.tve.browser_login.common import (
     _apply_sling_browser_login_input,
     _harvest_and_save_xfinity_cookies,
     _record_tve_login_error,
-    _cox_login_error_detail,
     _autofill_google_account_chooser,
     _autofill_spectrum_sso_confirm,
+    _log_signin_timeout_snapshot,
+    SpectrumWantsCoxProvider,
+    _spectrum_retry_as_cox,
+    _spectrum_signin_error_message,
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
@@ -75,21 +79,7 @@ def _is_redirected_callback_page(actual_url: str, expected_url: str, requestor_i
     warm Adobe SSO can also land on a callback; callers still grace-poll
     Adobe before reporting this as an unsupported provider.
     """
-    if _same_page_url(actual_url, expected_url):
-        return True
-    if requestor_id.upper() != 'FYI':
-        return False
-    try:
-        actual = _urlsplit(actual_url)
-        expected = _urlsplit(expected_url)
-        return (
-            expected.netloc.lower() == 'www.fyi.tv'
-            and expected.path.rstrip('/') == '/mvpd-auth'
-            and actual.netloc.lower() == 'www.aetv.com'
-            and actual.path.rstrip('/') == '/fyi/schedule'
-        )
-    except Exception:  # noqa: BLE001
-        return False
+    return _same_page_url(actual_url, expected_url) or is_retired_fyi_callback(actual_url, expected_url, requestor_id)
 
 
 def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
@@ -213,42 +203,17 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
 
         from app.tve.adobe_pass import _ensure_cox_device_fingerprint, load_cached_adobe_client_creds, save_adobe_client_creds
         client_creds = load_cached_adobe_client_creds(account_row, requestor_id) if account_row else None
-        client = AdobePassCoxClient(
-            requestor_id=requestor_id,
-            resource=resource,
-            software_statement=software_statement,
-            redirect_url=redirect_url,
-            device_fingerprint=_ensure_cox_device_fingerprint(account_row) if account_row else None,
-            client_creds=client_creds,
-        )
+        def _new_client():
+            return AdobePassCoxClient(
+                requestor_id=requestor_id,
+                resource=resource,
+                software_statement=software_statement,
+                redirect_url=redirect_url,
+                device_fingerprint=_ensure_cox_device_fingerprint(account_row) if account_row else None,
+                client_creds=client_creds,
+            )
 
-        if mso_id == 'Cox':
-            # Cox's login step is already fully scripted:
-            # AdobePassCoxClient.authorize_with_cox() does the whole thing —
-            # register, regcode, direct login.cox.com/api/v1/authn POST
-            # (authenticate_with_cox), fetch_session_token, authorize — exactly
-            # what authorize_mvpd() already does automatically at play time for
-            # this same "legacy" family (History/A&E/Warner). No browser
-            # needed; confirmed live 2026-08-11 (History TVE authorized in a
-            # few seconds, zero Camoufox). Only non-Cox MSOs (e.g. Sling,
-            # whose login page blocks scripted clients outright) fall through
-            # to the browser-assisted flow below.
-            set_status('running', f'Signing in to {requestor_id}…')
-            try:
-                client.authorize_with_cox(mvpd_username, mvpd_password)
-            except Exception as exc:  # noqa: BLE001
-                detail = _cox_login_error_detail(exc, requestor_id)
-                _step(requestor_id, 'failed', detail[:120])
-                _record_tve_login_error(requestor_id, detail)
-                set_status('error', f'{requestor_id}: {detail}')
-                return
-            if not client_creds and account_row:
-                save_adobe_client_creds(account_row, requestor_id, client.ctx.client_id, client.ctx.client_secret, client.ctx.access_token)
-            _save_mvpd_authn_token(requestor_id, client.ctx.authn_token)
-            _step(requestor_id, 'done', 'authorized')
-            set_status('success', f'Signed in — {requestor_id} authorized.')
-            logger.info('[mvpd-login] paired requestor_id=%s mso_id=Cox (scripted, no browser)', requestor_id)
-            return
+        client = _new_client()
 
         if mso_id == 'Comcast_SSO':
             # Try a saved cookie jar (harvested from a previous successful
@@ -392,6 +357,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
             # afterward without a human involved again).
             with Camoufox(**camoufox_options) as context:
                 page = context.pages[0] if context.pages else context.new_page()
+                _watch_spectrum_auth_results(page, 'mvpd-login')
                 _prime_google_session(context, mso_id)
                 page.on('crash', lambda p: logger.warning('[mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
                 page.on('close', lambda p: logger.warning('[mvpd-login] page CLOSE event fired'))
@@ -637,6 +603,12 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     # that hits Google's account-chooser most often tonight.
                     _autofill_google_account_chooser(page)
                     _autofill_spectrum_sso_confirm(page)
+                    idid_message = _spectrum_signin_error_message(page, requestor_id, mso_id)
+                    if idid_message:
+                        _step(requestor_id, 'failed', 'Spectrum "Feature Unavailable"')
+                        _record_tve_login_error(requestor_id, idid_message)
+                        set_status('error', idid_message)
+                        return
 
                     for _ in range(20):
                         raw = r.lpop(MVPD_BROWSER_LOGIN_INPUT_KEY)
@@ -744,6 +716,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
 
                     page.wait_for_timeout(80)
 
+                _log_signin_timeout_snapshot(page, 'mvpd-login')
                 _step(requestor_id, 'failed', 'timed out')
                 set_status('error', 'Timed out waiting for sign-in to complete.')
                 return
@@ -754,6 +727,11 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 # own teardown failing to close an already-dead browser, not
                 # an actual job failure. Don't clobber the real result.
                 logger.info('[mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
+                return
+            if isinstance(exc, SpectrumWantsCoxProvider):
+                if _spectrum_retry_as_cox(exc, mso_id, requestor_id, set_status):
+                    return run_mvpd_browser_login(requestor_id, resource, software_statement, redirect_url, 'Cox', _attempt=_attempt, _deadline=deadline)
+                _step(requestor_id, 'failed', 'Spectrum rejected sign-in')
                 return
             if _is_browser_death(exc) and _grace_poll_pairing(str(exc)[:80]):
                 return

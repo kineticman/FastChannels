@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
+import logging
 import secrets
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from html.parser import HTMLParser
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlsplit
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
-from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError, throttle_cox_login
+from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
+
+logger = logging.getLogger(__name__)
 
 
 SCHEME = 'discovery-tve://'
@@ -27,20 +30,20 @@ BRAND_ID = '5af07ab86b66d16f0e095063'
 PARTNER_ID = '55e9d01a6b66d1244474bbe5'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
 SESSION_CACHE_KEY = 'discovery_tve_session'
-# The `st` cookie minted by /token is genuinely short-lived (it's requested
-# with shortlived=true and its own JWT carries no `exp` claim at all — this
-# used to be treated as "assume it's long-lived, default to 6h" instead,
-# which was wrong). Live-measured 2026-08-17: still valid at 113s old, dead
-# ("invalid.token") by 214s — and there's no refresh path around it either;
-# re-minting via /token using the same (still-fresh, <4min-old) session
-# cookies came back anonymous instead of re-authenticating, so once `st`
-# dies the ONLY way back is a brand new MSO login from scratch, full stop.
-# 90s keeps this comfortably under the observed ~113-214s floor. This mostly
-# matters for MSOs with no scripted re-login (YouTubeTV, Sling) — Cox/
-# Xfinity's own _authenticate() re-logs in from scratch in a couple seconds
-# regardless of whether the cache was ever going to hit, so a short real TTL
-# doesn't cost them anything they weren't already paying.
-SESSION_TTL_SECONDS = 90
+# A signed-in session is reused until Discovery itself rejects it — there is
+# no local TTL. The `st` cookie from /login is a JWT with no `exp` claim, so
+# there's nothing to read a lifetime from. This used to be 90s (a 2026-08-17
+# measurement of one session dying at ~214s), then 23h after a 2026-09-25
+# re-measure (Xfinity sign-in: the login `st`, never refreshed, still played
+# at 146 min and passed /users/me at 176 min; a later sign-in didn't
+# invalidate it; /token doesn't rotate `st`). The 23h cap was itself the
+# failure on 2026-09-26: a Spectrum session that had served 8 scrapes was
+# discarded at 23h without ever asking Discovery, and since Spectrum can only
+# be signed in with the browser, every scrape after that failed with "sign in
+# again". _cached_session() checks /users/me before every reuse and resolve()
+# signs in again once if playback rejects the cached session, so a dead
+# session costs one sign-in, not a failed play. Both log the session's age
+# when it's rejected, which is how the real upper bound gets measured.
 
 
 @dataclass(frozen=True)
@@ -77,35 +80,9 @@ CHANNELS: dict[str, DiscoveryTVEChannel] = {
 }
 
 
-class _FormParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.in_form = False
-        self.action = ''
-        self.inputs: dict[str, str] = {}
-
-    def handle_starttag(self, tag: str, attrs) -> None:
-        attrs = dict(attrs)
-        if tag.lower() == 'form' and not self.in_form:
-            self.in_form = True
-            self.action = attrs.get('action') or ''
-            return
-        if self.in_form and tag.lower() == 'input':
-            name = attrs.get('name')
-            if name:
-                self.inputs[name] = attrs.get('value') or ''
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.lower() == 'form' and self.in_form:
-            self.in_form = False
-
-
-def _hidden_form(document: str, base_url: str) -> tuple[str, dict[str, str]]:
-    parser = _FormParser()
-    parser.feed(document)
-    if not parser.action and not parser.inputs:
-        raise TVEAuthError('Expected Cox SAML form but none was found.')
-    return urljoin(base_url, parser.action or base_url), parser.inputs
+def _session_rejected(r: requests.Response) -> bool:
+    """401 anywhere, or 400 from /token (how a dead `st` shows up there)."""
+    return r.status_code == 401 or (r.status_code == 400 and urlsplit(r.url).path == '/token')
 
 
 def channel_for_url(raw_url: str) -> DiscoveryTVEChannel | None:
@@ -170,6 +147,13 @@ def _jwt_exp(token: str) -> int | None:
         return None
 
 
+def _session_age(cached) -> str:
+    cached_at = int((cached or {}).get('cached_at') or 0) if isinstance(cached, dict) else 0
+    if not cached_at:
+        return 'unknown age'
+    return f'{(int(time.time()) - cached_at) / 3600:.1f}h'
+
+
 def _cookie_dict(session: requests.Session) -> dict[str, str]:
     return session.cookies.get_dict()
 
@@ -214,58 +198,46 @@ def _first_image_url(item: dict, images: dict[str, str]) -> str | None:
     return None
 
 
-def _cox_saml_login(session: requests.Session, cox_saml_url: str, username: str, password: str) -> str:
-    session.get(cox_saml_url, allow_redirects=True, timeout=30)
-    throttle_cox_login()
-    login_user = username.split('@', 1)[0] if username.lower().endswith('@cox.net') else username
-    r = session.post(
-        'https://login.cox.com/api/v1/authn',
-        json={
-            'username': login_user,
-            'password': password,
-            'options': {'warnBeforePasswordExpired': True, 'multiOptionalFactorEnroll': True},
-        },
-        headers={
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'Origin': 'https://login.cox.com',
-            'Referer': cox_saml_url,
-            'x-okta-user-agent-extended': 'okta-signin-widget-3.8.2',
-            'User-Agent': UA,
-        },
-        timeout=30,
-    )
-    r.raise_for_status()
-    auth = r.json()
-    if auth.get('status') != 'SUCCESS' or not auth.get('sessionToken'):
-        raise TVEAuthError(f'Cox authn did not succeed: {auth.get("status") or "unknown"}')
+class DiscoveryBrowserSignInRequired(TVEAuthError):
+    """This provider can only be signed in with the browser flow, so an
+    unattended (scripted) sign-in can't renew Discovery's session. A plain
+    TVEAuthError, i.e. retryable: the channels aren't disabled, and a fresh
+    browser sign-in in Settings fixes it."""
 
-    redirect_url = 'https://login.cox.com/login/sessionCookieRedirect?' + urlencode({
-        'checkAccountSetupComplete': 'true',
-        'token': auth['sessionToken'],
-        'redirectUrl': cox_saml_url,
-    })
-    r = session.get(redirect_url, allow_redirects=True, timeout=30)
-    r.raise_for_status()
-    action, form = _hidden_form(r.text, str(r.url))
-    if 'SAMLResponse' not in form:
-        raise TVEAuthError('Cox SAML page did not include SAMLResponse')
 
-    r = session.post(
-        action,
-        data=form,
-        headers={
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': 'https://login.cox.com',
-            'Referer': 'https://login.cox.com/',
-            'User-Agent': UA,
-        },
-        allow_redirects=False,
-        timeout=30,
+def _browser_signin_required(provider: str) -> DiscoveryBrowserSignInRequired:
+    """Builds the error and records it for the settings page, so an expired
+    session shows "sign in again" instead of just silently failing to play.
+    A later successful sign-in supersedes the recorded error."""
+    message = (
+        f'Discovery TVE needs you to sign in again: {provider} sign-in only works in a browser, '
+        'so it can\'t be renewed automatically. Use Sign in under Settings → TVE.'
     )
-    if r.status_code not in {200, 301, 302, 303, 307, 308}:
-        raise TVEAuthError(f'Adobe SAML consumer returned HTTP {r.status_code}')
-    return r.headers.get('location') or str(r.url)
+    try:
+        from ..tve.browser_login.common import _record_tve_login_error
+        _record_tve_login_error('discovery', message)
+    except Exception:  # noqa: BLE001
+        pass
+    return DiscoveryBrowserSignInRequired(message)
+
+
+def _raise_if_spectrum_routed(mso_id: str, mso_login_url: str, response: requests.Response) -> None:
+    """Confirmed live 2026-09-24: Adobe's authenticate call now answers for
+    BOTH mso_id=Spectrum and mso_id=Cox with a 200 auto-submit SAML form
+    posting to Spectrum's own IdP (tve.spectrum.net/openam/.../charter/idp)
+    — Cox's accounts have moved to Spectrum's login, so the scripted
+    login.cox.com path can never be reached any more. Spectrum's page is
+    reCAPTCHA/ThreatMetrix-gated, so only the browser flow can sign in there
+    (verified the same day). Raise a clear "sign in with the browser" error
+    instead of a confusing "did not return an MVPD login redirect"."""
+    if mso_id not in ('Cox', 'Spectrum') or mso_login_url:
+        return
+    try:
+        body = html.unescape(response.text or '')
+    except Exception:  # noqa: BLE001
+        return
+    if 'tve.spectrum.net' in body:
+        raise _browser_signin_required('Spectrum (including Cox)')
 
 
 class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
@@ -286,28 +258,33 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         cached = self.cache.get(SESSION_CACHE_KEY) or {}
         if not isinstance(cached, dict):
             return None
-        # This buffer used to be 300s, sized against the old (wrong) 6h TTL
-        # assumption — with SESSION_TTL_SECONDS now a realistic ~90s (see its
-        # definition), a 300s buffer would always exceed the entire real
-        # lifetime and make this cache permanently a no-op miss, forcing a
-        # full re-login (Cox's own throttle_cox_login() included) on every
-        # single resolve() instead of ever reusing a session that's still
-        # genuinely good. 15s leaves a real safety margin against an
-        # expiry-edge race while still allowing reuse within the actual
-        # short window.
-        if int(cached.get('expires_at') or 0) <= int(time.time()) + 15:
+        # Only a real `exp` from Discovery's login token ends a session early
+        # (see the comment by SESSION_CACHE_KEY). The old `expires_at` key
+        # held our own 23h guess and is ignored.
+        jwt_expires_at = int(cached.get('jwt_expires_at') or 0)
+        if jwt_expires_at and jwt_expires_at <= int(time.time()) + 15:
             return None
         cookies = cached.get('cookies') or {}
         if not isinstance(cookies, dict) or not cookies.get('st'):
             return None
         session = self._session()
         _restore_cookies(session, cookies)
+        # A network error, 429 or 5xx says nothing about the session — raise a
+        # retryable error rather than dropping it for a fresh sign-in, which
+        # Spectrum/Cox can't do without a browser.
         try:
             r = session.get(f'{API_BASE}/users/me', headers=_browser_headers(), timeout=15)
+        except requests.RequestException as exc:
+            raise TVEAuthError(f'Discovery TVE: could not reach Discovery to check the saved sign-in; will retry: {exc}') from exc
+        if r.status_code == 429 or r.status_code >= 500:
+            raise TVEAuthError(f'Discovery TVE: Discovery returned HTTP {r.status_code} checking the saved sign-in; will retry.')
+        try:
             if r.status_code == 200 and not (((r.json().get('data') or {}).get('attributes') or {}).get('anonymous')):
                 return session
-        except Exception:
-            return None
+        except ValueError:
+            pass
+        logger.info('[discovery-tve] cached session rejected by /users/me (HTTP %s) after %s',
+                    r.status_code, _session_age(cached))
         return None
 
     def _discovery_partner_id(self, session: requests.Session, device_id: str, mso_name: str, mso_id: str) -> str | None:
@@ -360,6 +337,15 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
                 for flow in p.get('flows') or []:
                     if (flow.get('external_partner_id') or '') == mso_id:
                         return p.get('id')
+
+        # Optimum TV (AlticeOne) and legacy Optimum (Cablevision) are
+        # separate Adobe integrations with confusable names — live list
+        # 2026-09-24: 'Optimum TV' -> AlticeOne, 'Optimum' -> Cablevision.
+        # The exact flow match above handles it today; if Discovery ever
+        # drops that flow id, the name fallback below would silently pick
+        # the wrong one, so refuse instead (via cstukane's closed PR #60).
+        if mso_id == 'AlticeOne':
+            raise TVEAuthError('Discovery TVE: partner list has no exact AlticeOne entry; not guessing between Optimum TV and legacy Optimum.')
 
         candidates = [c.strip().lower() for c in (mso_name, mso_id) if c]
         for candidate in candidates:
@@ -498,10 +484,9 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         )
         if r.status_code >= 400:
             raise TVEAuthError(f'Discovery entitlement check returned HTTP {r.status_code}: {r.text[:300]}')
-        expires_at = _jwt_exp(login_token) or int(time.time()) + SESSION_TTL_SECONDS
         self._update_cache(SESSION_CACHE_KEY, {
             'cookies': _cookie_dict(session),
-            'expires_at': min(expires_at, int(time.time()) + SESSION_TTL_SECONDS),
+            'jwt_expires_at': _jwt_exp(login_token) or 0,
             'cached_at': int(time.time()),
         })
 
@@ -518,72 +503,51 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         if not self.config.get('device_id'):
             self._update_config('device_id', device_id)
 
-        mso_login_url, r = self._discovery_session_redirect(session, device_id, mso_id, mso_name)
+        mso_login_url, r = self._discovery_session_redirect(
+            session, device_id, mso_id, mso_name, allow_empty_redirect=mso_id in ('Cox', 'Spectrum'),
+        )
+        _raise_if_spectrum_routed(mso_id, mso_login_url, r)
 
-        if mso_id == 'Cox':
-            if 'login.cox.com' not in mso_login_url:
-                raise TVEAuthError(f'Unexpected Adobe authenticate redirect host: {urlsplit(mso_login_url).netloc}.')
-            callback_url = _cox_saml_login(session, mso_login_url, account.username or '', account.password or '')
-            if CALLBACK_BASE not in callback_url:
-                raise TVEAuthError(f'Unexpected Discovery callback host: {urlsplit(callback_url).netloc}.')
-            r = session.get(callback_url, headers={'User-Agent': UA, 'Accept': 'text/html,*/*'}, allow_redirects=False, timeout=30)
-            if r.status_code not in {301, 302, 303, 307, 308}:
-                raise TVEAuthError(f'Discovery callback returned HTTP {r.status_code}.')
-            code_url = r.headers.get('location') or ''
-        else:
-            # Every other MVPD's actual sign-in mechanics live in
-            # app/tve/mvpd/ — add one there (not here) to support a new
-            # provider everywhere at once. Unlike _cox_saml_login (which
-            # deliberately stops at the FIRST post-login redirect, so the
-            # Cox branch above does one more explicit hop to reach
-            # code_url), every login_to_mvpd() backend follows redirects
-            # all the way through and returns that landed URL directly —
-            # confirmed live 2026-08-14 for Xfinity (lands on
-            # auth.watch.hgtv.com/gauth-sync?code=..., the same URL Cox's
-            # extra hop above extracts `code` from) — so it's used as
-            # code_url directly here, no extra hop needed.
-            if mso_id == 'YouTubeTV':
-                # Not "not wired up yet" (login_to_mvpd()'s generic message
-                # for any unimplemented MSO, which wrongly implies this
-                # could just be built later) -- live-confirmed 2026-08-17
-                # this is permanently unworkable for Discovery specifically:
-                # its session token dies in ~90-200s with no refresh path at
-                # all (not even via a fresh Google OAuth token), so every
-                # resolve()/audit call would need a real browser + human-
-                # equivalent Google click every couple minutes. Separately,
-                # and independently, this account isn't entitled to any of
-                # Discovery's 15 channels via YouTube TV anyway (confirmed
-                # per-channel, all access.denied.missingpackage). A
-                # definitive answer either way, so TVENotAuthorizedError
-                # (disables the channel) rather than the generic TVEAuthError
-                # login_to_mvpd() would raise (treated as possibly transient).
-                raise TVENotAuthorizedError(
-                    'Discovery TVE is not usable with YouTube TV: its session expires in '
-                    '~90-200s with no refresh, and this account is not entitled to any '
-                    'Discovery channel through it.'
-                )
-            from ..tve.mvpd import login_to_mvpd
-            cookie_jar = cfg.get('xfinity_cookie_jar')
-            page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
+        # Every MVPD's actual sign-in mechanics live in app/tve/mvpd/ —
+        # add one there (not here) to support a new provider everywhere
+        # at once. Every login_to_mvpd() backend follows redirects all the
+        # way through and returns that landed URL directly — confirmed
+        # live 2026-08-14 for Xfinity (lands on
+        # auth.watch.hgtv.com/gauth-sync?code=...) — so it's used as
+        # code_url directly here, no extra hop needed.
+        if mso_id == 'YouTubeTV':
+            # yt-dlp/login_to_mvpd() has no Google sign-in at all, so a
+            # YouTube TV session can only come from the browser flow.
+            # (This used to be a definitive "not usable", on the belief
+            # that Discovery's session died in ~90-200s; it doesn't, see
+            # SESSION_CACHE_KEY.)
+            raise _browser_signin_required('YouTube TV')
+        if mso_id in ('Cox', 'Spectrum'):
+            # Normally caught by _raise_if_spectrum_routed() above; this
+            # covers an Adobe response that didn't name Spectrum's IdP.
+            raise _browser_signin_required('Spectrum (including Cox)')
+        from ..tve.mvpd import login_to_mvpd
+        cookie_jar = cfg.get('xfinity_cookie_jar')
+        page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
+        try:
+            code_url = login_to_mvpd(
+                mso_id, page_html, page_url, account.username or '', account.password or '',
+                cookie_jar=cookie_jar,
+            )
+        except TVENotAuthorizedError:
+            raise
+        except TVEAuthError as exc:
+            # See fox_tve.py's _fox_sports_access_token() for why this
+            # also needs the per-network status — Discovery doesn't even
+            # track this in TVEAccount.last_auth_message (no try/except
+            # existed here at all before), so without this the failure
+            # would otherwise be invisible everywhere.
             try:
-                code_url = login_to_mvpd(
-                    mso_id, page_html, page_url, account.username or '', account.password or '',
-                    cookie_jar=cookie_jar,
-                )
-            except TVENotAuthorizedError:
-                raise
-            except TVEAuthError as exc:
-                # See fox_tve.py's _fox_sports_access_token() for why this
-                # also needs the per-network status — Discovery doesn't even
-                # track this in TVEAccount.last_auth_message (no try/except
-                # existed here at all before), so without this the failure
-                # would otherwise be invisible everywhere.
-                try:
-                    from ..tve.browser_login.common import _record_tve_login_error
-                    _record_tve_login_error('discovery', str(exc)[:300])
-                except Exception:  # noqa: BLE001
-                    pass
-                raise
+                from ..tve.browser_login.common import _record_tve_login_error
+                _record_tve_login_error('discovery', str(exc)[:300])
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
         code = (parse_qs(urlsplit(code_url).query).get('code') or [''])[0]
         if not code:
@@ -606,6 +570,22 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             timeout=20,
         )
         r.raise_for_status()
+
+    def _post_playback(self, session: requests.Session, channel: DiscoveryTVEChannel, payload: dict) -> requests.Response:
+        self._prime_playback_context(session, channel)
+        try:
+            self._refresh_short_token(session)
+        except requests.HTTPError as exc:
+            # A dead `st` fails here first (400), before playback is tried.
+            if exc.response is not None and exc.response.status_code in {400, 401}:
+                return exc.response
+            raise
+        return session.post(
+            f'{API_BASE}/playback/v3/channelPlaybackInfo',
+            data=json.dumps(payload, separators=(',', ':')),
+            headers={**_browser_headers(), 'Content-Type': 'application/json'},
+            timeout=30,
+        )
 
     def _prime_playback_context(self, session: requests.Session, channel: DiscoveryTVEChannel) -> None:
         for url, params in (
@@ -730,9 +710,10 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         if not channel:
             raise ValueError(f'Unsupported Discovery TVE stream URL: {raw_url}')
 
-        session = self._authorized_session()
-        self._prime_playback_context(session, channel)
-        self._refresh_short_token(session)
+        session = self._cached_session()
+        from_cache = session is not None
+        if session is None:
+            session = self._authenticate()
         device_id = self.config.get('device_id') or str(uuid.uuid4())
         payload = {
             'channelId': channel.channel_id,
@@ -778,13 +759,23 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
                 'streamProvider': {'suspendBeaconing': 1, 'hlsVersion': 7, 'pingConfig': 1, 'version': '1.0.0'},
             },
         }
-        r = session.post(
-            f'{API_BASE}/playback/v3/channelPlaybackInfo',
-            data=json.dumps(payload, separators=(',', ':')),
-            headers={**_browser_headers(), 'Content-Type': 'application/json'},
-            timeout=30,
-        )
-        if r.status_code in {401, 403}:
+        r = self._post_playback(session, channel, payload)
+        # With no local TTL, a cached session is only retired when Discovery
+        # rejects it. /users/me in _cached_session() catches most of that, but a rejection here (401, or 400 from /token) from a
+        # cached session means the same thing: sign in again once and retry, rather than reporting a
+        # definitive "not authorized" that would disable the channel.
+        if _session_rejected(r) and from_cache:
+            logger.info('[discovery-tve] cached session rejected (HTTP %s %s) after %s; signing in again',
+                        r.status_code, urlsplit(r.url).path, _session_age(self.cache.get(SESSION_CACHE_KEY)))
+            self._update_cache(SESSION_CACHE_KEY, {})
+            session = self._authenticate()
+            r = self._post_playback(session, channel, payload)
+        if _session_rejected(r):
+            # A freshly signed-in session being refused is not an entitlement
+            # answer (that's 403) -- keep it retryable.
+            self._update_cache(SESSION_CACHE_KEY, {})
+            raise TVEAuthError(f'{channel.name}: Discovery rejected a fresh session (HTTP {r.status_code} {urlsplit(r.url).path}): {r.text[:300]}')
+        if r.status_code == 403:
             # 401 (unauthenticated — the session itself is bad) and 403
             # (authenticated, but forbidden for THIS resource) were treated
             # identically here, both wiping the shared session cache. That's
@@ -796,9 +787,7 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
             # denied channel in any multi-channel run (audit, or this sweep),
             # forcing every channel checked after it to fall through to a
             # full re-authenticate — for YouTubeTV, an instant failure with
-            # no scripted fallback at all. Only wipe on 401.
-            if r.status_code == 401:
-                self._update_cache(SESSION_CACHE_KEY, {})
+            # no scripted fallback at all. 401 is handled above.
             raise TVENotAuthorizedError(f'{channel.name}: Discovery denied playback entitlement HTTP {r.status_code}: {r.text[:300]}')
         r.raise_for_status()
         data = r.json()

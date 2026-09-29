@@ -1,4 +1,5 @@
 import logging
+import re
 import time as _time
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,10 @@ from .admin import _default_feed_chnum_map_full
 from .api_shared import _apply_channel_filters, _apply_gracenote_update, _invalidate_and_refresh_xml
 
 channels_bp = Blueprint('api_channels', __name__)
+
+# A decimal channel lock: "700.1". The minor part can't be all zeros ("305.0"
+# reads as 305 to a player).
+_DECIMAL_CHNO_RE = re.compile(r'\d{1,5}\.(?!0+$)\d{1,3}')
 
 
 @channels_bp.route('/channels')
@@ -117,8 +122,45 @@ def update_channel(channel_id):
     ch   = Channel.query.get_or_404(channel_id)
     data = request.get_json()
 
+    # Channel.number is an INTEGER column, but SQLite's type affinity will
+    # happily store 100.1 as REAL (or '100' as TEXT) — which then leaks into
+    # the chnum allocator's integer cursor/collision sets. bool is excluded
+    # explicitly since it's an int subclass.
+    if 'number' in data and data['number'] is not None:
+        n = data['number']
+        if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+            return jsonify({'error': 'number must be a positive integer or null'}), 422
+
+    # Decimal locks ("700.1") live in their own text column, output-only, so the
+    # integer allocator never sees them. Setting one replaces a whole-number lock.
+    pinned_chno = None
+    if 'pinned_chno' in data and data['pinned_chno'] is not None:
+        pinned_chno = str(data['pinned_chno']).strip()
+        if not _DECIMAL_CHNO_RE.fullmatch(pinned_chno):
+            return jsonify({'error': 'Decimal channel number must look like 700.1'}), 422
+
     def _apply_changes():
         """Apply all field mutations to ch. Re-runnable after a rollback."""
+        if pinned_chno is not None:
+            holder = Channel.query.filter(Channel.id != ch.id, Channel.pinned_chno == pinned_chno).first()
+            if holder is not None:
+                raise ValueError(f'Channel number {pinned_chno} is already locked by "{holder.name}".')
+            from ..generators.m3u import _provider_number_sources
+            sources = _provider_number_sources()
+            if sources:
+                holder = (
+                    Channel.query.join(Source)
+                    .filter(Channel.id != ch.id, Source.name.in_(sources),
+                            Channel.provider_number == pinned_chno,
+                            Channel.is_active == True, Channel.is_enabled == True,
+                            Channel.pinned_chno.is_(None))
+                    .first()
+                )
+                if holder is not None:
+                    raise ValueError(
+                        f'Channel number {pinned_chno} is used by "{holder.name}" '
+                        '(its provider channel number). Choose a different number.'
+                    )
         # Resolve the requested lock target from CURRENT (pre-mutation) state,
         # and validate it before touching ch, so the check reflects true prior
         # DB state rather than an in-flight change the map-building algorithm
@@ -161,12 +203,30 @@ def update_channel(channel_id):
                     f'"{holder.name if holder else holder_id}" in the Default feed. '
                     'Choose a different number.'
                 )
+            # Or a number a source emits as its own provider number (e.g. DirecTV
+            # with "Use DirecTV channel numbers" on) -- a pin there would clash.
+            from ..generators.m3u import _reserved_provider_numbers
+            if (str(target_number).strip() != (ch.provider_number or '').strip()
+                    and str(target_number).strip().isdigit()
+                    and int(str(target_number).strip()) in _reserved_provider_numbers()):
+                raise ValueError(
+                    f'Channel number {target_number} is used by a channel numbered by its '
+                    'provider (e.g. DirecTV channel numbers). Choose a different number.'
+                )
 
         for field in ('name', 'logo_url', 'logo_url_pinned', 'category', 'category_override', 'language', 'language_override', 'is_active', 'is_enabled', 'scrape_pinned', 'number', 'number_pinned', 'disable_reason', 'is_duplicate', 'user_note'):
             if field in data:
                 setattr(ch, field, data[field])
         if target_pinned:
             ch.number_pinned = True
+        # A whole-number lock or an unlock replaces any decimal lock; a decimal
+        # lock replaces any whole-number lock.
+        if pinned_chno is not None:
+            ch.pinned_chno = pinned_chno
+            ch.number_pinned = False
+        elif ('number' in data and data['number'] is not None) or data.get('number_pinned') is False \
+                or ('pinned_chno' in data and data['pinned_chno'] is None):
+            ch.pinned_chno = None
         # Any explicit enable/disable counts as reviewing a new channel — clear the
         # 'pending' marker so it leaves the "Needs review" filter.
         if 'is_enabled' in data:

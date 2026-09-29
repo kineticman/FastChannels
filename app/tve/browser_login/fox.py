@@ -10,6 +10,7 @@ from app.worker import flask_app
 from app.extensions import db
 from app.models import TVEAccount
 from app.tve.browser_login.common import (
+    _watch_spectrum_auth_results,
     _safe_page_url,
     _same_page_url,
     _settle_after_mvpd_navigation,
@@ -18,10 +19,13 @@ from app.tve.browser_login.common import (
     _apply_sling_browser_login_input,
     _harvest_and_save_xfinity_cookies,
     _record_tve_login_error,
-    _cox_login_error_detail,
     _prime_google_session,
     _maybe_capture_google_master_token,
     _relay_input_and_screenshot,
+    _log_signin_timeout_snapshot,
+    SpectrumWantsCoxProvider,
+    _spectrum_retry_as_cox,
+    _spectrum_signin_error_message,
     _sling_f5_recover,
     _url_for_log,
     _gateway_url_for_log,
@@ -114,63 +118,8 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         r.delete(FOX_BROWSER_LOGIN_STOP_KEY)
         r.delete(FOX_BROWSER_LOGIN_INPUT_KEY)
 
-        if mso_id == 'Cox':
-            # Cox's login step is already fully scripted via
-            # fox_tve._fox_sports_mvpd_token() (the direct login.cox.com/
-            # api/v1/authn POST, same _cox_saml_login used elsewhere). No
-            # browser needed; confirmed live 2026-08-11. Only non-Cox MSOs
-            # fall through to the browser-assisted flow below.
-            #
-            # Calls _fox_sports_mvpd_token() directly rather than going
-            # through _fox_sports_access_token()'s cache-first path — same
-            # reasoning as foxone_signin()'s own docstring: a "Sign in"
-            # click should always exercise a live Cox login, not silently
-            # return a still-valid cached token untested. That cache-first
-            # wrapper also swallows its own exceptions and falls back to an
-            # anonymous preview token instead of raising (the right call at
-            # play time, wrong for this button — code review, 2026-08-11:
-            # this button was reading the account-wide last_auth_status
-            # afterward instead of the actual outcome, which a DIFFERENT
-            # network's more recent attempt could have overwritten, and the
-            # cache-hit path never touched that field at all).
-            set_status('running', 'Signing in to FOX TVE…')
-            import uuid as _uuid
-            from app.scrapers.fox_tve import _fox_sports_mvpd_token
-            account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
-            if not account_row or not account_row.is_enabled or not account_row.has_credentials():
-                set_status('error', 'TVE credentials are not configured in Settings.')
-                return
-            fox_session = requests.Session()
-            try:
-                token = _fox_sports_mvpd_token(fox_session, str(_uuid.uuid4()), mso_id, account_row.username or '', account_row.password or '')
-            except Exception as exc:  # noqa: BLE001
-                detail = _cox_login_error_detail(exc, 'FOX TVE')
-                message = f'FOX Sports {mso_id} auth failed: {detail}'
-                account_row.last_auth_status = 'error'
-                account_row.last_auth_message = message[:500]
-                account_row.last_auth_at = datetime.now(timezone.utc)
-                db.session.commit()
-                _record_tve_login_error('fox', detail)
-                set_status('error', f'FOX TVE: {detail}')
-                return
-            now = int(time.time())
-            cfg = dict(account_row.config or {})
-            cfg['fox_sports_access_token'] = token
-            cfg['fox_sports_access_token_exp'] = _jwt_exp(token) or (now + 3600)
-            cfg['fox_sports_access_token_mso'] = mso_id
-            cfg['fox_sports_access_token_captured_at'] = now
-            account_row.config = cfg
-            account_row.last_auth_status = 'ok'
-            account_row.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id}.'
-            account_row.last_auth_at = datetime.now(timezone.utc)
-            db.session.commit()
-            set_status('success', 'Signed in — FOX TVE authorized.')
-            logger.info('[fox-mvpd-login] paired mso_id=Cox (scripted, no browser)')
-            return
-
         if mso_id == 'Comcast_SSO':
-            # Same idea as the Cox branch above, but via a saved cookie jar
-            # instead of a scripted credential POST — see
+            # Try a saved cookie jar before opening a browser — see
             # run_nbc_browser_login's identical block for the full
             # reasoning. Falls through to the browser-assisted flow below
             # only when there's no jar yet or the saved one has gone stale.
@@ -181,9 +130,10 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 import uuid as _uuid
                 from app.scrapers.fox_tve import _fox_sports_mvpd_token
                 fox_session = requests.Session()
+                fox_device_id = str(_uuid.uuid4())
                 try:
                     token = _fox_sports_mvpd_token(
-                        fox_session, str(_uuid.uuid4()), mso_id,
+                        fox_session, fox_device_id, mso_id,
                         cookie_jar_account.username or '', cookie_jar_account.password or '',
                         cookie_jar=cookie_jar,
                     )
@@ -196,6 +146,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                     cfg['fox_sports_access_token_exp'] = _jwt_exp(token) or (now + 3600)
                     cfg['fox_sports_access_token_mso'] = mso_id
                     cfg['fox_sports_access_token_captured_at'] = now
+                    cfg['fox_sports_device_id'] = fox_device_id
                     cookie_jar_account.config = cfg
                     cookie_jar_account.last_auth_status = 'ok'
                     cookie_jar_account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (no browser needed).'
@@ -293,6 +244,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             acct_cfg['fox_sports_access_token_exp'] = exp
                             acct_cfg['fox_sports_access_token_mso'] = mso_id
                             acct_cfg['fox_sports_access_token_captured_at'] = int(time.time())
+                            acct_cfg['fox_sports_device_id'] = device_id
                             account.config = acct_cfg
                             account.last_auth_status = 'ok'
                             account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (browser-assisted).'
@@ -344,6 +296,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         try:
             with Camoufox(**camoufox_options) as context:
                 page = context.pages[0] if context.pages else context.new_page()
+                _watch_spectrum_auth_results(page, 'fox-mvpd-login')
                 _prime_google_session(context, mso_id)
                 page.on('crash', lambda p: logger.warning('[fox-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
                 page.on('close', lambda p: logger.warning('[fox-mvpd-login] page CLOSE event fired'))
@@ -500,6 +453,12 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             return
                         raise _BrowserSessionDied('browser page closed and pairing did not complete')
 
+                    idid_message = _spectrum_signin_error_message(page, 'FOX TVE', mso_id)
+                    if idid_message:
+                        _record_tve_login_error('fox', idid_message)
+                        set_status('error', idid_message)
+                        return
+
                     for _ in range(20):
                         raw = r.lpop(FOX_BROWSER_LOGIN_INPUT_KEY)
                         if raw is None:
@@ -604,6 +563,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                                 acct_cfg['fox_sports_access_token_exp'] = exp
                                 acct_cfg['fox_sports_access_token_mso'] = mso_id
                                 acct_cfg['fox_sports_access_token_captured_at'] = int(time.time())
+                                acct_cfg['fox_sports_device_id'] = device_id
                                 account.config = acct_cfg
                                 account.last_auth_status = 'ok'
                                 account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id} (browser-assisted).'
@@ -619,11 +579,16 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
 
                     page.wait_for_timeout(80)
 
+                _log_signin_timeout_snapshot(page, 'fox-mvpd-login')
                 set_status('error', 'Timed out waiting for sign-in to complete.')
                 return
         except BaseException as exc:  # noqa: BLE001
             if _terminal_status_set['v']:
                 logger.info('[fox-mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
+                return
+            if isinstance(exc, SpectrumWantsCoxProvider):
+                if _spectrum_retry_as_cox(exc, mso_id, 'FOX TVE', set_status):
+                    return run_fox_browser_login('Cox', _attempt=_attempt, _deadline=deadline)
                 return
             if _is_browser_death(exc) and _grace_poll_pairing(str(exc)[:80]):
                 return

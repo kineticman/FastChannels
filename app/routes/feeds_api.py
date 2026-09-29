@@ -146,6 +146,7 @@ def preview_order():
     """
     from ..generators.m3u import (
         _build_feed_chnum_map, build_manual_order_map, feed_namespace_start,
+        apply_provider_numbers, chnum_sort_key,
     )
     data = request.get_json() or {}
     filters = _clean_filters(data.get('filters') or {})
@@ -176,6 +177,11 @@ def preview_order():
                 for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
             }
         num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
+    app_map = num_map
+    num_map = apply_provider_numbers(stubs, num_map)
+    # Rows whose number is fixed outside this feed's ordering (a provider number
+    # like DirecTV "305.1", or a decimal lock) -- the dialog treats them as pinned.
+    fixed_ids = {cid for cid, num in num_map.items() if app_map.get(cid) != num}
 
     feed_pinned_ids = set(filters.get('pinned_channel_ids') or [])
     rows = [{
@@ -183,11 +189,17 @@ def preview_order():
         'name':        ch.name,
         'source':      ch.source.display_name or ch.source.name,
         'number':      num_map.get(ch.id),
-        'pinned':      bool(getattr(ch, 'number_pinned', False) and ch.number is not None),
+        'pinned':      bool((getattr(ch, 'number_pinned', False) and ch.number is not None)
+                            or ch.id in fixed_ids),
+        'number_source': ('lock' if getattr(ch, 'pinned_chno', None) else 'provider')
+                         if ch.id in fixed_ids else None,
+        # Channel-wide lock (whole or decimal number) the dialog can unlock.
+        'locked':      bool((getattr(ch, 'number_pinned', False) and ch.number is not None)
+                            or getattr(ch, 'pinned_chno', None)),
         'feed_pinned': ch.id in feed_pinned_ids,
         'gracenote':   ch.id in gn_ids,
     } for ch in stubs]
-    rows.sort(key=lambda r: (r['number'] is None, r['number'] or 0, r['name'].lower()))
+    rows.sort(key=lambda r: chnum_sort_key(r['number']) + (r['name'].lower(),))
     return jsonify({'start': start, 'channels': rows})
 
 
@@ -292,9 +304,19 @@ def chnum_lock_all(feed_id):
 
     unpinned = (
         Channel.query
-        .filter(Channel.id.in_(num_map.keys()), Channel.number_pinned == False)
+        .filter(Channel.id.in_(num_map.keys()), Channel.number_pinned == False,
+                Channel.pinned_chno.is_(None))  # decimal locks are locked already
         .all()
     )
+    # Channels numbered by their provider (e.g. DirecTV channel numbers) already
+    # have a fixed number; locking them to their hidden app number would replace it.
+    from ..generators.m3u import _provider_number_sources
+    provider_sources = _provider_number_sources()
+    if provider_sources:
+        unpinned = [
+            ch for ch in unpinned
+            if not (ch.provider_number and ch.source and ch.source.name in provider_sources)
+        ]
     for ch in unpinned:
         ch.number = num_map[ch.id]
         ch.number_pinned = True

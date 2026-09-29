@@ -1,0 +1,41 @@
+<!-- FastChannels Player devices: every known Fire TV / Android TV stick -->
+<div class="source-card" id="bridge-card-devices">
+  <div class="source-header" style="cursor:default">
+    <div class="source-title">
+      <div class="source-icon">📺</div>
+      <div>
+        <div class="source-name">FastChannels Player devices</div>
+        <div class="source-meta">Every Fire TV / Android TV device running the player — live status and one-click updates</div>
+      </div>
+    </div>
+  </div>
+  <div class="source-body open">
+    <div class="fc-devices-toolbar">
+      <div class="help" id="fc-devices-bundled" style="margin:0"></div>
+      <div class="fc-devices-toolbar-actions">
+        <button class="btn btn-secondary" onclick="toggleBridgeDeviceAdd()">Add device</button>
+        <button class="btn btn-secondary" id="fc-devices-update-all" onclick="updateAllBridgeDevices()" hidden>Update all</button>
+        <button class="btn btn-secondary" onclick="loadBridgeDevices()">Refresh</button>
+      </div>
+    </div>
+    <div class="fc-devices-add" id="fc-devices-add" hidden>
+      <div class="fields-grid" style="max-width:560px">
+        <div class="field">
+          <label for="fc-devices-add-address">Device IP</label>
+          <input type="text" id="fc-devices-add-address" placeholder="192.168.1.50">
+        </div>
+        <div class="field">
+          <label for="fc-devices-add-label">Name (optional)</label>
+          <input type="text" id="fc-devices-add-label" placeholder="Living room">
+        </div>
+      </div>
+      <div class="field-actions" style="border-top:0;padding-top:0;margin-top:0.6rem">
+        <button class="btn btn-secondary" onclick="toggleBridgeDeviceAdd()">Cancel</button>
+        <button class="btn btn-primary" onclick="addBridgeDevice()">Add</button>
+      </div>
+    </div>
+    <div class="save-status" id="fc-devices-status" style="display:block;margin-top:0.6rem"></div>
+    <div class="fc-devices-grid" id="fc-devices-list" aria-live="polite"></div>
+    <div class="help" style="margin-top:10px">Devices are listed from the HDMI Capture IP, ah4c's tuner list, anything added here, and any device FastChannels has tuned. Updates install the player bundled with this FastChannels version over ADB.</div>
+  </div>
+</div>

@@ -1,4 +1,4 @@
-# HDMI Capture and ah4c Capture setup (experimental)
+# HDMI Capture and ah4c Capture setup
 
 FastChannels Player is the Android playback companion used by FastChannels'
 hardware capture paths. When
@@ -16,7 +16,7 @@ Playback uses Media3/ExoPlayer and the Android device's own Widevine CDM. It
 does not remove or bypass DRM: license and entitlement checks still go through
 the provider's license server, and only the device's HDMI output is captured.
 
-This is an experimental hardware-and-software setup with several parts. Choose
+This is a hardware-and-software setup with several parts. Choose
 one capture method below, then follow the numbered steps in order.
 
 ## Two ways to capture the picture
@@ -350,15 +350,14 @@ build or maintain on the ah4c side.
    - Toggle **Enable ah4c support** on.
    - Enter ah4c's **server URL** (e.g. `http://192.168.1.30:7654`) — the same
      address as `IPADDRESS` above. Click **Save**.
-   - Click **Export ah4c scripts**. A modal asks for this FastChannels
-     server's own address, as reachable from the machine running ah4c (it's
-     pre-filled from your browser's address, but confirm it — the two
-     machines aren't always the same one). Downloading produces
-     `prebmitune.sh`, `bmitune.sh`, `stopbmitune.sh`, and `reboot.sh`, already
-     configured with that address as the default. To override it without
-     re-exporting, set `FASTCHANNELS_URL` in ah4c's container environment to the
-     FastChannels server URL (without a trailing slash). An unset or empty
-     variable uses the exported address.
+   - Only if your ah4c image doesn't include `scripts/firetv/fastchannels`
+     yet (see step 3), click **Export ah4c scripts**. A modal asks for this
+     FastChannels server's own address, as reachable from the machine running
+     ah4c (it's pre-filled from your browser's address, but confirm it — the
+     two machines aren't always the same one). Downloading produces
+     `prebmitune.sh`, `bmitune.sh`, `stopbmitune.sh`, and `reboot.sh` (the same
+     scripts ah4c ships), with that address as the default. A non-empty
+     `FASTCHANNELS_URL` in ah4c's environment overrides it.
    - Click **Check tuner authorization(s)** (any time after the server URL is
      saved). FastChannels reads ah4c's configured `TUNERx_IP` list from ah4c's
      own `/api/status` and, for each one, reports whether *this* FastChannels
@@ -378,11 +377,20 @@ build or maintain on the ah4c side.
      a session. Disable sleep on the device (Fire TV: **Settings → Display &
      Sounds → Display → Sleep → Never**; Android TV: the screensaver / sleep
      timeout under **Device Preferences**).
-3. On the machine running ah4c, extract those four scripts into a new
-   directory under its mounted scripts folder, e.g.
-   `${HOST_DIR}/ah4c/scripts/firetv/fastchannels/`, and set
-   `STREAMER_APP=scripts/firetv/fastchannels` in ah4c's own env file. Restart
-   the ah4c container to pick up the change.
+3. In ah4c's own settings (env file or its config page), set
+   `STREAMER_APP=scripts/firetv/fastchannels` and `FASTCHANNELS_URL` to this
+   FastChannels server's address as reachable from ah4c, without a trailing
+   slash (e.g. `http://192.168.1.20:5523`). The FastChannels scripts are
+   maintained in ah4c and ship in its image, so ah4c copies them into that
+   directory itself. With an older ah4c image that doesn't have them, extract
+   the exported scripts into `${HOST_DIR}/ah4c/scripts/firetv/fastchannels/`
+   instead. Restart the ah4c container to pick up the change.
+
+   Each tune reports its script version, and the tuner check's **Scripts**
+   column shows it after a tuner's next tune. **No version** means an older
+   script set that works but lacks later fixes. To update, run a newer ah4c
+   image with `UPDATE_SCRIPTS=true` (which refreshes the selected scripts on
+   start), or re-export.
 4. Confirm that you installed FastChannels Player in Step 4. The same app is
    used by both capture methods; ah4c changes only how tuning and HDMI capture
    are orchestrated.

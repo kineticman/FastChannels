@@ -10,9 +10,12 @@ import android.util.Log;
 import android.view.WindowManager;
 
 import androidx.media3.common.C;
+import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
+import androidx.media3.common.Timeline;
+import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
@@ -23,12 +26,22 @@ import androidx.media3.exoplayer.util.EventLogger;
 import androidx.media3.session.MediaSession;
 import androidx.media3.ui.PlayerView;
 
+import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.FileDescriptor;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.PrintWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
@@ -117,6 +130,45 @@ public class PlaybackActivity extends Activity {
     private final ExecutorService boundaryPollExecutor = Executors.newSingleThreadExecutor();
     private final Handler boundaryPollHandler = new Handler(Looper.getMainLooper());
     private Runnable boundaryPollRunnable;
+
+    // Confirmed live 2026-09-24 on a Sling channel: right after an audioTrackUnderrun the
+    // player sat in STATE_READY with isPlaying=true for six minutes while its position never
+    // moved — no PlaybackException, so onPlayerError never fired and nothing recovered it.
+    // Watch the position directly instead. Buffering doesn't count (Media3 owns that, and
+    // the Lever 2 swap passes through it); only a player that claims to be playing but isn't.
+    private static final long STALL_CHECK_INTERVAL_MS = 5_000;
+    private static final long STALL_THRESHOLD_MS = 15_000;
+    private static final int MAX_STALL_RECOVERIES = 3;
+    private static final long STALL_RECOVERY_RESET_AFTER_MS = 60_000;
+    // Sling blocks can contain unannounced ad gaps between periods: segments simply stop
+    // (6-58s measured across 6 channels 2026-09-24, most 16-20s) and the manifest only gains
+    // the next period partway through. MAX_RETRIES' ~6s budget exits to the launcher at
+    // nearly every one. For a live stream, keep rejoining at the live edge until content
+    // is back — a fresh MediaItem, since prepare() alone would re-request the same missing
+    // segment.
+    private static final long LIVE_GAP_RETRY_DELAY_MS = 5_000;
+    private static final long LIVE_GAP_RETRY_WINDOW_MS = 120_000;
+    private long liveGapStartedAtMs = 0;
+    private boolean activeIsLive = false;
+
+    // Read by FastChannels' Bridge devices card over adb (bridge_devices._device_extras)
+    // via `dumpsys activity`, which calls dump() below on the main thread: what's on
+    // screen and what this app recovered from recently. Not logcat — this device's ring
+    // buffer is ~256KB and system chatter rolls it over within a minute — and not a file
+    // adb reads directly, since Fire OS denies shell access to Android/data (confirmed
+    // 2026-09-24). The file only persists recovery events, so a give-up still shows after
+    // the next tune starts a fresh Activity.
+    private static final String STATUS_FILE = "status.json";
+    private static final String STATUS_DUMP_PREFIX = "FCPLAYER_STATUS ";
+    private static final int STATUS_MAX_EVENTS = 20;
+    private final ExecutorService statusExecutor = Executors.newSingleThreadExecutor();
+    private final ArrayDeque<JSONObject> statusEvents = new ArrayDeque<>();
+    private final Handler stallHandler = new Handler(Looper.getMainLooper());
+    private final Runnable checkStall = this::checkStall;
+    private long lastStallPosMs = -1;
+    private long lastAdvanceAtMs;
+    private long lastStallRecoveryAtMs;
+    private int stallRecoveries = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -218,17 +270,38 @@ public class PlaybackActivity extends Activity {
         player.addListener(new Player.Listener() {
             @Override
             public void onPlayerError(PlaybackException error) {
+                if (isLiveGapError(error)) {
+                    retryHandler.removeCallbacks(resetRetryCount);
+                    long now = System.currentTimeMillis();
+                    if (liveGapStartedAtMs == 0) liveGapStartedAtMs = now;
+                    long elapsedMs = now - liveGapStartedAtMs;
+                    if (elapsedMs < LIVE_GAP_RETRY_WINDOW_MS) {
+                        Log.w(TAG, "live stream unavailable for " + elapsedMs / 1000 + "s ("
+                                + error.getErrorCodeName() + "), rejoining live edge channel_key="
+                                + activeChannelKey);
+                        retryHandler.postDelayed(PlaybackActivity.this::reprepare, LIVE_GAP_RETRY_DELAY_MS);
+                        recordStatusEvent("gap_rejoin");
+                    } else {
+                        Log.e(TAG, "live stream still unavailable after " + elapsedMs / 1000
+                                + "s, giving up channel_key=" + activeChannelKey + ": " + error, error);
+                        recordStatusEvent("gave_up");
+                        finish();
+                    }
+                    return;
+                }
                 Log.e(TAG, "playback error channel_key=" + activeChannelKey
                         + " (retry " + retryCount + "/" + MAX_RETRIES + "): " + error, error);
                 retryHandler.removeCallbacks(resetRetryCount);
                 if (retryCount < MAX_RETRIES) {
                     retryCount++;
+                    recordStatusEvent("error_retry");
                     retryHandler.postDelayed(() -> {
                         Log.i(TAG, "retrying playback channel_key=" + activeChannelKey);
                         player.prepare();
                     }, RETRY_DELAY_MS);
                 } else {
                     Log.e(TAG, "giving up after " + MAX_RETRIES + " retries channel_key=" + activeChannelKey);
+                    recordStatusEvent("gave_up");
                     finish();
                 }
             }
@@ -241,10 +314,18 @@ public class PlaybackActivity extends Activity {
                 // error still gets its own full set of retries instead of inheriting an
                 // exhausted counter from hours ago.
                 if (isPlaying) {
+                    liveGapStartedAtMs = 0;
                     retryHandler.postDelayed(resetRetryCount, RETRY_RESET_AFTER_MS);
                 } else {
                     retryHandler.removeCallbacks(resetRetryCount);
                 }
+            }
+
+            @Override
+            public void onTimelineChanged(Timeline timeline, int reason) {
+                // Remembered because a gap retry swaps in a fresh MediaItem whose timeline
+                // isn't known yet when its first error arrives.
+                if (player.isCurrentMediaItemLive()) activeIsLive = true;
             }
         });
         playerView.setPlayer(player);
@@ -260,6 +341,7 @@ public class PlaybackActivity extends Activity {
         // (see onNewIntent), so it needs no per-retune handling.
         mediaSession = new MediaSession.Builder(this, player).build();
 
+        loadStatusEvents();
         playFromIntent(getIntent());
     }
 
@@ -312,11 +394,15 @@ public class PlaybackActivity extends Activity {
         // and don't carry its exhausted-or-not retry budget onto an unrelated channel.
         retryHandler.removeCallbacksAndMessages(null);
         retryCount = 0;
+        liveGapStartedAtMs = 0;
+        activeIsLive = false;
         activeChannelKey = intent.getStringExtra(EXTRA_CHANNEL_KEY);
         activeStreamUrl = streamUrl;
         activeDrm = drm;
         activeLicenseUrl = licenseUrl;
         reprepare();
+        stallRecoveries = 0;
+        startStallWatch();
 
         boundaryPollHandler.removeCallbacksAndMessages(null);
         Matcher slingMatch = SLING_DASH_URL_RE.matcher(streamUrl);
@@ -345,6 +431,122 @@ public class PlaybackActivity extends Activity {
         player.setMediaItem(itemBuilder.build());
         player.prepare();
         player.setPlayWhenReady(true);
+    }
+
+    private void recordStatusEvent(String kind) {
+        try {
+            statusEvents.addLast(new JSONObject().put("t", System.currentTimeMillis()).put("kind", kind));
+        } catch (JSONException ignored) {
+        }
+        while (statusEvents.size() > STATUS_MAX_EVENTS) statusEvents.removeFirst();
+        persistStatusEvents();
+    }
+
+    private JSONObject buildStatus() {
+        if (player == null) return null;
+        JSONObject status = new JSONObject();
+        try {
+            status.put("updated_ms", System.currentTimeMillis());
+            status.put("channel_key", activeChannelKey == null ? JSONObject.NULL : activeChannelKey);
+            status.put("playing", player.isPlaying());
+            VideoSize size = player.getVideoSize();
+            if (size.width > 0) status.put("video_width", size.width).put("video_height", size.height);
+            Format format = player.getVideoFormat();
+            if (format != null && format.bitrate > 0) status.put("video_bitrate", format.bitrate);
+            status.put("events", new JSONArray(statusEvents));
+        } catch (JSONException e) {
+            return null;
+        }
+        return status;
+    }
+
+    private void persistStatusEvents() {
+        final File dir = getExternalFilesDir(null);
+        if (dir == null) return;
+        final String body = "{\"events\":" + new JSONArray(statusEvents) + "}";
+        statusExecutor.execute(() -> {
+            File tmp = new File(dir, STATUS_FILE + ".tmp");
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
+                out.write(body.getBytes(StandardCharsets.UTF_8));
+            } catch (IOException e) {
+                Log.w(TAG, "status write failed: " + e);
+                return;
+            }
+            if (!tmp.renameTo(new File(dir, STATUS_FILE))) Log.w(TAG, "status rename failed");
+        });
+    }
+
+    @Override
+    public void dump(String prefix, FileDescriptor fd, PrintWriter writer, String[] args) {
+        super.dump(prefix, fd, writer, args);
+        JSONObject status = buildStatus();
+        if (status != null) writer.println(prefix + STATUS_DUMP_PREFIX + status);
+    }
+
+    private void loadStatusEvents() {
+        File dir = getExternalFilesDir(null);
+        if (dir == null) return;
+        File file = new File(dir, STATUS_FILE);
+        if (!file.exists()) return;
+        try (FileInputStream in = new FileInputStream(file)) {
+            byte[] data = new byte[(int) file.length()];
+            int read = in.read(data);
+            JSONArray events = new JSONObject(new String(data, 0, Math.max(read, 0), StandardCharsets.UTF_8))
+                    .optJSONArray("events");
+            for (int i = 0; events != null && i < events.length(); i++) {
+                statusEvents.addLast(events.getJSONObject(i));
+            }
+        } catch (IOException | JSONException e) {
+            Log.w(TAG, "status load failed: " + e);
+        }
+    }
+
+    private boolean isLiveGapError(PlaybackException error) {
+        boolean live = activeIsLive || (player != null && player.isCurrentMediaItemLive());
+        int code = error.errorCode;
+        boolean ioError = code >= PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+                && code < PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED;
+        return live && (ioError || code == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW);
+    }
+
+    private void startStallWatch() {
+        stallHandler.removeCallbacks(checkStall);
+        lastStallPosMs = -1;
+        lastAdvanceAtMs = System.currentTimeMillis();
+        stallHandler.postDelayed(checkStall, STALL_CHECK_INTERVAL_MS);
+    }
+
+    private void checkStall() {
+        if (player == null || activeStreamUrl == null) return;
+        long now = System.currentTimeMillis();
+        long pos = player.getCurrentPosition();
+        boolean shouldBePlaying = player.getPlaybackState() == Player.STATE_READY && player.getPlayWhenReady();
+        if (!shouldBePlaying || pos != lastStallPosMs) {
+            lastStallPosMs = pos;
+            lastAdvanceAtMs = now;
+            if (stallRecoveries > 0 && shouldBePlaying
+                    && now - lastStallRecoveryAtMs >= STALL_RECOVERY_RESET_AFTER_MS) {
+                stallRecoveries = 0;
+            }
+        } else if (now - lastAdvanceAtMs >= STALL_THRESHOLD_MS) {
+            if (stallRecoveries >= MAX_STALL_RECOVERIES) {
+                Log.e(TAG, "playback frozen again after " + MAX_STALL_RECOVERIES
+                        + " recoveries, giving up channel_key=" + activeChannelKey);
+                recordStatusEvent("gave_up");
+                finish();
+                return;
+            }
+            stallRecoveries++;
+            lastStallRecoveryAtMs = now;
+            Log.w(TAG, "playback frozen " + (now - lastAdvanceAtMs) / 1000 + "s at position "
+                    + pos + "ms while READY, rebuilding (" + stallRecoveries + "/"
+                    + MAX_STALL_RECOVERIES + ") channel_key=" + activeChannelKey);
+            reprepare();
+            lastStallPosMs = -1;
+            lastAdvanceAtMs = now;
+            recordStatusEvent("freeze_rebuild");
+        }
+        stallHandler.postDelayed(checkStall, STALL_CHECK_INTERVAL_MS);
     }
 
     private void schedulePollBoundaryStatus(long delayMs) {
@@ -488,6 +690,7 @@ public class PlaybackActivity extends Activity {
         Log.i(TAG, "warm-stopping " + (activeChannelKey == null ? "player" : activeChannelKey));
         retryHandler.removeCallbacksAndMessages(null);
         retryCount = 0;
+        stallHandler.removeCallbacksAndMessages(null);
         boundaryPollHandler.removeCallbacksAndMessages(null);
         boundaryStatusUrl = null;
         // Tells the server nobody's watching this channel anymore, so its
@@ -506,9 +709,11 @@ public class PlaybackActivity extends Activity {
     @Override
     protected void onDestroy() {
         retryHandler.removeCallbacksAndMessages(null);
+        stallHandler.removeCallbacksAndMessages(null);
         boundaryPollHandler.removeCallbacksAndMessages(null);
         boundaryStatusUrl = null;
         boundaryPollExecutor.shutdownNow();
+        statusExecutor.shutdown();
         if (mediaSession != null) {
             mediaSession.release();
             mediaSession = null;
