@@ -971,6 +971,9 @@
                 {% if this_cat == 'tve' %}
                 <div class="config-note">This source authenticates with your TV-provider account under <a href="/admin/settings#settings-card-tve">Settings → Credentials</a> — nothing to configure here.</div>
                 {% endif %}
+                {% if source.name == 'fox_tve' %}
+                <div class="config-note">If your TV provider works with FOX One (under Premium Sources), use that instead: it carries more channels, including your local FOX station. Keep FOX TVE if FOX One won't sign in with your provider.</div>
+                {% endif %}
 
                 {% set interval_meta = source_interval_meta.get(source.name, {'recommended': source.scrape_interval, 'min': 30, 'max': 10080}) %}
                 {% if source.scrape_cron %}
@@ -3343,8 +3346,9 @@
         <div class="config-title">ESPN Settings</div>
         <div class="config-note">
           Sign in the same way as ESPN's TV apps: get a code here, then enter it at espn.com/activate
-          on any device where you're signed in to ESPN. Streams NFL Network and MLB Network with an
-          ESPN+ subscription; playback goes through the DRM bridge.
+          on any device where you're signed in to ESPN. Needs an ESPN subscription that includes the
+          linear networks (ESPN Unlimited); plain ESPN+ doesn't, and an ESPN account that gets them
+          through a TV provider isn't supported yet. Playback goes through the DRM bridge.
         </div>
         <div class="amazon-autologin-panel" id="espn-login-${sourceId}">
           <div class="amazon-autologin-header">
@@ -3623,7 +3627,7 @@
           </div>
         </div>
         <div id="foxone-own-${sourceId}" style="margin-top:0.75rem;${own ? '' : 'display:none'}">
-          <div class="config-note">A separate login just for FOX One. It signs in in its own browser profile, so it never mixes with the TV provider under Settings → TV Everywhere. The username and password only fill in the provider's sign-in page — you can leave them blank and type into the sign-in window instead.</div>
+          <div class="config-note">A different TV-provider account used only for FOX One (still a cable/streaming TV login, not a FOX One subscription email). It signs in in its own browser profile, so it never mixes with the TV provider under Settings → TV Everywhere. The username and password only fill in the provider's sign-in page — you can leave them blank and type into the sign-in window instead.</div>
           <div class="fields-grid">
             <div class="field">
               <label for="cfg-${sourceId}-mvpd_provider_id">TV provider</label>

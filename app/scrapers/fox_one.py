@@ -215,7 +215,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             default='shared',
             options=[
                 {'value': 'shared', 'label': 'My TV provider from Settings > TV Everywhere'},
-                {'value': 'own', 'label': 'A separate TV provider login for FOX One'},
+                {'value': 'own', 'label': 'A different TV provider account, just for FOX One'},
             ],
         ),
         ConfigField('mvpd_provider_id', 'TV provider'),
