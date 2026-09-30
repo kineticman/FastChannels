@@ -26,6 +26,9 @@ _SUPPRESS_PATTERNS = (
     'tve/google/browser-login/input',   # mousemove/click/key forwarding — up to ~16/s while dragging
     'spectrum-browser-login/state', # admin UI polls every ~400ms during Spectrum sign-in
     'spectrum-browser-login/input', # mousemove/click/key forwarding — up to ~16/s while dragging
+    'tve/link-login/state',     # admin UI polls every ~2s while waiting on a phone-link sign-in
+    'espn-tve/state',           # ESPN card polls every 3s while waiting on a TV-provider link sign-in
+    'espn-activation/state',    # ESPN card polls every 3s while waiting on an activation code
     '/api/custom-channels/detect/', # stream detection status polling
     '/images/proxy',           # per-image cache hits — too noisy
     '/logos/',                 # cached logo file hits — too noisy
