@@ -26,11 +26,13 @@ playbackId, and the resulting manifest is the network's linear feed.
 
 Cable subscribers without an ESPN plan would need Adobe Pass (requestor
 `ESPN`), and ESPN+ events are event-based — neither is handled here yet.
-An ESPN account linked to a TV provider still gets not-entitled here: the
-BAM token only carries a direct ESPN plan (forum report 2026-09-29, post
-#3292). If Adobe Pass is added, the same report found (tested via HENA)
-that the ESPN app's NFL Network doesn't play with a TV-provider login, so
-it stays tied to a direct plan.
+ESPN Unlimited that a TV provider adds to the MyDisney account works like a
+direct plan: the test account's Unlimited comes from DirecTV (isWholesaleUser,
+wholesaleUserProvider=DIRECTV_US) and plays here. An account whose only link
+is a TV-provider sign-in in the ESPN app gets not-entitled, since the BAM
+token carries no plan (forum report 2026-09-29, post #3292). If Adobe Pass is
+added, the same report found (tested via HENA) that the ESPN app's NFL
+Network doesn't play with a TV-provider login, so it stays tied to a plan.
 """
 
 from __future__ import annotations
