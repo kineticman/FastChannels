@@ -855,6 +855,11 @@ const MVPD_LOGIN_FAMILIES = {
   discovery: { base: '/api/settings/tve/discovery/browser-login', needsRequestor: false },
   google:    { base: '/api/settings/tve/google/browser-login', needsRequestor: false },
 };
+// Phone-link sign-in (app/tve/link_login.py): the families whose provider
+// login can happen on the user's own device instead of in our browser.
+// Discovery and the Google step aren't Adobe Pass, so they stay browser-only.
+MVPD_LOGIN_FAMILIES.link = { base: '/api/settings/tve/link-login', needsRequestor: false };
+const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'fox', 'amcn']);
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;
@@ -969,6 +974,11 @@ async function loadTveNetworkStatus() {
 
 function openMvpdLoginModal(family, requestorId) {
   family = family || 'legacy';
+  if (_tveSigninMethod() === 'phone' && TVE_LINK_FAMILIES.has(family)) {
+    openTveLinkModal(family, requestorId);
+    return;
+  }
+  _tveLinkPanelOff();
   const cfg = MVPD_LOGIN_FAMILIES[family];
   if (!cfg) return;
   if (cfg.needsRequestor && !requestorId) return;
@@ -1240,6 +1250,8 @@ async function _pollMvpdLoginModal() {
 // browser or shared job to coordinate.
 async function signInToAllTve() {
   if (_mvpdLoginActive) return;  // a sign-in (single or batch) is already open
+  if (_tveSigninMethod() === 'phone') return signInToAllTveByLink();
+  _tveLinkPanelOff();
   const modal = document.getElementById('mvpd-login-modal');
   const frame = document.getElementById('mvpd-login-frame');
   const status = document.getElementById('mvpd-login-status');
@@ -2528,3 +2540,198 @@ async function refreshRemoteGracenoteMap() {
 
 if (document.getElementById('gn-map-url')) loadRemoteGracenoteStatus();
 if (document.getElementById('local-backups-list')) loadLatestBackup();
+
+
+// ── Phone-link sign-in ──────────────────────────────────────────────────────
+// Same modal as the browser sign-in, but instead of the live browser view it
+// shows a link the user opens on their own device. The job (app/tve/
+// link_login.py) polls the provider and saves the sign-in exactly where the
+// browser flow would, so network status updates the same way.
+
+function _tveSigninMethod() {
+  const el = document.getElementById('tve-signin-method');
+  return (el && el.dataset.method) || 'browser';
+}
+
+async function saveTveSigninMethod(method) {
+  const el = document.getElementById('tve-signin-method');
+  const status = document.getElementById('tve-signin-method-status');
+  status.className = 'save-status';
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/settings/tve/signin-method', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    el.dataset.method = d.signin_method;
+    status.className = 'save-status ok';
+    status.textContent = 'Saved';
+  } catch (e) {
+    status.className = 'save-status err';
+    status.textContent = 'Not saved: ' + e.message;
+    const current = el.dataset.method || 'browser';
+    document.querySelectorAll('input[name="tve-signin-method"]').forEach(i => { i.checked = i.value === current; });
+  }
+  setTimeout(() => { status.textContent = ''; }, 2500);
+}
+
+// Back to the browser view — called by the browser-mode openers.
+function _tveLinkPanelOff() {
+  document.getElementById('mvpd-link-panel').style.display = 'none';
+  document.getElementById('mvpd-login-frame').style.display = '';
+}
+
+function _tveLinkModalOpen() {
+  const modal = document.getElementById('mvpd-login-modal');
+  const status = document.getElementById('mvpd-login-status');
+  const frame = document.getElementById('mvpd-login-frame');
+  frame.removeAttribute('src');
+  frame.style.display = 'none';
+  document.getElementById('mvpd-link-panel').style.display = 'none';
+  document.getElementById('mvpd-login-hint').style.display = 'none';
+  _mvpdLoginLastLogLine = null;
+  _renderMvpdLoginLog([]);
+  _renderMvpdLoginSteps([]);
+  status.style.color = '';
+  status.textContent = 'Getting a sign-in link…';
+  if (_mvpdLoginPollTimer) { clearTimeout(_mvpdLoginPollTimer); _mvpdLoginPollTimer = null; }
+  _mvpdLoginRetryArgs = null;
+  _mvpdLoginFamily = 'link';  // so Cancel stops the link job
+  _mvpdLoginActive = true;
+  _mvpdLoginDone = false;
+  modal.classList.add('open');
+  return status;
+}
+
+function _showTveLink(label, url) {
+  const panel = document.getElementById('mvpd-link-panel');
+  const a = document.getElementById('mvpd-link-url');
+  document.getElementById('mvpd-link-label').textContent = `Sign in for ${label}`;
+  if (a.getAttribute('href') !== url) {
+    a.setAttribute('href', url);
+    a.textContent = url;
+    document.getElementById('mvpd-link-copy').textContent = 'Copy link';
+  }
+  panel.style.display = 'block';
+}
+
+function copyTveLink() {
+  const url = document.getElementById('mvpd-link-url').getAttribute('href');
+  const btn = document.getElementById('mvpd-link-copy');
+  if (navigator.clipboard && url) {
+    navigator.clipboard.writeText(url).then(() => { btn.textContent = 'Copied'; }).catch(() => {});
+  }
+}
+
+// Stops the current link job; its _tveLinkRunOne resolves 'stopped' and a
+// "Sign in to all" run carries on with the next network.
+function skipTveLink() {
+  document.getElementById('mvpd-link-panel').style.display = 'none';
+  fetch(`${MVPD_LOGIN_FAMILIES.link.base}/stop`, { method: 'POST' }).catch(() => {});
+}
+
+// One network (AMC: its four channels, one link each). Resolves with
+// {ok, message} once the job reaches a terminal state; onSteps gets the
+// job's own per-channel steps.
+function _tveLinkRunOne(family, requestorId, status, onSteps) {
+  return new Promise((resolve) => {
+    let runId = null;
+    const poll = () => {
+      if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
+      fetch(`${MVPD_LOGIN_FAMILIES.link.base}/state`)
+        .then(r => r.json())
+        .then((d) => {
+          if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
+          if (d.run_id !== runId) {
+            if (d.state === 'idle') { resolve({ ok: false, message: 'stopped' }); return; }
+            _mvpdLoginPollTimer = setTimeout(poll, 1000);
+            return;
+          }
+          if (onSteps && Array.isArray(d.steps)) onSteps(d.steps);
+          const label = MVPD_STEP_LABELS[d.label] || d.label || '';
+          if (d.state === 'waiting' && d.url) {
+            status.textContent = `Waiting for you to sign in for ${label}…`;
+            _showTveLink(label, d.url);
+          } else if (d.state === 'waiting') {
+            status.textContent = `Checking ${label}…`;
+          }
+          if (d.state === 'success' || d.state === 'error') {
+            document.getElementById('mvpd-link-panel').style.display = 'none';
+            resolve({ ok: d.state === 'success', message: d.message || '' });
+            return;
+          }
+          _mvpdLoginPollTimer = setTimeout(poll, 2000);
+        })
+        .catch(() => { _mvpdLoginPollTimer = setTimeout(poll, 3000); });
+    };
+    fetch(`${MVPD_LOGIN_FAMILIES.link.base}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ family, requestor_id: requestorId || null }),
+    })
+      .then(r => r.json().then(d => ({ ok: r.ok, status: r.status, d })))
+      .then(({ ok, status: httpStatus, d }) => {
+        if (!ok) { resolve({ ok: false, message: (d && d.error) || `HTTP ${httpStatus}` }); return; }
+        runId = d.run_id;
+        poll();
+      })
+      .catch(() => resolve({ ok: false, message: 'could not reach the server to start sign-in' }));
+  });
+}
+
+async function openTveLinkModal(family, requestorId) {
+  if (_mvpdLoginActive) return;
+  const status = _tveLinkModalOpen();
+  // AMC's four channels show as steps; a single network needs none.
+  const res = await _tveLinkRunOne(family, requestorId, status,
+    steps => _renderMvpdLoginSteps(steps.length > 1 ? steps : []));
+  if (!_mvpdLoginActive) return;
+  _mvpdLoginDone = true;
+  status.style.color = res.ok ? 'var(--success-soft)' : 'var(--danger)';
+  status.textContent = (res.ok ? '✓ ' : '✗ ') + res.message;
+  loadTveNetworkStatus();
+}
+
+async function signInToAllTveByLink() {
+  const status = _tveLinkModalOpen();
+  status.textContent = 'Loading network list…';
+  let networks;
+  try {
+    const d = await (await fetch('/api/settings/tve/status')).json();
+    networks = (d.networks || []).filter(n => !n.unsupported && n.family);
+  } catch (e) {
+    _mvpdLoginDone = true;
+    status.style.color = 'var(--danger)';
+    status.textContent = 'Could not load the TVE network list.';
+    return;
+  }
+  if (!_mvpdLoginActive) return;
+  const steps = networks.map(n => ({ label: n.requestor_id || n.label, state: 'pending' }));
+  _renderMvpdLoginSteps(steps);
+  for (let i = 0; i < networks.length; i++) {
+    if (!_mvpdLoginActive) return;
+    const n = networks[i];
+    if (!TVE_LINK_FAMILIES.has(n.family)) {
+      steps[i].state = 'failed';
+      steps[i].message = 'needs "Sign in for me"';
+      _renderMvpdLoginSteps(steps);
+      continue;
+    }
+    steps[i].state = 'running';
+    _renderMvpdLoginSteps(steps);
+    status.textContent = `Getting a sign-in link for ${n.label}…`;
+    const res = await _tveLinkRunOne(n.family, n.requestor_id, status, null);
+    if (!_mvpdLoginActive) return;
+    steps[i].state = res.ok ? 'done' : 'failed';
+    steps[i].message = res.message;
+    _renderMvpdLoginSteps(steps);
+  }
+  _mvpdLoginDone = true;
+  const okCount = steps.filter(s => s.state === 'done').length;
+  const skipped = steps.filter(s => s.message === 'needs "Sign in for me"').length;
+  status.style.color = okCount ? 'var(--success-soft)' : '';
+  status.textContent = `✓ Signed in to ${okCount}/${steps.length} networks.`
+    + (skipped ? ` ${skipped} need "Sign in for me" (not available as a phone link).` : '');
+  loadTveNetworkStatus();
+}

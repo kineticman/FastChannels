@@ -56,6 +56,16 @@
               <div style="color:var(--text-muted);font-size:0.78rem">TVE network sign-in status — sign in to each network individually below, or all at once.</div>
               <button class="btn btn-audit" style="padding:0.15rem 0.6rem;font-size:0.74rem;white-space:nowrap" type="button" onclick="signInToAllTve()" title="Signs in to every network one at a time, with a short pause between each to avoid triggering your TV provider's own rate limiting. Takes a minute or two.">Sign in to all</button>
             </div>
+            <div id="tve-signin-method" data-method="{{ tve_account.signin_method or 'browser' }}" style="display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem 0.9rem;margin:0.2rem 0 0.45rem;font-size:0.78rem;color:var(--text-muted)">
+              <span>Sign in with:</span>
+              <label style="display:inline-flex;align-items:center;gap:0.3rem;cursor:pointer" title="FastChannels opens your provider's login in its own browser and fills in the username and password above.">
+                <input type="radio" name="tve-signin-method" value="browser" onchange="saveTveSigninMethod(this.value)" {% if (tve_account.signin_method or 'browser') != 'phone' %}checked{% endif %}> Sign in for me
+              </label>
+              <label style="display:inline-flex;align-items:center;gap:0.3rem;cursor:pointer" title="FastChannels gives you a link for each network; open it on your phone or computer and sign in to your provider there. Handy when the provider blocks automated logins.">
+                <input type="radio" name="tve-signin-method" value="phone" onchange="saveTveSigninMethod(this.value)" {% if tve_account.signin_method == 'phone' %}checked{% endif %}> Sign in on my phone
+              </label>
+              <span class="save-status" id="tve-signin-method-status"></span>
+            </div>
             <div id="tve-xfinity-cache-status" style="display:none;margin-bottom:0.4rem;color:var(--text-muted);font-size:0.78rem"></div>
             <div id="tve-network-status" style="font-size:0.82rem;color:var(--text-soft)">Loading…</div>
           </div>
@@ -82,6 +92,20 @@
       <div id="mvpd-login-steps" style="display:flex;flex-wrap:wrap;gap:0.35rem;margin:0 0 0.75rem"></div>
       <p id="mvpd-login-hint" style="display:none;color:var(--warning-soft,#b8860b);background:var(--warning-bg-2,rgba(184,134,11,0.12));border:1px solid var(--warning-border,rgba(184,134,11,0.3));border-radius:4px;padding:0.5rem 0.7rem;margin:0 0 0.75rem;font-size:0.82rem;line-height:1.4"></p>
       <div id="mvpd-login-log" style="display:none;max-height:120px;overflow-y:auto;background:var(--bg-hover,rgba(0,0,0,0.25));border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.6rem;margin:0 0 0.75rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;line-height:1.55;color:var(--text-subtle);white-space:pre-wrap;word-break:break-word"></div>
+      <div id="mvpd-link-panel" style="display:none;margin:0 0 0.75rem;padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:6px;background:var(--bg-hover,rgba(0,0,0,0.2))">
+        <div id="mvpd-link-label" style="font-weight:600;margin-bottom:0.35rem"></div>
+        <div style="font-size:0.85rem;color:var(--text-subtle);margin-bottom:0.45rem">Open this link on your phone or computer and sign in to your TV provider there. This window updates by itself once you're done.</div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem">
+          <a id="mvpd-link-url" href="#" target="_blank" rel="noopener" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.8rem;word-break:break-all"></a>
+          <button class="btn btn-sm" type="button" id="mvpd-link-copy" onclick="copyTveLink()">Copy link</button>
+          <button class="btn btn-sm" type="button" onclick="skipTveLink()" title="Stop waiting for this network and move on">Skip</button>
+        </div>
+        <div style="margin-top:0.55rem;font-size:0.76rem;color:var(--text-muted);line-height:1.45">
+          Use a private/incognito tab if that browser is already signed in to a different TV provider account.
+          If Spectrum says to select "Cox Spectrum" (IDLI-4213), choose Cox as your provider above and start again.
+          Each link works for about 10 minutes.
+        </div>
+      </div>
       <img id="mvpd-login-frame" alt="Provider sign-in" tabindex="0" draggable="false"
            onmousedown="mvpdLoginFrameMousedown(event)" onkeydown="mvpdLoginFrameKeydown(event)"
            onmousemove="mvpdLoginFrameMousemove(event)" ondragstart="return false;"
