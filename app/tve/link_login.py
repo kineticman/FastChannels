@@ -15,7 +15,9 @@ Each family is an adapter over helpers the browser flows already use:
   poll(ctx)        None while pending; the result once signed in;
                    TVENotAuthorizedError if the provider said no
   save(ctx, res)   the family's own save → a short outcome message
-Discovery and YouTube TV's Google step aren't Adobe, so they stay browser-only.
+An adapter whose sign-in uses a typed code rather than a link puts it in
+ctx['code']; the status carries it so the UI can show it next to the URL.
+YouTube TV's Google step isn't an Adobe sign-in, so it stays browser-only.
 """
 from __future__ import annotations
 
@@ -31,7 +33,7 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'fox', 'amcn')
+LINK_FAMILIES = ('legacy', 'nbc', 'fox', 'amcn', 'discovery')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
@@ -332,7 +334,94 @@ class _FoxOne:
         return 'authorized'
 
 
-_ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne}
+class _Discovery:
+    """Discovery (HGTV and siblings) — not an Adobe link but Discovery's own TV
+    pairing, the one its Android TV / Roku apps use (found in the HGTV
+    Android TV app, 2026-09-30): an anonymous device asks
+    /authentication/linkDevice/initiate for a 6-digit code tied to the brand
+    and the user's TV provider (gauthPayload), the user enters it at
+    watch.hgtv.com/activate and signs in with the provider there, and
+    /authentication/linkDevice/login answers 204 until it lands, then returns
+    the signed-in token. That token only comes back in the body — the
+    session's `st` cookie is still the expired short-lived anonymous one — so
+    it has to be set as `st`, after which the scraper's normal path works.
+    Worked through Spectrum, which the browser sign-in struggles with."""
+    error_key = 'discovery'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.discovery_tve import DiscoveryTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.mso_name = ((account.config or {}).get('selected_mso_name') or mso_id).strip()
+        self.source = Source.query.filter_by(name='discovery_tve').first()
+        if not self.source:
+            raise TVEAuthError('Discovery TVE source not found.')
+        self.scraper = DiscoveryTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['Discovery']
+
+    def start(self, label):
+        from ..config_store import persist_source_config_updates
+        from ..scrapers.discovery_tve import API_BASE, BRAND_ID, PARTNER_ID, _auth_widget_headers
+        session = self.scraper._session()
+        device_id = self.scraper.config.get('device_id') or str(uuid.uuid4())
+        if not self.scraper.config.get('device_id'):
+            self.scraper._update_config('device_id', device_id)
+            persist_source_config_updates(self.source.id, self.scraper._pending_config_updates)
+            self.scraper._pending_config_updates = {}
+        headers = _auth_widget_headers(device_id)
+        session.get(f'{API_BASE}/token', params={'realm': 'go', 'deviceId': device_id, 'shortlived': 'true'},
+                    headers=headers, timeout=30).raise_for_status()
+        partner_id = PARTNER_ID if self.mso_id == 'Cox' else self.scraper._discovery_partner_id(
+            session, device_id, self.mso_name, self.mso_id)
+        if not partner_id:
+            raise TVENotAuthorizedError(f'{self.mso_name} is not a participating TV provider for Discovery.')
+        r = session.post(f'{API_BASE}/authentication/linkDevice/initiate',
+                         json={'gauthPayload': {'brandId': BRAND_ID, 'partnerId': partner_id}},
+                         headers={**headers, 'Content-Type': 'application/json'}, timeout=20)
+        r.raise_for_status()
+        attrs = ((r.json().get('data') or {}).get('attributes') or {})
+        code = (attrs.get('linkingCode') or '').strip()
+        if not code:
+            raise TVEAuthError('Discovery did not return a sign-in code.')
+        # The page that takes the code; targetUrl is its /link twin.
+        return 'https://watch.hgtv.com/activate', {
+            'session': session, 'headers': {**headers, 'Content-Type': 'application/json'}, 'code': code}
+
+    def poll(self, ctx):
+        from ..scrapers.discovery_tve import API_BASE
+        r = ctx['session'].post(f'{API_BASE}/authentication/linkDevice/login', json={},
+                                headers=ctx['headers'], timeout=20)
+        if r.status_code != 200:
+            return None  # 204 until the code is entered and the sign-in lands
+        return ((r.json().get('data') or {}).get('attributes') or {}).get('token') or None
+
+    def save(self, ctx, token):
+        from ..config_store import persist_source_cache_updates
+        from ..scrapers.discovery_tve import (API_BASE, SESSION_CACHE_KEY, _browser_headers, _cookie_dict,
+                                              _jwt_exp, _restore_cookies)
+        session = ctx['session']
+        for c in list(session.cookies):
+            if c.name == 'st':
+                session.cookies.clear(c.domain, c.path, c.name)
+        _restore_cookies(session, {'st': token})
+        me = session.get(f'{API_BASE}/users/me', headers=_browser_headers(), timeout=15)
+        attrs = ((me.json().get('data') or {}).get('attributes') or {}) if me.ok else {}
+        if not me.ok or attrs.get('anonymous', True):
+            raise TVEAuthError(f'Discovery didn\'t accept the new sign-in (HTTP {me.status_code}).')
+        self.scraper._update_cache(SESSION_CACHE_KEY, {
+            'cookies': _cookie_dict(session),
+            'jwt_expires_at': _jwt_exp(token) or 0,
+            'cached_at': int(time.time()),
+        })
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        return 'authorized'
+
+
+_ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne,
+             'discovery': _Discovery}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────
@@ -387,7 +476,8 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                 logger.warning('[link-login] %s: registration failed: %s', label, exc)
                 steps[i].update(state='failed', message=str(exc)[:160])
                 continue
-            set_status('waiting', f'Sign in for {label}', label=label, url=url or '')
+            code = ctx.get('code') if isinstance(ctx, dict) else None
+            set_status('waiting', f'Sign in for {label}', label=label, url=url or '', code=code or '')
             logger.info('[link-login] %s: waiting for the %s sign-in', label, getattr(adapter, 'mso_id', mso_id))
 
             result, denied = None, None

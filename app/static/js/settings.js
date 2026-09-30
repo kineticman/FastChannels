@@ -857,9 +857,10 @@ const MVPD_LOGIN_FAMILIES = {
 };
 // Phone-link sign-in (app/tve/link_login.py): the families whose provider
 // login can happen on the user's own device instead of in our browser.
-// Discovery and the Google step aren't Adobe Pass, so they stay browser-only.
+// Discovery uses a typed code on its own page (the status carries it); the
+// Google step isn't a network sign-in, so it stays browser-only.
 MVPD_LOGIN_FAMILIES.link = { base: '/api/settings/tve/link-login', needsRequestor: false };
-const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'fox', 'amcn']);
+const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'fox', 'amcn', 'discovery']);
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;
@@ -2604,10 +2605,12 @@ function _tveLinkModalOpen() {
   return status;
 }
 
-function _showTveLink(label, url) {
+function _showTveLink(label, url, code) {
   const panel = document.getElementById('mvpd-link-panel');
   const a = document.getElementById('mvpd-link-url');
   document.getElementById('mvpd-link-label').textContent = `Sign in for ${label}`;
+  document.getElementById('mvpd-link-code-row').style.display = code ? '' : 'none';
+  document.getElementById('mvpd-link-code').textContent = code || '';
   if (a.getAttribute('href') !== url) {
     a.setAttribute('href', url);
     a.textContent = url;
@@ -2673,7 +2676,7 @@ function _tveLinkRunOne(family, requestorId, status, onSteps) {
           const label = MVPD_STEP_LABELS[d.label] || d.label || '';
           if (d.state === 'waiting' && d.url) {
             status.textContent = `Waiting for you to sign in for ${label}…`;
-            _showTveLink(label, d.url);
+            _showTveLink(label, d.url, d.code);
           } else if (d.state === 'waiting') {
             status.textContent = `Checking ${label}…`;
           } else if (d.state === 'starting' && Date.now() - startedAt > 10000) {

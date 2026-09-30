@@ -1119,7 +1119,7 @@
       <div id="foxone-link-panel" style="display:none;margin-bottom:0.75rem;padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:6px">
         <div style="display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;margin-bottom:0.45rem">
           <div id="foxone-link-qr" style="width:200px;height:200px;flex:none;background:#fff;border-radius:6px;padding:6px;box-sizing:border-box"></div>
-          <div style="flex:1;min-width:220px;font-size:0.85rem">Scan the code with your phone's camera, or open the link below on any phone or computer, and sign in to your TV provider there. This window updates by itself once you're done.</div>
+          <div style="flex:1;min-width:220px;font-size:0.85rem">Scan the QR code with your phone's camera, or open the link below on any phone or computer, and sign in to your TV provider there. This window updates by itself once you're done.</div>
         </div>
         <a id="foxone-link-url" href="#" target="_blank" rel="noopener" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.8rem;word-break:break-all"></a>
         <div class="help" style="margin-top:0.5rem">Use a private/incognito tab if that browser is already signed in to a different TV provider account. If Spectrum says to select "Cox Spectrum" (IDLI-4213), choose Cox as the TV provider and start again. The link works for about 10 minutes.</div>
@@ -3437,7 +3437,7 @@
       const url = d.url || '';
       statusEl.innerHTML = `
         <div class="espn-tve-qr" style="width:200px;height:200px;background:#fff;border-radius:6px;padding:6px;box-sizing:border-box;margin:0.4rem 0"></div>
-        Scan the code with your phone, or open this link on your phone or computer, and sign in to ${escapeHtml(d.mso_name || 'your TV provider')}:<br>
+        Scan the QR code with your phone, or open this link on your phone or computer, and sign in to ${escapeHtml(d.mso_name || 'your TV provider')}:<br>
         <a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="word-break:break-all;font-family:monospace">${escapeHtml(url)}</a>
         <button class="btn btn-sm" type="button" onclick="navigator.clipboard && navigator.clipboard.writeText(${escapeHtml(JSON.stringify(url))}); this.textContent='Copied'">Copy link</button>
         <br><span style="color:var(--text-muted)">Waiting for the sign-in… (the link works for about 30 minutes)</span>`;

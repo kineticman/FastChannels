@@ -34,7 +34,7 @@
           </div>
           <div id="tve-provider-hint" style="margin-top:0.45rem;color:var(--text-muted);font-size:0.82rem">Used by TVE sources such as A+E Networks TVE.</div>
           <div id="tve-cox-retiring-notice" style="display:none;margin-top:0.45rem;color:var(--warning-soft,#b8860b);background:var(--warning-bg-2,rgba(184,134,11,0.12));border:1px solid var(--warning-border,rgba(184,134,11,0.3));border-radius:4px;padding:0.5rem 0.7rem;font-size:0.82rem;line-height:1.4">
-            ⚠️ Cox is being folded into Spectrum. If your Cox account has moved to Spectrum, use your Spectrum username/password: sign-in then happens on Spectrum's own login page in the browser window. If Spectrum says to select "Cox Spectrum" (error IDLI-4213), that's this Cox option — FastChannels switches to it automatically and retries. Discovery TVE can't work through Spectrum's login.
+            ⚠️ Cox is being folded into Spectrum. If your Cox account has moved to Spectrum, use your Spectrum username/password: sign-in then happens on Spectrum's own login page in the browser window. If Spectrum says to select "Cox Spectrum" (error IDLI-4213), that's this Cox option — FastChannels switches to it automatically and retries. Discovery TVE can't use Spectrum's login in the browser, but "Sign in on my phone" works for it.
           </div>
           <div id="tve-google-signin-row" style="display:none;margin-top:0.5rem">
             <button class="btn btn-audit" type="button" onclick="openMvpdLoginModal('google', null)">Sign in with Google</button>
@@ -94,9 +94,12 @@
       <div id="mvpd-login-log" style="display:none;max-height:120px;overflow-y:auto;background:var(--bg-hover,rgba(0,0,0,0.25));border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.6rem;margin:0 0 0.75rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;line-height:1.55;color:var(--text-subtle);white-space:pre-wrap;word-break:break-word"></div>
       <div id="mvpd-link-panel" style="display:none;margin:0 0 0.75rem;padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:6px;background:var(--bg-hover,rgba(0,0,0,0.2))">
         <div id="mvpd-link-label" style="font-weight:600;margin-bottom:0.35rem"></div>
+        <div id="mvpd-link-code-row" style="display:none;margin:0 0 0.55rem;font-size:0.9rem">
+          Enter this code on the page below: <b id="mvpd-link-code" style="font-size:1.6em;letter-spacing:0.15em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"></b>
+        </div>
         <div style="display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;margin-bottom:0.45rem">
           <div id="mvpd-link-qr" style="width:200px;height:200px;flex:none;background:#fff;border-radius:6px;padding:6px;box-sizing:border-box"></div>
-          <div style="flex:1;min-width:220px;font-size:0.85rem;color:var(--text-subtle)">Scan the code with your phone's camera, or open the link below on any phone or computer, and sign in to your TV provider there. This window updates by itself once you're done.</div>
+          <div style="flex:1;min-width:220px;font-size:0.85rem;color:var(--text-subtle)">Scan the QR code with your phone's camera, or open the link below on any phone or computer, and sign in to your TV provider there. This window updates by itself once you're done.</div>
         </div>
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem">
           <a id="mvpd-link-url" href="#" target="_blank" rel="noopener" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.8rem;word-break:break-all"></a>
