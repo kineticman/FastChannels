@@ -20,6 +20,13 @@ def tve_network_status(account) -> list[dict]:
     entries: list[dict] = []
     errors = cfg.get('tve_last_error') or {}
 
+    def _needs_signin(key: str, last_signed_in_at) -> bool:
+        """A newer-than-last-success error that says only a person can fix it
+        (see app/tve/signin_notice.py)."""
+        err = errors.get(key) or {}
+        at = err.get('at')
+        return bool(err.get('needs_signin') and at and not (last_signed_in_at and at <= last_signed_in_at))
+
     def _last_error(key: str, last_signed_in_at) -> tuple[str | None, int | None]:
         """A network that's never signed in successfully just shows "Never"
         with no indication why (confirmed live 2026-08-11: FYI came back
@@ -64,6 +71,7 @@ def tve_network_status(account) -> list[dict]:
             'requestor_id': choice['requestor_id'],
             'last_error_message': error_message,
             'last_error_at': error_at,
+            'needs_signin': _needs_signin(cache_key, last_signed_in_at),
         })
 
     nbc = cfg.get('nbc_mvpd_auth') or {}
@@ -77,6 +85,7 @@ def tve_network_status(account) -> list[dict]:
         'requestor_id': None,
         'last_error_message': nbc_error_message,
         'last_error_at': nbc_error_at,
+        'needs_signin': _needs_signin('nbc', nbc_last_signed_in_at),
     })
 
     fox_last_signed_in_at = cfg.get('fox_sports_access_token_captured_at')
@@ -89,6 +98,7 @@ def tve_network_status(account) -> list[dict]:
         'requestor_id': None,
         'last_error_message': fox_error_message,
         'last_error_at': fox_error_at,
+        'needs_signin': _needs_signin('fox', fox_last_signed_in_at),
     })
 
     amcn_cached_at = None
@@ -109,6 +119,7 @@ def tve_network_status(account) -> list[dict]:
         'requestor_id': None,
         'last_error_message': amcn_error_message,
         'last_error_at': amcn_error_at,
+        'needs_signin': _needs_signin('amcn', amcn_cached_at),
     })
 
     disco_cached_at = None
@@ -127,6 +138,7 @@ def tve_network_status(account) -> list[dict]:
         'requestor_id': None,
         'last_error_message': disco_error_message,
         'last_error_at': disco_error_at,
+        'needs_signin': _needs_signin('discovery', disco_cached_at),
     })
 
     from .providers import tve_account_mso_id, unsupported_network_reason

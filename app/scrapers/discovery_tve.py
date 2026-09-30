@@ -210,14 +210,11 @@ def _browser_signin_required(provider: str) -> DiscoveryBrowserSignInRequired:
     session shows "sign in again" instead of just silently failing to play.
     A later successful sign-in supersedes the recorded error."""
     message = (
-        f'Discovery TVE needs you to sign in again: {provider} sign-in only works in a browser, '
-        'so it can\'t be renewed automatically. Use Sign in under Settings → TVE.'
+        f'Discovery TVE needs you to sign in again: {provider} sign-in can\'t be renewed '
+        'automatically. Use Sign in under Settings → TV Everywhere (on your phone works too).'
     )
-    try:
-        from ..tve.browser_login.common import _record_tve_login_error
-        _record_tve_login_error('discovery', message)
-    except Exception:  # noqa: BLE001
-        pass
+    from ..tve.signin_notice import mark_signin_needed
+    mark_signin_needed('discovery', message)
     return DiscoveryBrowserSignInRequired(message)
 
 
@@ -532,7 +529,7 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         try:
             code_url = login_to_mvpd(
                 mso_id, page_html, page_url, account.username or '', account.password or '',
-                cookie_jar=cookie_jar,
+                cookie_jar=cookie_jar, key='discovery',
             )
         except TVENotAuthorizedError:
             raise

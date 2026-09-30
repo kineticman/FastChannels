@@ -391,7 +391,7 @@ class AdobePassV2Client:
             return {}
 
         from ..tve.mvpd import login_to_mvpd, require_scripted_mvpd_login
-        require_scripted_mvpd_login(mso_id)
+        require_scripted_mvpd_login(mso_id, key='nbc')
 
         try:
             r = self.session.get(
@@ -417,7 +417,7 @@ class AdobePassV2Client:
         # particular HTTP session, same as the existing browser-assisted
         # pairing's cross-session polling already relies on.
         page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
-        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar, key='nbc')
 
         r = self._get(f'{ADOBE_BASE}/api/v2/{self.requestor_id}/profiles/{mso_id}', headers=self._bearer_headers())
         profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)

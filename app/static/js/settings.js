@@ -940,8 +940,14 @@ async function loadTveNetworkStatus() {
       // "Last attempt failed just now" when it last worked under a
       // different MVPD than whatever's selected now (reported live
       // 2026-08-17: read as "looks finished but still says 1d ago?").
-      const age = n.last_signed_in_at ? `Signed in ${_tveRelativeTime(n.last_signed_in_at)}` : 'Never signed in';
-      const ageColor = n.last_signed_in_at ? 'var(--text-soft)' : 'var(--text-dim)';
+      let age = n.last_signed_in_at ? `Signed in ${_tveRelativeTime(n.last_signed_in_at)}` : 'Never signed in';
+      let ageColor = n.last_signed_in_at ? 'var(--text-soft)' : 'var(--text-dim)';
+      // The saved sign-in lapsed and only a person can redo it (see
+      // app/tve/signin_notice.py) — say that plainly instead of a stale age.
+      if (n.needs_signin) {
+        age = 'Sign in again';
+        ageColor = 'var(--warning-soft,#b8860b)';
+      }
       let note = n.note ? `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${n.note}</div>` : '';
       // Otherwise a network that's never signed in successfully just shows
       // "Never" with no clue why (e.g. this specific network not entitled
@@ -951,6 +957,9 @@ async function loadTveNetworkStatus() {
       if (n.unsupported) {
         note = `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${_escapeHtml(n.unsupported)}</div>`;
       }
+      if (!note && n.needs_signin) {
+        note = `<div style="color:var(--warning-soft,#b8860b);font-size:0.72rem;margin:0.05rem 0 0.35rem">${_escapeHtml(n.last_error_message || 'The saved sign-in stopped working.')}</div>`;
+      }
       if (!note && n.last_error_message) {
         const errAge = _tveRelativeTime(n.last_error_at);
         note = `<div style="color:var(--danger);font-size:0.72rem;margin:0.05rem 0 0.35rem">Last attempt failed ${errAge}: ${_escapeHtml(n.last_error_message)}</div>`;
@@ -958,7 +967,8 @@ async function loadTveNetworkStatus() {
       const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
       let button = '';
       if (n.family && !n.unsupported) {
-        button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`;
+        const needsStyle = n.needs_signin ? ';background:var(--warning-soft,#b8860b);color:#1a1a1a;border-color:transparent;font-weight:600' : '';
+        button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem${needsStyle}" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`;
       }
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
         <span>${n.label}</span>

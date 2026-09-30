@@ -754,7 +754,10 @@ class ESPNScraper(BaseScraper):
             if not rejected:
                 break
         if rejected:
-            raise ESPNAuthError('ESPN: the TV-provider sign-in was rejected — sign in again on the Sources page.')
+            message = 'ESPN: the TV-provider sign-in was rejected — sign in again on the Sources page.'
+            from ..tve.signin_notice import mark_signin_needed
+            mark_signin_needed('espn', message)
+            raise ESPNAuthError(message)
         return self._parse_playback(r, label, 'anon')
 
     def _parse_playback(self, r: requests.Response, label: str, license_auth: str) -> dict:

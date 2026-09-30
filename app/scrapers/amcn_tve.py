@@ -865,7 +865,7 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
 
         from ..tve.mvpd import require_scripted_mvpd_login
         try:
-            require_scripted_mvpd_login(mso_id)
+            require_scripted_mvpd_login(mso_id, key='amcn')
         except TVEAuthError as exc:
             try:
                 from ..tve.browser_login.common import _record_tve_login_error
@@ -911,7 +911,7 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             try:
                 login_to_mvpd(
                     mso_id, page_html, page_url, account.username or '', account.password or '',
-                    cookie_jar=cookie_jar,
+                    cookie_jar=cookie_jar, key='amcn',
                 )
             except TVENotAuthorizedError as exc:
                 raise TVENotAuthorizedError(f'{channel.name}: {exc}') from exc

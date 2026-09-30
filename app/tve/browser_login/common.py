@@ -1003,7 +1003,14 @@ def _record_tve_login_error(key: str, message: str) -> None:
             return
         cfg = dict(account.config or {})
         errors = dict(cfg.get('tve_last_error') or {})
-        errors[key] = {'message': str(message)[:300], 'at': int(time.time())}
+        entry = {'message': str(message)[:300], 'at': int(time.time())}
+        # The same failure may already be flagged "sign in again" by
+        # app/tve/signin_notice.py (callers record the exception it raised) —
+        # don't let this plain record drop that flag.
+        prev = errors.get(key) or {}
+        if prev.get('needs_signin') and prev.get('message') == entry['message']:
+            entry['needs_signin'] = True
+        errors[key] = entry
         cfg['tve_last_error'] = errors
         account.config = cfg
         db.session.commit()

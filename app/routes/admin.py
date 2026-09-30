@@ -564,6 +564,14 @@ def dashboard():
     # ways (GH #64). Non-blocking — first load kicks off the lookup in background.
     from app.geo_check import get_server_country
     server_country = get_server_country()
+    # TV-provider sign-ins that lapsed and need a person to redo them (see
+    # app/tve/signin_notice.py). Never let this break the dashboard.
+    try:
+        from app.tve.signin_notice import pending_signins
+        signins_needed = pending_signins()
+    except Exception:  # noqa: BLE001
+        current_app.logger.exception('[dashboard] could not read pending sign-ins')
+        signins_needed = []
     return render_template('admin/dashboard.html', sources=sources,
                            enabled_sources=enabled_sources, disabled_sources=disabled_sources,
                            total_channels=total_channels, base_url=base_url,
@@ -578,6 +586,7 @@ def dashboard():
                            tz_health=timezone_health(app_settings.timezone_name),
                            scheduler_health=scheduler_health,
                            server_country=server_country,
+                           signins_needed=signins_needed,
                            now=_now)
 
 

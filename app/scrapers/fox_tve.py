@@ -698,7 +698,7 @@ def _fox_sports_mvpd_token(
     cookie_jar: dict | None = None,
 ) -> str:
     from ..tve.mvpd import require_scripted_mvpd_login
-    require_scripted_mvpd_login(mso_id)
+    require_scripted_mvpd_login(mso_id, key='fox')
 
     anon = session.post(
         'https://api3.fox.com/v2.0/login',
@@ -749,7 +749,7 @@ def _fox_sports_mvpd_token(
     from ..tve.adobe_pass import TVEAuthError as _TVEAuthError
     page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
     try:
-        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar, key='fox')
     except _TVEAuthError as exc:
         raise ValueError(str(exc)) from exc
 

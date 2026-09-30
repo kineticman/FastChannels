@@ -162,6 +162,13 @@
       <code>TZ</code> is a common cause). Channel guide and streams will go stale until it recovers.
     </div>
     {% endif %}
+    {% if signins_needed %}
+    <div style="background:color-mix(in srgb, var(--warning-bg) 70%, var(--surface));border:1px solid var(--warning-border);border-radius:8px;padding:0.85rem 1.25rem;margin:0 0 1rem;color:var(--warning-soft)">
+      <strong>⚠ {{ signins_needed|length }} TV-provider sign-in{{ 's' if signins_needed|length != 1 }} need{{ '' if signins_needed|length != 1 else 's' }} redoing:</strong>
+      {% for s in signins_needed %}<a href="{{ s.href }}" style="color:inherit;text-decoration:underline" title="{{ s.message or '' }}">{{ s.label }}</a>{{ ', ' if not loop.last }}{% endfor %}.
+      Their channels won't play until you sign in again — use "Sign in" on each (signing in on your phone works too).
+    </div>
+    {% endif %}
     {% if server_country and server_country != 'US' %}
     <div style="background:color-mix(in srgb, var(--warning-bg) 70%, var(--surface));border:1px solid var(--warning-border);border-radius:8px;padding:0.85rem 1.25rem;margin:0 0 1rem;color:var(--warning-soft)">
       <strong>⚠ This server appears to be outside the US ({{ server_country }}).</strong>

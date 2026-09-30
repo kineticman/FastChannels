@@ -698,10 +698,10 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         """
         from ..tve.mvpd import login_to_mvpd, require_scripted_mvpd_login
 
-        require_scripted_mvpd_login(mso_id, where="on FOX One's card under Sources")
+        require_scripted_mvpd_login(mso_id, where="on FOX One's card under Sources", key='foxone')
         session, request_id, device_id, mso_login_url, r3 = self._foxone_mvpd_register(mso_id)
         page_html, page_url = (r3.text, str(r3.url)) if not mso_login_url else ('', mso_login_url)
-        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar, key='foxone')
 
         return self._foxone_mvpd_finish(session, request_id, device_id, mso_id)
 

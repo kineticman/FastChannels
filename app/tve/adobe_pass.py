@@ -1068,8 +1068,8 @@ def authorize_mvpd(
     # Spectrum's is reCAPTCHA-gated — yt-dlp's handlers can't get through
     # either, and repeated scripted attempts only invite the bot check.
     from .mvpd import require_scripted_mvpd_login
-    require_scripted_mvpd_login(selected_mso_id)
-    require_scripted_mvpd_login((cfg.get('yt_dlp_mso_id') or selected_mso_id).strip())
+    require_scripted_mvpd_login(selected_mso_id, key=requestor_id)
+    require_scripted_mvpd_login((cfg.get('yt_dlp_mso_id') or selected_mso_id).strip(), key=requestor_id)
 
     if selected_mso_id == 'Comcast_SSO':
         # login.xfinity.com's credential POST is blocked by Akamai Bot
