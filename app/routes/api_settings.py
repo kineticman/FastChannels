@@ -723,8 +723,9 @@ def bridge_healthcheck():
                 def _nums(rows):
                     return '#' + ', #'.join(str(t['index']) for t in rows)
 
-                update_hint = ('On the Bridge page, click "Update ah4c scripts" and run the command it '
-                               'shows. This rechecks on each tuner\'s next tune.')
+                update_hint = ('Set UPDATE_SCRIPTS=true and FASTCHANNELS_URL in ah4c so updating ah4c '
+                               'also updates its scripts, or click "Update ah4c scripts" on the Bridge page '
+                               'and run the command it shows. This rechecks on each tuner\'s next tune.')
                 stale = by_status.get('outdated', []) + by_status.get('unversioned', [])
                 unseen = by_status.get('unknown', [])
                 if stale:

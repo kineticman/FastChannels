@@ -398,10 +398,13 @@ build or maintain on the ah4c side.
 
    Each tune reports its script version, and the tuner check's **Scripts**
    column shows **Up to date** or **Update recommended** after a tuner's next
-   tune. Older scripts still work but lack later fixes. To update, click
-   **Update ah4c scripts** and run the one-line command it shows on the ah4c
-   host (no restart needed), or restart a newer ah4c image once with
-   `UPDATE_SCRIPTS=true`. The column only changes after the next tune.
+   tune. Older scripts still work but lack later fixes. The simplest way to
+   stay current is `UPDATE_SCRIPTS=true` in ah4c (with `FASTCHANNELS_URL`
+   set): each time ah4c starts, it installs the scripts that ship with it, so
+   updating ah4c updates them. Otherwise, click **Update ah4c scripts** and run
+   the one-line command it shows on the ah4c host (no restart needed). Either
+   way replaces any edits you made to the scripts. The column only changes
+   after the next tune.
 4. Confirm that you installed FastChannels Player in Step 4. The same app is
    used by both capture methods; ah4c changes only how tuning and HDMI capture
    are orchestrated.
